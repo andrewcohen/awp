@@ -2,10 +2,12 @@ package workspace
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,9 +18,14 @@ type JJClient interface {
 	WorkspaceExists(name string) (bool, error)
 	ListWorkspaceNames() ([]string, error)
 	AddWorkspace(name string, path string, revision string) error
-	SetBookmark(bookmarkName string, workspaceName string) error
+	TrackBookmark(bookmarkName string) error
 	RenameWorkspace(path string, newName string) error
 	ForgetWorkspace(name string) error
+	WorkspaceRevision(name string) (string, error)
+	BookmarksAtRevision(revision string) ([]string, error)
+	ForgetBookmark(name string) error
+	IsRevisionEmpty(revision string) (bool, error)
+	AbandonRevision(revision string) error
 }
 
 type TmuxClient interface {
@@ -33,6 +40,14 @@ type TmuxClient interface {
 type Store interface {
 	Load(repoRoot string) (map[string]Entry, error)
 	Save(repoRoot string, entries map[string]Entry) error
+}
+
+type HookConfigProvider interface {
+	PostWorkspaceStart(repoRoot string) ([]string, error)
+}
+
+type CommandRunner interface {
+	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
 }
 
 type Entry struct {
@@ -58,31 +73,47 @@ type InfoEntry struct {
 }
 
 type Service interface {
-	Start(name string, bookmark string) error
 	List() ([]ListEntry, error)
 	Info(name string) (InfoEntry, error)
-	Open(name string, bookmark string) error
+	Open(name string, bookmark string, yes bool) error
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
 }
 
 type Dependencies struct {
-	JJ    JJClient
-	Tmux  TmuxClient
-	Store Store
-	Input io.Reader
-	Out   io.Writer
+	JJ            JJClient
+	Tmux          TmuxClient
+	Store         Store
+	Hooks         HookConfigProvider
+	Runner        CommandRunner
+	InvocationDir string
+	Input         io.Reader
+	Out           io.Writer
 }
 
 type service struct {
-	jj    JJClient
-	tmux  TmuxClient
-	store Store
-	in    io.Reader
-	out   io.Writer
+	jj            JJClient
+	tmux          TmuxClient
+	store         Store
+	hooks         HookConfigProvider
+	runner        CommandRunner
+	invocationDir string
+	in            io.Reader
+	out           io.Writer
 }
 
-func NewService(deps Dependencies) Service {
+type defaultCommandRunner struct{}
+
+func (r *defaultCommandRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func NewService(deps Dependencies) *service {
 	in := deps.Input
 	if in == nil {
 		in = os.Stdin
@@ -91,56 +122,106 @@ func NewService(deps Dependencies) Service {
 	if out == nil {
 		out = os.Stdout
 	}
+	runner := deps.Runner
+	if runner == nil {
+		runner = &defaultCommandRunner{}
+	}
+	invocationDir := strings.TrimSpace(deps.InvocationDir)
+	if invocationDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			invocationDir = wd
+		}
+	}
+	if invocationDir != "" {
+		if abs, err := filepath.Abs(invocationDir); err == nil {
+			invocationDir = abs
+		}
+	}
 	return &service{
-		jj:    deps.JJ,
-		tmux:  deps.Tmux,
-		store: deps.Store,
-		in:    in,
-		out:   out,
+		jj:            deps.JJ,
+		tmux:          deps.Tmux,
+		store:         deps.Store,
+		hooks:         deps.Hooks,
+		runner:        runner,
+		invocationDir: invocationDir,
+		in:            in,
+		out:           out,
 	}
 }
 
-func (s *service) Start(name string, bookmark string) error {
+func (s *service) createWorkspace(name string, bookmark string, runHooks bool) error {
+	s.logf("▶️ Starting workspace create flow (name=%q, bookmark=%q)", strings.TrimSpace(name), strings.TrimSpace(bookmark))
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	s.logf("✅ Resolved repo root: %s", repoRoot)
 
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
 		name = bookmark
+		s.logf("ℹ️ Using bookmark as default workspace name: %q", name)
 	}
 
 	normalized, err := s.resolveName(name)
 	if err != nil {
 		return err
 	}
+	s.logf("✅ Resolved workspace name: %q", normalized)
 
+	s.logf("▶️ Checking whether workspace %q already exists", normalized)
 	exists, err := s.jj.WorkspaceExists(normalized)
 	if err != nil {
 		return err
 	}
 	if exists {
+		s.logf("ℹ️ Workspace %q already exists; opening existing workspace", normalized)
 		if err := s.openByName(repoRoot, normalized); err != nil {
 			return err
 		}
-		return s.setBookmark(bookmark, normalized)
+		return s.trackBookmark(bookmark)
 	}
 
 	workspacePath := s.defaultWorkspacePath(repoRoot, normalized)
+	s.logf("✅ Target workspace path: %s", workspacePath)
 	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
 		return fmt.Errorf("create workspace parent dir: %w", err)
 	}
+	s.logf("▶️ Preparing workspace path")
 	if err := s.prepareWorkspacePath(workspacePath); err != nil {
 		return err
 	}
 	startRevision := "@"
 	if strings.TrimSpace(bookmark) != "" {
+		s.logf("▶️ Tracking bookmark %q before workspace creation", strings.TrimSpace(bookmark))
+		if err := s.trackBookmark(bookmark); err != nil {
+			return err
+		}
 		startRevision = strings.TrimSpace(bookmark)
 	}
+	s.logf("▶️ Creating jj workspace %q at revision %q", normalized, startRevision)
 	if err := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err != nil {
-		return err
+		if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return err
+		}
+		s.logf("⚠️ jj reported workspace already exists; retrying after cleanup")
+		_ = s.jj.ForgetWorkspace(normalized)
+		if prepErr := s.prepareWorkspacePath(workspacePath); prepErr != nil {
+			return prepErr
+		}
+		if err2 := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err2 != nil {
+			existsNow, existsErr := s.jj.WorkspaceExists(normalized)
+			if existsErr == nil && existsNow {
+				s.logf("ℹ️ Workspace %q exists after retry; opening", normalized)
+				if err := s.openByName(repoRoot, normalized); err != nil {
+					return err
+				}
+				return s.trackBookmark(bookmark)
+			}
+			return err2
+		}
 	}
 
+	s.logf("▶️ Recording workspace in awp state")
 	entries, err := s.store.Load(repoRoot)
 	if err != nil {
 		return err
@@ -149,10 +230,22 @@ func (s *service) Start(name string, bookmark string) error {
 	if err := s.store.Save(repoRoot, entries); err != nil {
 		return err
 	}
-	if err := s.ensureWindowAndSwitch(normalized, workspacePath); err != nil {
+	if runHooks {
+		s.logf("▶️ Running bootstrap hooks")
+		if err := s.runPostWorkspaceStartHooks(repoRoot, normalized, workspacePath); err != nil {
+			s.logf("⚠️ Bootstrap hooks failed; rolling back new workspace")
+			if cleanupErr := s.rollbackNewWorkspaceStart(repoRoot, normalized, workspacePath); cleanupErr != nil {
+				return fmt.Errorf("%w (rollback failed: %v)", err, cleanupErr)
+			}
+			return err
+		}
+	}
+	s.logf("▶️ Ensuring tmux window %q", normalized)
+	if err := s.ensureWindow(normalized, workspacePath); err != nil {
 		return err
 	}
-	return s.setBookmark(bookmark, normalized)
+	s.logf("▶️ Switching to tmux window %q", normalized)
+	return s.switchWhenReady(normalized)
 }
 
 func (s *service) List() ([]ListEntry, error) {
@@ -269,7 +362,7 @@ func (s *service) Info(name string) (InfoEntry, error) {
 	}, nil
 }
 
-func (s *service) Open(name string, bookmark string) error {
+func (s *service) Open(name string, bookmark string, yes bool) error {
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
@@ -286,17 +379,16 @@ func (s *service) Open(name string, bookmark string) error {
 		return err
 	}
 	if !exists {
-		if strings.TrimSpace(bookmark) != "" {
-			return s.Start(normalized, bookmark)
+		if !yes {
+			ok, err := s.confirmf("Workspace %q does not exist. Create it? [y/N]: ", normalized)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("open cancelled")
+			}
 		}
-		ok, err := s.confirmf("Workspace %q does not exist. Start it? [y/N]: ", normalized)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return errors.New("open cancelled")
-		}
-		return s.Start(normalized, "")
+		return s.createWorkspace(normalized, bookmark, true)
 	}
 	return s.openByName(repoRoot, normalized)
 }
@@ -385,14 +477,21 @@ func (s *service) Delete(name string, force bool) error {
 		}
 	}
 	entry, hasEntry := entries[normalized]
+	revision, _ := s.jj.WorkspaceRevision(normalized)
 
 	if err := s.jj.ForgetWorkspace(normalized); err != nil {
 		return err
 	}
-	if hasWindow, _ := s.tmux.WindowExists(normalized); hasWindow {
-		if err := s.tmux.KillWindow(normalized); err != nil {
-			return err
-		}
+	fmt.Fprintf(s.out, "✅ Forgot jj workspace %q\n", normalized)
+
+	forgottenBookmarks, err := s.cleanupWorkspaceBookmarks(normalized, revision)
+	if err != nil {
+		return err
+	}
+	if forgottenBookmarks > 0 {
+		fmt.Fprintf(s.out, "✅ Forgot %d matching bookmark(s)\n", forgottenBookmarks)
+	} else {
+		fmt.Fprintln(s.out, "⏭️ Skipped bookmark cleanup (no matching bookmarks)")
 	}
 
 	if hasEntry {
@@ -400,11 +499,39 @@ func (s *service) Delete(name string, force bool) error {
 		if err := s.store.Save(repoRoot, entries); err != nil {
 			return err
 		}
+		fmt.Fprintf(s.out, "✅ Removed workspace state entry %q\n", normalized)
 		managedBase := s.managedWorkspaceBase()
 		if strings.HasPrefix(entry.Path, managedBase+string(filepath.Separator)) || entry.Path == managedBase {
 			_ = os.RemoveAll(entry.Path)
+			fmt.Fprintf(s.out, "✅ Removed workspace directory %q\n", entry.Path)
+		} else {
+			fmt.Fprintf(s.out, "⏭️ Skipped workspace directory removal (%q outside managed base)\n", entry.Path)
 		}
+	} else {
+		fmt.Fprintf(s.out, "⏭️ Skipped workspace state cleanup (%q not managed by awp)\n", normalized)
 	}
+
+	abandoned, err := s.cleanupEmptyRevision(revision)
+	if err != nil {
+		return err
+	}
+	if abandoned {
+		fmt.Fprintln(s.out, "✅ Abandoned empty workspace revision")
+	} else {
+		fmt.Fprintln(s.out, "⏭️ Skipped revision cleanup (revision not empty or unavailable)")
+	}
+
+	hasWindow, _ := s.tmux.WindowExists(normalized)
+	if hasWindow {
+		if err := s.tmux.KillWindow(normalized); err != nil {
+			return err
+		}
+		fmt.Fprintf(s.out, "✅ Removed tmux window %q\n", normalized)
+	} else {
+		fmt.Fprintf(s.out, "⏭️ Skipped tmux window removal (%q not present)\n", normalized)
+	}
+
+	fmt.Fprintf(s.out, "✅ Workspace %q removed\n", normalized)
 	return nil
 }
 
@@ -422,14 +549,17 @@ func (s *service) resolveName(name string) (string, error) {
 	return NormalizeName(strings.TrimSpace(line))
 }
 
-func (s *service) setBookmark(bookmark string, workspaceName string) error {
+func (s *service) trackBookmark(bookmark string) error {
 	bookmark = strings.TrimSpace(bookmark)
 	if bookmark == "" {
+		s.logf("⏭️ Skipping bookmark tracking (no bookmark provided)")
 		return nil
 	}
-	if err := s.jj.SetBookmark(bookmark, workspaceName); err != nil {
+	s.logf("▶️ Tracking bookmark %q", bookmark)
+	if err := s.jj.TrackBookmark(bookmark); err != nil {
 		return err
 	}
+	s.logf("✅ Bookmark %q is now tracked", bookmark)
 	return nil
 }
 
@@ -467,6 +597,13 @@ func (s *service) openByName(repoRoot, name string) error {
 }
 
 func (s *service) ensureWindowAndSwitch(name, path string) error {
+	if err := s.ensureWindow(name, path); err != nil {
+		return err
+	}
+	return s.tmux.SwitchToWindow(name)
+}
+
+func (s *service) ensureWindow(name, path string) error {
 	hasWindow, err := s.tmux.WindowExists(name)
 	if err != nil {
 		return err
@@ -476,11 +613,160 @@ func (s *service) ensureWindowAndSwitch(name, path string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *service) switchWhenReady(name string) error {
+	if !isInteractiveReader(s.in) {
+		return s.tmux.SwitchToWindow(name)
+	}
+	fmt.Fprintf(s.out, "✅ Setup complete for %q. Press any key to switch to tmux window...", name)
+	reader := bufio.NewReader(s.in)
+	_, err := reader.ReadByte()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	_, _ = fmt.Fprintln(s.out)
 	return s.tmux.SwitchToWindow(name)
 }
 
-func (s *service) defaultWorkspacePath(_ string, name string) string {
-	return filepath.Join(s.managedWorkspaceBase(), name)
+func (s *service) runPostWorkspaceStartHooks(repoRoot, workspaceName, workspacePath string) error {
+	if s.hooks == nil {
+		return nil
+	}
+	commands, err := s.hooks.PostWorkspaceStart(repoRoot)
+	if err != nil {
+		return err
+	}
+	if len(commands) == 0 {
+		fmt.Fprintln(s.out, "⏭️ Skipped bootstrap hooks (none configured)")
+		return nil
+	}
+
+	fmt.Fprintf(s.out, "✅ Running %d bootstrap hook(s)\n", len(commands))
+	root := strings.TrimSpace(s.invocationDir)
+	executed := 0
+	for _, command := range commands {
+		raw := strings.TrimSpace(command)
+		if raw == "" {
+			continue
+		}
+		executed++
+		expanded := strings.ReplaceAll(raw, "<root>", root)
+		fmt.Fprintf(s.out, "▶️ [%d/%d] %s\n", executed, len(commands), raw)
+		cmd := "cd " + shellQuote(workspacePath) + " && " + expanded
+		out, runErr := s.runner.Run(context.Background(), "", "sh", "-c", cmd)
+		output := strings.TrimSpace(out)
+		if output == "" {
+			fmt.Fprintln(s.out, "   ↳ (no output)")
+		} else {
+			for _, line := range strings.Split(output, "\n") {
+				fmt.Fprintf(s.out, "   ↳ %s\n", line)
+			}
+		}
+		if runErr != nil {
+			if output == "" {
+				return fmt.Errorf("bootstrap hook failed for workspace %q: %q: %w", workspaceName, raw, runErr)
+			}
+			return fmt.Errorf("bootstrap hook failed for workspace %q: %q: %w\n%s", workspaceName, raw, runErr, output)
+		}
+	}
+	fmt.Fprintln(s.out, "✅ Bootstrap hooks completed")
+	return nil
+}
+
+func (s *service) rollbackNewWorkspaceStart(repoRoot, name, path string) error {
+	var errs []error
+	revision, _ := s.jj.WorkspaceRevision(name)
+
+	if err := s.jj.ForgetWorkspace(name); err != nil {
+		errs = append(errs, fmt.Errorf("forget workspace %q: %w", name, err))
+	}
+
+	hasWindow, err := s.tmux.WindowExists(name)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("check tmux window %q: %w", name, err))
+	} else if hasWindow {
+		if err := s.tmux.KillWindow(name); err != nil {
+			errs = append(errs, fmt.Errorf("kill tmux window %q: %w", name, err))
+		}
+	}
+
+	entries, err := s.store.Load(repoRoot)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("load workspace state: %w", err))
+	} else {
+		delete(entries, name)
+		if err := s.store.Save(repoRoot, entries); err != nil {
+			errs = append(errs, fmt.Errorf("save workspace state: %w", err))
+		}
+	}
+
+	if s.isUnderManagedWorkspaceBase(path) {
+		if err := os.RemoveAll(path); err != nil {
+			errs = append(errs, fmt.Errorf("remove workspace path %q: %w", path, err))
+		}
+	}
+	if _, err := s.cleanupEmptyRevision(revision); err != nil {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
+}
+
+func (s *service) cleanupWorkspaceBookmarks(workspaceName, revision string) (int, error) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return 0, nil
+	}
+	bookmarks, err := s.jj.BookmarksAtRevision(revision)
+	if err != nil {
+		return 0, fmt.Errorf("list bookmarks at revision %q: %w", revision, err)
+	}
+	forgotten := 0
+	for _, bookmark := range bookmarks {
+		if !bookmarkMatchesWorkspace(workspaceName, bookmark) {
+			continue
+		}
+		if err := s.jj.ForgetBookmark(bookmark); err != nil {
+			return forgotten, fmt.Errorf("forget bookmark %q: %w", bookmark, err)
+		}
+		forgotten++
+	}
+	return forgotten, nil
+}
+
+func bookmarkMatchesWorkspace(workspaceName, bookmark string) bool {
+	if strings.TrimSpace(bookmark) == "" {
+		return false
+	}
+	normalized, err := NormalizeName(bookmark)
+	if err != nil {
+		return false
+	}
+	return normalized == workspaceName
+}
+
+func (s *service) cleanupEmptyRevision(revision string) (bool, error) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return false, nil
+	}
+	empty, err := s.jj.IsRevisionEmpty(revision)
+	if err != nil {
+		return false, fmt.Errorf("check whether revision %q is empty: %w", revision, err)
+	}
+	if !empty {
+		return false, nil
+	}
+	if err := s.jj.AbandonRevision(revision); err != nil {
+		return false, fmt.Errorf("abandon empty revision %q: %w", revision, err)
+	}
+	return true, nil
+}
+
+func (s *service) defaultWorkspacePath(repoRoot string, name string) string {
+	return filepath.Join(s.repoWorkspaceBase(repoRoot), name)
 }
 
 func (s *service) prepareWorkspacePath(path string) error {
@@ -514,6 +800,17 @@ func (s *service) managedWorkspaceBase() string {
 		return filepath.Join(".awp", "workspaces")
 	}
 	return filepath.Join(home, ".awp", "workspaces")
+}
+
+func (s *service) repoWorkspaceBase(repoRoot string) string {
+	repoName := strings.TrimSpace(filepath.Base(filepath.Clean(repoRoot)))
+	if repoName == "" || repoName == "." || repoName == string(filepath.Separator) {
+		repoName = "repo"
+	}
+	if normalized, err := NormalizeName(repoName); err == nil {
+		repoName = normalized
+	}
+	return filepath.Join(s.managedWorkspaceBase(), repoName)
 }
 
 func (s *service) canonicalizeEntries(repoRoot string, entries map[string]Entry) (map[string]Entry, bool) {
@@ -561,4 +858,27 @@ func deriveName(value string) string {
 
 func looksLikePath(value string) bool {
 	return strings.Contains(value, "/") || strings.Contains(value, string(filepath.Separator)) || strings.HasPrefix(value, "~")
+}
+
+func isInteractiveReader(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return stat.Mode()&os.ModeCharDevice != 0
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func (s *service) logf(format string, args ...any) {
+	if s.out == nil {
+		return
+	}
+	fmt.Fprintf(s.out, format+"\n", args...)
 }

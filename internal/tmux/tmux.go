@@ -33,7 +33,7 @@ func (c *Client) WindowExists(name string) (bool, error) {
 }
 
 func (c *Client) NewWindow(name string, dir string) error {
-	_, err := c.runner.Run(context.Background(), "", "tmux", "new-window", "-n", name, "-c", dir)
+	_, err := c.runner.Run(context.Background(), "", "tmux", "new-window", "-d", "-n", name, "-c", dir)
 	if err != nil {
 		return fmt.Errorf("create tmux window %q: %w", name, err)
 	}
