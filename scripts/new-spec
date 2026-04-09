@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: scripts/new-spec <feature-name>" >&2
+  exit 1
+fi
+
+feature_name="$*"
+
+slug=$(printf '%s' "$feature_name" \
+  | tr '[:upper:]' '[:lower:]' \
+  | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')
+
+if [[ -z "$slug" ]]; then
+  echo "Error: feature name must include at least one alphanumeric character" >&2
+  exit 1
+fi
+
+template="specs/spec-template.md"
+if [[ ! -f "$template" ]]; then
+  echo "Error: template not found at $template" >&2
+  exit 1
+fi
+
+mkdir -p specs
+
+gen_rand4() {
+  LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 4
+}
+
+id_prefix=$(date +%Y%m%d)
+for _ in $(seq 1 20); do
+  rand4=$(gen_rand4)
+  spec_id="${id_prefix}-${rand4}"
+  out="specs/${spec_id}-${slug}-spec.md"
+  if [[ ! -e "$out" ]]; then
+    cp "$template" "$out"
+    echo "$out"
+    exit 0
+  fi
+done
+
+echo "Error: could not allocate unique spec ID after multiple attempts" >&2
+exit 1
