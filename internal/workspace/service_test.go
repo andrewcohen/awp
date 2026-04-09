@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -11,20 +12,28 @@ import (
 )
 
 type fakeJJ struct {
-	repoRoot     string
-	repoRootErr  error
-	existing     map[string]bool
-	added        []Entry
-	addRevision  string
-	bookmarkName string
-	bookmarkWS   string
-	renamedPath  string
-	renamedTo    string
-	forgotten    []string
-	forgetErr    error
-	renameErr    error
-	workspaceErr error
-	listNames    []string
+	repoRoot        string
+	repoRootErr     error
+	existing        map[string]bool
+	added           []Entry
+	addRevision          string
+	addErr               error
+	addSetsExistingOnErr bool
+	trackedBookmark      string
+	renamedPath     string
+	renamedTo       string
+	forgotten       []string
+	forgetErr       error
+	renameErr       error
+	workspaceErr    error
+	listNames       []string
+	workspaceRevs     map[string]string
+	bookmarksByRev    map[string][]string
+	forgottenBookmarks []string
+	emptyRevisions    map[string]bool
+	abandoned         []string
+	abandonErr        error
+	revisionLookupErr error
 }
 
 func (f *fakeJJ) RepoRoot() (string, error) { return f.repoRoot, f.repoRootErr }
@@ -48,13 +57,18 @@ func (f *fakeJJ) ListWorkspaceNames() ([]string, error) {
 func (f *fakeJJ) AddWorkspace(name, path, revision string) error {
 	f.added = append(f.added, Entry{Name: name, Path: path})
 	f.addRevision = revision
+	if f.addErr != nil {
+		if f.addSetsExistingOnErr {
+			f.existing[name] = true
+		}
+		return f.addErr
+	}
 	f.existing[name] = true
 	return nil
 }
 
-func (f *fakeJJ) SetBookmark(bookmarkName string, workspaceName string) error {
-	f.bookmarkName = bookmarkName
-	f.bookmarkWS = workspaceName
+func (f *fakeJJ) TrackBookmark(bookmarkName string) error {
+	f.trackedBookmark = bookmarkName
 	return nil
 }
 func (f *fakeJJ) RenameWorkspace(path, newName string) error {
@@ -70,6 +84,43 @@ func (f *fakeJJ) ForgetWorkspace(name string) error {
 		return f.forgetErr
 	}
 	f.forgotten = append(f.forgotten, name)
+	return nil
+}
+
+func (f *fakeJJ) WorkspaceRevision(name string) (string, error) {
+	if f.revisionLookupErr != nil {
+		return "", f.revisionLookupErr
+	}
+	if rev, ok := f.workspaceRevs[name]; ok {
+		return rev, nil
+	}
+	return "", nil
+}
+
+func (f *fakeJJ) BookmarksAtRevision(revision string) ([]string, error) {
+	if f.bookmarksByRev == nil {
+		return nil, nil
+	}
+	return append([]string(nil), f.bookmarksByRev[revision]...), nil
+}
+
+func (f *fakeJJ) ForgetBookmark(name string) error {
+	f.forgottenBookmarks = append(f.forgottenBookmarks, name)
+	return nil
+}
+
+func (f *fakeJJ) IsRevisionEmpty(revision string) (bool, error) {
+	if f.emptyRevisions == nil {
+		return false, nil
+	}
+	return f.emptyRevisions[revision], nil
+}
+
+func (f *fakeJJ) AbandonRevision(revision string) error {
+	if f.abandonErr != nil {
+		return f.abandonErr
+	}
+	f.abandoned = append(f.abandoned, revision)
 	return nil
 }
 
@@ -110,6 +161,43 @@ type fakeStore struct {
 	entries map[string]Entry
 }
 
+type fakeHooks struct {
+	commands []string
+	err      error
+	calls    int
+	repoRoot string
+}
+
+func (f *fakeHooks) PostWorkspaceStart(repoRoot string) ([]string, error) {
+	f.calls++
+	f.repoRoot = repoRoot
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]string(nil), f.commands...), nil
+}
+
+type runCall struct {
+	dir  string
+	name string
+	args []string
+}
+
+type fakeRunner struct {
+	calls    []runCall
+	failCall int
+	failOut  string
+	failErr  error
+}
+
+func (f *fakeRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
+	f.calls = append(f.calls, runCall{dir: dir, name: name, args: append([]string(nil), args...)})
+	if f.failCall > 0 && len(f.calls) == f.failCall {
+		return f.failOut, f.failErr
+	}
+	return "", nil
+}
+
 func (f *fakeStore) Load(string) (map[string]Entry, error) {
 	cp := map[string]Entry{}
 	for k, v := range f.entries {
@@ -132,7 +220,7 @@ func TestStartCreatesWorkspaceAndWindow(t *testing.T) {
 	store := &fakeStore{entries: map[string]Entry{}}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
-	if err := svc.Start("Add Auth", ""); err != nil {
+	if err := svc.createWorkspace("Add Auth", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 
@@ -164,21 +252,21 @@ func TestStartCreatesWorkspaceAndWindow(t *testing.T) {
 	}
 }
 
-func TestStartWithBookmarkUsesBookmarkRevisionAndSetsBookmark(t *testing.T) {
+func TestStartWithBookmarkTracksBookmarkAndUsesBookmarkRevision(t *testing.T) {
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
 	store := &fakeStore{entries: map[string]Entry{}}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
-	if err := svc.Start("qa", "feature/qa"); err != nil {
+	if err := svc.createWorkspace("qa", "feature/qa", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 	if jj.addRevision != "feature/qa" {
 		t.Fatalf("expected add revision feature/qa, got %q", jj.addRevision)
 	}
-	if jj.bookmarkName != "feature/qa" || jj.bookmarkWS != "qa" {
-		t.Fatalf("unexpected bookmark set args: name=%q workspace=%q", jj.bookmarkName, jj.bookmarkWS)
+	if jj.trackedBookmark != "feature/qa" {
+		t.Fatalf("unexpected tracked bookmark: %q", jj.trackedBookmark)
 	}
 }
 
@@ -190,11 +278,11 @@ func TestStartUsesBookmarkAsDefaultNameWhenNameMissing(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: out})
-	if err := svc.Start("", "feature/qa"); err != nil {
+	if err := svc.createWorkspace("", "feature/qa", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	if got := out.String(); got != "" {
-		t.Fatalf("expected no prompt output, got %q", got)
+	if strings.Contains(out.String(), "Name: ") {
+		t.Fatalf("expected no name prompt output, got %q", out.String())
 	}
 	if len(jj.added) != 1 || jj.added[0].Name != "feature-qa" {
 		t.Fatalf("expected workspace name feature-qa, got %+v", jj.added)
@@ -202,8 +290,8 @@ func TestStartUsesBookmarkAsDefaultNameWhenNameMissing(t *testing.T) {
 	if jj.addRevision != "feature/qa" {
 		t.Fatalf("expected add revision feature/qa, got %q", jj.addRevision)
 	}
-	if jj.bookmarkName != "feature/qa" || jj.bookmarkWS != "feature-qa" {
-		t.Fatalf("unexpected bookmark set args: name=%q workspace=%q", jj.bookmarkName, jj.bookmarkWS)
+	if jj.trackedBookmark != "feature/qa" {
+		t.Fatalf("unexpected tracked bookmark: %q", jj.trackedBookmark)
 	}
 }
 
@@ -215,7 +303,8 @@ func TestStartRemovesStaleManagedWorkspaceDir(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	stalePath := filepath.Join(home, ".awp", "workspaces", "qa")
+	repoName := filepath.Base(repoRoot)
+	stalePath := filepath.Join(home, ".awp", "workspaces", repoName, "qa")
 	if err := os.MkdirAll(stalePath, 0o755); err != nil {
 		t.Fatalf("mkdir stale path: %v", err)
 	}
@@ -224,7 +313,7 @@ func TestStartRemovesStaleManagedWorkspaceDir(t *testing.T) {
 	}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
-	if err := svc.Start("qa", ""); err != nil {
+	if err := svc.createWorkspace("qa", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 	if _, err := os.Stat(stalePath); !errors.Is(err, os.ErrNotExist) {
@@ -241,11 +330,11 @@ func TestStartPromptsForNameWhenMissing(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: in, Out: out})
-	if err := svc.Start("", ""); err != nil {
+	if err := svc.createWorkspace("", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	if got := out.String(); got != "Name: " {
-		t.Fatalf("expected prompt output %q, got %q", "Name: ", got)
+	if !strings.Contains(out.String(), "Name: ") {
+		t.Fatalf("expected prompt output to contain %q, got %q", "Name: ", out.String())
 	}
 	if _, ok := store.entries["my-feature"]; !ok {
 		t.Fatal("expected normalized prompted name in store")
@@ -259,7 +348,7 @@ func TestStartOpensExistingWorkspace(t *testing.T) {
 	store := &fakeStore{entries: map[string]Entry{"foo": {Name: "foo", Path: filepath.Join(repoRoot, ".awp", "workspaces", "foo")}}}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
-	if err := svc.Start("foo", ""); err != nil {
+	if err := svc.createWorkspace("foo", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
 	if len(jj.added) != 0 {
@@ -277,11 +366,148 @@ func TestStartExistingWorkspaceSetsBookmarkWhenProvided(t *testing.T) {
 	store := &fakeStore{entries: map[string]Entry{"foo": {Name: "foo", Path: filepath.Join(repoRoot, ".awp", "workspaces", "foo")}}}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
-	if err := svc.Start("foo", "feature/foo"); err != nil {
+	if err := svc.createWorkspace("foo", "feature/foo", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	if jj.bookmarkName != "feature/foo" || jj.bookmarkWS != "foo" {
-		t.Fatalf("unexpected bookmark set args: name=%q workspace=%q", jj.bookmarkName, jj.bookmarkWS)
+	if jj.trackedBookmark != "feature/foo" {
+		t.Fatalf("unexpected tracked bookmark: %q", jj.trackedBookmark)
+	}
+}
+
+func TestCreateWorkspaceOpensWhenAddReportsAlreadyExists(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}, addErr: errors.New("Workspace named 'qa' already exists"), addSetsExistingOnErr: true}
+	tmux := &fakeTmux{windows: map[string]bool{"qa": true}}
+	store := &fakeStore{entries: map[string]Entry{"qa": {Name: "qa", Path: filepath.Join(repoRoot, ".awp", "workspaces", "qa")}}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.createWorkspace("qa", "", true); err != nil {
+		t.Fatalf("createWorkspace returned error: %v", err)
+	}
+	if len(tmux.switched) != 1 || tmux.switched[0] != "qa" {
+		t.Fatalf("expected switch to qa, got %+v", tmux.switched)
+	}
+}
+
+func TestStartRunsPostWorkspaceStartHooksForNewWorkspace(t *testing.T) {
+	repoRoot := t.TempDir()
+	invocationDir := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+	hooks := &fakeHooks{commands: []string{"cp <root>/.env .env", "mise trust"}}
+	runner := &fakeRunner{}
+
+	svc := NewService(Dependencies{
+		JJ:            jj,
+		Tmux:          tmux,
+		Store:         store,
+		Hooks:         hooks,
+		Runner:        runner,
+		InvocationDir: invocationDir,
+		Input:         bytes.NewBuffer(nil),
+		Out:           io.Discard,
+	})
+	if err := svc.createWorkspace("qa", "", true); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if hooks.calls != 1 || hooks.repoRoot != repoRoot {
+		t.Fatalf("unexpected hooks calls: calls=%d repoRoot=%q", hooks.calls, hooks.repoRoot)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected 2 hook command runs, got %+v", runner.calls)
+	}
+	if runner.calls[0].name != "sh" || len(runner.calls[0].args) != 2 || runner.calls[0].args[0] != "-c" {
+		t.Fatalf("unexpected first runner call: %+v", runner.calls[0])
+	}
+	if got := runner.calls[0].args[1]; !strings.Contains(got, "cp "+invocationDir+"/.env .env") {
+		t.Fatalf("unexpected expanded command %q", got)
+	}
+	if len(tmux.created) != 1 || tmux.created[0].Name != "qa" {
+		t.Fatalf("expected tmux window qa, got %+v", tmux.created)
+	}
+}
+
+func TestStartDoesNotRunHooksForExistingWorkspace(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{"foo": true}}
+	tmux := &fakeTmux{windows: map[string]bool{"foo": true}}
+	store := &fakeStore{entries: map[string]Entry{"foo": {Name: "foo", Path: filepath.Join(repoRoot, ".awp", "workspaces", "foo")}}}
+	hooks := &fakeHooks{commands: []string{"echo hi"}}
+	runner := &fakeRunner{}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Hooks: hooks, Runner: runner, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.createWorkspace("foo", "", true); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if hooks.calls != 0 {
+		t.Fatalf("expected no hook lookup for existing workspace, got %d", hooks.calls)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("expected no command runs, got %+v", runner.calls)
+	}
+}
+
+func TestOpenRunsHooksWhenCreatingWorkspace(t *testing.T) {
+	repoRoot := t.TempDir()
+	invocationDir := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{"default": true}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+	hooks := &fakeHooks{commands: []string{"cp <root>/.env .env", "echo done"}}
+	runner := &fakeRunner{}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Hooks: hooks, Runner: runner, InvocationDir: invocationDir, Input: bytes.NewBufferString("y\n"), Out: io.Discard})
+	if err := svc.Open("", "feature/qa", false); err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	if hooks.calls != 1 {
+		t.Fatalf("expected hook lookup on open-created workspace, got %d", hooks.calls)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected 2 hook command runs on open-created workspace, got %+v", runner.calls)
+	}
+	if got := runner.calls[0].args[1]; !strings.Contains(got, "cp "+invocationDir+"/.env .env") {
+		t.Fatalf("unexpected expanded command %q", got)
+	}
+}
+
+func TestStartRollsBackWhenHookFails(t *testing.T) {
+	repoRoot := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}, workspaceRevs: map[string]string{"qa": "rev-qa"}, emptyRevisions: map[string]bool{"rev-qa": true}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+	hooks := &fakeHooks{commands: []string{"pnpm i"}}
+	runner := &fakeRunner{failCall: 1, failOut: "install failed", failErr: errors.New("exit status 1")}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Hooks: hooks, Runner: runner, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	err := svc.createWorkspace("qa", "", true)
+	if err == nil {
+		t.Fatal("expected start error")
+	}
+	if !strings.Contains(err.Error(), "bootstrap hook failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(jj.forgotten) != 1 || jj.forgotten[0] != "qa" {
+		t.Fatalf("expected rollback forget qa, got %+v", jj.forgotten)
+	}
+	if len(tmux.killed) != 0 {
+		t.Fatalf("expected no rollback window kill because tmux window was not created yet, got %+v", tmux.killed)
+	}
+	if len(tmux.created) != 0 {
+		t.Fatalf("expected no tmux window to be created before hook success, got %+v", tmux.created)
+	}
+	if _, ok := store.entries["qa"]; ok {
+		t.Fatalf("expected qa entry removed on rollback, got %+v", store.entries)
+	}
+	if len(jj.abandoned) != 1 || jj.abandoned[0] != "rev-qa" {
+		t.Fatalf("expected rollback to abandon rev-qa, got %+v", jj.abandoned)
+	}
+	workspacePath := filepath.Join(home, ".awp", "workspaces", "qa")
+	if _, statErr := os.Stat(workspacePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected workspace path removed, stat err=%v", statErr)
 	}
 }
 
@@ -329,13 +555,55 @@ func TestDeleteRequiresConfirmationUnlessForced(t *testing.T) {
 	}
 }
 
+func TestDeleteAbandonsEmptyWorkspaceRevision(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{
+		repoRoot:       repoRoot,
+		existing:       map[string]bool{"foo": true},
+		workspaceRevs:  map[string]string{"foo": "abc123"},
+		emptyRevisions: map[string]bool{"abc123": true},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{"foo": true}}
+	store := &fakeStore{entries: map[string]Entry{"foo": {Name: "foo", Path: filepath.Join(repoRoot, ".awp", "workspaces", "foo")}}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete("foo", true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if len(jj.abandoned) != 1 || jj.abandoned[0] != "abc123" {
+		t.Fatalf("expected abandoned abc123, got %+v", jj.abandoned)
+	}
+}
+
+func TestDeleteForgetsMatchingBookmarkIncludingRemotes(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{
+		repoRoot:      repoRoot,
+		existing:      map[string]bool{"team-example-branch": true},
+		workspaceRevs: map[string]string{"team-example-branch": "abc123"},
+		bookmarksByRev: map[string][]string{
+			"abc123": {"team/example-branch"},
+		},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{"team-example-branch": true}}
+	store := &fakeStore{entries: map[string]Entry{"team-example-branch": {Name: "team-example-branch", Path: filepath.Join(repoRoot, ".awp", "workspaces", "team-example-branch")}}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete("team-example-branch", true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if len(jj.forgottenBookmarks) != 1 || jj.forgottenBookmarks[0] != "team/example-branch" {
+		t.Fatalf("expected bookmark forget for tracked bookmark, got %+v", jj.forgottenBookmarks)
+	}
+}
+
 func TestStartRequiresRepo(t *testing.T) {
 	jj := &fakeJJ{repoRootErr: errors.New("no repo"), existing: map[string]bool{}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
 	store := &fakeStore{entries: map[string]Entry{}}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
-	if err := svc.Start("foo", ""); err == nil {
+	if err := svc.createWorkspace("foo", "", true); err == nil {
 		t.Fatal("expected repo error")
 	}
 }
@@ -349,7 +617,7 @@ func TestOpenPromptsToStartWhenMissingAndCancelled(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: in, Out: out})
-	err := svc.Open("qa", "")
+	err := svc.Open("qa", "", false)
 	if err == nil || err.Error() != "open cancelled" {
 		t.Fatalf("expected open cancelled error, got %v", err)
 	}
@@ -359,7 +627,7 @@ func TestOpenPromptsToStartWhenMissingAndCancelled(t *testing.T) {
 	if _, ok := store.entries["qa"]; ok {
 		t.Fatalf("did not expect qa entry in store: %+v", store.entries)
 	}
-	if !strings.Contains(out.String(), "Start it?") {
+	if !strings.Contains(out.String(), "Create it?") {
 		t.Fatalf("expected prompt in output, got %q", out.String())
 	}
 }
@@ -372,7 +640,7 @@ func TestOpenPromptsToStartWhenMissingAndConfirmed(t *testing.T) {
 	in := bytes.NewBufferString("y\n")
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: in, Out: io.Discard})
-	if err := svc.Open("qa", ""); err != nil {
+	if err := svc.Open("qa", "", false); err != nil {
 		t.Fatalf("Open returned error: %v", err)
 	}
 	if len(jj.added) != 1 || jj.added[0].Name != "qa" {
@@ -383,7 +651,7 @@ func TestOpenPromptsToStartWhenMissingAndConfirmed(t *testing.T) {
 	}
 }
 
-func TestOpenWithBookmarkStartsWithoutPrompt(t *testing.T) {
+func TestOpenWithYesSkipsPromptWhenMissing(t *testing.T) {
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{"default": true}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
@@ -391,17 +659,40 @@ func TestOpenWithBookmarkStartsWithoutPrompt(t *testing.T) {
 	out := &bytes.Buffer{}
 
 	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: out})
-	if err := svc.Open("", "saltor/no-default-standard-delivery-preference"); err != nil {
+	if err := svc.Open("qa", "", true); err != nil {
 		t.Fatalf("Open returned error: %v", err)
 	}
-	if got := out.String(); got != "" {
-		t.Fatalf("expected no prompt output, got %q", got)
+	if strings.Contains(out.String(), "Create it?") {
+		t.Fatalf("expected no prompt output, got %q", out.String())
 	}
-	if len(jj.added) != 1 || jj.added[0].Name != "saltor-no-default-standard-delivery-preference" {
+	if len(jj.added) != 1 || jj.added[0].Name != "qa" {
+		t.Fatalf("expected qa workspace to be added, got %+v", jj.added)
+	}
+}
+
+func TestOpenWithBookmarkPromptsBeforeStarting(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{"default": true}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+	out := &bytes.Buffer{}
+	in := bytes.NewBufferString("y\n")
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: in, Out: out})
+	if err := svc.Open("", "team/example-branch", false); err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "Create it?") {
+		t.Fatalf("expected prompt output, got %q", out.String())
+	}
+	if len(jj.added) != 1 || jj.added[0].Name != "team-example-branch" {
 		t.Fatalf("unexpected added workspace: %+v", jj.added)
 	}
-	if jj.addRevision != "saltor/no-default-standard-delivery-preference" {
-		t.Fatalf("expected add revision to be bookmark, got %q", jj.addRevision)
+	if jj.addRevision != "team/example-branch" {
+		t.Fatalf("expected add revision team/example-branch, got %q", jj.addRevision)
+	}
+	if jj.trackedBookmark != "team/example-branch" {
+		t.Fatalf("unexpected tracked bookmark: %q", jj.trackedBookmark)
 	}
 }
 

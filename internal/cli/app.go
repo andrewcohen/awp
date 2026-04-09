@@ -14,8 +14,13 @@ import (
 
 type workspacePicker func(title string, options []string) (string, error)
 
+type doctorService interface {
+	Run() error
+}
+
 type App struct {
 	svc    workspace.Service
+	doctor doctorService
 	out    io.Writer
 	in     io.Reader
 	picker workspacePicker
@@ -34,10 +39,18 @@ func (a *App) Run(args []string) error {
 	if len(args) == 0 {
 		return a.usage()
 	}
-	if args[0] != "workspace" && args[0] != "w" {
+	switch args[0] {
+	case "workspace", "w":
+		return a.runWorkspace(args[1:])
+	case "doctor":
+		return a.runDoctor(args[1:])
+	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
-	return a.runWorkspace(args[1:])
+}
+
+func (a *App) SetDoctor(svc doctorService) {
+	a.doctor = svc
 }
 
 func (a *App) runWorkspace(args []string) error {
@@ -46,8 +59,6 @@ func (a *App) runWorkspace(args []string) error {
 	}
 
 	switch args[0] {
-	case "start":
-		return a.runStart(args[1:])
 	case "list":
 		return a.runList(args[1:])
 	case "info":
@@ -56,57 +67,11 @@ func (a *App) runWorkspace(args []string) error {
 		return a.runOpen(args[1:])
 	case "rename":
 		return a.runRename(args[1:])
-	case "delete", "remove":
+	case "delete", "remove", "rm":
 		return a.runDelete(args[1:])
 	default:
 		return fmt.Errorf("unknown workspace subcommand %q", args[0])
 	}
-}
-
-func (a *App) runStart(args []string) error {
-	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp w start [--name <name>|<name>] [--bookmark|-b <bookmark>]")
-		return nil
-	}
-
-	var name string
-	var bookmark string
-	positionals := make([]string, 0, len(args))
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--name":
-			if i+1 >= len(args) {
-				return errors.New("--name requires a value")
-			}
-			name = args[i+1]
-			i++
-		case strings.HasPrefix(arg, "--name="):
-			name = strings.TrimPrefix(arg, "--name=")
-		case arg == "--bookmark" || arg == "-b":
-			if i+1 >= len(args) {
-				return fmt.Errorf("%s requires a value", arg)
-			}
-			bookmark = args[i+1]
-			i++
-		case strings.HasPrefix(arg, "--bookmark="):
-			bookmark = strings.TrimPrefix(arg, "--bookmark=")
-		case strings.HasPrefix(arg, "-"):
-			return fmt.Errorf("unknown flag %q", arg)
-		default:
-			positionals = append(positionals, arg)
-		}
-	}
-
-	if name == "" && len(positionals) > 0 {
-		name = positionals[0]
-	}
-	if len(positionals) > 1 {
-		return errors.New("workspace start accepts at most one positional name")
-	}
-
-	return a.svc.Start(name, bookmark)
 }
 
 func (a *App) runList(args []string) error {
@@ -174,10 +139,11 @@ func (a *App) runInfo(args []string) error {
 
 func (a *App) runOpen(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp w open [workspace] [--bookmark|-b <bookmark>]\nIf no workspace is provided: read from stdin pipe, else open picker.\nIf bookmark is provided and workspace does not exist, start from bookmark.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp w open [workspace] [--bookmark|-b <bookmark>] [--yes|-y]\nIf no workspace is provided: read from stdin pipe, else open picker.")
 		return nil
 	}
 	var bookmark string
+	yes := false
 	positionals := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -190,6 +156,8 @@ func (a *App) runOpen(args []string) error {
 			i++
 		case strings.HasPrefix(arg, "--bookmark="):
 			bookmark = strings.TrimPrefix(arg, "--bookmark=")
+		case arg == "--yes" || arg == "-y":
+			yes = true
 		case strings.HasPrefix(arg, "-"):
 			return fmt.Errorf("unknown flag %q", arg)
 		default:
@@ -197,13 +165,13 @@ func (a *App) runOpen(args []string) error {
 		}
 	}
 	if strings.TrimSpace(bookmark) != "" && len(positionals) == 0 {
-		return a.svc.Open("", bookmark)
+		return a.svc.Open("", bookmark, yes)
 	}
 	name, err := a.resolveWorkspaceTarget("open", positionals)
 	if err != nil {
 		return err
 	}
-	return a.svc.Open(name, bookmark)
+	return a.svc.Open(name, bookmark, yes)
 }
 
 func (a *App) runRename(args []string) error {
@@ -219,7 +187,7 @@ func (a *App) runRename(args []string) error {
 
 func (a *App) runDelete(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp w delete|remove [--force] [workspace]\nIf no workspace is provided: read from stdin pipe, else open picker.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp w delete|remove|rm [--force] [workspace]\nIf no workspace is provided: read from stdin pipe, else open picker.")
 		return nil
 	}
 
@@ -287,13 +255,27 @@ func (a *App) resolveWorkspaceTarget(verb string, args []string) (string, error)
 	return strings.TrimSpace(selected), nil
 }
 
+func (a *App) runDoctor(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp doctor")
+		return nil
+	}
+	if len(args) != 0 {
+		return errors.New("doctor takes no arguments")
+	}
+	if a.doctor == nil {
+		return errors.New("doctor is not configured")
+	}
+	return a.doctor.Run()
+}
+
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <start|list|info|open|rename|delete|remove> [args]")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <doctor|workspace|w> ...")
 	return nil
 }
 
 func (a *App) workspaceUsage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <start|list|info|open|rename|delete|remove>")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|rename|delete|remove|rm>")
 	return nil
 }
 

@@ -9,37 +9,41 @@ import (
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
-type fakeService struct {
-	startName     string
-	startBookmark string
-	openName      string
-	openBookmark  string
-	renameOld     string
-	renameNew     string
-	deleteName    string
-	deleteForce   bool
-	listEntries   []workspace.ListEntry
-	infoEntry     workspace.InfoEntry
-	startErr      error
-	listErr       error
-	infoErr       error
-	openErr       error
-	renameErr     error
-	deleteErr     error
+type fakeDoctor struct {
+	runs int
+	err  error
 }
 
-func (f *fakeService) Start(name string, bookmark string) error {
-	f.startName = name
-	f.startBookmark = bookmark
-	return f.startErr
+func (d *fakeDoctor) Run() error {
+	d.runs++
+	return d.err
 }
+
+type fakeService struct {
+	openName     string
+	openBookmark string
+	openYes      bool
+	renameOld    string
+	renameNew    string
+	deleteName   string
+	deleteForce  bool
+	listEntries  []workspace.ListEntry
+	infoEntry    workspace.InfoEntry
+	listErr      error
+	infoErr      error
+	openErr      error
+	renameErr    error
+	deleteErr    error
+}
+
 func (f *fakeService) List() ([]workspace.ListEntry, error) { return f.listEntries, f.listErr }
 func (f *fakeService) Info(string) (workspace.InfoEntry, error) {
 	return f.infoEntry, f.infoErr
 }
-func (f *fakeService) Open(name string, bookmark string) error {
+func (f *fakeService) Open(name string, bookmark string, yes bool) error {
 	f.openName = name
 	f.openBookmark = bookmark
+	f.openYes = yes
 	return f.openErr
 }
 func (f *fakeService) Rename(oldName, newName string) error {
@@ -51,30 +55,29 @@ func (f *fakeService) Delete(name string, force bool) error {
 	return f.deleteErr
 }
 
-func TestRunStartParsesNameAndBookmarkFlags(t *testing.T) {
+func TestRunDoctor(t *testing.T) {
 	svc := &fakeService{}
+	doc := &fakeDoctor{}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"workspace", "start", "--name", "foo", "-b", "my-bookmark"}); err != nil {
+	app.SetDoctor(doc)
+	if err := app.Run([]string{"doctor"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.startName != "foo" || svc.startBookmark != "my-bookmark" {
-		t.Fatalf("unexpected start args: name=%q bookmark=%q", svc.startName, svc.startBookmark)
+	if doc.runs != 1 {
+		t.Fatalf("expected doctor to run once, got %d", doc.runs)
 	}
 }
 
 func TestRunWorkspaceAlias(t *testing.T) {
-	svc := &fakeService{}
+	svc := &fakeService{listEntries: []workspace.ListEntry{{Name: "foo"}}}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"w", "start", "foo"}); err != nil {
+	if err := app.Run([]string{"w", "list"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
-	}
-	if svc.startName != "foo" {
-		t.Fatalf("start name = %q, want foo", svc.startName)
 	}
 }
 
 func TestRunDeleteParsesForceBeforeOrAfterName(t *testing.T) {
-	tests := [][]string{{"workspace", "delete", "--force", "foo"}, {"workspace", "delete", "foo", "--force"}}
+	tests := [][]string{{"workspace", "delete", "--force", "foo"}, {"workspace", "delete", "foo", "--force"}, {"workspace", "rm", "foo", "--force"}}
 	for _, args := range tests {
 		svc := &fakeService{}
 		app := NewApp(svc, &bytes.Buffer{})
@@ -115,11 +118,22 @@ func TestRunOpenHelp(t *testing.T) {
 func TestRunOpenParsesBookmarkWithoutName(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"w", "open", "-b", "saltor/no-default-standard-delivery-preference"}); err != nil {
+	if err := app.Run([]string{"w", "open", "-b", "team/example-branch"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.openName != "" || svc.openBookmark != "saltor/no-default-standard-delivery-preference" {
-		t.Fatalf("unexpected open call: name=%q bookmark=%q", svc.openName, svc.openBookmark)
+	if svc.openName != "" || svc.openBookmark != "team/example-branch" || svc.openYes {
+		t.Fatalf("unexpected open call: name=%q bookmark=%q yes=%t", svc.openName, svc.openBookmark, svc.openYes)
+	}
+}
+
+func TestRunOpenParsesYesFlag(t *testing.T) {
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	if err := app.Run([]string{"w", "open", "-y", "qa"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if svc.openName != "qa" || !svc.openYes {
+		t.Fatalf("unexpected open call: name=%q yes=%t", svc.openName, svc.openYes)
 	}
 }
 
@@ -146,7 +160,7 @@ func TestRunDeleteUsesPickerWhenNoArg(t *testing.T) {
 	app := NewApp(svc, &bytes.Buffer{})
 	app.in = bytes.NewBuffer(nil)
 	app.picker = func(_ string, _ []string) (string, error) { return "qa", nil }
-	if err := app.Run([]string{"w", "remove", "--force"}); err != nil {
+	if err := app.Run([]string{"w", "rm", "--force"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 	if svc.deleteName != "qa" || !svc.deleteForce {
@@ -168,9 +182,9 @@ func TestRunInfoOutputsDetails(t *testing.T) {
 }
 
 func TestRunPropagatesServiceError(t *testing.T) {
-	svc := &fakeService{startErr: errors.New("boom")}
+	svc := &fakeService{openErr: errors.New("boom")}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"workspace", "start", "foo"}); err == nil {
+	if err := app.Run([]string{"workspace", "open", "foo"}); err == nil {
 		t.Fatal("expected error")
 	}
 }

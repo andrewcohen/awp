@@ -26,7 +26,20 @@ fi
 mkdir -p specs
 
 gen_rand4() {
-  LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 4
+  local chars="abcdefghijklmnopqrstuvwxyz0123456789"
+  local out=""
+  local idx
+
+  while [[ ${#out} -lt 4 ]]; do
+    idx=$(od -An -N2 -tu2 /dev/urandom)
+    idx=${idx//[[:space:]]/}
+    if [[ -z "$idx" ]]; then
+      continue
+    fi
+    out+="${chars:$((idx % ${#chars})):1}"
+  done
+
+  printf '%s' "$out"
 }
 
 id_prefix=$(date +%Y%m%d)
