@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -556,18 +557,19 @@ func renderHunkLines(h diff.Hunk, width int) []string {
 	if width <= 0 {
 		return nil
 	}
+	oldWidth, newWidth := hunkLineNumberWidths(h)
 	lines := make([]string, 0, len(h.Lines))
 	oldLine, newLine := h.OldStart, h.NewStart
 	for _, l := range h.Lines {
 		switch l.Type {
 		case '+':
-			lines = append(lines, renderDecoratedLine('+', 0, newLine, styleAdded.Render(l.Content), width, false))
+			lines = append(lines, renderDecoratedLine('+', 0, newLine, oldWidth, newWidth, styleAdded.Render(l.Content), width, false))
 			newLine++
 		case '-':
-			lines = append(lines, renderDecoratedLine('-', oldLine, 0, styleDeleted.Render(l.Content), width, false))
+			lines = append(lines, renderDecoratedLine('-', oldLine, 0, oldWidth, newWidth, styleDeleted.Render(l.Content), width, false))
 			oldLine++
 		default:
-			lines = append(lines, renderDecoratedLine(' ', oldLine, newLine, styleContext.Render(l.Content), width, false))
+			lines = append(lines, renderDecoratedLine(' ', oldLine, newLine, oldWidth, newWidth, styleContext.Render(l.Content), width, false))
 			oldLine++
 			newLine++
 		}
@@ -575,7 +577,28 @@ func renderHunkLines(h diff.Hunk, width int) []string {
 	return lines
 }
 
-func renderDecoratedLine(kind byte, oldLine, newLine int, content string, width int, selected bool) string {
+func hunkLineNumberWidths(h diff.Hunk) (int, int) {
+	oldWidth, newWidth := 1, 1
+	oldLine, newLine := h.OldStart, h.NewStart
+	for _, l := range h.Lines {
+		switch l.Type {
+		case '+':
+			newWidth = max(newWidth, len(strconv.Itoa(newLine)))
+			newLine++
+		case '-':
+			oldWidth = max(oldWidth, len(strconv.Itoa(oldLine)))
+			oldLine++
+		default:
+			oldWidth = max(oldWidth, len(strconv.Itoa(oldLine)))
+			newWidth = max(newWidth, len(strconv.Itoa(newLine)))
+			oldLine++
+			newLine++
+		}
+	}
+	return oldWidth, newWidth
+}
+
+func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int, content string, width int, selected bool) string {
 	oldText := lineNoText(oldLine)
 	newText := lineNoText(newLine)
 	lineStyle := styleLineNo
@@ -592,7 +615,7 @@ func renderDecoratedLine(kind byte, oldLine, newLine int, content string, width 
 	} else if kind == '-' {
 		gutterStyle = styleDeleted
 	}
-	prefix := lineStyle.Render(fmt.Sprintf("%4s %4s ", oldText, newText)) + gutterStyle.Render(gutter+" ")
+	prefix := lineStyle.Render(fmt.Sprintf("%*s %*s ", oldWidth, oldText, newWidth, newText)) + gutterStyle.Render(gutter+" ")
 	return truncateStyled(prefix+content, width)
 }
 

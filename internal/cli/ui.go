@@ -7,13 +7,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/editor"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/ui"
 )
 
 func runUIWithCharm(runner Runner, in io.Reader, out io.Writer) error {
-	if osTermDumb() {
+	if charm.IsDumbTerminal() {
 		return fmt.Errorf("diff ui not available in dumb terminal")
 	}
 	if runner == nil {
