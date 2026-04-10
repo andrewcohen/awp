@@ -8,7 +8,6 @@
 ## Workspace UX
 - [ ] Consider multi-repo listing support (`awp w list --all`, `--repo <path>`).
 - [ ] Consider `awp w info --all` view for cross-project diagnostics.
-- [ ] Add optional `--prompt` support to `awp w open` (and future interactive flow): after bootstrap completes in a newly initialized workspace, run configured agent command in the new tmux window (e.g., `pi <prompt>`).
 
 ## CLI Ergonomics
 - [ ] Add shell completion command/install flow (`awp completion ...`, optional `install`).

@@ -13,25 +13,32 @@ import (
 )
 
 type workspacePicker func(title string, options []string) (string, error)
+type openWorkflow func(initial openRequest, workspaces []string, in io.Reader, out io.Writer) (openRequest, error)
 
 type doctorService interface {
 	Run() error
 }
 
 type App struct {
-	svc    workspace.Service
-	doctor doctorService
-	out    io.Writer
-	in     io.Reader
-	picker workspacePicker
+	svc           workspace.Service
+	doctor        doctorService
+	out           io.Writer
+	in            io.Reader
+	picker        workspacePicker
+	openForm      openWorkflow
+	isPiped       func(io.Reader) bool
+	isInteractive func(io.Reader) bool
 }
 
 func NewApp(svc workspace.Service, out io.Writer) *App {
 	return &App{
-		svc:    svc,
-		out:    out,
-		in:     os.Stdin,
-		picker: pickWorkspaceWithCharm,
+		svc:           svc,
+		out:           out,
+		in:            os.Stdin,
+		picker:        pickWorkspaceWithCharm,
+		openForm:      runOpenWithCharm,
+		isPiped:       isPipedInput,
+		isInteractive: isInteractiveInput,
 	}
 }
 
@@ -139,11 +146,10 @@ func (a *App) runInfo(args []string) error {
 
 func (a *App) runOpen(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp w open [workspace] [--bookmark|-b <bookmark>] [--yes|-y]\nIf no workspace is provided: read from stdin pipe, else open picker.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp w open [workspace] [--bookmark|-b <bookmark>] [--prompt|-p <prompt>] [--yes|-y]\nIf no workspace is provided: read from stdin pipe, else open interactive form/picker.")
 		return nil
 	}
-	var bookmark string
-	yes := false
+	req := openRequest{}
 	positionals := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -152,26 +158,65 @@ func (a *App) runOpen(args []string) error {
 			if i+1 >= len(args) {
 				return fmt.Errorf("%s requires a value", arg)
 			}
-			bookmark = args[i+1]
+			req.Bookmark = args[i+1]
 			i++
 		case strings.HasPrefix(arg, "--bookmark="):
-			bookmark = strings.TrimPrefix(arg, "--bookmark=")
+			req.Bookmark = strings.TrimPrefix(arg, "--bookmark=")
+		case arg == "--prompt" || arg == "-p":
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires a value", arg)
+			}
+			req.Prompt = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--prompt="):
+			req.Prompt = strings.TrimPrefix(arg, "--prompt=")
 		case arg == "--yes" || arg == "-y":
-			yes = true
+			req.Yes = true
 		case strings.HasPrefix(arg, "-"):
 			return fmt.Errorf("unknown flag %q", arg)
 		default:
 			positionals = append(positionals, arg)
 		}
 	}
-	if strings.TrimSpace(bookmark) != "" && len(positionals) == 0 {
-		return a.svc.Open("", bookmark, yes)
+	if len(positionals) > 1 {
+		return errors.New("workspace open requires exactly one workspace name")
 	}
-	name, err := a.resolveWorkspaceTarget("open", positionals)
+	if len(positionals) == 1 {
+		req.Name = positionals[0]
+		return a.svc.Open(req.Name, req.Bookmark, req.Prompt, req.Yes)
+	}
+	if a.isPiped != nil && a.isPiped(a.in) {
+		name, err := a.resolveWorkspaceTarget("open", nil)
+		if err != nil {
+			return err
+		}
+		req.Name = name
+		return a.svc.Open(req.Name, req.Bookmark, req.Prompt, req.Yes)
+	}
+	if a.isInteractive != nil && a.isInteractive(a.in) && a.openForm != nil {
+		entries, err := a.svc.List()
+		if err != nil {
+			return err
+		}
+		options := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			options = append(options, entry.Name)
+		}
+		updated, err := a.openForm(req, options, a.in, a.out)
+		if err != nil {
+			return err
+		}
+		updated.Yes = true
+		return a.svc.Open(updated.Name, updated.Bookmark, updated.Prompt, updated.Yes)
+	}
+	if strings.TrimSpace(req.Bookmark) != "" {
+		return a.svc.Open("", req.Bookmark, req.Prompt, req.Yes)
+	}
+	name, err := a.resolveWorkspaceTarget("open", nil)
 	if err != nil {
 		return err
 	}
-	return a.svc.Open(name, bookmark, yes)
+	return a.svc.Open(name, req.Bookmark, req.Prompt, req.Yes)
 }
 
 func (a *App) runRename(args []string) error {
@@ -221,7 +266,7 @@ func (a *App) resolveWorkspaceTarget(verb string, args []string) (string, error)
 		return "", fmt.Errorf("workspace %s requires exactly one workspace name", verb)
 	}
 
-	if isPipedInput(a.in) {
+	if a.isPiped != nil && a.isPiped(a.in) {
 		reader := bufio.NewReader(a.in)
 		line, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -243,7 +288,16 @@ func (a *App) resolveWorkspaceTarget(verb string, args []string) (string, error)
 	}
 	options := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		if verb == "delete" && workspace.IsProtected(entry.Name) {
+			continue
+		}
 		options = append(options, entry.Name)
+	}
+	if len(options) == 0 {
+		if verb == "delete" {
+			return "", errors.New("no removable workspaces available")
+		}
+		return "", errors.New("no workspaces available")
 	}
 	if a.picker == nil {
 		return "", errors.New("workspace picker is not configured")
@@ -289,6 +343,18 @@ func isPipedInput(in io.Reader) bool {
 		return false
 	}
 	return stat.Mode()&os.ModeCharDevice == 0
+}
+
+func isInteractiveInput(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return stat.Mode()&os.ModeCharDevice != 0
 }
 
 func isHelpArgSlice(args []string) bool {
