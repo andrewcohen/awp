@@ -134,3 +134,63 @@ func TestDefaultRefreshIntervalSet(t *testing.T) {
 		t.Fatalf("expected auto-refresh disabled by default, got %v", m.RefreshInterval)
 	}
 }
+
+func TestCtrlDPagesFileList(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.height = 20
+	files := []diff.FileDiff{
+		{NewPath: "a.go", Status: "M"},
+		{NewPath: "b.go", Status: "M"},
+		{NewPath: "c.go", Status: "M"},
+		{NewPath: "d.go", Status: "M"},
+		{NewPath: "e.go", Status: "M"},
+		{NewPath: "f.go", Status: "M"},
+		{NewPath: "g.go", Status: "M"},
+		{NewPath: "h.go", Status: "M"},
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: files})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	got := updated.(Model)
+	if got.filesCursor != 7 {
+		t.Fatalf("expected files cursor to page to 7, got %d", got.filesCursor)
+	}
+}
+
+func TestCtrlUPagesHunks(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.height = 20
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks: []diff.Hunk{{NewStart: 1, Lines: []diff.HunkLine{{Type: ' ', Content: "a"}}}, {NewStart: 2, Lines: []diff.HunkLine{{Type: ' ', Content: "b"}}}, {NewStart: 3, Lines: []diff.HunkLine{{Type: ' ', Content: "c"}}}, {NewStart: 4, Lines: []diff.HunkLine{{Type: ' ', Content: "d"}}}, {NewStart: 5, Lines: []diff.HunkLine{{Type: ' ', Content: "e"}}}, {NewStart: 6, Lines: []diff.HunkLine{{Type: ' ', Content: "f"}}}, {NewStart: 7, Lines: []diff.HunkLine{{Type: ' ', Content: "g"}}}, {NewStart: 8, Lines: []diff.HunkLine{{Type: ' ', Content: "h"}}}},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	got.hunkScroll = 7
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	got = updated.(Model)
+	if got.hunkScroll != 0 {
+		t.Fatalf("expected hunk scroll to page to 0, got %d", got.hunkScroll)
+	}
+}
+
+func TestCtrlDScrollsSingleLargeHunk(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.height = 12
+	lines := make([]diff.HunkLine, 12)
+	for i := range lines {
+		lines[i] = diff.HunkLine{Type: ' ', Content: "line"}
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks:   []diff.Hunk{{NewStart: 1, Lines: lines}},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	got = updated.(Model)
+	if got.hunkScroll == 0 {
+		t.Fatal("expected ctrl+d to scroll a single large hunk")
+	}
+}

@@ -31,17 +31,18 @@ type Model struct {
 	LoadDiff        func() (string, error)
 	OpenFile        OpenFunc
 
-	files       []diff.FileDiff
-	filtered    []diff.FileDiff
-	filesCursor int
-	hunksCursor int
-	focus       Focus
-	filterInput textinput.Model
-	width       int
-	height      int
-	status      string
-	statusErr   bool
-	refreshing  bool
+	files          []diff.FileDiff
+	filtered       []diff.FileDiff
+	filesCursor    int
+	hunksCursor    int
+	hunkScroll     int
+	focus          Focus
+	filterInput    textinput.Model
+	width          int
+	height         int
+	status         string
+	statusErr      bool
+	refreshing     bool
 }
 
 type diffLoadedMsg struct {
@@ -105,6 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filesCursor = max(0, len(m.filtered)-1)
 		}
 		m.hunksCursor = 0
+		m.hunkScroll = 0
 		if len(m.filtered) == 0 {
 			m.status = "no changes"
 		} else {
@@ -173,6 +175,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = FocusFiles
 		}
 		return m, nil
+	case "ctrl+d":
+		m.pageDown()
+		return m, nil
+	case "ctrl+u":
+		m.pageUp()
+		return m, nil
 	}
 
 	if m.focus == FocusFiles {
@@ -181,11 +189,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.filesCursor < len(m.filtered)-1 {
 				m.filesCursor++
 				m.hunksCursor = 0
+				m.hunkScroll = 0
 			}
 		case "k", "up":
 			if m.filesCursor > 0 {
 				m.filesCursor--
 				m.hunksCursor = 0
+				m.hunkScroll = 0
 			}
 		case "enter", "e":
 			return m, m.openCurrentFile()
@@ -201,10 +211,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "j", "down":
 			if m.hunksCursor < len(current.Hunks)-1 {
 				m.hunksCursor++
+				m.ensureSelectedHunkVisible()
 			}
 		case "k", "up":
 			if m.hunksCursor > 0 {
 				m.hunksCursor--
+				m.ensureSelectedHunkVisible()
 			}
 		case "enter", "e":
 			return m, m.openAtHunk()
@@ -228,7 +240,95 @@ func (m *Model) applyFilter() {
 	if m.filesCursor >= len(m.filtered) {
 		m.filesCursor = max(0, len(m.filtered)-1)
 		m.hunksCursor = 0
+		m.hunkScroll = 0
 	}
+}
+
+func (m *Model) pageDown() {
+	step := m.pageStep()
+	if m.focus == FocusHunks {
+		m.hunkScroll += step
+		m.clampHunkScroll()
+		return
+	}
+	if len(m.filtered) == 0 {
+		return
+	}
+	m.filesCursor = min(len(m.filtered)-1, m.filesCursor+step)
+	m.hunksCursor = 0
+	m.hunkScroll = 0
+}
+
+func (m *Model) pageUp() {
+	step := m.pageStep()
+	if m.focus == FocusHunks {
+		m.hunkScroll = max(0, m.hunkScroll-step)
+		return
+	}
+	m.filesCursor = max(0, m.filesCursor-step)
+	m.hunksCursor = 0
+	m.hunkScroll = 0
+}
+
+func (m *Model) ensureSelectedHunkVisible() {
+	if len(m.filtered) == 0 || m.filesCursor >= len(m.filtered) {
+		m.hunkScroll = 0
+		return
+	}
+	visibleHeight := m.hunkContentHeight()
+	if visibleHeight <= 0 {
+		return
+	}
+	start, end := m.selectedHunkRowRange(m.filtered[m.filesCursor])
+	if start < m.hunkScroll {
+		m.hunkScroll = start
+		return
+	}
+	if end > m.hunkScroll+visibleHeight {
+		m.hunkScroll = end - visibleHeight
+	}
+	m.clampHunkScroll()
+}
+
+func (m *Model) clampHunkScroll() {
+	if len(m.filtered) == 0 || m.filesCursor >= len(m.filtered) {
+		m.hunkScroll = 0
+		return
+	}
+	maxScroll := max(0, m.totalHunkRows(m.filtered[m.filesCursor])-m.hunkContentHeight())
+	m.hunkScroll = min(maxScroll, max(0, m.hunkScroll))
+}
+
+func (m Model) hunkContentHeight() int {
+	return max(1, max(0, m.height-4)-1)
+}
+
+func (m Model) totalHunkRows(f diff.FileDiff) int {
+	rows := 0
+	for _, h := range f.Hunks {
+		rows += 1 + len(h.Lines)
+	}
+	return rows
+}
+
+func (m Model) selectedHunkRowRange(f diff.FileDiff) (int, int) {
+	start := 0
+	for i, h := range f.Hunks {
+		end := start + 1 + len(h.Lines)
+		if i == m.hunksCursor {
+			return start, end
+		}
+		start = end
+	}
+	return 0, 0
+}
+
+func (m Model) pageStep() int {
+	step := max(1, (m.height-4)/2)
+	if step < 1 {
+		return 1
+	}
+	return step
 }
 
 func (m Model) openCurrentFile() tea.Cmd {
@@ -318,7 +418,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:move  h/l:switch  e/enter:open  r:refresh  /:filter  q:quit"
+	hint := "j/k:move  ctrl+u/d:page  h/l:switch  e/enter:open  r:refresh  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
@@ -368,18 +468,21 @@ func (m Model) renderHunkPanel(width, height int) string {
 		rows = append(rows, styleDim.Render(" rename-only, binary, or empty diff body"))
 		return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
 	}
+
+	contentRows := make([]string, 0, m.totalHunkRows(f))
 	for i, h := range f.Hunks {
 		hdrStyle := styleHunkHeader
 		if i == m.hunksCursor && m.focus == FocusHunks {
 			hdrStyle = styleSelectedHunkHeader
 		}
-		rows = append(rows, hdrStyle.Width(width-4).Render(fmt.Sprintf(" @@ -%d,%d +%d,%d @@", h.OldStart, h.OldCount, h.NewStart, h.NewCount)))
-		rows = append(rows, renderHunkLines(h, width-4)...)
-		if len(rows) >= height {
-			rows = rows[:height]
-			break
-		}
+		contentRows = append(contentRows, hdrStyle.Width(width-4).Render(fmt.Sprintf(" @@ -%d,%d +%d,%d @@", h.OldStart, h.OldCount, h.NewStart, h.NewCount)))
+		contentRows = append(contentRows, renderHunkLines(h, width-4)...)
 	}
+
+	visibleHeight := max(1, height-1)
+	scroll := min(max(0, m.hunkScroll), max(0, len(contentRows)-visibleHeight))
+	end := min(len(contentRows), scroll+visibleHeight)
+	rows = append(rows, contentRows[scroll:end]...)
 	for len(rows) < height {
 		rows = append(rows, "")
 	}
@@ -546,6 +649,13 @@ func truncate(s string, n int) string {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b
