@@ -40,6 +40,18 @@ func (c *Client) NewWindow(name string, dir string) error {
 	return nil
 }
 
+func (c *Client) SendCommand(name string, command string) error {
+	_, err := c.runner.Run(context.Background(), "", "tmux", "send-keys", "-t", name, "-l", command)
+	if err != nil {
+		return fmt.Errorf("send command to tmux window %q: %w", name, err)
+	}
+	_, err = c.runner.Run(context.Background(), "", "tmux", "send-keys", "-t", name, "Enter")
+	if err != nil {
+		return fmt.Errorf("submit command in tmux window %q: %w", name, err)
+	}
+	return nil
+}
+
 func (c *Client) SwitchToWindow(name string) error {
 	_, err := c.runner.Run(context.Background(), "", "tmux", "select-window", "-t", name)
 	if err != nil {

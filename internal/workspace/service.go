@@ -31,6 +31,7 @@ type JJClient interface {
 type TmuxClient interface {
 	WindowExists(name string) (bool, error)
 	NewWindow(name string, dir string) error
+	SendCommand(name string, command string) error
 	SwitchToWindow(name string) error
 	RenameWindow(oldName string, newName string) error
 	KillWindow(name string) error
@@ -75,7 +76,7 @@ type InfoEntry struct {
 type Service interface {
 	List() ([]ListEntry, error)
 	Info(name string) (InfoEntry, error)
-	Open(name string, bookmark string, yes bool) error
+	Open(name string, bookmark string, prompt string, yes bool) error
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
 }
@@ -149,7 +150,7 @@ func NewService(deps Dependencies) *service {
 	}
 }
 
-func (s *service) createWorkspace(name string, bookmark string, runHooks bool) error {
+func (s *service) createWorkspace(name string, bookmark string, prompt string, runHooks bool) error {
 	s.logf("▶️ Starting workspace create flow (name=%q, bookmark=%q)", strings.TrimSpace(name), strings.TrimSpace(bookmark))
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
@@ -242,6 +243,9 @@ func (s *service) createWorkspace(name string, bookmark string, runHooks bool) e
 	}
 	s.logf("▶️ Ensuring tmux window %q", normalized)
 	if err := s.ensureWindow(normalized, workspacePath); err != nil {
+		return err
+	}
+	if err := s.maybeRunPrompt(normalized, prompt); err != nil {
 		return err
 	}
 	s.logf("▶️ Switching to tmux window %q", normalized)
@@ -362,7 +366,7 @@ func (s *service) Info(name string) (InfoEntry, error) {
 	}, nil
 }
 
-func (s *service) Open(name string, bookmark string, yes bool) error {
+func (s *service) Open(name string, bookmark string, prompt string, yes bool) error {
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
@@ -388,7 +392,7 @@ func (s *service) Open(name string, bookmark string, yes bool) error {
 				return errors.New("open cancelled")
 			}
 		}
-		return s.createWorkspace(normalized, bookmark, true)
+		return s.createWorkspace(normalized, bookmark, prompt, true)
 	}
 	return s.openByName(repoRoot, normalized)
 }
@@ -451,6 +455,9 @@ func (s *service) Delete(name string, force bool) error {
 	normalized, err := NormalizeName(name)
 	if err != nil {
 		return err
+	}
+	if IsProtected(normalized) {
+		return fmt.Errorf("workspace %q cannot be removed", normalized)
 	}
 
 	if !force {
@@ -547,6 +554,20 @@ func (s *service) resolveName(name string) (string, error) {
 		return "", err
 	}
 	return NormalizeName(strings.TrimSpace(line))
+}
+
+func (s *service) maybeRunPrompt(workspaceName, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil
+	}
+	command := "pi " + shellQuote(prompt)
+	s.logf("▶️ Starting agent prompt in tmux window %q", workspaceName)
+	if err := s.tmux.SendCommand(workspaceName, command); err != nil {
+		return fmt.Errorf("start prompt in tmux window %q: %w", workspaceName, err)
+	}
+	s.logf("✅ Agent prompt started")
+	return nil
 }
 
 func (s *service) trackBookmark(bookmark string) error {
@@ -870,6 +891,10 @@ func isInteractiveReader(in io.Reader) bool {
 		return false
 	}
 	return stat.Mode()&os.ModeCharDevice != 0
+}
+
+func IsProtected(name string) bool {
+	return strings.TrimSpace(name) == "default"
 }
 
 func shellQuote(value string) string {
