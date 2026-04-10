@@ -8,6 +8,7 @@
 ## Workspace UX
 - [ ] Consider multi-repo listing support (`awp w list --all`, `--repo <path>`).
 - [ ] Consider `awp w info --all` view for cross-project diagnostics.
+- [ ] When building a future awp UI / agent-deck, add first-class agent attention notifications (done/waiting for user, blocked on approval, errored, and background-session needs-attention states) owned by awp instead of ad hoc pi extensions.
 
 ## CLI Ergonomics
 - [ ] Add shell completion command/install flow (`awp completion ...`, optional `install`).

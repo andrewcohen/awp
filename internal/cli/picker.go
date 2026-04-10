@@ -2,30 +2,74 @@ package cli
 
 import (
 	"errors"
-	"fmt"
-	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/andrewcohen/awp/internal/charm"
 )
 
+type workspaceItem struct {
+	name string
+}
+
+func (i workspaceItem) FilterValue() string { return i.name }
+func (i workspaceItem) Title() string       { return i.name }
+func (i workspaceItem) Description() string { return "" }
+
 type pickerModel struct {
-	title   string
-	options []string
-	cursor  int
-	choice  string
-	cancel  bool
+	list   list.Model
+	choice string
+	cancel bool
+}
+
+var pickerSelectKey = key.NewBinding(
+	key.WithKeys("enter"),
+	key.WithHelp("enter", "select"),
+)
+
+var pickerCancelKey = key.NewBinding(
+	key.WithKeys("q", "esc"),
+	key.WithHelp("q", "cancel"),
+)
+
+func newPickerModel(title string, options []string) pickerModel {
+	items := make([]list.Item, 0, len(options))
+	for _, option := range options {
+		items = append(items, workspaceItem{name: option})
+	}
+
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = false
+	delegate.SetSpacing(0)
+	delegate.ShortHelpFunc = func() []key.Binding {
+		return []key.Binding{pickerSelectKey, pickerCancelKey}
+	}
+	delegate.FullHelpFunc = func() [][]key.Binding {
+		return [][]key.Binding{{pickerSelectKey, pickerCancelKey}}
+	}
+
+	l := list.New(items, delegate, 0, 0)
+	l.Title = title
+	l.SetStatusBarItemName("workspace", "workspaces")
+	l.DisableQuitKeybindings()
+	charm.ApplyListTheme(&l, &delegate)
+	l.SetDelegate(delegate)
+
+	return pickerModel{list: l}
 }
 
 func pickWorkspaceWithCharm(title string, options []string) (string, error) {
 	if len(options) == 0 {
 		return "", errors.New("no workspace options available")
 	}
-	if os.Getenv("TERM") == "dumb" {
+	if charm.IsDumbTerminal() {
 		return "", errors.New("interactive picker not available in dumb terminal")
 	}
 
-	m := pickerModel{title: title, options: options}
+	m := newPickerModel(title, options)
 	p := tea.NewProgram(m)
 	final, err := p.Run()
 	if err != nil {
@@ -48,38 +92,31 @@ func (m pickerModel) Init() tea.Cmd { return nil }
 
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.list.SetSize(msg.Width, msg.Height)
+		return m, nil
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "esc", "q":
-			m.cancel = true
-			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
+		if m.list.FilterState() != list.Filtering {
+			switch msg.String() {
+			case "ctrl+c", "esc", "q":
+				m.cancel = true
+				return m, tea.Quit
+			case "enter":
+				selected, ok := m.list.SelectedItem().(workspaceItem)
+				if !ok || strings.TrimSpace(selected.name) == "" {
+					return m, nil
+				}
+				m.choice = selected.name
+				return m, tea.Quit
 			}
-		case "down", "j":
-			if m.cursor < len(m.options)-1 {
-				m.cursor++
-			}
-		case "enter", " ":
-			m.choice = m.options[m.cursor]
-			return m, tea.Quit
 		}
 	}
-	return m, nil
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
 }
 
 func (m pickerModel) View() string {
-	var b strings.Builder
-	b.WriteString(m.title)
-	b.WriteString("\n\n")
-	for i, option := range m.options {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "> "
-		}
-		fmt.Fprintf(&b, "%s%s\n", prefix, option)
-	}
-	b.WriteString("\n↑/↓ or j/k to move, enter to select, q/esc to cancel\n")
-	return b.String()
+	return m.list.View()
 }

@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/andrewcohen/awp/internal/charm"
 )
 
 type JJClient interface {
@@ -384,7 +385,7 @@ func (s *service) Open(name string, bookmark string, prompt string, yes bool) er
 	}
 	if !exists {
 		if !yes {
-			ok, err := s.confirmf("Workspace %q does not exist. Create it? [y/N]: ", normalized)
+			ok, err := charm.Confirm(s.in, s.out, fmt.Sprintf("Workspace %q does not exist. Create it?", normalized), false)
 			if err != nil {
 				return err
 			}
@@ -461,14 +462,11 @@ func (s *service) Delete(name string, force bool) error {
 	}
 
 	if !force {
-		fmt.Fprintf(s.out, "Delete workspace %q? [y/N]: ", normalized)
-		reader := bufio.NewReader(s.in)
-		line, readErr := reader.ReadString('\n')
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return readErr
+		ok, err := charm.Confirm(s.in, s.out, fmt.Sprintf("Delete workspace %q?", normalized), false)
+		if err != nil {
+			return err
 		}
-		answer := strings.TrimSpace(strings.ToLower(line))
-		if answer != "y" && answer != "yes" {
+		if !ok {
 			return errors.New("delete cancelled")
 		}
 	}
@@ -489,16 +487,16 @@ func (s *service) Delete(name string, force bool) error {
 	if err := s.jj.ForgetWorkspace(normalized); err != nil {
 		return err
 	}
-	fmt.Fprintf(s.out, "✅ Forgot jj workspace %q\n", normalized)
+	s.logf("✅ Forgot jj workspace %q", normalized)
 
 	forgottenBookmarks, err := s.cleanupWorkspaceBookmarks(normalized, revision)
 	if err != nil {
 		return err
 	}
 	if forgottenBookmarks > 0 {
-		fmt.Fprintf(s.out, "✅ Forgot %d matching bookmark(s)\n", forgottenBookmarks)
+		s.logf("✅ Forgot %d matching bookmark(s)", forgottenBookmarks)
 	} else {
-		fmt.Fprintln(s.out, "⏭️ Skipped bookmark cleanup (no matching bookmarks)")
+		s.emit("⏭️ Skipped bookmark cleanup (no matching bookmarks)")
 	}
 
 	if hasEntry {
@@ -506,16 +504,16 @@ func (s *service) Delete(name string, force bool) error {
 		if err := s.store.Save(repoRoot, entries); err != nil {
 			return err
 		}
-		fmt.Fprintf(s.out, "✅ Removed workspace state entry %q\n", normalized)
+		s.logf("✅ Removed workspace state entry %q", normalized)
 		managedBase := s.managedWorkspaceBase()
 		if strings.HasPrefix(entry.Path, managedBase+string(filepath.Separator)) || entry.Path == managedBase {
 			_ = os.RemoveAll(entry.Path)
-			fmt.Fprintf(s.out, "✅ Removed workspace directory %q\n", entry.Path)
+			s.logf("✅ Removed workspace directory %q", entry.Path)
 		} else {
-			fmt.Fprintf(s.out, "⏭️ Skipped workspace directory removal (%q outside managed base)\n", entry.Path)
+			s.logf("⏭️ Skipped workspace directory removal (%q outside managed base)", entry.Path)
 		}
 	} else {
-		fmt.Fprintf(s.out, "⏭️ Skipped workspace state cleanup (%q not managed by awp)\n", normalized)
+		s.logf("⏭️ Skipped workspace state cleanup (%q not managed by awp)", normalized)
 	}
 
 	abandoned, err := s.cleanupEmptyRevision(revision)
@@ -523,9 +521,9 @@ func (s *service) Delete(name string, force bool) error {
 		return err
 	}
 	if abandoned {
-		fmt.Fprintln(s.out, "✅ Abandoned empty workspace revision")
+		s.emit("✅ Abandoned empty workspace revision")
 	} else {
-		fmt.Fprintln(s.out, "⏭️ Skipped revision cleanup (revision not empty or unavailable)")
+		s.emit("⏭️ Skipped revision cleanup (revision not empty or unavailable)")
 	}
 
 	hasWindow, _ := s.tmux.WindowExists(normalized)
@@ -533,12 +531,12 @@ func (s *service) Delete(name string, force bool) error {
 		if err := s.tmux.KillWindow(normalized); err != nil {
 			return err
 		}
-		fmt.Fprintf(s.out, "✅ Removed tmux window %q\n", normalized)
+		s.logf("✅ Removed tmux window %q", normalized)
 	} else {
-		fmt.Fprintf(s.out, "⏭️ Skipped tmux window removal (%q not present)\n", normalized)
+		s.logf("⏭️ Skipped tmux window removal (%q not present)", normalized)
 	}
 
-	fmt.Fprintf(s.out, "✅ Workspace %q removed\n", normalized)
+	s.logf("✅ Workspace %q removed", normalized)
 	return nil
 }
 
@@ -547,13 +545,11 @@ func (s *service) resolveName(name string) (string, error) {
 	if candidate != "" {
 		return NormalizeName(candidate)
 	}
-	fmt.Fprint(s.out, "Name: ")
-	reader := bufio.NewReader(s.in)
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
+	line, err := charm.ReadLine(s.in, s.out, "Name")
+	if err != nil {
 		return "", err
 	}
-	return NormalizeName(strings.TrimSpace(line))
+	return NormalizeName(line)
 }
 
 func (s *service) maybeRunPrompt(workspaceName, prompt string) error {
@@ -582,17 +578,6 @@ func (s *service) trackBookmark(bookmark string) error {
 	}
 	s.logf("✅ Bookmark %q is now tracked", bookmark)
 	return nil
-}
-
-func (s *service) confirmf(prompt string, args ...any) (bool, error) {
-	fmt.Fprintf(s.out, prompt, args...)
-	reader := bufio.NewReader(s.in)
-	line, err := reader.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	answer := strings.TrimSpace(strings.ToLower(line))
-	return answer == "y" || answer == "yes", nil
 }
 
 func (s *service) openByName(repoRoot, name string) error {
@@ -638,16 +623,13 @@ func (s *service) ensureWindow(name, path string) error {
 }
 
 func (s *service) switchWhenReady(name string) error {
-	if !isInteractiveReader(s.in) {
+	if !charm.IsInteractiveReader(s.in) {
 		return s.tmux.SwitchToWindow(name)
 	}
-	fmt.Fprintf(s.out, "✅ Setup complete for %q. Press any key to switch to tmux window...", name)
-	reader := bufio.NewReader(s.in)
-	_, err := reader.ReadByte()
-	if err != nil && !errors.Is(err, io.EOF) {
+	cue := fmt.Sprintf("✅ Setup complete for %q. Press any key to switch to tmux window...", name)
+	if err := charm.PressAnyKey(s.in, s.out, cue); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(s.out)
 	return s.tmux.SwitchToWindow(name)
 }
 
@@ -660,11 +642,11 @@ func (s *service) runPostWorkspaceStartHooks(repoRoot, workspaceName, workspaceP
 		return err
 	}
 	if len(commands) == 0 {
-		fmt.Fprintln(s.out, "⏭️ Skipped bootstrap hooks (none configured)")
+		s.emit("⏭️ Skipped bootstrap hooks (none configured)")
 		return nil
 	}
 
-	fmt.Fprintf(s.out, "✅ Running %d bootstrap hook(s)\n", len(commands))
+	s.logf("✅ Running %d bootstrap hook(s)", len(commands))
 	root := strings.TrimSpace(s.invocationDir)
 	executed := 0
 	for _, command := range commands {
@@ -674,15 +656,15 @@ func (s *service) runPostWorkspaceStartHooks(repoRoot, workspaceName, workspaceP
 		}
 		executed++
 		expanded := strings.ReplaceAll(raw, "<root>", root)
-		fmt.Fprintf(s.out, "▶️ [%d/%d] %s\n", executed, len(commands), raw)
+		s.logf("▶️ [%d/%d] %s", executed, len(commands), raw)
 		cmd := "cd " + shellQuote(workspacePath) + " && " + expanded
 		out, runErr := s.runner.Run(context.Background(), "", "sh", "-c", cmd)
 		output := strings.TrimSpace(out)
 		if output == "" {
-			fmt.Fprintln(s.out, "   ↳ (no output)")
+			s.emitOutput("(no output)")
 		} else {
 			for _, line := range strings.Split(output, "\n") {
-				fmt.Fprintf(s.out, "   ↳ %s\n", line)
+				s.emitOutput(line)
 			}
 		}
 		if runErr != nil {
@@ -692,7 +674,7 @@ func (s *service) runPostWorkspaceStartHooks(repoRoot, workspaceName, workspaceP
 			return fmt.Errorf("bootstrap hook failed for workspace %q: %q: %w\n%s", workspaceName, raw, runErr, output)
 		}
 	}
-	fmt.Fprintln(s.out, "✅ Bootstrap hooks completed")
+	s.emit("✅ Bootstrap hooks completed")
 	return nil
 }
 
@@ -881,18 +863,6 @@ func looksLikePath(value string) bool {
 	return strings.Contains(value, "/") || strings.Contains(value, string(filepath.Separator)) || strings.HasPrefix(value, "~")
 }
 
-func isInteractiveReader(in io.Reader) bool {
-	f, ok := in.(*os.File)
-	if !ok {
-		return false
-	}
-	stat, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return stat.Mode()&os.ModeCharDevice != 0
-}
-
 func IsProtected(name string) bool {
 	return strings.TrimSpace(name) == "default"
 }
@@ -902,8 +872,27 @@ func shellQuote(value string) string {
 }
 
 func (s *service) logf(format string, args ...any) {
+	s.emit(fmt.Sprintf(format, args...))
+}
+
+func (s *service) emit(line string) {
 	if s.out == nil {
 		return
 	}
-	fmt.Fprintf(s.out, format+"\n", args...)
+	if charm.IsInteractiveWriter(s.out) {
+		fmt.Fprintln(s.out, charm.RenderProgressLine(line))
+		return
+	}
+	fmt.Fprintln(s.out, line)
+}
+
+func (s *service) emitOutput(line string) {
+	if s.out == nil {
+		return
+	}
+	if charm.IsInteractiveWriter(s.out) {
+		fmt.Fprintln(s.out, charm.RenderProgressOutputLine(line))
+		return
+	}
+	fmt.Fprintf(s.out, "   ↳ %s\n", line)
 }

@@ -8,10 +8,19 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+
+	"github.com/andrewcohen/awp/internal/charm"
+)
+
+var (
+	openFormKeyMove    = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "move"))
+	openFormKeySubmit  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit"))
+	openFormKeyEditor  = key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "prompt in $EDITOR"))
+	openFormKeyCancel  = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
 )
 
 type openRequest struct {
@@ -75,7 +84,7 @@ func newOpenFormModel(initial openRequest, workspaces []string) openFormModel {
 }
 
 func runOpenWithCharm(initial openRequest, workspaces []string, in io.Reader, out io.Writer) (openRequest, error) {
-	if osTermDumb() {
+	if charm.IsDumbTerminal() {
 		return openRequest{}, errors.New("interactive open form not available in dumb terminal")
 	}
 	model := newOpenFormModel(initial, workspaces)
@@ -113,7 +122,7 @@ func (m openFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "esc", "q":
+		case "ctrl+c", "esc":
 			m.cancel = true
 			return m, tea.Quit
 		case "shift+tab":
@@ -260,16 +269,17 @@ func (m openFormModel) View() string {
 	const cardWidth = 84
 	const contentWidth = 74
 
-	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(1, 2).Width(cardWidth)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Render("Open workspace")
-	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Render(wrapText("Open an existing workspace or create a new one.", contentWidth))
-	label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	focused := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	chip := lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236"))
-	chipActive := lipgloss.NewStyle().Padding(0, 1).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("212")).Bold(true)
+	theme := charm.DefaultTheme()
+	card := theme.Card.Width(cardWidth)
+	title := theme.Title.Render("Open workspace")
+	subtitle := theme.Subtitle.Render(wrapText("Open an existing workspace or create a new one.", contentWidth))
+	label := theme.Label
+	focused := theme.Focused
+	dim := theme.Dim
+	hint := theme.Hint
+	errorStyle := theme.Error
+	chip := theme.Chip
+	chipActive := theme.ChipActive
 	fieldLabel := func(index int, name string) string {
 		marker := "  "
 		if m.activeField == index {
@@ -342,7 +352,10 @@ func (m openFormModel) View() string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(hint.Render(wrapText("tab/shift+tab move • use the cursor inside fields • enter submits from the action row • ctrl+g opens the prompt in $EDITOR • q cancels", contentWidth)))
+	helpModel := charm.NewHelp()
+	b.WriteString(helpModel.ShortHelpView([]key.Binding{
+		openFormKeyMove, openFormKeySubmit, openFormKeyEditor, openFormKeyCancel,
+	}))
 	return card.Render(b.String()) + "\n"
 }
 
@@ -464,8 +477,4 @@ func editTextInEditor(initial string) (tea.Cmd, error) {
 		}
 		return promptEditedMsg{value: strings.TrimRight(string(data), "\n")}
 	}), nil
-}
-
-func osTermDumb() bool {
-	return strings.TrimSpace(os.Getenv("TERM")) == "dumb"
 }

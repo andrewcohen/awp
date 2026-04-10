@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -193,4 +194,30 @@ func TestCtrlDScrollsSingleLargeHunk(t *testing.T) {
 	if got.hunkScroll == 0 {
 		t.Fatal("expected ctrl+d to scroll a single large hunk")
 	}
+}
+
+func TestRenderHunkLinesUsesMinimalLineNumberGutterWidth(t *testing.T) {
+	h := diff.Hunk{
+		OldStart: 1,
+		NewStart: 1,
+		Lines: []diff.HunkLine{{Type: ' ', Content: "one"}, {Type: '+', Content: "two"}},
+	}
+	lines := renderHunkLines(h, 80)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 rendered lines, got %d", len(lines))
+	}
+
+	plain := stripANSI(lines[0])
+	if strings.HasPrefix(plain, "   1") {
+		t.Fatalf("expected compact gutter, got %q", plain)
+	}
+	if !strings.HasPrefix(plain, "1 1 │ ") {
+		t.Fatalf("expected minimal-width line numbers, got %q", plain)
+	}
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiPattern.ReplaceAllString(s, "")
 }
