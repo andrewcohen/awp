@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/andrewcohen/awp/internal/cli"
 )
 
-type Client struct {
-	runner cli.Runner
+type Runner interface {
+	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
 }
 
-func New(runner cli.Runner) *Client {
+type Client struct {
+	runner Runner
+}
+
+func New(runner Runner) *Client {
 	return &Client{runner: runner}
 }
 
@@ -22,6 +24,19 @@ func (c *Client) RepoRoot() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func (c *Client) DiffGit(dir string, revision string) (string, error) {
+	args := []string{"diff", "--git"}
+	revision = strings.TrimSpace(revision)
+	if revision != "" {
+		args = append(args, "-r", revision)
+	}
+	out, err := c.runner.Run(context.Background(), dir, "jj", args...)
+	if err != nil {
+		return "", formatCommandError("load diff", err, out)
+	}
+	return out, nil
 }
 
 func (c *Client) WorkspaceExists(name string) (bool, error) {

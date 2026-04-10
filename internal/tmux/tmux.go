@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/andrewcohen/awp/internal/cli"
 )
 
-type Client struct {
-	runner cli.Runner
+type Runner interface {
+	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
 }
 
-func New(runner cli.Runner) *Client {
+type Client struct {
+	runner Runner
+}
+
+func New(runner Runner) *Client {
 	return &Client{runner: runner}
 }
 

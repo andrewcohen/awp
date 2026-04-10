@@ -253,6 +253,30 @@ func TestRunInfoOutputsDetails(t *testing.T) {
 	}
 }
 
+func TestRunUIRejectsArgs(t *testing.T) {
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	if err := app.Run([]string{"ui", "extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
+		t.Fatalf("expected ui arg error, got %v", err)
+	}
+}
+
+func TestRunUICallsWorkflow(t *testing.T) {
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	called := false
+	app.ui = func(runner Runner, in io.Reader, out io.Writer) error {
+		called = true
+		return nil
+	}
+	if err := app.Run([]string{"ui"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected ui workflow to be called")
+	}
+}
+
 func TestRunPropagatesServiceError(t *testing.T) {
 	svc := &fakeService{openErr: errors.New("boom")}
 	app := NewApp(svc, &bytes.Buffer{})
