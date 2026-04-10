@@ -185,3 +185,36 @@ func TestForgetBookmarkIncludesRemotes(t *testing.T) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
 	}
 }
+
+func TestDiffGitUsesRevisionWhenProvided(t *testing.T) {
+	r := &fakeRunner{out: "diff output"}
+	c := New(r)
+
+	out, err := c.DiffGit("/repo", "qa@")
+	if err != nil {
+		t.Fatalf("DiffGit returned error: %v", err)
+	}
+	if out != "diff output" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	if r.lastDir != "/repo" {
+		t.Fatalf("unexpected dir: %q", r.lastDir)
+	}
+	wantArgs := []string{"diff", "--git", "-r", "qa@"}
+	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
+		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
+	}
+}
+
+func TestDiffGitWithoutRevision(t *testing.T) {
+	r := &fakeRunner{out: "diff output"}
+	c := New(r)
+
+	if _, err := c.DiffGit("/repo", ""); err != nil {
+		t.Fatalf("DiffGit returned error: %v", err)
+	}
+	wantArgs := []string{"diff", "--git"}
+	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
+		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
+	}
+}

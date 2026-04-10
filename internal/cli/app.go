@@ -19,13 +19,17 @@ type doctorService interface {
 	Run() error
 }
 
+type uiWorkflow func(runner Runner, in io.Reader, out io.Writer) error
+
 type App struct {
 	svc           workspace.Service
 	doctor        doctorService
 	out           io.Writer
 	in            io.Reader
+	runner        Runner
 	picker        workspacePicker
 	openForm      openWorkflow
+	ui            uiWorkflow
 	isPiped       func(io.Reader) bool
 	isInteractive func(io.Reader) bool
 }
@@ -35,8 +39,10 @@ func NewApp(svc workspace.Service, out io.Writer) *App {
 		svc:           svc,
 		out:           out,
 		in:            os.Stdin,
+		runner:        NewExecRunner(),
 		picker:        pickWorkspaceWithCharm,
 		openForm:      runOpenWithCharm,
+		ui:            runUIWithCharm,
 		isPiped:       isPipedInput,
 		isInteractive: isInteractiveInput,
 	}
@@ -51,6 +57,8 @@ func (a *App) Run(args []string) error {
 		return a.runWorkspace(args[1:])
 	case "doctor":
 		return a.runDoctor(args[1:])
+	case "ui":
+		return a.runUI(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -323,8 +331,22 @@ func (a *App) runDoctor(args []string) error {
 	return a.doctor.Run()
 }
 
+func (a *App) runUI(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp ui")
+		return nil
+	}
+	if len(args) != 0 {
+		return errors.New("ui takes no arguments")
+	}
+	if a.ui == nil  {
+		return errors.New("ui is not configured")
+	}
+	return a.ui(a.runner, a.in, a.out)
+}
+
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <doctor|workspace|w> ...")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <doctor|ui|workspace|w> ...")
 	return nil
 }
 
