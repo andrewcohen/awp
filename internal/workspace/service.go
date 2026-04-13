@@ -44,6 +44,10 @@ type Store interface {
 	Save(repoRoot string, entries map[string]Entry) error
 }
 
+type AllStore interface {
+	LoadAll() (map[string]map[string]Entry, error)
+}
+
 type HookConfigProvider interface {
 	PostWorkspaceStart(repoRoot string) ([]string, error)
 }
@@ -53,15 +57,25 @@ type CommandRunner interface {
 }
 
 type Entry struct {
-	Name string
-	Path string
+	Name          string
+	Path          string
+	SessionID     string `json:",omitempty"`
+	SessionName   string `json:",omitempty"`
+	AgentWindowID string `json:",omitempty"`
+	AgentPaneID   string `json:",omitempty"`
+	ActivePrompt  string `json:",omitempty"`
+	Status        string `json:",omitempty"`
 }
 
 type ListEntry struct {
-	Name       string
-	Path       string
-	TmuxWindow string
-	Active     bool
+	Name         string
+	Path         string
+	TmuxWindow   string
+	Active       bool
+	SessionID    string
+	SessionName  string
+	ActivePrompt string
+	Status       string
 }
 
 type InfoEntry struct {
@@ -76,10 +90,26 @@ type InfoEntry struct {
 
 type Service interface {
 	List() ([]ListEntry, error)
+	ListAll() ([]CrossRepoEntry, error)
 	Info(name string) (InfoEntry, error)
 	Open(name string, bookmark string, prompt string, yes bool) error
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
+	RecordSession(workspaceName, sessionID, sessionName string) error
+	UpdatePrompt(workspaceName, prompt string) error
+	UpdateStatus(workspaceName, status string) error
+	ClearSession(workspaceName string) error
+}
+
+type CrossRepoEntry struct {
+	RepoRoot     string
+	ProjectName  string
+	Name         string
+	Path         string
+	SessionID    string
+	SessionName  string
+	ActivePrompt string
+	Status       string
 }
 
 type Dependencies struct {
@@ -304,10 +334,14 @@ func (s *service) List() ([]ListEntry, error) {
 			windowName = name
 		}
 		out = append(out, ListEntry{
-			Name:       name,
-			Path:       entry.Path,
-			TmuxWindow: windowName,
-			Active:     current == name && hasWindow,
+			Name:         name,
+			Path:         entry.Path,
+			TmuxWindow:   windowName,
+			Active:       current == name && hasWindow,
+			SessionID:    entry.SessionID,
+			SessionName:  entry.SessionName,
+			ActivePrompt: entry.ActivePrompt,
+			Status:       entry.Status,
 		})
 	}
 	return out, nil
@@ -396,6 +430,135 @@ func (s *service) Open(name string, bookmark string, prompt string, yes bool) er
 		return s.createWorkspace(normalized, bookmark, prompt, true)
 	}
 	return s.openByName(repoRoot, normalized)
+}
+
+func (s *service) ListAll() ([]CrossRepoEntry, error) {
+	all, ok := s.store.(AllStore)
+	if !ok {
+		entries, err := s.List()
+		if err != nil {
+			return nil, err
+		}
+		repoRoot, _ := s.jj.RepoRoot()
+		projectName := strings.TrimSpace(filepath.Base(filepath.Clean(repoRoot)))
+		out := make([]CrossRepoEntry, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, CrossRepoEntry{
+				RepoRoot: repoRoot, ProjectName: projectName, Name: e.Name, Path: e.Path,
+				SessionID: e.SessionID, SessionName: e.SessionName,
+				ActivePrompt: e.ActivePrompt, Status: e.Status,
+			})
+		}
+		return out, nil
+	}
+	repoMap, err := all.LoadAll()
+	if err != nil {
+		return nil, err
+	}
+	var out []CrossRepoEntry
+	type repoRow struct {
+		repo, project string
+	}
+	repos := make([]repoRow, 0, len(repoMap))
+	for r := range repoMap {
+		repos = append(repos, repoRow{repo: r, project: strings.TrimSpace(filepath.Base(filepath.Clean(r)))})
+	}
+	slices.SortFunc(repos, func(a, b repoRow) int {
+		if a.project != b.project {
+			if a.project < b.project {
+				return -1
+			}
+			return 1
+		}
+		if a.repo < b.repo {
+			return -1
+		}
+		if a.repo > b.repo {
+			return 1
+		}
+		return 0
+	})
+	for _, r := range repos {
+		entries := repoMap[r.repo]
+		names := make([]string, 0, len(entries))
+		for n := range entries {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		for _, n := range names {
+			e := entries[n]
+			out = append(out, CrossRepoEntry{
+				RepoRoot: r.repo, ProjectName: r.project, Name: e.Name, Path: e.Path,
+				SessionID: e.SessionID, SessionName: e.SessionName,
+				ActivePrompt: e.ActivePrompt, Status: e.Status,
+			})
+		}
+	}
+	return out, nil
+}
+
+func (s *service) UpdatePrompt(workspaceName, prompt string) error {
+	return s.mutateEntry(workspaceName, func(e *Entry) { e.ActivePrompt = prompt })
+}
+
+func (s *service) UpdateStatus(workspaceName, status string) error {
+	return s.mutateEntry(workspaceName, func(e *Entry) { e.Status = status })
+}
+
+func (s *service) ClearSession(workspaceName string) error {
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.SessionID = ""
+		e.SessionName = ""
+		e.AgentWindowID = ""
+		e.AgentPaneID = ""
+	})
+}
+
+func (s *service) mutateEntry(workspaceName string, fn func(*Entry)) error {
+	repoRoot, err := s.jj.RepoRoot()
+	if err != nil {
+		return fmt.Errorf("not a jj repository: %w", err)
+	}
+	normalized, err := NormalizeName(workspaceName)
+	if err != nil {
+		return err
+	}
+	entries, err := s.store.Load(repoRoot)
+	if err != nil {
+		return err
+	}
+	entries, _ = s.canonicalizeEntries(repoRoot, entries)
+	entry, ok := entries[normalized]
+	if !ok {
+		entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
+	}
+	fn(&entry)
+	entries[normalized] = entry
+	return s.store.Save(repoRoot, entries)
+}
+
+func (s *service) RecordSession(workspaceName, sessionID, sessionName string) error {
+	repoRoot, err := s.jj.RepoRoot()
+	if err != nil {
+		return fmt.Errorf("not a jj repository: %w", err)
+	}
+	normalized, err := NormalizeName(workspaceName)
+	if err != nil {
+		return err
+	}
+	entries, err := s.store.Load(repoRoot)
+	if err != nil {
+		return err
+	}
+	entries, _ = s.canonicalizeEntries(repoRoot, entries)
+	entry, ok := entries[normalized]
+	if !ok {
+		entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
+	}
+	entry.SessionID = sessionID
+	entry.SessionName = sessionName
+	entries[normalized] = entry
+	return s.store.Save(repoRoot, entries)
 }
 
 func (s *service) Rename(oldName, newName string) error {

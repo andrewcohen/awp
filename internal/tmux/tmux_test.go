@@ -8,6 +8,7 @@ import (
 
 type fakeRunner struct {
 	calls [][]string
+	out   string
 	err   error
 }
 
@@ -18,7 +19,7 @@ func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...strin
 	if f.err != nil {
 		return "", f.err
 	}
-	return "", nil
+	return f.out, nil
 }
 
 func TestSendCommandUsesLiteralSendKeysThenEnter(t *testing.T) {
@@ -40,6 +41,108 @@ func TestSendCommandUsesLiteralSendKeysThenEnter(t *testing.T) {
 	for i, want := range wantSecond {
 		if runner.calls[1][i] != want {
 			t.Fatalf("second call mismatch at %d: got %#v want %#v", i, runner.calls[1], wantSecond)
+		}
+	}
+}
+
+func TestNewSessionIssuesExpectedCommand(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	if err := client.NewSession("[awp]repo__qa", "/tmp/ws", "agent"); err != nil {
+		t.Fatalf("NewSession returned error: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 tmux call, got %#v", runner.calls)
+	}
+	want := []string{"tmux", "new-session", "-d", "-s", "[awp]repo__qa", "-n", "agent", "-c", "/tmp/ws"}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("call mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
+func TestSwitchClientIssuesExpectedCommand(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	if err := client.SwitchClient("[awp]repo__qa"); err != nil {
+		t.Fatalf("SwitchClient returned error: %v", err)
+	}
+	want := []string{"tmux", "switch-client", "-t", "[awp]repo__qa"}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("call mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
+func TestSessionExistsMatchesNameExactly(t *testing.T) {
+	runner := &fakeRunner{}
+	runner.out = "other\n[awp]repo__qa\n"
+	client := New(runner)
+	ok, err := client.SessionExists("[awp]repo__qa")
+	if err != nil || !ok {
+		t.Fatalf("expected session to exist: ok=%v err=%v", ok, err)
+	}
+	ok, err = client.SessionExists("[awp]repo__missing")
+	if err != nil || ok {
+		t.Fatalf("expected no match: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestNewWindowInSessionBuildsTarget(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	if err := client.NewWindowInSession("[awp]repo__qa", "logs", "/tmp/ws"); err != nil {
+		t.Fatalf("NewWindowInSession: %v", err)
+	}
+	want := []string{"tmux", "new-window", "-d", "-t", "[awp]repo__qa:", "-n", "logs", "-c", "/tmp/ws"}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
+func TestSplitPaneInSessionBuildsTarget(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	if err := client.SplitPaneInSession("[awp]repo__qa", "agent", "/tmp/ws", true); err != nil {
+		t.Fatalf("SplitPaneInSession: %v", err)
+	}
+	want := []string{"tmux", "split-window", "-d", "-t", "[awp]repo__qa:agent", "-h", "-c", "/tmp/ws"}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
+func TestListSessionsParsesIdAndName(t *testing.T) {
+	runner := &fakeRunner{out: "$1\tmain\n$2\t[awp]repo__qa\n"}
+	client := New(runner)
+	sessions, err := client.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2, got %#v", sessions)
+	}
+	if sessions[1].ID != "$2" || sessions[1].Name != "[awp]repo__qa" {
+		t.Fatalf("bad parse: %#v", sessions[1])
+	}
+}
+
+func TestKillSessionIssuesExpectedCommand(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	if err := client.KillSession("[awp]repo__qa"); err != nil {
+		t.Fatalf("KillSession: %v", err)
+	}
+	want := []string{"tmux", "kill-session", "-t", "[awp]repo__qa"}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
 		}
 	}
 }

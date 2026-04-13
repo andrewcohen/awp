@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +59,54 @@ func (s *sequenceRunner) Run(_ context.Context, _ string, _ string, args ...stri
 	step := s.steps[0]
 	s.steps = s.steps[1:]
 	return step.out, step.err
+}
+
+func TestRepoRootFormatsCommandErrors(t *testing.T) {
+	r := &fakeRunner{out: "Error: not in a repo\n", err: errors.New("exit status 1")}
+	c := New(r)
+
+	_, err := c.RepoRoot()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := err.Error(); got != "resolve repo root: exit status 1\nError: not in a repo" {
+		t.Fatalf("unexpected error: %q", got)
+	}
+}
+
+func TestListWorkspaceNamesFormatsCommandErrors(t *testing.T) {
+	r := &fakeRunner{out: "Error: The working copy is stale\nHint: Run `jj workspace update-stale`\n", err: errors.New("exit status 1")}
+	c := New(r)
+
+	_, err := c.ListWorkspaceNames()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "list workspaces: exit status 1") {
+		t.Fatalf("unexpected error: %q", got)
+	}
+	if !strings.Contains(got, "working copy is stale") {
+		t.Fatalf("expected stale hint in error: %q", got)
+	}
+}
+
+func TestIsStaleWorkingCopyError(t *testing.T) {
+	err := errors.New("list workspaces: exit status 1\nError: The working copy is stale\nHint: Run `jj workspace update-stale`")
+	if !IsStaleWorkingCopyError(err) {
+		t.Fatal("expected stale working copy error to be detected")
+	}
+	if IsStaleWorkingCopyError(nil) {
+		t.Fatal("expected nil error to not be stale")
+	}
+}
+
+func TestUpdateStaleFormatsCommandErrors(t *testing.T) {
+	r := &fakeRunner{out: "boom\n", err: errors.New("exit status 1")}
+	c := New(r)
+	if err := c.UpdateStale(); err == nil || !strings.Contains(err.Error(), "update stale working copy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestWorkspaceExistsChecksWorkingCopyRev(t *testing.T) {

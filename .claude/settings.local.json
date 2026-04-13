@@ -4,7 +4,15 @@
       "Bash(go build:*)",
       "Bash(go test:*)",
       "Bash(go vet:*)",
-      "Bash(jj describe:*)"
+      "Bash(jj abandon:*)",
+      "Bash(jj describe:*)",
+      "Bash(jj diff:*)",
+      "Bash(jj file:*)",
+      "Bash(jj log:*)",
+      "Bash(jj op:*)",
+      "Bash(jj resolve:*)",
+      "Bash(jj restore:*)",
+      "Bash(jj workspace:*)"
     ]
   }
 }

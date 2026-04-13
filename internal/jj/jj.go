@@ -3,6 +3,8 @@ package jj
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -21,9 +23,42 @@ func New(runner Runner) *Client {
 func (c *Client) RepoRoot() (string, error) {
 	out, err := c.runner.Run(context.Background(), "", "jj", "root")
 	if err != nil {
-		return "", err
+		return "", formatCommandError("resolve repo root", err, out)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// SourceRepoRoot returns the canonical source repo root, resolving jj secondary
+// workspaces to their owning repo. For a primary repo, returns the same as RepoRoot.
+// For a secondary workspace whose `.jj/repo` file points at `<source>/.jj/repo`,
+// returns `<source>`. Falls back to RepoRoot on any resolution failure.
+func (c *Client) SourceRepoRoot() (string, error) {
+	root, err := c.RepoRoot()
+	if err != nil {
+		return "", err
+	}
+	data, readErr := os.ReadFile(filepath.Join(root, ".jj", "repo"))
+	if readErr != nil {
+		return root, nil
+	}
+	pointer := strings.TrimSpace(string(data))
+	if pointer == "" {
+		return root, nil
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(root, ".jj", pointer)
+	}
+	pointer = filepath.Clean(pointer)
+	// Strip trailing "/.jj/repo" to get repo root.
+	if strings.HasSuffix(pointer, string(filepath.Separator)+filepath.Join(".jj", "repo")) {
+		pointer = strings.TrimSuffix(pointer, string(filepath.Separator)+filepath.Join(".jj", "repo"))
+	} else if base := filepath.Base(pointer); base == "repo" && filepath.Base(filepath.Dir(pointer)) == ".jj" {
+		pointer = filepath.Dir(filepath.Dir(pointer))
+	}
+	if pointer == "" {
+		return root, nil
+	}
+	return pointer, nil
 }
 
 func (c *Client) DiffGit(dir string, revision string) (string, error) {
@@ -53,9 +88,17 @@ func (c *Client) WorkspaceExists(name string) (bool, error) {
 func (c *Client) ListWorkspaceNames() ([]string, error) {
 	out, err := c.runner.Run(context.Background(), "", "jj", "workspace", "list", "-T", "name ++ \"\\n\"")
 	if err != nil {
-		return nil, err
+		return nil, formatCommandError("list workspaces", err, out)
 	}
 	return parseWorkspaceNames(out), nil
+}
+
+func (c *Client) UpdateStale() error {
+	out, err := c.runner.Run(context.Background(), "", "jj", "workspace", "update-stale")
+	if err != nil {
+		return formatCommandError("update stale working copy", err, out)
+	}
+	return nil
 }
 
 func (c *Client) AddWorkspace(name string, path string, revision string) error {
@@ -199,6 +242,14 @@ func bookmarkTrackCandidates(bookmark string) []string {
 func isMissingRevisionError(output string, err error) bool {
 	text := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
 	return strings.Contains(text, "doesn't exist") || strings.Contains(text, "does not exist") || strings.Contains(text, "no revisions to show") || strings.Contains(text, "doesn't have a working-copy commit")
+}
+
+func IsStaleWorkingCopyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "working copy is stale") || strings.Contains(text, "workspace update-stale")
 }
 
 func parseWorkspaceNames(out string) []string {
