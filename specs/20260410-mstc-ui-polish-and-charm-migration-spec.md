@@ -17,7 +17,7 @@ Andrew already has several interactive awp surfaces, but they do not yet feel un
 ### In scope (v1)
 - Audit existing interactive UI surfaces and standardize them around a shared Charm-based design system.
 - Add a shared theme/style/key-help layer for interactive UIs.
-- Improve `awp ui` by adopting higher-leverage Bubble components where they fit, especially `help`, `key`, `viewport`, and loading/status affordances.
+- Improve `awp diff` by adopting higher-leverage Bubble components where they fit, especially `help`, `key`, `viewport`, and loading/status affordances.
 - Replace the custom workspace picker with a richer searchable Bubble-based picker.
 - Replace the custom `awp w open` form with a Huh-based interactive flow if the library supports the needed UX cleanly.
 - Move interactive confirmations/prompts for workspace flows behind a shared UI layer, with plain stdin/stdout fallback preserved for non-interactive contexts.
@@ -33,7 +33,7 @@ Andrew already has several interactive awp surfaces, but they do not yet feel un
 
 ## UX
 ### CLI
-- Existing command entrypoints stay the same: `awp ui`, `awp w open`, `awp w delete`, and related flows.
+- Existing command entrypoints stay the same: `awp diff`, `awp w open`, `awp w delete`, and related flows.
 - Non-interactive use remains script-safe:
   - piped input still works
   - plain text output still works
@@ -50,7 +50,7 @@ Andrew already has several interactive awp surfaces, but they do not yet feel un
   - borders/padding
   - semantic colors for success/warning/error/selection
   - footer help
-- `awp ui` diff viewer should feel more polished and robust:
+- `awp diff` diff viewer should feel more polished and robust:
   - shared keymap/help footer via Charm help components
   - better loading/refresh feedback
   - independent scrolling for larger diff content where appropriate
@@ -85,7 +85,7 @@ We will build this incrementally, landing small reviewable changes that each imp
 2. Keep this package intentionally small and product-focused; it should not become a generic framework.
 3. Update at least one existing UI to consume the shared styles and key definitions so the package proves its value immediately.
 
-### Phase 2: modernize `awp ui`
+### Phase 2: modernize `awp diff`
 1. Refactor `internal/ui/model.go` to replace hardcoded help strings with a shared key map + `help.Model`.
 2. Introduce `viewport` for the hunk pane so large diffs scroll cleanly without hand-rolled clipping logic.
 3. Add a loading/refresh affordance, likely using `bubbles/spinner`, while keeping current manual refresh semantics.
@@ -145,7 +145,7 @@ We will build this incrementally, landing small reviewable changes that each imp
 
 ## Acceptance Criteria
 - [ ] A shared internal UI foundation exists and is used by at least the main interactive surfaces instead of duplicating styles/help strings.
-- [ ] `awp ui` uses shared key bindings/help and provides visibly improved status/loading/scroll behavior without regressing current navigation and editor-jump behavior.
+- [ ] `awp diff` uses shared key bindings/help and provides visibly improved status/loading/scroll behavior without regressing current navigation and editor-jump behavior.
 - [ ] Workspace picker flow is searchable and more polished than the current custom cursor-based picker.
 - [ ] Interactive `awp w open` form is simplified and improved, preferably via Huh, without changing the underlying workspace service behavior.
 - [ ] Interactive confirmations/prompts are more consistent across workspace flows, while non-interactive and dumb-terminal behavior remains safe and clear.
@@ -158,7 +158,7 @@ We will build this incrementally, landing small reviewable changes that each imp
 - [ ] Build `awp` from repo root.
 
 ### Core Happy Path
-- [ ] Run `awp ui` and verify the diff UI opens with a consistent header/footer/help treatment.
+- [ ] Run `awp diff` and verify the diff UI opens with a consistent header/footer/help treatment.
 - [ ] Verify key help is visible and matches actual working bindings.
 - [ ] Verify long diff content scrolls cleanly and refresh/loading states are understandable.
 - [ ] Run `awp w open` interactively and verify the form is polished, prefilled correctly from flags, and submits/cancels cleanly.
@@ -167,12 +167,12 @@ We will build this incrementally, landing small reviewable changes that each imp
 ### Edge Cases & Failure Modes
 - [ ] Verify dumb terminal behavior remains clear and safe for all affected interactive commands.
 - [ ] Verify blank/invalid interactive input surfaces actionable validation messages.
-- [ ] Verify refresh or data-loading errors in `awp ui` remain non-destructive where practical.
+- [ ] Verify refresh or data-loading errors in `awp diff` remain non-destructive where practical.
 - [ ] Verify interactive confirmations can still be bypassed appropriately in non-interactive or forced flows.
 
 ### Regression Checks
 - [ ] Existing scripted uses of `awp w open`, `awp w delete`, and other workspace commands still behave correctly.
-- [ ] Existing editor jump behavior in `awp ui` still works.
+- [ ] Existing editor jump behavior in `awp diff` still works.
 - [ ] Existing non-interactive outputs such as `awp doctor`, `awp w list`, and `awp w info` remain correct.
 
 ### Reviewer Notes

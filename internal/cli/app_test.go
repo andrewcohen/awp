@@ -57,6 +57,11 @@ func (f *fakeService) Delete(name string, force bool) error {
 	f.deleteName, f.deleteForce = name, force
 	return f.deleteErr
 }
+func (f *fakeService) RecordSession(string, string, string) error { return nil }
+func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error)   { return nil, nil }
+func (f *fakeService) UpdatePrompt(string, string) error              { return nil }
+func (f *fakeService) UpdateStatus(string, string) error              { return nil }
+func (f *fakeService) ClearSession(string) error                      { return nil }
 
 func TestRunDoctor(t *testing.T) {
 	svc := &fakeService{}
@@ -253,27 +258,54 @@ func TestRunInfoOutputsDetails(t *testing.T) {
 	}
 }
 
-func TestRunUIRejectsArgs(t *testing.T) {
+func TestRunDiffRejectsArgs(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"ui", "extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
-		t.Fatalf("expected ui arg error, got %v", err)
+	if err := app.Run([]string{"diff", "extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
+		t.Fatalf("expected diff arg error, got %v", err)
 	}
 }
 
-func TestRunUICallsWorkflow(t *testing.T) {
+func TestRunDiffCallsWorkflow(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
 	called := false
-	app.ui = func(runner Runner, in io.Reader, out io.Writer) error {
+	app.diff = func(runner Runner, in io.Reader, out io.Writer) error {
 		called = true
 		return nil
 	}
-	if err := app.Run([]string{"ui"}); err != nil {
+	if err := app.Run([]string{"diff"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
 	if !called {
-		t.Fatal("expected ui workflow to be called")
+		t.Fatal("expected diff workflow to be called")
+	}
+}
+
+func TestRunDeckRejectsArgs(t *testing.T) {
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	if err := app.Run([]string{"deck", "extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
+		t.Fatalf("expected deck arg error, got %v", err)
+	}
+}
+
+func TestRunDeckCallsWorkflow(t *testing.T) {
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	called := false
+	app.deck = func(runner Runner, gotSvc workspace.Service, in io.Reader, out io.Writer) error {
+		called = true
+		if gotSvc != svc {
+			t.Fatal("expected service to be passed to deck workflow")
+		}
+		return nil
+	}
+	if err := app.Run([]string{"deck"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected deck workflow to be called")
 	}
 }
 

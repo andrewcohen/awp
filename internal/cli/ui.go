@@ -13,7 +13,7 @@ import (
 	"github.com/andrewcohen/awp/internal/ui"
 )
 
-func runUIWithCharm(runner Runner, in io.Reader, out io.Writer) error {
+func runDiffWithCharm(runner Runner, in io.Reader, out io.Writer) error {
 	if charm.IsDumbTerminal() {
 		return fmt.Errorf("diff ui not available in dumb terminal")
 	}

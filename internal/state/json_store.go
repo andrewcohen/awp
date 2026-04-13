@@ -42,6 +42,19 @@ func (s *JSONStore) Load(repoRoot string) (map[string]workspace.Entry, error) {
 	return map[string]workspace.Entry{}, nil
 }
 
+// LoadAll returns all entries across repos keyed by repoRoot.
+func (s *JSONStore) LoadAll() (map[string]map[string]workspace.Entry, error) {
+	state, err := s.readGlobalState()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]workspace.Entry{}
+	for repo, entries := range state {
+		out[repo] = cloneEntries(entries)
+	}
+	return out, nil
+}
+
 func (s *JSONStore) Save(repoRoot string, entries map[string]workspace.Entry) error {
 	normalizedRepoRoot, err := normalizeRepoRoot(repoRoot)
 	if err != nil {
@@ -133,7 +146,41 @@ func normalizeRepoRoot(repoRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve repo root: %w", err)
 	}
-	return filepath.Clean(abs), nil
+	return canonicalizeRepoRoot(filepath.Clean(abs)), nil
+}
+
+// canonicalizeRepoRoot resolves a jj secondary workspace dir to its source repo root
+// by reading `<path>/.jj/repo` pointer file. Returns input unchanged if no pointer.
+func canonicalizeRepoRoot(path string) string {
+	data, err := os.ReadFile(filepath.Join(path, ".jj", "repo"))
+	if err != nil {
+		return path
+	}
+	pointer := trimSpace(string(data))
+	if pointer == "" {
+		return path
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(path, ".jj", pointer)
+	}
+	pointer = filepath.Clean(pointer)
+	if filepath.Base(pointer) == "repo" && filepath.Base(filepath.Dir(pointer)) == ".jj" {
+		pointer = filepath.Dir(filepath.Dir(pointer))
+	}
+	if pointer == "" {
+		return path
+	}
+	return pointer
+}
+
+func trimSpace(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n' || s[0] == '\r') {
+		s = s[1:]
+	}
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t' || s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 func cloneEntries(in map[string]workspace.Entry) map[string]workspace.Entry {

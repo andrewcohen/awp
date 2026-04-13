@@ -19,7 +19,8 @@ type doctorService interface {
 	Run() error
 }
 
-type uiWorkflow func(runner Runner, in io.Reader, out io.Writer) error
+type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
+type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error
 
 type App struct {
 	svc           workspace.Service
@@ -29,7 +30,8 @@ type App struct {
 	runner        Runner
 	picker        workspacePicker
 	openForm      openWorkflow
-	ui            uiWorkflow
+	diff          diffWorkflow
+	deck          deckWorkflow
 	isPiped       func(io.Reader) bool
 	isInteractive func(io.Reader) bool
 }
@@ -42,7 +44,8 @@ func NewApp(svc workspace.Service, out io.Writer) *App {
 		runner:        NewExecRunner(),
 		picker:        pickWorkspaceWithCharm,
 		openForm:      runOpenWithCharm,
-		ui:            runUIWithCharm,
+		diff:          runDiffWithCharm,
+		deck:          runDeckWithCharm,
 		isPiped:       isPipedInput,
 		isInteractive: isInteractiveInput,
 	}
@@ -57,8 +60,10 @@ func (a *App) Run(args []string) error {
 		return a.runWorkspace(args[1:])
 	case "doctor":
 		return a.runDoctor(args[1:])
-	case "ui":
-		return a.runUI(args[1:])
+	case "diff":
+		return a.runDiff(args[1:])
+	case "deck":
+		return a.runDeck(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -331,22 +336,41 @@ func (a *App) runDoctor(args []string) error {
 	return a.doctor.Run()
 }
 
-func (a *App) runUI(args []string) error {
+func (a *App) runDiff(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp ui")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp diff")
 		return nil
 	}
 	if len(args) != 0 {
-		return errors.New("ui takes no arguments")
+		return errors.New("diff takes no arguments")
 	}
-	if a.ui == nil  {
-		return errors.New("ui is not configured")
+	if a.diff == nil {
+		return errors.New("diff is not configured")
 	}
-	return a.ui(a.runner, a.in, a.out)
+	return a.diff(a.runner, a.in, a.out)
+}
+
+func (a *App) runDeck(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp deck")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Intended invocation: tmux popup overlay. Add this to ~/.tmux.conf:")
+		_, _ = fmt.Fprintln(a.out, "  bind a display-popup -E -w 90% -h 90% awp deck")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Selecting a workspace summons or focuses session [awp]<repo>__<workspace>.")
+		return nil
+	}
+	if len(args) != 0 {
+		return errors.New("deck takes no arguments")
+	}
+	if a.deck == nil {
+		return errors.New("deck is not configured")
+	}
+	return a.deck(a.runner, a.svc, a.in, a.out)
 }
 
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <doctor|ui|workspace|w> ...")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|diff|doctor|workspace|w> ...")
 	return nil
 }
 
