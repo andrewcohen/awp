@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -37,6 +38,9 @@ func main() {
 	app := cli.NewApp(svc, os.Stdout)
 	app.SetDoctor(doctorSvc)
 	if err := app.Run(os.Args[1:]); err != nil {
+		if errors.Is(err, cli.ErrOpenCancelled) {
+			os.Exit(2)
+		}
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}

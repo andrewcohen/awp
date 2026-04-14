@@ -182,6 +182,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		cmd := exec.Command(exe, "w", "open")
 		cmd.Dir = repoRoot
 		return tea.ExecProcess(cmd, func(err error) tea.Msg {
+			var exitErr *exec.ExitError
+			if err != nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
+				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
+			}
 			return deckui.NewWorkspaceDoneMsg{Err: err}
 		})
 	}
