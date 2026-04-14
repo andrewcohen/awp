@@ -157,6 +157,11 @@ func (a *App) runInfo(args []string) error {
 	return tw.Flush()
 }
 
+// ErrOpenCancelled signals a user-initiated cancel of the interactive open form.
+// main() maps this to a silent exit code 2 so callers (e.g. the deck) can
+// distinguish cancel from success without surfacing an error to the user.
+var ErrOpenCancelled = errors.New("open cancelled")
+
 func (a *App) runOpen(args []string) error {
 	if isHelpArgSlice(args) {
 		_, _ = fmt.Fprintln(a.out, "Usage: awp w open [workspace] [--bookmark|-b <bookmark>] [--prompt|-p <prompt>] [--yes|-y]\nIf no workspace is provided: read from stdin pipe, else open interactive form/picker.")
@@ -217,6 +222,9 @@ func (a *App) runOpen(args []string) error {
 		}
 		updated, err := a.openForm(req, options, a.in, a.out)
 		if err != nil {
+			if err.Error() == "open cancelled" {
+				return ErrOpenCancelled
+			}
 			return err
 		}
 		updated.Yes = true

@@ -62,7 +62,8 @@ type Model struct {
 }
 
 type NewWorkspaceDoneMsg struct {
-	Err error
+	Err       error
+	Cancelled bool
 }
 
 type actionResultMsg struct {
@@ -115,9 +116,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case NewWorkspaceDoneMsg:
+		if msg.Cancelled {
+			m.status = "new: cancelled"
+			return m, tea.ClearScreen
+		}
 		if msg.Err != nil {
 			m.status = "new: " + msg.Err.Error()
-			return m, nil
+			return m, tea.ClearScreen
 		}
 		return m, tea.Quit
 	case actionResultMsg:

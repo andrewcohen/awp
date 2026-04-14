@@ -88,7 +88,7 @@ func runOpenWithCharm(initial openRequest, workspaces []string, in io.Reader, ou
 		return openRequest{}, errors.New("interactive open form not available in dumb terminal")
 	}
 	model := newOpenFormModel(initial, workspaces)
-	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
 	final, err := program.Run()
 	if err != nil {
 		return openRequest{}, err
