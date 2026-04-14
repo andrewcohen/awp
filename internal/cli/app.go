@@ -21,6 +21,7 @@ type doctorService interface {
 
 type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error
+type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
 
 type App struct {
 	svc           workspace.Service
@@ -32,6 +33,7 @@ type App struct {
 	openForm      openWorkflow
 	diff          diffWorkflow
 	deck          deckWorkflow
+	review        reviewWorkflow
 	isPiped       func(io.Reader) bool
 	isInteractive func(io.Reader) bool
 }
@@ -46,6 +48,7 @@ func NewApp(svc workspace.Service, out io.Writer) *App {
 		openForm:      runOpenWithCharm,
 		diff:          runDiffWithCharm,
 		deck:          runDeckWithCharm,
+		review:        runReviewWithCharm,
 		isPiped:       isPipedInput,
 		isInteractive: isInteractiveInput,
 	}
@@ -64,6 +67,8 @@ func (a *App) Run(args []string) error {
 		return a.runDiff(args[1:])
 	case "deck":
 		return a.runDeck(args[1:])
+	case "review":
+		return a.runReview(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -377,8 +382,36 @@ func (a *App) runDeck(args []string) error {
 	return a.deck(a.runner, a.svc, a.in, a.out)
 }
 
+func (a *App) runReview(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\nWith no argument, opens an interactive picker over `gh pr list`.")
+		return nil
+	}
+	if len(args) > 1 {
+		return errors.New("review takes at most one PR number")
+	}
+	if a.review == nil {
+		return errors.New("review is not configured")
+	}
+	if len(args) == 1 {
+		n, err := parsePRNumber(args[0])
+		if err != nil {
+			return err
+		}
+		return a.review(a.runner, a.svc, n, a.in, a.out)
+	}
+	if a.picker == nil {
+		return errors.New("picker is not configured")
+	}
+	n, err := pickPRNumber(a.runner, a.picker)
+	if err != nil {
+		return err
+	}
+	return a.review(a.runner, a.svc, n, a.in, a.out)
+}
+
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|diff|doctor|workspace|w> ...")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|diff|doctor|review|workspace|w> ...")
 	return nil
 }
 
