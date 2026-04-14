@@ -16,6 +16,7 @@ import (
 
 type JJClient interface {
 	RepoRoot() (string, error)
+	SourceRepoRoot() (string, error)
 	WorkspaceExists(name string) (bool, error)
 	ListWorkspaceNames() ([]string, error)
 	AddWorkspace(name string, path string, revision string) error
@@ -94,6 +95,7 @@ type Service interface {
 	Info(name string) (InfoEntry, error)
 	Open(name string, bookmark string, prompt string, yes bool) error
 	PrepareWorkspace(name string, bookmark string, runHooks bool) (normalized string, path string, err error)
+	Bootstrap(name string) error
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
 	RecordSession(workspaceName, sessionID, sessionName string) error
@@ -825,6 +827,56 @@ func (s *service) maybeRunPrompt(workspaceName, prompt string) error {
 	return nil
 }
 
+// Bootstrap re-runs built-in + user bootstrap hooks for the given workspace.
+// If name is empty, resolves the current workspace from cwd (via jj).
+// <root> in user hook commands resolves to the source repo root.
+func (s *service) Bootstrap(name string) error {
+	sourceRepo, err := s.jj.SourceRepoRoot()
+	if err != nil {
+		return fmt.Errorf("resolve source repo root: %w", err)
+	}
+	currentRoot, err := s.jj.RepoRoot()
+	if err != nil {
+		return fmt.Errorf("resolve current jj root: %w", err)
+	}
+
+	workspaceName := strings.TrimSpace(name)
+	var workspacePath string
+	if workspaceName == "" {
+		if sameDir(sourceRepo, currentRoot) {
+			return fmt.Errorf("workspace bootstrap must run inside a secondary workspace or be given a name")
+		}
+		workspacePath = currentRoot
+		entries, _ := s.store.Load(sourceRepo)
+		for wsName, entry := range entries {
+			absEntry, _ := filepath.Abs(entry.Path)
+			if sameDir(absEntry, workspacePath) {
+				workspaceName = wsName
+				break
+			}
+		}
+		if workspaceName == "" {
+			workspaceName = filepath.Base(workspacePath)
+		}
+	} else {
+		entries, err := s.store.Load(sourceRepo)
+		if err != nil {
+			return err
+		}
+		if entry, ok := entries[workspaceName]; ok {
+			workspacePath = entry.Path
+		} else {
+			workspacePath = s.defaultWorkspacePath(sourceRepo, workspaceName)
+		}
+	}
+
+	s.logf("▶️ Bootstrapping workspace %q (path=%s, root=%s)", workspaceName, workspacePath, sourceRepo)
+	if err := s.runBuiltinBootstrap(sourceRepo, workspacePath); err != nil {
+		return err
+	}
+	return s.runPostWorkspaceStartHooksWithRoot(sourceRepo, workspaceName, workspacePath, sourceRepo)
+}
+
 // runBuiltinBootstrap copies files from the source repo that external tools
 // (gh, git) expect to find inside a workspace. Runs before any user hooks.
 // Silently skips pieces that don't exist in the source repo.
@@ -977,6 +1029,10 @@ func (s *service) switchWhenReady(name string) error {
 }
 
 func (s *service) runPostWorkspaceStartHooks(repoRoot, workspaceName, workspacePath string) error {
+	return s.runPostWorkspaceStartHooksWithRoot(repoRoot, workspaceName, workspacePath, s.invocationDir)
+}
+
+func (s *service) runPostWorkspaceStartHooksWithRoot(repoRoot, workspaceName, workspacePath, rootOverride string) error {
 	if s.hooks == nil {
 		return nil
 	}
@@ -990,7 +1046,7 @@ func (s *service) runPostWorkspaceStartHooks(repoRoot, workspaceName, workspaceP
 	}
 
 	s.logf("✅ Running %d bootstrap hook(s)", len(commands))
-	root := strings.TrimSpace(s.invocationDir)
+	root := strings.TrimSpace(rootOverride)
 	executed := 0
 	for _, command := range commands {
 		raw := strings.TrimSpace(command)

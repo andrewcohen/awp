@@ -65,6 +65,7 @@ func (f *fakeService) ClearSession(string) error                      { return n
 func (f *fakeService) PrepareWorkspace(name, bookmark string, _ bool) (string, string, error) {
 	return name, "/tmp/" + name, nil
 }
+func (f *fakeService) Bootstrap(string) error { return nil }
 
 func TestRunDoctor(t *testing.T) {
 	svc := &fakeService{}
