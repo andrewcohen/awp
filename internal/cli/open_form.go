@@ -17,10 +17,10 @@ import (
 )
 
 var (
-	openFormKeyMove    = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "move"))
-	openFormKeySubmit  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit"))
-	openFormKeyEditor  = key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "prompt in $EDITOR"))
-	openFormKeyCancel  = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
+	openFormKeyMove   = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "move"))
+	openFormKeySubmit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit"))
+	openFormKeyEditor = key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "prompt in $EDITOR"))
+	openFormKeyCancel = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
 )
 
 type openRequest struct {
@@ -65,6 +65,7 @@ func newOpenFormModel(initial openRequest, workspaces []string) openFormModel {
 
 	promptInput := textarea.New()
 	promptInput.Placeholder = "optional agent prompt to run after creating workspace"
+	promptInput.CharLimit = 0
 	promptInput.SetValue(strings.TrimSpace(initial.Prompt))
 	promptInput.Prompt = ""
 	promptInput.SetWidth(56)

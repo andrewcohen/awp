@@ -96,3 +96,10 @@ func TestOpenFormCtrlGWithoutEditorSetsError(t *testing.T) {
 		t.Fatalf("expected editor error, got %q", got.err)
 	}
 }
+
+func TestOpenFormPromptHasNoCharLimit(t *testing.T) {
+	model := newOpenFormModel(openRequest{}, nil)
+	if model.promptInput.CharLimit != 0 {
+		t.Fatalf("expected prompt char limit 0, got %d", model.promptInput.CharLimit)
+	}
+}
