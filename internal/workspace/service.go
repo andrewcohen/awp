@@ -260,6 +260,9 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	if err := s.store.Save(repoRoot, entries); err != nil {
 		return "", "", false, err
 	}
+	if err := s.runBuiltinBootstrap(repoRoot, workspacePath); err != nil {
+		return "", "", false, err
+	}
 	if runHooks {
 		if err := s.runPostWorkspaceStartHooks(repoRoot, normalized, workspacePath); err != nil {
 			if cleanupErr := s.rollbackNewWorkspaceStart(repoRoot, normalized, workspacePath); cleanupErr != nil {
@@ -350,6 +353,9 @@ func (s *service) createWorkspace(name string, bookmark string, prompt string, r
 	}
 	entries[normalized] = Entry{Name: normalized, Path: workspacePath}
 	if err := s.store.Save(repoRoot, entries); err != nil {
+		return err
+	}
+	if err := s.runBuiltinBootstrap(repoRoot, workspacePath); err != nil {
 		return err
 	}
 	if runHooks {
@@ -817,6 +823,90 @@ func (s *service) maybeRunPrompt(workspaceName, prompt string) error {
 	}
 	s.logf("✅ Agent prompt started")
 	return nil
+}
+
+// runBuiltinBootstrap copies files from the source repo that external tools
+// (gh, git) expect to find inside a workspace. Runs before any user hooks.
+// Silently skips pieces that don't exist in the source repo.
+func (s *service) runBuiltinBootstrap(sourceRepo, workspacePath string) error {
+	if strings.TrimSpace(sourceRepo) == "" || strings.TrimSpace(workspacePath) == "" {
+		return nil
+	}
+	if sameDir(sourceRepo, workspacePath) {
+		return nil
+	}
+	s.logf("▶️ Running built-in bootstrap")
+
+	gitConfigSrc := filepath.Join(sourceRepo, ".git", "config")
+	if st, err := os.Stat(gitConfigSrc); err == nil && st.Mode().IsRegular() {
+		gitConfigDst := filepath.Join(workspacePath, ".git", "config")
+		if err := os.MkdirAll(filepath.Dir(gitConfigDst), 0o755); err != nil {
+			return fmt.Errorf("create .git dir in workspace: %w", err)
+		}
+		if err := copyFile(gitConfigSrc, gitConfigDst); err != nil {
+			return fmt.Errorf("copy .git/config: %w", err)
+		}
+		s.logf("✅ Copied .git/config")
+	}
+
+	awpSrc := filepath.Join(sourceRepo, ".awp")
+	if st, err := os.Stat(awpSrc); err == nil && st.IsDir() {
+		awpDst := filepath.Join(workspacePath, ".awp")
+		if err := copyDir(awpSrc, awpDst); err != nil {
+			return fmt.Errorf("copy .awp: %w", err)
+		}
+		s.logf("✅ Copied .awp/")
+	}
+	return nil
+}
+
+func sameDir(a, b string) bool {
+	aa, aerr := filepath.Abs(a)
+	bb, berr := filepath.Abs(b)
+	if aerr != nil || berr != nil {
+		return false
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	st, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, st.Mode().Perm())
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			_ = os.Remove(target)
+			return os.Symlink(link, target)
+		}
+		return copyFile(path, target)
+	})
 }
 
 func (s *service) trackBookmark(bookmark string) error {
