@@ -402,6 +402,7 @@ func TestCreateWorkspaceOpensWhenAddReportsAlreadyExists(t *testing.T) {
 }
 
 func TestStartRunsPostWorkspaceStartHooksForNewWorkspace(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
 	repoRoot := t.TempDir()
 	invocationDir := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
@@ -429,7 +430,7 @@ func TestStartRunsPostWorkspaceStartHooksForNewWorkspace(t *testing.T) {
 	if len(runner.calls) != 2 {
 		t.Fatalf("expected 2 hook command runs, got %+v", runner.calls)
 	}
-	if runner.calls[0].name != "sh" || len(runner.calls[0].args) != 2 || runner.calls[0].args[0] != "-c" {
+	if runner.calls[0].name != "/bin/sh" || len(runner.calls[0].args) != 2 || runner.calls[0].args[0] != "-lc" {
 		t.Fatalf("unexpected first runner call: %+v", runner.calls[0])
 	}
 	if got := runner.calls[0].args[1]; !strings.Contains(got, "cp "+invocationDir+"/.env .env") {
@@ -461,6 +462,7 @@ func TestStartDoesNotRunHooksForExistingWorkspace(t *testing.T) {
 }
 
 func TestOpenRunsHooksWhenCreatingWorkspace(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
 	repoRoot := t.TempDir()
 	invocationDir := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{"default": true}}
@@ -479,12 +481,16 @@ func TestOpenRunsHooksWhenCreatingWorkspace(t *testing.T) {
 	if len(runner.calls) != 2 {
 		t.Fatalf("expected 2 hook command runs on open-created workspace, got %+v", runner.calls)
 	}
+	if runner.calls[0].name != "/bin/sh" || len(runner.calls[0].args) != 2 || runner.calls[0].args[0] != "-lc" {
+		t.Fatalf("unexpected first runner call: %+v", runner.calls[0])
+	}
 	if got := runner.calls[0].args[1]; !strings.Contains(got, "cp "+invocationDir+"/.env .env") {
 		t.Fatalf("unexpected expanded command %q", got)
 	}
 }
 
 func TestStartRollsBackWhenHookFails(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
 	repoRoot := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)

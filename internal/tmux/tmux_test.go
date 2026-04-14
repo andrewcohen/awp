@@ -104,6 +104,24 @@ func TestNewWindowInSessionBuildsTarget(t *testing.T) {
 	}
 }
 
+func TestNewShellWindowInSessionBuildsTargetAndReturnsWindowID(t *testing.T) {
+	runner := &fakeRunner{out: "[awp]repo__qa:3\n"}
+	client := New(runner)
+	target, err := client.NewShellWindowInSession("[awp]repo__qa", "/tmp/ws")
+	if err != nil {
+		t.Fatalf("NewShellWindowInSession: %v", err)
+	}
+	if target != "[awp]repo__qa:3" {
+		t.Fatalf("unexpected target: %q", target)
+	}
+	want := []string{"tmux", "new-window", "-d", "-t", "[awp]repo__qa:", "-P", "-F", "#{session_name}:#{window_index}", "-c", "/tmp/ws"}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
 func TestSplitPaneInSessionBuildsTarget(t *testing.T) {
 	runner := &fakeRunner{}
 	client := New(runner)
@@ -144,6 +162,18 @@ func TestKillSessionIssuesExpectedCommand(t *testing.T) {
 		if runner.calls[0][i] != w {
 			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
 		}
+	}
+}
+
+func TestCurrentSessionNameReturnsTrimmedValue(t *testing.T) {
+	runner := &fakeRunner{out: "[awp]repo__qa\n"}
+	client := New(runner)
+	name, err := client.CurrentSessionName()
+	if err != nil {
+		t.Fatalf("CurrentSessionName: %v", err)
+	}
+	if name != "[awp]repo__qa" {
+		t.Fatalf("unexpected name: %q", name)
 	}
 }
 
