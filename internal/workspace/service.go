@@ -1057,7 +1057,7 @@ func (s *service) runPostWorkspaceStartHooksWithRoot(repoRoot, workspaceName, wo
 		expanded := strings.ReplaceAll(raw, "<root>", root)
 		s.logf("▶️ [%d/%d] %s", executed, len(commands), raw)
 		cmd := "cd " + shellQuote(workspacePath) + " && " + expanded
-		out, runErr := s.runner.Run(context.Background(), "", "sh", "-c", cmd)
+		out, runErr := s.runShellCommand(cmd)
 		output := strings.TrimSpace(out)
 		if output == "" {
 			s.emitOutput("(no output)")
@@ -1268,6 +1268,14 @@ func IsProtected(name string) bool {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func (s *service) runShellCommand(command string) (string, error) {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell != "" {
+		return s.runner.Run(context.Background(), "", shell, "-lc", command)
+	}
+	return s.runner.Run(context.Background(), "", "sh", "-c", command)
 }
 
 func (s *service) logf(format string, args ...any) {

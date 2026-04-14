@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/andrewcohen/awp/internal/jj"
+	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -190,6 +193,7 @@ func (a *App) runOpen(args []string) error {
 		return nil
 	}
 	req := openRequest{}
+	deckMode := false
 	positionals := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -212,6 +216,8 @@ func (a *App) runOpen(args []string) error {
 			req.Prompt = strings.TrimPrefix(arg, "--prompt=")
 		case arg == "--yes" || arg == "-y":
 			req.Yes = true
+		case arg == "--deck":
+			deckMode = true
 		case strings.HasPrefix(arg, "-"):
 			return fmt.Errorf("unknown flag %q", arg)
 		default:
@@ -223,6 +229,9 @@ func (a *App) runOpen(args []string) error {
 	}
 	if len(positionals) == 1 {
 		req.Name = positionals[0]
+		if deckMode {
+			return a.openInDeckMode(req)
+		}
 		return a.svc.Open(req.Name, req.Bookmark, req.Prompt, req.Yes)
 	}
 	if a.isPiped != nil && a.isPiped(a.in) {
@@ -250,16 +259,67 @@ func (a *App) runOpen(args []string) error {
 			return err
 		}
 		updated.Yes = true
+		if deckMode {
+			return a.openInDeckMode(updated)
+		}
 		return a.svc.Open(updated.Name, updated.Bookmark, updated.Prompt, updated.Yes)
 	}
 	if strings.TrimSpace(req.Bookmark) != "" {
+		if deckMode {
+			return a.openInDeckMode(req)
+		}
 		return a.svc.Open("", req.Bookmark, req.Prompt, req.Yes)
 	}
 	name, err := a.resolveWorkspaceTarget("open", nil)
 	if err != nil {
 		return err
 	}
+	req.Name = name
+	if deckMode {
+		return a.openInDeckMode(req)
+	}
 	return a.svc.Open(name, req.Bookmark, req.Prompt, req.Yes)
+}
+
+func openWorkspaceInDeckMode(runner Runner, svc workspace.Service, req openRequest) error {
+	normalized, wsPath, err := svc.PrepareWorkspace(req.Name, req.Bookmark, true)
+	if err != nil {
+		return err
+	}
+	j := jj.New(runner)
+	repoRoot, err := j.RepoRoot()
+	if err != nil {
+		return err
+	}
+	projectName := filepath.Base(repoRoot)
+	sessionName := DeckSessionName(projectName, normalized)
+	tmuxClient := tmux.New(runner)
+	id, err := tmuxClient.SessionIDByName(sessionName)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		if err := tmuxClient.NewSession(sessionName, wsPath, "agent"); err != nil {
+			return err
+		}
+		id, _ = tmuxClient.SessionIDByName(sessionName)
+	}
+	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.Prompt) != "" {
+		if err := tmuxClient.SendCommand(sessionName+":agent", "pi "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
+			return err
+		}
+	}
+	return tmuxClient.SwitchClient(sessionName)
+}
+
+func (a *App) openInDeckMode(req openRequest) error {
+	if a.runner == nil {
+		a.runner = NewExecRunner()
+	}
+	return openWorkspaceInDeckMode(a.runner, a.svc, req)
 }
 
 func (a *App) runRename(args []string) error {

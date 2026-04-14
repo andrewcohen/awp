@@ -2,19 +2,21 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/jj"
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -39,6 +41,70 @@ func parseAwpSession(name string) (string, string, bool) {
 	return rest[:idx], rest[idx+2:], true
 }
 
+type fixedDirRunner struct {
+	base Runner
+	dir  string
+}
+
+func (r fixedDirRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = r.dir
+	}
+	return r.base.Run(ctx, dir, name, args...)
+}
+
+func newDeckActionServiceWithIO(runner Runner, repoRoot string, in io.Reader, out io.Writer) workspace.Service {
+	fr := fixedDirRunner{base: runner, dir: repoRoot}
+	return workspace.NewService(workspace.Dependencies{
+		JJ:            jj.New(fr),
+		Tmux:          tmux.New(runner),
+		Store:         state.NewJSONStore(),
+		Hooks:         config.NewFileHookProvider(),
+		Runner:        fr,
+		InvocationDir: repoRoot,
+		Input:         in,
+		Out:           out,
+	})
+}
+
+func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspace.Service {
+	return newDeckActionServiceWithIO(runner, repoRoot, in, io.Discard)
+}
+
+type deckOpenCommand struct {
+	runner   Runner
+	repoRoot string
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+}
+
+func (c *deckOpenCommand) SetStdin(r io.Reader)  { c.stdin = r }
+func (c *deckOpenCommand) SetStdout(w io.Writer) { c.stdout = w }
+func (c *deckOpenCommand) SetStderr(w io.Writer) { c.stderr = w }
+
+func (c *deckOpenCommand) Run() error {
+	fr := fixedDirRunner{base: c.runner, dir: c.repoRoot}
+	svc := newDeckActionServiceWithIO(c.runner, c.repoRoot, c.stdin, c.stdout)
+	entries, err := svc.List()
+	if err != nil {
+		return err
+	}
+	options := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		options = append(options, entry.Name)
+	}
+	req, err := runOpenWithCharm(openRequest{}, options, c.stdin, c.stdout)
+	if err != nil {
+		if err.Error() == "open cancelled" {
+			return ErrOpenCancelled
+		}
+		return err
+	}
+	req.Yes = true
+	return openWorkspaceInDeckMode(fr, svc, req)
+}
+
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp deck must run inside tmux (hint: bind a display-popup -E awp deck)")
@@ -57,19 +123,53 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
 	projectName := filepath.Base(repoRoot)
+	items, allItems, err := loadDeckItems(j, tmuxClient, svc, repoRoot, projectName, in, out)
+	if err != nil {
+		return err
+	}
+
+	handler := func(req deckui.ActionRequest) error {
+		actionSvc := svc
+		if strings.TrimSpace(req.Item.RepoRoot) != "" {
+			actionSvc = newDeckActionService(runner, req.Item.RepoRoot, in)
+		}
+		return handleDeckAction(tmuxClient, actionSvc, req)
+	}
+	launcher := func(repoRoot string) tea.Cmd {
+		cmd := &deckOpenCommand{runner: runner, repoRoot: repoRoot}
+		return tea.Exec(cmd, func(err error) tea.Msg {
+			if err != nil && errors.Is(err, ErrOpenCancelled) {
+				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
+			}
+			return deckui.NewWorkspaceDoneMsg{Err: err}
+		})
+	}
+	refresher := func() tea.Cmd {
+		return func() tea.Msg {
+			items, allItems, err := loadDeckItems(j, tmuxClient, svc, repoRoot, projectName, in, out)
+			return deckui.RefreshDoneMsg(items, allItems, err)
+		}
+	}
+	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
+	_, err = program.Run()
+	return err
+}
+
+func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, []deckui.Item, error) {
 	listOne, err := svc.List()
 	if err != nil {
 		if jj.IsStaleWorkingCopyError(err) {
 			updated, updateErr := maybeUpdateStaleWorkingCopy(j, in, out, err)
 			if updateErr != nil {
-				return updateErr
+				return nil, nil, updateErr
 			}
 			if updated {
 				listOne, err = svc.List()
 			}
 		}
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 	entries := make([]workspace.CrossRepoEntry, 0, len(listOne))
@@ -82,9 +182,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 
 	liveSessions, _ := tmuxClient.ListSessions()
+	currentSession, _ := tmuxClient.CurrentSessionName()
 	liveByName := map[string]string{}
 	liveByID := map[string]struct{}{}
-	adoptable := map[string]string{} // sessionName -> sessionID for [awp] sessions not yet in entries
+	adoptable := map[string]string{}
 	for _, s := range liveSessions {
 		liveByName[s.Name] = s.ID
 		liveByID[s.ID] = struct{}{}
@@ -118,17 +219,15 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			TmuxWindow:    sessionName,
 			SessionName:   sessionName,
 			Active:        nameMatch,
+			Current:       sessionName == currentSession,
 			Stale:         stale,
 		})
 	}
-
-	// Adopt orphan [awp] sessions not in store: render read-only rows so user sees them.
-	for name, id := range adoptable {
+	for name := range adoptable {
 		repo, ws, ok := parseAwpSession(name)
 		if !ok {
 			continue
 		}
-		_ = id
 		items = append(items, deckui.Item{
 			ProjectName:   repo,
 			WorkspaceName: ws,
@@ -138,10 +237,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			TmuxWindow:    name,
 			SessionName:   name,
 			Active:        true,
+			Current:       name == currentSession,
 		})
 	}
 
-	// Build all-projects list too for the P scope toggle.
 	allEntries, _ := svc.ListAll()
 	allItems := make([]deckui.Item, 0, len(allEntries))
 	for _, entry := range allEntries {
@@ -167,32 +266,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			TmuxWindow:    sessionName,
 			SessionName:   sessionName,
 			Active:        nameMatch,
+			Current:       sessionName == currentSession,
 			Stale:         stale,
 		})
 	}
-
-	handler := func(req deckui.ActionRequest) error {
-		return handleDeckAction(tmuxClient, svc, req)
-	}
-	launcher := func(repoRoot string) tea.Cmd {
-		exe, exeErr := os.Executable()
-		if exeErr != nil {
-			exe = "awp"
-		}
-		cmd := exec.Command(exe, "w", "open")
-		cmd.Dir = repoRoot
-		return tea.ExecProcess(cmd, func(err error) tea.Msg {
-			var exitErr *exec.ExitError
-			if err != nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
-				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
-			}
-			return deckui.NewWorkspaceDoneMsg{Err: err}
-		})
-	}
-	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
-	_, err = program.Run()
-	return err
+	return items, allItems, nil
 }
 
 func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, req deckui.ActionRequest) error {
@@ -201,18 +279,22 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, req deckui
 	switch req.Action {
 	case deckui.ActionSummon:
 		return summonWorkspaceSession(tmuxClient, svc, item)
-	case deckui.ActionLogs:
-		return ensureAuxWindow(tmuxClient, svc, item, "logs")
-	case deckui.ActionTests:
-		return ensureAuxWindow(tmuxClient, svc, item, "tests")
-	case deckui.ActionShell:
-		return splitAgentShell(tmuxClient, svc, item)
+	case deckui.ActionOpenWindow:
+		return openNamedWindow(tmuxClient, svc, item, req.Arg)
+	case deckui.ActionDelete:
+		if err := svc.Delete(item.WorkspaceName, true); err != nil {
+			return err
+		}
+		if id, err := tmuxClient.SessionIDByName(sessionName); err != nil {
+			return err
+		} else if id != "" {
+			if err := tmuxClient.KillSession(sessionName); err != nil {
+				return err
+			}
+		}
+		return nil
 	case deckui.ActionRelink:
 		return relinkSession(tmuxClient, svc, item)
-	case deckui.ActionSetPrompt:
-		return svc.UpdatePrompt(item.WorkspaceName, req.Arg)
-	case deckui.ActionSetStatus:
-		return svc.UpdateStatus(item.WorkspaceName, req.Arg)
 	}
 	return fmt.Errorf("unknown action: %q session=%q", req.Action, sessionName)
 }
@@ -234,7 +316,10 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 	return tmuxClient.SwitchClient(sessionName)
 }
 
-func ensureAuxWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, role string) error {
+// openNamedWindow ensures the workspace session exists, then switches to the
+// named window, creating it (with an optional default command) if missing.
+// Finally, it switches the tmux client to the session so the user lands there.
+func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, windowName string) error {
 	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
 	id, err := tmuxClient.SessionIDByName(sessionName)
 	if err != nil {
@@ -248,30 +333,54 @@ func ensureAuxWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
+
+	// Empty windowName = fresh shell window, no dedupe, tmux picks title.
+	if strings.TrimSpace(windowName) == "" {
+		target, err := tmuxClient.NewShellWindowInSession(sessionName, path)
+		if err != nil {
+			return err
+		}
+		if err := tmuxClient.SwitchToWindow(target); err != nil {
+			return err
+		}
+		return tmuxClient.SwitchClient(sessionName)
+	}
+
+	target := sessionName + ":" + windowName
+	exists := false
 	windows, _ := tmuxClient.ListWindowsInSession(sessionName)
 	for _, w := range windows {
-		if w.Name == role {
-			return nil
+		if w.Name == windowName {
+			exists = true
+			break
 		}
 	}
-	return tmuxClient.NewWindowInSession(sessionName, role, path)
-}
-
-func splitAgentShell(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item) error {
-	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
-	id, err := tmuxClient.SessionIDByName(sessionName)
-	if err != nil {
-		return err
-	}
-	path := resolvePath(svc, item)
-	if id == "" {
-		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+	if !exists {
+		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path); err != nil {
 			return err
 		}
-		id, _ = tmuxClient.SessionIDByName(sessionName)
-		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
+		if cmd := defaultWindowCommand(windowName); cmd != "" {
+			if err := tmuxClient.SendCommand(target, cmd); err != nil {
+				return err
+			}
+		}
 	}
-	return tmuxClient.SplitPaneInSession(sessionName, "agent", path, false)
+	if err := tmuxClient.SwitchToWindow(target); err != nil {
+		return err
+	}
+	return tmuxClient.SwitchClient(sessionName)
+}
+
+func defaultWindowCommand(windowName string) string {
+	switch windowName {
+	case "editor":
+		return "$EDITOR ."
+	case "tuicr":
+		return "tuicr -r main..@"
+	case "vcs":
+		return "jjui"
+	}
+	return ""
 }
 
 func relinkSession(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item) error {
@@ -324,4 +433,3 @@ func maybeUpdateStaleWorkingCopy(j *jj.Client, in io.Reader, out io.Writer, caus
 	}
 	return true, nil
 }
-

@@ -19,6 +19,7 @@ type Item struct {
 	TmuxWindow    string
 	SessionName   string
 	Active        bool
+	Current       bool
 	Stale         bool
 }
 
@@ -26,12 +27,9 @@ type Action int
 
 const (
 	ActionSummon Action = iota
-	ActionLogs
-	ActionTests
-	ActionShell
 	ActionRelink
-	ActionSetPrompt
-	ActionSetStatus
+	ActionOpenWindow
+	ActionDelete
 )
 
 type ActionRequest struct {
@@ -46,22 +44,25 @@ type Handler func(ActionRequest) error
 // interactive new-workspace flow in the same terminal, and emits a result msg.
 type NewWorkspaceLauncher func(repoRoot string) tea.Cmd
 
+type Refresher func() tea.Cmd
+
 type Model struct {
-	itemsCurrent []Item
-	itemsAll     []Item
-	showAll      bool
-	currentRepo  string
-	cursor       int
-	width        int
-	height       int
-	status       string
-	handler      Handler
-	promptInput  textinput.Model
-	editing      bool
-	filterInput  textinput.Model
-	filtering    bool
-	filter       string
-	newLauncher  NewWorkspaceLauncher
+	itemsCurrent  []Item
+	itemsAll      []Item
+	showAll       bool
+	currentRepo   string
+	cursor        int
+	width         int
+	height        int
+	status        string
+	handler       Handler
+	filterInput   textinput.Model
+	filtering     bool
+	filter        string
+	confirmDelete bool
+	deleteTarget  Item
+	refresher     Refresher
+	newLauncher   NewWorkspaceLauncher
 }
 
 type NewWorkspaceDoneMsg struct {
@@ -71,8 +72,19 @@ type NewWorkspaceDoneMsg struct {
 
 type actionResultMsg struct {
 	action Action
+	arg    string
 	item   Item
 	err    error
+}
+
+type refreshDoneMsg struct {
+	itemsCurrent []Item
+	itemsAll     []Item
+	err          error
+}
+
+func RefreshDoneMsg(itemsCurrent, itemsAll []Item, err error) tea.Msg {
+	return refreshDoneMsg{itemsCurrent: itemsCurrent, itemsAll: itemsAll, err: err}
 }
 
 func New(items []Item, handler Handler) Model {
@@ -80,30 +92,46 @@ func New(items []Item, handler Handler) Model {
 }
 
 // NewScoped builds a model with both scopes and a toggle key (P).
-// itemsCurrent = current repo only. itemsAll = every repo. currentRepo = active project name for header.
 func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handler) Model {
-	ti := textinput.New()
-	ti.Placeholder = "prompt..."
-	ti.CharLimit = 256
 	fi := textinput.New()
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
-	return Model{
+	m := Model{
 		itemsCurrent: append([]Item(nil), itemsCurrent...),
 		itemsAll:     append([]Item(nil), itemsAll...),
 		currentRepo:  currentRepo,
 		showAll:      len(itemsAll) > 0,
-		status:       "↑/↓ move · enter summon · n new · / filter · p prompt · l logs · t tests · s shell · R relink · P scope · q quit",
+		status:       "↑/↓ move · enter summon · n new · / filter · a agent · e editor · c review · v vcs · s shell · D delete · R relink · P scope · q quit",
 		handler:      handler,
-		promptInput:  ti,
 		filterInput:  fi,
 	}
+	if idx := m.indexCurrent(); idx >= 0 {
+		m.cursor = idx
+	}
+	return m
 }
 
-// WithNewWorkspaceLauncher installs a launcher used by the `n` key to create
-// a workspace in the selected row's project without leaving the popup.
+func (m Model) indexCurrent() int {
+	src := m.itemsCurrent
+	if m.showAll && len(m.itemsAll) > 0 {
+		src = m.itemsAll
+	}
+	for i, it := range src {
+		if it.Current {
+			return i
+		}
+	}
+	return -1
+}
+
+// WithNewWorkspaceLauncher installs a launcher used by the `n` key.
 func (m Model) WithNewWorkspaceLauncher(l NewWorkspaceLauncher) Model {
 	m.newLauncher = l
+	return m
+}
+
+func (m Model) WithRefresher(r Refresher) Model {
+	m.refresher = r
 	return m
 }
 
@@ -137,11 +165,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NewWorkspaceDoneMsg:
 		if msg.Cancelled {
 			m.status = "new: cancelled"
-			return m, tea.ClearScreen
+			return m, nil
 		}
 		if msg.Err != nil {
 			m.status = "new: " + msg.Err.Error()
-			return m, tea.ClearScreen
+			return m, nil
 		}
 		return m, tea.Quit
 	case actionResultMsg:
@@ -149,12 +177,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "error: " + msg.err.Error()
 			return m, nil
 		}
-		m.status = fmt.Sprintf("%s: %s", actionLabel(msg.action), msg.item.WorkspaceName)
-		if msg.action != ActionSetPrompt && msg.action != ActionSetStatus {
-			return m, tea.Quit
+		m.status = fmt.Sprintf("%s: %s", actionLabel(msg.action, msg.arg), msg.item.WorkspaceName)
+		if msg.action == ActionDelete {
+			if m.refresher != nil {
+				return m, m.refresher()
+			}
+			return m, nil
+		}
+		return m, tea.Quit
+	case refreshDoneMsg:
+		if msg.err != nil {
+			m.status = "refresh: " + msg.err.Error()
+			return m, nil
+		}
+		m.itemsCurrent = append([]Item(nil), msg.itemsCurrent...)
+		m.itemsAll = append([]Item(nil), msg.itemsAll...)
+		if items := m.items(); len(items) == 0 {
+			m.cursor = 0
+		} else if m.cursor >= len(items) {
+			m.cursor = len(items) - 1
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.confirmDelete {
+			switch strings.ToLower(msg.String()) {
+			case "y":
+				m.confirmDelete = false
+				if m.handler == nil {
+					m.status = "delete: handler not configured"
+					return m, nil
+				}
+				m.status = fmt.Sprintf("delete %s...", m.deleteTarget.WorkspaceName)
+				return m, m.dispatch(ActionDelete, m.deleteTarget, "")
+			case "n", "esc", "q":
+				m.confirmDelete = false
+				m.status = "delete: cancelled"
+				return m, nil
+			}
+			return m, nil
+		}
 		if m.filtering {
 			switch msg.String() {
 			case "esc":
@@ -177,26 +238,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= len(m.items()) {
 				m.cursor = 0
 			}
-			return m, cmd
-		}
-		if m.editing {
-			switch msg.String() {
-			case "esc":
-				m.editing = false
-				m.promptInput.Blur()
-				return m, nil
-			case "enter":
-				item, ok := m.selected()
-				m.editing = false
-				m.promptInput.Blur()
-				if !ok || m.handler == nil {
-					return m, nil
-				}
-				arg := m.promptInput.Value()
-				return m, m.dispatch(ActionSetPrompt, item, arg)
-			}
-			var cmd tea.Cmd
-			m.promptInput, cmd = m.promptInput.Update(msg)
 			return m, cmd
 		}
 		switch msg.String() {
@@ -233,23 +274,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			return m.trigger(ActionSummon)
-		case "l":
-			return m.trigger(ActionLogs)
-		case "t":
-			return m.trigger(ActionTests)
+			return m.trigger(ActionSummon, "")
+		case "a":
+			return m.trigger(ActionOpenWindow, "agent")
+		case "e":
+			return m.trigger(ActionOpenWindow, "editor")
+		case "c":
+			return m.trigger(ActionOpenWindow, "tuicr")
+		case "v":
+			return m.trigger(ActionOpenWindow, "vcs")
 		case "s":
-			return m.trigger(ActionShell)
-		case "R":
-			return m.trigger(ActionRelink)
-		case "p":
-			if item, ok := m.selected(); ok {
-				m.editing = true
-				m.promptInput.SetValue(item.PromptPreview)
-				m.promptInput.Focus()
-				m.status = "enter to save · esc cancel"
+			return m.trigger(ActionOpenWindow, "")
+		case "D":
+			item, ok := m.selected()
+			if !ok {
+				return m, nil
 			}
+			m.confirmDelete = true
+			m.deleteTarget = item
+			m.status = fmt.Sprintf("delete %s? [y/N]", item.WorkspaceName)
 			return m, nil
+		case "R":
+			return m.trigger(ActionRelink, "")
 		case "n":
 			if m.newLauncher == nil {
 				m.status = "new: launcher not configured"
@@ -267,38 +313,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) trigger(a Action) (tea.Model, tea.Cmd) {
+func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	item, ok := m.selected()
 	if !ok || m.handler == nil {
 		return m, nil
 	}
-	m.status = fmt.Sprintf("%s %s...", actionLabel(a), item.WorkspaceName)
-	return m, m.dispatch(a, item, "")
+	m.status = fmt.Sprintf("%s %s...", actionLabel(a, arg), item.WorkspaceName)
+	return m, m.dispatch(a, item, arg)
 }
 
 func (m Model) dispatch(a Action, item Item, arg string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.handler(ActionRequest{Item: item, Action: a, Arg: arg})
-		return actionResultMsg{action: a, item: item, err: err}
+		return actionResultMsg{action: a, arg: arg, item: item, err: err}
 	}
 }
 
-func actionLabel(a Action) string {
+func actionLabel(a Action, arg string) string {
 	switch a {
 	case ActionSummon:
 		return "summon"
-	case ActionLogs:
-		return "logs"
-	case ActionTests:
-		return "tests"
-	case ActionShell:
-		return "shell"
 	case ActionRelink:
 		return "relink"
-	case ActionSetPrompt:
-		return "prompt set"
-	case ActionSetStatus:
-		return "status set"
+	case ActionOpenWindow:
+		if arg != "" {
+			return "open " + arg
+		}
+		return "open shell"
+	case ActionDelete:
+		return "delete"
 	}
 	return "action"
 }
@@ -321,9 +364,6 @@ func (m Model) View() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
 
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status)
-	if m.editing {
-		footer = "prompt> " + m.promptInput.View()
-	}
 	if m.filtering {
 		footer = "/" + m.filterInput.View()
 	} else if m.filter != "" {
@@ -331,7 +371,11 @@ func (m Model) View() string {
 			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, m.status),
 		)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	view := lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	if m.confirmDelete {
+		view = lipgloss.JoinVertical(lipgloss.Left, view, "", m.renderDeleteConfirm())
+	}
+	return view
 }
 
 func (m Model) renderList(width int) string {
@@ -418,14 +462,29 @@ func (m Model) renderDetails(width int) string {
 		"",
 		"Actions:",
 		"enter  summon (create/focus session)",
-		"p      edit prompt",
-		"l      open logs window",
-		"t      open tests window",
-		"s      split shell into agent window",
+		"a      open agent window",
+		"e      open editor window ($EDITOR .)",
+		"c      open code review window (tuicr)",
+		"v      open vcs window (jjui)",
+		"s      open shell window",
+		"D      delete workspace",
 		"R      relink/recover session",
 		"q      quit deck",
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderDeleteConfirm() string {
+	name := m.deleteTarget.WorkspaceName
+	if strings.TrimSpace(name) == "" {
+		name = "this workspace"
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("203")).
+		Padding(1, 2).
+		Render("Delete workspace \"" + name + "\"?\n\nPress y to confirm, n to cancel.")
+	return box
 }
 
 func (m Model) selected() (Item, bool) {

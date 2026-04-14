@@ -188,6 +188,21 @@ func (c *Client) NewWindowInSession(sessionName, windowName, dir string) error {
 	return nil
 }
 
+// NewShellWindowInSession creates a new window without specifying a name, so
+// tmux applies its default (the running command / shell). Returns the target
+// id (session:index) of the created window.
+func (c *Client) NewShellWindowInSession(sessionName, dir string) (string, error) {
+	args := []string{"new-window", "-d", "-t", sessionName + ":", "-P", "-F", "#{session_name}:#{window_index}"}
+	if dir != "" {
+		args = append(args, "-c", dir)
+	}
+	out, err := c.runner.Run(context.Background(), "", "tmux", args...)
+	if err != nil {
+		return "", fmt.Errorf("create tmux shell window in session %q: %w", sessionName, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // SplitPaneInSession splits the target window within a session.
 func (c *Client) SplitPaneInSession(sessionName, windowName, dir string, horizontal bool) error {
 	args := []string{"split-window", "-d", "-t", sessionName + ":" + windowName}
@@ -220,9 +235,9 @@ func (c *Client) DisplayPopup(dir string, cmd string) error {
 }
 
 type Window struct {
-	ID       string
-	Name     string
-	Session  string
+	ID      string
+	Name    string
+	Session string
 }
 
 // ListWindowsInSession returns windows for a session.
@@ -250,6 +265,14 @@ func (c *Client) ListWindowsInSession(sessionName string) ([]Window, error) {
 
 func (c *Client) CurrentWindow() (string, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "#{window_name}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (c *Client) CurrentSessionName() (string, error) {
+	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "#{session_name}")
 	if err != nil {
 		return "", err
 	}
