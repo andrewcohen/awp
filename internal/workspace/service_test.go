@@ -36,7 +36,8 @@ type fakeJJ struct {
 	revisionLookupErr    error
 }
 
-func (f *fakeJJ) RepoRoot() (string, error) { return f.repoRoot, f.repoRootErr }
+func (f *fakeJJ) RepoRoot() (string, error)       { return f.repoRoot, f.repoRootErr }
+func (f *fakeJJ) SourceRepoRoot() (string, error) { return f.repoRoot, f.repoRootErr }
 func (f *fakeJJ) WorkspaceExists(name string) (bool, error) {
 	if f.workspaceErr != nil {
 		return false, f.workspaceErr

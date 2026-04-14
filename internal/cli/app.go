@@ -94,9 +94,26 @@ func (a *App) runWorkspace(args []string) error {
 		return a.runRename(args[1:])
 	case "delete", "remove", "rm":
 		return a.runDelete(args[1:])
+	case "bootstrap":
+		return a.runBootstrap(args[1:])
 	default:
 		return fmt.Errorf("unknown workspace subcommand %q", args[0])
 	}
+}
+
+func (a *App) runBootstrap(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp w bootstrap [workspace]\nRe-runs built-in + user bootstrap hooks. Infers workspace from cwd when omitted.")
+		return nil
+	}
+	if len(args) > 1 {
+		return errors.New("bootstrap takes at most one workspace name")
+	}
+	name := ""
+	if len(args) == 1 {
+		name = args[0]
+	}
+	return a.svc.Bootstrap(name)
 }
 
 func (a *App) runList(args []string) error {
@@ -416,7 +433,7 @@ func (a *App) usage() error {
 }
 
 func (a *App) workspaceUsage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|rename|delete|remove|rm>")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|bootstrap|rename|delete|remove|rm>")
 	return nil
 }
 
