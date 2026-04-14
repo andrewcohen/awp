@@ -837,16 +837,16 @@ func (s *service) runBuiltinBootstrap(sourceRepo, workspacePath string) error {
 	}
 	s.logf("▶️ Running built-in bootstrap")
 
-	gitConfigSrc := filepath.Join(sourceRepo, ".git", "config")
-	if st, err := os.Stat(gitConfigSrc); err == nil && st.Mode().IsRegular() {
-		gitConfigDst := filepath.Join(workspacePath, ".git", "config")
-		if err := os.MkdirAll(filepath.Dir(gitConfigDst), 0o755); err != nil {
-			return fmt.Errorf("create .git dir in workspace: %w", err)
+	gitSrc := filepath.Join(sourceRepo, ".git")
+	if st, err := os.Stat(gitSrc); err == nil && st.IsDir() {
+		gitDst := filepath.Join(workspacePath, ".git")
+		// Replace any prior `.git` (dir or file) so we can write the gitfile cleanly.
+		_ = os.RemoveAll(gitDst)
+		content := fmt.Sprintf("gitdir: %s\n", gitSrc)
+		if err := os.WriteFile(gitDst, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write .git gitfile: %w", err)
 		}
-		if err := copyFile(gitConfigSrc, gitConfigDst); err != nil {
-			return fmt.Errorf("copy .git/config: %w", err)
-		}
-		s.logf("✅ Copied .git/config")
+		s.logf("✅ Wrote .git gitfile → %s", gitSrc)
 	}
 
 	awpSrc := filepath.Join(sourceRepo, ".awp")
