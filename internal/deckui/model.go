@@ -58,6 +58,9 @@ type Model struct {
 	handler      Handler
 	promptInput  textinput.Model
 	editing      bool
+	filterInput  textinput.Model
+	filtering    bool
+	filter       string
 	newLauncher  NewWorkspaceLauncher
 }
 
@@ -82,14 +85,18 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	ti := textinput.New()
 	ti.Placeholder = "prompt..."
 	ti.CharLimit = 256
+	fi := textinput.New()
+	fi.Placeholder = "filter..."
+	fi.CharLimit = 64
 	return Model{
 		itemsCurrent: append([]Item(nil), itemsCurrent...),
 		itemsAll:     append([]Item(nil), itemsAll...),
 		currentRepo:  currentRepo,
 		showAll:      len(itemsAll) > 0,
-		status:       "↑/↓ move · enter summon · n new · p prompt · l logs · t tests · s shell · R relink · P scope · q quit",
+		status:       "↑/↓ move · enter summon · n new · / filter · p prompt · l logs · t tests · s shell · R relink · P scope · q quit",
 		handler:      handler,
 		promptInput:  ti,
+		filterInput:  fi,
 	}
 }
 
@@ -101,10 +108,22 @@ func (m Model) WithNewWorkspaceLauncher(l NewWorkspaceLauncher) Model {
 }
 
 func (m Model) items() []Item {
+	src := m.itemsCurrent
 	if m.showAll && len(m.itemsAll) > 0 {
-		return m.itemsAll
+		src = m.itemsAll
 	}
-	return m.itemsCurrent
+	f := strings.ToLower(strings.TrimSpace(m.filter))
+	if f == "" {
+		return src
+	}
+	out := make([]Item, 0, len(src))
+	for _, it := range src {
+		if strings.Contains(strings.ToLower(it.WorkspaceName), f) ||
+			strings.Contains(strings.ToLower(it.ProjectName), f) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -136,6 +155,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.filtering {
+			switch msg.String() {
+			case "esc":
+				m.filtering = false
+				m.filterInput.Blur()
+				m.filter = ""
+				m.filterInput.SetValue("")
+				m.cursor = 0
+				return m, nil
+			case "enter":
+				m.filtering = false
+				m.filterInput.Blur()
+				m.filter = m.filterInput.Value()
+				m.cursor = 0
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			m.filter = m.filterInput.Value()
+			if m.cursor >= len(m.items()) {
+				m.cursor = 0
+			}
+			return m, cmd
+		}
 		if m.editing {
 			switch msg.String() {
 			case "esc":
@@ -157,8 +200,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q", "esc", "ctrl+c":
+			if m.filter != "" && msg.String() == "esc" {
+				m.filter = ""
+				m.filterInput.SetValue("")
+				m.cursor = 0
+				return m, nil
+			}
 			return m, tea.Quit
+		case "/":
+			m.filtering = true
+			m.filterInput.Focus()
+			m.filterInput.SetValue(m.filter)
+			return m, nil
 		case "j", "down":
 			if m.cursor < len(m.items())-1 {
 				m.cursor++
@@ -269,6 +323,13 @@ func (m Model) View() string {
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status)
 	if m.editing {
 		footer = "prompt> " + m.promptInput.View()
+	}
+	if m.filtering {
+		footer = "/" + m.filterInput.View()
+	} else if m.filter != "" {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
+			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, m.status),
+		)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 }
