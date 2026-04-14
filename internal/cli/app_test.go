@@ -62,6 +62,9 @@ func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error)   { return n
 func (f *fakeService) UpdatePrompt(string, string) error              { return nil }
 func (f *fakeService) UpdateStatus(string, string) error              { return nil }
 func (f *fakeService) ClearSession(string) error                      { return nil }
+func (f *fakeService) PrepareWorkspace(name, bookmark string, _ bool) (string, string, error) {
+	return name, "/tmp/" + name, nil
+}
 
 func TestRunDoctor(t *testing.T) {
 	svc := &fakeService{}

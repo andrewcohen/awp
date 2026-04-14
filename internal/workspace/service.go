@@ -93,6 +93,7 @@ type Service interface {
 	ListAll() ([]CrossRepoEntry, error)
 	Info(name string) (InfoEntry, error)
 	Open(name string, bookmark string, prompt string, yes bool) error
+	PrepareWorkspace(name string, bookmark string, runHooks bool) (normalized string, path string, err error)
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
 	RecordSession(workspaceName, sessionID, sessionName string) error
@@ -179,6 +180,95 @@ func NewService(deps Dependencies) *service {
 		in:            in,
 		out:           out,
 	}
+}
+
+// PrepareWorkspace runs the jj + store + hooks portion of workspace creation
+// without touching tmux. Returns the normalized name and workspace path.
+// Callers (e.g. `awp review`) can then build their own tmux layout.
+func (s *service) PrepareWorkspace(name string, bookmark string, runHooks bool) (string, string, error) {
+	normalized, workspacePath, _, err := s.prepareWorkspaceInternal(name, bookmark, runHooks)
+	return normalized, workspacePath, err
+}
+
+// prepareWorkspaceInternal does all non-tmux work. It returns (normalized, path, alreadyExists, err).
+func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHooks bool) (string, string, bool, error) {
+	s.logf("▶️ Preparing workspace (name=%q, bookmark=%q)", strings.TrimSpace(name), strings.TrimSpace(bookmark))
+	repoRoot, err := s.jj.RepoRoot()
+	if err != nil {
+		return "", "", false, fmt.Errorf("not a jj repository: %w", err)
+	}
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
+		name = bookmark
+	}
+	normalized, err := s.resolveName(name)
+	if err != nil {
+		return "", "", false, err
+	}
+	exists, err := s.jj.WorkspaceExists(normalized)
+	if err != nil {
+		return "", "", false, err
+	}
+	if exists {
+		entries, err := s.store.Load(repoRoot)
+		if err != nil {
+			return "", "", false, err
+		}
+		entry, ok := entries[normalized]
+		if !ok {
+			entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
+			entries[normalized] = entry
+			if err := s.store.Save(repoRoot, entries); err != nil {
+				return "", "", false, err
+			}
+		}
+		if err := s.trackBookmark(bookmark); err != nil {
+			return "", "", false, err
+		}
+		return normalized, entry.Path, true, nil
+	}
+	workspacePath := s.defaultWorkspacePath(repoRoot, normalized)
+	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+		return "", "", false, fmt.Errorf("create workspace parent dir: %w", err)
+	}
+	if err := s.prepareWorkspacePath(workspacePath); err != nil {
+		return "", "", false, err
+	}
+	startRevision := "@"
+	if strings.TrimSpace(bookmark) != "" {
+		if err := s.trackBookmark(bookmark); err != nil {
+			return "", "", false, err
+		}
+		startRevision = strings.TrimSpace(bookmark)
+	}
+	if err := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return "", "", false, err
+		}
+		_ = s.jj.ForgetWorkspace(normalized)
+		if prepErr := s.prepareWorkspacePath(workspacePath); prepErr != nil {
+			return "", "", false, prepErr
+		}
+		if err2 := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err2 != nil {
+			return "", "", false, err2
+		}
+	}
+	entries, err := s.store.Load(repoRoot)
+	if err != nil {
+		return "", "", false, err
+	}
+	entries[normalized] = Entry{Name: normalized, Path: workspacePath}
+	if err := s.store.Save(repoRoot, entries); err != nil {
+		return "", "", false, err
+	}
+	if runHooks {
+		if err := s.runPostWorkspaceStartHooks(repoRoot, normalized, workspacePath); err != nil {
+			if cleanupErr := s.rollbackNewWorkspaceStart(repoRoot, normalized, workspacePath); cleanupErr != nil {
+				return "", "", false, fmt.Errorf("%w (rollback failed: %v)", err, cleanupErr)
+			}
+			return "", "", false, err
+		}
+	}
+	return normalized, workspacePath, false, nil
 }
 
 func (s *service) createWorkspace(name string, bookmark string, prompt string, runHooks bool) error {
