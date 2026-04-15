@@ -3,6 +3,7 @@ package deckui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,23 +48,37 @@ type NewWorkspaceLauncher func(repoRoot string) tea.Cmd
 
 type Refresher func() tea.Cmd
 
+type findStage int
+
+const (
+	findStageProject findStage = iota
+	findStageWorkspace
+)
+
+const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
+
 type Model struct {
-	itemsCurrent  []Item
-	itemsAll      []Item
-	showAll       bool
-	currentRepo   string
-	cursor        int
-	width         int
-	height        int
-	status        string
-	handler       Handler
-	filterInput   textinput.Model
-	filtering     bool
-	filter        string
-	confirmDelete bool
-	deleteTarget  Item
-	refresher     Refresher
-	newLauncher   NewWorkspaceLauncher
+	itemsCurrent   []Item
+	itemsAll       []Item
+	showAll        bool
+	currentRepo    string
+	cursor         int
+	width          int
+	height         int
+	status         string
+	handler        Handler
+	filterInput    textinput.Model
+	filtering      bool
+	filter         string
+	confirmDelete  bool
+	deleteTarget   Item
+	findMode       bool
+	findStage      findStage
+	findProject    string
+	findProjectMap map[rune]string
+	findRowMap     map[rune]int
+	refresher      Refresher
+	newLauncher    NewWorkspaceLauncher
 }
 
 type NewWorkspaceDoneMsg struct {
@@ -102,7 +117,9 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:     append([]Item(nil), itemsAll...),
 		currentRepo:  currentRepo,
 		showAll:      len(itemsAll) > 0,
-		status:       "↑/↓ move · enter summon · n new · / filter · a agent · e editor · c review · v vcs · s shell · i ci · D delete · R relink · P scope · q quit",
+		status:       "↑/↓ move · enter summon · f find · n new · / filter · a agent · e editor · c review · v vcs · s shell · i ci · D delete · R relink · P scope · q quit",
+		findProjectMap: map[rune]string{},
+		findRowMap:     map[rune]int{},
 		handler:      handler,
 		filterInput:  fi,
 	}
@@ -241,6 +258,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		}
+		if m.findMode {
+			switch msg.String() {
+			case "esc", "ctrl+c", "q":
+				m.cancelFind("find: cancelled")
+				return m, nil
+			case "backspace", "ctrl+h":
+				if m.findStage == findStageWorkspace {
+					m.findStage = findStageProject
+					m.findProject = ""
+					m.findRowMap = map[rune]int{}
+					m.status = "find: project"
+					return m, nil
+				}
+				m.cancelFind("find: cancelled")
+				return m, nil
+			}
+			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
+				r := unicode.ToLower(msg.Runes[0])
+				if !strings.ContainsRune(findHintAlphabet, r) {
+					return m, nil
+				}
+				if m.findStage == findStageProject {
+					project, ok := m.findProjectMap[r]
+					if !ok {
+						return m, nil
+					}
+					m.findProject = project
+					m.findStage = findStageWorkspace
+					m.findRowMap = m.buildRowHintMap(project)
+					m.status = "find: workspace"
+					if len(m.findRowMap) == 0 {
+						m.cancelFind("find: cancelled")
+					}
+					return m, nil
+				}
+				idx, ok := m.findRowMap[r]
+				if !ok {
+					return m, nil
+				}
+				m.cursor = idx
+				m.cancelFind("")
+				if item, ok := m.selected(); ok {
+					m.status = "find: " + item.WorkspaceName
+				}
+				return m, nil
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			if m.filter != "" && msg.String() == "esc" {
@@ -254,6 +319,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filtering = true
 			m.filterInput.Focus()
 			m.filterInput.SetValue(m.filter)
+			return m, nil
+		case "f", "F":
+			if len(m.items()) == 0 {
+				return m, nil
+			}
+			m.startFind()
 			return m, nil
 		case "j", "down":
 			if m.cursor < len(m.items())-1 {
@@ -371,6 +442,8 @@ func (m Model) View() string {
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status)
 	if m.filtering {
 		footer = "/" + m.filterInput.View()
+	} else if m.findMode {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status + " (esc/q cancel)")
 	} else if m.filter != "" {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
 			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, m.status),
@@ -399,13 +472,25 @@ func (m Model) renderList(width int) string {
 		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No workspaces found."))
 		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 	}
+	projectHints, rowHints := m.findHints()
 	lastProject := ""
 	for i, item := range items {
 		if item.ProjectName != lastProject {
-			rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(item.ProjectName))
+			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+			header := item.ProjectName
+			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
+				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color("117"))
+			}
+			if hint, ok := projectHints[item.ProjectName]; ok {
+				header = fmt.Sprintf("%s %s", renderFindHint(hint), header)
+			}
+			rows = append(rows, headerStyle.Render(header))
 			lastProject = item.ProjectName
 		}
 		prefix := "  "
+		if hint, ok := rowHints[i]; ok {
+			prefix = renderFindHint(hint)
+		}
 		style := lipgloss.NewStyle().Width(width - 1)
 		if i == m.cursor {
 			prefix = "› "
@@ -467,6 +552,7 @@ func (m Model) renderDetails(width int) string {
 		"",
 		"Actions:",
 		"enter  summon (create/focus session)",
+		"f      find jump (project → workspace)",
 		"a      open agent window",
 		"e      open editor window ($EDITOR)",
 		"c      open code review window (tuicr)",
@@ -501,6 +587,79 @@ func (m Model) selected() (Item, bool) {
 	return items[m.cursor], true
 }
 
+func (m *Model) startFind() {
+	m.findMode = true
+	m.findStage = findStageProject
+	m.findProject = ""
+	m.findProjectMap = m.buildProjectHintMap()
+	m.findRowMap = map[rune]int{}
+	m.status = "find: project"
+}
+
+func (m *Model) cancelFind(status string) {
+	m.findMode = false
+	m.findStage = findStageProject
+	m.findProject = ""
+	m.findProjectMap = map[rune]string{}
+	m.findRowMap = map[rune]int{}
+	if strings.TrimSpace(status) != "" {
+		m.status = status
+	}
+}
+
+func (m Model) buildProjectHintMap() map[rune]string {
+	items := m.items()
+	projects := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		if _, ok := seen[item.ProjectName]; ok {
+			continue
+		}
+		seen[item.ProjectName] = struct{}{}
+		projects = append(projects, item.ProjectName)
+	}
+	hints := map[rune]string{}
+	for i, project := range projects {
+		if i >= len(findHintAlphabet) {
+			break
+		}
+		hints[rune(findHintAlphabet[i])] = project
+	}
+	return hints
+}
+
+func (m Model) buildRowHintMap(project string) map[rune]int {
+	items := m.items()
+	hints := map[rune]int{}
+	n := 0
+	for i, item := range items {
+		if item.ProjectName != project {
+			continue
+		}
+		if n >= len(findHintAlphabet) {
+			break
+		}
+		hints[rune(findHintAlphabet[n])] = i
+		n++
+	}
+	return hints
+}
+
+func (m Model) findHints() (map[string]rune, map[int]rune) {
+	if !m.findMode {
+		return map[string]rune{}, map[int]rune{}
+	}
+	projectHints := map[string]rune{}
+	for hint, project := range m.findProjectMap {
+		projectHints[project] = hint
+	}
+	rowHints := map[int]rune{}
+	for hint, idx := range m.findRowMap {
+		rowHints[idx] = hint
+	}
+	return projectHints, rowHints
+}
+
 func compactStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "in progress", "in_progress", "running":
@@ -525,6 +684,14 @@ func normalizeStatus(status string) string {
 	}
 	s = strings.ReplaceAll(s, "_", " ")
 	return s
+}
+
+func renderFindHint(hint rune) string {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("230")).
+		Background(lipgloss.Color("62")).
+		Render(fmt.Sprintf("[%c]", hint))
 }
 
 func truncate(value string, width int) string {

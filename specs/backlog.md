@@ -14,6 +14,9 @@
 - [ ] `awp tmux-import [--apply] [--rename-agent]`: scans all tmux windows, finds ones whose cwd matches a known awp workspace path (longest-prefix), moves them into the proper `[awp]<repo>__<workspace>` session (creates if missing). Optionally renames the first moved window to `agent`. Dry-run by default.
 - [ ] `awp repo-import [--default <name>]` (name TBD): adopt a repo as awp-managed when no secondary workspaces exist yet — records the primary jj workspace under the canonical source-repo key in state so it appears in the deck. Does NOT run `jj workspace add`. Default workspace name `default` (or CLI flag).
 
+## Deck Theming
+- [ ] Add first-class deck theming with a cohesive palette (target: Catppuccin Macchiato), and apply consistent semantic colors across list rows, status, hints, and details panes.
+
 ## Deck Commands
 - [ ] Extend `.awp/config.json` with `commands: [{name, run}]`; per-command tmux window named `<name>` in workspace session.
 - [ ] Built-in defaults merged by name (user wins): `agent` (interactive), `codereview` (`tuicr -r main..@`).
