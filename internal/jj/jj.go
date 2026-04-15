@@ -86,7 +86,7 @@ func (c *Client) WorkspaceExists(name string) (bool, error) {
 }
 
 func (c *Client) ListWorkspaceNames() ([]string, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "workspace", "list", "-T", "name ++ \"\\n\"")
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\"")
 	if err != nil {
 		return nil, formatCommandError("list workspaces", err, out)
 	}

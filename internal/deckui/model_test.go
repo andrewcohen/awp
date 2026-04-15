@@ -204,6 +204,75 @@ func TestNewWorkspaceErrorStaysOpenAndShowsStatus(t *testing.T) {
 	}
 }
 
+func TestFindTwoLevelJumpMovesCursor(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "repo-a", WorkspaceName: "one"},
+		{ProjectName: "repo-b", WorkspaceName: "two"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	if !m.findMode || m.findStage != findStageProject {
+		t.Fatalf("expected find mode in project stage, got findMode=%v stage=%v", m.findMode, m.findStage)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) // second project hint
+	m = updated.(Model)
+	if !m.findMode || m.findStage != findStageWorkspace || m.findProject != "repo-b" {
+		t.Fatalf("expected workspace stage for repo-b, got findMode=%v stage=%v project=%q", m.findMode, m.findStage, m.findProject)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}) // first workspace in selected project
+	m = updated.(Model)
+	if m.findMode {
+		t.Fatal("expected find mode to exit after row selection")
+	}
+	if m.cursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", m.cursor)
+	}
+}
+
+func TestFindCancelWithQ(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo-a", WorkspaceName: "one"}}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	if !m.findMode {
+		t.Fatal("expected find mode")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(Model)
+	if m.findMode {
+		t.Fatal("expected find mode cancelled")
+	}
+	if m.status != "find: cancelled" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestFindKeyIgnoredWhileFiltering(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo-a", WorkspaceName: "one"}}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m := updated.(Model)
+	if !m.filtering {
+		t.Fatal("expected filtering mode")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = updated.(Model)
+	if m.findMode {
+		t.Fatal("did not expect find mode while filtering")
+	}
+	if !m.filtering {
+		t.Fatal("expected filtering mode to remain active")
+	}
+	if m.filter != "f" {
+		t.Fatalf("expected filter input to receive rune, got %q", m.filter)
+	}
+}
+
 func TestViewShowsEmptyState(t *testing.T) {
 	model := New(nil, nil)
 	view := model.View()

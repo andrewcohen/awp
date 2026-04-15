@@ -91,6 +91,24 @@ func TestListWorkspaceNamesFormatsCommandErrors(t *testing.T) {
 	}
 }
 
+func TestListWorkspaceNamesUsesIgnoreWorkingCopy(t *testing.T) {
+	r := &fakeRunner{out: "default\nqa\n"}
+	c := New(r)
+
+	names, err := c.ListWorkspaceNames()
+	if err != nil {
+		t.Fatalf("ListWorkspaceNames returned error: %v", err)
+	}
+	wantNames := []string{"default", "qa"}
+	if !reflect.DeepEqual(names, wantNames) {
+		t.Fatalf("names = %#v, want %#v", names, wantNames)
+	}
+	wantArgs := []string{"--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\""}
+	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
+		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
+	}
+}
+
 func TestIsStaleWorkingCopyError(t *testing.T) {
 	err := errors.New("list workspaces: exit status 1\nError: The working copy is stale\nHint: Run `jj workspace update-stale`")
 	if !IsStaleWorkingCopyError(err) {
