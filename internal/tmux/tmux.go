@@ -271,6 +271,14 @@ func (c *Client) CurrentWindow() (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func (c *Client) PaneCurrentCommand(target string) (string, error) {
+	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "-t", target, "#{pane_current_command}")
+	if err != nil {
+		return "", fmt.Errorf("pane current command for %q: %w", target, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func (c *Client) CurrentSessionName() (string, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "#{session_name}")
 	if err != nil {

@@ -177,6 +177,27 @@ func TestCurrentSessionNameReturnsTrimmedValue(t *testing.T) {
 	}
 }
 
+func TestPaneCurrentCommandUsesDisplayMessageTargetAndTrims(t *testing.T) {
+	runner := &fakeRunner{out: "zsh\n"}
+	client := New(runner)
+	got, err := client.PaneCurrentCommand("[awp]repo__qa:editor")
+	if err != nil {
+		t.Fatalf("PaneCurrentCommand: %v", err)
+	}
+	if got != "zsh" {
+		t.Fatalf("unexpected command: %q", got)
+	}
+	want := []string{"tmux", "display-message", "-p", "-t", "[awp]repo__qa:editor", "#{pane_current_command}"}
+	if len(runner.calls) != 1 {
+		t.Fatalf("unexpected call count: %#v", runner.calls)
+	}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
 func TestSendCommandReturnsError(t *testing.T) {
 	runner := &fakeRunner{err: errors.New("boom")}
 	client := New(runner)

@@ -117,10 +117,37 @@ func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	}
 }
 
-func TestOpenNamedWindowReusesExistingNamedWindowAndDoesNotSendCommand(t *testing.T) {
+func TestOpenNamedWindowReusesExistingNamedWindowAtShellAndResendsCommand(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
-		"tmux list-sessions -F #{session_id}\t#{session_name}":               "$1\t[awp]repo__qa\n",
-		"tmux list-windows -t [awp]repo__qa -F #{window_id}\t#{window_name}": "@1\tagent\n@2\teditor\n",
+		"tmux list-sessions -F #{session_id}\t#{session_name}":                    "$1\t[awp]repo__qa\n",
+		"tmux list-windows -t [awp]repo__qa -F #{window_id}\t#{window_name}":      "@1\tagent\n@2\teditor\n",
+		"tmux display-message -p -t [awp]repo__qa:editor #{pane_current_command}": "zsh\n",
+	}}
+	client := tmux.New(runner)
+	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
+	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws"}
+
+	if err := openNamedWindow(client, svc, item, "editor"); err != nil {
+		t.Fatalf("openNamedWindow: %v", err)
+	}
+
+	found := false
+	for _, call := range runner.calls {
+		if strings.Join(call, " ") == "tmux send-keys -t [awp]repo__qa:editor -l $EDITOR" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected resend to existing shell pane, calls: %#v", runner.calls)
+	}
+}
+
+func TestOpenNamedWindowReusesExistingNamedWindowInTUIAndDoesNotSendCommand(t *testing.T) {
+	runner := &deckFakeRunner{outs: map[string]string{
+		"tmux list-sessions -F #{session_id}\t#{session_name}":                    "$1\t[awp]repo__qa\n",
+		"tmux list-windows -t [awp]repo__qa -F #{window_id}\t#{window_name}":      "@1\tagent\n@2\teditor\n",
+		"tmux display-message -p -t [awp]repo__qa:editor #{pane_current_command}": "vim\n",
 	}}
 	client := tmux.New(runner)
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
@@ -131,17 +158,9 @@ func TestOpenNamedWindowReusesExistingNamedWindowAndDoesNotSendCommand(t *testin
 	}
 
 	for _, call := range runner.calls {
-		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "new-window") || strings.Contains(joined, "send-keys") {
-			t.Fatalf("unexpected create/send call: %#v", runner.calls)
+		if strings.Contains(strings.Join(call, " "), "send-keys") {
+			t.Fatalf("unexpected send-keys call: %#v", runner.calls)
 		}
-	}
-	lastTwo := runner.calls[len(runner.calls)-2:]
-	if strings.Join(lastTwo[0], " ") != "tmux select-window -t [awp]repo__qa:editor" {
-		t.Fatalf("unexpected select call: %#v", lastTwo[0])
-	}
-	if strings.Join(lastTwo[1], " ") != "tmux switch-client -t [awp]repo__qa" {
-		t.Fatalf("unexpected switch call: %#v", lastTwo[1])
 	}
 }
 
@@ -167,7 +186,7 @@ func TestHandleDeckActionDeleteUsesForceAndKillsSession(t *testing.T) {
 
 func TestDefaultWindowCommand(t *testing.T) {
 	cases := map[string]string{
-		"editor": "$EDITOR .",
+		"editor": "$EDITOR",
 		"tuicr":  "tuicr -r main..@",
 		"vcs":    "jjui",
 		"agent":  "",
