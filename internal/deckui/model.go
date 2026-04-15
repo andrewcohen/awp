@@ -30,6 +30,7 @@ const (
 	ActionRelink
 	ActionOpenWindow
 	ActionDelete
+	ActionCI
 )
 
 type ActionRequest struct {
@@ -101,7 +102,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:     append([]Item(nil), itemsAll...),
 		currentRepo:  currentRepo,
 		showAll:      len(itemsAll) > 0,
-		status:       "↑/↓ move · enter summon · n new · / filter · a agent · e editor · c review · v vcs · s shell · D delete · R relink · P scope · q quit",
+		status:       "↑/↓ move · enter summon · n new · / filter · a agent · e editor · c review · v vcs · s shell · i ci · D delete · R relink · P scope · q quit",
 		handler:      handler,
 		filterInput:  fi,
 	}
@@ -285,6 +286,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.trigger(ActionOpenWindow, "vcs")
 		case "s":
 			return m.trigger(ActionOpenWindow, "")
+		case "i":
+			return m.trigger(ActionCI, "")
 		case "D":
 			item, ok := m.selected()
 			if !ok {
@@ -342,6 +345,8 @@ func actionLabel(a Action, arg string) string {
 		return "open shell"
 	case ActionDelete:
 		return "delete"
+	case ActionCI:
+		return "ci"
 	}
 	return "action"
 }
@@ -467,6 +472,7 @@ func (m Model) renderDetails(width int) string {
 		"c      open code review window (tuicr)",
 		"v      open vcs window (jjui)",
 		"s      open shell window",
+		"i      watch CI run for branch",
 		"D      delete workspace",
 		"R      relink/recover session",
 		"q      quit deck",

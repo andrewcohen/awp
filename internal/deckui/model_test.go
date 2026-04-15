@@ -74,6 +74,29 @@ func TestShellKeyInvokesOpenWindowAction(t *testing.T) {
 	}
 }
 
+func TestCIKeyInvokesCIAction(t *testing.T) {
+	var got ActionRequest
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, func(req ActionRequest) error {
+		got = req
+		return nil
+	})
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	msg := cmd()
+	updated, _ = updated.Update(msg)
+	m := updated.(Model)
+
+	if got.Action != ActionCI {
+		t.Fatalf("unexpected action: %v", got.Action)
+	}
+	if m.status != "ci: qa" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
 func TestScopedModelStartsInAllProjectsViewWhenAvailable(t *testing.T) {
 	model := NewScoped(
 		[]Item{{ProjectName: "repo-a", WorkspaceName: "one"}},
