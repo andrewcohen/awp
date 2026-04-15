@@ -133,7 +133,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		if strings.TrimSpace(req.Item.RepoRoot) != "" {
 			actionSvc = newDeckActionService(runner, req.Item.RepoRoot, in)
 		}
-		return handleDeckAction(tmuxClient, actionSvc, req)
+		return handleDeckAction(tmuxClient, actionSvc, runner, req)
 	}
 	launcher := func(repoRoot string) tea.Cmd {
 		cmd := &deckOpenCommand{runner: runner, repoRoot: repoRoot}
@@ -151,7 +151,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 	}
 	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
 }
@@ -273,7 +273,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 	return items, allItems, nil
 }
 
-func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, req deckui.ActionRequest) error {
+func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Runner, req deckui.ActionRequest) error {
 	item := req.Item
 	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
 	switch req.Action {
@@ -281,6 +281,8 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, req deckui
 		return summonWorkspaceSession(tmuxClient, svc, item)
 	case deckui.ActionOpenWindow:
 		return openNamedWindow(tmuxClient, svc, item, req.Arg)
+	case deckui.ActionCI:
+		return openCIWindow(tmuxClient, svc, runner, item)
 	case deckui.ActionDelete:
 		if err := svc.Delete(item.WorkspaceName, true); err != nil {
 			return err
@@ -381,6 +383,52 @@ func defaultWindowCommand(windowName string) string {
 		return "jjui"
 	}
 	return ""
+}
+
+// openCIWindow opens (or reuses) a `ci` tmux window in the workspace and runs
+// `gh run watch` with a fallback to `gh run view`. gh resolves the repo and
+// branch from the workspace's cwd.
+func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item deckui.Item) error {
+	path := resolvePath(svc, item)
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("ci: no path for workspace %q", item.WorkspaceName)
+	}
+
+	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
+	id, err := tmuxClient.SessionIDByName(sessionName)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+			return err
+		}
+		id, _ = tmuxClient.SessionIDByName(sessionName)
+		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
+	}
+
+	target := sessionName + ":ci"
+	exists := false
+	windows, _ := tmuxClient.ListWindowsInSession(sessionName)
+	for _, w := range windows {
+		if w.Name == "ci" {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		if err := tmuxClient.NewWindowInSession(sessionName, "ci", path); err != nil {
+			return err
+		}
+	}
+	cmd := `bash -c 'b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"'`
+	if err := tmuxClient.SendCommand(target, cmd); err != nil {
+		return err
+	}
+	if err := tmuxClient.SwitchToWindow(target); err != nil {
+		return err
+	}
+	return tmuxClient.SwitchClient(sessionName)
 }
 
 func relinkSession(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item) error {

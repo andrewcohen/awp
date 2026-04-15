@@ -153,7 +153,7 @@ func TestHandleDeckActionDeleteUsesForceAndKillsSession(t *testing.T) {
 	svc := &deckFakeService{}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa"}
 
-	if err := handleDeckAction(client, svc, deckui.ActionRequest{Item: item, Action: deckui.ActionDelete}); err != nil {
+	if err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionDelete}); err != nil {
 		t.Fatalf("handleDeckAction: %v", err)
 	}
 	if svc.deleteName != "qa" || !svc.deleteForce {
