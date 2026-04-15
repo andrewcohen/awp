@@ -93,6 +93,9 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 }
 
 // repoRootFromPath walks up from a workspace path to find the jj repo root (contains .jj).
+// For secondary jj workspaces, .jj/repo is a file whose contents point to the main repo's
+// .jj/repo directory; follow that pointer so the result is the source repo root, not the
+// workspace dir (otherwise filepath.Base would return the workspace/branch name).
 func repoRootFromPath(p string) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
@@ -100,7 +103,26 @@ func repoRootFromPath(p string) (string, error) {
 	}
 	dir := abs
 	for {
-		if st, err := os.Stat(filepath.Join(dir, ".jj")); err == nil && st.IsDir() {
+		jjDir := filepath.Join(dir, ".jj")
+		if st, err := os.Stat(jjDir); err == nil && st.IsDir() {
+			repoEntry := filepath.Join(jjDir, "repo")
+			rst, rerr := os.Stat(repoEntry)
+			if rerr == nil && rst.IsDir() {
+				return dir, nil
+			}
+			if rerr == nil && !rst.IsDir() {
+				data, ferr := os.ReadFile(repoEntry)
+				if ferr != nil {
+					return "", fmt.Errorf("read %s: %w", repoEntry, ferr)
+				}
+				target := strings.TrimSpace(string(data))
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(jjDir, target)
+				}
+				// target is .../<mainRepo>/.jj/repo — main repo root is two levels up.
+				mainRepo := filepath.Clean(filepath.Join(target, "..", ".."))
+				return mainRepo, nil
+			}
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)

@@ -468,7 +468,7 @@ func (m Model) renderDetails(width int) string {
 		"Actions:",
 		"enter  summon (create/focus session)",
 		"a      open agent window",
-		"e      open editor window ($EDITOR .)",
+		"e      open editor window ($EDITOR)",
 		"c      open code review window (tuicr)",
 		"v      open vcs window (jjui)",
 		"s      open shell window",

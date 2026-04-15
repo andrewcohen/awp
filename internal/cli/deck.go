@@ -350,6 +350,7 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 
 	target := sessionName + ":" + windowName
 	exists := false
+	justCreated := false
 	windows, _ := tmuxClient.ListWindowsInSession(sessionName)
 	for _, w := range windows {
 		if w.Name == windowName {
@@ -361,10 +362,11 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path); err != nil {
 			return err
 		}
-		if cmd := defaultWindowCommand(windowName); cmd != "" {
-			if err := tmuxClient.SendCommand(target, cmd); err != nil {
-				return err
-			}
+		justCreated = true
+	}
+	if cmd := defaultWindowCommand(windowName); cmd != "" && (justCreated || paneIsShell(tmuxClient, target)) {
+		if err := tmuxClient.SendCommand(target, cmd); err != nil {
+			return err
 		}
 	}
 	if err := tmuxClient.SwitchToWindow(target); err != nil {
@@ -373,10 +375,23 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	return tmuxClient.SwitchClient(sessionName)
 }
 
+func paneIsShell(tmuxClient *tmux.Client, target string) bool {
+	cmd, err := tmuxClient.PaneCurrentCommand(target)
+	if err != nil {
+		return false
+	}
+	switch strings.TrimSpace(cmd) {
+	case "bash", "zsh", "fish", "sh", "dash":
+		return true
+	default:
+		return false
+	}
+}
+
 func defaultWindowCommand(windowName string) string {
 	switch windowName {
 	case "editor":
-		return "$EDITOR ."
+		return "$EDITOR"
 	case "tuicr":
 		return "tuicr -r main..@"
 	case "vcs":
@@ -422,8 +437,10 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 		}
 	}
 	cmd := `bash -c 'b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"'`
-	if err := tmuxClient.SendCommand(target, cmd); err != nil {
-		return err
+	if !exists || paneIsShell(tmuxClient, target) {
+		if err := tmuxClient.SendCommand(target, cmd); err != nil {
+			return err
+		}
 	}
 	if err := tmuxClient.SwitchToWindow(target); err != nil {
 		return err
