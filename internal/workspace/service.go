@@ -1168,6 +1168,9 @@ func (s *service) cleanupEmptyRevision(revision string) (bool, error) {
 }
 
 func (s *service) defaultWorkspacePath(repoRoot string, name string) string {
+	if strings.TrimSpace(name) == "default" {
+		return repoRoot
+	}
 	return filepath.Join(s.repoWorkspaceBase(repoRoot), name)
 }
 
@@ -1237,6 +1240,10 @@ func (s *service) canonicalizeEntries(repoRoot string, entries map[string]Entry)
 			} else {
 				path = s.defaultWorkspacePath(repoRoot, normalizedName)
 			}
+			changed = true
+		}
+		if normalizedName == "default" && path != repoRoot {
+			path = repoRoot
 			changed = true
 		}
 		canonical[normalizedName] = Entry{Name: normalizedName, Path: path}
