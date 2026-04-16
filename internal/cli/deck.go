@@ -394,6 +394,8 @@ func defaultWindowCommand(windowName string) string {
 		return "$EDITOR"
 	case "tuicr":
 		return "tuicr -r main..@"
+	case "review":
+		return "tuicr -r @"
 	case "vcs":
 		return "jjui"
 	}
