@@ -195,9 +195,13 @@ func (s *service) PrepareWorkspace(name string, bookmark string, runHooks bool) 
 // prepareWorkspaceInternal does all non-tmux work. It returns (normalized, path, alreadyExists, err).
 func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHooks bool) (string, string, bool, error) {
 	s.logf("▶️ Preparing workspace (name=%q, bookmark=%q)", strings.TrimSpace(name), strings.TrimSpace(bookmark))
-	repoRoot, err := s.jj.RepoRoot()
+	currentRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return "", "", false, fmt.Errorf("not a jj repository: %w", err)
+	}
+	repoRoot, sErr := s.jj.SourceRepoRoot()
+	if sErr != nil || strings.TrimSpace(repoRoot) == "" {
+		repoRoot = currentRoot
 	}
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
 		name = bookmark
@@ -224,6 +228,9 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 			}
 		}
 		if err := s.trackBookmark(bookmark); err != nil {
+			return "", "", false, err
+		}
+		if err := s.runBuiltinBootstrap(repoRoot, entry.Path); err != nil {
 			return "", "", false, err
 		}
 		return normalized, entry.Path, true, nil
@@ -278,9 +285,13 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 
 func (s *service) createWorkspace(name string, bookmark string, prompt string, runHooks bool) error {
 	s.logf("▶️ Starting workspace create flow (name=%q, bookmark=%q)", strings.TrimSpace(name), strings.TrimSpace(bookmark))
-	repoRoot, err := s.jj.RepoRoot()
+	currentRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
+	}
+	repoRoot, sErr := s.jj.SourceRepoRoot()
+	if sErr != nil || strings.TrimSpace(repoRoot) == "" {
+		repoRoot = currentRoot
 	}
 	s.logf("✅ Resolved repo root: %s", repoRoot)
 
