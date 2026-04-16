@@ -72,7 +72,14 @@ When many workspaces are visible in deck, arrow-key navigation is slow. The user
 ## Decisions
 - **Flow**: fixed two-level jump (project first, workspace second), to keep interaction predictable.
 - **Target set**: visible rows only (respects current scope/filter result).
-- **Hint alphabet**: home-row-priority (`asdfghjkl` first; then remaining letters for capacity).
+- **Hint assignment**: prefix-aware, EasyMotion/leap-style.
+  - First char of each target name (lowercased) is the preferred hint.
+  - Any first-char shared by >1 target promotes *all* sharing targets to two-key hints: preferred first char + a disambiguating second char.
+  - Unique first chars remain single-key.
+  - Disambiguator pool: home-row priority (`asdfghjkl`), then `qwertyuiopzxcvbnm`; skip any char already used as a unique single-key hint at the same stage (so typing a unique hint never ambiguously prefixes a two-key hint).
+  - Targets whose first char is outside `[a-z]` (digits, punctuation, empty) fall back to the disambiguator pool as their first char.
+  - Capacity overflow (more targets than pool allows at a stage) falls back to sequential home-row alphabet assignment for that stage.
+  - Applies at both project stage and workspace stage independently.
 - **Action on selection**: move cursor only.
 - **Cancel keys**: `esc` and `q`.
 - **Invalid keys**: ignored silently.
@@ -82,6 +89,9 @@ When many workspaces are visible in deck, arrow-key navigation is slow. The user
 ## Spec Change Log
 - 2026-04-15: Initial draft.
 - 2026-04-15: Implemented deck two-level find state machine (`f`/`F`), inline hints, cancel behavior (`esc`/`q`), and tests; filter-input mode keeps find disabled.
+- 2026-04-16: Replaced sequential home-row hints with prefix-aware EasyMotion-style assignment (first-letter preferred; collisions promote all sharing targets to two-key hints using home-row disambiguators). Applies at both project and workspace stages.
+- 2026-04-16: Implemented new hint algorithm (`assignHints`) and two-key keypress state (`findPendingPrefix`). Added unit tests covering unique/collision/reserved-single/non-letter cases plus end-to-end two-key jump. `esc` on a pending prefix clears the prefix without exiting find mode.
+- 2026-04-16: Workspace-stage polish. When stage advances to workspace, project-level hint letters are hidden and non-selected projects dim. If the chosen project has only one workspace, cursor jumps immediately and find mode exits (skips second level).
 
 ## Implementation Plan
 1. Extend `internal/deckui/model.go` with find-mode state machine:
@@ -95,6 +105,18 @@ When many workspaces are visible in deck, arrow-key navigation is slow. The user
    - two-level jump,
    - cancel with `q`/`esc`,
    - find disabled during active filter entry.
+7. Replace hint builders (`buildProjectHintMap`, `buildRowHintMap`) with prefix-aware assignment:
+   - Pass 1: group targets by lowercased first char (letters only); non-letter first chars go to fallback bucket.
+   - Pass 2: single-member groups get that letter as 1-key hint (reserve it).
+   - Pass 3: multi-member groups and fallback-bucket targets get 2-key hints: first char = preferred letter (or disambiguator pool char for fallback), second char drawn from home-row pool excluding reserved single-key hints.
+   - Extend key handling: after first keypress, if it matches a 1-key hint, resolve immediately; if it matches a reserved prefix for 2-key hints, wait for second char; otherwise ignore.
+   - Track prefix state in model (e.g., `findPendingPrefix rune`) with its own cancel behavior (`esc` clears prefix, returns to current stage).
+8. Add tests for new hint assignment:
+   - unique first letters → 1-key hints,
+   - collisions → 2-key hints for all colliding targets,
+   - non-letter-starting names fall through to disambiguator pool,
+   - second-char pool excludes reserved 1-key chars,
+   - overflow falls back to sequential home-row alphabet.
 
 ## Acceptance Criteria
 - [ ] Pressing `f` enters find mode and displays project hints.
