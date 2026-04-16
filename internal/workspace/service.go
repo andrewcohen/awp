@@ -60,6 +60,7 @@ type CommandRunner interface {
 type Entry struct {
 	Name          string
 	Path          string
+	Bookmark      string `json:",omitempty"`
 	SessionID     string `json:",omitempty"`
 	SessionName   string `json:",omitempty"`
 	AgentWindowID string `json:",omitempty"`
@@ -220,8 +221,17 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 			return "", "", false, err
 		}
 		entry, ok := entries[normalized]
+		trimmedBookmark := strings.TrimSpace(bookmark)
+		mutated := false
 		if !ok {
 			entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
+			mutated = true
+		}
+		if trimmedBookmark != "" && entry.Bookmark != trimmedBookmark {
+			entry.Bookmark = trimmedBookmark
+			mutated = true
+		}
+		if mutated {
 			entries[normalized] = entry
 			if err := s.store.Save(repoRoot, entries); err != nil {
 				return "", "", false, err
@@ -265,7 +275,7 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	if err != nil {
 		return "", "", false, err
 	}
-	entries[normalized] = Entry{Name: normalized, Path: workspacePath}
+	entries[normalized] = Entry{Name: normalized, Path: workspacePath, Bookmark: strings.TrimSpace(bookmark)}
 	if err := s.store.Save(repoRoot, entries); err != nil {
 		return "", "", false, err
 	}
@@ -364,7 +374,7 @@ func (s *service) createWorkspace(name string, bookmark string, prompt string, r
 	if err != nil {
 		return err
 	}
-	entries[normalized] = Entry{Name: normalized, Path: workspacePath}
+	entries[normalized] = Entry{Name: normalized, Path: workspacePath, Bookmark: strings.TrimSpace(bookmark)}
 	if err := s.store.Save(repoRoot, entries); err != nil {
 		return err
 	}
@@ -761,7 +771,11 @@ func (s *service) Delete(name string, force bool) error {
 	}
 	s.logf("✅ Forgot jj workspace %q", normalized)
 
-	forgottenBookmarks, err := s.cleanupWorkspaceBookmarks(normalized, revision)
+	storedBookmark := ""
+	if hasEntry {
+		storedBookmark = strings.TrimSpace(entry.Bookmark)
+	}
+	forgottenBookmarks, err := s.cleanupWorkspaceBookmarks(normalized, storedBookmark, revision)
 	if err != nil {
 		return err
 	}
@@ -1127,7 +1141,7 @@ func (s *service) rollbackNewWorkspaceStart(repoRoot, name, path string) error {
 	return errors.Join(errs...)
 }
 
-func (s *service) cleanupWorkspaceBookmarks(workspaceName, revision string) (int, error) {
+func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revision string) (int, error) {
 	revision = strings.TrimSpace(revision)
 	if revision == "" {
 		return 0, nil
@@ -1138,7 +1152,7 @@ func (s *service) cleanupWorkspaceBookmarks(workspaceName, revision string) (int
 	}
 	forgotten := 0
 	for _, bookmark := range bookmarks {
-		if !bookmarkMatchesWorkspace(workspaceName, bookmark) {
+		if !bookmarkMatchesWorkspace(workspaceName, storedBookmark, bookmark) {
 			continue
 		}
 		if err := s.jj.ForgetBookmark(bookmark); err != nil {
@@ -1149,11 +1163,15 @@ func (s *service) cleanupWorkspaceBookmarks(workspaceName, revision string) (int
 	return forgotten, nil
 }
 
-func bookmarkMatchesWorkspace(workspaceName, bookmark string) bool {
-	if strings.TrimSpace(bookmark) == "" {
+func bookmarkMatchesWorkspace(workspaceName, storedBookmark, bookmark string) bool {
+	trimmed := strings.TrimSpace(bookmark)
+	if trimmed == "" {
 		return false
 	}
-	normalized, err := NormalizeName(bookmark)
+	if storedBookmark != "" && trimmed == storedBookmark {
+		return true
+	}
+	normalized, err := NormalizeName(trimmed)
 	if err != nil {
 		return false
 	}
@@ -1257,7 +1275,17 @@ func (s *service) canonicalizeEntries(repoRoot string, entries map[string]Entry)
 			path = repoRoot
 			changed = true
 		}
-		canonical[normalizedName] = Entry{Name: normalizedName, Path: path}
+		canonical[normalizedName] = Entry{
+			Name:          normalizedName,
+			Path:          path,
+			Bookmark:      entry.Bookmark,
+			SessionID:     entry.SessionID,
+			SessionName:   entry.SessionName,
+			AgentWindowID: entry.AgentWindowID,
+			AgentPaneID:   entry.AgentPaneID,
+			ActivePrompt:  entry.ActivePrompt,
+			Status:        entry.Status,
+		}
 		if key != normalizedName || entry.Name != normalizedName || entry.Path != path {
 			changed = true
 		}
