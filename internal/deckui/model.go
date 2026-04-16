@@ -356,6 +356,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "e":
 			return m.trigger(ActionOpenWindow, "editor")
 		case "c":
+			return m.trigger(ActionOpenWindow, "review")
+		case "C":
 			return m.trigger(ActionOpenWindow, "tuicr")
 		case "v":
 			return m.trigger(ActionOpenWindow, "vcs")
@@ -568,7 +570,8 @@ func (m Model) renderDetails(width int) string {
 		"f      find jump (project → workspace)",
 		"a      open agent window",
 		"e      open editor window ($EDITOR)",
-		"c      open code review window (tuicr)",
+		"c      open code review window (tuicr -r @)",
+		"C      open code review window (tuicr -r main..@)",
 		"v      open vcs window (jjui)",
 		"s      open shell window",
 		"i      watch CI run for branch",
