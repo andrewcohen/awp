@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -21,21 +22,28 @@ func (d *fakeDoctor) Run() error {
 }
 
 type fakeService struct {
-	openName     string
-	openBookmark string
-	openPrompt   string
-	openYes      bool
-	renameOld    string
-	renameNew    string
-	deleteName   string
-	deleteForce  bool
-	listEntries  []workspace.ListEntry
-	infoEntry    workspace.InfoEntry
-	listErr      error
-	infoErr      error
-	openErr      error
-	renameErr    error
-	deleteErr    error
+	openName          string
+	openBookmark      string
+	openPrompt        string
+	openYes           bool
+	prepareName       string
+	prepareBookmark   string
+	prepareRunHooks   bool
+	recordedWorkspace string
+	recordedSessionID string
+	recordedSession   string
+	renameOld         string
+	renameNew         string
+	deleteName        string
+	deleteForce       bool
+	listEntries       []workspace.ListEntry
+	infoEntry         workspace.InfoEntry
+	listErr           error
+	infoErr           error
+	openErr           error
+	prepareErr        error
+	renameErr         error
+	deleteErr         error
 }
 
 func (f *fakeService) List() ([]workspace.ListEntry, error) { return f.listEntries, f.listErr }
@@ -57,15 +65,73 @@ func (f *fakeService) Delete(name string, force bool) error {
 	f.deleteName, f.deleteForce = name, force
 	return f.deleteErr
 }
-func (f *fakeService) RecordSession(string, string, string) error { return nil }
-func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error)   { return nil, nil }
-func (f *fakeService) UpdatePrompt(string, string) error              { return nil }
-func (f *fakeService) UpdateStatus(string, string) error              { return nil }
-func (f *fakeService) ClearSession(string) error                      { return nil }
-func (f *fakeService) PrepareWorkspace(name, bookmark string, _ bool) (string, string, error) {
-	return name, "/tmp/" + name, nil
+func (f *fakeService) RecordSession(workspaceName, sessionID, sessionName string) error {
+	f.recordedWorkspace = workspaceName
+	f.recordedSessionID = sessionID
+	f.recordedSession = sessionName
+	return nil
+}
+func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error) { return nil, nil }
+func (f *fakeService) UpdatePrompt(string, string) error            { return nil }
+func (f *fakeService) UpdateStatus(string, string) error            { return nil }
+func (f *fakeService) ClearSession(string) error                    { return nil }
+func (f *fakeService) PrepareWorkspace(name, bookmark string, runHooks bool) (string, string, error) {
+	f.prepareName = name
+	f.prepareBookmark = bookmark
+	f.prepareRunHooks = runHooks
+	if f.prepareErr != nil {
+		return "", "", f.prepareErr
+	}
+	normalized := name
+	if normalized == "" {
+		normalized = "from-bookmark"
+	}
+	return normalized, "/tmp/" + normalized, nil
 }
 func (f *fakeService) Bootstrap(string) error { return nil }
+
+type openDeckRunner struct {
+	sessions map[string]struct{}
+}
+
+func newOpenDeckRunner() *openDeckRunner {
+	return &openDeckRunner{sessions: map[string]struct{}{}}
+}
+
+func (r *openDeckRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	if name == "jj" && len(args) == 1 && args[0] == "root" {
+		return "/tmp/repo\n", nil
+	}
+	if name != "tmux" {
+		return "", nil
+	}
+	if len(args) >= 2 && args[0] == "new-session" {
+		for i := 1; i < len(args)-1; i++ {
+			if args[i] == "-s" {
+				r.sessions[args[i+1]] = struct{}{}
+				break
+			}
+		}
+		return "", nil
+	}
+	if len(args) >= 2 && args[0] == "list-sessions" {
+		if len(r.sessions) == 0 {
+			return "", nil
+		}
+		var b strings.Builder
+		i := 1
+		for session := range r.sessions {
+			b.WriteString("$")
+			b.WriteString(string(rune('0' + i)))
+			b.WriteString("\t")
+			b.WriteString(session)
+			b.WriteString("\n")
+			i++
+		}
+		return b.String(), nil
+	}
+	return "", nil
+}
 
 func TestRunDoctor(t *testing.T) {
 	svc := &fakeService{}
@@ -130,29 +196,32 @@ func TestRunOpenHelp(t *testing.T) {
 func TestRunOpenParsesBookmarkWithoutName(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	app.isInteractive = func(io.Reader) bool { return false }
 	if err := app.Run([]string{"w", "open", "-b", "team/example-branch"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.openName != "" || svc.openBookmark != "team/example-branch" || svc.openPrompt != "" || svc.openYes {
-		t.Fatalf("unexpected open call: name=%q bookmark=%q prompt=%q yes=%t", svc.openName, svc.openBookmark, svc.openPrompt, svc.openYes)
+	if svc.prepareName != "" || svc.prepareBookmark != "team/example-branch" || !svc.prepareRunHooks {
+		t.Fatalf("unexpected prepare call: name=%q bookmark=%q runHooks=%t", svc.prepareName, svc.prepareBookmark, svc.prepareRunHooks)
 	}
 }
 
 func TestRunOpenParsesYesFlag(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	if err := app.Run([]string{"w", "open", "-y", "qa"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.openName != "qa" || svc.openPrompt != "" || !svc.openYes {
-		t.Fatalf("unexpected open call: name=%q prompt=%q yes=%t", svc.openName, svc.openPrompt, svc.openYes)
+	if svc.prepareName != "qa" || svc.prepareBookmark != "" {
+		t.Fatalf("unexpected prepare call: name=%q bookmark=%q", svc.prepareName, svc.prepareBookmark)
 	}
 }
 
 func TestRunOpenUsesPickerWhenNoArg(t *testing.T) {
 	svc := &fakeService{listEntries: []workspace.ListEntry{{Name: "qa"}, {Name: "default"}}}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	app.in = bytes.NewBuffer(nil)
 	app.picker = func(_ string, options []string) (string, error) {
 		if len(options) != 2 {
@@ -163,25 +232,27 @@ func TestRunOpenUsesPickerWhenNoArg(t *testing.T) {
 	if err := app.Run([]string{"w", "open"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.openName != "qa" {
-		t.Fatalf("expected open qa, got %q", svc.openName)
+	if svc.prepareName != "qa" {
+		t.Fatalf("expected prepare qa, got %q", svc.prepareName)
 	}
 }
 
 func TestRunOpenParsesPromptFlag(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	if err := app.Run([]string{"w", "open", "qa", "--prompt", "fix tests"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.openName != "qa" || svc.openPrompt != "fix tests" {
-		t.Fatalf("unexpected open call: name=%q prompt=%q", svc.openName, svc.openPrompt)
+	if svc.prepareName != "qa" {
+		t.Fatalf("unexpected prepare name: %q", svc.prepareName)
 	}
 }
 
 func TestRunOpenInteractivePrefillsFlags(t *testing.T) {
 	svc := &fakeService{listEntries: []workspace.ListEntry{{Name: "qa"}}}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	app.in = bytes.NewBuffer(nil)
 	app.isPiped = func(io.Reader) bool { return false }
 	app.isInteractive = func(io.Reader) bool { return true }
@@ -198,14 +269,15 @@ func TestRunOpenInteractivePrefillsFlags(t *testing.T) {
 	if err := app.Run([]string{"w", "open", "--bookmark", "team/feature", "--prompt", "fix tests", "--yes"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if svc.openName != "qa" || svc.openBookmark != "team/feature" || svc.openPrompt != "fix tests" || !svc.openYes {
-		t.Fatalf("unexpected open call: name=%q bookmark=%q prompt=%q yes=%t", svc.openName, svc.openBookmark, svc.openPrompt, svc.openYes)
+	if svc.prepareName != "qa" || svc.prepareBookmark != "team/feature" {
+		t.Fatalf("unexpected prepare call: name=%q bookmark=%q", svc.prepareName, svc.prepareBookmark)
 	}
 }
 
 func TestRunOpenInteractiveSubmitImpliesYes(t *testing.T) {
 	svc := &fakeService{listEntries: []workspace.ListEntry{{Name: "qa"}}}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	app.in = bytes.NewBuffer(nil)
 	app.isPiped = func(io.Reader) bool { return false }
 	app.isInteractive = func(io.Reader) bool { return true }
@@ -217,8 +289,8 @@ func TestRunOpenInteractiveSubmitImpliesYes(t *testing.T) {
 	if err := app.Run([]string{"w", "open"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !svc.openYes {
-		t.Fatal("expected interactive submit to imply yes")
+	if svc.prepareName != "new-workspace" {
+		t.Fatalf("expected prepare new-workspace, got %q", svc.prepareName)
 	}
 }
 
@@ -314,8 +386,9 @@ func TestRunDeckCallsWorkflow(t *testing.T) {
 }
 
 func TestRunPropagatesServiceError(t *testing.T) {
-	svc := &fakeService{openErr: errors.New("boom")}
+	svc := &fakeService{prepareErr: errors.New("boom")}
 	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
 	if err := app.Run([]string{"workspace", "open", "foo"}); err == nil {
 		t.Fatal("expected error")
 	}

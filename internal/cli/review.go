@@ -44,8 +44,9 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 		return fmt.Errorf("jj git fetch: %w: %s", err, fetchOut)
 	}
 
-	fmt.Fprintf(out, "▶️ Preparing jj workspace for %q...\n", branch)
-	name, wsPath, err := svc.PrepareWorkspace(branch, branch, true)
+	wsName := fmt.Sprintf("pr-%d-%s", pr.Number, branch)
+	fmt.Fprintf(out, "▶️ Preparing jj workspace %q (bookmark %q)...\n", wsName, branch)
+	name, wsPath, err := svc.PrepareWorkspace(wsName, branch, true)
 	if err != nil {
 		return fmt.Errorf("prepare workspace from bookmark %q: %w", branch, err)
 	}
@@ -62,6 +63,9 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 
 	prompt := buildReviewPrompt(pr, base)
 	tuicrCmd := fmt.Sprintf("tuicr -r %s..@", shellSingleQuote(base))
+	prDescWindow := "pr description"
+	prDescTarget := sessionName + ":" + prDescWindow
+	prDescCmd := fmt.Sprintf("GH_FORCE_TTY=100%% GH_PAGER='less -R' gh pr view %d", pr.Number)
 
 	exists, err := tmuxClient.SessionExists(sessionName)
 	if err != nil {
@@ -79,6 +83,15 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 			return err
 		}
 		if err := tmuxClient.SendCommand(sessionName+":tuicr", tuicrCmd); err != nil {
+			return err
+		}
+		if err := tmuxClient.NewWindowInSession(sessionName, prDescWindow, wsPath); err != nil {
+			return err
+		}
+		if err := tmuxClient.SendCommand(prDescTarget, prDescCmd); err != nil {
+			return err
+		}
+		if err := tmuxClient.SwitchToWindow(prDescTarget); err != nil {
 			return err
 		}
 	} else {

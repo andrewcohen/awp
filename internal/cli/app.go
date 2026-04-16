@@ -193,7 +193,6 @@ func (a *App) runOpen(args []string) error {
 		return nil
 	}
 	req := openRequest{}
-	deckMode := false
 	positionals := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -217,7 +216,7 @@ func (a *App) runOpen(args []string) error {
 		case arg == "--yes" || arg == "-y":
 			req.Yes = true
 		case arg == "--deck":
-			deckMode = true
+			// Deprecated: workspace open now always uses deck/session semantics.
 		case strings.HasPrefix(arg, "-"):
 			return fmt.Errorf("unknown flag %q", arg)
 		default:
@@ -229,10 +228,7 @@ func (a *App) runOpen(args []string) error {
 	}
 	if len(positionals) == 1 {
 		req.Name = positionals[0]
-		if deckMode {
-			return a.openInDeckMode(req)
-		}
-		return a.svc.Open(req.Name, req.Bookmark, req.Prompt, req.Yes)
+		return a.openInDeckMode(req)
 	}
 	if a.isPiped != nil && a.isPiped(a.in) {
 		name, err := a.resolveWorkspaceTarget("open", nil)
@@ -240,7 +236,7 @@ func (a *App) runOpen(args []string) error {
 			return err
 		}
 		req.Name = name
-		return a.svc.Open(req.Name, req.Bookmark, req.Prompt, req.Yes)
+		return a.openInDeckMode(req)
 	}
 	if a.isInteractive != nil && a.isInteractive(a.in) && a.openForm != nil {
 		entries, err := a.svc.List()
@@ -259,26 +255,17 @@ func (a *App) runOpen(args []string) error {
 			return err
 		}
 		updated.Yes = true
-		if deckMode {
-			return a.openInDeckMode(updated)
-		}
-		return a.svc.Open(updated.Name, updated.Bookmark, updated.Prompt, updated.Yes)
+		return a.openInDeckMode(updated)
 	}
 	if strings.TrimSpace(req.Bookmark) != "" {
-		if deckMode {
-			return a.openInDeckMode(req)
-		}
-		return a.svc.Open("", req.Bookmark, req.Prompt, req.Yes)
+		return a.openInDeckMode(req)
 	}
 	name, err := a.resolveWorkspaceTarget("open", nil)
 	if err != nil {
 		return err
 	}
 	req.Name = name
-	if deckMode {
-		return a.openInDeckMode(req)
-	}
-	return a.svc.Open(name, req.Bookmark, req.Prompt, req.Yes)
+	return a.openInDeckMode(req)
 }
 
 func openWorkspaceInDeckMode(runner Runner, svc workspace.Service, req openRequest) error {

@@ -631,6 +631,68 @@ func TestDeleteForgetsMatchingBookmarkIncludingRemotes(t *testing.T) {
 	}
 }
 
+func TestDeleteForgetsStoredBookmarkForReviewWorkspace(t *testing.T) {
+	repoRoot := t.TempDir()
+	workspaceName := "pr-1976-rli-trqqqlpytpuo"
+	bookmark := "rli/trq-qq-qlpytpuo"
+	jj := &fakeJJ{
+		repoRoot:       repoRoot,
+		existing:       map[string]bool{workspaceName: true},
+		workspaceRevs:  map[string]string{workspaceName: "abc123"},
+		bookmarksByRev: map[string][]string{"abc123": {bookmark}},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{workspaceName: true}}
+	store := &fakeStore{entries: map[string]Entry{
+		workspaceName: {Name: workspaceName, Bookmark: bookmark, Path: filepath.Join(repoRoot, ".awp", "workspaces", workspaceName)},
+	}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete(workspaceName, true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if len(jj.forgottenBookmarks) != 1 || jj.forgottenBookmarks[0] != bookmark {
+		t.Fatalf("expected bookmark forget for stored bookmark %q, got %+v", bookmark, jj.forgottenBookmarks)
+	}
+}
+
+func TestPrepareWorkspaceRecordsBookmark(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	name, _, err := svc.PrepareWorkspace("pr-42-feat", "feat/branch", false)
+	if err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+	entry, ok := store.entries[name]
+	if !ok {
+		t.Fatalf("expected entry for %q in store: %+v", name, store.entries)
+	}
+	if entry.Bookmark != "feat/branch" {
+		t.Fatalf("expected stored bookmark %q, got %q", "feat/branch", entry.Bookmark)
+	}
+}
+
+func TestPrepareWorkspaceBackfillsBookmarkOnExisting(t *testing.T) {
+	repoRoot := t.TempDir()
+	name := "pr-7-foo"
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{name: true}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{
+		name: {Name: name, Path: filepath.Join(repoRoot, ".awp", "workspaces", name)},
+	}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if _, _, err := svc.PrepareWorkspace(name, "foo/bar", false); err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+	if got := store.entries[name].Bookmark; got != "foo/bar" {
+		t.Fatalf("expected backfilled bookmark %q, got %q", "foo/bar", got)
+	}
+}
+
 func TestStartRequiresRepo(t *testing.T) {
 	jj := &fakeJJ{repoRootErr: errors.New("no repo"), existing: map[string]bool{}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
