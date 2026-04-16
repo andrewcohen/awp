@@ -206,8 +206,9 @@ func TestNewWorkspaceErrorStaysOpenAndShowsStatus(t *testing.T) {
 
 func TestFindTwoLevelJumpMovesCursor(t *testing.T) {
 	model := New([]Item{
-		{ProjectName: "repo-a", WorkspaceName: "one"},
-		{ProjectName: "repo-b", WorkspaceName: "two"},
+		{ProjectName: "alpha", WorkspaceName: "main"},
+		{ProjectName: "beta", WorkspaceName: "dev"},
+		{ProjectName: "beta", WorkspaceName: "stg"},
 	}, nil)
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
@@ -215,20 +216,139 @@ func TestFindTwoLevelJumpMovesCursor(t *testing.T) {
 	if !m.findMode || m.findStage != findStageProject {
 		t.Fatalf("expected find mode in project stage, got findMode=%v stage=%v", m.findMode, m.findStage)
 	}
-
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) // second project hint
-	m = updated.(Model)
-	if !m.findMode || m.findStage != findStageWorkspace || m.findProject != "repo-b" {
-		t.Fatalf("expected workspace stage for repo-b, got findMode=%v stage=%v project=%q", m.findMode, m.findStage, m.findProject)
+	if got := m.findProjectHints["beta"]; got != "b" {
+		t.Fatalf("expected unique-first-letter hint b for beta, got %q (map=%+v)", got, m.findProjectHints)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}) // first workspace in selected project
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = updated.(Model)
+	if !m.findMode || m.findStage != findStageWorkspace || m.findProject != "beta" {
+		t.Fatalf("expected workspace stage for beta, got findMode=%v stage=%v project=%q", m.findMode, m.findStage, m.findProject)
+	}
+	if got := m.findRowHints[1]; got != "d" {
+		t.Fatalf("expected row hint d for dev, got %q (map=%+v)", got, m.findRowHints)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
 	if m.findMode {
 		t.Fatal("expected find mode to exit after row selection")
 	}
 	if m.cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", m.cursor)
+	}
+}
+
+func TestFindAutoSelectsWhenProjectHasSingleWorkspace(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "alpha", WorkspaceName: "main"},
+		{ProjectName: "beta", WorkspaceName: "dev"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = updated.(Model)
+	if m.findMode {
+		t.Fatal("expected find mode to exit when project has single workspace")
+	}
+	if m.cursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", m.cursor)
+	}
+	if m.status != "find: dev" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestFindHintsHideProjectLevelOnceInWorkspaceStage(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "alpha", WorkspaceName: "main"},
+		{ProjectName: "beta", WorkspaceName: "dev"},
+		{ProjectName: "beta", WorkspaceName: "stg"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = updated.(Model)
+
+	projectHints, rowHints := m.findHints()
+	if len(projectHints) != 0 {
+		t.Fatalf("expected no project hints in workspace stage, got %+v", projectHints)
+	}
+	if len(rowHints) == 0 {
+		t.Fatal("expected row hints in workspace stage")
+	}
+}
+
+func TestFindPromotesPrefixCollisionsToTwoKey(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "repo-a", WorkspaceName: "one"},
+		{ProjectName: "repo-a", WorkspaceName: "alt"},
+		{ProjectName: "repo-b", WorkspaceName: "two"},
+		{ProjectName: "repo-b", WorkspaceName: "tmp"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+
+	hintA := m.findProjectHints["repo-a"]
+	hintB := m.findProjectHints["repo-b"]
+	if len([]rune(hintA)) != 2 || len([]rune(hintB)) != 2 {
+		t.Fatalf("expected two-key hints for colliding projects, got %q / %q", hintA, hintB)
+	}
+	if hintA[0] != 'r' || hintB[0] != 'r' {
+		t.Fatalf("expected both hints to share prefix r, got %q / %q", hintA, hintB)
+	}
+	if hintA == hintB {
+		t.Fatalf("expected distinct hints, got %q twice", hintA)
+	}
+	if !m.findProjectPrefix['r'] {
+		t.Fatalf("expected r registered as reserved prefix, got %+v", m.findProjectPrefix)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updated.(Model)
+	if m.findPendingPrefix != 'r' {
+		t.Fatalf("expected pending prefix r, got %q", m.findPendingPrefix)
+	}
+	if m.findStage != findStageProject {
+		t.Fatalf("expected to stay in project stage while pending, got %v", m.findStage)
+	}
+
+	second := rune(hintB[1])
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{second}})
+	m = updated.(Model)
+	if m.findStage != findStageWorkspace || m.findProject != "repo-b" {
+		t.Fatalf("expected workspace stage for repo-b, got stage=%v project=%q", m.findStage, m.findProject)
+	}
+	if m.findPendingPrefix != 0 {
+		t.Fatalf("expected pending prefix cleared, got %q", m.findPendingPrefix)
+	}
+}
+
+func TestFindEscClearsPendingPrefixWithoutExitingFind(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "repo-a", WorkspaceName: "one"},
+		{ProjectName: "repo-b", WorkspaceName: "two"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updated.(Model)
+	if m.findPendingPrefix != 'r' {
+		t.Fatalf("expected pending prefix set, got %q", m.findPendingPrefix)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if !m.findMode {
+		t.Fatal("expected to remain in find mode after esc on pending prefix")
+	}
+	if m.findPendingPrefix != 0 {
+		t.Fatalf("expected pending prefix cleared, got %q", m.findPendingPrefix)
 	}
 }
 
@@ -270,6 +390,62 @@ func TestFindKeyIgnoredWhileFiltering(t *testing.T) {
 	}
 	if m.filter != "f" {
 		t.Fatalf("expected filter input to receive rune, got %q", m.filter)
+	}
+}
+
+func TestAssignHintsUniqueFirstLettersStaySingle(t *testing.T) {
+	got := assignHints([]string{"alpha", "beta", "gamma"})
+	want := map[string]string{"alpha": "a", "beta": "b", "gamma": "g"}
+	for name, expected := range want {
+		if got[name] != expected {
+			t.Fatalf("expected hint %q for %q, got %q (full=%+v)", expected, name, got[name], got)
+		}
+	}
+}
+
+func TestAssignHintsPromotesCollisions(t *testing.T) {
+	got := assignHints([]string{"auth", "api", "billing"})
+	if got["billing"] != "b" {
+		t.Fatalf("expected billing single hint b, got %q", got["billing"])
+	}
+	for _, name := range []string{"auth", "api"} {
+		hint := got[name]
+		if len(hint) != 2 || hint[0] != 'a' {
+			t.Fatalf("expected two-key hint starting with a for %q, got %q", name, hint)
+		}
+	}
+	if got["auth"] == got["api"] {
+		t.Fatalf("expected distinct hints, got %q twice", got["auth"])
+	}
+}
+
+func TestAssignHintsSecondCharAvoidsReservedSingles(t *testing.T) {
+	got := assignHints([]string{"alpha", "alt", "beta"})
+	if got["beta"] != "b" {
+		t.Fatalf("expected beta single hint b, got %q", got["beta"])
+	}
+	for _, name := range []string{"alpha", "alt"} {
+		hint := got[name]
+		if len(hint) != 2 || hint[0] != 'a' {
+			t.Fatalf("expected two-key hint starting with a for %q, got %q", name, hint)
+		}
+		if hint[1] == 'b' {
+			t.Fatalf("second char must not reuse reserved single %q for %q", "b", name)
+		}
+	}
+}
+
+func TestAssignHintsNonLetterFirstCharFallsBack(t *testing.T) {
+	got := assignHints([]string{"1project", "alpha"})
+	if got["alpha"] != "a" {
+		t.Fatalf("expected alpha single hint a, got %q", got["alpha"])
+	}
+	hint := got["1project"]
+	if len(hint) != 2 {
+		t.Fatalf("expected two-key fallback hint for %q, got %q", "1project", hint)
+	}
+	if hint[0] < 'a' || hint[0] > 'z' {
+		t.Fatalf("expected fallback first char from pool, got %q", hint)
 	}
 }
 

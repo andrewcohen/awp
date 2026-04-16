@@ -58,27 +58,32 @@ const (
 const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
 type Model struct {
-	itemsCurrent   []Item
-	itemsAll       []Item
-	showAll        bool
-	currentRepo    string
-	cursor         int
-	width          int
-	height         int
-	status         string
-	handler        Handler
-	filterInput    textinput.Model
-	filtering      bool
-	filter         string
-	confirmDelete  bool
-	deleteTarget   Item
-	findMode       bool
-	findStage      findStage
-	findProject    string
-	findProjectMap map[rune]string
-	findRowMap     map[rune]int
-	refresher      Refresher
-	newLauncher    NewWorkspaceLauncher
+	itemsCurrent      []Item
+	itemsAll          []Item
+	showAll           bool
+	currentRepo       string
+	cursor            int
+	width             int
+	height            int
+	status            string
+	handler           Handler
+	filterInput       textinput.Model
+	filtering         bool
+	filter            string
+	confirmDelete     bool
+	deleteTarget      Item
+	findMode          bool
+	findStage         findStage
+	findProject       string
+	findProjectHints  map[string]string
+	findProjectLookup map[string]string
+	findProjectPrefix map[rune]bool
+	findRowHints      map[int]string
+	findRowLookup     map[string]int
+	findRowPrefix     map[rune]bool
+	findPendingPrefix rune
+	refresher         Refresher
+	newLauncher       NewWorkspaceLauncher
 }
 
 type NewWorkspaceDoneMsg struct {
@@ -113,15 +118,19 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
 	m := Model{
-		itemsCurrent: append([]Item(nil), itemsCurrent...),
-		itemsAll:     append([]Item(nil), itemsAll...),
-		currentRepo:  currentRepo,
-		showAll:      len(itemsAll) > 0,
-		status:       "↑/↓ move · enter summon · f find · n new · / filter · a agent · e editor · c review · v vcs · s shell · i ci · D delete · R relink · P scope · q quit",
-		findProjectMap: map[rune]string{},
-		findRowMap:     map[rune]int{},
-		handler:      handler,
-		filterInput:  fi,
+		itemsCurrent:      append([]Item(nil), itemsCurrent...),
+		itemsAll:          append([]Item(nil), itemsAll...),
+		currentRepo:       currentRepo,
+		showAll:           len(itemsAll) > 0,
+		status:            "↑/↓ move · enter summon · f find · n new · / filter · a agent · e editor · c review · v vcs · s shell · i ci · D delete · R relink · P scope · q quit",
+		findProjectHints:  map[string]string{},
+		findProjectLookup: map[string]string{},
+		findProjectPrefix: map[rune]bool{},
+		findRowHints:      map[int]string{},
+		findRowLookup:     map[string]int{},
+		findRowPrefix:     map[rune]bool{},
+		handler:           handler,
+		filterInput:       fi,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
 		m.cursor = idx
@@ -260,14 +269,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.findMode {
 			switch msg.String() {
-			case "esc", "ctrl+c", "q":
+			case "esc", "ctrl+c":
+				if m.findPendingPrefix != 0 {
+					m.findPendingPrefix = 0
+					m.status = stageStatus(m.findStage)
+					return m, nil
+				}
+				m.cancelFind("find: cancelled")
+				return m, nil
+			case "q":
+				if m.findPendingPrefix != 0 {
+					return m, nil
+				}
 				m.cancelFind("find: cancelled")
 				return m, nil
 			case "backspace", "ctrl+h":
+				if m.findPendingPrefix != 0 {
+					m.findPendingPrefix = 0
+					m.status = stageStatus(m.findStage)
+					return m, nil
+				}
 				if m.findStage == findStageWorkspace {
 					m.findStage = findStageProject
 					m.findProject = ""
-					m.findRowMap = map[rune]int{}
+					m.findRowHints = map[int]string{}
+					m.findRowLookup = map[string]int{}
+					m.findRowPrefix = map[rune]bool{}
 					m.status = "find: project"
 					return m, nil
 				}
@@ -279,30 +306,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !strings.ContainsRune(findHintAlphabet, r) {
 					return m, nil
 				}
-				if m.findStage == findStageProject {
-					project, ok := m.findProjectMap[r]
-					if !ok {
-						return m, nil
-					}
-					m.findProject = project
-					m.findStage = findStageWorkspace
-					m.findRowMap = m.buildRowHintMap(project)
-					m.status = "find: workspace"
-					if len(m.findRowMap) == 0 {
-						m.cancelFind("find: cancelled")
-					}
-					return m, nil
-				}
-				idx, ok := m.findRowMap[r]
-				if !ok {
-					return m, nil
-				}
-				m.cursor = idx
-				m.cancelFind("")
-				if item, ok := m.selected(); ok {
-					m.status = "find: " + item.WorkspaceName
-				}
-				return m, nil
+				return m.handleFindRune(r)
 			}
 			return m, nil
 		}
@@ -475,11 +479,14 @@ func (m Model) renderList(width int) string {
 	projectHints, rowHints := m.findHints()
 	lastProject := ""
 	for i, item := range items {
+		dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
 		if item.ProjectName != lastProject {
 			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 			header := item.ProjectName
 			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
 				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color("117"))
+			} else if dim {
+				headerStyle = headerStyle.Foreground(lipgloss.Color("238"))
 			}
 			if hint, ok := projectHints[item.ProjectName]; ok {
 				header = fmt.Sprintf("%s %s", renderFindHint(hint), header)
@@ -495,6 +502,8 @@ func (m Model) renderList(width int) string {
 		if i == m.cursor {
 			prefix = "› "
 			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+		} else if dim {
+			style = style.Foreground(lipgloss.Color("238"))
 		}
 		label := truncate(item.WorkspaceName, max(10, width-20))
 		if item.Stale {
@@ -508,7 +517,11 @@ func (m Model) renderList(width int) string {
 		}
 		line := fmt.Sprintf("%s %-4s %s", prefix, compactStatus(item.Status), label)
 		rows = append(rows, style.Render(line))
-		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("245")).Render("   "+truncate(prompt, max(8, width-4))))
+		promptColor := lipgloss.Color("245")
+		if dim {
+			promptColor = lipgloss.Color("238")
+		}
+		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(promptColor).Render("   "+truncate(prompt, max(8, width-4))))
 	}
 	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 }
@@ -591,8 +604,11 @@ func (m *Model) startFind() {
 	m.findMode = true
 	m.findStage = findStageProject
 	m.findProject = ""
-	m.findProjectMap = m.buildProjectHintMap()
-	m.findRowMap = map[rune]int{}
+	m.findPendingPrefix = 0
+	m.findProjectHints, m.findProjectLookup, m.findProjectPrefix = m.buildProjectHints()
+	m.findRowHints = map[int]string{}
+	m.findRowLookup = map[string]int{}
+	m.findRowPrefix = map[rune]bool{}
 	m.status = "find: project"
 }
 
@@ -600,14 +616,104 @@ func (m *Model) cancelFind(status string) {
 	m.findMode = false
 	m.findStage = findStageProject
 	m.findProject = ""
-	m.findProjectMap = map[rune]string{}
-	m.findRowMap = map[rune]int{}
+	m.findPendingPrefix = 0
+	m.findProjectHints = map[string]string{}
+	m.findProjectLookup = map[string]string{}
+	m.findProjectPrefix = map[rune]bool{}
+	m.findRowHints = map[int]string{}
+	m.findRowLookup = map[string]int{}
+	m.findRowPrefix = map[rune]bool{}
 	if strings.TrimSpace(status) != "" {
 		m.status = status
 	}
 }
 
-func (m Model) buildProjectHintMap() map[rune]string {
+func (m Model) handleFindRune(r rune) (tea.Model, tea.Cmd) {
+	if m.findPendingPrefix != 0 {
+		hint := string(m.findPendingPrefix) + string(r)
+		m.findPendingPrefix = 0
+		if m.findStage == findStageProject {
+			project, ok := m.findProjectLookup[hint]
+			if !ok {
+				m.status = stageStatus(m.findStage)
+				return m, nil
+			}
+			return m.enterWorkspaceStage(project), nil
+		}
+		idx, ok := m.findRowLookup[hint]
+		if !ok {
+			m.status = stageStatus(m.findStage)
+			return m, nil
+		}
+		m.cursor = idx
+		m.cancelFind("")
+		if item, ok := m.selected(); ok {
+			m.status = "find: " + item.WorkspaceName
+		}
+		return m, nil
+	}
+
+	hint := string(r)
+	if m.findStage == findStageProject {
+		if project, ok := m.findProjectLookup[hint]; ok {
+			return m.enterWorkspaceStage(project), nil
+		}
+		if m.findProjectPrefix[r] {
+			m.findPendingPrefix = r
+			m.status = fmt.Sprintf("find: project %c…", r)
+		}
+		return m, nil
+	}
+	if idx, ok := m.findRowLookup[hint]; ok {
+		m.cursor = idx
+		m.cancelFind("")
+		if item, ok := m.selected(); ok {
+			m.status = "find: " + item.WorkspaceName
+		}
+		return m, nil
+	}
+	if m.findRowPrefix[r] {
+		m.findPendingPrefix = r
+		m.status = fmt.Sprintf("find: workspace %c…", r)
+	}
+	return m, nil
+}
+
+func (m Model) enterWorkspaceStage(project string) Model {
+	m.findProject = project
+	m.findStage = findStageWorkspace
+	items := m.items()
+	matches := []int{}
+	for i, item := range items {
+		if item.ProjectName == project {
+			matches = append(matches, i)
+		}
+	}
+	if len(matches) == 0 {
+		m.cancelFind("find: cancelled")
+		return m
+	}
+	if len(matches) == 1 {
+		m.cursor = matches[0]
+		m.cancelFind("find: " + items[matches[0]].WorkspaceName)
+		return m
+	}
+	m.findRowHints, m.findRowLookup, m.findRowPrefix = m.buildRowHints(project)
+	m.status = "find: workspace"
+	if len(m.findRowLookup) == 0 {
+		m.cancelFind("find: cancelled")
+	}
+	return m
+}
+
+func stageStatus(stage findStage) string {
+	if stage == findStageWorkspace {
+		return "find: workspace"
+	}
+	return "find: project"
+}
+
+func (m Model) buildProjectHints() (map[string]string, map[string]string, map[rune]bool) {
 	items := m.items()
 	projects := make([]string, 0, len(items))
 	seen := map[string]struct{}{}
@@ -618,46 +724,178 @@ func (m Model) buildProjectHintMap() map[rune]string {
 		seen[item.ProjectName] = struct{}{}
 		projects = append(projects, item.ProjectName)
 	}
-	hints := map[rune]string{}
-	for i, project := range projects {
-		if i >= len(findHintAlphabet) {
-			break
+	hintByName := assignHints(projects)
+	lookup := map[string]string{}
+	prefix := map[rune]bool{}
+	forward := map[string]string{}
+	for name, hint := range hintByName {
+		forward[name] = hint
+		lookup[hint] = name
+		if len([]rune(hint)) == 2 {
+			prefix[[]rune(hint)[0]] = true
 		}
-		hints[rune(findHintAlphabet[i])] = project
 	}
-	return hints
+	return forward, lookup, prefix
 }
 
-func (m Model) buildRowHintMap(project string) map[rune]int {
+func (m Model) buildRowHints(project string) (map[int]string, map[string]int, map[rune]bool) {
 	items := m.items()
-	hints := map[rune]int{}
-	n := 0
+	rowIdx := []int{}
+	names := []string{}
 	for i, item := range items {
 		if item.ProjectName != project {
 			continue
 		}
-		if n >= len(findHintAlphabet) {
-			break
-		}
-		hints[rune(findHintAlphabet[n])] = i
-		n++
+		rowIdx = append(rowIdx, i)
+		names = append(names, item.WorkspaceName)
 	}
-	return hints
+	hintByName := assignHints(names)
+	forward := map[int]string{}
+	lookup := map[string]int{}
+	prefix := map[rune]bool{}
+	for i, name := range names {
+		hint, ok := hintByName[name]
+		if !ok {
+			continue
+		}
+		forward[rowIdx[i]] = hint
+		lookup[hint] = rowIdx[i]
+		if len([]rune(hint)) == 2 {
+			prefix[[]rune(hint)[0]] = true
+		}
+	}
+	return forward, lookup, prefix
 }
 
-func (m Model) findHints() (map[string]rune, map[int]rune) {
+func (m Model) findHints() (map[string]string, map[int]string) {
 	if !m.findMode {
-		return map[string]rune{}, map[int]rune{}
+		return map[string]string{}, map[int]string{}
 	}
-	projectHints := map[string]rune{}
-	for hint, project := range m.findProjectMap {
-		projectHints[project] = hint
+	projectHints := map[string]string{}
+	if m.findStage == findStageProject {
+		for name, hint := range m.findProjectHints {
+			projectHints[name] = hint
+		}
 	}
-	rowHints := map[int]rune{}
-	for hint, idx := range m.findRowMap {
+	rowHints := map[int]string{}
+	for idx, hint := range m.findRowHints {
 		rowHints[idx] = hint
 	}
 	return projectHints, rowHints
+}
+
+// assignHints picks EasyMotion-style hints for the given ordered list of
+// target names. Unique first letters become single-key hints; collisions
+// promote all sharing targets to two-key hints (preferred first letter +
+// home-row disambiguator). Names whose first rune is not [a-z] fall through
+// to the disambiguator pool for their first char. If smart assignment cannot
+// cover every target, the function falls back to sequential home-row hints.
+func assignHints(names []string) map[string]string {
+	out := map[string]string{}
+	if len(names) == 0 {
+		return out
+	}
+	type bucket struct {
+		key   rune
+		names []string
+	}
+	var ordered []*bucket
+	byKey := map[rune]*bucket{}
+	firstRune := func(s string) rune {
+		rs := []rune(s)
+		if len(rs) == 0 {
+			return 0
+		}
+		r := unicode.ToLower(rs[0])
+		if r >= 'a' && r <= 'z' {
+			return r
+		}
+		return 0
+	}
+	for _, name := range names {
+		k := firstRune(name)
+		b, ok := byKey[k]
+		if !ok {
+			b = &bucket{key: k}
+			byKey[k] = b
+			ordered = append(ordered, b)
+		}
+		b.names = append(b.names, name)
+	}
+
+	reservedSingle := map[rune]bool{}
+	for _, b := range ordered {
+		if b.key != 0 && len(b.names) == 1 {
+			reservedSingle[b.key] = true
+			out[b.names[0]] = string(b.key)
+		}
+	}
+
+	secondPool := make([]rune, 0, len(findHintAlphabet))
+	for _, c := range findHintAlphabet {
+		if !reservedSingle[c] {
+			secondPool = append(secondPool, c)
+		}
+	}
+
+	used := map[string]bool{}
+	for _, hint := range out {
+		used[hint] = true
+	}
+
+	assignDouble := func(name string, first rune) bool {
+		for _, second := range secondPool {
+			hint := string(first) + string(second)
+			if used[hint] {
+				continue
+			}
+			used[hint] = true
+			out[name] = hint
+			return true
+		}
+		return false
+	}
+
+	for _, b := range ordered {
+		if b.key == 0 || len(b.names) <= 1 {
+			continue
+		}
+		for _, name := range b.names {
+			assignDouble(name, b.key)
+		}
+	}
+
+	if fallback, ok := byKey[0]; ok {
+		firstPool := make([]rune, 0, len(findHintAlphabet))
+		for _, c := range findHintAlphabet {
+			if reservedSingle[c] {
+				continue
+			}
+			firstPool = append(firstPool, c)
+		}
+		for _, name := range fallback.names {
+			for _, first := range firstPool {
+				if assignDouble(name, first) {
+					break
+				}
+			}
+		}
+	}
+
+	for _, name := range names {
+		if _, ok := out[name]; ok {
+			continue
+		}
+		legacy := map[string]string{}
+		for i, n := range names {
+			if i >= len(findHintAlphabet) {
+				break
+			}
+			legacy[n] = string(findHintAlphabet[i])
+		}
+		return legacy
+	}
+	return out
 }
 
 func compactStatus(status string) string {
@@ -686,12 +924,12 @@ func normalizeStatus(status string) string {
 	return s
 }
 
-func renderFindHint(hint rune) string {
+func renderFindHint(hint string) string {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("230")).
 		Background(lipgloss.Color("62")).
-		Render(fmt.Sprintf("[%c]", hint))
+		Render("[" + hint + "]")
 }
 
 func truncate(value string, width int) string {
