@@ -456,3 +456,132 @@ func TestViewShowsEmptyState(t *testing.T) {
 		t.Fatal("expected non-empty view")
 	}
 }
+
+func TestReviewModeEntersOnR(t *testing.T) {
+	fetchCalled := false
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithPRFetcher(func() tea.Cmd {
+		return func() tea.Msg {
+			fetchCalled = true
+			return PRFetchDoneMsg{PRs: []PRItem{{Number: 42, Title: "Fix bug", HeadRef: "fix", Author: "dev"}}}
+		}
+	})
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m := updated.(Model)
+	if !m.reviewMode || !m.reviewLoading {
+		t.Fatal("expected review mode + loading")
+	}
+	if cmd == nil {
+		t.Fatal("expected fetch command")
+	}
+	msg := cmd()
+	updated, _ = updated.Update(msg)
+	m = updated.(Model)
+	if !fetchCalled {
+		t.Fatal("expected fetch to be called")
+	}
+	if m.reviewLoading {
+		t.Fatal("expected loading to be false after fetch")
+	}
+	if len(m.reviewPRs) != 1 || m.reviewPRs[0].Number != 42 {
+		t.Fatalf("expected 1 PR, got %+v", m.reviewPRs)
+	}
+}
+
+func TestReviewModeSelectDispatchesAction(t *testing.T) {
+	var got ActionRequest
+	handler := func(req ActionRequest) error {
+		got = req
+		return nil
+	}
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, handler).WithPRFetcher(func() tea.Cmd {
+		return func() tea.Msg {
+			return PRFetchDoneMsg{PRs: []PRItem{
+				{Number: 10, Title: "First"},
+				{Number: 20, Title: "Second"},
+			}}
+		}
+	})
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	msg := cmd()
+	updated, _ = updated.Update(msg)
+
+	// move down to second PR
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m := updated.(Model)
+	if m.reviewCursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", m.reviewCursor)
+	}
+
+	// press enter
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected command on enter")
+	}
+	msg = cmd()
+	updated, _ = updated.Update(msg)
+	m = updated.(Model)
+
+	if got.Action != ActionReview {
+		t.Fatalf("expected ActionReview, got %v", got.Action)
+	}
+	if got.Arg != "20" {
+		t.Fatalf("expected arg '20', got %q", got.Arg)
+	}
+	if m.reviewMode {
+		t.Fatal("expected review mode to exit after selection")
+	}
+}
+
+func TestReviewModeCancelWithEsc(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithPRFetcher(func() tea.Cmd {
+		return func() tea.Msg {
+			return PRFetchDoneMsg{PRs: []PRItem{{Number: 1, Title: "PR"}}}
+		}
+	})
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	msg := cmd()
+	updated, _ = updated.Update(msg)
+
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m := updated.(Model)
+	if m.reviewMode {
+		t.Fatal("expected review mode cancelled")
+	}
+	if m.status != "review: cancelled" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestReviewModeNoPRsFetcher(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m := updated.(Model)
+	if m.reviewMode {
+		t.Fatal("expected no review mode without fetcher")
+	}
+	if m.status != "review: not configured" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestReviewModeEmptyPRs(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithPRFetcher(func() tea.Cmd {
+		return func() tea.Msg {
+			return PRFetchDoneMsg{PRs: nil}
+		}
+	})
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	msg := cmd()
+	updated, _ = updated.Update(msg)
+	m := updated.(Model)
+	if m.reviewMode {
+		t.Fatal("expected review mode to exit on empty PRs")
+	}
+	if m.status != "review: no open PRs" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}

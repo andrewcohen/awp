@@ -159,6 +159,16 @@ func (c *Client) SwitchClient(sessionName string) error {
 	return nil
 }
 
+// SwitchClientLast switches the current client to the previously active session
+// (tmux `switch-client -l`).
+func (c *Client) SwitchClientLast() error {
+	_, err := c.runner.Run(context.Background(), "", "tmux", "switch-client", "-l")
+	if err != nil {
+		return fmt.Errorf("switch-client to last session: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) KillSession(name string) error {
 	_, err := c.runner.Run(context.Background(), "", "tmux", "kill-session", "-t", name)
 	if err != nil {

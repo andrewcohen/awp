@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +16,7 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
@@ -129,6 +131,15 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 
 	handler := func(req deckui.ActionRequest) error {
+		if req.Action == deckui.ActionReview {
+			n, err := strconv.Atoi(req.Arg)
+			if err != nil {
+				return fmt.Errorf("review: invalid PR number %q", req.Arg)
+			}
+			fr := fixedDirRunner{base: runner, dir: repoRoot}
+			reviewSvc := newDeckActionServiceWithIO(runner, repoRoot, nil, io.Discard)
+			return runReviewWithCharm(fr, reviewSvc, n, nil, io.Discard)
+		}
 		actionSvc := svc
 		if strings.TrimSpace(req.Item.RepoRoot) != "" {
 			actionSvc = newDeckActionService(runner, req.Item.RepoRoot, in)
@@ -150,7 +161,31 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.RefreshDoneMsg(items, allItems, err)
 		}
 	}
-	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher)
+	prFetcher := func() tea.Cmd {
+		return func() tea.Msg {
+			gh := github.New(fixedDirRunner{base: runner, dir: repoRoot})
+			prs, err := gh.ListPRs()
+			if err != nil {
+				return deckui.PRFetchDoneMsg{Err: err}
+			}
+			items := make([]deckui.PRItem, len(prs))
+			for i, pr := range prs {
+				author := pr.Author.Login
+				if author == "" {
+					author = "?"
+				}
+				items[i] = deckui.PRItem{
+					Number:  pr.Number,
+					Title:   pr.Title,
+					HeadRef: pr.HeadRef,
+					Author:  author,
+					IsDraft: pr.IsDraft,
+				}
+			}
+			return deckui.PRFetchDoneMsg{PRs: items}
+		}
+	}
+	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).WithPRFetcher(prFetcher)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
@@ -283,6 +318,8 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		return openNamedWindow(tmuxClient, svc, item, req.Arg)
 	case deckui.ActionCI:
 		return openCIWindow(tmuxClient, svc, runner, item)
+	case deckui.ActionLastSession:
+		return tmuxClient.SwitchClientLast()
 	case deckui.ActionDelete:
 		if err := svc.Delete(item.WorkspaceName, true); err != nil {
 			return err
