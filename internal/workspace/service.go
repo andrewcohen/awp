@@ -915,15 +915,26 @@ func (s *service) runBuiltinBootstrap(sourceRepo, workspacePath string) error {
 	s.logf("▶️ Running built-in bootstrap")
 
 	gitSrc := filepath.Join(sourceRepo, ".git")
-	if st, err := os.Stat(gitSrc); err == nil && st.IsDir() {
-		gitDst := filepath.Join(workspacePath, ".git")
-		// Replace any prior `.git` (dir or file) so we can write the gitfile cleanly.
-		_ = os.RemoveAll(gitDst)
-		content := fmt.Sprintf("gitdir: %s\n", gitSrc)
-		if err := os.WriteFile(gitDst, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("write .git gitfile: %w", err)
+	if st, err := os.Stat(gitSrc); err == nil {
+		var gitdirTarget string
+		if st.IsDir() {
+			gitdirTarget = gitSrc
+		} else if data, readErr := os.ReadFile(gitSrc); readErr == nil {
+			raw := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
+			if !filepath.IsAbs(raw) {
+				raw = filepath.Join(sourceRepo, raw)
+			}
+			gitdirTarget = filepath.Clean(raw)
 		}
-		s.logf("✅ Wrote .git gitfile → %s", gitSrc)
+		if gitdirTarget != "" {
+			gitDst := filepath.Join(workspacePath, ".git")
+			_ = os.RemoveAll(gitDst)
+			content := fmt.Sprintf("gitdir: %s\n", gitdirTarget)
+			if err := os.WriteFile(gitDst, []byte(content), 0o644); err != nil {
+				return fmt.Errorf("write .git gitfile: %w", err)
+			}
+			s.logf("✅ Wrote .git gitfile → %s", gitdirTarget)
+		}
 	}
 
 	awpSrc := filepath.Join(sourceRepo, ".awp")
