@@ -2,6 +2,7 @@ package deckui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -32,6 +33,8 @@ const (
 	ActionOpenWindow
 	ActionDelete
 	ActionCI
+	ActionLastSession
+	ActionReview
 )
 
 type ActionRequest struct {
@@ -47,6 +50,24 @@ type Handler func(ActionRequest) error
 type NewWorkspaceLauncher func(repoRoot string) tea.Cmd
 
 type Refresher func() tea.Cmd
+
+// PRItem is a lightweight PR summary for the review picker.
+type PRItem struct {
+	Number  int
+	Title   string
+	HeadRef string
+	Author  string
+	IsDraft bool
+}
+
+// PRFetcher returns a tea.Cmd that fetches PRs and emits a PRFetchDoneMsg.
+type PRFetcher func() tea.Cmd
+
+// PRFetchDoneMsg carries the result of an async PR list fetch.
+type PRFetchDoneMsg struct {
+	PRs []PRItem
+	Err error
+}
 
 type findStage int
 
@@ -84,6 +105,11 @@ type Model struct {
 	findPendingPrefix rune
 	refresher         Refresher
 	newLauncher       NewWorkspaceLauncher
+	prFetcher         PRFetcher
+	reviewMode        bool
+	reviewLoading     bool
+	reviewPRs         []PRItem
+	reviewCursor      int
 }
 
 type NewWorkspaceDoneMsg struct {
@@ -122,7 +148,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
 		showAll:           len(itemsAll) > 0,
-		status:            "↑/↓ move · enter summon · f find · n new · / filter · a agent · e editor · c review · v vcs · s shell · i ci · D delete · R relink · P scope · q quit",
+		status:            "↑/↓ move · enter summon · f find · n new · r review · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · q quit",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -159,6 +185,11 @@ func (m Model) WithNewWorkspaceLauncher(l NewWorkspaceLauncher) Model {
 
 func (m Model) WithRefresher(r Refresher) Model {
 	m.refresher = r
+	return m
+}
+
+func (m Model) WithPRFetcher(f PRFetcher) Model {
+	m.prFetcher = f
 	return m
 }
 
@@ -212,6 +243,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+	case PRFetchDoneMsg:
+		if !m.reviewMode {
+			return m, nil
+		}
+		m.reviewLoading = false
+		if msg.Err != nil {
+			m.reviewMode = false
+			m.status = "review: " + msg.Err.Error()
+			return m, nil
+		}
+		if len(msg.PRs) == 0 {
+			m.reviewMode = false
+			m.status = "review: no open PRs"
+			return m, nil
+		}
+		m.reviewPRs = msg.PRs
+		m.reviewCursor = 0
+		m.status = "review: select PR (enter confirm, esc cancel)"
+		return m, nil
 	case refreshDoneMsg:
 		if msg.err != nil {
 			m.status = "refresh: " + msg.err.Error()
@@ -266,6 +316,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 			}
 			return m, cmd
+		}
+		if m.reviewMode {
+			if m.reviewLoading {
+				switch msg.String() {
+				case "esc", "q", "ctrl+c":
+					m.reviewMode = false
+					m.reviewLoading = false
+					m.status = "review: cancelled"
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc", "q", "ctrl+c":
+				m.reviewMode = false
+				m.reviewPRs = nil
+				m.reviewCursor = 0
+				m.status = "review: cancelled"
+				return m, nil
+			case "j", "down":
+				if m.reviewCursor < len(m.reviewPRs)-1 {
+					m.reviewCursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.reviewCursor > 0 {
+					m.reviewCursor--
+				}
+				return m, nil
+			case "enter":
+				if len(m.reviewPRs) == 0 || m.handler == nil {
+					return m, nil
+				}
+				pr := m.reviewPRs[m.reviewCursor]
+				item, _ := m.selected()
+				m.reviewMode = false
+				m.status = fmt.Sprintf("review PR #%d...", pr.Number)
+				return m, m.dispatch(ActionReview, item, strconv.Itoa(pr.Number))
+			}
+			return m, nil
 		}
 		if m.findMode {
 			switch msg.String() {
@@ -365,6 +454,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.trigger(ActionOpenWindow, "")
 		case "i":
 			return m.trigger(ActionCI, "")
+		case "L":
+			if m.handler == nil {
+				return m, nil
+			}
+			m.status = "jump to last session..."
+			return m, m.dispatch(ActionLastSession, Item{}, "")
 		case "D":
 			item, ok := m.selected()
 			if !ok {
@@ -376,6 +471,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "R":
 			return m.trigger(ActionRelink, "")
+		case "r":
+			if m.prFetcher == nil {
+				m.status = "review: not configured"
+				return m, nil
+			}
+			m.reviewMode = true
+			m.reviewLoading = true
+			m.reviewPRs = nil
+			m.reviewCursor = 0
+			m.status = "review: loading PRs..."
+			return m, m.prFetcher()
 		case "n":
 			if m.newLauncher == nil {
 				m.status = "new: launcher not configured"
@@ -424,6 +530,10 @@ func actionLabel(a Action, arg string) string {
 		return "delete"
 	case ActionCI:
 		return "ci"
+	case ActionLastSession:
+		return "last session"
+	case ActionReview:
+		return "review"
 	}
 	return "action"
 }
@@ -441,8 +551,14 @@ func (m Model) View() string {
 	}
 	rightWidth := max(20, m.width-leftWidth-3)
 
-	left := m.renderList(leftWidth)
-	right := m.renderDetails(rightWidth)
+	var left, right string
+	if m.reviewMode {
+		left = m.renderReviewList(leftWidth)
+		right = m.renderReviewDetails(rightWidth)
+	} else {
+		left = m.renderList(leftWidth)
+		right = m.renderDetails(rightWidth)
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
 
 	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status)
@@ -568,6 +684,7 @@ func (m Model) renderDetails(width int) string {
 		"Actions:",
 		"enter  summon (create/focus session)",
 		"f      find jump (project → workspace)",
+		"r      review PR",
 		"a      open agent window",
 		"e      open editor window ($EDITOR)",
 		"c      open code review window (tuicr -r @)",
@@ -578,6 +695,67 @@ func (m Model) renderDetails(width int) string {
 		"D      delete workspace",
 		"R      relink/recover session",
 		"q      quit deck",
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderReviewList(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("review: select PR")
+	rows := []string{title, ""}
+	if m.reviewLoading {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Loading PRs..."))
+		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	}
+	if len(m.reviewPRs) == 0 {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No open PRs."))
+		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	}
+	for i, pr := range m.reviewPRs {
+		prefix := "  "
+		style := lipgloss.NewStyle().Width(width - 1)
+		if i == m.reviewCursor {
+			prefix = "› "
+			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+		}
+		draft := ""
+		if pr.IsDraft {
+			draft = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [draft]")
+		}
+		number := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Render(fmt.Sprintf("#%d", pr.Number))
+		line := fmt.Sprintf("%s%s%s %s", prefix, number, draft, truncate(pr.Title, max(10, width-20)))
+		rows = append(rows, style.Render(line))
+		meta := fmt.Sprintf("   @%s  %s", pr.Author, pr.HeadRef)
+		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("245")).Render(truncate(meta, max(8, width-4))))
+	}
+	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+}
+
+func (m Model) renderReviewDetails(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Render("PR review")
+	if m.reviewLoading || len(m.reviewPRs) == 0 {
+		lines := []string{title, "", "Waiting for PR list..."}
+		return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+	}
+	if m.reviewCursor < 0 || m.reviewCursor >= len(m.reviewPRs) {
+		return lipgloss.NewStyle().Width(width).Render(title + "\n\nSelect a PR.")
+	}
+	pr := m.reviewPRs[m.reviewCursor]
+	draft := "no"
+	if pr.IsDraft {
+		draft = "yes"
+	}
+	lines := []string{
+		title,
+		"",
+		fmt.Sprintf("PR:     #%d", pr.Number),
+		fmt.Sprintf("Title:  %s", pr.Title),
+		fmt.Sprintf("Author: @%s", pr.Author),
+		fmt.Sprintf("Branch: %s", pr.HeadRef),
+		fmt.Sprintf("Draft:  %s", draft),
+		"",
+		"Actions:",
+		"enter  start review",
+		"esc    cancel",
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
