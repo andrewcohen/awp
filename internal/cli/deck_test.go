@@ -187,7 +187,6 @@ func TestHandleDeckActionDeleteUsesForceAndKillsSession(t *testing.T) {
 func TestDefaultWindowCommand(t *testing.T) {
 	cases := map[string]string{
 		"editor": "$EDITOR",
-		"tuicr":  "tuicr -r main..@",
 		"review": "tuicr -r @",
 		"vcs":    "jjui",
 		"agent":  "",

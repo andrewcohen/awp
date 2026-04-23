@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -35,7 +36,14 @@ const (
 	ActionCI
 	ActionLastSession
 	ActionReview
+	ActionCustom
 )
+
+type UserAction struct {
+	Name    string
+	Command string
+	Alias   string
+}
 
 type ActionRequest struct {
 	Item   Item
@@ -110,6 +118,11 @@ type Model struct {
 	reviewLoading     bool
 	reviewPRs         []PRItem
 	reviewCursor      int
+	userActions       []UserAction
+	actionMode        bool
+	actionAliasLookup map[string]UserAction
+	spinner           spinner.Model
+	busy              bool
 }
 
 type NewWorkspaceDoneMsg struct {
@@ -143,12 +156,14 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	fi := textinput.New()
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
+	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	m := Model{
 		itemsCurrent:      append([]Item(nil), itemsCurrent...),
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
 		showAll:           len(itemsAll) > 0,
-		status:            "↑/↓ move · enter summon · f find · n new · r review · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · q quit",
+		status:            "↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · q quit",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -157,6 +172,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		findRowPrefix:     map[rune]bool{},
 		handler:           handler,
 		filterInput:       fi,
+		spinner:           sp,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
 		m.cursor = idx
@@ -193,6 +209,17 @@ func (m Model) WithPRFetcher(f PRFetcher) Model {
 	return m
 }
 
+func (m Model) WithUserActions(actions []UserAction) Model {
+	m.userActions = actions
+	m.actionAliasLookup = make(map[string]UserAction, len(actions))
+	for _, a := range actions {
+		if a.Alias != "" {
+			m.actionAliasLookup[a.Alias] = a
+		}
+	}
+	return m
+}
+
 func (m Model) items() []Item {
 	src := m.itemsCurrent
 	if m.showAll && len(m.itemsAll) > 0 {
@@ -220,6 +247,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+	case spinner.TickMsg:
+		if m.busy {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	case NewWorkspaceDoneMsg:
 		if msg.Cancelled {
 			m.status = "new: cancelled"
@@ -231,6 +265,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case actionResultMsg:
+		m.busy = false
 		if msg.err != nil {
 			m.status = "error: " + msg.err.Error()
 			return m, nil
@@ -244,6 +279,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case PRFetchDoneMsg:
+		m.busy = false
 		if !m.reviewMode {
 			return m, nil
 		}
@@ -284,8 +320,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "delete: handler not configured"
 					return m, nil
 				}
+				m.busy = true
 				m.status = fmt.Sprintf("delete %s...", m.deleteTarget.WorkspaceName)
-				return m, m.dispatch(ActionDelete, m.deleteTarget, "")
+				return m, tea.Batch(m.spinner.Tick, m.dispatch(ActionDelete, m.deleteTarget, ""))
 			case "n", "esc", "q":
 				m.confirmDelete = false
 				m.status = "delete: cancelled"
@@ -399,6 +436,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.actionMode {
+			switch msg.String() {
+			case "esc", "q", "ctrl+c":
+				m.actionMode = false
+				m.status = "action: cancelled"
+				return m, nil
+			}
+			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
+				alias := string(msg.Runes[0])
+				if ua, ok := m.actionAliasLookup[alias]; ok {
+					m.actionMode = false
+					return m.trigger(ActionCustom, ua.Name)
+				}
+				m.actionMode = false
+				m.status = fmt.Sprintf("action: unknown alias %q", alias)
+				return m, nil
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			if m.filter != "" && msg.String() == "esc" {
@@ -447,7 +503,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			return m.trigger(ActionOpenWindow, "review")
 		case "C":
-			return m.trigger(ActionOpenWindow, "tuicr")
+			return m.trigger(ActionOpenWindow, "review:tuicr -r main..@")
 		case "v":
 			return m.trigger(ActionOpenWindow, "vcs")
 		case "s":
@@ -480,8 +536,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reviewLoading = true
 			m.reviewPRs = nil
 			m.reviewCursor = 0
+			m.busy = true
 			m.status = "review: loading PRs..."
-			return m, m.prFetcher()
+			return m, tea.Batch(m.spinner.Tick, m.prFetcher())
 		case "n":
 			if m.newLauncher == nil {
 				m.status = "new: launcher not configured"
@@ -494,6 +551,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = "new workspace in " + item.ProjectName + "..."
 			return m, m.newLauncher(item.RepoRoot)
+		case "x":
+			if len(m.userActions) == 0 {
+				m.status = "no user actions configured"
+				return m, nil
+			}
+			m.actionMode = true
+			m.status = m.actionModeStatus()
+			return m, nil
 		}
 	}
 	return m, nil
@@ -504,8 +569,9 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	if !ok || m.handler == nil {
 		return m, nil
 	}
+	m.busy = true
 	m.status = fmt.Sprintf("%s %s...", actionLabel(a, arg), item.WorkspaceName)
-	return m, m.dispatch(a, item, arg)
+	return m, tea.Batch(m.spinner.Tick, m.dispatch(a, item, arg))
 }
 
 func (m Model) dispatch(a Action, item Item, arg string) tea.Cmd {
@@ -534,8 +600,23 @@ func actionLabel(a Action, arg string) string {
 		return "last session"
 	case ActionReview:
 		return "review"
+	case ActionCustom:
+		if arg != "" {
+			return "run " + arg
+		}
+		return "run action"
 	}
 	return "action"
+}
+
+func (m Model) actionModeStatus() string {
+	parts := make([]string, 0, len(m.userActions))
+	for _, a := range m.userActions {
+		if a.Alias != "" {
+			parts = append(parts, fmt.Sprintf("%s:%s", a.Alias, a.Name))
+		}
+	}
+	return "action: " + strings.Join(parts, " · ")
 }
 
 func (m Model) View() string {
@@ -561,14 +642,18 @@ func (m Model) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
 
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status)
+	statusText := m.status
+	if m.busy {
+		statusText = m.spinner.View() + " " + m.status
+	}
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(statusText)
 	if m.filtering {
 		footer = "/" + m.filterInput.View()
-	} else if m.findMode {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status + " (esc/q cancel)")
+	} else if m.findMode || m.actionMode {
+		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status + " (esc cancel)")
 	} else if m.filter != "" {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
-			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, m.status),
+			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, statusText),
 		)
 	}
 	view := lipgloss.JoinVertical(lipgloss.Left, body, footer)
@@ -685,10 +770,11 @@ func (m Model) renderDetails(width int) string {
 		"enter  summon (create/focus session)",
 		"f      find jump (project → workspace)",
 		"r      review PR",
+		"x      user actions",
 		"a      open agent window",
 		"e      open editor window ($EDITOR)",
-		"c      open code review window (tuicr -r @)",
-		"C      open code review window (tuicr -r main..@)",
+		"c      open review window (tuicr -r @)",
+		"C      open review window (tuicr -r main..@)",
 		"v      open vcs window (jjui)",
 		"s      open shell window",
 		"i      watch CI run for branch",
