@@ -3,8 +3,31 @@ package deckui
 import (
 	"testing"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func execCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c == nil {
+				continue
+			}
+			m := c()
+			if _, ok := m.(spinner.TickMsg); ok {
+				continue
+			}
+			return m
+		}
+		t.Fatal("batch contained no non-spinner cmd")
+	}
+	return msg
+}
 
 func TestEnterInvokesOpenActionAndUpdatesStatus(t *testing.T) {
 	called := false
@@ -23,7 +46,7 @@ func TestEnterInvokesOpenActionAndUpdatesStatus(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected command")
 	}
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
 	if !called {
@@ -59,7 +82,7 @@ func TestShellKeyInvokesOpenWindowAction(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected command")
 	}
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
 
@@ -85,7 +108,7 @@ func TestCIKeyInvokesCIAction(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected command")
 	}
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
 
@@ -145,7 +168,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected command after confirmation")
 	}
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, cmd = updated.Update(msg)
 	if cmd == nil {
 		t.Fatal("expected refresh command after successful delete")
@@ -474,7 +497,7 @@ func TestReviewModeEntersOnR(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected fetch command")
 	}
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m = updated.(Model)
 	if !fetchCalled {
@@ -504,7 +527,7 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 	})
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 
 	// move down to second PR
@@ -542,7 +565,7 @@ func TestReviewModeCancelWithEsc(t *testing.T) {
 	})
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -575,13 +598,100 @@ func TestReviewModeEmptyPRs(t *testing.T) {
 	})
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	msg := cmd()
+	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
 	if m.reviewMode {
 		t.Fatal("expected review mode to exit on empty PRs")
 	}
 	if m.status != "review: no open PRs" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestActionModeDispatchesOnAlias(t *testing.T) {
+	var got ActionRequest
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(req ActionRequest) error {
+		got = req
+		return nil
+	}).WithUserActions([]UserAction{
+		{Name: "dev", Command: "pnpm dev", Alias: "d"},
+		{Name: "lint", Command: "pnpm lint", Alias: "l"},
+	})
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m := updated.(Model)
+	if !m.actionMode {
+		t.Fatal("expected action mode")
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if cmd == nil {
+		t.Fatal("expected command on alias press")
+	}
+	msg := execCmd(t, cmd)
+	updated, _ = updated.Update(msg)
+	m = updated.(Model)
+	if m.actionMode {
+		t.Fatal("expected action mode to exit")
+	}
+	if got.Action != ActionCustom {
+		t.Fatalf("expected ActionCustom, got %v", got.Action)
+	}
+	if got.Arg != "dev" {
+		t.Fatalf("expected arg 'dev', got %q", got.Arg)
+	}
+}
+
+func TestActionModeCancelWithEsc(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithUserActions([]UserAction{
+		{Name: "dev", Command: "pnpm dev", Alias: "d"},
+	})
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m := updated.(Model)
+	if !m.actionMode {
+		t.Fatal("expected action mode")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.actionMode {
+		t.Fatal("expected action mode cancelled")
+	}
+	if m.status != "action: cancelled" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestActionModeUnknownAlias(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithUserActions([]UserAction{
+		{Name: "dev", Command: "pnpm dev", Alias: "d"},
+	})
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m := updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	if cmd != nil {
+		t.Fatal("expected no command for unknown alias")
+	}
+	m = updated.(Model)
+	if m.actionMode {
+		t.Fatal("expected action mode to exit on unknown alias")
+	}
+	if m.status != `action: unknown alias "z"` {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestActionModeNoActionsConfigured(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m := updated.(Model)
+	if m.actionMode {
+		t.Fatal("expected no action mode without actions")
+	}
+	if m.status != "no user actions configured" {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }

@@ -130,6 +130,19 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		return err
 	}
 
+	cfg, _ := config.Load(repoRoot)
+	var userActions []deckui.UserAction
+	for name, act := range cfg.Actions {
+		userActions = append(userActions, deckui.UserAction{
+			Name:    name,
+			Command: act.Command,
+			Alias:   act.Alias,
+		})
+	}
+	actionsByName := make(map[string]deckui.UserAction, len(userActions))
+	for _, a := range userActions {
+		actionsByName[a.Name] = a
+	}
 	handler := func(req deckui.ActionRequest) error {
 		if req.Action == deckui.ActionReview {
 			n, err := strconv.Atoi(req.Arg)
@@ -139,6 +152,17 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			fr := fixedDirRunner{base: runner, dir: repoRoot}
 			reviewSvc := newDeckActionServiceWithIO(runner, repoRoot, nil, io.Discard)
 			return runReviewWithCharm(fr, reviewSvc, n, nil, io.Discard)
+		}
+		if req.Action == deckui.ActionCustom {
+			ua, ok := actionsByName[req.Arg]
+			if !ok {
+				return fmt.Errorf("unknown user action %q", req.Arg)
+			}
+			actionSvc := svc
+			if strings.TrimSpace(req.Item.RepoRoot) != "" {
+				actionSvc = newDeckActionService(runner, req.Item.RepoRoot, in)
+			}
+			return openCustomActionWindow(tmuxClient, actionSvc, req.Item, ua)
 		}
 		actionSvc := svc
 		if strings.TrimSpace(req.Item.RepoRoot) != "" {
@@ -185,7 +209,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.PRFetchDoneMsg{PRs: items}
 		}
 	}
-	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).WithPRFetcher(prFetcher)
+	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).WithPRFetcher(prFetcher).WithUserActions(userActions)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
@@ -358,7 +382,13 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 // openNamedWindow ensures the workspace session exists, then switches to the
 // named window, creating it (with an optional default command) if missing.
 // Finally, it switches the tmux client to the session so the user lands there.
-func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, windowName string) error {
+func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, arg string) error {
+	windowName, cmdOverride := arg, ""
+	if idx := strings.IndexByte(arg, ':'); idx >= 0 {
+		windowName = arg[:idx]
+		cmdOverride = arg[idx+1:]
+	}
+
 	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
 	id, err := tmuxClient.SessionIDByName(sessionName)
 	if err != nil {
@@ -401,8 +431,12 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 		}
 		justCreated = true
 	}
-	if cmd := defaultWindowCommand(windowName); cmd != "" && (justCreated || paneIsShell(tmuxClient, target)) {
-		if err := tmuxClient.SendCommand(target, cmd); err != nil {
+	winCmd := cmdOverride
+	if winCmd == "" {
+		winCmd = defaultWindowCommand(windowName)
+	}
+	if winCmd != "" && (justCreated || paneIsShell(tmuxClient, target)) {
+		if err := tmuxClient.SendCommand(target, winCmd); err != nil {
 			return err
 		}
 	}
@@ -429,8 +463,6 @@ func defaultWindowCommand(windowName string) string {
 	switch windowName {
 	case "editor":
 		return "$EDITOR"
-	case "tuicr":
-		return "tuicr -r main..@"
 	case "review":
 		return "tuicr -r @"
 	case "vcs":
@@ -478,6 +510,47 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 	cmd := `bash -c 'b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"'`
 	if !exists || paneIsShell(tmuxClient, target) {
 		if err := tmuxClient.SendCommand(target, cmd); err != nil {
+			return err
+		}
+	}
+	if err := tmuxClient.SwitchToWindow(target); err != nil {
+		return err
+	}
+	return tmuxClient.SwitchClient(sessionName)
+}
+
+func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, ua deckui.UserAction) error {
+	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
+	id, err := tmuxClient.SessionIDByName(sessionName)
+	if err != nil {
+		return err
+	}
+	path := resolvePath(svc, item)
+	if id == "" {
+		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+			return err
+		}
+		id, _ = tmuxClient.SessionIDByName(sessionName)
+		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
+	}
+
+	windowName := ua.Name
+	target := sessionName + ":" + windowName
+	exists := false
+	windows, _ := tmuxClient.ListWindowsInSession(sessionName)
+	for _, w := range windows {
+		if w.Name == windowName {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path); err != nil {
+			return err
+		}
+	}
+	if !exists || paneIsShell(tmuxClient, target) {
+		if err := tmuxClient.SendCommand(target, ua.Command); err != nil {
 			return err
 		}
 	}

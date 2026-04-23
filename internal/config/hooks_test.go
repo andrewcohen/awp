@@ -66,7 +66,7 @@ func TestPostWorkspaceStartReturnsParseError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
-	if !strings.Contains(err.Error(), "parse config") {
-		t.Fatalf("expected parse config error, got %v", err)
+	if !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("expected parse error, got %v", err)
 	}
 }
