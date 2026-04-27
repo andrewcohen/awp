@@ -9,12 +9,30 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
+type writerReporter struct{ out io.Writer }
+
+func (w writerReporter) Step(label string) {
+	if w.out != nil {
+		fmt.Fprintf(w.out, "▶️ %s\n", label)
+	}
+}
+func (w writerReporter) Log(line string) {
+	if w.out != nil {
+		fmt.Fprintln(w.out, line)
+	}
+}
+
 func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error {
+	return runReviewWithReporter(runner, svc, prNumber, in, writerReporter{out: out})
+}
+
+func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter) error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp review must run inside tmux")
 	}
@@ -27,7 +45,7 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 	gh := github.New(runner)
 	tmuxClient := tmux.New(runner)
 
-	fmt.Fprintf(out, "▶️ Fetching PR #%d from GitHub...\n", prNumber)
+	reporter.Step(fmt.Sprintf("Fetch PR #%d from GitHub", prNumber))
 	pr, err := gh.FetchPR(prNumber)
 	if err != nil {
 		return err
@@ -37,15 +55,15 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 	if branch == "" || base == "" {
 		return fmt.Errorf("PR #%d missing head/base ref", prNumber)
 	}
-	fmt.Fprintf(out, "✅ PR #%d: %s (%s ← %s)\n", pr.Number, pr.Title, base, branch)
+	reporter.Log(fmt.Sprintf("PR #%d: %s (%s ← %s)", pr.Number, pr.Title, base, branch))
 
-	fmt.Fprintln(out, "▶️ Fetching refs (jj git fetch)...")
+	reporter.Step("jj git fetch")
 	if fetchOut, err := runner.Run(context.Background(), "", "jj", "git", "fetch"); err != nil {
 		return fmt.Errorf("jj git fetch: %w: %s", err, fetchOut)
 	}
 
 	wsName := fmt.Sprintf("pr-%d-%s", pr.Number, branch)
-	fmt.Fprintf(out, "▶️ Preparing jj workspace %q (bookmark %q)...\n", wsName, branch)
+	reporter.Step(fmt.Sprintf("Prepare jj workspace %s (bookmark %s)", wsName, branch))
 	name, wsPath, err := svc.PrepareWorkspace(wsName, branch, true)
 	if err != nil {
 		return fmt.Errorf("prepare workspace from bookmark %q: %w", branch, err)
@@ -72,19 +90,21 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 		return err
 	}
 	if !exists {
-		fmt.Fprintf(out, "▶️ Creating tmux session %q...\n", sessionName)
+		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
 		if err := tmuxClient.NewSession(sessionName, wsPath, "agent"); err != nil {
 			return err
 		}
 		if err := tmuxClient.SendCommand(sessionName+":agent", "pi "+shellSingleQuote(prompt)); err != nil {
 			return err
 		}
+		reporter.Step("Open tuicr window")
 		if err := tmuxClient.NewWindowInSession(sessionName, "tuicr", wsPath); err != nil {
 			return err
 		}
 		if err := tmuxClient.SendCommand(sessionName+":tuicr", tuicrCmd); err != nil {
 			return err
 		}
+		reporter.Step("Open PR description window")
 		if err := tmuxClient.NewWindowInSession(sessionName, prDescWindow, wsPath); err != nil {
 			return err
 		}
@@ -95,13 +115,13 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 			return err
 		}
 	} else {
-		fmt.Fprintf(out, "ℹ️ tmux session %q already exists; attaching.\n", sessionName)
+		reporter.Log(fmt.Sprintf("tmux session %s already exists; attaching", sessionName))
 	}
 
+	reporter.Step(fmt.Sprintf("Switch to %s", sessionName))
 	if err := tmuxClient.SwitchClient(sessionName); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "✅ Review workspace ready for PR #%d\n", pr.Number)
 	return nil
 }
 

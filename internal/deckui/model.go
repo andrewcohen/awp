@@ -46,12 +46,70 @@ type UserAction struct {
 }
 
 type ActionRequest struct {
-	Item   Item
-	Action Action
-	Arg    string
+	Item     Item
+	Action   Action
+	Arg      string
+	Reporter Reporter
 }
 
 type Handler func(ActionRequest) error
+
+// Reporter lets a handler push progress updates to the deck UI.
+// Step marks the previous step done and starts a new running step.
+// Log appends a line to the scrolling tail.
+// Calls are safe from any goroutine.
+type Reporter interface {
+	Step(label string)
+	Log(line string)
+}
+
+type ProgressStepState int
+
+const (
+	StepRunning ProgressStepState = iota
+	StepDone
+	StepError
+)
+
+type ProgressStep struct {
+	Label string
+	State ProgressStepState
+}
+
+type progressEventKind int
+
+const (
+	progressEventStep progressEventKind = iota
+	progressEventLog
+	progressEventDone
+)
+
+type progressEvent struct {
+	kind   progressEventKind
+	label  string
+	line   string
+	err    error
+	action Action
+	arg    string
+	item   Item
+}
+
+type chanReporter struct {
+	ch chan progressEvent
+}
+
+func (r *chanReporter) Step(label string) {
+	r.ch <- progressEvent{kind: progressEventStep, label: label}
+}
+
+func (r *chanReporter) Log(line string) {
+	r.ch <- progressEvent{kind: progressEventLog, line: line}
+}
+
+type progressEventMsg struct {
+	ev progressEvent
+	ok bool
+}
 
 // NewWorkspaceLauncher returns a tea.Cmd that suspends the deck, runs the
 // interactive new-workspace flow in the same terminal, and emits a result msg.
@@ -124,7 +182,17 @@ type Model struct {
 	actionAliasLookup map[string]UserAction
 	spinner           spinner.Model
 	busy              bool
+	progressMode      bool
+	progressTitle     string
+	progressSteps     []ProgressStep
+	progressLog       []string
+	progressErr       error
+	progressDone       bool
+	progressDoneAction Action
+	progressChan       chan progressEvent
 }
+
+const progressLogMax = 50
 
 type NewWorkspaceDoneMsg struct {
 	Err       error
@@ -265,17 +333,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+	case progressEventMsg:
+		if !msg.ok {
+			return m, nil
+		}
+		switch msg.ev.kind {
+		case progressEventStep:
+			if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
+				m.progressSteps[n-1].State = StepDone
+			}
+			m.progressSteps = append(m.progressSteps, ProgressStep{Label: msg.ev.label, State: StepRunning})
+		case progressEventLog:
+			m.progressLog = append(m.progressLog, msg.ev.line)
+			if len(m.progressLog) > progressLogMax {
+				m.progressLog = m.progressLog[len(m.progressLog)-progressLogMax:]
+			}
+		case progressEventDone:
+			return m.Update(actionResultMsg{action: msg.ev.action, arg: msg.ev.arg, item: msg.ev.item, err: msg.ev.err})
+		}
+		return m, waitForProgress(m.progressChan)
 	case actionResultMsg:
 		m.busy = false
+		m.progressDone = true
+		m.progressDoneAction = msg.action
 		if msg.err != nil {
+			m.progressErr = msg.err
+			if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
+				m.progressSteps[n-1].State = StepError
+			}
 			m.status = "error: " + msg.err.Error()
 			return m, nil
 		}
+		if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
+			m.progressSteps[n-1].State = StepDone
+		}
 		m.status = fmt.Sprintf("%s: %s", actionLabel(msg.action, msg.arg), msg.item.WorkspaceName)
 		if msg.action == ActionDelete {
-			if m.refresher != nil {
-				return m, m.refresher()
-			}
 			return m, nil
 		}
 		return m, tea.Quit
@@ -313,17 +406,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.progressMode {
+			if !m.progressDone {
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc", "q", "enter", "ctrl+c":
+				m.progressMode = false
+				m.progressSteps = nil
+				m.progressLog = nil
+				m.progressErr = nil
+				m.progressDone = false
+				if m.progressDoneAction == ActionDelete && m.refresher != nil {
+					return m, m.refresher()
+				}
+				return m, nil
+			}
+			return m, nil
+		}
 		if m.confirmDelete {
 			switch strings.ToLower(msg.String()) {
-			case "y":
+			case "y", "enter":
 				m.confirmDelete = false
 				if m.handler == nil {
 					m.status = "delete: handler not configured"
 					return m, nil
 				}
-				m.busy = true
-				m.status = fmt.Sprintf("delete %s...", m.deleteTarget.WorkspaceName)
-				return m, tea.Batch(m.spinner.Tick, m.dispatch(ActionDelete, m.deleteTarget, ""))
+				return m.startAction(ActionDelete, m.deleteTarget, "")
 			case "n", "esc", "q":
 				m.confirmDelete = false
 				m.status = "delete: cancelled"
@@ -389,8 +498,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pr := m.reviewPRs[m.reviewCursor]
 				item, _ := m.selected()
 				m.reviewMode = false
-				m.status = fmt.Sprintf("review PR #%d...", pr.Number)
-				return m, m.dispatch(ActionReview, item, strconv.Itoa(pr.Number))
+				return m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
 			}
 			return m, nil
 		}
@@ -515,8 +623,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.handler == nil {
 				return m, nil
 			}
-			m.status = "jump to last session..."
-			return m, m.dispatch(ActionLastSession, Item{}, "")
+			return m.startAction(ActionLastSession, Item{}, "")
 		case "D":
 			item, ok := m.selected()
 			if !ok {
@@ -575,15 +682,43 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	if !ok || m.handler == nil {
 		return m, nil
 	}
+	return m.startAction(a, item, arg)
+}
+
+func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd) {
 	m.busy = true
+	m.progressMode = true
+	m.progressTitle = fmt.Sprintf("%s · %s", actionLabel(a, arg), item.WorkspaceName)
+	m.progressSteps = nil
+	m.progressLog = nil
+	m.progressErr = nil
+	m.progressDone = false
+	m.progressChan = make(chan progressEvent, 32)
 	m.status = fmt.Sprintf("%s %s...", actionLabel(a, arg), item.WorkspaceName)
-	return m, tea.Batch(m.spinner.Tick, m.dispatch(a, item, arg))
+	return *m, tea.Batch(m.spinner.Tick, m.dispatch(a, item, arg), waitForProgress(m.progressChan))
 }
 
 func (m Model) dispatch(a Action, item Item, arg string) tea.Cmd {
+	ch := m.progressChan
+	handler := m.handler
 	return func() tea.Msg {
-		err := m.handler(ActionRequest{Item: item, Action: a, Arg: arg})
-		return actionResultMsg{action: a, arg: arg, item: item, err: err}
+		reporter := &chanReporter{ch: ch}
+		err := handler(ActionRequest{Item: item, Action: a, Arg: arg, Reporter: reporter})
+		if ch != nil {
+			ch <- progressEvent{kind: progressEventDone, err: err, action: a, arg: arg, item: item}
+			close(ch)
+		}
+		return nil
+	}
+}
+
+func waitForProgress(ch chan progressEvent) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ev, ok := <-ch
+		return progressEventMsg{ev: ev, ok: ok}
 	}
 }
 
@@ -632,6 +767,12 @@ func (m Model) View() string {
 	if m.height == 0 {
 		m.height = 24
 	}
+	if m.progressMode {
+		body := m.renderProgress(m.width)
+		footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.progressFooter())
+		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	}
+
 	leftWidth := max(32, m.width/2)
 	if leftWidth > m.width-24 {
 		leftWidth = m.width - 24
@@ -850,6 +991,57 @@ func (m Model) renderReviewDetails(width int) string {
 		"esc    cancel",
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderProgress(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render(m.progressTitle)
+	rows := []string{title, ""}
+	if len(m.progressSteps) == 0 {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(m.spinner.View()+" starting..."))
+	}
+	for _, step := range m.progressSteps {
+		var glyph, color string
+		switch step.State {
+		case StepDone:
+			glyph, color = "✓", "82"
+		case StepError:
+			glyph, color = "✗", "203"
+		case StepRunning:
+			glyph, color = m.spinner.View(), "117"
+		default:
+			glyph, color = "○", "245"
+		}
+		line := fmt.Sprintf("%s %s", lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph), step.Label)
+		rows = append(rows, line)
+	}
+	if m.progressErr != nil {
+		rows = append(rows, "")
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("error: "+m.progressErr.Error()))
+	}
+	if len(m.progressLog) > 0 {
+		rows = append(rows, "")
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Bold(true).Render("log"))
+		tail := m.progressLog
+		maxLines := max(4, m.height-len(m.progressSteps)-10)
+		if maxLines > 0 && len(tail) > maxLines {
+			tail = tail[len(tail)-maxLines:]
+		}
+		logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width)
+		for _, line := range tail {
+			rows = append(rows, logStyle.Render(truncate(line, max(8, width-2))))
+		}
+	}
+	return lipgloss.NewStyle().Width(width).Padding(1, 2).Render(strings.Join(rows, "\n"))
+}
+
+func (m Model) progressFooter() string {
+	if m.progressDone {
+		if m.progressErr != nil {
+			return "press esc to dismiss"
+		}
+		return "done · press esc to dismiss"
+	}
+	return "running... (no cancel)"
 }
 
 func (m Model) renderDeleteConfirm() string {
