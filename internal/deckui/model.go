@@ -69,7 +69,8 @@ type PRItem struct {
 }
 
 // PRFetcher returns a tea.Cmd that fetches PRs and emits a PRFetchDoneMsg.
-type PRFetcher func() tea.Cmd
+// repoRoot scopes the fetch to the selected item's repository.
+type PRFetcher func(repoRoot string) tea.Cmd
 
 // PRFetchDoneMsg carries the result of an async PR list fetch.
 type PRFetchDoneMsg struct {
@@ -532,13 +533,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "review: not configured"
 				return m, nil
 			}
+			item, ok := m.selected()
+			if !ok || strings.TrimSpace(item.RepoRoot) == "" {
+				m.status = "review: select a row with a known repo"
+				return m, nil
+			}
 			m.reviewMode = true
 			m.reviewLoading = true
 			m.reviewPRs = nil
 			m.reviewCursor = 0
 			m.busy = true
 			m.status = "review: loading PRs..."
-			return m, tea.Batch(m.spinner.Tick, m.prFetcher())
+			return m, tea.Batch(m.spinner.Tick, m.prFetcher(item.RepoRoot))
 		case "n":
 			if m.newLauncher == nil {
 				m.status = "new: launcher not configured"

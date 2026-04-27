@@ -482,7 +482,7 @@ func TestViewShowsEmptyState(t *testing.T) {
 
 func TestReviewModeEntersOnR(t *testing.T) {
 	fetchCalled := false
-	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithPRFetcher(func() tea.Cmd {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws", RepoRoot: "/tmp"}}, nil).WithPRFetcher(func(string) tea.Cmd {
 		return func() tea.Msg {
 			fetchCalled = true
 			return PRFetchDoneMsg{PRs: []PRItem{{Number: 42, Title: "Fix bug", HeadRef: "fix", Author: "dev"}}}
@@ -517,7 +517,7 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 		got = req
 		return nil
 	}
-	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, handler).WithPRFetcher(func() tea.Cmd {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws", RepoRoot: "/tmp"}}, handler).WithPRFetcher(func(string) tea.Cmd {
 		return func() tea.Msg {
 			return PRFetchDoneMsg{PRs: []PRItem{
 				{Number: 10, Title: "First"},
@@ -558,7 +558,7 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 }
 
 func TestReviewModeCancelWithEsc(t *testing.T) {
-	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithPRFetcher(func() tea.Cmd {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws", RepoRoot: "/tmp"}}, nil).WithPRFetcher(func(string) tea.Cmd {
 		return func() tea.Msg {
 			return PRFetchDoneMsg{PRs: []PRItem{{Number: 1, Title: "PR"}}}
 		}
@@ -591,7 +591,7 @@ func TestReviewModeNoPRsFetcher(t *testing.T) {
 }
 
 func TestReviewModeEmptyPRs(t *testing.T) {
-	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil).WithPRFetcher(func() tea.Cmd {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws", RepoRoot: "/tmp"}}, nil).WithPRFetcher(func(string) tea.Cmd {
 		return func() tea.Msg {
 			return PRFetchDoneMsg{PRs: nil}
 		}
