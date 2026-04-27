@@ -83,6 +83,12 @@ func (s *deckFakeService) Delete(name string, force bool) error {
 	s.deleteForce = force
 	return nil
 }
+func (s *deckFakeService) DeleteWithOptions(name string, opts workspace.DeleteOptions) error {
+	if opts.DeferTmuxKill != nil {
+		opts.DeferTmuxKill(name)
+	}
+	return s.Delete(name, opts.Force)
+}
 func (s *deckFakeService) RecordSession(string, string, string) error { return nil }
 func (s *deckFakeService) UpdatePrompt(string, string) error          { return nil }
 func (s *deckFakeService) UpdateStatus(string, string) error          { return nil }

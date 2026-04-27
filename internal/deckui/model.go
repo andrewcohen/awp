@@ -160,6 +160,7 @@ type Model struct {
 	filter            string
 	confirmDelete     bool
 	deleteTarget      Item
+	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
 	findStage         findStage
 	findProject       string
@@ -399,7 +400,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.itemsCurrent = append([]Item(nil), msg.itemsCurrent...)
 		m.itemsAll = append([]Item(nil), msg.itemsAll...)
-		if items := m.items(); len(items) == 0 {
+		items := m.items()
+		if pending := m.pendingSelect; pending.WorkspaceName != "" {
+			for i, it := range items {
+				if it.WorkspaceName == pending.WorkspaceName && (pending.ProjectName == "" || it.ProjectName == pending.ProjectName) {
+					m.cursor = i
+					break
+				}
+			}
+			m.pendingSelect = Item{}
+		}
+		if len(items) == 0 {
 			m.cursor = 0
 		} else if m.cursor >= len(items) {
 			m.cursor = len(items) - 1
@@ -418,6 +429,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.progressErr = nil
 				m.progressDone = false
 				if m.progressDoneAction == ActionDelete && m.refresher != nil {
+					m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
 					return m, m.refresher()
 				}
 				return m, nil
