@@ -99,6 +99,7 @@ type Service interface {
 	Bootstrap(name string) error
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
+	DeleteWithOptions(name string, opts DeleteOptions) error
 	RecordSession(workspaceName, sessionID, sessionName string) error
 	UpdatePrompt(workspaceName, prompt string) error
 	UpdateStatus(workspaceName, status string) error
@@ -730,7 +731,21 @@ func (s *service) Rename(oldName, newName string) error {
 	return s.store.Save(repoRoot, entries)
 }
 
+// DeleteOptions controls Delete behavior.
+type DeleteOptions struct {
+	Force bool
+	// DeferTmuxKill, when non-nil, is called with the tmux window name in
+	// place of an immediate KillWindow. Callers can queue the kill to run
+	// after their UI (e.g. a tmux popup) has closed.
+	DeferTmuxKill func(window string)
+}
+
 func (s *service) Delete(name string, force bool) error {
+	return s.DeleteWithOptions(name, DeleteOptions{Force: force})
+}
+
+func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
+	force := opts.Force
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
@@ -814,10 +829,15 @@ func (s *service) Delete(name string, force bool) error {
 
 	hasWindow, _ := s.tmux.WindowExists(normalized)
 	if hasWindow {
-		if err := s.tmux.KillWindow(normalized); err != nil {
-			return err
+		if opts.DeferTmuxKill != nil {
+			opts.DeferTmuxKill(normalized)
+			s.logf("⏳ Queued tmux window %q for removal after popup exits", normalized)
+		} else {
+			if err := s.tmux.KillWindow(normalized); err != nil {
+				return err
+			}
+			s.logf("✅ Removed tmux window %q", normalized)
 		}
-		s.logf("✅ Removed tmux window %q", normalized)
 	} else {
 		s.logf("⏭️ Skipped tmux window removal (%q not present)", normalized)
 	}

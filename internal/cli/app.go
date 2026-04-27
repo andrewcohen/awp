@@ -70,6 +70,8 @@ func (a *App) Run(args []string) error {
 		return a.runDiff(args[1:])
 	case "deck":
 		return a.runDeck(args[1:])
+	case "deck-cleanup":
+		return runDeckCleanup(a.runner, a.out)
 	case "review":
 		return a.runReview(args[1:])
 	default:
@@ -432,7 +434,7 @@ func (a *App) runDeck(args []string) error {
 		_, _ = fmt.Fprintln(a.out, "Usage: awp deck")
 		_, _ = fmt.Fprintln(a.out, "")
 		_, _ = fmt.Fprintln(a.out, "Intended invocation: tmux popup overlay. Add this to ~/.tmux.conf:")
-		_, _ = fmt.Fprintln(a.out, "  bind a display-popup -E -w 90% -h 90% awp deck")
+		_, _ = fmt.Fprintln(a.out, "  bind a display-popup -E -w 90% -h 90% awp deck \\; run-shell \"awp deck-cleanup\"")
 		_, _ = fmt.Fprintln(a.out, "")
 		_, _ = fmt.Fprintln(a.out, "Selecting a workspace summons or focuses session [awp]<repo>__<workspace>.")
 		return nil

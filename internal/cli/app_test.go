@@ -65,6 +65,9 @@ func (f *fakeService) Delete(name string, force bool) error {
 	f.deleteName, f.deleteForce = name, force
 	return f.deleteErr
 }
+func (f *fakeService) DeleteWithOptions(name string, opts workspace.DeleteOptions) error {
+	return f.Delete(name, opts.Force)
+}
 func (f *fakeService) RecordSession(workspaceName, sessionID, sessionName string) error {
 	f.recordedWorkspace = workspaceName
 	f.recordedSessionID = sessionID

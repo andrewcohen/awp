@@ -289,6 +289,14 @@ func (c *Client) PaneCurrentCommand(target string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func (c *Client) CurrentSessionID() (string, error) {
+	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "#{session_id}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func (c *Client) CurrentSessionName() (string, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "#{session_name}")
 	if err != nil {

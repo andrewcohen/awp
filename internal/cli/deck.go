@@ -371,7 +371,18 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		return tmuxClient.SwitchClientLast()
 	case deckui.ActionDelete:
 		reporter.Step(fmt.Sprintf("Delete workspace %s", item.WorkspaceName))
-		if err := svc.Delete(item.WorkspaceName, true); err != nil {
+		opts := workspace.DeleteOptions{Force: true}
+		var queuePath string
+		if sessionID, err := tmuxClient.CurrentSessionID(); err == nil {
+			if path, ok := pendingKillsPath(sessionID); ok {
+				queuePath = path
+				_ = appendPendingAction(path, "switch", DeckSessionName(item.ProjectName, "default"))
+				opts.DeferTmuxKill = func(window string) {
+					_ = appendPendingKill(path, window)
+				}
+			}
+		}
+		if err := svc.DeleteWithOptions(item.WorkspaceName, opts); err != nil {
 			return err
 		}
 		id, err := tmuxClient.SessionIDByName(sessionName)
@@ -379,9 +390,14 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 			return err
 		}
 		if id != "" {
-			reporter.Step(fmt.Sprintf("Kill tmux session %s", sessionName))
-			if err := tmuxClient.KillSession(sessionName); err != nil {
-				return err
+			if queuePath != "" {
+				reporter.Step(fmt.Sprintf("Queue tmux session removal %s", sessionName))
+				_ = appendPendingAction(queuePath, "session", sessionName)
+			} else {
+				reporter.Step(fmt.Sprintf("Kill tmux session %s", sessionName))
+				if err := tmuxClient.KillSession(sessionName); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
