@@ -19,6 +19,9 @@ func execCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
 				continue
 			}
 			m := c()
+			if m == nil {
+				continue
+			}
 			if _, ok := m.(spinner.TickMsg); ok {
 				continue
 			}
@@ -169,16 +172,21 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 		t.Fatal("expected command after confirmation")
 	}
 	msg := execCmd(t, cmd)
-	updated, cmd = updated.Update(msg)
-	if cmd == nil {
-		t.Fatal("expected refresh command after successful delete")
-	}
-	msg = cmd()
 	updated, _ = updated.Update(msg)
 	m = updated.(Model)
 	if !called {
 		t.Fatal("expected delete action to be called")
 	}
+	if !m.progressDone || m.progressDoneAction != ActionDelete {
+		t.Fatalf("expected progress done after delete, got done=%v action=%v", m.progressDone, m.progressDoneAction)
+	}
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected refresh command after esc dismisses delete progress")
+	}
+	msg = cmd()
+	updated, _ = updated.Update(msg)
+	m = updated.(Model)
 	if !refreshed {
 		t.Fatal("expected refresh to run")
 	}
@@ -542,7 +550,7 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected command on enter")
 	}
-	msg = cmd()
+	msg = execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m = updated.(Model)
 
@@ -695,3 +703,83 @@ func TestActionModeNoActionsConfigured(t *testing.T) {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }
+
+func TestProgressEventStepAndDoneAdvancesState(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
+	model.progressMode = true
+	model.progressChan = make(chan progressEvent, 8)
+	var updated tea.Model = model
+
+	feed := func(ev progressEvent) {
+		updated, _ = updated.Update(progressEventMsg{ev: ev, ok: true})
+	}
+	feed(progressEvent{kind: progressEventStep, label: "first step"})
+	feed(progressEvent{kind: progressEventLog, line: "hello"})
+	feed(progressEvent{kind: progressEventStep, label: "second step"})
+	feed(progressEvent{kind: progressEventDone, action: ActionSummon, item: Item{WorkspaceName: "ws"}})
+
+	m := updated.(Model)
+	if len(m.progressSteps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(m.progressSteps))
+	}
+	if m.progressSteps[0].Label != "first step" || m.progressSteps[0].State != StepDone {
+		t.Fatalf("step 0 wrong: %+v", m.progressSteps[0])
+	}
+	if m.progressSteps[1].Label != "second step" || m.progressSteps[1].State != StepDone {
+		t.Fatalf("step 1 wrong: %+v", m.progressSteps[1])
+	}
+	if len(m.progressLog) != 1 || m.progressLog[0] != "hello" {
+		t.Fatalf("log wrong: %+v", m.progressLog)
+	}
+	if !m.progressDone {
+		t.Fatal("expected done")
+	}
+}
+
+func TestProgressEventDoneWithErrorMarksRunningStepError(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
+	model.progressMode = true
+	model.progressChan = make(chan progressEvent, 8)
+	var updated tea.Model = model
+
+	feed := func(ev progressEvent) {
+		updated, _ = updated.Update(progressEventMsg{ev: ev, ok: true})
+	}
+	feed(progressEvent{kind: progressEventStep, label: "doing thing"})
+	feed(progressEvent{kind: progressEventDone, err: errTest, action: ActionReview, item: Item{WorkspaceName: "ws"}})
+
+	m := updated.(Model)
+	if !m.progressMode || !m.progressDone || m.progressErr == nil {
+		t.Fatalf("expected progress mode + done + err, got mode=%v done=%v err=%v", m.progressMode, m.progressDone, m.progressErr)
+	}
+	if m.progressSteps[0].State != StepError {
+		t.Fatalf("expected error state on running step, got %v", m.progressSteps[0].State)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.progressMode {
+		t.Fatal("expected progress mode dismissed after esc")
+	}
+}
+
+func TestStartActionEntersProgressMode(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected cmd on enter")
+	}
+	m := updated.(Model)
+	if !m.progressMode {
+		t.Fatal("expected progress mode active")
+	}
+	if m.progressTitle == "" {
+		t.Fatal("expected non-empty progress title")
+	}
+}
+
+var errTest = fmtErr("boom")
+
+type fmtErr string
+
+func (e fmtErr) Error() string { return string(e) }

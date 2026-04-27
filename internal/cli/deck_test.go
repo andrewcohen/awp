@@ -97,7 +97,7 @@ func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws"}
 
-	if err := openNamedWindow(client, svc, item, ""); err != nil {
+	if err := openNamedWindow(client, svc, item, "", noopReporter{}); err != nil {
 		t.Fatalf("openNamedWindow: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestOpenNamedWindowReusesExistingNamedWindowAtShellAndResendsCommand(t *tes
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws"}
 
-	if err := openNamedWindow(client, svc, item, "editor"); err != nil {
+	if err := openNamedWindow(client, svc, item, "editor", noopReporter{}); err != nil {
 		t.Fatalf("openNamedWindow: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestOpenNamedWindowReusesExistingNamedWindowInTUIAndDoesNotSendCommand(t *t
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws"}
 
-	if err := openNamedWindow(client, svc, item, "editor"); err != nil {
+	if err := openNamedWindow(client, svc, item, "editor", noopReporter{}); err != nil {
 		t.Fatalf("openNamedWindow: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestHandleDeckActionDeleteUsesForceAndKillsSession(t *testing.T) {
 	svc := &deckFakeService{}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa"}
 
-	if err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionDelete}); err != nil {
+	if err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionDelete}, noopReporter{}); err != nil {
 		t.Fatalf("handleDeckAction: %v", err)
 	}
 	if svc.deleteName != "qa" || !svc.deleteForce {
