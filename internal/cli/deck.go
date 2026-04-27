@@ -149,8 +149,12 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			if err != nil {
 				return fmt.Errorf("review: invalid PR number %q", req.Arg)
 			}
-			fr := fixedDirRunner{base: runner, dir: repoRoot}
-			reviewSvc := newDeckActionServiceWithIO(runner, repoRoot, nil, io.Discard)
+			dir := strings.TrimSpace(req.Item.RepoRoot)
+			if dir == "" {
+				dir = repoRoot
+			}
+			fr := fixedDirRunner{base: runner, dir: dir}
+			reviewSvc := newDeckActionServiceWithIO(runner, dir, nil, io.Discard)
 			return runReviewWithCharm(fr, reviewSvc, n, nil, io.Discard)
 		}
 		if req.Action == deckui.ActionCustom {
@@ -185,9 +189,13 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.RefreshDoneMsg(items, allItems, err)
 		}
 	}
-	prFetcher := func() tea.Cmd {
+	prFetcher := func(itemRepoRoot string) tea.Cmd {
 		return func() tea.Msg {
-			gh := github.New(fixedDirRunner{base: runner, dir: repoRoot})
+			dir := strings.TrimSpace(itemRepoRoot)
+			if dir == "" {
+				dir = repoRoot
+			}
+			gh := github.New(fixedDirRunner{base: runner, dir: dir})
 			prs, err := gh.ListPRs()
 			if err != nil {
 				return deckui.PRFetchDoneMsg{Err: err}
