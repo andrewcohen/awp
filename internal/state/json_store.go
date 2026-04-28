@@ -108,6 +108,9 @@ func (s *JSONStore) writeGlobalState(state globalState) error {
 	return nil
 }
 
+// GlobalStorePath returns the path of the global workspace state JSON file.
+func GlobalStorePath() (string, error) { return globalStorePath() }
+
 func globalStorePath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {

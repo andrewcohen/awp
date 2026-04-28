@@ -11,6 +11,7 @@ import (
 
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
+	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -42,6 +43,14 @@ func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, i
 	if runner == nil {
 		runner = NewExecRunner()
 	}
+	// Always run jj/git operations from the default workspace (the source repo
+	// root) so a stale secondary workspace can't interfere with the new PR
+	// workspace's bookmark resolution.
+	defaultRoot, derr := jj.New(runner).SourceRepoRoot()
+	if derr != nil || strings.TrimSpace(defaultRoot) == "" {
+		return fmt.Errorf("resolve default workspace: %w", derr)
+	}
+	runner = fixedDirRunner{base: runner, dir: defaultRoot}
 	gh := github.New(runner)
 	tmuxClient := tmux.New(runner)
 
@@ -58,7 +67,7 @@ func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, i
 	reporter.Log(fmt.Sprintf("PR #%d: %s (%s ← %s)", pr.Number, pr.Title, base, branch))
 
 	reporter.Step("jj git fetch")
-	if fetchOut, err := runner.Run(context.Background(), "", "jj", "git", "fetch"); err != nil {
+	if fetchOut, err := runner.Run(context.Background(), defaultRoot, "jj", "git", "fetch"); err != nil {
 		return fmt.Errorf("jj git fetch: %w: %s", err, fetchOut)
 	}
 

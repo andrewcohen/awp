@@ -764,17 +764,28 @@ func TestProgressEventDoneWithErrorMarksRunningStepError(t *testing.T) {
 }
 
 func TestStartActionEntersProgressMode(t *testing.T) {
+	// Summon is a quick action: no progress UI, just busy.
 	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected cmd on enter")
 	}
 	m := updated.(Model)
-	if !m.progressMode {
-		t.Fatal("expected progress mode active")
+	if m.progressMode {
+		t.Fatal("did not expect progress mode for summon")
 	}
-	if m.progressTitle == "" {
-		t.Fatal("expected non-empty progress title")
+	if !m.busy {
+		t.Fatal("expected busy spinner")
+	}
+}
+
+func TestDeleteEntersProgressMode(t *testing.T) {
+	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m := updated.(Model)
+	if !m.progressMode {
+		t.Fatal("expected progress mode for delete")
 	}
 }
 

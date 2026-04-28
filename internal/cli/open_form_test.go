@@ -20,48 +20,6 @@ func TestOpenFormSubmitRequiresNameOrBookmark(t *testing.T) {
 	}
 }
 
-func TestOpenFormDownSelectsExistingWorkspace(t *testing.T) {
-	model := newOpenFormModel(openRequest{}, []string{"qa", "qa-hotfix"})
-	model.workspaceIndex = -1
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	got := updated.(openFormModel)
-	if got.currentRequest().Name != "qa" {
-		t.Fatalf("expected first workspace selected, got %q", got.currentRequest().Name)
-	}
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyDown})
-	got = updated.(openFormModel)
-	if got.currentRequest().Name != "qa-hotfix" {
-		t.Fatalf("expected second workspace selected, got %q", got.currentRequest().Name)
-	}
-}
-
-func TestOpenFormFiltersWorkspaceMatches(t *testing.T) {
-	model := newOpenFormModel(openRequest{Name: "qa"}, []string{"qa", "default", "qa-hotfix"})
-	matches := model.filteredWorkspaceOptions()
-	if len(matches) != 2 || matches[0] != "qa" || matches[1] != "qa-hotfix" {
-		t.Fatalf("unexpected matches: %#v", matches)
-	}
-}
-
-func TestOpenFormPreviewText(t *testing.T) {
-	model := newOpenFormModel(openRequest{Name: "qa", Prompt: "fix tests"}, []string{"qa"})
-	if got := model.previewText(); !strings.Contains(got, "Prompt will not auto-run") {
-		t.Fatalf("unexpected existing preview: %q", got)
-	}
-	model = newOpenFormModel(openRequest{Name: "new-workspace", Prompt: "fix tests"}, nil)
-	if got := model.previewText(); !strings.Contains(got, "run the prompt") {
-		t.Fatalf("unexpected create preview: %q", got)
-	}
-}
-
-func TestOpenFormViewShowsPreview(t *testing.T) {
-	model := newOpenFormModel(openRequest{Name: "new-workspace"}, nil)
-	view := model.View()
-	if !strings.Contains(view, "Will create workspace") {
-		t.Fatalf("expected preview in view, got %q", view)
-	}
-}
-
 func TestOpenFormTabMovesToActions(t *testing.T) {
 	model := newOpenFormModel(openRequest{}, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})

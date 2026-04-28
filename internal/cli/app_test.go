@@ -284,6 +284,9 @@ func TestRunOpenInteractiveSubmitImpliesYes(t *testing.T) {
 	app.in = bytes.NewBuffer(nil)
 	app.isPiped = func(io.Reader) bool { return false }
 	app.isInteractive = func(io.Reader) bool { return true }
+	app.newFlow = func(Runner, io.Reader, io.Writer) (newFlowResult, error) {
+		return newFlowResult{kind: newFlowDefault}, nil
+	}
 	app.openForm = func(initial openRequest, workspaces []string, _ io.Reader, _ io.Writer) (openRequest, error) {
 		initial.Name = "new-workspace"
 		initial.Yes = false

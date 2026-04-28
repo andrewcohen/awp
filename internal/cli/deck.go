@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -81,6 +82,8 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 type deckOpenCommand struct {
 	runner   Runner
 	repoRoot string
+	initial  openRequest
+	result   *openRequest
 	stdin    io.Reader
 	stdout   io.Writer
 	stderr   io.Writer
@@ -91,7 +94,6 @@ func (c *deckOpenCommand) SetStdout(w io.Writer) { c.stdout = w }
 func (c *deckOpenCommand) SetStderr(w io.Writer) { c.stderr = w }
 
 func (c *deckOpenCommand) Run() error {
-	fr := fixedDirRunner{base: c.runner, dir: c.repoRoot}
 	svc := newDeckActionServiceWithIO(c.runner, c.repoRoot, c.stdin, c.stdout)
 	entries, err := svc.List()
 	if err != nil {
@@ -101,7 +103,7 @@ func (c *deckOpenCommand) Run() error {
 	for _, entry := range entries {
 		options = append(options, entry.Name)
 	}
-	req, err := runOpenWithCharm(openRequest{}, options, c.stdin, c.stdout)
+	req, err := runOpenWithCharm(c.initial, options, c.stdin, c.stdout)
 	if err != nil {
 		if err.Error() == "open cancelled" {
 			return ErrOpenCancelled
@@ -109,7 +111,8 @@ func (c *deckOpenCommand) Run() error {
 		return err
 	}
 	req.Yes = true
-	return openWorkspaceInDeckMode(fr, svc, req)
+	c.result = &req
+	return nil
 }
 
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
@@ -149,6 +152,24 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		actionsByName[a.Name] = a
 	}
 	handler := func(req deckui.ActionRequest) error {
+		if req.Action == deckui.ActionCreateWorkspace {
+			dir := strings.TrimSpace(req.Item.RepoRoot)
+			if dir == "" {
+				dir = repoRoot
+			}
+			fr := fixedDirRunner{base: runner, dir: dir}
+			actionSvc := newDeckActionService(runner, dir, in)
+			reporter := req.Reporter
+			if reporter == nil {
+				reporter = noopReporter{}
+			}
+			return openWorkspaceWithReporter(fr, actionSvc, openRequest{
+				Name:     req.Workspace.Name,
+				Bookmark: req.Workspace.Bookmark,
+				Prompt:   req.Workspace.Prompt,
+				Yes:      true,
+			}, reporter)
+		}
 		if req.Action == deckui.ActionReview {
 			n, err := strconv.Atoi(req.Arg)
 			if err != nil {
@@ -187,14 +208,48 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 		return handleDeckAction(tmuxClient, actionSvc, runner, req, reporter)
 	}
-	launcher := func(repoRoot string) tea.Cmd {
-		cmd := &deckOpenCommand{runner: runner, repoRoot: repoRoot}
+	launcher := func(itemRoot string, initial deckui.NewWorkspaceInitial) tea.Cmd {
+		cmd := &deckOpenCommand{
+			runner:   runner,
+			repoRoot: itemRoot,
+			initial:  openRequest{Bookmark: initial.Bookmark},
+		}
 		return tea.Exec(cmd, func(err error) tea.Msg {
 			if err != nil && errors.Is(err, ErrOpenCancelled) {
 				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
 			}
-			return deckui.NewWorkspaceDoneMsg{Err: err}
+			if err != nil {
+				return deckui.NewWorkspaceDoneMsg{Err: err}
+			}
+			if cmd.result == nil {
+				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
+			}
+			return deckui.NewWorkspaceDoneMsg{
+				Request: &deckui.NewWorkspaceRequest{
+					Name:     cmd.result.Name,
+					Bookmark: cmd.result.Bookmark,
+					Prompt:   cmd.result.Prompt,
+				},
+				RepoRoot: itemRoot,
+			}
 		})
+	}
+	bookmarkFetcher := func(itemRepoRoot string) tea.Cmd {
+		return func() tea.Msg {
+			dir := strings.TrimSpace(itemRepoRoot)
+			if dir == "" {
+				dir = repoRoot
+			}
+			fr := fixedDirRunner{base: runner, dir: dir}
+			if out, err := fr.Run(context.Background(), dir, "jj", "git", "fetch"); err != nil {
+				return deckui.BookmarksDoneMsg{Err: fmt.Errorf("jj git fetch: %w: %s", err, out)}
+			}
+			names, err := jj.New(fr).AllBookmarks()
+			if err != nil {
+				return deckui.BookmarksDoneMsg{Err: err}
+			}
+			return deckui.BookmarksDoneMsg{Bookmarks: names}
+		}
 	}
 	refresher := func() tea.Cmd {
 		return func() tea.Msg {
@@ -230,7 +285,21 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.PRFetchDoneMsg{PRs: items}
 		}
 	}
-	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).WithPRFetcher(prFetcher).WithUserActions(userActions)
+	stateEditor := func() tea.Cmd {
+		path, err := state.GlobalStorePath()
+		if err != nil {
+			return func() tea.Msg { return deckui.StateEditDoneMsg{Err: err} }
+		}
+		editor := strings.TrimSpace(os.Getenv("EDITOR"))
+		if editor == "" {
+			return func() tea.Msg { return deckui.StateEditDoneMsg{Err: fmt.Errorf("$EDITOR is not set")} }
+		}
+		c := exec.Command("sh", "-c", `exec "$EDITOR" "$1"`, "sh", path)
+		return tea.ExecProcess(c, func(err error) tea.Msg {
+			return deckui.StateEditDoneMsg{Err: err}
+		})
+	}
+	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).WithStateEditor(stateEditor).WithUserActions(userActions)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err

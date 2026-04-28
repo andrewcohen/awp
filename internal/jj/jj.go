@@ -172,6 +172,34 @@ func (c *Client) WorkspaceRevision(name string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// AllBookmarks lists every bookmark visible to jj, deduped to a logical name.
+// A remote bookmark "main@origin" is folded into "main"; if a local bookmark
+// of the same name exists it wins. The returned slice preserves the first-seen
+// order from `jj bookmark list --all`.
+func (c *Client) AllBookmarks() ([]string, error) {
+	out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "list", "--all-remotes", "-T", "name ++ \"\\n\"")
+	if err != nil {
+		return nil, formatCommandError("list bookmarks", err, out)
+	}
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, raw := range parseWorkspaceNames(out) {
+		name := raw
+		if idx := strings.Index(name, "@"); idx > 0 {
+			name = name[:idx]
+		}
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
 func (c *Client) BookmarksAtRevision(revision string) ([]string, error) {
 	out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "list", "-r", revision, "-T", "name ++ \"\\n\"")
 	if err != nil {
