@@ -526,7 +526,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.progressErr = nil
 				m.progressDone = false
 				if m.progressDoneAction == ActionDelete && m.refresher != nil {
-					m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
+					if m.deleteTarget.Current {
+						m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
+					}
 					return m, m.refresher()
 				}
 				return m, nil

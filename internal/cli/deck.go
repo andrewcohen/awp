@@ -445,7 +445,9 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		if sessionID, err := tmuxClient.CurrentSessionID(); err == nil {
 			if path, ok := pendingKillsPath(sessionID); ok {
 				queuePath = path
-				_ = appendPendingAction(path, "switch", DeckSessionName(item.ProjectName, "default"))
+				if item.Current {
+					_ = appendPendingAction(path, "switch", DeckSessionName(item.ProjectName, "default"))
+				}
 				opts.DeferTmuxKill = func(window string) {
 					_ = appendPendingKill(path, window)
 				}
