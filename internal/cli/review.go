@@ -89,10 +89,10 @@ func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, i
 	sessionName := DeckSessionName(project, name)
 
 	prompt := buildReviewPrompt(pr, base)
-	tuicrCmd := fmt.Sprintf("tuicr -r %s..@", shellSingleQuote(base))
+	reviewCmd := fmt.Sprintf("tuicr -r %s..@", shellSingleQuote(base))
 	prDescWindow := "pr description"
 	prDescTarget := sessionName + ":" + prDescWindow
-	prDescCmd := fmt.Sprintf("GH_FORCE_TTY=100%% GH_PAGER='less -R' gh pr view %d", pr.Number)
+	prDescCmd := fmt.Sprintf("GH_FORCE_TTY=100%% gh pr view %d | less -R", pr.Number)
 
 	exists, err := tmuxClient.SessionExists(sessionName)
 	if err != nil {
@@ -100,24 +100,24 @@ func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, i
 	}
 	if !exists {
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
-		if err := tmuxClient.NewSession(sessionName, wsPath, "agent"); err != nil {
+		if err := tmuxClient.NewSession(sessionName, wsPath, prDescWindow); err != nil {
+			return err
+		}
+		if err := tmuxClient.SendCommand(prDescTarget, prDescCmd); err != nil {
+			return err
+		}
+		reporter.Step("Open agent window")
+		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath); err != nil {
 			return err
 		}
 		if err := tmuxClient.SendCommand(sessionName+":agent", "pi "+shellSingleQuote(prompt)); err != nil {
 			return err
 		}
-		reporter.Step("Open tuicr window")
-		if err := tmuxClient.NewWindowInSession(sessionName, "tuicr", wsPath); err != nil {
+		reporter.Step("Open review window")
+		if err := tmuxClient.NewWindowInSession(sessionName, "review", wsPath); err != nil {
 			return err
 		}
-		if err := tmuxClient.SendCommand(sessionName+":tuicr", tuicrCmd); err != nil {
-			return err
-		}
-		reporter.Step("Open PR description window")
-		if err := tmuxClient.NewWindowInSession(sessionName, prDescWindow, wsPath); err != nil {
-			return err
-		}
-		if err := tmuxClient.SendCommand(prDescTarget, prDescCmd); err != nil {
+		if err := tmuxClient.SendCommand(sessionName+":review", reviewCmd); err != nil {
 			return err
 		}
 		if err := tmuxClient.SwitchToWindow(prDescTarget); err != nil {
