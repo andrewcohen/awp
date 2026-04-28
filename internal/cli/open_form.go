@@ -17,10 +17,11 @@ import (
 )
 
 var (
-	openFormKeyMove   = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "move"))
-	openFormKeySubmit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit"))
-	openFormKeyEditor = key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "prompt in $EDITOR"))
-	openFormKeyCancel = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
+	openFormKeyMove    = key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "move"))
+	openFormKeySubmit  = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit / focus submit"))
+	openFormKeyNewline = key.NewBinding(key.WithKeys("shift+enter"), key.WithHelp("shift+enter", "newline (prompt)"))
+	openFormKeyEditor  = key.NewBinding(key.WithKeys("ctrl+g"), key.WithHelp("ctrl+g", "prompt in $EDITOR"))
+	openFormKeyCancel  = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
 )
 
 type openRequest struct {
@@ -31,15 +32,13 @@ type openRequest struct {
 }
 
 type openFormModel struct {
-	workspaceOptions []string
-	activeField      int
-	actionIndex      int
-	workspaceIndex   int
-	workspaceInput   textinput.Model
-	bookmarkInput    textinput.Model
-	promptInput      textarea.Model
-	cancel           bool
-	err              string
+	activeField    int
+	actionIndex    int
+	workspaceInput textinput.Model
+	bookmarkInput  textinput.Model
+	promptInput    textarea.Model
+	cancel         bool
+	err            string
 }
 
 type promptEditedMsg struct {
@@ -47,9 +46,9 @@ type promptEditedMsg struct {
 	err   error
 }
 
-func newOpenFormModel(initial openRequest, workspaces []string) openFormModel {
+func newOpenFormModel(initial openRequest, _ []string) openFormModel {
 	workspaceInput := textinput.New()
-	workspaceInput.Placeholder = "existing name or new workspace name"
+	workspaceInput.Placeholder = "workspace name (leave blank to derive from bookmark)"
 	workspaceInput.SetValue(strings.TrimSpace(initial.Name))
 	workspaceInput.Prompt = ""
 	workspaceInput.CharLimit = 0
@@ -71,14 +70,13 @@ func newOpenFormModel(initial openRequest, workspaces []string) openFormModel {
 	promptInput.SetWidth(56)
 	promptInput.SetHeight(4)
 	promptInput.ShowLineNumbers = false
+	promptInput.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"), key.WithHelp("shift+enter", "newline"))
 	promptInput.Blur()
 
 	m := openFormModel{
-		workspaceOptions: append([]string(nil), workspaces...),
-		workspaceIndex:   selectedWorkspaceIndex(workspaces, initial.Name),
-		workspaceInput:   workspaceInput,
-		bookmarkInput:    bookmarkInput,
-		promptInput:      promptInput,
+		workspaceInput: workspaceInput,
+		bookmarkInput:  bookmarkInput,
+		promptInput:    promptInput,
 	}
 	m.setFocus(0)
 	return m
@@ -145,20 +143,14 @@ func (m openFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activeField == 3 {
 				return m.handleSubmit()
 			}
+			m.setFocus(3)
+			return m, nil
 		case "up":
-			if m.activeField == 0 {
-				m.handleWorkspaceUp()
-				return m, nil
-			}
 			if m.activeField == 3 {
 				m.handleActionLeft()
 				return m, nil
 			}
 		case "down":
-			if m.activeField == 0 {
-				m.handleWorkspaceDown()
-				return m, nil
-			}
 			if m.activeField == 3 {
 				m.handleActionRight()
 				return m, nil
@@ -180,7 +172,6 @@ func (m openFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.activeField {
 	case 0:
 		m.workspaceInput, cmd = m.workspaceInput.Update(msg)
-		m.workspaceIndex = selectedWorkspaceIndex(m.filteredWorkspaceOptions(), m.workspaceInput.Value())
 	case 1:
 		m.bookmarkInput, cmd = m.bookmarkInput.Update(msg)
 	case 2:
@@ -200,32 +191,6 @@ func (m *openFormModel) handleSubmit() (tea.Model, tea.Cmd) {
 		return *m, nil
 	}
 	return *m, tea.Quit
-}
-
-func (m *openFormModel) handleWorkspaceUp() {
-	options := m.filteredWorkspaceOptions()
-	if len(options) == 0 {
-		return
-	}
-	if m.workspaceIndex <= 0 {
-		m.workspaceIndex = 0
-	} else {
-		m.workspaceIndex--
-	}
-	m.workspaceInput.SetValue(options[m.workspaceIndex])
-}
-
-func (m *openFormModel) handleWorkspaceDown() {
-	options := m.filteredWorkspaceOptions()
-	if len(options) == 0 {
-		return
-	}
-	if m.workspaceIndex < 0 {
-		m.workspaceIndex = 0
-	} else if m.workspaceIndex < len(options)-1 {
-		m.workspaceIndex++
-	}
-	m.workspaceInput.SetValue(options[m.workspaceIndex])
 }
 
 func (m *openFormModel) handleActionLeft() {
@@ -272,15 +237,13 @@ func (m openFormModel) View() string {
 
 	theme := charm.DefaultTheme()
 	card := theme.Card.Width(cardWidth)
-	title := theme.Title.Render("Open workspace")
-	subtitle := theme.Subtitle.Render(wrapText("Open an existing workspace or create a new one.", contentWidth))
+	title := theme.Title.Render("New workspace")
+	subtitle := theme.Subtitle.Render(wrapText("Create a new workspace.", contentWidth))
 	label := theme.Label
 	focused := theme.Focused
 	dim := theme.Dim
 	hint := theme.Hint
 	errorStyle := theme.Error
-	chip := theme.Chip
-	chipActive := theme.ChipActive
 	fieldLabel := func(index int, name string) string {
 		marker := "  "
 		if m.activeField == index {
@@ -295,9 +258,6 @@ func (m openFormModel) View() string {
 		return dim.Render("○ " + text)
 	}
 
-	filtered := m.filteredWorkspaceOptions()
-	preview := m.previewText()
-
 	var b strings.Builder
 	b.WriteString(title)
 	b.WriteString("\n")
@@ -306,26 +266,6 @@ func (m openFormModel) View() string {
 	b.WriteString(fieldLabel(0, "Workspace"))
 	b.WriteString("\n")
 	b.WriteString(m.workspaceInput.View())
-	if len(filtered) > 0 {
-		b.WriteString("\n")
-		b.WriteString(dim.Render("   Existing workspaces: "))
-		for i, option := range filtered {
-			if i > 0 {
-				b.WriteString(" ")
-			}
-			if i == m.workspaceIndex && m.activeField == 0 {
-				b.WriteString(chipActive.Render(option))
-			} else {
-				b.WriteString(chip.Render(option))
-			}
-		}
-	} else if len(m.workspaceOptions) > 0 {
-		b.WriteString("\n")
-		b.WriteString(dim.Render("   Existing workspaces: "))
-		b.WriteString(hint.Render("no existing workspace match"))
-	}
-	b.WriteString("\n")
-	b.WriteString(hint.Render(indentWrapped(preview, "   ", contentWidth)))
 	b.WriteString("\n\n")
 	b.WriteString(fieldLabel(1, "Bookmark"))
 	b.WriteString("\n")
@@ -355,47 +295,9 @@ func (m openFormModel) View() string {
 	b.WriteString("\n\n")
 	helpModel := charm.NewHelp()
 	b.WriteString(helpModel.ShortHelpView([]key.Binding{
-		openFormKeyMove, openFormKeySubmit, openFormKeyEditor, openFormKeyCancel,
+		openFormKeyMove, openFormKeySubmit, openFormKeyNewline, openFormKeyEditor, openFormKeyCancel,
 	}))
 	return card.Render(b.String()) + "\n"
-}
-
-func (m openFormModel) filteredWorkspaceOptions() []string {
-	query := strings.TrimSpace(m.workspaceInput.Value())
-	if query == "" {
-		return append([]string(nil), m.workspaceOptions...)
-	}
-	lowered := strings.ToLower(query)
-	filtered := make([]string, 0, len(m.workspaceOptions))
-	for _, option := range m.workspaceOptions {
-		if strings.Contains(strings.ToLower(option), lowered) {
-			filtered = append(filtered, option)
-		}
-	}
-	return filtered
-}
-
-func (m openFormModel) previewText() string {
-	request := m.currentRequest()
-	name := request.Name
-	bookmark := request.Bookmark
-	prompt := request.Prompt
-	if name == "" && bookmark != "" {
-		name = bookmark
-	}
-	if name == "" {
-		return "Enter a workspace name or bookmark to continue."
-	}
-	if selectedWorkspaceIndex(m.workspaceOptions, name) >= 0 {
-		if prompt != "" {
-			return fmt.Sprintf("Will open existing workspace %q. Prompt will not auto-run for existing workspaces.", name)
-		}
-		return fmt.Sprintf("Will open existing workspace %q.", name)
-	}
-	if prompt != "" {
-		return fmt.Sprintf("Will create workspace %q and run the prompt in tmux after bootstrap.", name)
-	}
-	return fmt.Sprintf("Will create workspace %q if it does not already exist.", name)
 }
 
 func wrapText(value string, width int) string {
@@ -436,19 +338,6 @@ func indentWrapped(value string, indent string, width int) string {
 		lines[i] = indent + line
 	}
 	return strings.Join(lines, "\n")
-}
-
-func selectedWorkspaceIndex(options []string, name string) int {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return -1
-	}
-	for i, option := range options {
-		if option == trimmed {
-			return i
-		}
-	}
-	return -1
 }
 
 func editTextInEditor(initial string) (tea.Cmd, error) {

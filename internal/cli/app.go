@@ -25,6 +25,7 @@ type doctorService interface {
 type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
+type newFlowWorkflow func(runner Runner, in io.Reader, out io.Writer) (newFlowResult, error)
 
 type App struct {
 	svc           workspace.Service
@@ -34,6 +35,7 @@ type App struct {
 	runner        Runner
 	picker        workspacePicker
 	openForm      openWorkflow
+	newFlow       newFlowWorkflow
 	diff          diffWorkflow
 	deck          deckWorkflow
 	review        reviewWorkflow
@@ -49,6 +51,7 @@ func NewApp(svc workspace.Service, out io.Writer) *App {
 		runner:        NewExecRunner(),
 		picker:        pickWorkspaceWithCharm,
 		openForm:      runOpenWithCharm,
+		newFlow:       runNewFlowPreScreen,
 		diff:          runDiffWithCharm,
 		deck:          runDeckWithCharm,
 		review:        runReviewWithCharm,
@@ -249,6 +252,24 @@ func (a *App) runOpen(args []string) error {
 		for _, entry := range entries {
 			options = append(options, entry.Name)
 		}
+		if strings.TrimSpace(req.Bookmark) == "" && a.newFlow != nil {
+			result, err := a.newFlow(a.runner, a.in, a.out)
+			if err != nil {
+				if errors.Is(err, ErrOpenCancelled) {
+					return ErrOpenCancelled
+				}
+				return err
+			}
+			switch result.kind {
+			case newFlowReview:
+				if a.review == nil {
+					return errors.New("review is not configured")
+				}
+				return a.review(a.runner, a.svc, result.prNumber, a.in, a.out)
+			case newFlowBookmark:
+				req.Bookmark = result.bookmark
+			}
+		}
 		updated, err := a.openForm(req, options, a.in, a.out)
 		if err != nil {
 			if err.Error() == "open cancelled" {
@@ -271,6 +292,22 @@ func (a *App) runOpen(args []string) error {
 }
 
 func openWorkspaceInDeckMode(runner Runner, svc workspace.Service, req openRequest) error {
+	return openWorkspaceWithReporter(runner, svc, req, nil)
+}
+
+// openWorkspaceWithReporter performs the create-or-attach + tmux setup with
+// optional progress reporting. Used both by `awp open` (no reporter) and by
+// the deck's create action (with the in-deck progress reporter).
+func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openRequest, reporter interface {
+	Step(string)
+	Log(string)
+}) error {
+	step := func(s string) {
+		if reporter != nil {
+			reporter.Step(s)
+		}
+	}
+	step("Prepare jj workspace")
 	normalized, wsPath, err := svc.PrepareWorkspace(req.Name, req.Bookmark, true)
 	if err != nil {
 		return err
@@ -288,6 +325,7 @@ func openWorkspaceInDeckMode(runner Runner, svc workspace.Service, req openReque
 		return err
 	}
 	if id == "" {
+		step("Create tmux session " + sessionName)
 		if err := tmuxClient.NewSession(sessionName, wsPath, "agent"); err != nil {
 			return err
 		}
@@ -297,10 +335,12 @@ func openWorkspaceInDeckMode(runner Runner, svc workspace.Service, req openReque
 		return err
 	}
 	if strings.TrimSpace(req.Prompt) != "" {
+		step("Send prompt to agent")
 		if err := tmuxClient.SendCommand(sessionName+":agent", "pi "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
 			return err
 		}
 	}
+	step("Switch to " + sessionName)
 	return tmuxClient.SwitchClient(sessionName)
 }
 

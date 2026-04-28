@@ -37,6 +37,7 @@ const (
 	ActionLastSession
 	ActionReview
 	ActionCustom
+	ActionCreateWorkspace
 )
 
 type UserAction struct {
@@ -45,11 +46,21 @@ type UserAction struct {
 	Alias   string
 }
 
+// NewWorkspaceRequest is the form result passed back from the launcher when
+// the user submits the new-workspace form. It is consumed by the deck handler
+// for ActionCreateWorkspace.
+type NewWorkspaceRequest struct {
+	Name     string
+	Bookmark string
+	Prompt   string
+}
+
 type ActionRequest struct {
-	Item     Item
-	Action   Action
-	Arg      string
-	Reporter Reporter
+	Item      Item
+	Action    Action
+	Arg       string
+	Workspace NewWorkspaceRequest
+	Reporter  Reporter
 }
 
 type Handler func(ActionRequest) error
@@ -111,9 +122,33 @@ type progressEventMsg struct {
 	ok bool
 }
 
+// NewWorkspaceInitial pre-fills the workspace form before it is shown.
+// Bookmark, when set, becomes the bookmark field on the form (and the
+// workspace name auto-derives from it if the user leaves the name blank).
+type NewWorkspaceInitial struct {
+	Bookmark string
+}
+
 // NewWorkspaceLauncher returns a tea.Cmd that suspends the deck, runs the
 // interactive new-workspace flow in the same terminal, and emits a result msg.
-type NewWorkspaceLauncher func(repoRoot string) tea.Cmd
+type NewWorkspaceLauncher func(repoRoot string, initial NewWorkspaceInitial) tea.Cmd
+
+// BookmarkFetcher returns a tea.Cmd that lists deduped bookmarks and emits a
+// BookmarksDoneMsg.
+type BookmarkFetcher func(repoRoot string) tea.Cmd
+
+// StateEditorLauncher returns a tea.Cmd that suspends the deck and opens the
+// global workspace-state.json in $EDITOR.
+type StateEditorLauncher func() tea.Cmd
+
+// StateEditDoneMsg is emitted when the state editor exits.
+type StateEditDoneMsg struct{ Err error }
+
+// BookmarksDoneMsg carries the result of an async bookmark fetch.
+type BookmarksDoneMsg struct {
+	Bookmarks []string
+	Err       error
+}
 
 type Refresher func() tea.Cmd
 
@@ -174,10 +209,21 @@ type Model struct {
 	refresher         Refresher
 	newLauncher       NewWorkspaceLauncher
 	prFetcher         PRFetcher
+	bookmarkFetcher   BookmarkFetcher
+	stateEditor       StateEditorLauncher
 	reviewMode        bool
 	reviewLoading     bool
 	reviewPRs         []PRItem
 	reviewCursor      int
+	newMenuMode       bool
+	newMenuCursor     int
+	newMenuRepo       string
+	bookmarkMode      bool
+	bookmarkLoading   bool
+	bookmarks         []string
+	bookmarkCursor    int
+	bookmarkFilter    textinput.Model
+	bookmarkFiltering bool
 	userActions       []UserAction
 	actionMode        bool
 	actionAliasLookup map[string]UserAction
@@ -198,6 +244,8 @@ const progressLogMax = 50
 type NewWorkspaceDoneMsg struct {
 	Err       error
 	Cancelled bool
+	Request   *NewWorkspaceRequest
+	RepoRoot  string
 }
 
 type actionResultMsg struct {
@@ -226,6 +274,9 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	fi := textinput.New()
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
+	bf := textinput.New()
+	bf.Placeholder = "filter bookmarks..."
+	bf.CharLimit = 64
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	m := Model{
@@ -233,7 +284,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
 		showAll:           len(itemsAll) > 0,
-		status:            "↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · q quit",
+		status:            "↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -242,6 +293,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		findRowPrefix:     map[rune]bool{},
 		handler:           handler,
 		filterInput:       fi,
+		bookmarkFilter:    bf,
 		spinner:           sp,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
@@ -276,6 +328,16 @@ func (m Model) WithRefresher(r Refresher) Model {
 
 func (m Model) WithPRFetcher(f PRFetcher) Model {
 	m.prFetcher = f
+	return m
+}
+
+func (m Model) WithBookmarkFetcher(f BookmarkFetcher) Model {
+	m.bookmarkFetcher = f
+	return m
+}
+
+func (m Model) WithStateEditor(l StateEditorLauncher) Model {
+	m.stateEditor = l
 	return m
 }
 
@@ -333,6 +395,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "new: " + msg.Err.Error()
 			return m, nil
 		}
+		if msg.Request != nil {
+			return m.startCreateAction(*msg.Request, msg.RepoRoot)
+		}
 		return m, tea.Quit
 	case progressEventMsg:
 		if !msg.ok {
@@ -373,6 +438,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+	case StateEditDoneMsg:
+		if msg.Err != nil {
+			m.status = "edit state: " + msg.Err.Error()
+		} else {
+			m.status = "edit state: done"
+		}
+		if m.refresher != nil {
+			return m, m.refresher()
+		}
+		return m, nil
+	case BookmarksDoneMsg:
+		m.busy = false
+		if !m.bookmarkMode {
+			return m, nil
+		}
+		m.bookmarkLoading = false
+		if msg.Err != nil {
+			m.bookmarkMode = false
+			m.status = "bookmark: " + msg.Err.Error()
+			return m, nil
+		}
+		if len(msg.Bookmarks) == 0 {
+			m.bookmarkMode = false
+			m.status = "bookmark: no bookmarks found"
+			return m, nil
+		}
+		m.bookmarks = msg.Bookmarks
+		m.bookmarkCursor = 0
+		m.bookmarkFiltering = true
+		m.bookmarkFilter.Focus()
+		m.status = "bookmark: type to filter · enter pick · esc cancel"
+		return m, textinput.Blink
 	case PRFetchDoneMsg:
 		m.busy = false
 		if !m.reviewMode {
@@ -473,6 +570,84 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filter = m.filterInput.Value()
 			if m.cursor >= len(m.items()) {
 				m.cursor = 0
+			}
+			return m, cmd
+		}
+		if m.newMenuMode {
+			switch msg.String() {
+			case "esc", "q", "ctrl+c":
+				m.newMenuMode = false
+				m.status = "new: cancelled"
+				return m, nil
+			case "j", "down":
+				if m.newMenuCursor < 2 {
+					m.newMenuCursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.newMenuCursor > 0 {
+					m.newMenuCursor--
+				}
+				return m, nil
+			case "b":
+				return m.startBookmarkPicker()
+			case "r":
+				return m.startReviewFromMenu()
+			case "enter":
+				switch m.newMenuCursor {
+				case 0:
+					return m.launchNewForm(NewWorkspaceInitial{})
+				case 1:
+					return m.startBookmarkPicker()
+				case 2:
+					return m.startReviewFromMenu()
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+		if m.bookmarkMode {
+			if m.bookmarkLoading {
+				switch msg.String() {
+				case "esc", "ctrl+c":
+					m.bookmarkMode = false
+					m.bookmarkLoading = false
+					m.status = "bookmark: cancelled"
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.bookmarkMode = false
+				m.bookmarks = nil
+				m.bookmarkCursor = 0
+				m.bookmarkFilter.Blur()
+				m.bookmarkFilter.SetValue("")
+				m.bookmarkFiltering = false
+				m.status = "bookmark: cancelled"
+				return m, nil
+			case "down":
+				if m.bookmarkCursor < len(m.filteredBookmarks())-1 {
+					m.bookmarkCursor++
+				}
+				return m, nil
+			case "up":
+				if m.bookmarkCursor > 0 {
+					m.bookmarkCursor--
+				}
+				return m, nil
+			case "enter":
+				picks := m.filteredBookmarks()
+				if len(picks) == 0 {
+					return m, nil
+				}
+				name := picks[m.bookmarkCursor]
+				return m.launchNewForm(NewWorkspaceInitial{Bookmark: name})
+			}
+			var cmd tea.Cmd
+			m.bookmarkFilter, cmd = m.bookmarkFilter.Update(msg)
+			if m.bookmarkCursor >= len(m.filteredBookmarks()) {
+				m.bookmarkCursor = 0
 			}
 			return m, cmd
 		}
@@ -635,7 +810,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.handler == nil {
 				return m, nil
 			}
-			return m.startAction(ActionLastSession, Item{}, "")
+			return m.startQuickAction(ActionLastSession, Item{}, "")
 		case "D":
 			item, ok := m.selected()
 			if !ok {
@@ -674,8 +849,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "new: select a row with a known repo"
 				return m, nil
 			}
-			m.status = "new workspace in " + item.ProjectName + "..."
-			return m, m.newLauncher(item.RepoRoot)
+			m.newMenuMode = true
+			m.newMenuCursor = 0
+			m.newMenuRepo = item.RepoRoot
+			m.status = "new: choose start (↑/↓ enter · b bookmark · r review · esc cancel)"
+			return m, nil
+		case ",":
+			if m.stateEditor == nil {
+				m.status = "edit state: not configured"
+				return m, nil
+			}
+			m.status = "editing workspace-state.json..."
+			return m, m.stateEditor()
 		case "x":
 			if len(m.userActions) == 0 {
 				m.status = "no user actions configured"
@@ -689,12 +874,92 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) {
+	repo := m.newMenuRepo
+	m.newMenuMode = false
+	m.bookmarkMode = false
+	m.bookmarks = nil
+	m.bookmarkCursor = 0
+	m.bookmarkFilter.SetValue("")
+	if m.newLauncher == nil || strings.TrimSpace(repo) == "" {
+		m.status = "new: launcher not configured"
+		return *m, nil
+	}
+	m.status = "new workspace..."
+	return *m, m.newLauncher(repo, initial)
+}
+
+func (m *Model) startBookmarkPicker() (tea.Model, tea.Cmd) {
+	if m.bookmarkFetcher == nil {
+		m.status = "bookmark: not configured"
+		return *m, nil
+	}
+	if strings.TrimSpace(m.newMenuRepo) == "" {
+		m.status = "bookmark: no repo"
+		return *m, nil
+	}
+	m.newMenuMode = false
+	m.bookmarkMode = true
+	m.bookmarkLoading = true
+	m.bookmarks = nil
+	m.bookmarkCursor = 0
+	m.bookmarkFilter.SetValue("")
+	m.busy = true
+	m.status = "bookmark: loading..."
+	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(m.newMenuRepo))
+}
+
+func (m *Model) startReviewFromMenu() (tea.Model, tea.Cmd) {
+	if m.prFetcher == nil {
+		m.status = "review: not configured"
+		return *m, nil
+	}
+	repo := m.newMenuRepo
+	if strings.TrimSpace(repo) == "" {
+		m.status = "review: no repo"
+		return *m, nil
+	}
+	m.newMenuMode = false
+	m.reviewMode = true
+	m.reviewLoading = true
+	m.reviewPRs = nil
+	m.reviewCursor = 0
+	m.busy = true
+	m.status = "review: loading PRs..."
+	return *m, tea.Batch(m.spinner.Tick, m.prFetcher(repo))
+}
+
+func (m Model) filteredBookmarks() []string {
+	q := strings.ToLower(strings.TrimSpace(m.bookmarkFilter.Value()))
+	if q == "" {
+		return append([]string(nil), m.bookmarks...)
+	}
+	out := make([]string, 0, len(m.bookmarks))
+	for _, b := range m.bookmarks {
+		if strings.Contains(strings.ToLower(b), q) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	item, ok := m.selected()
 	if !ok || m.handler == nil {
 		return m, nil
 	}
-	return m.startAction(a, item, arg)
+	if isProgressAction(a) {
+		return m.startAction(a, item, arg)
+	}
+	return m.startQuickAction(a, item, arg)
+}
+
+func isProgressAction(a Action) bool {
+	switch a {
+	case ActionDelete, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom:
+		return true
+	}
+	return false
 }
 
 func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd) {
@@ -708,6 +973,63 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 	m.progressChan = make(chan progressEvent, 32)
 	m.status = fmt.Sprintf("%s %s...", actionLabel(a, arg), item.WorkspaceName)
 	return *m, tea.Batch(m.spinner.Tick, m.dispatch(a, item, arg), waitForProgress(m.progressChan))
+}
+
+// startQuickAction runs an action without entering progress mode. Used for
+// fast operations like summon/switch where a progress UI just causes flicker.
+func (m *Model) startQuickAction(a Action, item Item, arg string) (tea.Model, tea.Cmd) {
+	m.busy = true
+	m.status = fmt.Sprintf("%s %s...", actionLabel(a, arg), item.WorkspaceName)
+	handler := m.handler
+	dispatch := func() tea.Msg {
+		err := handler(ActionRequest{Item: item, Action: a, Arg: arg, Reporter: noopActionReporter{}})
+		return actionResultMsg{action: a, arg: arg, item: item, err: err}
+	}
+	return *m, tea.Batch(m.spinner.Tick, dispatch)
+}
+
+type noopActionReporter struct{}
+
+func (noopActionReporter) Step(string) {}
+func (noopActionReporter) Log(string)  {}
+
+func (m *Model) startCreateAction(req NewWorkspaceRequest, repoRoot string) (tea.Model, tea.Cmd) {
+	if m.handler == nil {
+		m.status = "new: handler not configured"
+		return *m, nil
+	}
+	m.busy = true
+	m.progressMode = true
+	m.progressTitle = "create workspace"
+	if strings.TrimSpace(req.Name) != "" {
+		m.progressTitle = "create · " + req.Name
+	} else if strings.TrimSpace(req.Bookmark) != "" {
+		m.progressTitle = "create · " + req.Bookmark
+	}
+	m.progressSteps = nil
+	m.progressLog = nil
+	m.progressErr = nil
+	m.progressDone = false
+	m.progressChan = make(chan progressEvent, 32)
+	m.status = "creating workspace..."
+	ch := m.progressChan
+	handler := m.handler
+	item := Item{RepoRoot: repoRoot}
+	dispatch := func() tea.Msg {
+		reporter := &chanReporter{ch: ch}
+		err := handler(ActionRequest{
+			Item:      item,
+			Action:    ActionCreateWorkspace,
+			Workspace: req,
+			Reporter:  reporter,
+		})
+		if ch != nil {
+			ch <- progressEvent{kind: progressEventDone, err: err, action: ActionCreateWorkspace, item: item}
+			close(ch)
+		}
+		return nil
+	}
+	return *m, tea.Batch(m.spinner.Tick, dispatch, waitForProgress(m.progressChan))
 }
 
 func (m Model) dispatch(a Action, item Item, arg string) tea.Cmd {
@@ -758,6 +1080,8 @@ func actionLabel(a Action, arg string) string {
 			return "run " + arg
 		}
 		return "run action"
+	case ActionCreateWorkspace:
+		return "create"
 	}
 	return "action"
 }
@@ -792,10 +1116,17 @@ func (m Model) View() string {
 	rightWidth := max(20, m.width-leftWidth-3)
 
 	var left, right string
-	if m.reviewMode {
+	switch {
+	case m.newMenuMode:
+		left = m.renderNewMenu(leftWidth)
+		right = m.renderNewMenuDetails(rightWidth)
+	case m.bookmarkMode:
+		left = m.renderBookmarkList(leftWidth)
+		right = m.renderBookmarkDetails(rightWidth)
+	case m.reviewMode:
 		left = m.renderReviewList(leftWidth)
 		right = m.renderReviewDetails(rightWidth)
-	} else {
+	default:
 		left = m.renderList(leftWidth)
 		right = m.renderDetails(rightWidth)
 	}
@@ -939,8 +1270,105 @@ func (m Model) renderDetails(width int) string {
 		"i      watch CI run for branch",
 		"D      delete workspace",
 		"R      relink/recover session",
+		",      edit ~/.awp/workspace-state.json in $EDITOR",
 		"q      quit deck",
 	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderNewMenu(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("new workspace: choose start")
+	options := []struct {
+		label string
+		hint  string
+	}{
+		{"empty", "empty workspace from current revision"},
+		{"bookmark", "pick a jj bookmark to base it on"},
+		{"review", "review an open PR"},
+	}
+	rows := []string{title, ""}
+	for i, opt := range options {
+		prefix := "  "
+		style := lipgloss.NewStyle().Width(width - 1)
+		if i == m.newMenuCursor {
+			prefix = "› "
+			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+		}
+		quick := ""
+		switch i {
+		case 1:
+			quick = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [b]")
+		case 2:
+			quick = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [r]")
+		}
+		rows = append(rows, style.Render(fmt.Sprintf("%s%s%s", prefix, opt.label, quick)))
+		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("245")).Render("   "+opt.hint))
+	}
+	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+}
+
+func (m Model) renderNewMenuDetails(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Render("new workspace")
+	lines := []string{
+		title, "",
+		"Repo: " + m.newMenuRepo, "",
+		"Keys:",
+		"↑/↓ j/k  navigate",
+		"enter    choose",
+		"b        bookmark (quick)",
+		"r        review   (quick)",
+		"esc      cancel",
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderBookmarkList(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("bookmark: pick one")
+	rows := []string{title, ""}
+	if m.bookmarkLoading {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Loading bookmarks..."))
+		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	}
+	if m.bookmarkFiltering || strings.TrimSpace(m.bookmarkFilter.Value()) != "" {
+		rows = append(rows, "/"+m.bookmarkFilter.View(), "")
+	}
+	picks := m.filteredBookmarks()
+	if len(picks) == 0 {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No bookmarks match."))
+		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	}
+	for i, name := range picks {
+		prefix := "  "
+		style := lipgloss.NewStyle().Width(width - 1)
+		if i == m.bookmarkCursor {
+			prefix = "› "
+			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+		}
+		rows = append(rows, style.Render(prefix+truncate(name, max(8, width-4))))
+	}
+	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+}
+
+func (m Model) renderBookmarkDetails(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Render("bookmark")
+	picks := m.filteredBookmarks()
+	current := ""
+	if m.bookmarkCursor >= 0 && m.bookmarkCursor < len(picks) {
+		current = picks[m.bookmarkCursor]
+	}
+	lines := []string{title, ""}
+	if current != "" {
+		lines = append(lines, "Selection: "+current)
+	} else {
+		lines = append(lines, "Pick a bookmark to base the new workspace on.")
+	}
+	lines = append(lines, "",
+		"Keys:",
+		"↑/↓ j/k  navigate",
+		"/        filter",
+		"enter    select",
+		"esc      cancel",
+	)
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
