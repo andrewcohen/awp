@@ -358,6 +358,9 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 				stale = true
 			}
 		}
+		if nameMatch && agentPaneIsShell(tmuxClient, sessionName) {
+			status = "exited"
+		}
 		items = append(items, deckui.Item{
 			ProjectName:   entry.ProjectName,
 			WorkspaceName: entry.Name,
@@ -404,6 +407,9 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 			if _, ok := liveByID[entry.SessionID]; !ok && !nameMatch {
 				stale = true
 			}
+		}
+		if nameMatch && agentPaneIsShell(tmuxClient, sessionName) {
+			status = "exited"
 		}
 		allItems = append(allItems, deckui.Item{
 			ProjectName:   entry.ProjectName,
@@ -493,6 +499,9 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 	}
+	if stale := ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot); stale {
+		reporter.Log("agent missing AWP_WORKSPACE — restart agent to enable status reporting")
+	}
 	_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	reporter.Step(fmt.Sprintf("Switch to %s", sessionName))
 	return tmuxClient.SwitchClient(sessionName)
@@ -522,6 +531,7 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
+	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
 
 	// Empty windowName = fresh shell window, no dedupe, tmux picks title.
 	if strings.TrimSpace(windowName) == "" {
@@ -555,7 +565,7 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	}
 	winCmd := cmdOverride
 	if winCmd == "" {
-		winCmd = defaultWindowCommand(windowName)
+		winCmd = defaultWindowCommandWithRepo(windowName, item.RepoRoot)
 	}
 	if winCmd != "" && (justCreated || paneIsShell(tmuxClient, target)) {
 		reporter.Step(fmt.Sprintf("Run %s", winCmd))
@@ -568,6 +578,14 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 		return err
 	}
 	return tmuxClient.SwitchClient(sessionName)
+}
+
+// agentPaneIsShell returns true when the agent window of a workspace session
+// has no agent process running (i.e. the pane has dropped back to a shell).
+// Used to mark a workspace as "exited" in the deck even when the workspace
+// state file still claims an older status.
+func agentPaneIsShell(tmuxClient *tmux.Client, sessionName string) bool {
+	return paneIsShell(tmuxClient, sessionName+":agent")
 }
 
 func paneIsShell(tmuxClient *tmux.Client, target string) bool {
@@ -584,6 +602,13 @@ func paneIsShell(tmuxClient *tmux.Client, target string) bool {
 }
 
 func defaultWindowCommand(windowName string) string {
+	return defaultWindowCommandWithRepo(windowName, "")
+}
+
+// defaultWindowCommandWithRepo returns the default command to run in a freshly
+// created (or shell-reset) named window. Pulls the agent command from
+// per-repo + global config; defaults to "pi" when nothing is configured.
+func defaultWindowCommandWithRepo(windowName, repoRoot string) string {
 	switch windowName {
 	case "editor":
 		return "$EDITOR"
@@ -591,6 +616,8 @@ func defaultWindowCommand(windowName string) string {
 		return "tuicr -r @"
 	case "vcs":
 		return "jjui"
+	case "agent":
+		return config.AgentCommand(repoRoot)
 	}
 	return ""
 }
@@ -617,6 +644,7 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
+	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
 
 	target := sessionName + ":ci"
 	exists := false
@@ -659,6 +687,7 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
+	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
 
 	windowName := ua.Name
 	target := sessionName + ":" + windowName

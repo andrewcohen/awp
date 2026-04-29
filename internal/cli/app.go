@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -20,6 +21,8 @@ type openWorkflow func(initial openRequest, workspaces []string, in io.Reader, o
 
 type doctorService interface {
 	Run() error
+	RunGlobal(fix bool) error
+	RunRepo(fix bool) error
 }
 
 type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
@@ -77,8 +80,36 @@ func (a *App) Run(args []string) error {
 		return runDeckCleanup(a.runner, a.out)
 	case "review":
 		return a.runReview(args[1:])
+	case "internal":
+		return a.runInternal(args[1:])
+	case "init":
+		return a.runInit(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func (a *App) runInternal(args []string) error {
+	if len(args) == 0 {
+		return errors.New("internal requires a subcommand")
+	}
+	switch args[0] {
+	case "report-status":
+		return runReportStatus(args[1:], a.out)
+	default:
+		return fmt.Errorf("unknown internal subcommand %q", args[0])
+	}
+}
+
+func (a *App) runInit(args []string) error {
+	if len(args) == 0 {
+		return errors.New("init requires a subcommand (try: awp init hooks)")
+	}
+	switch args[0] {
+	case "hooks":
+		return runInitHooks(args[1:], a.out)
+	default:
+		return fmt.Errorf("unknown init subcommand %q", args[0])
 	}
 }
 
@@ -331,12 +362,14 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 	}
+	_, _ = ensureWorkspaceSessionEnv(tmuxClient, sessionName, projectName, normalized, repoRoot, sessionName+":agent")
 	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
 		return err
 	}
 	if strings.TrimSpace(req.Prompt) != "" {
 		step("Send prompt to agent")
-		if err := tmuxClient.SendCommand(sessionName+":agent", "pi "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
+		agent := config.AgentCommand(repoRoot)
+		if err := tmuxClient.SendCommand(sessionName+":agent", agent+" "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
 			return err
 		}
 	}
@@ -443,16 +476,29 @@ func (a *App) resolveWorkspaceTarget(verb string, args []string) (string, error)
 
 func (a *App) runDoctor(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp doctor")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp doctor [--global] [--fix]")
+		_, _ = fmt.Fprintln(a.out, "  --global  skip checks that require a jj repo (scans all live awp tmux sessions)")
+		_, _ = fmt.Fprintln(a.out, "  --fix     attempt to repair issues (reinstall hooks, inject missing tmux env vars)")
 		return nil
 	}
-	if len(args) != 0 {
-		return errors.New("doctor takes no arguments")
+	global, fix := false, false
+	for _, arg := range args {
+		switch arg {
+		case "--global":
+			global = true
+		case "--fix":
+			fix = true
+		default:
+			return fmt.Errorf("unknown doctor flag %q", arg)
+		}
 	}
 	if a.doctor == nil {
 		return errors.New("doctor is not configured")
 	}
-	return a.doctor.Run()
+	if global {
+		return a.doctor.RunGlobal(fix)
+	}
+	return a.doctor.RunRepo(fix)
 }
 
 func (a *App) runDiff(args []string) error {

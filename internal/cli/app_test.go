@@ -21,6 +21,16 @@ func (d *fakeDoctor) Run() error {
 	return d.err
 }
 
+func (d *fakeDoctor) RunGlobal(bool) error {
+	d.runs++
+	return d.err
+}
+
+func (d *fakeDoctor) RunRepo(bool) error {
+	d.runs++
+	return d.err
+}
+
 type fakeService struct {
 	openName          string
 	openBookmark      string

@@ -8,7 +8,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andrewcohen/awp/internal/agenthooks"
 )
+
+// installAgentHooksForTest stages the global Claude/pi files in a fake $HOME
+// so doctor's hook-installed checks pass during tests.
+func installAgentHooksForTest(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	if _, err := agenthooks.InstallClaude(); err != nil {
+		t.Fatalf("install claude hooks: %v", err)
+	}
+	if _, err := agenthooks.InstallPi(); err != nil {
+		t.Fatalf("install pi extension: %v", err)
+	}
+}
 
 type fakeRunner struct {
 	responses map[string]struct {
@@ -40,6 +55,7 @@ func (f *fakeHooks) PostWorkspaceStart(string) ([]string, error) {
 func TestDoctorRunReportsSuccess(t *testing.T) {
 	repo := t.TempDir()
 	home := t.TempDir()
+	installAgentHooksForTest(t, home)
 	out := &bytes.Buffer{}
 	r := &fakeRunner{responses: map[string]struct {
 		out string

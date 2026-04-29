@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type UserAction struct {
@@ -18,6 +19,25 @@ type Config struct {
 		Bootstrap []string `json:"bootstrap"`
 	} `json:"hooks"`
 	Actions map[string]UserAction `json:"actions"`
+	// Agent is the command name used to launch the workspace agent. It is
+	// invoked as `<agent> <prompt>` (or just `<agent>` when no prompt is
+	// passed). Defaults to "pi" when unset. Project config overrides global.
+	Agent string `json:"agent,omitempty"`
+}
+
+// DefaultAgent is the agent command used when neither global nor project
+// config sets one.
+const DefaultAgent = "pi"
+
+// AgentCommand returns the configured agent command (project overrides
+// global, falling back to DefaultAgent). Empty repoRoot skips the project
+// lookup.
+func AgentCommand(repoRoot string) string {
+	cfg, _ := Load(repoRoot)
+	if a := strings.TrimSpace(cfg.Agent); a != "" {
+		return a
+	}
+	return DefaultAgent
 }
 
 func Load(repoRoot string) (Config, error) {
@@ -66,6 +86,9 @@ func merge(global, project Config) Config {
 	}
 	if len(out.Hooks.Bootstrap) == 0 {
 		out.Hooks.Bootstrap = global.Hooks.Bootstrap
+	}
+	if strings.TrimSpace(out.Agent) == "" {
+		out.Agent = global.Agent
 	}
 	return out
 }

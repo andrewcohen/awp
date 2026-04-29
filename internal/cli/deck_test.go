@@ -107,19 +107,38 @@ func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 		t.Fatalf("openNamedWindow: %v", err)
 	}
 
+	// The env-injection step issues some show-environment / set-environment
+	// calls and a pane_current_command probe before the window work. Verify
+	// the window-related calls happen in order, and that env injection
+	// preceded them.
 	want := [][]string{
 		{"tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}"},
 		{"tmux", "new-window", "-d", "-t", "[awp]repo__qa:", "-P", "-F", "#{session_name}:#{window_index}", "-c", "/tmp/ws"},
 		{"tmux", "select-window", "-t", "[awp]repo__qa:3"},
 		{"tmux", "switch-client", "-t", "[awp]repo__qa"},
 	}
-	if len(runner.calls) != len(want) {
-		t.Fatalf("unexpected calls: %#v", runner.calls)
-	}
-	for i := range want {
-		if strings.Join(runner.calls[i], "|") != strings.Join(want[i], "|") {
-			t.Fatalf("call %d mismatch: got %#v want %#v", i, runner.calls[i], want[i])
+	idx := 0
+	for _, call := range runner.calls {
+		if idx >= len(want) {
+			break
 		}
+		if strings.Join(call, "|") == strings.Join(want[idx], "|") {
+			idx++
+		}
+	}
+	if idx != len(want) {
+		t.Fatalf("missing expected call at index %d (%v); got %#v", idx, want[idx], runner.calls)
+	}
+	sawSetEnv := false
+	for _, call := range runner.calls {
+		if len(call) >= 4 && call[1] == "set-environment" {
+			if call[4] == "AWP_WORKSPACE" {
+				sawSetEnv = true
+			}
+		}
+	}
+	if !sawSetEnv {
+		t.Fatalf("expected AWP_WORKSPACE to be injected; got %#v", runner.calls)
 	}
 }
 
@@ -195,7 +214,7 @@ func TestDefaultWindowCommand(t *testing.T) {
 		"editor": "$EDITOR",
 		"review": "tuicr -r @",
 		"vcs":    "jjui",
-		"agent":  "",
+		"agent":  "pi",
 	}
 	for name, want := range cases {
 		if got := defaultWindowCommand(name); got != want {
