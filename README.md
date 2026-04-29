@@ -1,0 +1,160 @@
+# awp — Agentic Workspace Pilot
+
+> ⚠️ **Disclaimer**: This project is heavily vibe-coded. The maintainer doesn't necessarily know what's inside any given file at any given moment. Treat the source as a sketch, not a contract: read it before depending on it, and assume any behavior may change without warning. Bug reports and PRs welcome; "this code is weird" is fair feedback.
+
+`awp` is a Go CLI and TUI for running multiple AI coding agents (Claude Code, pi.dev, …) in parallel across isolated [Jujutsu](https://github.com/martinvonz/jj) workspaces, each in its own [tmux](https://github.com/tmux/tmux) session. It gives you a single keyboard-driven dashboard ("the deck") to summon, switch between, and observe agents — including a live status indicator showing which agents are working, idle, or waiting on you.
+
+## What problem it solves
+
+You want to run 5+ agents at once on different branches without:
+
+- Manually managing `jj` workspaces, branch checkouts, and tmux layout.
+- Tab-switching to figure out which agent is blocked, which is generating, and which has finished.
+- Re-typing the same `claude` / `pi` invocation in every pane.
+
+`awp` automates the whole loop: create a workspace from a bookmark or PR, drop you into a tmux session running your default agent, wire up status reporting via hooks, and give you a one-screen overview of every running workspace.
+
+## Installation
+
+```sh
+go install github.com/andrewcohen/awp/cmd/awp@latest
+awp init hooks   # one-time: install Claude Code + pi.dev integrations globally
+```
+
+`awp init hooks` installs:
+
+- `~/.claude/settings.json` — hooks that report state to awp on every prompt/tool/stop/notification.
+- `~/.pi/agent/extensions/awp-status.ts` — a pi.dev extension that reports state on `turn_start` / `turn_end` / `tool_execution_start` / `session_shutdown`.
+
+Both integrations are no-ops outside awp-managed sessions (they gate on `$AWP_WORKSPACE`), so they never affect your standalone Claude or pi usage.
+
+## The deck
+
+```sh
+awp deck
+```
+
+Recommended invocation as a tmux popup (in `~/.tmux.conf`):
+
+```tmux
+bind a display-popup -E -w 90% -h 90% awp deck \; run-shell "awp deck-cleanup"
+```
+
+Press `?` inside the deck for the full key + status legend.
+
+### Agent status (the colored dot at the start of each row)
+
+| Color | State | Meaning |
+|---|---|---|
+| 🟢 Green | `working` | Agent is actively producing output or running a tool |
+| 🟡 Yellow | `waiting` | Paused on a permission prompt — needs your input |
+| ⚪ Grey | `idle` | Alive, sitting at its prompt |
+| 🔵 Cyan | `starting` | Session initializing |
+| 🔴 Red | `exited` | Process gone, pane back at a shell |
+
+### Key bindings
+
+| Key | Action |
+|---|---|
+| `enter` | Summon (create or focus) the workspace's tmux session |
+| `a` | Open agent window — re-launches the agent if its pane is at a shell |
+| `e` | Open editor window (`$EDITOR`) |
+| `c` / `C` | Review window: `tuicr -r @` / `tuicr -r main..@` |
+| `v` | VCS window (`jjui`) |
+| `s` | Shell window |
+| `i` | CI window (`gh run watch`) |
+| `r` | Pick a PR to review |
+| `x` | User actions menu (configurable via `actions` in config) |
+| `n` | New workspace (form: bookmark/branch/PR) |
+| `f` | Find: easymotion-style project → workspace jump |
+| `/` | Filter rows · `esc` clears |
+| `P` | Toggle scope: current project ↔ all projects |
+| `L` | Switch to last tmux session |
+| `R` | Relink session |
+| `D` | Delete workspace |
+| `,` | Edit global state file in `$EDITOR` |
+| `?` | Help overlay |
+| `q` / `esc` | Quit |
+
+## CLI reference (highlights)
+
+| Command | Purpose |
+|---|---|
+| `awp deck` | Open the workspace dashboard |
+| `awp w open [name]` | Create or attach to a workspace (interactive form when run alone) |
+| `awp w list` | List workspaces in the current repo |
+| `awp w info <name>` | Show details for a workspace |
+| `awp w rename <old> <new>` | Rename |
+| `awp w delete <name>` | Delete (use `--force` to skip prompts) |
+| `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
+| `awp review [pr#]` | Pick or open a PR for review in a fresh workspace |
+| `awp diff` | Charm-styled diff viewer |
+| `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
+| `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |
+| `awp internal report-status --state <…>` | Hidden — used by hooks to write status |
+
+`awp doctor` checks environment tooling, the agent hook installs, and (when run inside a repo) per-repo configuration. `--global` skips repo-scoped checks and scans every live `[awp]*` tmux session across all projects. `--fix` reinstalls missing hooks and re-injects `AWP_WORKSPACE` / `AWP_REPO` into any session that's missing them.
+
+## Configuration
+
+awp reads JSON config from two locations and merges them (project wins):
+
+- `~/.config/awp/config.json` — global
+- `<repo>/.awp/config.json` — per-project
+
+Example:
+
+```json
+{
+  "agent": "claude",
+  "actions": {
+    "logs": { "command": "tail -f /tmp/app.log", "alias": "l" }
+  },
+  "hooks": {
+    "bootstrap": ["pnpm install", "make migrate"]
+  }
+}
+```
+
+### `agent`
+
+Command used to launch the workspace agent. Invoked as `<agent> <prompt>` (with the prompt shell-quoted) when summoning with a prompt, or just `<agent>` when re-attaching via the `a` key. Defaults to `pi`. Common values: `pi`, `claude`, `aider`. Anything that accepts a prompt as its first positional argument works.
+
+### `actions`
+
+Custom commands surfaced by the deck's `x` action menu. Each action runs in a new tmux window in the workspace.
+
+### `hooks.bootstrap`
+
+Shell commands run after a workspace's jj layout exists but before the agent starts. Used for things like `pnpm install` or `make seed`.
+
+## How status reporting works
+
+1. When awp creates or summons a tmux session, it sets `AWP_WORKSPACE`, `AWP_REPO`, and `AWP_REPO_ROOT` on the session env.
+2. The globally-installed hooks (Claude) / extension (pi) run on every state transition. Each one calls `awp internal report-status --state <state>`, gated on `$AWP_WORKSPACE` so it's a no-op outside awp.
+3. The status writer mutates the workspace entry's `Status` field in `~/.awp/workspace-state.json`.
+4. The deck reads that file on each refresh tick and renders the colored dot.
+5. Crash fallback: if the agent pane has dropped back to a shell, the deck overrides the in-memory status to `exited` regardless of what's on disk.
+
+If the deck's status looks stuck, run `awp doctor --fix` to repair env injection and reinstall hooks.
+
+## Repository layout
+
+- `cmd/awp/` — main entry point
+- `internal/cli/` — command dispatch, deck wiring, init/hooks installer
+- `internal/deckui/` — Bubble Tea TUI model/view
+- `internal/workspace/` — workspace lifecycle (jj + state + hooks)
+- `internal/tmux/` — tmux client
+- `internal/jj/` — jj client
+- `internal/agenthooks/` — Claude Code + pi.dev integration installers
+- `internal/config/` — project + global JSON config
+- `internal/state/` — workspace state JSON store
+- `internal/doctor/` — `awp doctor`
+- `internal/diff/`, `internal/review/`, `internal/github/` — diff and PR review flows
+- `specs/` — feature specs (start from `specs/spec-template.md`; use `scripts/new-spec`)
+
+See `AGENTS.md` for contributor and AI-agent guidance.
+
+## License
+
+See repository.

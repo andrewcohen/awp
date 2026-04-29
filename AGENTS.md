@@ -23,6 +23,16 @@ Focus on the current task request and keep solutions simple, correct, and easy t
 - Handle errors explicitly and return actionable messages.
 - Avoid hidden global state where possible.
 
+## TUI / lipgloss
+
+The deck and other TUIs are built on Bubble Tea + lipgloss. When working on UI:
+
+- Use lipgloss styling primitives (`MarginTop`, `MarginBottom`, `PaddingLeft`, `Border*`, `Foreground`, `Bold`, `Width`) rather than ad-hoc tricks like inserting `""` rows or padding strings with spaces. Spacing should belong to a style, not the row list.
+- Inter-block spacing (between project groups, sections, headers) → `MarginTop` / `MarginBottom` on the block's style. Inner spacing → `Padding*`.
+- Reuse helpers like `statusGlyph` / `statusColor` for status colors. Don't hardcode color codes inline; if you need a new semantic color, add it to the existing helpers so the legend in `?` help and the row renderer stay in sync.
+- Terminals render whole rows only — half-line gaps don't exist. If a layout feels too dense, prefer a faint top/bottom border (`BorderTop(true).BorderForeground(...)`) over stacking blanks.
+- Keep the `?` help overlay in `internal/deckui/model.go::renderHelp` updated whenever you add or rebind a key, or change a status state.
+
 ## Security & Safety
 
 - Treat all external input as untrusted.

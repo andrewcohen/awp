@@ -136,6 +136,39 @@ func (c *Client) SessionExists(name string) (bool, error) {
 	return false, nil
 }
 
+// SetSessionEnv sets a tmux session-level environment variable. The value is
+// inherited by new panes/processes spawned in the session; it does not
+// retroactively apply to already-running processes.
+func (c *Client) SetSessionEnv(sessionName, key, value string) error {
+	_, err := c.runner.Run(context.Background(), "", "tmux", "set-environment", "-t", sessionName, key, value)
+	if err != nil {
+		return fmt.Errorf("set-environment %s on %q: %w", key, sessionName, err)
+	}
+	return nil
+}
+
+// GetSessionEnv returns the value of a session-level env var, or empty string
+// if unset.
+func (c *Client) GetSessionEnv(sessionName, key string) (string, error) {
+	out, err := c.runner.Run(context.Background(), "", "tmux", "show-environment", "-t", sessionName, key)
+	if err != nil {
+		// tmux exits non-zero with "unknown variable" when not set.
+		if strings.Contains(err.Error(), "exit status") {
+			return "", nil
+		}
+		return "", err
+	}
+	line := strings.TrimSpace(out)
+	if line == "" || strings.HasPrefix(line, "-") {
+		// "-FOO" means the var is explicitly unset in the session env.
+		return "", nil
+	}
+	if idx := strings.IndexByte(line, '='); idx >= 0 {
+		return line[idx+1:], nil
+	}
+	return "", nil
+}
+
 func (c *Client) NewSession(name string, dir string, firstWindowName string) error {
 	args := []string{"new-session", "-d", "-s", name}
 	if firstWindowName != "" {

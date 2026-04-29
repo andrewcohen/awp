@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -11,6 +12,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// refreshInterval is how often the deck polls workspace state for status
+// updates pushed in by agent hooks. Short enough that color transitions
+// feel live; long enough not to waste cycles.
+const refreshInterval = 2 * time.Second
+
+type refreshTickMsg time.Time
+
+func scheduleRefreshTick() tea.Cmd {
+	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg { return refreshTickMsg(t) })
+}
 
 type Item struct {
 	ProjectName   string
@@ -194,6 +206,7 @@ type Model struct {
 	filtering         bool
 	filter            string
 	confirmDelete     bool
+	helpMode          bool
 	deleteTarget      Item
 	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
@@ -284,7 +297,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
 		showAll:           len(itemsAll) > 0,
-		status:            "↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
+		status:            "? help · ↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -371,7 +384,7 @@ func (m Model) items() []Item {
 	return out
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return scheduleRefreshTick() }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -386,6 +399,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case refreshTickMsg:
+		// Background poll: fetch fresh state for status updates from
+		// agent hooks. Pause during interactive overlays so we don't
+		// race with their own state.
+		if m.refresher != nil && !m.busy && !m.progressMode &&
+			!m.confirmDelete && !m.filtering &&
+			!m.findMode && !m.actionMode &&
+			!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
+			!m.helpMode {
+			return m, tea.Batch(m.refresher(), scheduleRefreshTick())
+		}
+		return m, scheduleRefreshTick()
 	case NewWorkspaceDoneMsg:
 		if msg.Cancelled {
 			m.status = "new: cancelled"
@@ -753,7 +778,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.helpMode {
+			switch msg.String() {
+			case "?", "esc", "q", "enter":
+				m.helpMode = false
+			}
+			return m, nil
+		}
 		switch msg.String() {
+		case "?":
+			m.helpMode = true
+			return m, nil
 		case "q", "esc", "ctrl+c":
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
@@ -1148,11 +1183,89 @@ func (m Model) View() string {
 			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, statusText),
 		)
 	}
-	view := lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	// Pin the footer to the bottom of the viewport: pad the body up to
+	// (height - footer height) before stacking the footer below.
+	footerHeight := lipgloss.Height(footer)
+	bodyHeight := lipgloss.Height(body)
+	pad := m.height - bodyHeight - footerHeight
+	if pad < 0 {
+		pad = 0
+	}
+	view := lipgloss.JoinVertical(lipgloss.Left, body, strings.Repeat("\n", pad), footer)
 	if m.confirmDelete {
 		view = lipgloss.JoinVertical(lipgloss.Left, view, "", m.renderDeleteConfirm())
 	}
+	if m.helpMode {
+		// Center the help box over the existing view as a popover.
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.renderHelp(m.width))
+	}
 	return view
+}
+
+func (m Model) renderHelp(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("awp deck — help (?, esc, or enter to close)")
+
+	dot := func(state string, label string) string {
+		return statusGlyph(state, false) + "  " + label
+	}
+	statusLines := []string{
+		lipgloss.NewStyle().Bold(true).Render("Agent status (left dot)"),
+		dot("working", "working — actively producing output / running a tool"),
+		dot("waiting", "waiting — paused on a permission prompt"),
+		dot("idle", "idle — alive, sitting at its prompt"),
+		dot("starting", "starting — session initializing"),
+		dot("exited", "exited — process gone, pane back at a shell"),
+	}
+
+	keyRows := [][2]string{
+		{"enter", "summon (create or focus the workspace tmux session)"},
+		{"a", "open agent window (re-attach without re-prompting)"},
+		{"e", "open editor window ($EDITOR)"},
+		{"c / C", "review window: tuicr -r @  /  tuicr -r main..@"},
+		{"v", "vcs window (jjui)"},
+		{"s", "shell window"},
+		{"i", "ci window (gh run watch)"},
+		{"r", "review a PR"},
+		{"x", "user actions menu"},
+		{"f", "find: project → workspace easymotion jump"},
+		{"/", "filter rows · esc clears"},
+		{"P", "toggle scope (current project ↔ all projects)"},
+		{"L", "switch to last tmux session"},
+		{"R", "relink session"},
+		{"D", "delete workspace"},
+		{",", "edit global state file in $EDITOR"},
+		{"?", "this help"},
+		{"q / esc", "quit"},
+	}
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	keyLines := []string{lipgloss.NewStyle().Bold(true).Render("Keys")}
+	for _, kr := range keyRows {
+		keyLines = append(keyLines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		"",
+		strings.Join(statusLines, "\n"),
+		"",
+		strings.Join(keyLines, "\n"),
+	)
+	boxWidth := 70
+	if width > 0 && width-8 < boxWidth {
+		boxWidth = width - 8
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("117")).
+		Background(lipgloss.Color("236")).
+		Padding(1, 2).
+		Width(boxWidth).
+		Render(body)
 }
 
 func (m Model) renderList(width int) string {
@@ -1177,6 +1290,10 @@ func (m Model) renderList(width int) string {
 		dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
 		if item.ProjectName != lastProject {
 			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+			// Add a top margin between projects, but not above the very first one.
+			if lastProject != "" {
+				headerStyle = headerStyle.MarginTop(1)
+			}
 			header := item.ProjectName
 			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
 				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color("117"))
@@ -1203,20 +1320,16 @@ func (m Model) renderList(width int) string {
 		label := truncate(item.WorkspaceName, max(10, width-20))
 		if item.Stale {
 			label += " ⚠"
-		} else if item.Active {
-			label += " ●"
 		}
-		prompt := item.PromptPreview
-		if strings.TrimSpace(prompt) == "" {
-			prompt = "—"
-		}
-		line := fmt.Sprintf("%s %-4s %s", prefix, compactStatus(item.Status), label)
+		line := fmt.Sprintf("%s %s %s", prefix, statusGlyph(item.Status, dim), label)
 		rows = append(rows, style.Render(line))
-		promptColor := lipgloss.Color("245")
-		if dim {
-			promptColor = lipgloss.Color("238")
+		if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
+			promptColor := lipgloss.Color("245")
+			if dim {
+				promptColor = lipgloss.Color("238")
+			}
+			rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(promptColor).Render("   "+truncate(prompt, max(8, width-4))))
 		}
-		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(promptColor).Render("   "+truncate(prompt, max(8, width-4))))
 	}
 	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 }
@@ -1805,20 +1918,42 @@ func assignHints(names []string) map[string]string {
 	return out
 }
 
-func compactStatus(status string) string {
+// statusGlyph renders a colored ● for an agent status. When dim is true, the
+// row is being shown as dimmed (filtered/inactive) and we render a duller
+// version of the same color so the glyph still shows but doesn't fight the
+// row styling.
+func statusGlyph(status string, dim bool) string {
+	color := statusColor(status, dim)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("●")
+}
+
+func statusColor(status string, dim bool) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "in progress", "in_progress", "running":
-		return "RUN"
+	case "working", "in progress", "in_progress", "running":
+		if dim {
+			return "65"
+		}
+		return "82"
 	case "waiting":
-		return "WAIT"
-	case "error":
-		return "ERR"
+		if dim {
+			return "136"
+		}
+		return "214"
+	case "exited", "error":
+		if dim {
+			return "131"
+		}
+		return "203"
 	case "starting":
-		return "INIT"
-	case "done":
-		return "DONE"
-	default:
-		return "IDLE"
+		if dim {
+			return "67"
+		}
+		return "117"
+	default: // idle / done / unknown
+		if dim {
+			return "238"
+		}
+		return "244"
 	}
 }
 
