@@ -66,9 +66,10 @@ Press `?` inside the deck for the full key + status legend.
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config) |
 | `n` | New workspace (form: bookmark/branch/PR) |
+| `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style project → workspace jump |
 | `/` | Filter rows · `esc` clears |
-| `P` | Toggle scope: current project ↔ all projects |
+| `P` | Cycle scope: current project → all projects → awaiting input (persisted across runs) |
 | `L` | Switch to last tmux session |
 | `R` | Relink session |
 | `D` | Delete workspace |
@@ -86,6 +87,7 @@ Press `?` inside the deck for the full key + status legend.
 | `awp w info <name>` | Show details for a workspace |
 | `awp w rename <old> <new>` | Rename |
 | `awp w delete <name>` | Delete (use `--force` to skip prompts) |
+| `awp w prune [--dry-run] [--force]` | Remove orphan workspace dirs under `~/.awp/workspaces` not tracked in state |
 | `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
 | `awp review [pr#]` | Pick or open a PR for review in a fresh workspace |
 | `awp diff` | Charm-styled diff viewer |
@@ -112,9 +114,14 @@ Example:
   },
   "hooks": {
     "bootstrap": ["pnpm install", "make migrate"]
+  },
+  "deck": {
+    "project_roots": ["~/p", "~/go/src/github.com/andrewcohen"]
   }
 }
 ```
+
+> **Note**: awp will refuse to operate on `$HOME` as a repo (deck open, workspace open/create/delete/rename, project picker selection) so workspace dirs and bookmarks don't end up scattered across your home.
 
 ### `agent`
 
@@ -127,6 +134,10 @@ Custom commands surfaced by the deck's `x` action menu. Each action runs in a ne
 ### `hooks.bootstrap`
 
 Shell commands run after a workspace's jj layout exists but before the agent starts. Used for things like `pnpm install` or `make seed`.
+
+### `deck.project_roots`
+
+List of directories the deck's `o` (open) screen scans for projects. Tilde-expanded. The walker descends up to 4 levels and stops at any directory containing `.git` or `.jj`. Selecting a project summons (or creates) a tmux session named `[awp]<basename>__default` at that path.
 
 ## How status reporting works
 

@@ -17,7 +17,13 @@ func writeConfig(t *testing.T, dir, content string) {
 	}
 }
 
+func isolateGlobalConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+}
+
 func TestLoadActionsFromProjectConfig(t *testing.T) {
+	isolateGlobalConfig(t)
 	repo := t.TempDir()
 	writeConfig(t, repo, `{
 		"actions": {
@@ -39,6 +45,7 @@ func TestLoadActionsFromProjectConfig(t *testing.T) {
 }
 
 func TestLoadMissingConfigReturnsEmpty(t *testing.T) {
+	isolateGlobalConfig(t)
 	repo := t.TempDir()
 	cfg, err := Load(repo)
 	if err != nil {

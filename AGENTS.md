@@ -70,6 +70,14 @@ If you cannot run something, state what was not run and why.
 - Treat the spec as a primary code-review artifact for humans.
 - When implementation deviates from the spec, update the spec in the same change (decisions, scope, acceptance criteria, QA notes) so it stays accurate.
 
+## Documentation
+
+- **Always update `README.md` in the same change as any user-facing feature**: new CLI commands or flags, new deck keys / modes, new config fields, new persisted files, or behavior changes a user would notice. The README is part of the change, not a follow-up.
+- Update the relevant table (key bindings, CLI reference, configuration) and add a short prose paragraph if the feature needs explanation beyond a one-liner.
+- New config field → add it to the example JSON block.
+- New persisted file under `~/.awp/` or `~/.config/awp/` → mention it in the relevant section.
+- Deck key/mode shared between the right details panel and the `?` help overlay live in `internal/deckui/model.go::deckKeyGroups` — update that one slice rather than two surfaces.
+
 ## Communication
 
 - Summarize what changed, where, and why.
