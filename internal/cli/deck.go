@@ -132,6 +132,9 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	if workspace.IsHomeDir(repoRoot) {
+		return fmt.Errorf("refusing to open deck at $HOME — cd into a project first")
+	}
 	projectName := filepath.Base(repoRoot)
 	items, allItems, err := loadDeckItems(j, tmuxClient, svc, repoRoot, projectName, in, out)
 	if err != nil {
