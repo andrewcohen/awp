@@ -23,6 +23,12 @@ type Config struct {
 	// invoked as `<agent> <prompt>` (or just `<agent>` when no prompt is
 	// passed). Defaults to "pi" when unset. Project config overrides global.
 	Agent string `json:"agent,omitempty"`
+	Deck  struct {
+		// ProjectRoots are directories under which the deck's project
+		// picker (`o`) searches for git/jj repos. Tilde-expanded.
+		// Example: ["~/p", "~/go/src"].
+		ProjectRoots []string `json:"project_roots,omitempty"`
+	} `json:"deck,omitempty"`
 }
 
 // DefaultAgent is the agent command used when neither global nor project
@@ -89,6 +95,9 @@ func merge(global, project Config) Config {
 	}
 	if strings.TrimSpace(out.Agent) == "" {
 		out.Agent = global.Agent
+	}
+	if len(out.Deck.ProjectRoots) == 0 {
+		out.Deck.ProjectRoots = global.Deck.ProjectRoots
 	}
 	return out
 }

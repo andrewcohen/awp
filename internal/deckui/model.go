@@ -210,6 +210,27 @@ type PRItem struct {
 	IsDraft bool
 }
 
+// ProjectItem describes a discovered project directory shown in the open
+// picker. Path is the absolute repo root.
+type ProjectItem struct {
+	Path string
+	Name string // display label, usually filepath.Base(Path)
+}
+
+// ProjectFinder returns a tea.Cmd that discovers projects from configured
+// roots and emits a ProjectsDoneMsg.
+type ProjectFinder func() tea.Cmd
+
+// ProjectsDoneMsg carries the result of an async project search.
+type ProjectsDoneMsg struct {
+	Projects []ProjectItem
+	Err      error
+}
+
+// ProjectOpener is invoked when the user picks a project from the open
+// picker. The deck quits afterwards (handler is expected to switch tmux).
+type ProjectOpener func(ProjectItem) error
+
 // PRFetcher returns a tea.Cmd that fetches PRs and emits a PRFetchDoneMsg.
 // repoRoot scopes the fetch to the selected item's repository.
 type PRFetcher func(repoRoot string) tea.Cmd
@@ -288,6 +309,13 @@ type Model struct {
 	progressDone       bool
 	progressDoneAction Action
 	progressChan       chan progressEvent
+	openMode           bool
+	openLoading        bool
+	openProjects       []ProjectItem
+	openCursor         int
+	openFilter         textinput.Model
+	projectFinder      ProjectFinder
+	projectOpener      ProjectOpener
 }
 
 const progressLogMax = 50
@@ -328,6 +356,9 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	bf := textinput.New()
 	bf.Placeholder = "filter bookmarks..."
 	bf.CharLimit = 64
+	of := textinput.New()
+	of.Placeholder = "filter projects..."
+	of.CharLimit = 96
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	m := Model{
@@ -335,7 +366,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
 		scope:             defaultInitialScope(itemsAll),
-		status:            "? help · ↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
+		status:            "? help · ↑/↓ move · enter summon · o open · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -345,6 +376,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		handler:           handler,
 		filterInput:       fi,
 		bookmarkFilter:    bf,
+		openFilter:        of,
 		spinner:           sp,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
@@ -393,6 +425,20 @@ func (m Model) WithBookmarkFetcher(f BookmarkFetcher) Model {
 
 func (m Model) WithStateEditor(l StateEditorLauncher) Model {
 	m.stateEditor = l
+	return m
+}
+
+// WithProjectFinder installs the async finder that discovers projects from
+// configured roots. Without it, the `o` key shows an error.
+func (m Model) WithProjectFinder(f ProjectFinder) Model {
+	m.projectFinder = f
+	return m
+}
+
+// WithProjectOpener installs the handler invoked when the user picks a
+// project from the open screen. The deck quits after a successful pick.
+func (m Model) WithProjectOpener(o ProjectOpener) Model {
+	m.projectOpener = o
 	return m
 }
 
@@ -503,7 +549,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!m.confirmDelete && !m.filtering &&
 			!m.findMode && !m.actionMode &&
 			!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
-			!m.helpMode {
+			!m.openMode && !m.helpMode {
 			return m, tea.Batch(m.refresher(), scheduleRefreshTick())
 		}
 		return m, scheduleRefreshTick()
@@ -590,6 +636,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bookmarkFiltering = true
 		m.bookmarkFilter.Focus()
 		m.status = "bookmark: type to filter · enter pick · esc cancel"
+		return m, textinput.Blink
+	case ProjectsDoneMsg:
+		m.busy = false
+		if !m.openMode {
+			return m, nil
+		}
+		m.openLoading = false
+		if msg.Err != nil {
+			m.openMode = false
+			m.status = "open: " + msg.Err.Error()
+			return m, nil
+		}
+		if len(msg.Projects) == 0 {
+			m.openMode = false
+			m.status = "open: no projects found (configure deck.project_roots)"
+			return m, nil
+		}
+		m.openProjects = msg.Projects
+		m.openCursor = 0
+		m.openFilter.Focus()
+		m.status = "open: type to filter · enter pick · esc cancel"
 		return m, textinput.Blink
 	case PRFetchDoneMsg:
 		m.busy = false
@@ -728,6 +795,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		}
+		if m.openMode {
+			if m.openLoading {
+				switch msg.String() {
+				case "esc", "ctrl+c":
+					m.openMode = false
+					m.openLoading = false
+					m.status = "open: cancelled"
+				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.openMode = false
+				m.openProjects = nil
+				m.openCursor = 0
+				m.openFilter.Blur()
+				m.openFilter.SetValue("")
+				m.status = "open: cancelled"
+				return m, nil
+			case "down", "ctrl+n":
+				if m.openCursor < len(m.filteredProjects())-1 {
+					m.openCursor++
+				}
+				return m, nil
+			case "up", "ctrl+p":
+				if m.openCursor > 0 {
+					m.openCursor--
+				}
+				return m, nil
+			case "enter":
+				picks := m.filteredProjects()
+				if len(picks) == 0 || m.projectOpener == nil {
+					return m, nil
+				}
+				pick := picks[m.openCursor]
+				err := m.projectOpener(pick)
+				if err != nil {
+					m.status = "open: " + err.Error()
+					return m, nil
+				}
+				return m, tea.Quit
+			}
+			var cmd tea.Cmd
+			m.openFilter, cmd = m.openFilter.Update(msg)
+			if m.openCursor >= len(m.filteredProjects()) {
+				m.openCursor = 0
+			}
+			return m, cmd
 		}
 		if m.bookmarkMode {
 			if m.bookmarkLoading {
@@ -986,6 +1102,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.newMenuRepo = item.RepoRoot
 			m.status = "new: choose start (↑/↓ enter · b bookmark · r review · esc cancel)"
 			return m, nil
+		case "o":
+			if m.projectFinder == nil {
+				m.status = "open: not configured (set deck.project_roots in config)"
+				return m, nil
+			}
+			m.openMode = true
+			m.openLoading = true
+			m.openProjects = nil
+			m.openCursor = 0
+			m.openFilter.SetValue("")
+			m.busy = true
+			m.status = "open: scanning project roots..."
+			return m, tea.Batch(m.spinner.Tick, m.projectFinder())
 		case ",":
 			if m.stateEditor == nil {
 				m.status = "edit state: not configured"
@@ -1073,6 +1202,53 @@ func (m Model) filteredBookmarks() []string {
 		}
 	}
 	return out
+}
+
+func (m Model) filteredProjects() []ProjectItem {
+	q := strings.ToLower(strings.TrimSpace(m.openFilter.Value()))
+	if q == "" {
+		return append([]ProjectItem(nil), m.openProjects...)
+	}
+	out := make([]ProjectItem, 0, len(m.openProjects))
+	for _, p := range m.openProjects {
+		if fuzzyMatch(strings.ToLower(p.Name), q) || fuzzyMatch(strings.ToLower(p.Path), q) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// fuzzyMatch returns true if every rune of needle appears in haystack in
+// order (subsequence match). Used by the project picker so typing
+// "myrepo" matches "github.com/me/myrepo".
+func fuzzyMatch(haystack, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	hi := 0
+	for _, nr := range needle {
+		found := false
+		for hi < len(haystack) {
+			hr, size := utf8DecodeRune(haystack[hi:])
+			hi += size
+			if hr == nr {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func utf8DecodeRune(s string) (rune, int) {
+	for i, r := range s {
+		_ = i
+		return r, len(string(r))
+	}
+	return 0, 0
 }
 
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
@@ -1252,6 +1428,9 @@ func (m Model) View() string {
 	case m.newMenuMode:
 		left = m.renderNewMenu(leftWidth)
 		right = m.renderNewMenuDetails(rightWidth)
+	case m.openMode:
+		left = m.renderOpenList(leftWidth)
+		right = m.renderOpenDetails(rightWidth)
 	case m.bookmarkMode:
 		left = m.renderBookmarkList(leftWidth)
 		right = m.renderBookmarkDetails(rightWidth)
@@ -1323,6 +1502,7 @@ func (m Model) renderHelp(width int) string {
 		{"i", "ci window (gh run watch)"},
 		{"r", "review a PR"},
 		{"x", "user actions menu"},
+		{"o", "open: fuzzy-pick a project from configured roots"},
 		{"f", "find: project → workspace easymotion jump"},
 		{"/", "filter rows · esc clears"},
 		{"P", "cycle scope (current project → all projects → awaiting input)"},
@@ -1538,6 +1718,55 @@ func (m Model) renderNewMenuDetails(width int) string {
 		"r        review   (quick)",
 		"esc      cancel",
 	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderOpenList(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("open: pick a project")
+	rows := []string{title, ""}
+	if m.openLoading {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Scanning project roots..."))
+		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	}
+	rows = append(rows, "/"+m.openFilter.View(), "")
+	picks := m.filteredProjects()
+	if len(picks) == 0 {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No projects match."))
+		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	}
+	for i, p := range picks {
+		prefix := "  "
+		style := lipgloss.NewStyle().Width(width - 1)
+		if i == m.openCursor {
+			prefix = "› "
+			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+		}
+		label := truncate(p.Name, max(10, width-4))
+		rows = append(rows, style.Render(prefix+label))
+	}
+	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+}
+
+func (m Model) renderOpenDetails(width int) string {
+	title := lipgloss.NewStyle().Bold(true).Render("open")
+	picks := m.filteredProjects()
+	lines := []string{title, ""}
+	if m.openCursor >= 0 && m.openCursor < len(picks) {
+		p := picks[m.openCursor]
+		lines = append(lines,
+			"Selection: "+p.Name,
+			"Path:      "+p.Path,
+		)
+	} else {
+		lines = append(lines, "Pick a project to summon (or create) its default workspace.")
+	}
+	lines = append(lines, "",
+		"Keys:",
+		"type     fuzzy filter",
+		"↑/↓      navigate",
+		"enter    open",
+		"esc      cancel",
+	)
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
