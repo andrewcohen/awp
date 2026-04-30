@@ -164,6 +164,43 @@ type BookmarksDoneMsg struct {
 
 type Refresher func() tea.Cmd
 
+// Scope controls which items are shown in the deck list.
+type Scope int
+
+const (
+	ScopeCurrent  Scope = iota // workspaces in the current project
+	ScopeAll                   // workspaces across all projects
+	ScopeAwaiting              // only workspaces with status=waiting (any project)
+)
+
+// String returns the persisted token for a Scope.
+func (s Scope) String() string {
+	switch s {
+	case ScopeAll:
+		return "all"
+	case ScopeAwaiting:
+		return "awaiting"
+	default:
+		return "current"
+	}
+}
+
+// ParseScope returns the Scope for a persisted token, defaulting to current.
+func ParseScope(s string) Scope {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "all":
+		return ScopeAll
+	case "awaiting":
+		return ScopeAwaiting
+	default:
+		return ScopeCurrent
+	}
+}
+
+// ScopeChangedHandler is invoked when the user toggles scope (P), so the
+// caller can persist the choice across runs.
+type ScopeChangedHandler func(Scope)
+
 // PRItem is a lightweight PR summary for the review picker.
 type PRItem struct {
 	Number  int
@@ -195,7 +232,8 @@ const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 type Model struct {
 	itemsCurrent      []Item
 	itemsAll          []Item
-	showAll           bool
+	scope             Scope
+	scopeChanged      ScopeChangedHandler
 	currentRepo       string
 	cursor            int
 	width             int
@@ -296,7 +334,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsCurrent:      append([]Item(nil), itemsCurrent...),
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
-		showAll:           len(itemsAll) > 0,
+		scope:             defaultInitialScope(itemsAll),
 		status:            "? help · ↑/↓ move · enter summon · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
@@ -315,11 +353,15 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	return m
 }
 
-func (m Model) indexCurrent() int {
-	src := m.itemsCurrent
-	if m.showAll && len(m.itemsAll) > 0 {
-		src = m.itemsAll
+func defaultInitialScope(itemsAll []Item) Scope {
+	if len(itemsAll) > 0 {
+		return ScopeAll
 	}
+	return ScopeCurrent
+}
+
+func (m Model) indexCurrent() int {
+	src := m.scopedSource()
 	for i, it := range src {
 		if it.Current {
 			return i
@@ -354,6 +396,41 @@ func (m Model) WithStateEditor(l StateEditorLauncher) Model {
 	return m
 }
 
+// WithScope sets the initial scope (called by the deck launcher after loading
+// the persisted preference). Has no effect if scope is invalid.
+func (m Model) WithScope(scope Scope) Model {
+	if scope == ScopeCurrent || scope == ScopeAll || scope == ScopeAwaiting {
+		m.scope = scope
+		if idx := m.indexCurrent(); idx >= 0 {
+			m.cursor = idx
+		}
+	}
+	return m
+}
+
+// WithScopeChanged installs a callback invoked whenever the user cycles scope.
+func (m Model) WithScopeChanged(h ScopeChangedHandler) Model {
+	m.scopeChanged = h
+	return m
+}
+
+// Scope returns the active scope (used by tests).
+func (m Model) Scope() Scope { return m.scope }
+
+func scopeLabel(scope Scope, currentRepo string) string {
+	switch scope {
+	case ScopeAll:
+		return "all projects"
+	case ScopeAwaiting:
+		return "awaiting input"
+	default:
+		if strings.TrimSpace(currentRepo) != "" {
+			return currentRepo
+		}
+		return "current project"
+	}
+}
+
 func (m Model) WithUserActions(actions []UserAction) Model {
 	m.userActions = actions
 	m.actionAliasLookup = make(map[string]UserAction, len(actions))
@@ -365,10 +442,29 @@ func (m Model) WithUserActions(actions []UserAction) Model {
 	return m
 }
 
+// scopedSource returns the unfiltered item slice for the active scope.
+func (m Model) scopedSource() []Item {
+	switch m.scope {
+	case ScopeAll, ScopeAwaiting:
+		if len(m.itemsAll) > 0 {
+			return m.itemsAll
+		}
+		return m.itemsCurrent
+	default:
+		return m.itemsCurrent
+	}
+}
+
 func (m Model) items() []Item {
-	src := m.itemsCurrent
-	if m.showAll && len(m.itemsAll) > 0 {
-		src = m.itemsAll
+	src := m.scopedSource()
+	if m.scope == ScopeAwaiting {
+		filtered := make([]Item, 0, len(src))
+		for _, it := range src {
+			if strings.EqualFold(strings.TrimSpace(it.Status), "waiting") {
+				filtered = append(filtered, it)
+			}
+		}
+		src = filtered
 	}
 	f := strings.ToLower(strings.TrimSpace(m.filter))
 	if f == "" {
@@ -814,12 +910,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "P":
-			m.showAll = !m.showAll
+			m.scope = (m.scope + 1) % 3
 			m.cursor = 0
-			if m.showAll {
-				m.status = "scope: all projects"
-			} else {
-				m.status = "scope: current project"
+			m.status = "scope: " + scopeLabel(m.scope, m.currentRepo)
+			if m.scopeChanged != nil {
+				m.scopeChanged(m.scope)
 			}
 			return m, nil
 		case "k", "up":
@@ -1230,7 +1325,7 @@ func (m Model) renderHelp(width int) string {
 		{"x", "user actions menu"},
 		{"f", "find: project → workspace easymotion jump"},
 		{"/", "filter rows · esc clears"},
-		{"P", "toggle scope (current project ↔ all projects)"},
+		{"P", "cycle scope (current project → all projects → awaiting input)"},
 		{"L", "switch to last tmux session"},
 		{"R", "relink session"},
 		{"D", "delete workspace"},
@@ -1270,14 +1365,7 @@ func (m Model) renderHelp(width int) string {
 
 func (m Model) renderList(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("awp deck")
-	scope := "current project"
-	if m.currentRepo != "" {
-		scope = m.currentRepo
-	}
-	if m.showAll {
-		scope = "all projects"
-	}
-	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("scope: " + scope + "  (P to toggle)")
+	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("scope: " + scopeLabel(m.scope, m.currentRepo) + "  (P to cycle)")
 	rows := []string{title, subtitle, ""}
 	items := m.items()
 	if len(items) == 0 {
