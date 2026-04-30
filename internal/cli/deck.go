@@ -299,7 +299,12 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.StateEditDoneMsg{Err: err}
 		})
 	}
-	model := deckui.NewScoped(items, allItems, projectName, handler).WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).WithStateEditor(stateEditor).WithUserActions(userActions)
+	model := deckui.NewScoped(items, allItems, projectName, handler).
+		WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).
+		WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).
+		WithStateEditor(stateEditor).WithUserActions(userActions).
+		WithScope(loadDeckScope()).
+		WithScopeChanged(saveDeckScope)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
