@@ -93,6 +93,7 @@ func (s *deckFakeService) RecordSession(string, string, string) error { return n
 func (s *deckFakeService) UpdatePrompt(string, string) error          { return nil }
 func (s *deckFakeService) UpdateStatus(string, string) error          { return nil }
 func (s *deckFakeService) ClearSession(string) error                  { return nil }
+func (s *deckFakeService) PruneOrphans(bool) ([]string, error)        { return nil, nil }
 
 func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
