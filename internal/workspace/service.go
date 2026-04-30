@@ -104,6 +104,7 @@ type Service interface {
 	UpdatePrompt(workspaceName, prompt string) error
 	UpdateStatus(workspaceName, status string) error
 	ClearSession(workspaceName string) error
+	PruneOrphans(dryRun bool) ([]string, error)
 }
 
 type CrossRepoEntry struct {
@@ -810,6 +811,7 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 		if strings.HasPrefix(entry.Path, managedBase+string(filepath.Separator)) || entry.Path == managedBase {
 			_ = os.RemoveAll(entry.Path)
 			s.logf("✅ Removed workspace directory %q", entry.Path)
+			pruneEmptyParents(entry.Path, managedBase)
 		} else {
 			s.logf("⏭️ Skipped workspace directory removal (%q outside managed base)", entry.Path)
 		}
@@ -1252,6 +1254,104 @@ func (s *service) prepareWorkspacePath(path string) error {
 		return fmt.Errorf("remove stale workspace path %q: %w", path, err)
 	}
 	return nil
+}
+
+// PruneOrphans walks the managed workspace base and removes every
+// <repo>/<workspace> directory not referenced by any entry in the global
+// state. Returns the list of paths that were (or would have been, if dryRun)
+// removed. Empty parent dirs are also pruned.
+func (s *service) PruneOrphans(dryRun bool) ([]string, error) {
+	base := s.managedWorkspaceBase()
+	info, err := os.Stat(base)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat managed workspace base: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("managed workspace base %q is not a directory", base)
+	}
+
+	known := map[string]struct{}{}
+	if all, ok := s.store.(AllStore); ok {
+		repoMap, err := all.LoadAll()
+		if err != nil {
+			return nil, err
+		}
+		for _, entries := range repoMap {
+			for _, e := range entries {
+				p := strings.TrimSpace(e.Path)
+				if p == "" {
+					continue
+				}
+				if abs, err := filepath.Abs(p); err == nil {
+					known[filepath.Clean(abs)] = struct{}{}
+				}
+			}
+		}
+	}
+
+	var removed []string
+	repoDirs, err := os.ReadDir(base)
+	if err != nil {
+		return nil, fmt.Errorf("read managed workspace base: %w", err)
+	}
+	for _, repoDir := range repoDirs {
+		if !repoDir.IsDir() {
+			continue
+		}
+		repoPath := filepath.Join(base, repoDir.Name())
+		wsDirs, err := os.ReadDir(repoPath)
+		if err != nil {
+			continue
+		}
+		for _, wsDir := range wsDirs {
+			if !wsDir.IsDir() {
+				continue
+			}
+			wsPath := filepath.Join(repoPath, wsDir.Name())
+			if _, ok := known[filepath.Clean(wsPath)]; ok {
+				continue
+			}
+			removed = append(removed, wsPath)
+			if !dryRun {
+				if err := os.RemoveAll(wsPath); err != nil {
+					return removed, fmt.Errorf("remove %q: %w", wsPath, err)
+				}
+			}
+		}
+		if !dryRun {
+			pruneEmptyParents(filepath.Join(repoPath, ".sentinel"), base)
+		}
+	}
+	return removed, nil
+}
+
+// pruneEmptyParents removes the parent directory of removed (and any
+// further-up empty ancestors) up to and excluding root. Best-effort.
+func pruneEmptyParents(removed, root string) {
+	if removed == "" || root == "" {
+		return
+	}
+	dir := filepath.Dir(removed)
+	for {
+		cleaned := filepath.Clean(dir)
+		if cleaned == "" || cleaned == "." || cleaned == filepath.Clean(root) {
+			return
+		}
+		if !strings.HasPrefix(cleaned, filepath.Clean(root)+string(filepath.Separator)) {
+			return
+		}
+		entries, err := os.ReadDir(cleaned)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(cleaned); err != nil {
+			return
+		}
+		dir = filepath.Dir(cleaned)
+	}
 }
 
 func (s *service) isUnderManagedWorkspaceBase(path string) bool {

@@ -135,6 +135,8 @@ func (a *App) runWorkspace(args []string) error {
 		return a.runDelete(args[1:])
 	case "bootstrap":
 		return a.runBootstrap(args[1:])
+	case "prune":
+		return a.runPrune(args[1:])
 	default:
 		return fmt.Errorf("unknown workspace subcommand %q", args[0])
 	}
@@ -153,6 +155,65 @@ func (a *App) runBootstrap(args []string) error {
 		name = args[0]
 	}
 	return a.svc.Bootstrap(name)
+}
+
+func (a *App) runPrune(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp w prune [--dry-run] [--force]\nRemoves orphaned workspace directories under ~/.awp/workspaces that are not tracked in awp state.")
+		return nil
+	}
+	dryRun := false
+	force := false
+	for _, arg := range args {
+		switch arg {
+		case "--dry-run", "-n":
+			dryRun = true
+		case "--force", "-f":
+			force = true
+		default:
+			return fmt.Errorf("unknown prune flag %q", arg)
+		}
+	}
+	if !dryRun && !force {
+		paths, err := a.svc.PruneOrphans(true)
+		if err != nil {
+			return err
+		}
+		if len(paths) == 0 {
+			_, _ = fmt.Fprintln(a.out, "No orphan workspace directories found.")
+			return nil
+		}
+		_, _ = fmt.Fprintln(a.out, "Would remove:")
+		for _, p := range paths {
+			_, _ = fmt.Fprintf(a.out, "  %s\n", p)
+		}
+		_, _ = fmt.Fprintf(a.out, "\nRemove %d orphan(s)? [y/N]: ", len(paths))
+		reader := bufio.NewReader(a.in)
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		answer := strings.TrimSpace(strings.ToLower(line))
+		if answer != "y" && answer != "yes" {
+			return errors.New("prune cancelled")
+		}
+	}
+	paths, err := a.svc.PruneOrphans(dryRun)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		_, _ = fmt.Fprintln(a.out, "No orphan workspace directories found.")
+		return nil
+	}
+	verb := "Removed"
+	if dryRun {
+		verb = "Would remove"
+	}
+	for _, p := range paths {
+		_, _ = fmt.Fprintf(a.out, "%s %s\n", verb, p)
+	}
+	return nil
 }
 
 func (a *App) runList(args []string) error {
@@ -568,7 +629,7 @@ func (a *App) usage() error {
 }
 
 func (a *App) workspaceUsage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|bootstrap|rename|delete|remove|rm>")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|bootstrap|rename|delete|remove|rm|prune>")
 	return nil
 }
 
