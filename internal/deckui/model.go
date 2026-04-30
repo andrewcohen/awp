@@ -1285,6 +1285,20 @@ func (m Model) renderList(width int) string {
 		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 	}
 	projectHints, rowHints := m.findHints()
+	// Reserve a fixed prefix slot so workspace rows and project headers
+	// don't shift horizontally when find-mode hints (1- or 2-char) appear.
+	prefixWidth := 2
+	for _, h := range rowHints {
+		if w := len(h) + 2; w > prefixWidth {
+			prefixWidth = w
+		}
+	}
+	for _, h := range projectHints {
+		if w := len(h) + 2; w > prefixWidth {
+			prefixWidth = w
+		}
+	}
+	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
 	lastProject := ""
 	for i, item := range items {
 		dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
@@ -1294,15 +1308,16 @@ func (m Model) renderList(width int) string {
 			if lastProject != "" {
 				headerStyle = headerStyle.MarginTop(1)
 			}
-			header := item.ProjectName
 			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
 				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color("117"))
 			} else if dim {
 				headerStyle = headerStyle.Foreground(lipgloss.Color("238"))
 			}
+			hintStr := ""
 			if hint, ok := projectHints[item.ProjectName]; ok {
-				header = fmt.Sprintf("%s %s", renderFindHint(hint), header)
+				hintStr = renderFindHint(hint)
 			}
+			header := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), item.ProjectName)
 			rows = append(rows, headerStyle.Render(header))
 			lastProject = item.ProjectName
 		}
@@ -1321,14 +1336,15 @@ func (m Model) renderList(width int) string {
 		if item.Stale {
 			label += " ⚠"
 		}
-		line := fmt.Sprintf("%s %s %s", prefix, statusGlyph(item.Status, dim), label)
+		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), statusGlyph(item.Status, dim), label)
 		rows = append(rows, style.Render(line))
 		if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
 			promptColor := lipgloss.Color("245")
 			if dim {
 				promptColor = lipgloss.Color("238")
 			}
-			rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(promptColor).Render("   "+truncate(prompt, max(8, width-4))))
+			promptIndent := strings.Repeat(" ", prefixWidth+1)
+			rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(promptColor).Render(promptIndent+truncate(prompt, max(8, width-prefixWidth-3))))
 		}
 	}
 	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
