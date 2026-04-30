@@ -304,7 +304,9 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithScope(loadDeckScope()).
-		WithScopeChanged(saveDeckScope)
+		WithScopeChanged(saveDeckScope).
+		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
+		WithProjectOpener(openProjectViaTmux(runner))
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
