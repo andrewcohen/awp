@@ -206,6 +206,9 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	if sErr != nil || strings.TrimSpace(repoRoot) == "" {
 		repoRoot = currentRoot
 	}
+	if err := s.guardRepoRoot(repoRoot); err != nil {
+		return "", "", false, err
+	}
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
 		name = bookmark
 	}
@@ -304,6 +307,9 @@ func (s *service) createWorkspace(name string, bookmark string, prompt string, r
 	repoRoot, sErr := s.jj.SourceRepoRoot()
 	if sErr != nil || strings.TrimSpace(repoRoot) == "" {
 		repoRoot = currentRoot
+	}
+	if err := s.guardRepoRoot(repoRoot); err != nil {
+		return err
 	}
 	s.logf("✅ Resolved repo root: %s", repoRoot)
 
@@ -527,6 +533,9 @@ func (s *service) Open(name string, bookmark string, prompt string, yes bool) er
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	if err := s.guardRepoRoot(repoRoot); err != nil {
+		return err
+	}
 	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
 		name = bookmark
 	}
@@ -687,6 +696,9 @@ func (s *service) Rename(oldName, newName string) error {
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	if err := s.guardRepoRoot(repoRoot); err != nil {
+		return err
+	}
 	oldNormalized, err := NormalizeName(oldName)
 	if err != nil {
 		return err
@@ -750,6 +762,9 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
+	}
+	if err := s.guardRepoRoot(repoRoot); err != nil {
+		return err
 	}
 	normalized, err := NormalizeName(name)
 	if err != nil {
@@ -885,6 +900,9 @@ func (s *service) Bootstrap(name string) error {
 	currentRoot, err := s.jj.RepoRoot()
 	if err != nil {
 		return fmt.Errorf("resolve current jj root: %w", err)
+	}
+	if err := s.guardRepoRoot(sourceRepo); err != nil {
+		return err
 	}
 
 	workspaceName := strings.TrimSpace(name)
@@ -1441,6 +1459,31 @@ func looksLikePath(value string) bool {
 
 func IsProtected(name string) bool {
 	return strings.TrimSpace(name) == "default"
+}
+
+// IsHomeDir reports whether path resolves to the user's home directory.
+// Returns false on resolution errors.
+func IsHomeDir(path string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return false
+	}
+	abs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(abs) == filepath.Clean(home)
+}
+
+// errRepoIsHome guards against treating $HOME as an awp-managed repo, which
+// would scatter workspace dirs and bookmarks all over the user's home.
+var errRepoIsHome = errors.New("refusing to operate on $HOME as a repo (awp is not allowed at your home directory)")
+
+func (s *service) guardRepoRoot(repoRoot string) error {
+	if IsHomeDir(repoRoot) {
+		return errRepoIsHome
+	}
+	return nil
 }
 
 func shellQuote(value string) string {

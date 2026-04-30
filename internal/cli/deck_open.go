@@ -11,6 +11,7 @@ import (
 
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/tmux"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // projectFinderFromRoots returns a deckui.ProjectFinder that walks the given
@@ -61,6 +62,9 @@ func walkProjectRoot(root, current string, maxDepth int, seen map[string]struct{
 		depth = strings.Count(rel, string(filepath.Separator)) + 1
 	}
 	if isRepoDir(current) {
+		if workspace.IsHomeDir(current) {
+			return
+		}
 		if _, ok := seen[current]; !ok {
 			seen[current] = struct{}{}
 			*out = append(*out, deckui.ProjectItem{Path: current, Name: filepath.Base(current)})
@@ -103,6 +107,9 @@ func openProjectViaTmux(runner Runner) deckui.ProjectOpener {
 		path := strings.TrimSpace(p.Path)
 		if path == "" {
 			return fmt.Errorf("open: empty project path")
+		}
+		if workspace.IsHomeDir(path) {
+			return fmt.Errorf("open: refusing to summon a session at $HOME")
 		}
 		repoName := strings.TrimSpace(filepath.Base(filepath.Clean(path)))
 		if repoName == "" {
