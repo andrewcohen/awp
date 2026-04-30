@@ -9,6 +9,7 @@ import (
 )
 
 func TestPostWorkspaceStartMissingConfigReturnsNoHooks(t *testing.T) {
+	isolateGlobalConfig(t)
 	repo := t.TempDir()
 	provider := NewFileHookProvider()
 
@@ -22,6 +23,7 @@ func TestPostWorkspaceStartMissingConfigReturnsNoHooks(t *testing.T) {
 }
 
 func TestPostWorkspaceStartParsesHookCommands(t *testing.T) {
+	isolateGlobalConfig(t)
 	repo := t.TempDir()
 	cfgDir := filepath.Join(repo, ".awp")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {

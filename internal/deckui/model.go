@@ -1492,32 +1492,18 @@ func (m Model) renderHelp(width int) string {
 		dot("exited", "exited — process gone, pane back at a shell"),
 	}
 
-	keyRows := [][2]string{
-		{"enter", "summon (create or focus the workspace tmux session)"},
-		{"a", "open agent window (re-attach without re-prompting)"},
-		{"e", "open editor window ($EDITOR)"},
-		{"c / C", "review window: tuicr -r @  /  tuicr -r main..@"},
-		{"v", "vcs window (jjui)"},
-		{"s", "shell window"},
-		{"i", "ci window (gh run watch)"},
-		{"r", "review a PR"},
-		{"x", "user actions menu"},
-		{"o", "open: fuzzy-pick a project from configured roots"},
-		{"f", "find: project → workspace easymotion jump"},
-		{"/", "filter rows · esc clears"},
-		{"P", "cycle scope (current project → all projects → awaiting input)"},
-		{"L", "switch to last tmux session"},
-		{"R", "relink session"},
-		{"D", "delete workspace"},
-		{",", "edit global state file in $EDITOR"},
-		{"?", "this help"},
-		{"q / esc", "quit"},
-	}
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
 	keyLines := []string{lipgloss.NewStyle().Bold(true).Render("Keys")}
-	for _, kr := range keyRows {
-		keyLines = append(keyLines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
+	for i, g := range deckKeyGroups() {
+		if i > 0 {
+			keyLines = append(keyLines, "")
+		}
+		keyLines = append(keyLines, headerStyle.Render(g.Title))
+		for _, kr := range g.Keys {
+			keyLines = append(keyLines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
+		}
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
@@ -1553,19 +1539,10 @@ func (m Model) renderList(width int) string {
 		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 	}
 	projectHints, rowHints := m.findHints()
-	// Reserve a fixed prefix slot so workspace rows and project headers
-	// don't shift horizontally when find-mode hints (1- or 2-char) appear.
-	prefixWidth := 2
-	for _, h := range rowHints {
-		if w := len(h) + 2; w > prefixWidth {
-			prefixWidth = w
-		}
-	}
-	for _, h := range projectHints {
-		if w := len(h) + 2; w > prefixWidth {
-			prefixWidth = w
-		}
-	}
+	// Reserve a fixed-width prefix slot at all times so workspace rows
+	// and project headers don't shift horizontally between modes (no
+	// find / 1-char hint / 2-char hint).
+	const prefixWidth = 4
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
 	lastProject := ""
 	for i, item := range items {
@@ -1618,6 +1595,65 @@ func (m Model) renderList(width int) string {
 	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 }
 
+// keyGroup is a labeled group of (key, description) rows shown in both the
+// right details panel and the `?` help overlay. One source of truth so the
+// two surfaces never drift.
+type keyGroup struct {
+	Title string
+	Keys  [][2]string
+}
+
+func deckKeyGroups() []keyGroup {
+	return []keyGroup{
+		{
+			Title: "Navigate",
+			Keys: [][2]string{
+				{"↑/↓ j/k", "move cursor"},
+				{"/", "filter rows · esc clears"},
+				{"f", "find: project → workspace easymotion jump"},
+				{"P", "cycle scope (current → all → awaiting)"},
+				{"L", "switch to last tmux session"},
+			},
+		},
+		{
+			Title: "Open / create",
+			Keys: [][2]string{
+				{"enter", "summon (create or focus the workspace tmux session)"},
+				{"n", "new workspace"},
+				{"o", "open: fuzzy-pick a project from configured roots"},
+			},
+		},
+		{
+			Title: "Windows",
+			Keys: [][2]string{
+				{"a", "agent window (re-attach without re-prompting)"},
+				{"e", "editor window ($EDITOR)"},
+				{"c / C", "review window: tuicr -r @  /  tuicr -r main..@"},
+				{"v", "vcs window (jjui)"},
+				{"s", "shell window"},
+				{"i", "ci window (gh run watch)"},
+				{"x", "user actions menu"},
+			},
+		},
+		{
+			Title: "Workspace",
+			Keys: [][2]string{
+				{"r", "review a PR"},
+				{"D", "delete workspace"},
+				{"R", "relink session"},
+				{",", "edit global state file in $EDITOR"},
+			},
+		},
+		{
+			Title: "View",
+			Keys: [][2]string{
+				{"?", "this help"},
+				{"q / esc", "quit"},
+			},
+		},
+	}
+}
+
 func (m Model) renderDetails(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("details")
 	item, ok := m.selected()
@@ -1655,22 +1691,18 @@ func (m Model) renderDetails(width int) string {
 		"Prompt:",
 		prompt,
 		"",
-		"Actions:",
-		"enter  summon (create/focus session)",
-		"f      find jump (project → workspace)",
-		"r      review PR",
-		"x      user actions",
-		"a      open agent window",
-		"e      open editor window ($EDITOR)",
-		"c      open review window (tuicr -r @)",
-		"C      open review window (tuicr -r main..@)",
-		"v      open vcs window (jjui)",
-		"s      open shell window",
-		"i      watch CI run for branch",
-		"D      delete workspace",
-		"R      relink/recover session",
-		",      edit ~/.awp/workspace-state.json in $EDITOR",
-		"q      quit deck",
+	}
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	for i, g := range deckKeyGroups() {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, headerStyle.Render(g.Title))
+		for _, kr := range g.Keys {
+			lines = append(lines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
+		}
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }

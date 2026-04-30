@@ -60,12 +60,17 @@ func Load(repoRoot string) (Config, error) {
 	return merge(global, project), nil
 }
 
+// globalConfigPath returns the canonical global config location:
+// $XDG_CONFIG_HOME/awp/config.json (defaulting to ~/.config/awp/config.json).
 func globalConfigPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = filepath.Join(os.Getenv("HOME"), ".config")
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "awp", "config.json")
 	}
-	return filepath.Join(dir, "awp", "config.json")
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		home = os.Getenv("HOME")
+	}
+	return filepath.Join(home, ".config", "awp", "config.json")
 }
 
 func loadFile(path string) (Config, error) {
