@@ -45,6 +45,14 @@ type Store interface {
 	Save(repoRoot string, entries map[string]Entry) error
 }
 
+// UpdaterStore is an optional interface a Store may implement to provide an
+// atomic read-modify-write that holds an OS-level lock for the whole sequence.
+// Mutations should prefer this when available so concurrent writers from
+// agent hooks + the deck don't drop each other's changes.
+type UpdaterStore interface {
+	Update(repoRoot string, fn func(map[string]Entry) map[string]Entry) error
+}
+
 type AllStore interface {
 	LoadAll() (map[string]map[string]Entry, error)
 }
@@ -67,6 +75,11 @@ type Entry struct {
 	AgentPaneID   string `json:",omitempty"`
 	ActivePrompt  string `json:",omitempty"`
 	Status        string `json:",omitempty"`
+	// Unread is set when the agent transitions to a state that wants the
+	// user's attention (waiting/idle/exited) and cleared when the user
+	// summons the workspace. Surfaces as a tmux status badge and the
+	// "notified" dot in the deck.
+	Unread bool `json:",omitempty"`
 }
 
 type ListEntry struct {
@@ -78,6 +91,7 @@ type ListEntry struct {
 	SessionName  string
 	ActivePrompt string
 	Status       string
+	Unread       bool
 }
 
 type InfoEntry struct {
@@ -103,6 +117,7 @@ type Service interface {
 	RecordSession(workspaceName, sessionID, sessionName string) error
 	UpdatePrompt(workspaceName, prompt string) error
 	UpdateStatus(workspaceName, status string) error
+	MarkRead(workspaceName string) error
 	ClearSession(workspaceName string) error
 	PruneOrphans(dryRun bool) ([]string, error)
 }
@@ -116,6 +131,7 @@ type CrossRepoEntry struct {
 	SessionName  string
 	ActivePrompt string
 	Status       string
+	Unread       bool
 }
 
 type Dependencies struct {
@@ -148,7 +164,68 @@ func (r *defaultCommandRunner) Run(ctx context.Context, dir string, name string,
 		cmd.Dir = dir
 	}
 	out, err := cmd.CombinedOutput()
-	return string(out), err
+	return string(out), explainCmdError(name, string(out), err)
+}
+
+// explainCmdError turns opaque exec errors into actionable messages. Mirrors
+// cli.explainExecError; kept here to avoid a workspace→cli import cycle. The
+// long-form PATH hint lives in cli.pathHint — this layer only sees jj/tmux
+// invocations from the service, where the most common failure is a missing
+// binary or a non-zero exit.
+func explainCmdError(name, out string, err error) error {
+	if err == nil {
+		return nil
+	}
+	hint := cmdRunnerPathHint(name)
+	if errors.Is(err, exec.ErrNotFound) {
+		return fmt.Errorf("%q is not on $PATH for this process.\n\n%s", name, hint)
+	}
+	var perr *exec.Error
+	if errors.As(err, &perr) {
+		return fmt.Errorf("could not run %q: %w\n\n%s", name, perr.Err, hint)
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		code := exitErr.ExitCode()
+		snippet := strings.TrimSpace(out)
+		if len(snippet) > 800 {
+			snippet = snippet[:800] + "…"
+		}
+		if code == 127 {
+			lead := fmt.Sprintf("%q exited 127 — the shell that ran it could not find the binary.", name)
+			if snippet != "" {
+				lead += "\n\nOutput:\n  " + snippet
+			}
+			return fmt.Errorf("%s\n\n%s", lead, hint)
+		}
+		if snippet != "" {
+			return fmt.Errorf("%q exited %d:\n%s", name, code, snippet)
+		}
+		return fmt.Errorf("%q exited %d (no output)", name, code)
+	}
+	return err
+}
+
+func cmdRunnerPathHint(name string) string {
+	return strings.Join([]string{
+		"Why this can happen inside a tmux popup or run-shell:",
+		"  tmux's popup/run-shell runs under a non-interactive /bin/sh that does NOT",
+		"  source your shell rc. The tmux server captures PATH once when it starts;",
+		"  if it was launched from a context where your shell rc had not yet added",
+		"  the install dir for " + name + ", it never will. That's why the same binding",
+		"  can work for one teammate and fail for another with `exit 127`.",
+		"",
+		"Fixes (pick one):",
+		"  1. Inject PATH into the tmux server (covers all popups). Add to ~/.tmux.conf:",
+		"       set-environment -g PATH \"$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\"",
+		"     Then reload: `tmux source-file ~/.tmux.conf`.",
+		"  2. Use an absolute path in your tmux bindings or the awp invocation.",
+		"",
+		"Verify with a popup that prints what tmux actually sees:",
+		"  tmux display-popup -E 'echo \"$PATH\"; which " + name + "; read'",
+		"(`tmux show-environment` does not answer this; it only lists explicit",
+		"set-environment overrides, not the inherited PATH.)",
+	}, "\n")
 }
 
 func NewService(deps Dependencies) *service {
@@ -469,6 +546,7 @@ func (s *service) List() ([]ListEntry, error) {
 			SessionName:  entry.SessionName,
 			ActivePrompt: entry.ActivePrompt,
 			Status:       entry.Status,
+			Unread:       entry.Unread,
 		})
 	}
 	return out, nil
@@ -576,7 +654,7 @@ func (s *service) ListAll() ([]CrossRepoEntry, error) {
 			out = append(out, CrossRepoEntry{
 				RepoRoot: repoRoot, ProjectName: projectName, Name: e.Name, Path: e.Path,
 				SessionID: e.SessionID, SessionName: e.SessionName,
-				ActivePrompt: e.ActivePrompt, Status: e.Status,
+				ActivePrompt: e.ActivePrompt, Status: e.Status, Unread: e.Unread,
 			})
 		}
 		return out, nil
@@ -620,7 +698,7 @@ func (s *service) ListAll() ([]CrossRepoEntry, error) {
 			out = append(out, CrossRepoEntry{
 				RepoRoot: r.repo, ProjectName: r.project, Name: e.Name, Path: e.Path,
 				SessionID: e.SessionID, SessionName: e.SessionName,
-				ActivePrompt: e.ActivePrompt, Status: e.Status,
+				ActivePrompt: e.ActivePrompt, Status: e.Status, Unread: e.Unread,
 			})
 		}
 	}
@@ -632,7 +710,27 @@ func (s *service) UpdatePrompt(workspaceName, prompt string) error {
 }
 
 func (s *service) UpdateStatus(workspaceName, status string) error {
-	return s.mutateEntry(workspaceName, func(e *Entry) { e.Status = status })
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.Status = status
+		if WantsAttention(status) {
+			e.Unread = true
+		}
+	})
+}
+
+func (s *service) MarkRead(workspaceName string) error {
+	return s.mutateEntry(workspaceName, func(e *Entry) { e.Unread = false })
+}
+
+// WantsAttention reports whether a status transition into `status` should mark
+// the workspace unread (badge it for the user). Working/starting do not.
+func WantsAttention(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "waiting", "idle", "exited":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *service) ClearSession(workspaceName string) error {
@@ -653,13 +751,26 @@ func (s *service) mutateEntry(workspaceName string, fn func(*Entry)) error {
 	if err != nil {
 		return err
 	}
+	updater, ok := s.store.(UpdaterStore)
+	if ok {
+		return updater.Update(repoRoot, func(entries map[string]Entry) map[string]Entry {
+			entries, _ = s.canonicalizeEntries(repoRoot, entries)
+			entry, exists := entries[normalized]
+			if !exists {
+				entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
+			}
+			fn(&entry)
+			entries[normalized] = entry
+			return entries
+		})
+	}
 	entries, err := s.store.Load(repoRoot)
 	if err != nil {
 		return err
 	}
 	entries, _ = s.canonicalizeEntries(repoRoot, entries)
-	entry, ok := entries[normalized]
-	if !ok {
+	entry, exists := entries[normalized]
+	if !exists {
 		entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
 	}
 	fn(&entry)
@@ -668,27 +779,13 @@ func (s *service) mutateEntry(workspaceName string, fn func(*Entry)) error {
 }
 
 func (s *service) RecordSession(workspaceName, sessionID, sessionName string) error {
-	repoRoot, err := s.jj.RepoRoot()
-	if err != nil {
-		return fmt.Errorf("not a jj repository: %w", err)
-	}
-	normalized, err := NormalizeName(workspaceName)
-	if err != nil {
-		return err
-	}
-	entries, err := s.store.Load(repoRoot)
-	if err != nil {
-		return err
-	}
-	entries, _ = s.canonicalizeEntries(repoRoot, entries)
-	entry, ok := entries[normalized]
-	if !ok {
-		entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
-	}
-	entry.SessionID = sessionID
-	entry.SessionName = sessionName
-	entries[normalized] = entry
-	return s.store.Save(repoRoot, entries)
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.SessionID = sessionID
+		e.SessionName = sessionName
+		// Summon (or any record-session) implies the user is opening this
+		// workspace, so clear the attention badge.
+		e.Unread = false
+	})
 }
 
 func (s *service) Rename(oldName, newName string) error {

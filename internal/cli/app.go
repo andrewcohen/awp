@@ -96,6 +96,10 @@ func (a *App) runInternal(args []string) error {
 	switch args[0] {
 	case "report-status":
 		return runReportStatus(args[1:], a.out)
+	case "unread-summary":
+		return runUnreadSummary(a.out)
+	case "mark-read":
+		return runMarkRead(args[1:])
 	default:
 		return fmt.Errorf("unknown internal subcommand %q", args[0])
 	}

@@ -30,6 +30,7 @@ type Item struct {
 	Path          string
 	RepoRoot      string
 	Status        string
+	Unread        bool
 	PromptPreview string
 	TmuxWindow    string
 	SessionName   string
@@ -1480,16 +1481,15 @@ func (m Model) View() string {
 func (m Model) renderHelp(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("awp deck — help (?, esc, or enter to close)")
 
-	dot := func(state string, label string) string {
-		return statusGlyph(state, false) + "  " + label
+	dot := func(state string, unread bool, label string) string {
+		return statusGlyph(state, false, unread) + "  " + label
 	}
 	statusLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Agent status (left dot)"),
-		dot("working", "working — actively producing output / running a tool"),
-		dot("waiting", "waiting — paused on a permission prompt"),
-		dot("idle", "idle — alive, sitting at its prompt"),
-		dot("starting", "starting — session initializing"),
-		dot("exited", "exited — process gone, pane back at a shell"),
+		dot("working", false, "working — actively producing output / running a tool"),
+		dot("waiting", true, "waiting — paused on a permission prompt"),
+		dot("idle", true, "notified — agent finished a turn (clears on summon)"),
+		dot("exited", true, "exited — process gone, pane back at a shell"),
 	}
 
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
@@ -1581,7 +1581,7 @@ func (m Model) renderList(width int) string {
 		if item.Stale {
 			label += " ⚠"
 		}
-		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), statusGlyph(item.Status, dim), label)
+		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), statusGlyph(item.Status, dim, item.Unread), label)
 		rows = append(rows, style.Render(line))
 		if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
 			promptColor := lipgloss.Color("245")
@@ -2286,13 +2286,27 @@ func assignHints(names []string) map[string]string {
 // statusGlyph renders a colored ● for an agent status. When dim is true, the
 // row is being shown as dimmed (filtered/inactive) and we render a duller
 // version of the same color so the glyph still shows but doesn't fight the
-// row styling.
-func statusGlyph(status string, dim bool) string {
-	color := statusColor(status, dim)
+// row styling. unread=true forces a notified (grey) dot for idle workspaces;
+// otherwise idle renders as a blank space so quiet workspaces don't add
+// visual noise.
+func statusGlyph(status string, dim bool, unread bool) string {
+	if isQuietStatus(status) && !unread {
+		return " "
+	}
+	color := statusColor(status, dim, unread)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("●")
 }
 
-func statusColor(status string, dim bool) string {
+func isQuietStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "idle", "done", "starting":
+		return true
+	default:
+		return false
+	}
+}
+
+func statusColor(status string, dim bool, unread bool) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "working", "in progress", "in_progress", "running":
 		if dim {
@@ -2314,7 +2328,7 @@ func statusColor(status string, dim bool) string {
 			return "67"
 		}
 		return "117"
-	default: // idle / done / unknown
+	default: // idle / done / unknown — only rendered when unread (notified)
 		if dim {
 			return "238"
 		}

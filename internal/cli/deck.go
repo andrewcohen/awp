@@ -336,7 +336,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 		entries = append(entries, workspace.CrossRepoEntry{
 			RepoRoot: repoRoot, ProjectName: projectName, Name: e.Name, Path: e.Path,
 			SessionID: e.SessionID, SessionName: e.SessionName,
-			ActivePrompt: e.ActivePrompt, Status: e.Status,
+			ActivePrompt: e.ActivePrompt, Status: e.Status, Unread: e.Unread,
 		})
 	}
 
@@ -358,6 +358,13 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 		sessionName := DeckSessionName(entry.ProjectName, entry.Name)
 		_, nameMatch := liveByName[sessionName]
 		delete(adoptable, sessionName)
+		// If the user is literally looking at this workspace's session,
+		// clear the unread badge — by definition they've seen it.
+		if entry.Unread && sessionName == currentSession {
+			if err := svc.MarkRead(entry.Name); err == nil {
+				entry.Unread = false
+			}
+		}
 		status := entry.Status
 		if strings.TrimSpace(status) == "" {
 			status = "idle"
@@ -377,6 +384,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 			Path:          entry.Path,
 			RepoRoot:      entry.RepoRoot,
 			Status:        status,
+			Unread:        entry.Unread,
 			PromptPreview: entry.ActivePrompt,
 			TmuxWindow:    sessionName,
 			SessionName:   sessionName,
@@ -408,6 +416,13 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 	for _, entry := range allEntries {
 		sessionName := DeckSessionName(entry.ProjectName, entry.Name)
 		_, nameMatch := liveByName[sessionName]
+		// Same auto-clear as the per-repo loop, but only suppress in-UI
+		// here — writing the cleared state requires a service rooted at
+		// `entry.RepoRoot`, which the writer-side check in report-status
+		// handles. The deck's own loadDeckItems for that repo will sync.
+		if entry.Unread && sessionName == currentSession {
+			entry.Unread = false
+		}
 		status := entry.Status
 		if strings.TrimSpace(status) == "" {
 			status = "idle"
@@ -427,6 +442,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 			Path:          entry.Path,
 			RepoRoot:      entry.RepoRoot,
 			Status:        status,
+			Unread:        entry.Unread,
 			PromptPreview: entry.ActivePrompt,
 			TmuxWindow:    sessionName,
 			SessionName:   sessionName,
@@ -513,6 +529,7 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 		reporter.Log("agent missing AWP_WORKSPACE — restart agent to enable status reporting")
 	}
 	_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
+	_ = svc.MarkRead(item.WorkspaceName)
 	reporter.Step(fmt.Sprintf("Switch to %s", sessionName))
 	return tmuxClient.SwitchClient(sessionName)
 }
@@ -587,6 +604,7 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	if err := tmuxClient.SwitchToWindow(target); err != nil {
 		return err
 	}
+	_ = svc.MarkRead(item.WorkspaceName)
 	return tmuxClient.SwitchClient(sessionName)
 }
 
@@ -679,6 +697,7 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 	if err := tmuxClient.SwitchToWindow(target); err != nil {
 		return err
 	}
+	_ = svc.MarkRead(item.WorkspaceName)
 	return tmuxClient.SwitchClient(sessionName)
 }
 
@@ -722,6 +741,7 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 	if err := tmuxClient.SwitchToWindow(target); err != nil {
 		return err
 	}
+	_ = svc.MarkRead(item.WorkspaceName)
 	return tmuxClient.SwitchClient(sessionName)
 }
 

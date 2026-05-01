@@ -40,6 +40,19 @@ Recommended invocation as a tmux popup (in `~/.tmux.conf`):
 bind a display-popup -E -w 90% -h 90% awp deck \; run-shell "awp deck-cleanup"
 ```
 
+> **Heads up — "exit code 127" from the popup or `deck-cleanup`?**
+> tmux's popup/run-shell commands run under a non-interactive `/bin/sh` that does **not** read your `~/.zshrc` / `~/.config/fish/config.fish`. If `awp` lives in `~/go/bin` (the `go install` default) and your shell rc adds that to PATH, tmux won't see it and you'll get a bare exit 127. Two fixes:
+>
+> 1. **Inject PATH into the tmux server** (recommended — covers all popups):
+>    ```tmux
+>    set -g update-environment "PATH DISPLAY ..."   # if not already
+>    set-environment -g PATH "$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+>    ```
+> 2. **Use absolute paths** in the binding:
+>    ```tmux
+>    bind a display-popup -E -w 90% -h 90% "$HOME/go/bin/awp deck" \; run-shell "$HOME/go/bin/awp deck-cleanup"
+>    ```
+
 Press `?` inside the deck for the full key + status legend.
 
 ### Agent status (the colored dot at the start of each row)
@@ -48,9 +61,11 @@ Press `?` inside the deck for the full key + status legend.
 |---|---|---|
 | 🟢 Green | `working` | Agent is actively producing output or running a tool |
 | 🟡 Yellow | `waiting` | Paused on a permission prompt — needs your input |
-| ⚪ Grey | `idle` | Alive, sitting at its prompt |
-| 🔵 Cyan | `starting` | Session initializing |
-| 🔴 Red | `exited` | Process gone, pane back at a shell |
+| ⚪ Grey | `notified` | Agent finished a turn (or exited) and you haven't summoned the workspace since |
+| 🔴 Red | `exited` | Process gone, pane back at a shell (rendered when notified) |
+| _(blank)_ | `idle` / `starting` | Quiet — no badge until the agent actually surfaces something |
+
+The grey "notified" dot is a per-workspace unread badge: it lights up when the agent transitions into `waiting`, `idle`, or `exited`, and clears the next time you summon that workspace (any of `enter`, `a`, `e`, `c`, `v`, `s`, `i`, `x`).
 
 ### Key bindings
 
@@ -94,6 +109,8 @@ Press `?` inside the deck for the full key + status legend.
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |
 | `awp internal report-status --state <…>` | Hidden — used by hooks to write status |
+| `awp internal unread-summary` | Print a tmux-status-bar badge of workspaces needing attention (waiting + notified counts). Empty when nothing's unread. |
+| `awp internal mark-read [--workspace <name>]` | Clear the unread badge for one workspace. Resolves from `$AWP_WORKSPACE` when no flag given. |
 
 `awp doctor` checks environment tooling, the agent hook installs, and (when run inside a repo) per-repo configuration. `--global` skips repo-scoped checks and scans every live `[awp]*` tmux session across all projects. `--fix` reinstalls missing hooks and re-injects `AWP_WORKSPACE` / `AWP_REPO` into any session that's missing them.
 
@@ -138,6 +155,21 @@ Shell commands run after a workspace's jj layout exists but before the agent sta
 ### `deck.project_roots`
 
 List of directories the deck's `o` (open) screen scans for projects. Tilde-expanded. The walker descends up to 4 levels and stops at any directory containing `.git` or `.jj`. Selecting a project summons (or creates) a tmux session named `[awp]<basename>__default` at that path.
+
+## Tmux status bar badge
+
+Add this to `~/.tmux.conf` to surface waiting / notified workspaces from any session:
+
+```tmux
+set -g status-interval 5
+set -g status-right '#(awp internal unread-summary) | %H:%M'
+```
+
+`awp internal unread-summary` prints `▲ N` (waiting, yellow) and/or `● N` (notified) — empty output when nothing is pending, so the divider/clock collapses cleanly.
+
+## Concurrent writes
+
+Workspace state lives in a single `~/.awp/workspace-state.json` written from many places (every Claude/pi hook, the deck refresh tick, summon/delete/rename). Writes are guarded by an OS-level advisory lock (`flock`) on `~/.awp/workspace-state.json.lock` and committed via temp-file + atomic `rename`, so concurrent writers don't drop each other's changes or leave a torn file. The lock has a 2-second timeout — if a writer ever stalls, agent hooks fail loudly rather than blocking the agent's turn.
 
 ## How status reporting works
 
