@@ -114,21 +114,43 @@ func tmuxLocalEnv(key string) string {
 
 // writeWorkspaceStatus mutates Status on the matching entry. It prefers
 // repoRoot (absolute path) for an exact match; falls back to repoName
-// (basename of each known repo root) when the root is unknown.
+// (basename of each known repo root) when the root is unknown. It also
+// flips Unread=true on transitions into "attention" states so the tmux
+// badge surfaces the change.
 func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status string) error {
 	store := stateStore()
 
+	// Suppress the badge when the user is literally looking at this
+	// workspace's session — same logic as the deck's auto-clear, applied
+	// at write time so the tmux status bar stays accurate without waiting
+	// for a deck refresh.
+	viewing := sessionHasAttachedClient(repoName, workspaceName)
+	apply := func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+		entry, ok := entries[workspaceName]
+		if !ok {
+			return entries
+		}
+		entry.Status = status
+		if workspace.WantsAttention(status) {
+			if viewing {
+				entry.Unread = false
+			} else {
+				entry.Unread = true
+			}
+		}
+		entries[workspaceName] = entry
+		return entries
+	}
+
 	if repoRoot != "" {
+		if u, ok := store.(updater); ok {
+			return u.Update(repoRoot, apply)
+		}
 		entries, err := store.Load(repoRoot)
 		if err != nil {
 			return err
 		}
-		entry, ok := entries[workspaceName]
-		if !ok {
-			return nil
-		}
-		entry.Status = status
-		entries[workspaceName] = entry
+		entries = apply(entries)
 		return store.Save(repoRoot, entries)
 	}
 
@@ -139,22 +161,46 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status string) erro
 	if err != nil {
 		return err
 	}
-	for root, entries := range all {
+	for root := range all {
 		if filepath.Base(root) != repoName {
 			continue
 		}
-		entry, ok := entries[workspaceName]
-		if !ok {
-			continue
+		if u, ok := store.(updater); ok {
+			return u.Update(root, apply)
 		}
-		entry.Status = status
-		entries[workspaceName] = entry
-		if err := store.Save(root, entries); err != nil {
+		entries, err := store.Load(root)
+		if err != nil {
 			return err
 		}
-		return nil
+		entries = apply(entries)
+		return store.Save(root, entries)
 	}
 	return nil
+}
+
+type updater interface {
+	Update(repoRoot string, fn func(map[string]workspace.Entry) map[string]workspace.Entry) error
+}
+
+// sessionHasAttachedClient reports whether at least one tmux client is
+// currently attached to the workspace's session — i.e. the user is looking
+// at it. Best-effort: any tmux/exec error returns false (we'd rather badge
+// than silently miss).
+func sessionHasAttachedClient(repoName, workspaceName string) bool {
+	repoName = strings.TrimSpace(repoName)
+	workspaceName = strings.TrimSpace(workspaceName)
+	if repoName == "" || workspaceName == "" {
+		return false
+	}
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return false
+	}
+	session := "[awp]" + repoName + "__" + workspaceName
+	out, err := exec.Command("tmux", "list-clients", "-t", session, "-F", "#{client_name}").Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }
 
 // stateStore returns a JSONStore. Indirection exists so tests can swap it.

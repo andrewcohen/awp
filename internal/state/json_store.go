@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -60,15 +62,46 @@ func (s *JSONStore) Save(repoRoot string, entries map[string]workspace.Entry) er
 	if err != nil {
 		return err
 	}
-	state, err := s.readGlobalState()
+	return s.withLock(func() error {
+		state, err := s.readGlobalStateLocked()
+		if err != nil {
+			return err
+		}
+		state[normalizedRepoRoot] = cloneEntries(entries)
+		return s.writeGlobalStateLocked(state)
+	})
+}
+
+// Update atomically applies fn to the entries map for repoRoot. fn receives a
+// mutable copy of the current entries; the returned map (or the same map after
+// in-place mutation) is persisted. The whole read-modify-write sequence is
+// guarded by an OS-level advisory lock so concurrent writers can't drop each
+// other's changes.
+func (s *JSONStore) Update(repoRoot string, fn func(map[string]workspace.Entry) map[string]workspace.Entry) error {
+	normalizedRepoRoot, err := normalizeRepoRoot(repoRoot)
 	if err != nil {
 		return err
 	}
-	state[normalizedRepoRoot] = cloneEntries(entries)
-	return s.writeGlobalState(state)
+	return s.withLock(func() error {
+		state, err := s.readGlobalStateLocked()
+		if err != nil {
+			return err
+		}
+		current := cloneEntries(state[normalizedRepoRoot])
+		updated := fn(current)
+		if updated == nil {
+			updated = map[string]workspace.Entry{}
+		}
+		state[normalizedRepoRoot] = cloneEntries(updated)
+		return s.writeGlobalStateLocked(state)
+	})
 }
 
 func (s *JSONStore) readGlobalState() (globalState, error) {
+	return s.readGlobalStateLocked()
+}
+
+func (s *JSONStore) readGlobalStateLocked() (globalState, error) {
 	path, err := globalStorePath()
 	if err != nil {
 		return nil, err
@@ -90,23 +123,89 @@ func (s *JSONStore) readGlobalState() (globalState, error) {
 	return state, nil
 }
 
-func (s *JSONStore) writeGlobalState(state globalState) error {
+func (s *JSONStore) writeGlobalStateLocked(state globalState) error {
 	path, err := globalStorePath()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode workspace state: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".workspace-state.*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp state file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
 		return fmt.Errorf("write workspace state: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("sync workspace state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close workspace state: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod workspace state: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename workspace state: %w", err)
 	}
 	return nil
 }
+
+// withLock acquires an advisory exclusive lock on the state file (creating a
+// sidecar lock file so we don't have to re-open the state file every read),
+// runs fn, and releases. Times out after lockTimeout to keep agent hooks from
+// stalling on a stuck holder.
+func (s *JSONStore) withLock(fn func() error) error {
+	path, err := globalStorePath()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	lockPath := path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("open state lock: %w", err)
+	}
+	defer f.Close()
+
+	deadline := time.Now().Add(lockTimeout)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("flock state: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("flock state: timed out after %s", lockTimeout)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+const lockTimeout = 2 * time.Second
 
 // GlobalStorePath returns the path of the global workspace state JSON file.
 func GlobalStorePath() (string, error) { return globalStorePath() }

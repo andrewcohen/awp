@@ -89,6 +89,7 @@ func (f *fakeService) UpdatePrompt(string, string) error            { return nil
 func (f *fakeService) UpdateStatus(string, string) error            { return nil }
 func (f *fakeService) ClearSession(string) error                    { return nil }
 func (f *fakeService) PruneOrphans(bool) ([]string, error)          { return nil, nil }
+func (f *fakeService) MarkRead(string) error                        { return nil }
 func (f *fakeService) PrepareWorkspace(name, bookmark string, runHooks bool) (string, string, error) {
 	f.prepareName = name
 	f.prepareBookmark = bookmark
