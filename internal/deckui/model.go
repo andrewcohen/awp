@@ -1570,19 +1570,24 @@ func (m Model) renderList(width int) string {
 		if hint, ok := rowHints[i]; ok {
 			prefix = renderFindHint(hint)
 		}
-		style := lipgloss.NewStyle().Width(width - 1)
+		// Style the label segment directly. The dot is rendered with its
+		// own ANSI color sequence ending in a reset, which would otherwise
+		// truncate any outer Foreground/Bold applied to the whole row —
+		// that's why selected rows containing a status dot weren't
+		// highlighting past the dot.
+		labelStyle := lipgloss.NewStyle()
 		if i == m.cursor {
 			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			labelStyle = labelStyle.Bold(true).Foreground(lipgloss.Color("230"))
 		} else if dim {
-			style = style.Foreground(lipgloss.Color("238"))
+			labelStyle = labelStyle.Foreground(lipgloss.Color("238"))
 		}
 		label := truncate(item.WorkspaceName, max(10, width-20))
 		if item.Stale {
 			label += " ⚠"
 		}
-		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), statusGlyph(item.Status, dim, item.Unread), label)
-		rows = append(rows, style.Render(line))
+		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), statusGlyph(item.Status, dim, item.Unread), labelStyle.Render(label))
+		rows = append(rows, lipgloss.NewStyle().Width(width-1).Render(line))
 		if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
 			promptColor := lipgloss.Color("245")
 			if dim {
@@ -2283,23 +2288,24 @@ func assignHints(names []string) map[string]string {
 	return out
 }
 
-// statusGlyph renders a colored ● for an agent status. When dim is true, the
-// row is being shown as dimmed (filtered/inactive) and we render a duller
-// version of the same color so the glyph still shows but doesn't fight the
-// row styling. unread=true forces a notified (grey) dot for idle workspaces;
-// otherwise idle renders as a blank space so quiet workspaces don't add
-// visual noise.
+// statusGlyph renders a colored ● for an agent status. Only "loud" states
+// (working/in-progress/running) render a dot unconditionally — every other
+// state requires unread=true. This makes the dot strictly an attention
+// signal: when the user is viewing the session (or has summoned it since
+// the last transition) report-status / the deck refresh clear Unread, and
+// the row goes quiet regardless of whether the last hook to write was
+// "waiting", "idle", or "exited" with stale data.
 func statusGlyph(status string, dim bool, unread bool) string {
-	if isQuietStatus(status) && !unread {
+	if !alwaysShownStatus(status) && !unread {
 		return " "
 	}
 	color := statusColor(status, dim, unread)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("●")
 }
 
-func isQuietStatus(status string) bool {
+func alwaysShownStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "", "idle", "done", "starting":
+	case "working", "in progress", "in_progress", "running":
 		return true
 	default:
 		return false
