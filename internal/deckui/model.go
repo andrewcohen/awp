@@ -2174,6 +2174,51 @@ func (m Model) findHints() (map[string]string, map[int]string) {
 	return projectHints, rowHints
 }
 
+// mnemonicSecondKeys returns candidate second-key runes for a two-letter hint
+// drawn from the name itself, in priority order: first letter of each word
+// after the leading one (split on '-', '_', '.', '/', ' ', or camelCase
+// boundaries), then the remaining letters of the name in order. The shared
+// first key is skipped so we don't produce hints like "bb" for "billing".
+func mnemonicSecondKeys(name string, first rune) []rune {
+	rs := []rune(name)
+	if len(rs) == 0 {
+		return nil
+	}
+	letters := make([]rune, 0, len(rs))
+	for _, r := range rs {
+		lr := unicode.ToLower(r)
+		if lr >= 'a' && lr <= 'z' {
+			letters = append(letters, lr)
+		} else {
+			letters = append(letters, 0)
+		}
+	}
+	seen := map[rune]bool{}
+	out := make([]rune, 0, len(letters))
+	push := func(r rune) {
+		if r == 0 || r == first || seen[r] {
+			return
+		}
+		seen[r] = true
+		out = append(out, r)
+	}
+	// Word starts after a separator or camelCase boundary.
+	for i := 1; i < len(rs); i++ {
+		prev := rs[i-1]
+		curr := rs[i]
+		isSep := prev == '-' || prev == '_' || prev == '.' || prev == '/' || prev == ' '
+		isCamel := unicode.IsLower(prev) && unicode.IsUpper(curr)
+		if isSep || isCamel {
+			push(letters[i])
+		}
+	}
+	// Then the remaining letters in order (skipping the leading char).
+	for i := 1; i < len(letters); i++ {
+		push(letters[i])
+	}
+	return out
+}
+
 // assignHints picks EasyMotion-style hints for the given ordered list of
 // target names. Unique first letters become single-key hints; collisions
 // promote all sharing targets to two-key hints (preferred first letter +
@@ -2233,15 +2278,33 @@ func assignHints(names []string) map[string]string {
 		used[hint] = true
 	}
 
-	assignDouble := func(name string, first rune) bool {
-		for _, second := range secondPool {
+	inSecondPool := map[rune]bool{}
+	for _, c := range secondPool {
+		inSecondPool[c] = true
+	}
+
+	assignDouble := func(name string, first rune, candidates []rune) bool {
+		tryRune := func(second rune) bool {
+			if !inSecondPool[second] {
+				return false
+			}
 			hint := string(first) + string(second)
 			if used[hint] {
-				continue
+				return false
 			}
 			used[hint] = true
 			out[name] = hint
 			return true
+		}
+		for _, second := range candidates {
+			if tryRune(second) {
+				return true
+			}
+		}
+		for _, second := range secondPool {
+			if tryRune(second) {
+				return true
+			}
 		}
 		return false
 	}
@@ -2251,7 +2314,7 @@ func assignHints(names []string) map[string]string {
 			continue
 		}
 		for _, name := range b.names {
-			assignDouble(name, b.key)
+			assignDouble(name, b.key, mnemonicSecondKeys(name, b.key))
 		}
 	}
 
@@ -2265,7 +2328,7 @@ func assignHints(names []string) map[string]string {
 		}
 		for _, name := range fallback.names {
 			for _, first := range firstPool {
-				if assignDouble(name, first) {
+				if assignDouble(name, first, mnemonicSecondKeys(name, first)) {
 					break
 				}
 			}
