@@ -288,6 +288,8 @@ type Model struct {
 	reviewLoading     bool
 	reviewPRs         []PRItem
 	reviewCursor      int
+	reviewFiltering   bool
+	reviewFilter      string
 	newMenuMode       bool
 	newMenuCursor     int
 	newMenuRepo       string
@@ -670,14 +672,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "review: " + msg.Err.Error()
 			return m, nil
 		}
-		if len(msg.PRs) == 0 {
-			m.reviewMode = false
-			m.status = "review: no open PRs"
-			return m, nil
-		}
 		m.reviewPRs = msg.PRs
 		m.reviewCursor = 0
-		m.status = "review: select PR (enter confirm, esc cancel)"
+		if len(msg.PRs) == 0 {
+			m.status = "review: no open PRs (esc to cancel)"
+		} else {
+			m.status = "review: select PR (enter confirm, / filter, esc cancel)"
+		}
 		return m, nil
 	case refreshDoneMsg:
 		if msg.err != nil {
@@ -901,15 +902,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			if m.reviewFiltering {
+				switch msg.String() {
+				case "esc":
+					m.reviewFiltering = false
+					m.filterInput.Blur()
+					m.reviewFilter = ""
+					m.filterInput.SetValue("")
+					m.reviewCursor = 0
+					return m, nil
+				case "enter":
+					m.reviewFiltering = false
+					m.filterInput.Blur()
+					m.reviewFilter = m.filterInput.Value()
+					m.reviewCursor = 0
+					return m, nil
+				}
+				var cmd tea.Cmd
+				m.filterInput, cmd = m.filterInput.Update(msg)
+				m.reviewFilter = m.filterInput.Value()
+				if m.reviewCursor >= len(m.filteredReviewPRs()) {
+					m.reviewCursor = 0
+				}
+				return m, cmd
+			}
 			switch msg.String() {
 			case "esc", "q", "ctrl+c":
+				if m.reviewFilter != "" && msg.String() == "esc" {
+					m.reviewFilter = ""
+					m.filterInput.SetValue("")
+					m.reviewCursor = 0
+					return m, nil
+				}
 				m.reviewMode = false
 				m.reviewPRs = nil
 				m.reviewCursor = 0
+				m.reviewFilter = ""
+				m.filterInput.SetValue("")
 				m.status = "review: cancelled"
 				return m, nil
+			case "/":
+				m.reviewFiltering = true
+				m.filterInput.Focus()
+				m.filterInput.SetValue(m.reviewFilter)
+				m.filterInput.SetCursor(len(m.reviewFilter))
+				return m, textinput.Blink
 			case "j", "down":
-				if m.reviewCursor < len(m.reviewPRs)-1 {
+				prs := m.filteredReviewPRs()
+				if m.reviewCursor < len(prs)-1 {
 					m.reviewCursor++
 				}
 				return m, nil
@@ -919,12 +959,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "enter":
-				if len(m.reviewPRs) == 0 || m.handler == nil {
+				prs := m.filteredReviewPRs()
+				if len(prs) == 0 || m.handler == nil {
 					return m, nil
 				}
-				pr := m.reviewPRs[m.reviewCursor]
+				if m.reviewCursor < 0 || m.reviewCursor >= len(prs) {
+					return m, nil
+				}
+				pr := prs[m.reviewCursor]
 				item, _ := m.selected()
 				m.reviewMode = false
+				m.reviewFilter = ""
+				m.filterInput.SetValue("")
 				return m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
 			}
 			return m, nil
@@ -1436,13 +1482,18 @@ func (m Model) View() string {
 		left = m.renderBookmarkList(leftWidth)
 		right = m.renderBookmarkDetails(rightWidth)
 	case m.reviewMode:
-		left = m.renderReviewList(leftWidth)
-		right = m.renderReviewDetails(rightWidth)
+		left = m.renderReviewList(m.width)
+		right = ""
 	default:
 		left = m.renderList(leftWidth)
 		right = m.renderDetails(rightWidth)
 	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
+	var body string
+	if right == "" {
+		body = left
+	} else {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
+	}
 
 	statusText := m.status
 	if m.busy {
@@ -1857,65 +1908,162 @@ func (m Model) renderBookmarkDetails(width int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
-func (m Model) renderReviewList(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("review: select PR")
-	rows := []string{title, ""}
-	if m.reviewLoading {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Loading PRs..."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+func (m Model) filteredReviewPRs() []PRItem {
+	f := strings.ToLower(strings.TrimSpace(m.reviewFilter))
+	if f == "" {
+		return m.reviewPRs
 	}
-	if len(m.reviewPRs) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No open PRs."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
-	}
-	for i, pr := range m.reviewPRs {
-		prefix := "  "
-		style := lipgloss.NewStyle().Width(width - 1)
-		if i == m.reviewCursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+	out := make([]PRItem, 0, len(m.reviewPRs))
+	for _, pr := range m.reviewPRs {
+		// Match only against fields the user actually sees in the row:
+		// PR number, title, and author. Including the branch caused PRs
+		// with the substring in their HeadRef to show up with no visible
+		// reason why.
+		hay := strings.ToLower(fmt.Sprintf("%d %s %s", pr.Number, pr.Title, pr.Author))
+		if strings.Contains(hay, f) {
+			out = append(out, pr)
 		}
-		draft := ""
-		if pr.IsDraft {
-			draft = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [draft]")
-		}
-		number := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Render(fmt.Sprintf("#%d", pr.Number))
-		line := fmt.Sprintf("%s%s%s %s", prefix, number, draft, truncate(pr.Title, max(10, width-20)))
-		rows = append(rows, style.Render(line))
-		meta := fmt.Sprintf("   @%s  %s", pr.Author, pr.HeadRef)
-		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("245")).Render(truncate(meta, max(8, width-4))))
 	}
-	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	return out
 }
 
-func (m Model) renderReviewDetails(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("PR review")
-	if m.reviewLoading || len(m.reviewPRs) == 0 {
-		lines := []string{title, "", "Waiting for PR list..."}
-		return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+func (m Model) renderReviewList(width int) string {
+	titleStyle := lipgloss.NewStyle().Bold(true)
+	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	containerStyle := lipgloss.NewStyle().Width(width).PaddingRight(1)
+
+	header := titleStyle.Render("review: select PR")
+
+	if m.reviewLoading {
+		return containerStyle.Render(strings.Join([]string{
+			header,
+			subtitleStyle.Render(m.spinner.View() + " loading PRs..."),
+		}, "\n"))
 	}
-	if m.reviewCursor < 0 || m.reviewCursor >= len(m.reviewPRs) {
-		return lipgloss.NewStyle().Width(width).Render(title + "\n\nSelect a PR.")
+
+	prs := m.filteredReviewPRs()
+
+	var subtitle string
+	switch {
+	case m.reviewFiltering:
+		subtitle = "/" + m.filterInput.View()
+	case m.reviewFilter != "":
+		subtitle = subtitleStyle.Render(fmt.Sprintf("filter: %q · %d/%d  (esc clears)", m.reviewFilter, len(prs), len(m.reviewPRs)))
+	default:
+		subtitle = subtitleStyle.Render(fmt.Sprintf("%d open  ·  / filter · enter open · esc cancel", len(m.reviewPRs)))
 	}
-	pr := m.reviewPRs[m.reviewCursor]
-	draft := "no"
-	if pr.IsDraft {
-		draft = "yes"
+
+	rows := []string{header, subtitle, ""}
+
+	if len(m.reviewPRs) == 0 {
+		rows = append(rows, mutedStyle.Render("No open PRs."))
+		return containerStyle.Render(strings.Join(rows, "\n"))
 	}
-	lines := []string{
-		title,
-		"",
-		fmt.Sprintf("PR:     #%d", pr.Number),
-		fmt.Sprintf("Title:  %s", pr.Title),
-		fmt.Sprintf("Author: @%s", pr.Author),
-		fmt.Sprintf("Branch: %s", pr.HeadRef),
-		fmt.Sprintf("Draft:  %s", draft),
-		"",
-		"Actions:",
-		"enter  start review",
-		"esc    cancel",
+	if len(prs) == 0 {
+		rows = append(rows, mutedStyle.Render("No matching PRs."))
+		return containerStyle.Render(strings.Join(rows, "\n"))
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+
+	// One row per PR. Reserve header + subtitle + blank + scroll hint.
+	reserved := 4
+	avail := m.height - reserved
+	if avail < 1 {
+		avail = 1
+	}
+	capacity := avail
+	if capacity > len(prs) {
+		capacity = len(prs)
+	}
+	if m.reviewCursor >= len(prs) {
+		m.reviewCursor = len(prs) - 1
+	}
+	if m.reviewCursor < 0 {
+		m.reviewCursor = 0
+	}
+	offset := 0
+	if m.reviewCursor >= capacity {
+		offset = m.reviewCursor - capacity + 1
+	}
+	if offset+capacity > len(prs) {
+		offset = len(prs) - capacity
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Right-align PR numbers within the widest number's width so titles align.
+	numW := 0
+	for _, pr := range m.reviewPRs {
+		if w := len(fmt.Sprintf("#%d", pr.Number)); w > numW {
+			numW = w
+		}
+	}
+
+	const prefixWidth = 2
+	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	numStyleSelected := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
+	draftStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
+	titleSelected := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	titleNormal := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	authorMutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+
+	for i := offset; i < offset+capacity; i++ {
+		pr := prs[i]
+		selected := i == m.reviewCursor
+
+		prefix := "  "
+		if selected {
+			prefix = "› "
+		}
+
+		numText := fmt.Sprintf("%*s", numW, fmt.Sprintf("#%d", pr.Number))
+		var numRendered string
+		if selected {
+			numRendered = numStyleSelected.Render(numText)
+		} else {
+			numRendered = numStyle.Render(numText)
+		}
+
+		author := "@" + pr.Author
+		if selected {
+			author = authorStyle.Render(author)
+		} else {
+			author = authorMutedStyle.Render(author)
+		}
+
+		draft := ""
+		if pr.IsDraft {
+			draft = " " + draftStyle.Render("draft")
+		}
+
+		// width = prefix + num + space + title + space + author + draft
+		fixed := prefixWidth + numW + 1 + 1 + lipgloss.Width("@"+pr.Author) + lipgloss.Width(draft)
+		titleRoom := width - 1 - fixed
+		if titleRoom < 10 {
+			titleRoom = 10
+		}
+		titleText := truncate(pr.Title, titleRoom)
+		var titleRendered string
+		if selected {
+			titleRendered = titleSelected.Render(titleText)
+		} else {
+			titleRendered = titleNormal.Render(titleText)
+		}
+
+		line := fmt.Sprintf("%s%s  %s  %s%s",
+			prefixSlot.Render(prefix), numRendered, titleRendered, author, draft)
+		rows = append(rows, line)
+	}
+
+	if len(prs) > capacity {
+		hint := fmt.Sprintf("  %d–%d of %d", offset+1, offset+capacity, len(prs))
+		rows = append(rows, mutedStyle.Render(hint))
+	}
+
+	return containerStyle.Render(strings.Join(rows, "\n"))
 }
 
 func (m Model) renderProgress(width int) string {

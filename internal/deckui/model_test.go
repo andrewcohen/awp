@@ -609,10 +609,10 @@ func TestReviewModeEmptyPRs(t *testing.T) {
 	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
-	if m.reviewMode {
-		t.Fatal("expected review mode to exit on empty PRs")
+	if !m.reviewMode {
+		t.Fatal("expected review mode to stay open so user can see empty state")
 	}
-	if m.status != "review: no open PRs" {
+	if m.status != "review: no open PRs (esc to cancel)" {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }
