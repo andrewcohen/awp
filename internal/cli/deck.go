@@ -310,7 +310,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithScopeChanged(saveDeckScope).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
 		WithProjectOpener(openProjectViaTmux(runner))
-	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen())
 	_, err = program.Run()
 	return err
 }
