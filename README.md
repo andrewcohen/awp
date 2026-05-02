@@ -89,6 +89,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `R` | Relink session |
 | `D` | Delete workspace |
 | `,` | Edit global state file in `$EDITOR` |
+| `J` | Jobs overlay (running async dispatches — cancel, dismiss, open log) |
 | `?` | Help overlay |
 | `q` / `esc` | Quit |
 
@@ -166,6 +167,55 @@ set -g status-right '#(awp internal unread-summary) | %H:%M'
 ```
 
 `awp internal unread-summary` prints `▲ N` (waiting, yellow) and/or `● N` (notified) — empty output when nothing is pending, so the divider/clock collapses cleanly.
+
+## Async deck jobs
+
+All "progress" actions in the deck — create workspace (`n`), review a PR (`r`),
+CI watch (`i`), user actions (`x`), delete (`D`) — now dispatch a detached
+subprocess (`awp run-job <id>`) instead of blocking the deck. The deck stays
+fully interactive: navigate, dispatch more, `q` out — jobs keep running.
+
+Each job lives at `~/.awp/jobs/<id>.json` (status record) and
+`~/.awp/jobs/<id>.log` (full subprocess output). A tray under the deck status
+line summarizes the active set:
+
+```
+▶ 2 running   ⚠ 1 failed   ☠ 1 orphaned   [J: jobs]
+```
+
+- `▶` Running / pending.
+- `⚠` Failed — error details visible in the `J` overlay.
+- `☠` Orphaned — subprocess died without flushing a final state (SIGKILL,
+  OOM, crash). Detected via heartbeat staleness + `kill(pid, 0)` + a
+  process-start-time check that also catches PID reuse. Orphans persist
+  for 7 days; clean terminal records are GC'd after 24 hours on next deck
+  startup (cleanup runs in a background `tea.Cmd`, never blocks startup).
+
+Press `J` to open the jobs overlay:
+
+| Key | Action in overlay |
+|---|---|
+| `↑` / `↓` (or `k` / `j`) | Move cursor |
+| `g` / `G` | Jump to top / bottom |
+| `c` | Cancel the selected running job (sends `SIGTERM`; subprocess flushes a `cancelled` record before exiting) |
+| `x` | Dismiss a finished/failed/orphaned record (deletes the JSON + log file) |
+| `o` | Open the sidecar log file in `$PAGER` |
+| `esc` / `q` / `J` | Close the overlay |
+
+Completion is non-intrusive: created workspaces appear in the deck list via the
+existing 2-second refresher, and you press `enter` on the new row to summon as
+usual. No auto-quit, no auto-switch.
+
+Inspecting a running job from a shell:
+
+```sh
+ls ~/.awp/jobs/                             # list records
+jq . ~/.awp/jobs/20260502-or72.json         # status
+tail -f ~/.awp/jobs/20260502-or72.log       # streaming subprocess output
+```
+
+`awp run-job <id>` is an internal subcommand spawned by the deck — you
+shouldn't need to run it directly.
 
 ## Concurrent writes
 

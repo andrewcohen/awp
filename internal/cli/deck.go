@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,10 +21,18 @@ import (
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
+	"github.com/andrewcohen/awp/internal/jobs"
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
+
+// timeNowForJobs is a small indirection so a future test can stub
+// the clock used by orphan detection / GC. Production callers always
+// receive time.Now().
+var timeNowForJobs = func() time.Time { return time.Now() }
+
+func itoa(i int) string { return strconv.Itoa(i) }
 
 // DeckSessionName returns the tmux session name for a workspace: "[awp]<repo>__<workspace>".
 func DeckSessionName(repo, workspace string) string {
@@ -302,6 +312,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.StateEditDoneMsg{Err: err}
 		})
 	}
+	asyncLauncher, asyncList, asyncCancel, asyncDismiss, asyncLog := buildAsyncJobs(repoRoot)
+	if asyncLauncher != nil {
+		go runJobsStartupCleanup()
+	}
+
 	model := deckui.NewScoped(items, allItems, projectName, handler).
 		WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).
 		WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).
@@ -309,10 +324,163 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithScope(loadDeckScope()).
 		WithScopeChanged(saveDeckScope).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
-		WithProjectOpener(openProjectViaTmux(runner))
+		WithProjectOpener(openProjectViaTmux(runner)).
+		WithAsyncJobLauncher(asyncLauncher).
+		WithJobsListRefresher(asyncList).
+		WithJobCancelHandler(asyncCancel).
+		WithJobDismissHandler(asyncDismiss).
+		WithJobLogOpener(asyncLog)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen())
 	_, err = program.Run()
 	return err
+}
+
+// buildAsyncJobs returns the deck-side glue to the jobs subsystem:
+// a launcher that translates a deckui.AsyncJobSpec into an
+// internal/jobs.Spec + spawns a detached subprocess, a list
+// refresher that powers the tray and the J overlay, and three
+// per-action handlers (cancel via SIGTERM, dismiss = delete record,
+// open log in $PAGER). Returns nil-valued functions if the jobs
+// store can't be initialized; the deck silently falls back to the
+// synchronous path.
+func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRefresher, deckui.JobCancelHandler, deckui.JobDismissHandler, deckui.JobLogOpener) {
+	store, err := jobs.NewStore()
+	if err != nil {
+		return nil, nil, nil, nil, nil
+	}
+	launcher := func(spec deckui.AsyncJobSpec) error {
+		root := strings.TrimSpace(spec.RepoRoot)
+		if root == "" {
+			root = repoRoot
+		}
+		jspec := jobs.Spec{
+			Action:        jobs.JobAction(spec.Action),
+			RepoRoot:      root,
+			Name:          spec.Name,
+			Bookmark:      spec.Bookmark,
+			Prompt:        spec.Prompt,
+			Arg:           spec.Arg,
+			WorkspaceName: spec.WorkspaceName,
+			WorkspacePath: spec.WorkspacePath,
+		}
+		_, err := store.Spawn(jspec, spec.Title, jobs.SpawnOptions{})
+		return err
+	}
+	listRefresher := func() []deckui.Job {
+		return projectJobs(store)
+	}
+	cancel := func(id string) error {
+		return store.SignalCancel(jobs.JobID(id))
+	}
+	dismiss := func(id string) error {
+		return store.Delete(jobs.JobID(id))
+	}
+	logOpen := func(id string) tea.Cmd {
+		path := store.LogPath(jobs.JobID(id))
+		pager := strings.TrimSpace(os.Getenv("PAGER"))
+		if pager == "" {
+			pager = "less"
+		}
+		c := exec.Command("sh", "-c", `exec "$PAGER" "$1"`, "sh", path)
+		c.Env = append(os.Environ(), "PAGER="+pager)
+		return tea.ExecProcess(c, func(err error) tea.Msg {
+			return deckui.JobActionDoneMsg{JobID: id, Kind: "log", Err: err}
+		})
+	}
+	return launcher, listRefresher, cancel, dismiss, logOpen
+}
+
+// projectJobs builds the deckui-side projection of the jobs
+// directory: runs orphan detection in-line, then converts each
+// internal/jobs.Job into a deckui.Job record. Sorted newest-first.
+func projectJobs(store *jobs.Store) []deckui.Job {
+	all, err := store.List()
+	if err != nil {
+		return nil
+	}
+	now := timeNowForJobs()
+	out := make([]deckui.Job, 0, len(all))
+	for _, j := range all {
+		if !j.Status.IsTerminal() && jobs.IsOrphan(j, now) {
+			_ = store.Update(j.ID, func(rec *jobs.Job) error {
+				if rec.Status.IsTerminal() {
+					return nil
+				}
+				rec.Status = jobs.StatusOrphaned
+				rec.ErrMsg = "subprocess died (pid " + itoa(rec.PID) + ")"
+				ended := now
+				rec.EndedAt = &ended
+				return nil
+			})
+			j.Status = jobs.StatusOrphaned
+		}
+		out = append(out, toDeckJob(j, store))
+	}
+	// Newest first — most recently-started jobs at the top of the
+	// overlay so users see what they just dispatched.
+	sort.Slice(out, func(i, k int) bool {
+		return out[i].StartedAt.After(out[k].StartedAt)
+	})
+	return out
+}
+
+func toDeckJob(j jobs.Job, store *jobs.Store) deckui.Job {
+	steps := make([]deckui.JobStep, 0, len(j.Steps))
+	for _, st := range j.Steps {
+		steps = append(steps, deckui.JobStep{
+			Label: st.Label,
+			Done:  st.State == jobs.StepDone,
+			Error: st.State == jobs.StepError,
+		})
+	}
+	ended := time.Time{}
+	if j.EndedAt != nil {
+		ended = *j.EndedAt
+	}
+	return deckui.Job{
+		ID:        string(j.ID),
+		Title:     j.Title,
+		Action:    string(j.Spec.Action),
+		Status:    deckui.JobStatus(j.Status),
+		StartedAt: j.StartedAt,
+		EndedAt:   ended,
+		Steps:     steps,
+		LogsTail:  j.LogsInline,
+		ErrMsg:    j.ErrMsg,
+		LogPath:   store.LogPath(j.ID),
+		PID:       j.PID,
+	}
+}
+
+// runJobsStartupCleanup sweeps terminal records older than their
+// retention threshold. Runs in a goroutine on deck startup; failures
+// are silent (the next deck launch will retry). Orphan detection is
+// handled by countActiveJobs on every refresh tick.
+func runJobsStartupCleanup() {
+	store, err := jobs.NewStore()
+	if err != nil {
+		return
+	}
+	all, err := store.List()
+	if err != nil {
+		return
+	}
+	now := timeNowForJobs()
+	for _, j := range all {
+		if !j.Status.IsTerminal() {
+			continue
+		}
+		if j.EndedAt == nil {
+			continue
+		}
+		retention := jobs.RetentionDone
+		if j.Status == jobs.StatusOrphaned {
+			retention = jobs.RetentionOrphaned
+		}
+		if now.Sub(*j.EndedAt) > retention {
+			_ = store.Delete(j.ID)
+		}
+	}
 }
 
 func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, []deckui.Item, error) {

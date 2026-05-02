@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
@@ -33,7 +34,20 @@ func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in i
 	return runReviewWithReporter(runner, svc, prNumber, in, writerReporter{out: out})
 }
 
+// runReviewWithReporter prepares (or attaches to) the PR-review tmux
+// session and switches the user's client to it.
 func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter) error {
+	return runReviewOpts(runner, svc, prNumber, in, reporter, false)
+}
+
+// runReviewAsync runs the same setup as runReviewWithReporter but
+// suppresses the final SwitchToWindow + SwitchClient — used by the
+// async job path so the user's tmux focus is not yanked away.
+func runReviewAsync(runner Runner, svc workspace.Service, prNumber int, reporter deckui.Reporter) error {
+	return runReviewOpts(runner, svc, prNumber, nil, reporter, true)
+}
+
+func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter, noSwitch bool) error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp review must run inside tmux")
 	}
@@ -110,7 +124,7 @@ func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, i
 		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath); err != nil {
 			return err
 		}
-		if err := tmuxClient.SendCommand(sessionName+":agent", "pi "+shellSingleQuote(prompt)); err != nil {
+		if err := tmuxClient.SendCommand(sessionName+":agent", config.AgentInvocation(repoRoot)+" "+shellSingleQuote(prompt)); err != nil {
 			return err
 		}
 		reporter.Step("Open review window")
@@ -120,13 +134,18 @@ func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, i
 		if err := tmuxClient.SendCommand(sessionName+":review", reviewCmd); err != nil {
 			return err
 		}
-		if err := tmuxClient.SwitchToWindow(prDescTarget); err != nil {
-			return err
+		if !noSwitch {
+			if err := tmuxClient.SwitchToWindow(prDescTarget); err != nil {
+				return err
+			}
 		}
 	} else {
 		reporter.Log(fmt.Sprintf("tmux session %s already exists; attaching", sessionName))
 	}
 
+	if noSwitch {
+		return nil
+	}
 	reporter.Step(fmt.Sprintf("Switch to %s", sessionName))
 	if err := tmuxClient.SwitchClient(sessionName); err != nil {
 		return err
