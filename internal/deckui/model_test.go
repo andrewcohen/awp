@@ -2,6 +2,7 @@ package deckui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -233,6 +234,166 @@ func TestNewWorkspaceErrorStaysOpenAndShowsStatus(t *testing.T) {
 	if m.status == "" || m.status == "new: " {
 		t.Fatalf("expected error status, got %q", m.status)
 	}
+}
+
+// TestAsyncCreateSkipsProgressMode verifies that when an async job
+// launcher is configured, the create flow does NOT enter modal
+// progressMode and the deck stays interactive.
+func TestAsyncCreateSkipsProgressMode(t *testing.T) {
+	var got AsyncJobSpec
+	launcher := func(spec AsyncJobSpec) error {
+		got = spec
+		return nil
+	}
+	model := New(nil, nil).WithAsyncJobLauncher(launcher)
+	req := NewWorkspaceRequest{Name: "feat/x", Bookmark: "main", Prompt: "go"}
+	updated, cmd := model.Update(NewWorkspaceDoneMsg{Request: &req, RepoRoot: "/repo"})
+	if cmd == nil {
+		t.Fatal("expected dispatch cmd")
+	}
+	// Run the dispatch closure so the launcher is invoked.
+	_ = cmd()
+	m := updated.(Model)
+	if m.progressMode {
+		t.Fatal("async create should not enter progressMode")
+	}
+	if m.busy {
+		t.Fatal("async create should not mark deck busy")
+	}
+	if got.Name != "feat/x" || got.Bookmark != "main" || got.RepoRoot != "/repo" {
+		t.Fatalf("launcher received unexpected spec: %+v", got)
+	}
+	if got.Title != "create · feat/x" {
+		t.Fatalf("title not derived from name: %q", got.Title)
+	}
+}
+
+func TestAsyncCreateLauncherErrorSetsStatus(t *testing.T) {
+	launcher := func(AsyncJobSpec) error { return tea.ErrProgramKilled }
+	model := New(nil, nil).WithAsyncJobLauncher(launcher)
+	req := NewWorkspaceRequest{Name: "feat/x"}
+	updated, cmd := model.Update(NewWorkspaceDoneMsg{Request: &req, RepoRoot: "/repo"})
+	// Trigger the dispatch and feed the resulting message back in.
+	msg := cmd()
+	updated, _ = updated.Update(msg)
+	m := updated.(Model)
+	if m.status == "" {
+		t.Fatal("expected error status when launcher fails")
+	}
+}
+
+func TestRenderTrayShowsCounts(t *testing.T) {
+	out := renderTray(JobCounts{Running: 2, Failed: 1})
+	if out == "" {
+		t.Fatal("expected non-empty tray when counts present")
+	}
+	if !contains(out, "2 running") || !contains(out, "1 failed") {
+		t.Fatalf("tray missing counts: %q", out)
+	}
+}
+
+func TestRenderTrayEmpty(t *testing.T) {
+	if got := renderTray(JobCounts{}); got != "" {
+		t.Fatalf("expected empty tray, got %q", got)
+	}
+}
+
+func TestJobsOverlayOpensOnCapitalJ(t *testing.T) {
+	model := New(nil, nil).WithJobsListRefresher(func() []Job {
+		return []Job{{ID: "a", Title: "create · x", Status: JobRunning, StartedAt: time.Now()}}
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	m := updated.(Model)
+	if !m.jobsOverlay {
+		t.Fatal("expected J to open jobs overlay")
+	}
+}
+
+func TestJobsOverlayClosesOnEsc(t *testing.T) {
+	model := New(nil, nil)
+	model.jobsOverlay = true
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m := updated.(Model)
+	if m.jobsOverlay {
+		t.Fatal("expected esc to close overlay")
+	}
+}
+
+func TestJobsOverlayCancelInvokesHandler(t *testing.T) {
+	called := ""
+	model := New(nil, nil).
+		WithJobCancelHandler(func(id string) error {
+			called = id
+			return nil
+		})
+	model.jobsOverlay = true
+	model.jobs = []Job{{ID: "abc", Status: JobRunning}}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd == nil {
+		t.Fatal("expected cancel cmd")
+	}
+	_ = cmd()
+	_ = updated
+	if called != "abc" {
+		t.Fatalf("cancel handler called with %q, want abc", called)
+	}
+}
+
+func TestJobsOverlayCancelTerminalNoop(t *testing.T) {
+	calls := 0
+	model := New(nil, nil).
+		WithJobCancelHandler(func(id string) error { calls++; return nil })
+	model.jobsOverlay = true
+	model.jobs = []Job{{ID: "abc", Status: JobDone}}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m := updated.(Model)
+	if calls != 0 {
+		t.Fatal("cancel should be a no-op for terminal jobs")
+	}
+	if m.status == "" {
+		t.Fatal("expected status hint when cancelling a finished job")
+	}
+}
+
+func TestJobsOverlayDismissRequiresTerminal(t *testing.T) {
+	calls := 0
+	model := New(nil, nil).
+		WithJobDismissHandler(func(id string) error { calls++; return nil })
+	model.jobsOverlay = true
+	model.jobs = []Job{{ID: "abc", Status: JobRunning}}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m := updated.(Model)
+	if calls != 0 {
+		t.Fatal("dismiss should refuse running jobs")
+	}
+	if m.status == "" {
+		t.Fatal("expected status hint when dismissing a running job")
+	}
+}
+
+func TestAsyncReviewSkipsProgressMode(t *testing.T) {
+	var got AsyncJobSpec
+	model := New([]Item{{ProjectName: "p", WorkspaceName: "w", RepoRoot: "/repo"}}, nil).
+		WithAsyncJobLauncher(func(s AsyncJobSpec) error { got = s; return nil })
+	item := Item{RepoRoot: "/repo", WorkspaceName: "w"}
+	updated, cmd := model.startAction(ActionReview, item, "42")
+	_ = cmd()
+	m := updated.(Model)
+	if m.progressMode {
+		t.Fatal("review should not enter progressMode when async is configured")
+	}
+	if got.Action != "review" || got.Arg != "42" {
+		t.Fatalf("unexpected spec: %+v", got)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFindTwoLevelJumpMovesCursor(t *testing.T) {

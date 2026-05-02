@@ -29,6 +29,11 @@ type openRequest struct {
 	Bookmark string
 	Prompt   string
 	Yes      bool
+	// NoSwitch suppresses the final tmux switch-client step. Used by
+	// the async create-workspace job so the subprocess prepares the
+	// workspace + agent + prompt without yanking the user's tmux
+	// focus away from the deck.
+	NoSwitch bool
 }
 
 type openFormModel struct {

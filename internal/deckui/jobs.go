@@ -1,0 +1,347 @@
+package deckui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// AsyncJobSpec describes the work the deck wants to dispatch to a
+// detached subprocess. The deck UI builds this; the wiring layer
+// (internal/cli/deck.go) translates it into an internal/jobs.Spec
+// and calls the jobs store. Keeping deckui free of that dependency
+// preserves the package boundary.
+type AsyncJobSpec struct {
+	Action        string // "create-workspace", "review", "ci", "custom"
+	RepoRoot      string
+	Title         string
+	Name          string
+	Bookmark      string
+	Prompt        string
+	Arg           string
+	WorkspaceName string
+	WorkspacePath string
+}
+
+// AsyncJobLauncher dispatches an async job. Returns immediately after
+// the subprocess is spawned; long-running work happens out-of-band.
+type AsyncJobLauncher func(AsyncJobSpec) error
+
+// JobStatus mirrors the lifecycle states from internal/jobs without
+// importing that package. Strings match the on-disk JSON to make
+// translation trivial.
+type JobStatus string
+
+const (
+	JobPending   JobStatus = "pending"
+	JobRunning   JobStatus = "running"
+	JobDone      JobStatus = "done"
+	JobError     JobStatus = "error"
+	JobCancelled JobStatus = "cancelled"
+	JobOrphaned  JobStatus = "orphaned"
+)
+
+// IsTerminal reports whether the status is final.
+func (s JobStatus) IsTerminal() bool {
+	switch s {
+	case JobDone, JobError, JobCancelled, JobOrphaned:
+		return true
+	}
+	return false
+}
+
+// JobStep is one named phase of an async job, mirrored from the
+// subprocess's reporter output.
+type JobStep struct {
+	Label string
+	Done  bool
+	Error bool
+}
+
+// Job is the deckui-side projection of an internal/jobs.Job. The
+// wiring layer fills these in on every refresh tick.
+type Job struct {
+	ID         string
+	Title      string
+	Action     string
+	Status     JobStatus
+	StartedAt  time.Time
+	EndedAt    time.Time
+	Steps      []JobStep
+	LogsTail   []string
+	ErrMsg     string
+	LogPath    string
+	PID        int
+}
+
+// JobsListRefresher returns the current set of async jobs, ordered
+// newest-first. Called on every refresh tick.
+type JobsListRefresher func() []Job
+
+// JobCancelHandler is invoked when the user presses `c` on a running
+// job in the overlay. The wiring layer signals SIGTERM via the jobs
+// store. Returns an error if the cancel couldn't be issued.
+type JobCancelHandler func(jobID string) error
+
+// JobDismissHandler is invoked when the user presses `x` on a
+// finished/failed/orphaned job in the overlay. The wiring layer
+// deletes the job record + log file.
+type JobDismissHandler func(jobID string) error
+
+// JobLogOpener returns a tea.Cmd that suspends the deck and opens
+// the job's sidecar log file in $PAGER.
+type JobLogOpener func(jobID string) tea.Cmd
+
+// JobCounts is the small summary the tray renders. Derived from the
+// jobs list every refresh tick.
+type JobCounts struct {
+	Running  int
+	Failed   int
+	Orphaned int
+}
+
+// HasAny reports whether the tray should be visible.
+func (c JobCounts) HasAny() bool {
+	return c.Running > 0 || c.Failed > 0 || c.Orphaned > 0
+}
+
+func countsFromJobs(jobs []Job) JobCounts {
+	var c JobCounts
+	for _, j := range jobs {
+		switch j.Status {
+		case JobPending, JobRunning:
+			c.Running++
+		case JobError:
+			c.Failed++
+		case JobOrphaned:
+			c.Orphaned++
+		}
+	}
+	return c
+}
+
+type jobsListMsg struct{ jobs []Job }
+
+// JobActionDoneMsg signals the result of a c/x action initiated from
+// the overlay so the deck can refresh itself.
+type JobActionDoneMsg struct {
+	JobID string
+	Err   error
+	Kind  string // "cancel" | "dismiss"
+}
+
+func refreshJobsListCmd(r JobsListRefresher) tea.Cmd {
+	if r == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return jobsListMsg{jobs: r()}
+	}
+}
+
+// trayStyle is the lipgloss style for the async-jobs tray line. It
+// sits directly under the status line and is only rendered when
+// counts are non-zero.
+var trayStyle = lipgloss.NewStyle().
+	MarginTop(0).
+	MarginBottom(1).
+	Foreground(lipgloss.Color("245"))
+
+var trayRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+var trayFailedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+var trayOrphanStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("172")).Bold(true)
+var trayHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+
+// renderTray builds the one-line tray summary. Returns "" when no
+// counts are present.
+func renderTray(c JobCounts) string {
+	if !c.HasAny() {
+		return ""
+	}
+	parts := []string{}
+	if c.Running > 0 {
+		parts = append(parts, trayRunningStyle.Render(fmt.Sprintf("▶ %d running", c.Running)))
+	}
+	if c.Failed > 0 {
+		parts = append(parts, trayFailedStyle.Render(fmt.Sprintf("⚠ %d failed", c.Failed)))
+	}
+	if c.Orphaned > 0 {
+		parts = append(parts, trayOrphanStyle.Render(fmt.Sprintf("☠ %d orphaned", c.Orphaned)))
+	}
+	out := parts[0]
+	for _, p := range parts[1:] {
+		out += "   " + p
+	}
+	out += "   " + trayHintStyle.Render("[J: jobs]")
+	return trayStyle.Render(out)
+}
+
+// statusToastFor returns a brief one-line message suitable for
+// putting into Model.status when an async dispatch happens.
+func statusToastFor(spec AsyncJobSpec) string {
+	label := spec.Title
+	if label == "" {
+		label = spec.Name
+	}
+	if label == "" {
+		label = spec.Bookmark
+	}
+	if label == "" {
+		label = spec.Action
+	}
+	return fmt.Sprintf("queued · %s", label)
+}
+
+// renderJobsOverlay renders the full-screen jobs overlay at the
+// supplied dimensions. Uses lipgloss styles, no ad-hoc spacing per
+// CLAUDE.md. Returns a centered popover string; caller is
+// responsible for placing it within the viewport.
+func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
+	// Box overhead: 2 cols of border + 2*2 cols of horizontal padding.
+	const boxOverhead = 6
+	boxWidth := width - 4 // leave a small margin so the border never clips the viewport edge
+	if boxWidth < 44 {
+		boxWidth = 44
+	}
+	innerWidth := boxWidth - boxOverhead
+	if innerWidth < 38 {
+		innerWidth = 38
+	}
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Width(innerWidth)
+	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · x dismiss · o open log)")
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("241")).
+		Padding(1, 2).
+		Width(boxWidth)
+
+	if len(jobs) == 0 {
+		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(innerWidth).
+			Render("No jobs in flight. Press n to create a workspace.")
+		body := lipgloss.JoinVertical(lipgloss.Left, title, "", empty)
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, boxStyle.Render(body))
+	}
+
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor >= len(jobs) {
+		cursor = len(jobs) - 1
+	}
+
+	// 50/50 split, with a 2-col gutter between the columns.
+	const gutter = 2
+	listWidth := (innerWidth - gutter) / 2
+	detailsWidth := innerWidth - gutter - listWidth
+
+	list := renderJobsList(jobs, cursor, listWidth)
+	details := renderJobDetails(jobs[cursor], detailsWidth)
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", details)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+		boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body)))
+}
+
+func renderJobsList(jobs []Job, cursor, width int) string {
+	rowStyle := lipgloss.NewStyle().Width(width)
+	selStyle := rowStyle.
+		Background(lipgloss.Color("236")).
+		Foreground(lipgloss.Color("231")).
+		Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+	lines := make([]string, 0, len(jobs))
+	for i, j := range jobs {
+		glyph, color := jobStatusGlyph(j.Status)
+		glyphStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
+		title := j.Title
+		if title == "" {
+			title = j.ID
+		}
+		row := fmt.Sprintf("%s %s", glyphStyle.Render(glyph), title)
+		if i == cursor {
+			lines = append(lines, selStyle.Render(row))
+		} else {
+			lines = append(lines, rowStyle.Render(row))
+		}
+	}
+	footer := mutedStyle.Render(fmt.Sprintf("%d job(s)", len(jobs)))
+	return lipgloss.JoinVertical(lipgloss.Left, append(lines, "", footer)...)
+}
+
+func renderJobDetails(j Job, width int) string {
+	glyph, color := jobStatusGlyph(j.Status)
+	glyphStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
+	headerStyle := lipgloss.NewStyle().Bold(true).Width(width)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width)
+	logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Width(width)
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Width(width)
+
+	lines := []string{
+		headerStyle.Render(fmt.Sprintf("%s  %s", glyphStyle.Render(glyph), j.Title)),
+		mutedStyle.Render(fmt.Sprintf("id %s · status %s · pid %d", j.ID, j.Status, j.PID)),
+	}
+	if !j.StartedAt.IsZero() {
+		lines = append(lines, mutedStyle.Render("started "+j.StartedAt.Format("15:04:05")))
+	}
+	if !j.EndedAt.IsZero() {
+		lines = append(lines, mutedStyle.Render("ended   "+j.EndedAt.Format("15:04:05")))
+	}
+	if j.LogPath != "" {
+		lines = append(lines, mutedStyle.Render("log     "+j.LogPath))
+	}
+	if j.ErrMsg != "" {
+		lines = append(lines, "", errStyle.Render("error: "+j.ErrMsg))
+	}
+	if len(j.Steps) > 0 {
+		lines = append(lines, "", headerStyle.Render("Steps"))
+		for _, st := range j.Steps {
+			marker := "•"
+			switch {
+			case st.Error:
+				marker = "✗"
+			case st.Done:
+				marker = "✓"
+			}
+			lines = append(lines, mutedStyle.Render(fmt.Sprintf("  %s %s", marker, st.Label)))
+		}
+	}
+	if len(j.LogsTail) > 0 {
+		lines = append(lines, "", headerStyle.Render("Recent log"))
+		// Keep the tail bounded — too much scrolls the popover.
+		const maxTail = 12
+		tail := j.LogsTail
+		if len(tail) > maxTail {
+			tail = tail[len(tail)-maxTail:]
+		}
+		for _, ln := range tail {
+			lines = append(lines, logStyle.Render("  "+strings.TrimRight(ln, "\n")))
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// jobStatusGlyph returns the glyph and lipgloss color for an async
+// job status. Kept here (not in the existing statusGlyph helper) so
+// the deck row colors and the tray colors can diverge if needed.
+func jobStatusGlyph(s JobStatus) (string, string) {
+	switch s {
+	case JobRunning, JobPending:
+		return "▶", "39"
+	case JobDone:
+		return "✓", "78"
+	case JobError:
+		return "⚠", "203"
+	case JobCancelled:
+		return "⊘", "245"
+	case JobOrphaned:
+		return "☠", "172"
+	}
+	return "·", "245"
+}
+

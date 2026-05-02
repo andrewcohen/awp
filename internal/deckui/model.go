@@ -319,6 +319,15 @@ type Model struct {
 	openFilter         textinput.Model
 	projectFinder      ProjectFinder
 	projectOpener      ProjectOpener
+	asyncJobLauncher   AsyncJobLauncher
+	jobsListRefresher  JobsListRefresher
+	jobCancelHandler   JobCancelHandler
+	jobDismissHandler  JobDismissHandler
+	jobLogOpener       JobLogOpener
+	jobs               []Job
+	jobCounts          JobCounts
+	jobsOverlay        bool
+	jobsOverlayCursor  int
 }
 
 const progressLogMax = 50
@@ -445,6 +454,44 @@ func (m Model) WithProjectOpener(o ProjectOpener) Model {
 	return m
 }
 
+// WithAsyncJobLauncher installs the launcher used for async progress
+// actions (today: workspace creation). When set, ActionCreateWorkspace
+// dispatches via the launcher instead of running the handler inline,
+// and the deck stays interactive throughout.
+func (m Model) WithAsyncJobLauncher(l AsyncJobLauncher) Model {
+	m.asyncJobLauncher = l
+	return m
+}
+
+// WithJobsListRefresher installs the function that returns the
+// current async job list. Called on every refresh tick to keep the
+// tray and overlay up to date.
+func (m Model) WithJobsListRefresher(r JobsListRefresher) Model {
+	m.jobsListRefresher = r
+	return m
+}
+
+// WithJobCancelHandler installs the cancel handler used by `c` in
+// the jobs overlay.
+func (m Model) WithJobCancelHandler(h JobCancelHandler) Model {
+	m.jobCancelHandler = h
+	return m
+}
+
+// WithJobDismissHandler installs the dismiss handler used by `x` in
+// the jobs overlay (deletes the record + log file).
+func (m Model) WithJobDismissHandler(h JobDismissHandler) Model {
+	m.jobDismissHandler = h
+	return m
+}
+
+// WithJobLogOpener installs the log-opener used by `o` in the jobs
+// overlay.
+func (m Model) WithJobLogOpener(o JobLogOpener) Model {
+	m.jobLogOpener = o
+	return m
+}
+
 // WithScope sets the initial scope (called by the deck launcher after loading
 // the persisted preference). Has no effect if scope is invalid.
 func (m Model) WithScope(scope Scope) Model {
@@ -547,15 +594,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshTickMsg:
 		// Background poll: fetch fresh state for status updates from
 		// agent hooks. Pause during interactive overlays so we don't
-		// race with their own state.
+		// race with their own state. The jobs overlay is a viewer —
+		// it benefits from continuous refresh, so we always run the
+		// jobs cmd even when other overlays are active.
+		jobsCmd := refreshJobsListCmd(m.jobsListRefresher)
 		if m.refresher != nil && !m.busy && !m.progressMode &&
 			!m.confirmDelete && !m.filtering &&
 			!m.findMode && !m.actionMode &&
 			!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
 			!m.openMode && !m.helpMode {
-			return m, tea.Batch(m.refresher(), scheduleRefreshTick())
+			return m, tea.Batch(m.refresher(), jobsCmd, scheduleRefreshTick())
+		}
+		if jobsCmd != nil {
+			return m, tea.Batch(jobsCmd, scheduleRefreshTick())
 		}
 		return m, scheduleRefreshTick()
+	case jobsListMsg:
+		m.jobs = msg.jobs
+		m.jobCounts = countsFromJobs(msg.jobs)
+		// Keep overlay cursor in range as jobs come and go.
+		if m.jobsOverlayCursor >= len(m.jobs) {
+			m.jobsOverlayCursor = len(m.jobs) - 1
+		}
+		if m.jobsOverlayCursor < 0 {
+			m.jobsOverlayCursor = 0
+		}
+		return m, nil
+	case JobActionDoneMsg:
+		if msg.Err != nil {
+			m.status = msg.Kind + ": " + msg.Err.Error()
+		} else {
+			m.status = msg.Kind + ": " + msg.JobID
+		}
+		// Refresh the jobs list immediately so the overlay reflects
+		// the action without waiting for the next tick.
+		return m, refreshJobsListCmd(m.jobsListRefresher)
+	case asyncJobDispatchedMsg:
+		if msg.err != nil {
+			m.status = "create: " + msg.err.Error()
+			return m, nil
+		}
+		// Kick off a fresh tray refresh so the user sees the new
+		// "running" count immediately rather than waiting up to 2 s
+		// for the next tick.
+		return m, refreshJobsListCmd(m.jobsListRefresher)
 	case NewWorkspaceDoneMsg:
 		if msg.Cancelled {
 			m.status = "new: cancelled"
@@ -1044,10 +1126,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.jobsOverlay {
+			return m.updateJobsOverlay(msg)
+		}
 		switch msg.String() {
 		case "?":
 			m.helpMode = true
 			return m, nil
+		case "J":
+			m.jobsOverlay = true
+			m.jobsOverlayCursor = 0
+			// Force an immediate refresh so the overlay isn't blank
+			// for up to 2 s after opening.
+			return m, refreshJobsListCmd(m.jobsListRefresher)
 		case "q", "esc", "ctrl+c":
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
@@ -1318,6 +1409,33 @@ func isProgressAction(a Action) bool {
 }
 
 func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd) {
+	// Workspace lifecycle actions (create, delete) run async via the
+	// jobs subsystem. Window-summoning actions (review, ci, custom
+	// user actions) stay in-process so they remain interactive and
+	// don't surprise the user with a detached subprocess opening tmux
+	// windows behind their back.
+	if m.asyncJobLauncher != nil {
+		switch a {
+		case ActionDelete:
+			return m.startAsyncAction(AsyncJobSpec{
+				Action:        "delete",
+				Title:         "delete · " + item.WorkspaceName,
+				RepoRoot:      item.RepoRoot,
+				WorkspaceName: item.WorkspaceName,
+				WorkspacePath: item.Path,
+				Arg:           arg,
+			})
+		case ActionReview:
+			return m.startAsyncAction(AsyncJobSpec{
+				Action:        "review",
+				Title:         "review · PR " + arg,
+				RepoRoot:      item.RepoRoot,
+				WorkspaceName: item.WorkspaceName,
+				WorkspacePath: item.Path,
+				Arg:           arg,
+			})
+		}
+	}
 	m.busy = true
 	m.progressMode = true
 	m.progressTitle = fmt.Sprintf("%s · %s", actionLabel(a, arg), item.WorkspaceName)
@@ -1328,6 +1446,17 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 	m.progressChan = make(chan progressEvent, 32)
 	m.status = fmt.Sprintf("%s %s...", actionLabel(a, arg), item.WorkspaceName)
 	return *m, tea.Batch(m.spinner.Tick, m.dispatch(a, item, arg), waitForProgress(m.progressChan))
+}
+
+// startAsyncAction dispatches a non-create progress action through
+// the async launcher. No modal progress mode, no tea.Quit.
+func (m *Model) startAsyncAction(spec AsyncJobSpec) (tea.Model, tea.Cmd) {
+	launcher := m.asyncJobLauncher
+	m.status = statusToastFor(spec)
+	dispatch := func() tea.Msg {
+		return asyncJobDispatchedMsg{spec: spec, err: launcher(spec)}
+	}
+	return *m, dispatch
 }
 
 // startQuickAction runs an action without entering progress mode. Used for
@@ -1349,6 +1478,9 @@ func (noopActionReporter) Step(string) {}
 func (noopActionReporter) Log(string)  {}
 
 func (m *Model) startCreateAction(req NewWorkspaceRequest, repoRoot string) (tea.Model, tea.Cmd) {
+	if m.asyncJobLauncher != nil {
+		return m.startAsyncCreateAction(req, repoRoot)
+	}
 	if m.handler == nil {
 		m.status = "new: handler not configured"
 		return *m, nil
@@ -1385,6 +1517,43 @@ func (m *Model) startCreateAction(req NewWorkspaceRequest, repoRoot string) (tea
 		return nil
 	}
 	return *m, tea.Batch(m.spinner.Tick, dispatch, waitForProgress(m.progressChan))
+}
+
+// startAsyncCreateAction dispatches a workspace-create job to the
+// detached subprocess via the async launcher. The deck stays
+// interactive: no modal progress mode, no tea.Quit. The new
+// workspace appears in the deck list once the subprocess finishes
+// via the existing 2 s refresher.
+func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string) (tea.Model, tea.Cmd) {
+	title := "create workspace"
+	if n := strings.TrimSpace(req.Name); n != "" {
+		title = "create · " + n
+	} else if b := strings.TrimSpace(req.Bookmark); b != "" {
+		title = "create · " + b
+	}
+	spec := AsyncJobSpec{
+		Action:   "create-workspace",
+		RepoRoot: repoRoot,
+		Title:    title,
+		Name:     strings.TrimSpace(req.Name),
+		Bookmark: strings.TrimSpace(req.Bookmark),
+		Prompt:   strings.TrimSpace(req.Prompt),
+	}
+	launcher := m.asyncJobLauncher
+	dispatch := func() tea.Msg {
+		err := launcher(spec)
+		return asyncJobDispatchedMsg{spec: spec, err: err}
+	}
+	m.status = statusToastFor(spec)
+	return *m, dispatch
+}
+
+// asyncJobDispatchedMsg is emitted once the async launcher returns
+// (the subprocess has been forked, or spawn failed before it could
+// be).
+type asyncJobDispatchedMsg struct {
+	spec AsyncJobSpec
+	err  error
 }
 
 func (m Model) dispatch(a Action, item Item, arg string) tea.Cmd {
@@ -1510,14 +1679,25 @@ func (m Model) View() string {
 		)
 	}
 	// Pin the footer to the bottom of the viewport: pad the body up to
-	// (height - footer height) before stacking the footer below.
+	// (height - footer height - tray height) before stacking the
+	// async-jobs tray (if any) and the footer below.
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
-	pad := m.height - bodyHeight - footerHeight
+	tray := renderTray(m.jobCounts)
+	trayHeight := 0
+	if tray != "" {
+		trayHeight = lipgloss.Height(tray)
+	}
+	pad := m.height - bodyHeight - footerHeight - trayHeight
 	if pad < 0 {
 		pad = 0
 	}
-	view := lipgloss.JoinVertical(lipgloss.Left, body, strings.Repeat("\n", pad), footer)
+	parts := []string{body, strings.Repeat("\n", pad)}
+	if tray != "" {
+		parts = append(parts, tray)
+	}
+	parts = append(parts, footer)
+	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	if m.confirmDelete {
 		view = lipgloss.JoinVertical(lipgloss.Left, view, "", m.renderDeleteConfirm())
 	}
@@ -1526,7 +1706,75 @@ func (m Model) View() string {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.renderHelp(m.width))
 	}
+	if m.jobsOverlay {
+		view = renderJobsOverlay(m.jobs, m.jobsOverlayCursor, m.width, m.height)
+	}
 	return view
+}
+
+// updateJobsOverlay handles keypresses while the J overlay is active.
+// Closes on esc/J/q, navigates with j/k/arrows, dispatches c (cancel)
+// / x (dismiss) / o (open log) via the configured handlers.
+func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "J":
+		m.jobsOverlay = false
+		return m, nil
+	case "j", "down":
+		if m.jobsOverlayCursor < len(m.jobs)-1 {
+			m.jobsOverlayCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.jobsOverlayCursor > 0 {
+			m.jobsOverlayCursor--
+		}
+		return m, nil
+	case "g":
+		m.jobsOverlayCursor = 0
+		return m, nil
+	case "G":
+		m.jobsOverlayCursor = len(m.jobs) - 1
+		if m.jobsOverlayCursor < 0 {
+			m.jobsOverlayCursor = 0
+		}
+		return m, nil
+	case "c":
+		if len(m.jobs) == 0 || m.jobCancelHandler == nil {
+			return m, nil
+		}
+		j := m.jobs[m.jobsOverlayCursor]
+		if j.Status.IsTerminal() {
+			m.status = "cancel: job already finished"
+			return m, nil
+		}
+		handler := m.jobCancelHandler
+		id := j.ID
+		return m, func() tea.Msg {
+			return JobActionDoneMsg{JobID: id, Kind: "cancel", Err: handler(id)}
+		}
+	case "x":
+		if len(m.jobs) == 0 || m.jobDismissHandler == nil {
+			return m, nil
+		}
+		j := m.jobs[m.jobsOverlayCursor]
+		if !j.Status.IsTerminal() {
+			m.status = "dismiss: cancel a running job first"
+			return m, nil
+		}
+		handler := m.jobDismissHandler
+		id := j.ID
+		return m, func() tea.Msg {
+			return JobActionDoneMsg{JobID: id, Kind: "dismiss", Err: handler(id)}
+		}
+	case "o":
+		if len(m.jobs) == 0 || m.jobLogOpener == nil {
+			return m, nil
+		}
+		j := m.jobs[m.jobsOverlayCursor]
+		return m, m.jobLogOpener(j.ID)
+	}
+	return m, nil
 }
 
 func (m Model) renderHelp(width int) string {
@@ -1698,6 +1946,12 @@ func deckKeyGroups() []keyGroup {
 				{"D", "delete workspace"},
 				{"R", "relink session"},
 				{",", "edit global state file in $EDITOR"},
+			},
+		},
+		{
+			Title: "Async jobs",
+			Keys: [][2]string{
+				{"J", "jobs overlay (list, cancel, dismiss, open log)"},
 			},
 		},
 		{

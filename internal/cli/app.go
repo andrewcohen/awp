@@ -78,6 +78,8 @@ func (a *App) Run(args []string) error {
 		return a.runDeck(args[1:])
 	case "deck-cleanup":
 		return runDeckCleanup(a.runner, a.out)
+	case "run-job":
+		return runRunJob(a.svc, a.runner, args[1:])
 	case "review":
 		return a.runReview(args[1:])
 	case "internal":
@@ -433,10 +435,13 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	}
 	if strings.TrimSpace(req.Prompt) != "" {
 		step("Send prompt to agent")
-		agent := config.AgentCommand(repoRoot)
-		if err := tmuxClient.SendCommand(sessionName+":agent", agent+" "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
+		invocation := config.AgentInvocation(repoRoot)
+		if err := tmuxClient.SendCommand(sessionName+":agent", invocation+" "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
 			return err
 		}
+	}
+	if req.NoSwitch {
+		return nil
 	}
 	step("Switch to " + sessionName)
 	return tmuxClient.SwitchClient(sessionName)
@@ -664,3 +669,4 @@ func isInteractiveInput(in io.Reader) bool {
 func isHelpArgSlice(args []string) bool {
 	return len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")
 }
+

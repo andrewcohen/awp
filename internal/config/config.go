@@ -20,10 +20,15 @@ type Config struct {
 	} `json:"hooks"`
 	Actions map[string]UserAction `json:"actions"`
 	// Agent is the command name used to launch the workspace agent. It is
-	// invoked as `<agent> <prompt>` (or just `<agent>` when no prompt is
-	// passed). Defaults to "pi" when unset. Project config overrides global.
+	// invoked as `<agent> [agent_options] <prompt>` (or just
+	// `<agent> [agent_options]` when no prompt is passed). Defaults to "pi"
+	// when unset. Project config overrides global.
 	Agent string `json:"agent,omitempty"`
-	Deck  struct {
+	// AgentOptions are extra flags passed to the agent before the prompt,
+	// e.g. "--model claude-opus-4-7" or "--resume". Inserted verbatim into
+	// the shell command, so the user owns quoting.
+	AgentOptions string `json:"agent_options,omitempty"`
+	Deck         struct {
 		// ProjectRoots are directories under which the deck's project
 		// picker (`o`) searches for git/jj repos. Tilde-expanded.
 		// Example: ["~/p", "~/go/src"].
@@ -44,6 +49,21 @@ func AgentCommand(repoRoot string) string {
 		return a
 	}
 	return DefaultAgent
+}
+
+// AgentInvocation returns the configured agent command joined with its
+// agent_options (project overrides global). Suitable for prepending to
+// a prompt: `<invocation> '<prompt>'`.
+func AgentInvocation(repoRoot string) string {
+	cfg, _ := Load(repoRoot)
+	cmd := strings.TrimSpace(cfg.Agent)
+	if cmd == "" {
+		cmd = DefaultAgent
+	}
+	if opts := strings.TrimSpace(cfg.AgentOptions); opts != "" {
+		return cmd + " " + opts
+	}
+	return cmd
 }
 
 func Load(repoRoot string) (Config, error) {
@@ -100,6 +120,9 @@ func merge(global, project Config) Config {
 	}
 	if strings.TrimSpace(out.Agent) == "" {
 		out.Agent = global.Agent
+	}
+	if strings.TrimSpace(out.AgentOptions) == "" {
+		out.AgentOptions = global.AgentOptions
 	}
 	if len(out.Deck.ProjectRoots) == 0 {
 		out.Deck.ProjectRoots = global.Deck.ProjectRoots
