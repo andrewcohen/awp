@@ -64,17 +64,20 @@ type JobStep struct {
 // Job is the deckui-side projection of an internal/jobs.Job. The
 // wiring layer fills these in on every refresh tick.
 type Job struct {
-	ID         string
-	Title      string
-	Action     string
-	Status     JobStatus
-	StartedAt  time.Time
-	EndedAt    time.Time
-	Steps      []JobStep
-	LogsTail   []string
-	ErrMsg     string
-	LogPath    string
-	PID        int
+	ID            string
+	Title         string
+	Action        string
+	Status        JobStatus
+	StartedAt     time.Time
+	EndedAt       time.Time
+	Steps         []JobStep
+	LogsTail      []string
+	ErrMsg        string
+	LogPath       string
+	PID           int
+	WorkspaceName string
+	WorkspacePath string
+	RepoRoot      string
 }
 
 // JobsListRefresher returns the current set of async jobs, ordered
@@ -106,6 +109,18 @@ type JobCounts struct {
 // HasAny reports whether the tray should be visible.
 func (c JobCounts) HasAny() bool {
 	return c.Running > 0 || c.Failed > 0 || c.Orphaned > 0
+}
+
+// hasActiveJobs reports whether any cached job is non-terminal. Used to
+// gate the periodic jobs refresh so terminal records don't keep
+// triggering disk reads.
+func hasActiveJobs(jobs []Job) bool {
+	for _, j := range jobs {
+		if !j.Status.IsTerminal() {
+			return true
+		}
+	}
+	return false
 }
 
 func countsFromJobs(jobs []Job) JobCounts {
@@ -155,28 +170,59 @@ var trayFailedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold
 var trayOrphanStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("172")).Bold(true)
 var trayHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
-// renderTray builds the one-line tray summary. Returns "" when no
-// counts are present.
-func renderTray(c JobCounts) string {
+// renderJobCountsCompact builds the inline counts segment used in the
+// merged status bar. Empty when no counts are non-zero.
+func renderJobCountsCompact(c JobCounts) string {
 	if !c.HasAny() {
 		return ""
 	}
 	parts := []string{}
 	if c.Running > 0 {
-		parts = append(parts, trayRunningStyle.Render(fmt.Sprintf("▶ %d running", c.Running)))
+		parts = append(parts, trayRunningStyle.Render(fmt.Sprintf("▶ %d", c.Running)))
 	}
 	if c.Failed > 0 {
-		parts = append(parts, trayFailedStyle.Render(fmt.Sprintf("⚠ %d failed", c.Failed)))
+		parts = append(parts, trayFailedStyle.Render(fmt.Sprintf("⚠ %d", c.Failed)))
 	}
 	if c.Orphaned > 0 {
-		parts = append(parts, trayOrphanStyle.Render(fmt.Sprintf("☠ %d orphaned", c.Orphaned)))
+		parts = append(parts, trayOrphanStyle.Render(fmt.Sprintf("☠ %d", c.Orphaned)))
 	}
-	out := parts[0]
-	for _, p := range parts[1:] {
-		out += "   " + p
+	return strings.Join(parts, " ")
+}
+
+// composeStatusBar lays out a single bottom line: counts on the left,
+// status/filter/mode text on the right, separated by flexible padding.
+// Width-aware so the right segment doesn't wrap on narrow terminals.
+func composeStatusBar(c JobCounts, right string, width int) string {
+	left := renderJobCountsCompact(c)
+	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("? help")
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	hintW := lipgloss.Width(hint)
+	// Layout: "<left>   <right>   <hint>"  with flexible gap between
+	// left and right. Drop sections progressively if they don't fit.
+	gap := 3
+	used := leftW + rightW + hintW + 2*gap
+	if width <= 0 || used <= width {
+		// Pad so hint sits flush right.
+		fill := width - used
+		if fill < 0 {
+			fill = 0
+		}
+		segs := []string{}
+		if left != "" {
+			segs = append(segs, left)
+		}
+		if right != "" {
+			segs = append(segs, right)
+		}
+		segs = append(segs, strings.Repeat(" ", fill)+hint)
+		return strings.Join(segs, strings.Repeat(" ", gap))
 	}
-	out += "   " + trayHintStyle.Render("[J: jobs]")
-	return trayStyle.Render(out)
+	// Tight: drop hint first, then left.
+	if leftW+rightW+gap <= width {
+		return left + strings.Repeat(" ", gap) + right
+	}
+	return right
 }
 
 // statusToastFor returns a brief one-line message suitable for

@@ -282,19 +282,29 @@ func TestAsyncCreateLauncherErrorSetsStatus(t *testing.T) {
 	}
 }
 
-func TestRenderTrayShowsCounts(t *testing.T) {
-	out := renderTray(JobCounts{Running: 2, Failed: 1})
+func TestRenderJobCountsCompactShowsCounts(t *testing.T) {
+	out := renderJobCountsCompact(JobCounts{Running: 2, Failed: 1})
 	if out == "" {
-		t.Fatal("expected non-empty tray when counts present")
+		t.Fatal("expected non-empty counts segment")
 	}
-	if !contains(out, "2 running") || !contains(out, "1 failed") {
-		t.Fatalf("tray missing counts: %q", out)
+	if !contains(out, "2") || !contains(out, "1") {
+		t.Fatalf("counts segment missing counts: %q", out)
 	}
 }
 
-func TestRenderTrayEmpty(t *testing.T) {
-	if got := renderTray(JobCounts{}); got != "" {
-		t.Fatalf("expected empty tray, got %q", got)
+func TestRenderJobCountsCompactEmpty(t *testing.T) {
+	if got := renderJobCountsCompact(JobCounts{}); got != "" {
+		t.Fatalf("expected empty counts segment, got %q", got)
+	}
+}
+
+func TestComposeStatusBarIncludesHelpHint(t *testing.T) {
+	bar := composeStatusBar(JobCounts{Running: 1}, "ready", 80)
+	if !contains(bar, "? help") {
+		t.Fatalf("status bar missing help hint: %q", bar)
+	}
+	if !contains(bar, "ready") {
+		t.Fatalf("status bar missing right segment: %q", bar)
 	}
 }
 

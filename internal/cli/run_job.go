@@ -1,17 +1,20 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"syscall"
 
+	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/jobs"
 	"github.com/andrewcohen/awp/internal/tmux"
@@ -102,6 +105,8 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 		err = runDeleteJob(runner, actionSvc, job, reporter)
 	case jobs.ActionReview:
 		err = runReviewJob(runner, actionSvc, job, reporter)
+	case jobs.ActionCustom:
+		err = runCustomJob(job, reporter)
 	default:
 		err = fmt.Errorf("unsupported job action %q", job.Spec.Action)
 	}
@@ -193,4 +198,63 @@ func (f fileLogger) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return f.mirror.Write(p)
+}
+
+// runCustomJob runs a background user action (config.UserAction with
+// Background=true). Spec.Arg holds the action name; we resolve it
+// against the config rooted at Spec.RepoRoot and exec the command via
+// `sh -c` in Spec.WorkspacePath. Stdout/stderr are streamed line-by-line
+// into the job log via reporter.Log so the deck's overlay/log file
+// stays useful.
+func runCustomJob(job jobs.Job, reporter *storeReporter) error {
+	name := job.Spec.Arg
+	cfg, err := config.Load(job.Spec.RepoRoot)
+	if err != nil {
+		return fmt.Errorf("custom: load config: %w", err)
+	}
+	ua, ok := cfg.Actions[name]
+	if !ok {
+		return fmt.Errorf("custom: unknown user action %q", name)
+	}
+	cmd := ua.Command
+	if cmd == "" {
+		return fmt.Errorf("custom: action %q has no command", name)
+	}
+	dir := job.Spec.WorkspacePath
+	if dir == "" {
+		dir = job.Spec.RepoRoot
+	}
+	reporter.Step(fmt.Sprintf("Run %s", name))
+	c := exec.Command("sh", "-c", cmd)
+	c.Dir = dir
+	stdout, err := c.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := c.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err := c.Start(); err != nil {
+		return err
+	}
+	streamLines := func(r io.Reader) {
+		s := bufio.NewScanner(r)
+		s.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for s.Scan() {
+			reporter.Log(s.Text())
+		}
+	}
+	done := make(chan struct{}, 2)
+	go func() { streamLines(stdout); done <- struct{}{} }()
+	go func() { streamLines(stderr); done <- struct{}{} }()
+	<-done
+	<-done
+	if err := c.Wait(); err != nil {
+		if ee, isExit := err.(*exec.ExitError); isExit {
+			return fmt.Errorf("exit %d", ee.ExitCode())
+		}
+		return err
+	}
+	return nil
 }

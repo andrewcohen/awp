@@ -54,9 +54,11 @@ const (
 )
 
 type UserAction struct {
-	Name    string
-	Command string
-	Alias   string
+	Name       string
+	Command    string
+	Alias      string
+	Background bool
+	Focus      bool
 }
 
 // NewWorkspaceRequest is the form result passed back from the launcher when
@@ -378,7 +380,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		itemsAll:          append([]Item(nil), itemsAll...),
 		currentRepo:       currentRepo,
 		scope:             defaultInitialScope(itemsAll),
-		status:            "? help · ↑/↓ move · enter summon · o open · f find · n new · r review · x action · / filter · a agent · e editor · c review · v vcs · s shell · i ci · L last · D delete · R relink · P scope · , edit state · q quit",
+		status:            "",
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -527,6 +529,15 @@ func scopeLabel(scope Scope, currentRepo string) string {
 	}
 }
 
+func (m Model) findUserAction(name string) (UserAction, bool) {
+	for _, ua := range m.userActions {
+		if ua.Name == name {
+			return ua, true
+		}
+	}
+	return UserAction{}, false
+}
+
 func (m Model) WithUserActions(actions []UserAction) Model {
 	m.userActions = actions
 	m.actionAliasLookup = make(map[string]UserAction, len(actions))
@@ -594,16 +605,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshTickMsg:
 		// Background poll: fetch fresh state for status updates from
 		// agent hooks. Pause during interactive overlays so we don't
-		// race with their own state. The jobs overlay is a viewer —
-		// it benefits from continuous refresh, so we always run the
-		// jobs cmd even when other overlays are active.
-		jobsCmd := refreshJobsListCmd(m.jobsListRefresher)
+		// race with their own state. Jobs are only re-polled while
+		// something is in flight — terminal records don't change, so
+		// continuing to read disk every 2 s is wasted work. Explicit
+		// paths (dispatch, dismiss, opening the J overlay) still force
+		// a fresh pull.
+		var jobsCmd tea.Cmd
+		if hasActiveJobs(m.jobs) {
+			jobsCmd = refreshJobsListCmd(m.jobsListRefresher)
+		}
 		if m.refresher != nil && !m.busy && !m.progressMode &&
 			!m.confirmDelete && !m.filtering &&
 			!m.findMode && !m.actionMode &&
 			!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
 			!m.openMode && !m.helpMode {
-			return m, tea.Batch(m.refresher(), jobsCmd, scheduleRefreshTick())
+			cmds := []tea.Cmd{m.refresher(), scheduleRefreshTick()}
+			if jobsCmd != nil {
+				cmds = append(cmds, jobsCmd)
+			}
+			return m, tea.Batch(cmds...)
 		}
 		if jobsCmd != nil {
 			return m, tea.Batch(jobsCmd, scheduleRefreshTick())
@@ -1434,6 +1454,17 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 				WorkspacePath: item.Path,
 				Arg:           arg,
 			})
+		case ActionCustom:
+			if ua, ok := m.findUserAction(arg); ok && ua.Background {
+				return m.startAsyncAction(AsyncJobSpec{
+					Action:        "custom",
+					Title:         arg + " · " + item.WorkspaceName,
+					RepoRoot:      item.RepoRoot,
+					WorkspaceName: item.WorkspaceName,
+					WorkspacePath: item.Path,
+					Arg:           arg,
+				})
+			}
 		}
 	}
 	m.busy = true
@@ -1668,35 +1699,26 @@ func (m Model) View() string {
 	if m.busy {
 		statusText = m.spinner.View() + " " + m.status
 	}
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(statusText)
-	if m.filtering {
-		footer = "/" + m.filterInput.View()
-	} else if m.findMode || m.actionMode {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.status + " (esc cancel)")
-	} else if m.filter != "" {
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(
-			fmt.Sprintf("filter: %q (esc to clear) · %s", m.filter, statusText),
-		)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	var rightSeg string
+	switch {
+	case m.filtering:
+		rightSeg = "/" + m.filterInput.View()
+	case m.findMode || m.actionMode:
+		rightSeg = dim.Render(m.status + " (esc cancel)")
+	case m.filter != "":
+		rightSeg = dim.Render(fmt.Sprintf("filter: %q · %s", m.filter, statusText))
+	default:
+		rightSeg = dim.Render(statusText)
 	}
-	// Pin the footer to the bottom of the viewport: pad the body up to
-	// (height - footer height - tray height) before stacking the
-	// async-jobs tray (if any) and the footer below.
+	footer := composeStatusBar(m.jobCounts, rightSeg, m.width)
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
-	tray := renderTray(m.jobCounts)
-	trayHeight := 0
-	if tray != "" {
-		trayHeight = lipgloss.Height(tray)
-	}
-	pad := m.height - bodyHeight - footerHeight - trayHeight
+	pad := m.height - bodyHeight - footerHeight
 	if pad < 0 {
 		pad = 0
 	}
-	parts := []string{body, strings.Repeat("\n", pad)}
-	if tray != "" {
-		parts = append(parts, tray)
-	}
-	parts = append(parts, footer)
+	parts := []string{body, strings.Repeat("\n", pad), footer}
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	if m.confirmDelete {
 		view = lipgloss.JoinVertical(lipgloss.Left, view, "", m.renderDeleteConfirm())
@@ -2000,21 +2022,109 @@ func (m Model) renderDetails(width int) string {
 		"",
 		"Prompt:",
 		prompt,
-		"",
 	}
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	for i, g := range deckKeyGroups() {
-		if i > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, headerStyle.Render(g.Title))
-		for _, kr := range g.Keys {
-			lines = append(lines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
-		}
+	if act := renderActivityBlock(m.jobs, item, width); act != "" {
+		lines = append(lines, "", act)
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+}
+
+// renderActivityBlock renders the per-workspace "Recent activity" list:
+// up to 5 most-recent jobs whose Spec ties them to the selected
+// workspace. Returns "" when no jobs match — the caller decides whether
+// to show a placeholder.
+func renderActivityBlock(allJobs []Job, item Item, width int) string {
+	matching := make([]Job, 0, 8)
+	for _, j := range allJobs {
+		if !jobMatchesWorkspace(j, item) {
+			continue
+		}
+		matching = append(matching, j)
+	}
+	if len(matching) == 0 {
+		return ""
+	}
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	const maxRows = 5
+	rows := []string{headerStyle.Render("Recent activity")}
+	for i, j := range matching {
+		if i >= maxRows {
+			rows = append(rows, dimStyle.Render(fmt.Sprintf("  … %d more (J)", len(matching)-maxRows)))
+			break
+		}
+		rows = append(rows, "  "+formatActivityRow(j, width-2))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func jobMatchesWorkspace(j Job, item Item) bool {
+	if strings.TrimSpace(item.Path) != "" && j.WorkspacePath == item.Path {
+		return true
+	}
+	if strings.TrimSpace(item.WorkspaceName) != "" &&
+		j.WorkspaceName == item.WorkspaceName &&
+		j.RepoRoot == item.RepoRoot {
+		return true
+	}
+	return false
+}
+
+func formatActivityRow(j Job, width int) string {
+	glyph, color := activityGlyph(j.Status)
+	glyphStyled := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(glyph)
+	label := j.Action
+	if j.Action == "custom" && strings.TrimSpace(j.Title) != "" {
+		// Title is "<name> · <workspace>"; take the leading component.
+		if idx := strings.Index(j.Title, " · "); idx > 0 {
+			label = j.Title[:idx]
+		} else {
+			label = j.Title
+		}
+	}
+	rel := relativeTimeShort(j.StartedAt, j.EndedAt, j.Status)
+	relStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(rel)
+	return fmt.Sprintf("%s %s   %s", glyphStyled, label, relStyled)
+}
+
+func activityGlyph(s JobStatus) (glyph, color string) {
+	switch s {
+	case JobPending, JobRunning:
+		return "▶", "39"
+	case JobDone:
+		return "✓", "42"
+	case JobError:
+		return "⚠", "203"
+	case JobCancelled:
+		return "·", "245"
+	case JobOrphaned:
+		return "☠", "172"
+	}
+	return "·", "245"
+}
+
+func relativeTimeShort(started, ended time.Time, status JobStatus) string {
+	ref := ended
+	if ref.IsZero() {
+		ref = started
+	}
+	if ref.IsZero() {
+		return ""
+	}
+	d := time.Since(ref)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 func (m Model) renderNewMenu(width int) string {

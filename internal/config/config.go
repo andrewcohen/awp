@@ -12,6 +12,15 @@ import (
 type UserAction struct {
 	Command string `json:"command"`
 	Alias   string `json:"alias"`
+	// Background runs the action detached via the jobs subsystem instead of
+	// opening a tmux window. Output is captured to the job log; the deck
+	// surfaces pass/fail in the right panel's Recent activity list.
+	Background bool `json:"background,omitempty"`
+	// Focus controls whether the deck switches the tmux client to the new
+	// window after spawning a foreground action. nil/unset = true (default
+	// behavior). Set to false to spawn the window in the workspace's
+	// session but keep the deck focused. Ignored when Background is true.
+	Focus *bool `json:"focus,omitempty"`
 }
 
 type Config struct {
