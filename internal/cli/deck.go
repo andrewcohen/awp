@@ -154,10 +154,16 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	cfg, _ := config.Load(repoRoot)
 	var userActions []deckui.UserAction
 	for name, act := range cfg.Actions {
+		focus := true
+		if act.Focus != nil {
+			focus = *act.Focus
+		}
 		userActions = append(userActions, deckui.UserAction{
-			Name:    name,
-			Command: act.Command,
-			Alias:   act.Alias,
+			Name:       name,
+			Command:    act.Command,
+			Alias:      act.Alias,
+			Background: act.Background,
+			Focus:      focus,
 		})
 	}
 	actionsByName := make(map[string]deckui.UserAction, len(userActions))
@@ -438,17 +444,20 @@ func toDeckJob(j jobs.Job, store *jobs.Store) deckui.Job {
 		ended = *j.EndedAt
 	}
 	return deckui.Job{
-		ID:        string(j.ID),
-		Title:     j.Title,
-		Action:    string(j.Spec.Action),
-		Status:    deckui.JobStatus(j.Status),
-		StartedAt: j.StartedAt,
-		EndedAt:   ended,
-		Steps:     steps,
-		LogsTail:  j.LogsInline,
-		ErrMsg:    j.ErrMsg,
-		LogPath:   store.LogPath(j.ID),
-		PID:       j.PID,
+		ID:            string(j.ID),
+		Title:         j.Title,
+		Action:        string(j.Spec.Action),
+		Status:        deckui.JobStatus(j.Status),
+		StartedAt:     j.StartedAt,
+		EndedAt:       ended,
+		Steps:         steps,
+		LogsTail:      j.LogsInline,
+		ErrMsg:        j.ErrMsg,
+		LogPath:       store.LogPath(j.ID),
+		PID:           j.PID,
+		WorkspaceName: j.Spec.WorkspaceName,
+		WorkspacePath: j.Spec.WorkspacePath,
+		RepoRoot:      j.Spec.RepoRoot,
 	}
 }
 
@@ -905,6 +914,11 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 		if err := tmuxClient.SendCommand(target, ua.Command); err != nil {
 			return err
 		}
+	}
+	if !ua.Focus {
+		// Window is created and the command is running; deliberately
+		// don't pull the user away from the deck.
+		return nil
 	}
 	if err := tmuxClient.SwitchToWindow(target); err != nil {
 		return err

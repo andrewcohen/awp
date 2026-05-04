@@ -128,7 +128,8 @@ Example:
 {
   "agent": "claude",
   "actions": {
-    "logs": { "command": "tail -f /tmp/app.log", "alias": "l" }
+    "logs": { "command": "tail -f /tmp/app.log", "alias": "l" },
+    "install": { "command": "pnpm install", "alias": "i", "background": true }
   },
   "hooks": {
     "bootstrap": ["pnpm install", "make migrate"]
@@ -147,7 +148,11 @@ Command used to launch the workspace agent. Invoked as `<agent> <prompt>` (with 
 
 ### `actions`
 
-Custom commands surfaced by the deck's `x` action menu. Each action runs in a new tmux window in the workspace.
+Custom commands surfaced by the deck's `x` action menu. By default each action runs in a new tmux window in the workspace.
+
+Set `"background": true` to run the action detached via the jobs subsystem instead. The deck dispatches it without opening a tmux window; output is captured to `~/.awp/jobs/<id>.log` and the run shows up in the right panel's **Recent activity** list for that workspace. Failures appear in the bottom status bar's `⚠` count and stay until dismissed in the `J` overlay. Best for installs, lints, builds, or anything you'd rather not babysit.
+
+Set `"focus": false` to keep the action foregrounded (it gets a real tmux window, runs interactively, scrollback intact) but **don't** switch the tmux client to it on launch. Useful for spawning a long-running watcher you'll check on later without losing your place in the deck. Ignored when `background` is true.
 
 ### `hooks.bootstrap`
 
@@ -176,12 +181,16 @@ subprocess (`awp run-job <id>`) instead of blocking the deck. The deck stays
 fully interactive: navigate, dispatch more, `q` out — jobs keep running.
 
 Each job lives at `~/.awp/jobs/<id>.json` (status record) and
-`~/.awp/jobs/<id>.log` (full subprocess output). A tray under the deck status
-line summarizes the active set:
+`~/.awp/jobs/<id>.log` (full subprocess output). The deck's bottom status bar
+inlines an active-set summary on the left:
 
 ```
-▶ 2 running   ⚠ 1 failed   ☠ 1 orphaned   [J: jobs]
+▶ 2 ⚠ 1 ☠ 1                                  ready                       ? help
 ```
+
+The selected workspace's right panel includes a **Recent activity** block
+listing its most recent job runs (newest first, up to 5) — handy for seeing
+what `install` or `lint` last did without opening the `J` overlay.
 
 - `▶` Running / pending.
 - `⚠` Failed — error details visible in the `J` overlay.
