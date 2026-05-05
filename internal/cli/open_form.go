@@ -111,14 +111,7 @@ func runOpenWithCharm(initial openRequest, workspaces []string, in io.Reader, ou
 	return request, nil
 }
 
-// Init issues tea.ClearScreen alongside the textinput blink so the
-// form starts on a fresh viewport. Without this, when the deck spawns
-// the form via tea.Exec, leftover characters from the deck's previous
-// alt-screen frame can bleed through the gap between alt-screen exit
-// and the inner program's first paint.
-func (m openFormModel) Init() tea.Cmd {
-	return tea.Batch(tea.ClearScreen, textinput.Blink)
-}
+func (m openFormModel) Init() tea.Cmd { return textinput.Blink }
 
 func (m openFormModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.err = ""
