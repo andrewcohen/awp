@@ -329,6 +329,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithScope(loadDeckScope()).
 		WithScopeChanged(saveDeckScope).
+		WithStateChangeWatcher(newDeckStateChangeWatcher()).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
 		WithProjectOpener(openProjectViaTmux(runner)).
 		WithAsyncJobLauncher(asyncLauncher).

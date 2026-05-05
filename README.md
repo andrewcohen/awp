@@ -236,7 +236,7 @@ Workspace state lives in a single `~/.awp/workspace-state.json` written from man
 1. When awp creates or summons a tmux session, it sets `AWP_WORKSPACE`, `AWP_REPO`, and `AWP_REPO_ROOT` on the session env.
 2. The globally-installed hooks (Claude) / extension (pi) run on every state transition. Each one calls `awp internal report-status --state <state>` from tmux; the CLI is a silent no-op when awp workspace metadata is missing.
 3. The status writer mutates the workspace entry's `Status` field in `~/.awp/workspace-state.json`.
-4. The deck reads that file on each refresh tick and renders the colored dot.
+4. The deck watches the state file for changes and refreshes immediately when possible, while keeping a periodic poll as a fallback.
 5. Crash fallback: if the agent pane has dropped back to a shell, the deck overrides the in-memory status to `exited` regardless of what's on disk.
 
 If the deck's status looks stuck, run `awp doctor --fix` to repair env injection and reinstall hooks.
