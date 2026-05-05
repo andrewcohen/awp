@@ -349,6 +349,79 @@ func TestAsyncCreateLauncherErrorSetsStatus(t *testing.T) {
 	}
 }
 
+// TestInlineNewWorkspaceFormSubmitDispatches verifies the deck's
+// inline form path: enter form mode, populate the workspace name,
+// move to the action row, and press Enter on Submit. The async
+// launcher should receive a spec derived from the form values.
+// This is the architectural replacement for the prior nested
+// tea.Program flow that produced alt-screen bleed.
+func TestInlineNewWorkspaceFormSubmitDispatches(t *testing.T) {
+	var got AsyncJobSpec
+	launcher := func(spec AsyncJobSpec) error {
+		got = spec
+		return nil
+	}
+	model := New(nil, nil).WithAsyncJobLauncher(launcher)
+	model.newWorkspaceMode = true
+	model.newWorkspaceRepo = "/repo"
+	model.newWorkspaceForm = newNewWorkspaceForm(NewWorkspaceInitial{Bookmark: "main"})
+	model.newWorkspaceForm.workspaceInput.SetValue("feat/x")
+
+	updatedModel, _ := model.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyTab})
+	m := updatedModel.(Model)
+	updatedModel, _ = m.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyTab})
+	m = updatedModel.(Model)
+	updatedModel, _ = m.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyTab})
+	m = updatedModel.(Model)
+	if m.newWorkspaceForm.activeField != 3 {
+		t.Fatalf("expected to land on action row, got field %d", m.newWorkspaceForm.activeField)
+	}
+	updatedModel, cmd := m.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updatedModel.(Model)
+	if m.newWorkspaceMode {
+		t.Fatal("submit should leave form mode")
+	}
+	if cmd == nil {
+		t.Fatal("expected dispatch cmd from submit")
+	}
+	// Submit returns a Batch (dispatch + tea.ClearScreen). Drain the
+	// batch by invoking it; tea.Batch returns a BatchMsg whose contents
+	// we run individually so the dispatch closure actually fires.
+	if msg := cmd(); msg != nil {
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				if sub != nil {
+					_ = sub()
+				}
+			}
+		}
+	}
+	if got.Name != "feat/x" || got.Bookmark != "main" || got.RepoRoot != "/repo" {
+		t.Fatalf("launcher received unexpected spec: %+v", got)
+	}
+}
+
+// TestInlineNewWorkspaceFormCancelClearsState verifies pressing esc
+// in the form returns to the row list with no side effects.
+func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
+	model := New(nil, nil)
+	model.newWorkspaceMode = true
+	model.newWorkspaceRepo = "/repo"
+	model.newWorkspaceForm = newNewWorkspaceForm(NewWorkspaceInitial{})
+
+	updated, _ := model.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m := updated.(Model)
+	if m.newWorkspaceMode {
+		t.Fatal("esc should leave form mode")
+	}
+	if m.newWorkspaceRepo != "" {
+		t.Fatalf("repo should be cleared, got %q", m.newWorkspaceRepo)
+	}
+	if m.status != "new: cancelled" {
+		t.Fatalf("expected cancel status, got %q", m.status)
+	}
+}
+
 func TestRenderJobCountsCompactShowsCounts(t *testing.T) {
 	out := renderJobCountsCompact(JobCounts{Running: 2, Failed: 1})
 	if out == "" {

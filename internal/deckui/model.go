@@ -144,10 +144,6 @@ type NewWorkspaceInitial struct {
 	Bookmark string
 }
 
-// NewWorkspaceLauncher returns a tea.Cmd that suspends the deck, runs the
-// interactive new-workspace flow in the same terminal, and emits a result msg.
-type NewWorkspaceLauncher func(repoRoot string, initial NewWorkspaceInitial) tea.Cmd
-
 // BookmarkFetcher returns a tea.Cmd that lists deduped bookmarks and emits a
 // BookmarksDoneMsg.
 type BookmarkFetcher func(repoRoot string) tea.Cmd
@@ -293,7 +289,6 @@ type Model struct {
 	findPendingPrefix  rune
 	refresher          Refresher
 	stateWatcher       StateChangeWatcher
-	newLauncher        NewWorkspaceLauncher
 	prFetcher          PRFetcher
 	bookmarkFetcher    BookmarkFetcher
 	stateEditor        StateEditorLauncher
@@ -341,6 +336,15 @@ type Model struct {
 	jobCounts          JobCounts
 	jobsOverlay        bool
 	jobsOverlayCursor  int
+
+	// New-workspace form. When newWorkspaceMode is true the deck's
+	// View renders the form in place of the row list and Update
+	// delegates key handling to the form. See doc.go for the
+	// "modal-state inside Model, never a nested tea.Program"
+	// architectural constraint.
+	newWorkspaceMode bool
+	newWorkspaceForm newWorkspaceForm
+	newWorkspaceRepo string
 }
 
 const progressLogMax = 50
@@ -425,12 +429,6 @@ func (m Model) indexCurrent() int {
 		}
 	}
 	return -1
-}
-
-// WithNewWorkspaceLauncher installs a launcher used by the `n` key.
-func (m Model) WithNewWorkspaceLauncher(l NewWorkspaceLauncher) Model {
-	m.newLauncher = l
-	return m
 }
 
 func (m Model) WithRefresher(r Refresher) Model {
@@ -616,7 +614,7 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.confirmDelete && !m.filtering &&
 		!m.findMode && !m.actionMode &&
 		!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
-		!m.openMode && !m.helpMode
+		!m.openMode && !m.helpMode && !m.newWorkspaceMode
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -693,18 +691,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "running" count immediately rather than waiting up to 2 s
 		// for the next tick.
 		return m, refreshJobsListCmd(m.jobsListRefresher)
+	case promptEditedMsg:
+		// Editor exec returns here after the user finishes editing the
+		// new-workspace prompt in $EDITOR. Route to the form so it can
+		// stash the edited value (or surface the error). When the form
+		// isn't open we drop the message — the editor exec only fires
+		// from inside the form, so a stale message here means the user
+		// cancelled out before the editor returned.
+		if !m.newWorkspaceMode {
+			return m, nil
+		}
+		return m.dispatchNewWorkspaceForm(msg)
 	case NewWorkspaceDoneMsg:
-		// Force a full repaint when control returns from the form's
-		// inner tea.Exec — without this, the deck's first frame after
-		// resuming the alt-screen leaves rows from the form visible
-		// in cells the deck's view doesn't overwrite.
+		// Legacy message from the now-removed nested-tea.Program form.
+		// Kept for any in-flight callers; the inline form bypasses this
+		// path entirely.
 		if msg.Cancelled {
 			m.status = "new: cancelled"
-			return m, tea.ClearScreen
+			return m, nil
 		}
 		if msg.Err != nil {
 			m.status = "new: " + msg.Err.Error()
-			return m, tea.ClearScreen
+			return m, nil
 		}
 		if msg.Request != nil {
 			return m.startCreateAction(*msg.Request, msg.RepoRoot)
@@ -866,6 +874,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.newWorkspaceMode {
+			return m.dispatchNewWorkspaceForm(msg)
+		}
 		if m.confirmDelete {
 			switch strings.ToLower(msg.String()) {
 			case "y", "enter":
@@ -911,7 +922,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "q", "ctrl+c":
 				m.newMenuMode = false
 				m.status = "new: cancelled"
-				return m, nil
+				return m, tea.ClearScreen
 			case "j", "down":
 				if m.newMenuCursor < 2 {
 					m.newMenuCursor++
@@ -1285,10 +1296,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "review: loading PRs..."
 			return m, tea.Batch(m.spinner.Tick, m.prFetcher(item.RepoRoot))
 		case "n":
-			if m.newLauncher == nil {
-				m.status = "new: launcher not configured"
-				return m, nil
-			}
 			item, ok := m.selected()
 			if !ok || strings.TrimSpace(item.RepoRoot) == "" {
 				m.status = "new: select a row with a known repo"
@@ -1298,7 +1305,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.newMenuCursor = 0
 			m.newMenuRepo = item.RepoRoot
 			m.status = "new: choose start (↑/↓ enter · b bookmark · r review · esc cancel)"
-			return m, nil
+			// tea.ClearScreen forces Bubble Tea's renderer to drop its
+			// previous-frame buffer and rewrite every cell on the next
+			// View. Required when entering a modal whose layout is
+			// narrower than the row list — otherwise the renderer's
+			// per-line diff skips redrawing rows whose left columns are
+			// occupied by stale row-list content. See doc.go for the
+			// "modal-state, full repaint on entry" pattern.
+			return m, tea.ClearScreen
 		case "o":
 			if m.projectFinder == nil {
 				m.status = "open: not configured (set deck.project_roots in config)"
@@ -1332,6 +1346,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// launchNewForm enters inline new-workspace-form mode. The form is a
+// state of this Model (see doc.go); we do not nest a tea.Program. The
+// repo root collected from the row selection is stashed so submit can
+// dispatch a create job through the existing async-job path.
 func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) {
 	repo := m.newMenuRepo
 	m.newMenuMode = false
@@ -1339,12 +1357,67 @@ func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) 
 	m.bookmarks = nil
 	m.bookmarkCursor = 0
 	m.bookmarkFilter.SetValue("")
-	if m.newLauncher == nil || strings.TrimSpace(repo) == "" {
-		m.status = "new: launcher not configured"
+	if strings.TrimSpace(repo) == "" {
+		m.status = "new: select a row with a known repo"
 		return *m, nil
 	}
+	m.newWorkspaceMode = true
+	m.newWorkspaceRepo = repo
+	m.newWorkspaceForm = newNewWorkspaceForm(initial)
 	m.status = "new workspace..."
-	return *m, m.newLauncher(repo, initial)
+	// tea.ClearScreen so the renderer drops its previous-frame buffer
+	// and the form's first paint overwrites every cell, including
+	// columns the deck row list (or the new-menu) wrote that the form
+	// doesn't. See doc.go.
+	return *m, tea.Batch(textinput.Blink, tea.ClearScreen)
+}
+
+// dispatchNewWorkspaceForm forwards a message to the inline form and
+// acts on the form's returned action. Submit dispatches a create job;
+// cancel and editor exec leave the form open with the form's own
+// state updated.
+func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	form, cmd, action := m.newWorkspaceForm.update(msg)
+	m.newWorkspaceForm = form
+	switch action {
+	case newFormActionCancel:
+		m.newWorkspaceMode = false
+		m.newWorkspaceRepo = ""
+		m.newWorkspaceForm = newWorkspaceForm{}
+		m.status = "new: cancelled"
+		// tea.ClearScreen on every modal exit so the row list's first
+		// frame after the modal closes overwrites every cell, not just
+		// the lines the renderer thinks changed.
+		return m, batchCmds(cmd, tea.ClearScreen)
+	case newFormActionSubmit:
+		req := form.request()
+		repo := m.newWorkspaceRepo
+		m.newWorkspaceMode = false
+		m.newWorkspaceRepo = ""
+		m.newWorkspaceForm = newWorkspaceForm{}
+		updated, dispatchCmd := m.startCreateAction(req, repo)
+		return updated, batchCmds(cmd, dispatchCmd, tea.ClearScreen)
+	}
+	return m, cmd
+}
+
+// batchCmds combines non-nil tea.Cmds. tea.Batch(nil, ...) panics in
+// some Bubble Tea versions, so we filter first.
+func batchCmds(cmds ...tea.Cmd) tea.Cmd {
+	out := cmds[:0]
+	for _, c := range cmds {
+		if c != nil {
+			out = append(out, c)
+		}
+	}
+	switch len(out) {
+	case 0:
+		return nil
+	case 1:
+		return out[0]
+	default:
+		return tea.Batch(out...)
+	}
 }
 
 func (m *Model) startBookmarkPicker() (tea.Model, tea.Cmd) {
@@ -1701,6 +1774,12 @@ func (m Model) View() string {
 		body := m.renderProgress(m.width)
 		footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.progressFooter())
 		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	}
+	if m.newWorkspaceMode {
+		// Render the inline new-workspace form across the entire
+		// viewport. Same pattern as progressMode above; both replace
+		// the deck body wholesale when the modal owns the screen.
+		return m.newWorkspaceForm.view(m.width, m.height)
 	}
 
 	leftWidth := max(32, m.width/2)

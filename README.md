@@ -80,7 +80,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `i` | CI window (`gh run watch`) |
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config) |
-| `n` | New workspace (form: bookmark/branch/PR) |
+| `n` | New workspace (inline form: workspace name / bookmark / agent prompt) |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style project → workspace jump |
 | `/` | Filter rows · `esc` clears |

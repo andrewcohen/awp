@@ -89,42 +89,6 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 	return newDeckActionServiceWithIO(runner, repoRoot, in, io.Discard)
 }
 
-type deckOpenCommand struct {
-	runner   Runner
-	repoRoot string
-	initial  openRequest
-	result   *openRequest
-	stdin    io.Reader
-	stdout   io.Writer
-	stderr   io.Writer
-}
-
-func (c *deckOpenCommand) SetStdin(r io.Reader)  { c.stdin = r }
-func (c *deckOpenCommand) SetStdout(w io.Writer) { c.stdout = w }
-func (c *deckOpenCommand) SetStderr(w io.Writer) { c.stderr = w }
-
-func (c *deckOpenCommand) Run() error {
-	svc := newDeckActionServiceWithIO(c.runner, c.repoRoot, c.stdin, c.stdout)
-	entries, err := svc.List()
-	if err != nil {
-		return err
-	}
-	options := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		options = append(options, entry.Name)
-	}
-	req, err := runOpenWithCharm(c.initial, options, c.stdin, c.stdout)
-	if err != nil {
-		if err.Error() == "open cancelled" {
-			return ErrOpenCancelled
-		}
-		return err
-	}
-	req.Yes = true
-	c.result = &req
-	return nil
-}
-
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp deck must run inside tmux (hint: bind a display-popup -E awp deck)")
@@ -227,32 +191,6 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 		return handleDeckAction(tmuxClient, actionSvc, runner, req, reporter)
 	}
-	launcher := func(itemRoot string, initial deckui.NewWorkspaceInitial) tea.Cmd {
-		cmd := &deckOpenCommand{
-			runner:   runner,
-			repoRoot: itemRoot,
-			initial:  openRequest{Bookmark: initial.Bookmark},
-		}
-		return tea.Exec(cmd, func(err error) tea.Msg {
-			if err != nil && errors.Is(err, ErrOpenCancelled) {
-				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
-			}
-			if err != nil {
-				return deckui.NewWorkspaceDoneMsg{Err: err}
-			}
-			if cmd.result == nil {
-				return deckui.NewWorkspaceDoneMsg{Cancelled: true}
-			}
-			return deckui.NewWorkspaceDoneMsg{
-				Request: &deckui.NewWorkspaceRequest{
-					Name:     cmd.result.Name,
-					Bookmark: cmd.result.Bookmark,
-					Prompt:   cmd.result.Prompt,
-				},
-				RepoRoot: itemRoot,
-			}
-		})
-	}
 	bookmarkFetcher := func(itemRepoRoot string) tea.Cmd {
 		return func() tea.Msg {
 			dir := strings.TrimSpace(itemRepoRoot)
@@ -324,7 +262,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 
 	model := deckui.NewScoped(items, allItems, projectName, handler).
-		WithNewWorkspaceLauncher(launcher).WithRefresher(refresher).
+		WithRefresher(refresher).
 		WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithScope(loadDeckScope()).
