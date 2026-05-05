@@ -157,7 +157,7 @@ func (c *Client) RenameWorkspace(path string, newName string) error {
 }
 
 func (c *Client) ForgetWorkspace(name string) error {
-	out, err := c.runner.Run(context.Background(), "", "jj", "workspace", "forget", name)
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "workspace", "forget", name)
 	if err != nil {
 		return formatCommandError(fmt.Sprintf("forget workspace %q", name), err, out)
 	}

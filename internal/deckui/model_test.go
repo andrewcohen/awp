@@ -292,10 +292,11 @@ func TestDeleteCanBeCancelled(t *testing.T) {
 
 func TestNewWorkspaceErrorStaysOpenAndShowsStatus(t *testing.T) {
 	model := New(nil, nil)
-	updated, cmd := model.Update(NewWorkspaceDoneMsg{Err: tea.ErrProgramKilled})
-	if cmd != nil {
-		t.Fatal("expected no quit/clear command on new-workspace error")
-	}
+	updated, _ := model.Update(NewWorkspaceDoneMsg{Err: tea.ErrProgramKilled})
+	// A tea.ClearScreen cmd is expected here so the deck repaints
+	// after returning from the form's tea.Exec; we don't assert its
+	// absence anymore. The important guarantee is that the deck
+	// stays open and surfaces the error in status.
 	m := updated.(Model)
 	if m.status == "" || m.status == "new: " {
 		t.Fatalf("expected error status, got %q", m.status)

@@ -694,13 +694,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// for the next tick.
 		return m, refreshJobsListCmd(m.jobsListRefresher)
 	case NewWorkspaceDoneMsg:
+		// Force a full repaint when control returns from the form's
+		// inner tea.Exec — without this, the deck's first frame after
+		// resuming the alt-screen leaves rows from the form visible
+		// in cells the deck's view doesn't overwrite.
 		if msg.Cancelled {
 			m.status = "new: cancelled"
-			return m, nil
+			return m, tea.ClearScreen
 		}
 		if msg.Err != nil {
 			m.status = "new: " + msg.Err.Error()
-			return m, nil
+			return m, tea.ClearScreen
 		}
 		if msg.Request != nil {
 			return m.startCreateAction(*msg.Request, msg.RepoRoot)
@@ -1225,7 +1229,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.scopeChanged != nil {
 				m.scopeChanged(m.scope)
 			}
-			return m, nil
+			return m, tea.ClearScreen
 		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
@@ -1830,6 +1834,18 @@ func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		j := m.jobs[m.jobsOverlayCursor]
 		return m, m.jobLogOpener(j.ID)
+	case "y":
+		if len(m.jobs) == 0 {
+			return m, nil
+		}
+		j := m.jobs[m.jobsOverlayCursor]
+		text := jobDetailsForCopy(j)
+		if err := writeOSC52Clipboard(text); err != nil {
+			m.status = "copy: " + err.Error()
+		} else {
+			m.status = fmt.Sprintf("copied %d bytes to clipboard", len(text))
+		}
+		return m, nil
 	}
 	return m, nil
 }
