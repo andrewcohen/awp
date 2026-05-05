@@ -89,7 +89,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `R` | Relink session |
 | `D` | Delete workspace |
 | `,` | Edit global state file in `$EDITOR` |
-| `J` | Jobs overlay (running async dispatches — cancel, dismiss, open log) |
+| `J` | Jobs overlay (running async dispatches — cancel, dismiss, open log, yank to clipboard) |
 | `?` | Help overlay |
 | `q` / `esc` | Quit |
 
@@ -210,7 +210,17 @@ Press `J` to open the jobs overlay:
 | `c` | Cancel the selected running job (sends `SIGTERM`; subprocess flushes a `cancelled` record before exiting) |
 | `x` | Dismiss a finished/failed/orphaned record (deletes the JSON + log file) |
 | `o` | Open the sidecar log file in `$PAGER` |
+| `y` | Yank current job details (id, status, error, steps, recent log) to the system clipboard via OSC 52 |
 | `esc` / `q` / `J` | Close the overlay |
+
+The `y` yank exists because tmux popups don't expose copy-mode, so dragging
+to select text inside the deck doesn't work the way it does in a normal
+tmux pane. If you want native mouse selection instead, hold your terminal's
+"bypass tmux mouse" modifier while dragging — Option (⌥) in iTerm2 / Terminal.app
+/ Ghostty, Shift in Alacritty — or turn off `set -g mouse` in tmux. On
+terminals that honor OSC 52 (iTerm2, Ghostty, Kitty, WezTerm, modern xterm,
+foot) the yank lands directly in your system clipboard; tmux must have
+`set -g set-clipboard on` for the escape to pass through.
 
 Completion is non-intrusive: created workspaces appear in the deck list via the
 existing 2-second refresher, and you press `enter` on the new row to summon as

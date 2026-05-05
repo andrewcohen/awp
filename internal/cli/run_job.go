@@ -11,12 +11,16 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/jobs"
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -86,7 +90,13 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 		return fmt.Errorf("mark running: %w", err)
 	}
 
-	reporter := &storeReporter{store: store, id: id}
+	// Wrap runner so each command and its output is mirrored into the
+	// run-job process's stdout, which spawn redirected to the sidecar
+	// log file. Without this the log file stays empty because the
+	// underlying ExecRunner uses CombinedOutput (captures, doesn't
+	// stream) and workspace.Service is built with Out: io.Discard.
+	runner = teeRunner{base: runner, out: os.Stdout}
+	reporter := &storeReporter{store: store, id: id, mirror: os.Stdout}
 
 	// Use the workspace.Service the parent process passed in only
 	// when the spec carries no repo_root override. For deck-spawned
@@ -95,7 +105,7 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 	// deck handler does it today).
 	actionSvc := svc
 	if r := job.Spec.RepoRoot; r != "" {
-		actionSvc = newDeckActionService(runner, r, os.Stdin)
+		actionSvc = newRunJobActionService(runner, r, os.Stdin, os.Stdout)
 	}
 
 	switch job.Spec.Action {
@@ -169,18 +179,70 @@ func runCreateWorkspaceJob(runner Runner, svc workspace.Service, job jobs.Job, r
 }
 
 // storeReporter implements deckui.Reporter by writing Step/Log events
-// to the job store.
+// to the job store. If mirror is non-nil, events are also written to
+// it (in run-job that's os.Stdout, redirected to the sidecar log
+// file by spawn) so the on-disk log file shows the same milestones a
+// foreground deck action would print.
 type storeReporter struct {
-	store *jobs.Store
-	id    jobs.JobID
+	store  *jobs.Store
+	id     jobs.JobID
+	mirror io.Writer
 }
 
 func (r *storeReporter) Step(label string) {
 	_ = r.store.AppendStep(r.id, label)
+	if r.mirror != nil {
+		fmt.Fprintf(r.mirror, "[%s] » %s\n", time.Now().Format("15:04:05"), label)
+	}
 }
 
 func (r *storeReporter) Log(line string) {
 	_ = r.store.AppendLog(r.id, line)
+	if r.mirror != nil {
+		fmt.Fprintf(r.mirror, "[%s] %s\n", time.Now().Format("15:04:05"), strings.TrimRight(line, "\n"))
+	}
+}
+
+// teeRunner wraps a Runner, mirroring each command invocation and its
+// combined output to a writer. Used in run-job so the workspace
+// operations leave a useful trail in the sidecar log file.
+type teeRunner struct {
+	base Runner
+	out  io.Writer
+}
+
+func (r teeRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if r.out != nil {
+		fmt.Fprintf(r.out, "[%s] $ %s %s\n", time.Now().Format("15:04:05"), name, strings.Join(args, " "))
+	}
+	out, err := r.base.Run(ctx, dir, name, args...)
+	if r.out != nil {
+		if trimmed := strings.TrimRight(out, "\n"); trimmed != "" {
+			fmt.Fprintln(r.out, trimmed)
+		}
+		if err != nil {
+			fmt.Fprintf(r.out, "  -> error: %v\n", err)
+		}
+	}
+	return out, err
+}
+
+// newRunJobActionService builds the workspace.Service used inside the
+// run-job subprocess. Identical to newDeckActionServiceWithIO except
+// the runner here is already a teeRunner; we keep the helper local so
+// run-job can pin its IO without leaking into the deck.
+func newRunJobActionService(runner Runner, repoRoot string, in io.Reader, out io.Writer) workspace.Service {
+	fr := fixedDirRunner{base: runner, dir: repoRoot}
+	return workspace.NewService(workspace.Dependencies{
+		JJ:            jj.New(fr),
+		Tmux:          tmux.New(runner),
+		Store:         state.NewJSONStore(),
+		Hooks:         config.NewFileHookProvider(),
+		Runner:        fr,
+		InvocationDir: repoRoot,
+		Input:         in,
+		Out:           out,
+	})
 }
 
 // fileLogger is a small io.Writer that mirrors the subprocess's

@@ -1,7 +1,9 @@
 package deckui
 
 import (
+	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -258,7 +260,7 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Width(innerWidth)
-	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · x dismiss · o open log)")
+	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · x dismiss · o open log · y yank)")
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -370,6 +372,87 @@ func renderJobDetails(j Job, width int) string {
 		}
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// jobDetailsForCopy renders a plain-text version of a job's details
+// suitable for the system clipboard. Mirrors what the user sees in
+// renderJobDetails minus the lipgloss styling so paste targets get
+// readable text. Recent log lines are included verbatim — the inline
+// buffer is capped at MaxInlineLogLines (200) upstream so this stays
+// bounded.
+func jobDetailsForCopy(j Job) string {
+	var b strings.Builder
+	if j.Title != "" {
+		fmt.Fprintf(&b, "%s\n", j.Title)
+	}
+	fmt.Fprintf(&b, "id %s · status %s · pid %d\n", j.ID, j.Status, j.PID)
+	if !j.StartedAt.IsZero() {
+		fmt.Fprintf(&b, "started %s\n", j.StartedAt.Format("2006-01-02 15:04:05"))
+	}
+	if !j.EndedAt.IsZero() {
+		fmt.Fprintf(&b, "ended   %s\n", j.EndedAt.Format("2006-01-02 15:04:05"))
+	}
+	if j.LogPath != "" {
+		fmt.Fprintf(&b, "log     %s\n", j.LogPath)
+	}
+	if j.ErrMsg != "" {
+		fmt.Fprintf(&b, "\nerror:\n%s\n", j.ErrMsg)
+	}
+	if len(j.Steps) > 0 {
+		b.WriteString("\nSteps:\n")
+		for _, st := range j.Steps {
+			marker := "•"
+			switch {
+			case st.Error:
+				marker = "✗"
+			case st.Done:
+				marker = "✓"
+			}
+			fmt.Fprintf(&b, "  %s %s\n", marker, st.Label)
+		}
+	}
+	if len(j.LogsTail) > 0 {
+		b.WriteString("\nRecent log:\n")
+		for _, ln := range j.LogsTail {
+			fmt.Fprintf(&b, "  %s\n", strings.TrimRight(ln, "\n"))
+		}
+	}
+	return b.String()
+}
+
+// writeOSC52Clipboard writes text to the host terminal's clipboard via
+// the OSC 52 escape sequence. Works inside a tmux popup (where copy-
+// mode is unavailable) provided tmux has `set -g set-clipboard on`
+// and the host terminal supports OSC 52 (iTerm2, Ghostty, Kitty,
+// WezTerm, modern xterm, foot, etc. all do).
+//
+// The sequence is wrapped in tmux's DCS passthrough (`\x1bPtmux;…\x1b\`)
+// so tmux forwards it instead of swallowing it. Non-tmux terminals
+// just see the inner OSC 52 directly because the DCS wrapping happens
+// to be a no-op in many emulators — we detect $TMUX and only emit the
+// wrapper when it's set.
+func writeOSC52Clipboard(text string) error {
+	enc := base64.StdEncoding.EncodeToString([]byte(text))
+	var seq string
+	if os.Getenv("TMUX") != "" {
+		// Inside tmux: DCS passthrough. Inner ESCs must be doubled.
+		inner := fmt.Sprintf("\x1b]52;c;%s\x07", enc)
+		inner = strings.ReplaceAll(inner, "\x1b", "\x1b\x1b")
+		seq = "\x1bPtmux;" + inner + "\x1b\\"
+	} else {
+		seq = fmt.Sprintf("\x1b]52;c;%s\x1b\\", enc)
+	}
+	// Write to /dev/tty so the escape reaches the terminal even when
+	// stdout is captured/piped.
+	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("open tty: %w", err)
+	}
+	defer tty.Close()
+	if _, err := tty.WriteString(seq); err != nil {
+		return fmt.Errorf("write tty: %w", err)
+	}
+	return nil
 }
 
 // jobStatusGlyph returns the glyph and lipgloss color for an async
