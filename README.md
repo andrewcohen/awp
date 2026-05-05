@@ -105,6 +105,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `awp w delete <name>` | Delete (use `--force` to skip prompts) |
 | `awp w prune [--dry-run] [--force]` | Remove orphan workspace dirs under `~/.awp/workspaces` not tracked in state |
 | `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
+| `awp w bootstrap --all` | Re-run bootstrap hooks for every tracked workspace in the current repo (continues on failure) |
 | `awp review [pr#]` | Pick or open a PR for review in a fresh workspace |
 | `awp diff` | Charm-styled diff viewer |
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |

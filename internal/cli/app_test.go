@@ -104,6 +104,7 @@ func (f *fakeService) PrepareWorkspace(name, bookmark string, runHooks bool) (st
 	return normalized, "/tmp/" + normalized, nil
 }
 func (f *fakeService) Bootstrap(string) error { return nil }
+func (f *fakeService) BootstrapAll() error    { return nil }
 
 type openDeckRunner struct {
 	sessions map[string]struct{}
