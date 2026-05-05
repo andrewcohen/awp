@@ -24,9 +24,9 @@ awp init hooks   # one-time: install Claude Code + pi.dev integrations globally
 `awp init hooks` installs:
 
 - `~/.claude/settings.json` — hooks that report state to awp on every prompt/tool/stop/notification.
-- `~/.pi/agent/extensions/awp-status.ts` — a pi.dev extension that reports state on `before_agent_start` / `agent_end` / `tool_execution_start` / `session_shutdown`. If statuses aren't landing, set `AWP_DEBUG=1` in the pi pane to write diagnostics to `~/.awp/pi-extension.log`.
+- `~/.pi/agent/extensions/awp-status.ts` — a pi.dev extension that reports state on `session_start` / `before_agent_start` / `agent_end` / `tool_execution_start` / quit-time `session_shutdown`. If statuses aren't landing, set `AWP_DEBUG=1` in the pi pane to write diagnostics to `~/.awp/pi-extension.log`.
 
-Both integrations are no-ops outside awp-managed sessions (they gate on `$AWP_WORKSPACE`), so they never affect your standalone Claude or pi usage.
+Both integrations are no-ops outside awp-managed sessions (they only run in tmux and `awp internal report-status` ignores sessions without awp workspace metadata), so they never affect your standalone Claude or pi usage.
 
 ## The deck
 
@@ -234,7 +234,7 @@ Workspace state lives in a single `~/.awp/workspace-state.json` written from man
 ## How status reporting works
 
 1. When awp creates or summons a tmux session, it sets `AWP_WORKSPACE`, `AWP_REPO`, and `AWP_REPO_ROOT` on the session env.
-2. The globally-installed hooks (Claude) / extension (pi) run on every state transition. Each one calls `awp internal report-status --state <state>`, gated on `$AWP_WORKSPACE` so it's a no-op outside awp.
+2. The globally-installed hooks (Claude) / extension (pi) run on every state transition. Each one calls `awp internal report-status --state <state>` from tmux; the CLI is a silent no-op when awp workspace metadata is missing.
 3. The status writer mutates the workspace entry's `Status` field in `~/.awp/workspace-state.json`.
 4. The deck reads that file on each refresh tick and renders the colored dot.
 5. Crash fallback: if the agent pane has dropped back to a shell, the deck overrides the in-memory status to `exited` regardless of what's on disk.
