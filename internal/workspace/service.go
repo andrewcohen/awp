@@ -1082,6 +1082,11 @@ func (s *service) runBuiltinBootstrap(sourceRepo, workspacePath string) error {
 		}
 		s.logf("✅ Copied .awp/")
 	}
+	if err := markClaudeWorkspaceTrusted(workspacePath); err != nil {
+		s.logf("⚠️ Could not mark workspace trusted in ~/.claude.json: %v", err)
+	} else {
+		s.logf("✅ Marked workspace trusted in ~/.claude.json")
+	}
 	return nil
 }
 
