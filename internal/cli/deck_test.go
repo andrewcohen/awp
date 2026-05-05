@@ -77,6 +77,7 @@ func (s *deckFakeService) PrepareWorkspace(string, string, bool) (string, string
 	return "", "", nil
 }
 func (s *deckFakeService) Bootstrap(string) error      { return nil }
+func (s *deckFakeService) BootstrapAll() error         { return nil }
 func (s *deckFakeService) Rename(string, string) error { return nil }
 func (s *deckFakeService) Delete(name string, force bool) error {
 	s.deleteName = name

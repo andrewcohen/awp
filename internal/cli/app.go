@@ -150,15 +150,31 @@ func (a *App) runWorkspace(args []string) error {
 
 func (a *App) runBootstrap(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp w bootstrap [workspace]\nRe-runs built-in + user bootstrap hooks. Infers workspace from cwd when omitted.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp w bootstrap [--all | workspace]\nRe-runs built-in + user bootstrap hooks. Infers workspace from cwd when omitted.\n--all bootstraps every tracked workspace in the current source repo (continues on failure).")
 		return nil
 	}
-	if len(args) > 1 {
+	all := false
+	positional := args[:0:0]
+	for _, arg := range args {
+		switch arg {
+		case "--all", "-a":
+			all = true
+		default:
+			positional = append(positional, arg)
+		}
+	}
+	if all {
+		if len(positional) > 0 {
+			return errors.New("bootstrap --all does not take a workspace name")
+		}
+		return a.svc.BootstrapAll()
+	}
+	if len(positional) > 1 {
 		return errors.New("bootstrap takes at most one workspace name")
 	}
 	name := ""
-	if len(args) == 1 {
-		name = args[0]
+	if len(positional) == 1 {
+		name = positional[0]
 	}
 	return a.svc.Bootstrap(name)
 }

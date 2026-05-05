@@ -111,6 +111,7 @@ type Service interface {
 	Open(name string, bookmark string, prompt string, yes bool) error
 	PrepareWorkspace(name string, bookmark string, runHooks bool) (normalized string, path string, err error)
 	Bootstrap(name string) error
+	BootstrapAll() error
 	Rename(oldName, newName string) error
 	Delete(name string, force bool) error
 	DeleteWithOptions(name string, opts DeleteOptions) error
@@ -1037,6 +1038,60 @@ func (s *service) Bootstrap(name string) error {
 		return err
 	}
 	return s.runPostWorkspaceStartHooksWithRoot(sourceRepo, workspaceName, workspacePath, sourceRepo)
+}
+
+// BootstrapAll re-runs built-in + user bootstrap hooks for every tracked
+// workspace in the current source repo. Errors from individual workspaces are
+// logged and collected; the call returns a non-nil error if any failed.
+func (s *service) BootstrapAll() error {
+	sourceRepo, err := s.jj.SourceRepoRoot()
+	if err != nil {
+		return fmt.Errorf("resolve source repo root: %w", err)
+	}
+	if err := s.guardRepoRoot(sourceRepo); err != nil {
+		return err
+	}
+	entries, err := s.store.Load(sourceRepo)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	if len(names) == 0 {
+		s.logf("ℹ️ No workspaces to bootstrap for %s", sourceRepo)
+		return nil
+	}
+	s.logf("▶️ Bootstrapping %d workspace(s) for %s", len(names), sourceRepo)
+	var failed []string
+	var firstErr error
+	for _, name := range names {
+		entry := entries[name]
+		s.logf("▶️ Bootstrapping workspace %q (path=%s)", name, entry.Path)
+		if err := s.runBuiltinBootstrap(sourceRepo, entry.Path); err != nil {
+			s.logf("❌ Built-in bootstrap failed for %q: %v", name, err)
+			failed = append(failed, name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := s.runPostWorkspaceStartHooksWithRoot(sourceRepo, name, entry.Path, sourceRepo); err != nil {
+			s.logf("❌ Bootstrap hooks failed for %q: %v", name, err)
+			failed = append(failed, name)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("bootstrap failed for %d workspace(s): %s: %w", len(failed), strings.Join(failed, ", "), firstErr)
+	}
+	s.logf("✅ Bootstrapped %d workspace(s)", len(names))
+	return nil
 }
 
 // runBuiltinBootstrap copies files from the source repo that external tools
