@@ -167,6 +167,16 @@ type BookmarksDoneMsg struct {
 
 type Refresher func() tea.Cmd
 
+// StateChangeWatcher returns a command that emits StateChangedMsg when the
+// persisted workspace state file changes. It is an optimization layered on
+// top of the periodic refresh tick; callers may leave it nil.
+type StateChangeWatcher func() tea.Cmd
+
+// StateChangedMsg is emitted when workspace-state.json is created, replaced,
+// renamed, or written. The deck treats it as an immediate refresh hint and
+// keeps polling as the correctness fallback.
+type StateChangedMsg struct{}
+
 // Scope controls which items are shown in the deck list.
 type Scope int
 
@@ -254,63 +264,64 @@ const (
 const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
 type Model struct {
-	itemsCurrent      []Item
-	itemsAll          []Item
-	scope             Scope
-	scopeChanged      ScopeChangedHandler
-	currentRepo       string
-	cursor            int
-	width             int
-	height            int
-	status            string
-	handler           Handler
-	filterInput       textinput.Model
-	filtering         bool
-	filter            string
-	confirmDelete     bool
-	helpMode          bool
-	deleteTarget      Item
-	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
-	findMode          bool
-	findStage         findStage
-	findProject       string
-	findProjectHints  map[string]string
-	findProjectLookup map[string]string
-	findProjectPrefix map[rune]bool
-	findRowHints      map[int]string
-	findRowLookup     map[string]int
-	findRowPrefix     map[rune]bool
-	findPendingPrefix rune
-	refresher         Refresher
-	newLauncher       NewWorkspaceLauncher
-	prFetcher         PRFetcher
-	bookmarkFetcher   BookmarkFetcher
-	stateEditor       StateEditorLauncher
-	reviewMode        bool
-	reviewLoading     bool
-	reviewPRs         []PRItem
-	reviewCursor      int
-	reviewFiltering   bool
-	reviewFilter      string
-	newMenuMode       bool
-	newMenuCursor     int
-	newMenuRepo       string
-	bookmarkMode      bool
-	bookmarkLoading   bool
-	bookmarks         []string
-	bookmarkCursor    int
-	bookmarkFilter    textinput.Model
-	bookmarkFiltering bool
-	userActions       []UserAction
-	actionMode        bool
-	actionAliasLookup map[string]UserAction
-	spinner           spinner.Model
-	busy              bool
-	progressMode      bool
-	progressTitle     string
-	progressSteps     []ProgressStep
-	progressLog       []string
-	progressErr       error
+	itemsCurrent       []Item
+	itemsAll           []Item
+	scope              Scope
+	scopeChanged       ScopeChangedHandler
+	currentRepo        string
+	cursor             int
+	width              int
+	height             int
+	status             string
+	handler            Handler
+	filterInput        textinput.Model
+	filtering          bool
+	filter             string
+	confirmDelete      bool
+	helpMode           bool
+	deleteTarget       Item
+	pendingSelect      Item // after next refresh, cursor jumps to this (project, workspace) if present
+	findMode           bool
+	findStage          findStage
+	findProject        string
+	findProjectHints   map[string]string
+	findProjectLookup  map[string]string
+	findProjectPrefix  map[rune]bool
+	findRowHints       map[int]string
+	findRowLookup      map[string]int
+	findRowPrefix      map[rune]bool
+	findPendingPrefix  rune
+	refresher          Refresher
+	stateWatcher       StateChangeWatcher
+	newLauncher        NewWorkspaceLauncher
+	prFetcher          PRFetcher
+	bookmarkFetcher    BookmarkFetcher
+	stateEditor        StateEditorLauncher
+	reviewMode         bool
+	reviewLoading      bool
+	reviewPRs          []PRItem
+	reviewCursor       int
+	reviewFiltering    bool
+	reviewFilter       string
+	newMenuMode        bool
+	newMenuCursor      int
+	newMenuRepo        string
+	bookmarkMode       bool
+	bookmarkLoading    bool
+	bookmarks          []string
+	bookmarkCursor     int
+	bookmarkFilter     textinput.Model
+	bookmarkFiltering  bool
+	userActions        []UserAction
+	actionMode         bool
+	actionAliasLookup  map[string]UserAction
+	spinner            spinner.Model
+	busy               bool
+	progressMode       bool
+	progressTitle      string
+	progressSteps      []ProgressStep
+	progressLog        []string
+	progressErr        error
 	progressDone       bool
 	progressDoneAction Action
 	progressChan       chan progressEvent
@@ -424,6 +435,11 @@ func (m Model) WithNewWorkspaceLauncher(l NewWorkspaceLauncher) Model {
 
 func (m Model) WithRefresher(r Refresher) Model {
 	m.refresher = r
+	return m
+}
+
+func (m Model) WithStateChangeWatcher(w StateChangeWatcher) Model {
+	m.stateWatcher = w
 	return m
 }
 
@@ -587,7 +603,21 @@ func (m Model) items() []Item {
 	return out
 }
 
-func (m Model) Init() tea.Cmd { return scheduleRefreshTick() }
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{scheduleRefreshTick()}
+	if m.stateWatcher != nil {
+		cmds = append(cmds, m.stateWatcher())
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m Model) canBackgroundRefresh() bool {
+	return m.refresher != nil && !m.busy && !m.progressMode &&
+		!m.confirmDelete && !m.filtering &&
+		!m.findMode && !m.actionMode &&
+		!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
+		!m.openMode && !m.helpMode
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -614,11 +644,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if hasActiveJobs(m.jobs) {
 			jobsCmd = refreshJobsListCmd(m.jobsListRefresher)
 		}
-		if m.refresher != nil && !m.busy && !m.progressMode &&
-			!m.confirmDelete && !m.filtering &&
-			!m.findMode && !m.actionMode &&
-			!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
-			!m.openMode && !m.helpMode {
+		if m.canBackgroundRefresh() {
 			cmds := []tea.Cmd{m.refresher(), scheduleRefreshTick()}
 			if jobsCmd != nil {
 				cmds = append(cmds, jobsCmd)
@@ -629,6 +655,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(jobsCmd, scheduleRefreshTick())
 		}
 		return m, scheduleRefreshTick()
+	case StateChangedMsg:
+		cmds := []tea.Cmd{}
+		if m.stateWatcher != nil {
+			cmds = append(cmds, m.stateWatcher())
+		}
+		if m.canBackgroundRefresh() {
+			cmds = append(cmds, m.refresher())
+		}
+		return m, tea.Batch(cmds...)
 	case jobsListMsg:
 		m.jobs = msg.jobs
 		m.jobCounts = countsFromJobs(msg.jobs)

@@ -140,6 +140,72 @@ func TestScopedModelStartsInAllProjectsViewWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestStateChangedRefreshesAndResubscribes(t *testing.T) {
+	refreshed := 0
+	watched := 0
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil).
+		WithRefresher(func() tea.Cmd {
+			return func() tea.Msg {
+				refreshed++
+				return RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa", Status: "working"}}, nil, nil)
+			}
+		}).
+		WithStateChangeWatcher(func() tea.Cmd {
+			watched++
+			return func() tea.Msg { return StateChangedMsg{} }
+		})
+
+	_, cmd := model.Update(StateChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected watcher/refresh batch")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected batch msg, got %T", msg)
+	}
+	for _, c := range batch {
+		if c != nil {
+			_ = c()
+		}
+	}
+	if refreshed != 1 {
+		t.Fatalf("expected one refresh, got %d", refreshed)
+	}
+	if watched != 1 {
+		t.Fatalf("expected watcher to resubscribe once, got %d", watched)
+	}
+}
+
+func TestStateChangedDoesNotRefreshDuringOverlay(t *testing.T) {
+	refreshed := 0
+	watched := 0
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil).
+		WithRefresher(func() tea.Cmd {
+			return func() tea.Msg {
+				refreshed++
+				return RefreshDoneMsg(nil, nil, nil)
+			}
+		}).
+		WithStateChangeWatcher(func() tea.Cmd {
+			watched++
+			return func() tea.Msg { return StateChangedMsg{} }
+		})
+	model.helpMode = true
+
+	_, cmd := model.Update(StateChangedMsg{})
+	if cmd == nil {
+		t.Fatal("expected watcher resubscribe command")
+	}
+	_ = cmd()
+	if refreshed != 0 {
+		t.Fatalf("expected no refresh during overlay, got %d", refreshed)
+	}
+	if watched != 1 {
+		t.Fatalf("expected watcher to resubscribe once, got %d", watched)
+	}
+}
+
 func TestDeleteRequiresConfirmation(t *testing.T) {
 	called := false
 	refreshed := false
