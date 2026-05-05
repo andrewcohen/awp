@@ -33,6 +33,35 @@ The deck and other TUIs are built on Bubble Tea + lipgloss. When working on UI:
 - Terminals render whole rows only — half-line gaps don't exist. If a layout feels too dense, prefer a faint top/bottom border (`BorderTop(true).BorderForeground(...)`) over stacking blanks.
 - Keep the `?` help overlay in `internal/deckui/model.go::renderHelp` updated whenever you add or rebind a key, or change a status state.
 
+### Bubble Tea program structure
+
+**One program, one renderer.** The deck is a single `tea.Program`. Modal flows
+(jobs overlay, confirm-delete, new-workspace form, find-mode, review picker,
+quick-action prompts, etc.) live as **states inside `deckui.Model`** — flags
+plus sub-component structs that `Update` routes keys to, and `View` renders in
+place of the row list.
+
+- **Do not** launch a second `tea.Program` from inside the deck. `tea.Exec` /
+  `tea.ExecProcess` is for **external** commands (`$EDITOR`, `git`, `vi`,
+  pagers) — never for another Bubble Tea program. Nested Bubble Tea programs
+  cause alt-screen bleed during the entry/exit handoff that no amount of
+  `tea.ClearScreen` / `lipgloss.Place` padding fully cures (see
+  `specs/20260505-ucc0-deck-inline-new-workspace-form-spec.md` for the
+  postmortem).
+- Reference patterns in `internal/deckui/model.go`: `jobsOverlay`,
+  `confirmDelete`, `newMenuMode`, `bookmarkMode`, `reviewMode`, `findMode`.
+  Mirror those when adding a new modal: a `bool` flag (or enum) on `Model`,
+  the sub-component's state held alongside it, a delegated key handler
+  inside `Update`, and a branch in `View` (or whatever helper composes the
+  bottom panel) that swaps in the modal's render.
+- Sub-components (form structs, pickers) should be plain structs with
+  `update(msg) (self, cmd, action)` and `view(width) string` methods — not
+  `tea.Model` implementations. Keeping them off `tea.Model` prevents future
+  drift toward "just call `tea.NewProgram` here."
+- The `?` help overlay (`internal/deckui/model.go::renderHelp`) and the
+  `deckKeyGroups` slice are the canonical key-binding surface. Any new modal
+  key binding has to be reflected there.
+
 ## Security & Safety
 
 - Treat all external input as untrusted.

@@ -4,8 +4,8 @@
 - **Spec ID**: `20260505-ucc0`
 - **Feature name**: Deck inline new-workspace form
 - **Owner**: andrew
-- **Status**: Planned
-- **Last updated**: 2026-05-05
+- **Status**: Done
+- **Last updated**: 2026-05-06
 
 ## Goal
 Stop the alt-screen bleed when pressing `n` (new workspace) in the deck. The form
@@ -189,6 +189,18 @@ alt-screen.
 
 ## Spec Change Log
 - 2026-05-05: Initial draft.
+- 2026-05-06: Implemented. Form lives at
+  `internal/deckui/new_workspace_form.go` as a plain struct (not a
+  `tea.Model`), wired into `Model` via `newWorkspaceMode` /
+  `newWorkspaceForm` / `newWorkspaceRepo` fields. `n` enters form
+  mode directly; submit dispatches via the existing `startCreateAction`
+  path. Architectural rule documented in `CLAUDE.md` (TUI / lipgloss
+  → Bubble Tea program structure) and `internal/deckui/doc.go`. The
+  legacy `NewWorkspaceDoneMsg` handler is retained as a no-op safety
+  net but the dispatch path no longer fires it. `runOpenWithCharm`
+  remains in `internal/cli/open_form.go` because the standalone
+  `awp open` CLI still uses it as its sole `tea.Program` (no nesting,
+  no bleed).
 
 ## Validation
 - [ ] `go test ./...`
