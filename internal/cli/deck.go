@@ -46,6 +46,32 @@ type noopReporter struct{}
 func (noopReporter) Step(string) {}
 func (noopReporter) Log(string)  {}
 
+// recoverRepoRootFromSession returns the repo root for the workspace whose
+// awp tmux session the deck was launched from. Used when the popup's CWD
+// doesn't resolve to a jj repo (e.g. it landed in $HOME because the parent
+// pane was running `less` and tmux couldn't read its cwd). Returns false
+// if we're not in an [awp]... session or no matching workspace is known.
+func recoverRepoRootFromSession(tmuxClient *tmux.Client, svc workspace.Service) (string, bool) {
+	sessionName, err := tmuxClient.CurrentSessionName()
+	if err != nil {
+		return "", false
+	}
+	repo, ws, ok := parseAwpSession(strings.TrimSpace(sessionName))
+	if !ok {
+		return "", false
+	}
+	all, err := svc.ListAll()
+	if err != nil {
+		return "", false
+	}
+	for _, e := range all {
+		if e.ProjectName == repo && e.Name == ws && strings.TrimSpace(e.RepoRoot) != "" {
+			return e.RepoRoot, true
+		}
+	}
+	return "", false
+}
+
 // parseAwpSession parses "[awp]<repo>__<workspace>" into (repo, workspace, true).
 func parseAwpSession(name string) (string, string, bool) {
 	if !strings.HasPrefix(name, deckSessionPrefix) {
@@ -103,11 +129,23 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	tmuxClient := tmux.New(runner)
 
 	repoRoot, err := j.RepoRoot()
-	if err != nil {
-		return fmt.Errorf("not a jj repository: %w", err)
-	}
-	if workspace.IsHomeDir(repoRoot) {
-		return fmt.Errorf("refusing to open deck at $HOME — cd into a project first")
+	rootBad := err != nil || workspace.IsHomeDir(repoRoot)
+	if rootBad {
+		// The popup spawned with a CWD that isn't a project (e.g. tmux's
+		// `pane_current_path` resolved to $HOME because the parent pane
+		// was running `less` and proc lookup couldn't read its cwd).
+		// If we're inside an [awp]<repo>__<workspace> session, recover
+		// the repo root from the cross-repo state instead of giving up.
+		if recovered, ok := recoverRepoRootFromSession(tmuxClient, svc); ok {
+			repoRoot = recovered
+			runner = fixedDirRunner{base: runner, dir: repoRoot}
+			j = jj.New(runner)
+			svc = newDeckActionServiceWithIO(runner, repoRoot, in, out)
+		} else if err != nil {
+			return fmt.Errorf("not a jj repository: %w", err)
+		} else {
+			return fmt.Errorf("refusing to open deck at $HOME — cd into a project first")
+		}
 	}
 	projectName := filepath.Base(repoRoot)
 	items, allItems, err := loadDeckItems(j, tmuxClient, svc, repoRoot, projectName, in, out)
