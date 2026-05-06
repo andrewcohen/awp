@@ -86,6 +86,8 @@ func (a *App) Run(args []string) error {
 		return a.runInternal(args[1:])
 	case "init":
 		return a.runInit(args[1:])
+	case "config":
+		return a.runConfig(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -649,7 +651,7 @@ func (a *App) runReview(args []string) error {
 }
 
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|diff|doctor|review|workspace|w> ...")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|diff|doctor|review|config|workspace|w> ...")
 	return nil
 }
 

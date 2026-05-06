@@ -110,6 +110,8 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `awp diff` | Charm-styled diff viewer |
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |
+| `awp config init` | Bootstrap `<repo>/.awp/config.json` (must run from repo root) |
+| `awp config edit [--global]` | Open the project (or `--global`) config in `$EDITOR` |
 | `awp internal report-status --state <…>` | Hidden — used by hooks to write status |
 | `awp internal unread-summary` | Print a tmux-status-bar badge of workspaces needing attention (waiting + notified counts). Empty when nothing's unread. |
 | `awp internal mark-read [--workspace <name>]` | Clear the unread badge for one workspace. Resolves from `$AWP_WORKSPACE` when no flag given. |
