@@ -77,7 +77,7 @@ func AgentInvocation(repoRoot string) string {
 
 func Load(repoRoot string) (Config, error) {
 	global, globalErr := loadFile(globalConfigPath())
-	project, projectErr := loadFile(filepath.Join(repoRoot, ".awp", "config.json"))
+	project, projectErr := loadFile(ProjectConfigPath(repoRoot))
 
 	if globalErr != nil && !errors.Is(globalErr, os.ErrNotExist) {
 		return Config{}, fmt.Errorf("global config: %w", globalErr)
@@ -89,8 +89,17 @@ func Load(repoRoot string) (Config, error) {
 	return merge(global, project), nil
 }
 
-// globalConfigPath returns the canonical global config location:
+// GlobalConfigPath returns the canonical global config location:
 // $XDG_CONFIG_HOME/awp/config.json (defaulting to ~/.config/awp/config.json).
+func GlobalConfigPath() string {
+	return globalConfigPath()
+}
+
+// ProjectConfigPath returns the per-repo config path: <repoRoot>/.awp/config.json.
+func ProjectConfigPath(repoRoot string) string {
+	return filepath.Join(repoRoot, ".awp", "config.json")
+}
+
 func globalConfigPath() string {
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 		return filepath.Join(xdg, "awp", "config.json")
