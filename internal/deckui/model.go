@@ -910,19 +910,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filter = ""
 				m.filterInput.SetValue("")
 				m.cursor = 0
-				return m, nil
+				// tea.ClearScreen on modal exit so the row list's
+				// first frame after filtering closes overwrites every
+				// cell, not just lines the renderer's per-line diff
+				// thinks changed. See doc.go.
+				return m, tea.ClearScreen
 			case "enter":
 				m.filtering = false
 				m.filterInput.Blur()
 				m.filter = m.filterInput.Value()
 				m.cursor = 0
-				return m, nil
+				return m, tea.ClearScreen
 			}
+			beforeCount := len(m.items())
 			var cmd tea.Cmd
 			m.filterInput, cmd = m.filterInput.Update(msg)
 			m.filter = m.filterInput.Value()
-			if m.cursor >= len(m.items()) {
+			afterCount := len(m.items())
+			if m.cursor >= afterCount {
 				m.cursor = 0
+			}
+			// Only force a full repaint when the visible row count
+			// actually changes — clearing on every keystroke flickers.
+			// When the row list shrinks, rows that fall out the bottom
+			// otherwise bleed through the renderer's per-line diff.
+			if beforeCount != afterCount {
+				return m, batchCmds(cmd, tea.ClearScreen)
 			}
 			return m, cmd
 		}
@@ -1230,7 +1243,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.filtering = true
 			m.filterInput.Focus()
 			m.filterInput.SetValue(m.filter)
-			return m, nil
+			// tea.ClearScreen on modal entry; see doc.go and the
+			// matching tea.ClearScreen on exit above.
+			return m, tea.ClearScreen
 		case "f", "F":
 			if len(m.items()) == 0 {
 				return m, nil
