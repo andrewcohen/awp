@@ -294,7 +294,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.StateEditDoneMsg{Err: err}
 		})
 	}
-	asyncLauncher, asyncList, asyncCancel, asyncDismiss, asyncLog := buildAsyncJobs(repoRoot)
+	asyncLauncher, asyncList, asyncCancel, asyncDismiss, asyncLog, asyncRetry := buildAsyncJobs(repoRoot)
 	if asyncLauncher != nil {
 		go runJobsStartupCleanup()
 	}
@@ -312,7 +312,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithJobsListRefresher(asyncList).
 		WithJobCancelHandler(asyncCancel).
 		WithJobDismissHandler(asyncDismiss).
-		WithJobLogOpener(asyncLog)
+		WithJobLogOpener(asyncLog).
+		WithJobRetryHandler(asyncRetry)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen())
 	_, err = program.Run()
 	return err
@@ -326,10 +327,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 // open log in $PAGER). Returns nil-valued functions if the jobs
 // store can't be initialized; the deck silently falls back to the
 // synchronous path.
-func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRefresher, deckui.JobCancelHandler, deckui.JobDismissHandler, deckui.JobLogOpener) {
+func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRefresher, deckui.JobCancelHandler, deckui.JobDismissHandler, deckui.JobLogOpener, deckui.JobRetryHandler) {
 	store, err := jobs.NewStore()
 	if err != nil {
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 	launcher := func(spec deckui.AsyncJobSpec) error {
 		root := strings.TrimSpace(spec.RepoRoot)
@@ -370,7 +371,15 @@ func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRe
 			return deckui.JobActionDoneMsg{JobID: id, Kind: "log", Err: err}
 		})
 	}
-	return launcher, listRefresher, cancel, dismiss, logOpen
+	retry := func(id string) error {
+		orig, err := store.Get(jobs.JobID(id))
+		if err != nil {
+			return err
+		}
+		_, err = store.Spawn(orig.Spec, orig.Title, jobs.SpawnOptions{})
+		return err
+	}
+	return launcher, listRefresher, cancel, dismiss, logOpen, retry
 }
 
 // projectJobs builds the deckui-side projection of the jobs

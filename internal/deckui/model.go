@@ -332,6 +332,7 @@ type Model struct {
 	jobCancelHandler   JobCancelHandler
 	jobDismissHandler  JobDismissHandler
 	jobLogOpener       JobLogOpener
+	jobRetryHandler    JobRetryHandler
 	jobs               []Job
 	jobCounts          JobCounts
 	jobsOverlay        bool
@@ -505,6 +506,14 @@ func (m Model) WithJobDismissHandler(h JobDismissHandler) Model {
 // overlay.
 func (m Model) WithJobLogOpener(o JobLogOpener) Model {
 	m.jobLogOpener = o
+	return m
+}
+
+// WithJobRetryHandler installs the retry handler used by `r` in the
+// jobs overlay (re-spawns a failed/cancelled/orphaned job from its
+// original Spec).
+func (m Model) WithJobRetryHandler(h JobRetryHandler) Model {
+	m.jobRetryHandler = h
 	return m
 }
 
@@ -1907,6 +1916,24 @@ func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			return JobActionDoneMsg{JobID: id, Kind: "dismiss", Err: handler(id)}
 		}
+	case "r":
+		if len(m.jobs) == 0 || m.jobRetryHandler == nil {
+			return m, nil
+		}
+		j := m.jobs[m.jobsOverlayCursor]
+		if !j.Status.IsTerminal() {
+			m.status = "retry: job is still running"
+			return m, nil
+		}
+		if j.Status == JobDone {
+			m.status = "retry: job already succeeded"
+			return m, nil
+		}
+		handler := m.jobRetryHandler
+		id := j.ID
+		return m, func() tea.Msg {
+			return JobActionDoneMsg{JobID: id, Kind: "retry", Err: handler(id)}
+		}
 	case "o":
 		if len(m.jobs) == 0 || m.jobLogOpener == nil {
 			return m, nil
@@ -2103,7 +2130,7 @@ func deckKeyGroups() []keyGroup {
 		{
 			Title: "Async jobs",
 			Keys: [][2]string{
-				{"J", "jobs overlay (list, cancel, dismiss, open log)"},
+				{"J", "jobs overlay (list, cancel, retry, dismiss, open log)"},
 			},
 		},
 		{

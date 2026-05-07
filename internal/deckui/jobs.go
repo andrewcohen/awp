@@ -100,6 +100,12 @@ type JobDismissHandler func(jobID string) error
 // the job's sidecar log file in $PAGER.
 type JobLogOpener func(jobID string) tea.Cmd
 
+// JobRetryHandler is invoked when the user presses `r` on a
+// terminal-but-not-successful job in the overlay. The wiring layer
+// re-spawns a new job from the original Spec. Returns an error if
+// the retry couldn't be dispatched (e.g. unknown id, store error).
+type JobRetryHandler func(jobID string) error
+
 // JobCounts is the small summary the tray renders. Derived from the
 // jobs list every refresh tick.
 type JobCounts struct {
@@ -147,7 +153,7 @@ type jobsListMsg struct{ jobs []Job }
 type JobActionDoneMsg struct {
 	JobID string
 	Err   error
-	Kind  string // "cancel" | "dismiss"
+	Kind  string // "cancel" | "dismiss" | "retry"
 }
 
 func refreshJobsListCmd(r JobsListRefresher) tea.Cmd {
@@ -260,7 +266,7 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Width(innerWidth)
-	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · x dismiss · o open log · y yank)")
+	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · r retry · x dismiss · o open log · y yank)")
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

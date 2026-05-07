@@ -89,7 +89,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `R` | Relink session |
 | `D` | Delete workspace |
 | `,` | Edit global state file in `$EDITOR` |
-| `J` | Jobs overlay (running async dispatches — cancel, dismiss, open log, yank to clipboard) |
+| `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
 | `?` | Help overlay |
 | `q` / `esc` | Quit |
 
@@ -210,6 +210,7 @@ Press `J` to open the jobs overlay:
 | `↑` / `↓` (or `k` / `j`) | Move cursor |
 | `g` / `G` | Jump to top / bottom |
 | `c` | Cancel the selected running job (sends `SIGTERM`; subprocess flushes a `cancelled` record before exiting) |
+| `r` | Retry a failed/cancelled/orphaned job (re-spawns from the original spec; useful after manually resolving a stale workspace and similar fixable conditions) |
 | `x` | Dismiss a finished/failed/orphaned record (deletes the JSON + log file) |
 | `o` | Open the sidecar log file in `$PAGER` |
 | `y` | Yank current job details (id, status, error, steps, recent log) to the system clipboard via OSC 52 |
