@@ -299,9 +299,12 @@ func TestRunOpenInteractiveSubmitImpliesYes(t *testing.T) {
 	app.isPiped = func(io.Reader) bool { return false }
 	app.isInteractive = func(io.Reader) bool { return true }
 	app.newFlow = func(Runner, io.Reader, io.Writer) (newFlowResult, error) {
-		return newFlowResult{kind: newFlowDefault}, nil
+		return newFlowResult{kind: newFlowDefault, bookmark: workspace.DefaultBookmark}, nil
 	}
 	app.openForm = func(initial openRequest, workspaces []string, _ io.Reader, _ io.Writer) (openRequest, error) {
+		if initial.Bookmark != workspace.DefaultBookmark {
+			t.Fatalf("expected default bookmark %q, got %q", workspace.DefaultBookmark, initial.Bookmark)
+		}
 		initial.Name = "new-workspace"
 		initial.Yes = false
 		return initial, nil
@@ -311,6 +314,34 @@ func TestRunOpenInteractiveSubmitImpliesYes(t *testing.T) {
 	}
 	if svc.prepareName != "new-workspace" {
 		t.Fatalf("expected prepare new-workspace, got %q", svc.prepareName)
+	}
+}
+
+// TestRunOpenInteractiveBlankBookmarkSubmitIsHonored guards that the
+// CLI form does not re-coerce a user's explicit blank submit back to
+// the default bookmark. The prefill is one-way; clearing it has to
+// flow through to PrepareWorkspace as an empty bookmark.
+func TestRunOpenInteractiveBlankBookmarkSubmitIsHonored(t *testing.T) {
+	svc := &fakeService{listEntries: []workspace.ListEntry{{Name: "qa"}}}
+	app := NewApp(svc, &bytes.Buffer{})
+	app.runner = newOpenDeckRunner()
+	app.in = bytes.NewBuffer(nil)
+	app.isPiped = func(io.Reader) bool { return false }
+	app.isInteractive = func(io.Reader) bool { return true }
+	app.newFlow = func(Runner, io.Reader, io.Writer) (newFlowResult, error) {
+		return newFlowResult{kind: newFlowDefault, bookmark: workspace.DefaultBookmark}, nil
+	}
+	app.openForm = func(initial openRequest, _ []string, _ io.Reader, _ io.Writer) (openRequest, error) {
+		initial.Name = "scratch"
+		initial.Bookmark = ""
+		initial.Yes = false
+		return initial, nil
+	}
+	if err := app.Run([]string{"w", "open"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if svc.prepareBookmark != "" {
+		t.Fatalf("expected empty bookmark to flow through, got %q", svc.prepareBookmark)
 	}
 }
 

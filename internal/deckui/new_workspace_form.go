@@ -67,7 +67,7 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial) newWorkspaceForm {
 	workspaceInput.Width = 56
 
 	bookmarkInput := textinput.New()
-	bookmarkInput.Placeholder = "optional jj bookmark/revision to track"
+	bookmarkInput.Placeholder = "jj bookmark/revision to track (blank = current revision)"
 	bookmarkInput.SetValue(strings.TrimSpace(initial.Bookmark))
 	bookmarkInput.Prompt = ""
 	bookmarkInput.CharLimit = 0

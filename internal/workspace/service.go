@@ -14,6 +14,11 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 )
 
+// DefaultBookmark is the bookmark the interactive new-workspace flows
+// pre-fill. Users can clear the field to create a workspace from the
+// current revision instead.
+const DefaultBookmark = "main"
+
 type JJClient interface {
 	RepoRoot() (string, error)
 	SourceRepoRoot() (string, error)

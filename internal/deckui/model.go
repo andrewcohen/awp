@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // refreshInterval is how often the deck polls for live tmux state
@@ -1402,7 +1404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				switch m.newMenuCursor {
 				case 0:
-					return m.launchNewForm(NewWorkspaceInitial{})
+					return m.launchNewForm(NewWorkspaceInitial{Bookmark: workspace.DefaultBookmark})
 				case 1:
 					return m.startBookmarkPicker()
 				case 2:
@@ -2934,7 +2936,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Open / create",
 			Keys: [][2]string{
 				{"enter", "summon (create or focus the workspace tmux session)"},
-				{"n", "new workspace"},
+				{"n", "new workspace (defaults to main)"},
 				{"o", "open: fuzzy-pick a project from configured roots"},
 			},
 		},
@@ -3142,7 +3144,7 @@ func (m Model) renderNewMenu(width int) string {
 		label string
 		hint  string
 	}{
-		{"empty", "empty workspace from current revision"},
+		{"main", "start from main (edit in form if needed)"},
 		{"bookmark", "pick a jj bookmark to base it on"},
 		{"review", "review an open PR"},
 	}

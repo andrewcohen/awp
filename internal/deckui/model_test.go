@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 func execCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
@@ -345,6 +347,50 @@ func TestDeleteCanBeCancelled(t *testing.T) {
 	}
 	if m.status != "" {
 		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestNewWorkspaceDefaultStartPrefillsMainBookmark(t *testing.T) {
+	model := New([]Item{{ProjectName: "alpha", WorkspaceName: "ws", RepoRoot: "/repo"}}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+
+	if !m.newWorkspaceMode {
+		t.Fatal("expected inline new workspace form mode")
+	}
+	if m.newWorkspaceRepo != "/repo" {
+		t.Fatalf("expected new workspace repo /repo, got %q", m.newWorkspaceRepo)
+	}
+	if got := m.newWorkspaceForm.bookmarkInput.Value(); got != workspace.DefaultBookmark {
+		t.Fatalf("expected default bookmark %q, got %q", workspace.DefaultBookmark, got)
+	}
+	if m.newMenuMode {
+		t.Fatal("expected new menu mode to close after selection")
+	}
+}
+
+// TestNewWorkspaceFormSubmitPreservesClearedBookmark guards the
+// symmetric submit behavior: the prefill is just a default; if the
+// user clears the bookmark field and submits, the resulting request
+// must carry an empty bookmark (workspace from current revision),
+// not silently fall back to main.
+func TestNewWorkspaceFormSubmitPreservesClearedBookmark(t *testing.T) {
+	form := newNewWorkspaceForm(NewWorkspaceInitial{Bookmark: workspace.DefaultBookmark})
+	form.workspaceInput.SetValue("scratch")
+	form.bookmarkInput.SetValue("")
+	form.setFocus(3)
+	_, _, action := form.update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action != newFormActionSubmit {
+		t.Fatalf("expected submit action, got %v", action)
+	}
+	req := form.request()
+	if req.Bookmark != "" {
+		t.Fatalf("expected empty bookmark on submit, got %q", req.Bookmark)
+	}
+	if req.Name != "scratch" {
+		t.Fatalf("expected name 'scratch', got %q", req.Name)
 	}
 }
 

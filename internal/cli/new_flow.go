@@ -12,6 +12,7 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 type newFlowKind int
@@ -164,7 +165,7 @@ func (m newFlowModel) handleMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		switch m.cursor {
 		case 0:
-			m.result = newFlowResult{kind: newFlowDefault}
+			m.result = newFlowResult{kind: newFlowDefault, bookmark: workspace.DefaultBookmark}
 			m.chosen = true
 			return m, tea.Quit
 		case 1:
@@ -314,7 +315,7 @@ func (m newFlowModel) viewMenu() string {
 		label string
 		hint  string
 	}{
-		{"empty", "empty workspace from current revision"},
+		{"main", "start from main (edit in form if needed)"},
 		{"bookmark [b]", "pick a jj bookmark to base it on"},
 		{"review [r]", "review an open PR"},
 	}
