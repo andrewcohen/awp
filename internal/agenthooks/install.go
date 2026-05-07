@@ -16,20 +16,24 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 2
+const HookMarkerVersion = 3
 
 // HookCommand returns the shell snippet each Claude hook runs. It gates on
-// $TMUX so global installation never affects non-tmux Claude usage. The awp
-// CLI itself falls back to reading session env from tmux when its own env is
+// $TMUX so global installation never affects non-tmux Claude usage, and
+// honors $AWP_BIN for users running a non-PATH awp binary. The awp CLI
+// itself falls back to reading session env from tmux when its own env is
 // missing, so this works for processes that predate env injection.
 func HookCommand(state string) string {
-	return `[ -n "$TMUX" ] && awp internal report-status --state ` + state + ` >/dev/null 2>&1 || true`
+	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + ` >/dev/null 2>&1 || true`
 }
 
 // DesiredClaudeHooks returns the event → state mapping awp installs into
-// Claude's global settings.
+// Claude's global settings. SessionStart marks the workspace idle as soon
+// as Claude attaches, so summoned-but-not-yet-prompted agents stop showing
+// the previous run's state.
 func DesiredClaudeHooks() map[string]string {
 	return map[string]string{
+		"SessionStart":     "idle",
 		"UserPromptSubmit": "working",
 		"PreToolUse":       "working",
 		"Stop":             "idle",

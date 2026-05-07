@@ -440,14 +440,21 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err != nil {
 		return err
 	}
+	env := workspaceEnvPairs(projectName, normalized, repoRoot)
 	if id == "" {
 		step("Create tmux session " + sessionName)
-		if err := tmuxClient.NewSession(sessionName, wsPath, "agent"); err != nil {
+		if err := tmuxClient.NewSession(sessionName, wsPath, "agent", env); err != nil {
 			return err
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 	}
-	_, _ = ensureWorkspaceSessionEnv(tmuxClient, sessionName, projectName, normalized, repoRoot, sessionName+":agent")
+	stale, envErr := ensureWorkspaceSessionEnv(tmuxClient, sessionName, projectName, normalized, repoRoot, sessionName+":agent")
+	if envErr != nil && reporter != nil {
+		reporter.Log(fmt.Sprintf("warning: failed to set session env: %v", envErr))
+	}
+	if stale && reporter != nil {
+		reporter.Log("agent missing AWP_WORKSPACE — restart agent to enable status reporting")
+	}
 	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
 		return err
 	}

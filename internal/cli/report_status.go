@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/state"
@@ -94,11 +95,27 @@ func resolveWorkspaceIdent() (workspace, repo, repoRoot string) {
 	return
 }
 
-// tmuxLocalEnv reads a single session-level env var from the tmux server,
-// using the current pane's session as the target. Empty on any error or
-// when the variable is unset.
+// tmuxLocalEnv reads a single session-level env var from the tmux server.
+// We resolve the current session via display-message and pin show-environment
+// with `-t` rather than relying on tmux's implicit "current session" — that
+// inference depends on $TMUX_PANE being set and the pane still existing,
+// which isn't always true for hook child processes.
+//
+// Returns empty on any error, when TMUX is unset, or when the var is unset
+// or explicitly removed (`-KEY` form).
 func tmuxLocalEnv(key string) string {
-	out, err := exec.Command("tmux", "show-environment", key).Output()
+	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
+		return ""
+	}
+	sessionOut, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	if err != nil {
+		return ""
+	}
+	session := strings.TrimSpace(string(sessionOut))
+	if session == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "show-environment", "-t", session, key).Output()
 	if err != nil {
 		return ""
 	}
@@ -161,10 +178,36 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status string) erro
 	if err != nil {
 		return err
 	}
+	// Deterministic basename fallback: collect every repo whose basename
+	// matches, sort for stability, then prefer one that actually has the
+	// named workspace as an entry. If exactly one match has the entry, we
+	// write to it. If multiple have it (basename collision across repos
+	// that both happen to have a same-named workspace), we no-op rather
+	// than silently route to an arbitrary pick — better to drop a status
+	// than to badge the wrong workspace.
+	var candidates []string
 	for root := range all {
-		if filepath.Base(root) != repoName {
-			continue
+		if filepath.Base(root) == repoName {
+			candidates = append(candidates, root)
 		}
+	}
+	sort.Strings(candidates)
+	var matches []string
+	for _, root := range candidates {
+		if _, ok := all[root][workspaceName]; ok {
+			matches = append(matches, root)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		// Fall back to first basename match — preserves prior behavior
+		// when there's no entry collision (most common case: one repo
+		// shares the basename and the entry hasn't been created yet,
+		// e.g. status arrives during workspace setup).
+		if len(candidates) == 0 {
+			return nil
+		}
+		root := candidates[0]
 		if u, ok := store.(updater); ok {
 			return u.Update(root, apply)
 		}
@@ -174,8 +217,20 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status string) erro
 		}
 		entries = apply(entries)
 		return store.Save(root, entries)
+	case 1:
+		root := matches[0]
+		if u, ok := store.(updater); ok {
+			return u.Update(root, apply)
+		}
+		entries, err := store.Load(root)
+		if err != nil {
+			return err
+		}
+		entries = apply(entries)
+		return store.Save(root, entries)
+	default:
+		return nil
 	}
-	return nil
 }
 
 type updater interface {
@@ -195,7 +250,7 @@ func sessionHasAttachedClient(repoName, workspaceName string) bool {
 	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
 		return false
 	}
-	session := "[awp]" + repoName + "__" + workspaceName
+	session := DeckSessionName(repoName, workspaceName)
 	out, err := exec.Command("tmux", "list-clients", "-t", session, "-F", "#{client_name}").Output()
 	if err != nil {
 		return false

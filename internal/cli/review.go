@@ -113,22 +113,23 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		return err
 	}
 	if !exists {
+		env := workspaceEnvPairs(project, name, repoRoot)
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
-		if err := tmuxClient.NewSession(sessionName, wsPath, prDescWindow); err != nil {
+		if err := tmuxClient.NewSession(sessionName, wsPath, prDescWindow, env); err != nil {
 			return err
 		}
 		if err := tmuxClient.SendCommand(prDescTarget, prDescCmd); err != nil {
 			return err
 		}
 		reporter.Step("Open agent window")
-		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath); err != nil {
+		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath, env); err != nil {
 			return err
 		}
 		if err := tmuxClient.SendCommand(sessionName+":agent", config.AgentInvocation(repoRoot)+" "+shellSingleQuote(prompt)); err != nil {
 			return err
 		}
 		reporter.Step("Open review window")
-		if err := tmuxClient.NewWindowInSession(sessionName, "review", wsPath); err != nil {
+		if err := tmuxClient.NewWindowInSession(sessionName, "review", wsPath, env); err != nil {
 			return err
 		}
 		if err := tmuxClient.SendCommand(sessionName+":review", reviewCmd); err != nil {

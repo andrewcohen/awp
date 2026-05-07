@@ -42,6 +42,23 @@ func (c *Client) NewWindow(name string, dir string) error {
 	return nil
 }
 
+// envFlags expands a slice of "KEY=VALUE" pairs into a flat []string of
+// `-e KEY=VALUE` arguments for tmux. Empty / malformed entries are skipped.
+func envFlags(env []string) []string {
+	out := make([]string, 0, 2*len(env))
+	for _, kv := range env {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		if !strings.ContainsRune(kv, '=') {
+			continue
+		}
+		out = append(out, "-e", kv)
+	}
+	return out
+}
+
 func (c *Client) SendCommand(name string, command string) error {
 	_, err := c.runner.Run(context.Background(), "", "tmux", "send-keys", "-t", name, "-l", command)
 	if err != nil {
@@ -169,7 +186,11 @@ func (c *Client) GetSessionEnv(sessionName, key string) (string, error) {
 	return "", nil
 }
 
-func (c *Client) NewSession(name string, dir string, firstWindowName string) error {
+// NewSession creates a detached tmux session. env is a slice of "KEY=VALUE"
+// pairs passed via tmux `-e`, which (unlike `set-environment`) is inherited
+// by the session's first pane process — critical for hooks running inside
+// the agent that need AWP_WORKSPACE et al. at fork time.
+func (c *Client) NewSession(name string, dir string, firstWindowName string, env []string) error {
 	args := []string{"new-session", "-d", "-s", name}
 	if firstWindowName != "" {
 		args = append(args, "-n", firstWindowName)
@@ -177,6 +198,7 @@ func (c *Client) NewSession(name string, dir string, firstWindowName string) err
 	if dir != "" {
 		args = append(args, "-c", dir)
 	}
+	args = append(args, envFlags(env)...)
 	_, err := c.runner.Run(context.Background(), "", "tmux", args...)
 	if err != nil {
 		return fmt.Errorf("create tmux session %q: %w", name, err)
@@ -218,12 +240,15 @@ func (c *Client) RenameSession(oldName, newName string) error {
 	return nil
 }
 
-// NewWindowInSession creates a window in the named session (target form "session:window").
-func (c *Client) NewWindowInSession(sessionName, windowName, dir string) error {
+// NewWindowInSession creates a window in the named session (target form
+// "session:window"). env is a slice of "KEY=VALUE" pairs passed via tmux
+// `-e` so the window's first process inherits them.
+func (c *Client) NewWindowInSession(sessionName, windowName, dir string, env []string) error {
 	args := []string{"new-window", "-d", "-t", sessionName + ":", "-n", windowName}
 	if dir != "" {
 		args = append(args, "-c", dir)
 	}
+	args = append(args, envFlags(env)...)
 	_, err := c.runner.Run(context.Background(), "", "tmux", args...)
 	if err != nil {
 		return fmt.Errorf("create tmux window %q in session %q: %w", windowName, sessionName, err)
@@ -232,13 +257,15 @@ func (c *Client) NewWindowInSession(sessionName, windowName, dir string) error {
 }
 
 // NewShellWindowInSession creates a new window without specifying a name, so
-// tmux applies its default (the running command / shell). Returns the target
-// id (session:index) of the created window.
-func (c *Client) NewShellWindowInSession(sessionName, dir string) (string, error) {
+// tmux applies its default (the running command / shell). env is a slice of
+// "KEY=VALUE" pairs passed via tmux `-e`. Returns the target id
+// (session:index) of the created window.
+func (c *Client) NewShellWindowInSession(sessionName, dir string, env []string) (string, error) {
 	args := []string{"new-window", "-d", "-t", sessionName + ":", "-P", "-F", "#{session_name}:#{window_index}"}
 	if dir != "" {
 		args = append(args, "-c", dir)
 	}
+	args = append(args, envFlags(env)...)
 	out, err := c.runner.Run(context.Background(), "", "tmux", args...)
 	if err != nil {
 		return "", fmt.Errorf("create tmux shell window in session %q: %w", sessionName, err)

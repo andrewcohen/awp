@@ -412,3 +412,99 @@ func TestRunPropagatesServiceError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// recordingRunner captures every command issued and returns canned outputs
+// for known queries. It's enough to drive openWorkspaceWithReporter end to
+// end without touching a real shell.
+type recordingRunner struct {
+	calls [][]string
+}
+
+func (r *recordingRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	call := append([]string{name}, args...)
+	r.calls = append(r.calls, call)
+	if name == "jj" && len(args) >= 1 && args[0] == "root" {
+		return "/tmp/repo\n", nil
+	}
+	if name == "tmux" && len(args) >= 1 && args[0] == "list-sessions" {
+		return "", nil
+	}
+	if name == "tmux" && len(args) >= 1 && args[0] == "show-environment" {
+		return "", errors.New("exit status 1")
+	}
+	if name == "tmux" && len(args) >= 1 && args[0] == "display-message" {
+		return "zsh\n", nil
+	}
+	return "", nil
+}
+
+// TestOpenWorkspaceNoSwitchInjectsEnvBeforeAgentInvocation pins the critical
+// dispatch-without-switching path: AWP_REPO_ROOT (and friends) MUST land on
+// the new tmux session via `-e` *before* we send the agent prompt — without
+// this, the agent process inherits a shell env that has no AWP_* and the
+// hooks fail to identify the workspace.
+func TestOpenWorkspaceNoSwitchInjectsEnvBeforeAgentInvocation(t *testing.T) {
+	svc := &fakeService{}
+	runner := &recordingRunner{}
+	err := openWorkspaceWithReporter(runner, svc, openRequest{
+		Name:     "qa",
+		Prompt:   "fix tests",
+		Yes:      true,
+		NoSwitch: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("openWorkspaceWithReporter: %v", err)
+	}
+
+	newSessionIdx := -1
+	sendKeysIdx := -1
+	switchClientIdx := -1
+	var newSessionCall []string
+	for i, call := range runner.calls {
+		if len(call) < 2 || call[0] != "tmux" {
+			continue
+		}
+		switch call[1] {
+		case "new-session":
+			newSessionIdx = i
+			newSessionCall = call
+		case "send-keys":
+			if sendKeysIdx < 0 {
+				sendKeysIdx = i
+			}
+		case "switch-client":
+			switchClientIdx = i
+		}
+	}
+	if newSessionIdx < 0 {
+		t.Fatalf("expected tmux new-session call; got %#v", runner.calls)
+	}
+	if sendKeysIdx < 0 {
+		t.Fatalf("expected tmux send-keys call (agent prompt); got %#v", runner.calls)
+	}
+	if newSessionIdx > sendKeysIdx {
+		t.Fatalf("new-session must come before send-keys; got new-session@%d send-keys@%d", newSessionIdx, sendKeysIdx)
+	}
+	if switchClientIdx >= 0 {
+		t.Fatalf("NoSwitch:true must not call switch-client; calls=%#v", runner.calls)
+	}
+
+	wantPairs := map[string]string{
+		"AWP_WORKSPACE": "qa",
+		"AWP_REPO":      "repo",
+		"AWP_REPO_ROOT": "/tmp/repo",
+	}
+	for k, v := range wantPairs {
+		want := k + "=" + v
+		found := false
+		for i := 0; i < len(newSessionCall)-1; i++ {
+			if newSessionCall[i] == "-e" && newSessionCall[i+1] == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("new-session missing -e %s; got %#v", want, newSessionCall)
+		}
+	}
+}

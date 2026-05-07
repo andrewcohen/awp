@@ -48,7 +48,7 @@ func TestSendCommandUsesLiteralSendKeysThenEnter(t *testing.T) {
 func TestNewSessionIssuesExpectedCommand(t *testing.T) {
 	runner := &fakeRunner{}
 	client := New(runner)
-	if err := client.NewSession("[awp]repo__qa", "/tmp/ws", "agent"); err != nil {
+	if err := client.NewSession("[awp]repo__qa", "/tmp/ws", "agent", nil); err != nil {
 		t.Fatalf("NewSession returned error: %v", err)
 	}
 	if len(runner.calls) != 1 {
@@ -59,6 +59,46 @@ func TestNewSessionIssuesExpectedCommand(t *testing.T) {
 		if runner.calls[0][i] != w {
 			t.Fatalf("call mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
 		}
+	}
+}
+
+func TestNewSessionInjectsEnvViaDashE(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	env := []string{"AWP_WORKSPACE=qa", "AWP_REPO=repo", "AWP_REPO_ROOT=/repos/r"}
+	if err := client.NewSession("[awp]repo__qa", "/tmp/ws", "agent", env); err != nil {
+		t.Fatalf("NewSession returned error: %v", err)
+	}
+	want := []string{
+		"tmux", "new-session", "-d", "-s", "[awp]repo__qa",
+		"-n", "agent", "-c", "/tmp/ws",
+		"-e", "AWP_WORKSPACE=qa",
+		"-e", "AWP_REPO=repo",
+		"-e", "AWP_REPO_ROOT=/repos/r",
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 call, got %#v", runner.calls)
+	}
+	if got := runner.calls[0]; len(got) != len(want) {
+		t.Fatalf("call mismatch len: got %#v want %#v", got, want)
+	}
+	for i, w := range want {
+		if runner.calls[0][i] != w {
+			t.Fatalf("mismatch at %d: got %#v want %#v", i, runner.calls[0], want)
+		}
+	}
+}
+
+func TestNewSessionSkipsMalformedEnvEntries(t *testing.T) {
+	runner := &fakeRunner{}
+	client := New(runner)
+	env := []string{"", "  ", "NO_EQUALS", "K=v"}
+	if err := client.NewSession("s", "", "", env); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	want := []string{"tmux", "new-session", "-d", "-s", "s", "-e", "K=v"}
+	if got := runner.calls[0]; len(got) != len(want) {
+		t.Fatalf("got %#v want %#v", got, want)
 	}
 }
 
@@ -93,7 +133,7 @@ func TestSessionExistsMatchesNameExactly(t *testing.T) {
 func TestNewWindowInSessionBuildsTarget(t *testing.T) {
 	runner := &fakeRunner{}
 	client := New(runner)
-	if err := client.NewWindowInSession("[awp]repo__qa", "logs", "/tmp/ws"); err != nil {
+	if err := client.NewWindowInSession("[awp]repo__qa", "logs", "/tmp/ws", nil); err != nil {
 		t.Fatalf("NewWindowInSession: %v", err)
 	}
 	want := []string{"tmux", "new-window", "-d", "-t", "[awp]repo__qa:", "-n", "logs", "-c", "/tmp/ws"}
@@ -107,7 +147,7 @@ func TestNewWindowInSessionBuildsTarget(t *testing.T) {
 func TestNewShellWindowInSessionBuildsTargetAndReturnsWindowID(t *testing.T) {
 	runner := &fakeRunner{out: "[awp]repo__qa:3\n"}
 	client := New(runner)
-	target, err := client.NewShellWindowInSession("[awp]repo__qa", "/tmp/ws")
+	target, err := client.NewShellWindowInSession("[awp]repo__qa", "/tmp/ws", nil)
 	if err != nil {
 		t.Fatalf("NewShellWindowInSession: %v", err)
 	}

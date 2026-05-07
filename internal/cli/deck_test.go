@@ -100,7 +100,7 @@ func (s *deckFakeService) MarkRead(string) error                      { return n
 func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
 		"tmux list-sessions -F #{session_id}\t#{session_name}":                                  "$1\t[awp]repo__qa\n",
-		"tmux new-window -d -t [awp]repo__qa: -P -F #{session_name}:#{window_index} -c /tmp/ws": "[awp]repo__qa:3\n",
+		"tmux new-window -d -t [awp]repo__qa: -P -F #{session_name}:#{window_index} -c /tmp/ws -e AWP_WORKSPACE=qa -e AWP_REPO=repo": "[awp]repo__qa:3\n",
 	}}
 	client := tmux.New(runner)
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
@@ -116,7 +116,7 @@ func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	// preceded them.
 	want := [][]string{
 		{"tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}"},
-		{"tmux", "new-window", "-d", "-t", "[awp]repo__qa:", "-P", "-F", "#{session_name}:#{window_index}", "-c", "/tmp/ws"},
+		{"tmux", "new-window", "-d", "-t", "[awp]repo__qa:", "-P", "-F", "#{session_name}:#{window_index}", "-c", "/tmp/ws", "-e", "AWP_WORKSPACE=qa", "-e", "AWP_REPO=repo"},
 		{"tmux", "select-window", "-t", "[awp]repo__qa:3"},
 		{"tmux", "switch-client", "-t", "[awp]repo__qa"},
 	}
