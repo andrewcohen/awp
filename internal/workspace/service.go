@@ -1133,10 +1133,11 @@ func (s *service) runBuiltinBootstrap(sourceRepo, workspacePath string) error {
 	awpSrc := filepath.Join(sourceRepo, ".awp")
 	if st, err := os.Stat(awpSrc); err == nil && st.IsDir() {
 		awpDst := filepath.Join(workspacePath, ".awp")
-		if err := copyDir(awpSrc, awpDst); err != nil {
-			return fmt.Errorf("copy .awp: %w", err)
+		_ = os.RemoveAll(awpDst)
+		if err := os.Symlink(awpSrc, awpDst); err != nil {
+			return fmt.Errorf("symlink .awp: %w", err)
 		}
-		s.logf("✅ Copied .awp/")
+		s.logf("✅ Linked .awp/ → %s", awpSrc)
 	}
 	if err := markClaudeWorkspaceTrusted(workspacePath); err != nil {
 		s.logf("⚠️ Could not mark workspace trusted in ~/.claude.json: %v", err)
@@ -1153,46 +1154,6 @@ func sameDir(a, b string) bool {
 		return false
 	}
 	return filepath.Clean(aa) == filepath.Clean(bb)
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	st, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, st.Mode().Perm())
-}
-
-func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			return os.Symlink(link, target)
-		}
-		return copyFile(path, target)
-	})
 }
 
 func (s *service) trackBookmark(bookmark string) error {
