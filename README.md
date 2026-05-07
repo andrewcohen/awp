@@ -23,10 +23,10 @@ awp init hooks   # one-time: install Claude Code + pi.dev integrations globally
 
 `awp init hooks` installs:
 
-- `~/.claude/settings.json` — hooks that report state to awp on every prompt/tool/stop/notification.
+- `~/.claude/settings.json` — hooks that report state to awp on `SessionStart` (idle), `UserPromptSubmit` / `PreToolUse` (working), `Stop` (idle), and `Notification` (waiting).
 - `~/.pi/agent/extensions/awp-status.ts` — a pi.dev extension that reports state on `session_start` / `before_agent_start` / `agent_end` / `tool_execution_start` / quit-time `session_shutdown`. If statuses aren't landing, set `AWP_DEBUG=1` in the pi pane to write diagnostics to `~/.awp/pi-extension.log`.
 
-Both integrations are no-ops outside awp-managed sessions (they only run in tmux and `awp internal report-status` ignores sessions without awp workspace metadata), so they never affect your standalone Claude or pi usage.
+Both integrations are no-ops outside awp-managed sessions (they only run in tmux and `awp internal report-status` ignores sessions without awp workspace metadata), so they never affect your standalone Claude or pi usage. Both honor `$AWP_BIN` if you need the hook to invoke a non-PATH `awp`.
 
 ## The deck
 

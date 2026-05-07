@@ -724,7 +724,8 @@ func (s *service) MarkRead(workspaceName string) error {
 }
 
 // WantsAttention reports whether a status transition into `status` should mark
-// the workspace unread (badge it for the user). Working/starting do not.
+// the workspace unread (badge it for the user). `working` does not — the agent
+// is busy and the user has nothing to act on yet.
 func WantsAttention(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "waiting", "idle", "exited":

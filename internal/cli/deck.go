@@ -531,6 +531,18 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 		}
 		if nameMatch && agentPaneIsShell(tmuxClient, sessionName) {
 			status = "exited"
+			// Persist the override so any other consumer of
+			// workspace-state.json (doctor, scripts, the cross-repo
+			// pane on another deck) sees the same thing. Claude
+			// has no exit hook of its own, so without this the
+			// JSON sticks at the last reported state forever.
+			if entry.Status != "exited" {
+				if err := svc.UpdateStatus(entry.Name, "exited"); err == nil {
+					if !entry.Unread {
+						entry.Unread = true
+					}
+				}
+			}
 		}
 		items = append(items, deckui.Item{
 			ProjectName:   entry.ProjectName,
@@ -671,15 +683,18 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 	if err != nil {
 		return err
 	}
+	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
 		path := resolvePath(svc, item)
-		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
 			return err
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
 	}
-	if stale := ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot); stale {
+	if stale, envErr := ensureWorkspaceSessionEnv(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot, sessionName+":agent"); envErr != nil {
+		reporter.Log(fmt.Sprintf("warning: failed to set session env: %v", envErr))
+	} else if stale {
 		reporter.Log("agent missing AWP_WORKSPACE — restart agent to enable status reporting")
 	}
 	_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
@@ -704,9 +719,10 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 		return err
 	}
 	path := resolvePath(svc, item)
+	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
-		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
 			return err
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
@@ -717,7 +733,7 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	// Empty windowName = fresh shell window, no dedupe, tmux picks title.
 	if strings.TrimSpace(windowName) == "" {
 		reporter.Step("Open shell window")
-		target, err := tmuxClient.NewShellWindowInSession(sessionName, path)
+		target, err := tmuxClient.NewShellWindowInSession(sessionName, path, env)
 		if err != nil {
 			return err
 		}
@@ -739,7 +755,7 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	}
 	if !exists {
 		reporter.Step(fmt.Sprintf("Open %s window", windowName))
-		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path); err != nil {
+		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path, env); err != nil {
 			return err
 		}
 		justCreated = true
@@ -819,8 +835,9 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 	if err != nil {
 		return err
 	}
+	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
-		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
 			return err
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
@@ -838,7 +855,7 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 		}
 	}
 	if !exists {
-		if err := tmuxClient.NewWindowInSession(sessionName, "ci", path); err != nil {
+		if err := tmuxClient.NewWindowInSession(sessionName, "ci", path, env); err != nil {
 			return err
 		}
 	}
@@ -863,8 +880,9 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 		return err
 	}
 	path := resolvePath(svc, item)
+	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
-		if err := tmuxClient.NewSession(sessionName, path, "agent"); err != nil {
+		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
 			return err
 		}
 		id, _ = tmuxClient.SessionIDByName(sessionName)
@@ -883,7 +901,7 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 		}
 	}
 	if !exists {
-		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path); err != nil {
+		if err := tmuxClient.NewWindowInSession(sessionName, windowName, path, env); err != nil {
 			return err
 		}
 	}

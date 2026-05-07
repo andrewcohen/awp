@@ -76,3 +76,21 @@ func isShellName(name string) bool {
 func projectNameForRepo(repoRoot string) string {
 	return filepath.Base(strings.TrimRight(repoRoot, "/"))
 }
+
+// workspaceEnvPairs returns the AWP_* env pairs (KEY=VALUE) for a workspace.
+// Used with tmux new-session/new-window `-e` so the first pane process
+// inherits them at fork time — set-environment alone does not retroactively
+// apply to a pane that's already running.
+func workspaceEnvPairs(projectName, workspaceName, repoRoot string) []string {
+	var env []string
+	if strings.TrimSpace(workspaceName) != "" {
+		env = append(env, "AWP_WORKSPACE="+workspaceName)
+	}
+	if strings.TrimSpace(projectName) != "" {
+		env = append(env, "AWP_REPO="+projectName)
+	}
+	if strings.TrimSpace(repoRoot) != "" {
+		env = append(env, "AWP_REPO_ROOT="+repoRoot)
+	}
+	return env
+}
