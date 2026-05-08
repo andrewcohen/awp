@@ -113,6 +113,8 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 		err = runCreateWorkspaceJob(runner, actionSvc, job, reporter)
 	case jobs.ActionDelete:
 		err = runDeleteJob(runner, actionSvc, job, reporter)
+	case jobs.ActionDeleteProject:
+		err = runDeleteProjectJob(runner, actionSvc, job, reporter)
 	case jobs.ActionReview:
 		err = runReviewJob(runner, actionSvc, job, reporter)
 	case jobs.ActionCustom:
@@ -157,6 +159,23 @@ func runDeleteJob(runner Runner, svc workspace.Service, job jobs.Job, reporter *
 	return handleDeckAction(tmuxClient, svc, runner, deckui.ActionRequest{
 		Item:     item,
 		Action:   deckui.ActionDelete,
+		Reporter: reporter,
+	}, reporter)
+}
+
+// runDeleteProjectJob delegates to handleDeckAction's delete-project
+// branch with inputs reconstituted from the job spec.
+func runDeleteProjectJob(runner Runner, svc workspace.Service, job jobs.Job, reporter *storeReporter) error {
+	tmuxClient := tmux.New(runner)
+	item := deckui.Item{
+		ProjectName:   filepath.Base(job.Spec.RepoRoot),
+		WorkspaceName: job.Spec.WorkspaceName,
+		Path:          job.Spec.WorkspacePath,
+		RepoRoot:      job.Spec.RepoRoot,
+	}
+	return handleDeckAction(tmuxClient, svc, runner, deckui.ActionRequest{
+		Item:     item,
+		Action:   deckui.ActionDeleteProject,
 		Reporter: reporter,
 	}, reporter)
 }

@@ -23,6 +23,7 @@ const (
 	ActionCI              JobAction = "ci"
 	ActionCustom          JobAction = "custom"
 	ActionDelete          JobAction = "delete"
+	ActionDeleteProject   JobAction = "delete-project"
 )
 
 // JobStatus is the lifecycle state of a job. Terminal states are
