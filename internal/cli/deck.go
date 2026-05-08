@@ -587,13 +587,24 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 
 			unread := e.Unread
 			// If the user is currently focused on this workspace's session,
-			// clear the unread badge. Persist only when we own this repo
-			// (svc is rooted at the deck's invocation repo, so writes for
-			// other repos would land in the wrong scope).
+			// clear the unread badge. Persist via `svc.MarkRead` for the
+			// deck's own repo; for other repos, write through the JSON
+			// store directly so the tmux unread summary (which reads the
+			// store) doesn't show a gray dot for a workspace the user is
+			// actively viewing.
 			if snap.known && unread && sessionName == snap.currentSession {
 				unread = false
 				if isCurrentRepo {
 					_ = svc.MarkRead(e.Name)
+				} else {
+					name := e.Name
+					_ = store.Update(r.repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+						if cur, ok := entries[name]; ok && cur.Unread {
+							cur.Unread = false
+							entries[name] = cur
+						}
+						return entries
+					})
 				}
 			}
 
