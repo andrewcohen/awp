@@ -13,10 +13,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// refreshInterval is how often the deck polls workspace state for status
-// updates pushed in by agent hooks. Short enough that color transitions
-// feel live; long enough not to waste cycles.
-const refreshInterval = 2 * time.Second
+// refreshInterval is how often the deck polls for live tmux state
+// (sessions, agent pane command). Status updates pushed in by agent
+// hooks come through the state-file watcher much sooner than this, so
+// the tick is just a backstop for tmux-only transitions.
+const refreshInterval = 5 * time.Second
 
 type refreshTickMsg time.Time
 
@@ -288,6 +289,8 @@ type Model struct {
 	findRowPrefix      map[rune]bool
 	findPendingPrefix  rune
 	refresher          Refresher
+	refreshing         bool // true while a m.refresher() command is in flight
+	preEnrichment      bool // true until the first refreshDoneMsg arrives; suppresses caution glyphs / stale ⚠ on the JSON-only first paint
 	stateWatcher       StateChangeWatcher
 	prFetcher          PRFetcher
 	bookmarkFetcher    BookmarkFetcher
@@ -408,6 +411,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		bookmarkFilter:    bf,
 		openFilter:        of,
 		spinner:           sp,
+		preEnrichment:     true,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
 		m.cursor = idx
@@ -615,6 +619,12 @@ func (m Model) Init() tea.Cmd {
 	if m.stateWatcher != nil {
 		cmds = append(cmds, m.stateWatcher())
 	}
+	// Kick the first enrichment refresh immediately so tmux-derived
+	// decorations (Active/Current/Stale, "exited" status) land within
+	// a few tens of ms of first paint instead of waiting refreshInterval.
+	if m.refresher != nil {
+		cmds = append(cmds, m.refresher())
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -644,14 +654,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// agent hooks. Pause during interactive overlays so we don't
 		// race with their own state. Jobs are only re-polled while
 		// something is in flight — terminal records don't change, so
-		// continuing to read disk every 2 s is wasted work. Explicit
-		// paths (dispatch, dismiss, opening the J overlay) still force
-		// a fresh pull.
+		// continuing to read disk every refreshInterval is wasted work.
+		// Explicit paths (dispatch, dismiss, opening the J overlay)
+		// still force a fresh pull. Skip when a previous refresh is
+		// still in flight so fsnotify-driven bursts don't pile up.
 		var jobsCmd tea.Cmd
 		if hasActiveJobs(m.jobs) {
 			jobsCmd = refreshJobsListCmd(m.jobsListRefresher)
 		}
-		if m.canBackgroundRefresh() {
+		if m.canBackgroundRefresh() && !m.refreshing {
+			m.refreshing = true
 			cmds := []tea.Cmd{m.refresher(), scheduleRefreshTick()}
 			if jobsCmd != nil {
 				cmds = append(cmds, jobsCmd)
@@ -667,7 +679,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.stateWatcher != nil {
 			cmds = append(cmds, m.stateWatcher())
 		}
-		if m.canBackgroundRefresh() {
+		if m.canBackgroundRefresh() && !m.refreshing {
+			m.refreshing = true
 			cmds = append(cmds, m.refresher())
 		}
 		return m, tea.Batch(cmds...)
@@ -773,6 +786,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "edit state: done"
 		}
 		if m.refresher != nil {
+			m.refreshing = true
 			return m, m.refresher()
 		}
 		return m, nil
@@ -839,6 +853,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case refreshDoneMsg:
+		m.refreshing = false
+		m.preEnrichment = false
 		if msg.err != nil {
 			m.status = "refresh: " + msg.err.Error()
 			return m, nil
@@ -877,6 +893,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.deleteTarget.Current {
 						m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
 					}
+					m.refreshing = true
 					return m, m.refresher()
 				}
 				return m, nil
@@ -2076,10 +2093,19 @@ func (m Model) renderList(width int) string {
 			labelStyle = labelStyle.Foreground(lipgloss.Color("238"))
 		}
 		label := truncate(item.WorkspaceName, max(10, width-20))
-		if item.Stale {
+		if item.Stale && !m.preEnrichment {
 			label += " ⚠"
 		}
-		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), statusGlyph(item.Status, dim, item.Unread), labelStyle.Render(label))
+		// Pre-enrichment first paint: render the glyph slot blank rather
+		// than coloring it from JSON status. Statuses can flip from
+		// "waiting"/"exited" → "working" once tmux/state are resolved,
+		// and we don't want to flash an attention dot we're about to
+		// retract a frame later.
+		glyph := " "
+		if !m.preEnrichment {
+			glyph = statusGlyph(item.Status, dim, item.Unread)
+		}
+		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
 		rows = append(rows, lipgloss.NewStyle().Width(width-1).Render(line))
 		if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
 			promptColor := lipgloss.Color("245")
