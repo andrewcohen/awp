@@ -154,7 +154,12 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// yet, so loadDeckItems suppresses them on the snap.known=false path.
 	// The Init-driven enrichment refresh fills in real decorations within
 	// a few tens of ms.
-	items, allItems, err := loadDeckItems(nil, nil, svc, repoRoot, projectName, nil, nil)
+	// Fast first paint: skip jj entirely and skip the heavy tmux probes
+	// (ListSessions/ListPanes), but still ask tmux for the current
+	// session name so the initial cursor lands on the workspace the
+	// user launched from. The full enrichment refresh follows ~50 ms
+	// later and fills in caution glyphs / stale decorations.
+	items, allItems, err := loadDeckItems(nil, tmuxClient, true, svc, repoRoot, projectName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -254,7 +259,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 	refresher := func() tea.Cmd {
 		return func() tea.Msg {
-			items, allItems, err := loadDeckItems(j, tmuxClient, svc, repoRoot, projectName, in, out)
+			items, allItems, err := loadDeckItems(j, tmuxClient, false, svc, repoRoot, projectName, in, out)
 			return deckui.RefreshDoneMsg(items, allItems, err)
 		}
 	}
@@ -499,13 +504,24 @@ type deckTmuxSnapshot struct {
 	agentShell     map[string]bool     // session name → agent pane is a shell
 }
 
-func captureDeckTmuxSnapshot(tmuxClient *tmux.Client) deckTmuxSnapshot {
+// captureDeckTmuxSnapshot reads tmux state used to decorate deck rows.
+// When fast is true, only the currently-attached session name is read
+// (a single cheap `display-message` call) — ListSessions/ListPanes are
+// skipped, and snap.known stays false so caution glyphs / stale
+// decorations remain suppressed until the next full enrichment pass.
+// The current-session name still flows through so the initial cursor
+// can land on the workspace the user launched from.
+func captureDeckTmuxSnapshot(tmuxClient *tmux.Client, fast bool) deckTmuxSnapshot {
 	snap := deckTmuxSnapshot{
 		liveByName: map[string]string{},
 		liveByID:   map[string]struct{}{},
 		agentShell: map[string]bool{},
 	}
 	if tmuxClient == nil {
+		return snap
+	}
+	if fast {
+		snap.currentSession, _ = tmuxClient.CurrentSessionName()
 		return snap
 	}
 	snap.known = true
@@ -534,7 +550,7 @@ func captureDeckTmuxSnapshot(tmuxClient *tmux.Client) deckTmuxSnapshot {
 // per-row tmux calls. Workspaces created externally via `jj workspace
 // add` won't appear until the deck reconciles via a write path
 // (deck-driven create/delete already does this).
-func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, []deckui.Item, error) {
+func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, []deckui.Item, error) {
 	_ = j
 	_ = in
 	_ = out
@@ -545,7 +561,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 		return nil, nil, err
 	}
 
-	snap := captureDeckTmuxSnapshot(tmuxClient)
+	snap := captureDeckTmuxSnapshot(tmuxClient, fastTmux)
 
 	// adoptable: live [awp]<projectName>__* sessions not represented in state.
 	adoptable := map[string]struct{}{}
@@ -618,10 +634,9 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 			// later from the Init-driven refresh and overwrites this.
 			active := nameMatch
 			stale := false
-			current := sessionName == snap.currentSession
+			current := snap.currentSession != "" && sessionName == snap.currentSession
 			if !snap.known {
 				active = e.SessionID != ""
-				current = false
 			} else if e.SessionID != "" {
 				if _, ok := snap.liveByID[e.SessionID]; !ok && !nameMatch {
 					stale = true
