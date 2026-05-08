@@ -341,6 +341,39 @@ func (c *Client) CurrentWindow() (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// Pane is a single tmux pane row, used by ListPanes to deliver
+// session/window/command tuples in one fork/exec.
+type Pane struct {
+	Session string
+	Window  string
+	Command string
+}
+
+// ListPanes returns one row per pane across all sessions, with the
+// pane's current command. A single shell-out replaces N per-session
+// `display-message` calls when the deck enriches rows on refresh.
+func (c *Client) ListPanes() ([]Pane, error) {
+	out, err := c.runner.Run(context.Background(), "", "tmux", "list-panes", "-a", "-F", "#{session_name}\t#{window_name}\t#{pane_current_command}")
+	if err != nil {
+		if strings.Contains(err.Error(), "exit status") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var panes []Pane
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		panes = append(panes, Pane{Session: parts[0], Window: parts[1], Command: parts[2]})
+	}
+	return panes, nil
+}
+
 func (c *Client) PaneCurrentCommand(target string) (string, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "display-message", "-p", "-t", target, "#{pane_current_command}")
 	if err != nil {

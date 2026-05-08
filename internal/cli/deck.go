@@ -148,7 +148,13 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 	}
 	projectName := filepath.Base(repoRoot)
-	items, allItems, err := loadDeckItems(j, tmuxClient, svc, repoRoot, projectName, in, out)
+	// First paint is JSON-only — no jj, no tmux. Rows render with their
+	// last-known status from workspace-state.json. The Stale/Active "caution"
+	// decorations require live tmux state, which we deliberately don't have
+	// yet, so loadDeckItems suppresses them on the snap.known=false path.
+	// The Init-driven enrichment refresh fills in real decorations within
+	// a few tens of ms.
+	items, allItems, err := loadDeckItems(nil, nil, svc, repoRoot, projectName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -478,96 +484,174 @@ func runJobsStartupCleanup() {
 	}
 }
 
+// deckTmuxSnapshot is the tmux state needed to enrich rows on a single
+// refresh. Captured up-front in two shell-outs (list-sessions +
+// list-panes -a) so per-row enrichment is a map lookup. `known` is
+// false on the JSON-only fast path (e.g. first paint), in which case
+// row decorations fall back to optimistic defaults — Active reflects
+// the stored SessionID, Stale stays off — so we don't flash a caution
+// badge for the ~50 ms until the next refresh fills in real tmux state.
+type deckTmuxSnapshot struct {
+	known          bool
+	liveByName     map[string]string   // session name → session id
+	liveByID       map[string]struct{} // session id set
+	currentSession string              // current attached session name
+	agentShell     map[string]bool     // session name → agent pane is a shell
+}
+
+func captureDeckTmuxSnapshot(tmuxClient *tmux.Client) deckTmuxSnapshot {
+	snap := deckTmuxSnapshot{
+		liveByName: map[string]string{},
+		liveByID:   map[string]struct{}{},
+		agentShell: map[string]bool{},
+	}
+	if tmuxClient == nil {
+		return snap
+	}
+	snap.known = true
+	sessions, _ := tmuxClient.ListSessions()
+	for _, s := range sessions {
+		snap.liveByName[s.Name] = s.ID
+		snap.liveByID[s.ID] = struct{}{}
+	}
+	snap.currentSession, _ = tmuxClient.CurrentSessionName()
+	panes, _ := tmuxClient.ListPanes()
+	for _, p := range panes {
+		if p.Window != "agent" {
+			continue
+		}
+		switch strings.TrimSpace(p.Command) {
+		case "bash", "zsh", "fish", "sh", "dash":
+			snap.agentShell[p.Session] = true
+		}
+	}
+	return snap
+}
+
+// loadDeckItems builds the deck's row data from workspace-state.json
+// directly, using a single batched tmux probe for live decorations.
+// Reading is JSON-only on the hot path: no `jj` invocations, no
+// per-row tmux calls. Workspaces created externally via `jj workspace
+// add` won't appear until the deck reconciles via a write path
+// (deck-driven create/delete already does this).
 func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, []deckui.Item, error) {
-	listOne, err := svc.List()
+	_ = j
+	_ = in
+	_ = out
+
+	store := state.NewJSONStore()
+	repoMap, err := store.LoadAll()
 	if err != nil {
-		if jj.IsStaleWorkingCopyError(err) {
-			updated, updateErr := maybeUpdateStaleWorkingCopy(j, in, out, err)
-			if updateErr != nil {
-				return nil, nil, updateErr
-			}
-			if updated {
-				listOne, err = svc.List()
-			}
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	entries := make([]workspace.CrossRepoEntry, 0, len(listOne))
-	for _, e := range listOne {
-		entries = append(entries, workspace.CrossRepoEntry{
-			RepoRoot: repoRoot, ProjectName: projectName, Name: e.Name, Path: e.Path,
-			SessionID: e.SessionID, SessionName: e.SessionName,
-			ActivePrompt: e.ActivePrompt, Status: e.Status, Unread: e.Unread,
-		})
+		return nil, nil, err
 	}
 
-	liveSessions, _ := tmuxClient.ListSessions()
-	currentSession, _ := tmuxClient.CurrentSessionName()
-	liveByName := map[string]string{}
-	liveByID := map[string]struct{}{}
-	adoptable := map[string]string{}
-	for _, s := range liveSessions {
-		liveByName[s.Name] = s.ID
-		liveByID[s.ID] = struct{}{}
-		if repo, _, ok := parseAwpSession(s.Name); ok && repo == projectName {
-			adoptable[s.Name] = s.ID
+	snap := captureDeckTmuxSnapshot(tmuxClient)
+
+	// adoptable: live [awp]<projectName>__* sessions not represented in state.
+	adoptable := map[string]struct{}{}
+	for name := range snap.liveByName {
+		if repo, _, ok := parseAwpSession(name); ok && repo == projectName {
+			adoptable[name] = struct{}{}
 		}
 	}
 
-	items := make([]deckui.Item, 0, len(entries))
-	for _, entry := range entries {
-		sessionName := DeckSessionName(entry.ProjectName, entry.Name)
-		_, nameMatch := liveByName[sessionName]
-		delete(adoptable, sessionName)
-		// If the user is literally looking at this workspace's session,
-		// clear the unread badge — by definition they've seen it.
-		if entry.Unread && sessionName == currentSession {
-			if err := svc.MarkRead(entry.Name); err == nil {
-				entry.Unread = false
+	type repoRow struct {
+		repo, project string
+	}
+	repos := make([]repoRow, 0, len(repoMap))
+	for r := range repoMap {
+		repos = append(repos, repoRow{repo: r, project: strings.TrimSpace(filepath.Base(filepath.Clean(r)))})
+	}
+	sort.Slice(repos, func(i, k int) bool {
+		if repos[i].project != repos[k].project {
+			return repos[i].project < repos[k].project
+		}
+		return repos[i].repo < repos[k].repo
+	})
+
+	var items []deckui.Item
+	var allItems []deckui.Item
+	for _, r := range repos {
+		entries := repoMap[r.repo]
+		names := make([]string, 0, len(entries))
+		for n := range entries {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		isCurrentRepo := r.repo == repoRoot
+		for _, n := range names {
+			e := entries[n]
+			sessionName := DeckSessionName(r.project, e.Name)
+			_, nameMatch := snap.liveByName[sessionName]
+			delete(adoptable, sessionName)
+
+			unread := e.Unread
+			// If the user is currently focused on this workspace's session,
+			// clear the unread badge. Persist only when we own this repo
+			// (svc is rooted at the deck's invocation repo, so writes for
+			// other repos would land in the wrong scope).
+			if snap.known && unread && sessionName == snap.currentSession {
+				unread = false
+				if isCurrentRepo {
+					_ = svc.MarkRead(e.Name)
+				}
 			}
-		}
-		status := entry.Status
-		if strings.TrimSpace(status) == "" {
-			status = "idle"
-		}
-		stale := false
-		if entry.SessionID != "" {
-			if _, ok := liveByID[entry.SessionID]; !ok && !nameMatch {
-				stale = true
+
+			status := e.Status
+			if strings.TrimSpace(status) == "" {
+				status = "idle"
 			}
-		}
-		if nameMatch && agentPaneIsShell(tmuxClient, sessionName) {
-			status = "exited"
-			// Persist the override so any other consumer of
-			// workspace-state.json (doctor, scripts, the cross-repo
-			// pane on another deck) sees the same thing. Claude
-			// has no exit hook of its own, so without this the
-			// JSON sticks at the last reported state forever.
-			if entry.Status != "exited" {
-				if err := svc.UpdateStatus(entry.Name, "exited"); err == nil {
-					if !entry.Unread {
-						entry.Unread = true
+			// Without tmux info (fast first paint), trust the stored
+			// SessionID: if there is one, assume the session is still
+			// alive and not stale. Real tmux state arrives ~50 ms
+			// later from the Init-driven refresh and overwrites this.
+			active := nameMatch
+			stale := false
+			current := sessionName == snap.currentSession
+			if !snap.known {
+				active = e.SessionID != ""
+				current = false
+			} else if e.SessionID != "" {
+				if _, ok := snap.liveByID[e.SessionID]; !ok && !nameMatch {
+					stale = true
+				}
+			}
+			if snap.known && nameMatch && snap.agentShell[sessionName] {
+				status = "exited"
+				// Persist the override (only on the deck's own repo) so
+				// downstream consumers — doctor, the cross-repo pane on
+				// another deck — see the same thing. Claude has no exit
+				// hook of its own.
+				if isCurrentRepo && e.Status != "exited" {
+					if err := svc.UpdateStatus(e.Name, "exited"); err == nil && !unread {
+						unread = true
 					}
 				}
 			}
+
+			item := deckui.Item{
+				ProjectName:   r.project,
+				WorkspaceName: e.Name,
+				Path:          e.Path,
+				RepoRoot:      r.repo,
+				Status:        status,
+				Unread:        unread,
+				PromptPreview: e.ActivePrompt,
+				TmuxWindow:    sessionName,
+				SessionName:   sessionName,
+				Active:        active,
+				Current:       current,
+				Stale:         stale,
+			}
+			allItems = append(allItems, item)
+			if isCurrentRepo {
+				items = append(items, item)
+			}
 		}
-		items = append(items, deckui.Item{
-			ProjectName:   entry.ProjectName,
-			WorkspaceName: entry.Name,
-			Path:          entry.Path,
-			RepoRoot:      entry.RepoRoot,
-			Status:        status,
-			Unread:        entry.Unread,
-			PromptPreview: entry.ActivePrompt,
-			TmuxWindow:    sessionName,
-			SessionName:   sessionName,
-			Active:        nameMatch,
-			Current:       sessionName == currentSession,
-			Stale:         stale,
-		})
 	}
+
+	// Live tmux sessions for the current project that aren't in state — show
+	// them as "unmanaged" rows so the user can adopt or kill them.
 	for name := range adoptable {
 		repo, ws, ok := parseAwpSession(name)
 		if !ok {
@@ -582,50 +666,10 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, svc workspace.Service,
 			TmuxWindow:    name,
 			SessionName:   name,
 			Active:        true,
-			Current:       name == currentSession,
+			Current:       name == snap.currentSession,
 		})
 	}
 
-	allEntries, _ := svc.ListAll()
-	allItems := make([]deckui.Item, 0, len(allEntries))
-	for _, entry := range allEntries {
-		sessionName := DeckSessionName(entry.ProjectName, entry.Name)
-		_, nameMatch := liveByName[sessionName]
-		// Same auto-clear as the per-repo loop, but only suppress in-UI
-		// here — writing the cleared state requires a service rooted at
-		// `entry.RepoRoot`, which the writer-side check in report-status
-		// handles. The deck's own loadDeckItems for that repo will sync.
-		if entry.Unread && sessionName == currentSession {
-			entry.Unread = false
-		}
-		status := entry.Status
-		if strings.TrimSpace(status) == "" {
-			status = "idle"
-		}
-		stale := false
-		if entry.SessionID != "" {
-			if _, ok := liveByID[entry.SessionID]; !ok && !nameMatch {
-				stale = true
-			}
-		}
-		if nameMatch && agentPaneIsShell(tmuxClient, sessionName) {
-			status = "exited"
-		}
-		allItems = append(allItems, deckui.Item{
-			ProjectName:   entry.ProjectName,
-			WorkspaceName: entry.Name,
-			Path:          entry.Path,
-			RepoRoot:      entry.RepoRoot,
-			Status:        status,
-			Unread:        entry.Unread,
-			PromptPreview: entry.ActivePrompt,
-			TmuxWindow:    sessionName,
-			SessionName:   sessionName,
-			Active:        nameMatch,
-			Current:       sessionName == currentSession,
-			Stale:         stale,
-		})
-	}
 	return items, allItems, nil
 }
 
