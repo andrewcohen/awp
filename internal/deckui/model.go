@@ -47,6 +47,7 @@ const (
 	ActionRelink
 	ActionOpenWindow
 	ActionDelete
+	ActionDeleteProject
 	ActionCI
 	ActionLastSession
 	ActionReview
@@ -275,6 +276,9 @@ type Model struct {
 	filtering          bool
 	filter             string
 	confirmDelete      bool
+	deleteIsProject    bool // confirmDelete branch: project-level delete (typed confirmation)
+	deleteInput        textinput.Model
+	deleteErr          string
 	helpMode           bool
 	deleteTarget       Item
 	pendingSelect      Item // after next refresh, cursor jumps to this (project, workspace) if present
@@ -904,6 +908,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.dispatchNewWorkspaceForm(msg)
 		}
 		if m.confirmDelete {
+			if m.deleteIsProject {
+				switch msg.String() {
+				case "esc", "ctrl+c":
+					m.confirmDelete = false
+					m.deleteIsProject = false
+					m.deleteInput.Blur()
+					m.deleteInput.SetValue("")
+					m.deleteErr = ""
+					m.status = "delete project: cancelled"
+					return m, tea.ClearScreen
+				case "enter":
+					typed := strings.TrimSpace(m.deleteInput.Value())
+					if typed != m.deleteTarget.ProjectName {
+						m.deleteErr = "project name didn't match"
+						return m, nil
+					}
+					m.confirmDelete = false
+					m.deleteIsProject = false
+					m.deleteInput.Blur()
+					m.deleteInput.SetValue("")
+					m.deleteErr = ""
+					if m.handler == nil {
+						m.status = "delete project: handler not configured"
+						return m, tea.ClearScreen
+					}
+					updated, cmd := m.startAction(ActionDeleteProject, m.deleteTarget, "")
+					return updated, batchCmds(cmd, tea.ClearScreen)
+				}
+				var cmd tea.Cmd
+				m.deleteInput, cmd = m.deleteInput.Update(msg)
+				m.deleteErr = ""
+				return m, cmd
+			}
 			switch strings.ToLower(msg.String()) {
 			case "y", "enter":
 				m.confirmDelete = false
@@ -1315,6 +1352,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.confirmDelete = true
 			m.deleteTarget = item
+			m.deleteErr = ""
+			if strings.TrimSpace(item.WorkspaceName) == "default" {
+				// "Deleting" the default workspace is reinterpreted as
+				// deleting the whole project from the deck: every
+				// non-default workspace under this repo is removed and
+				// the project is dropped from workspace state. The
+				// default jj workspace itself stays. Require typing
+				// the project name to confirm — it's a bigger blast
+				// radius than a single-workspace delete.
+				m.deleteIsProject = true
+				ti := textinput.New()
+				ti.Placeholder = item.ProjectName
+				ti.CharLimit = 128
+				ti.Focus()
+				m.deleteInput = ti
+				m.status = fmt.Sprintf("delete project %q?", item.ProjectName)
+				return m, textinput.Blink
+			}
+			m.deleteIsProject = false
 			m.status = fmt.Sprintf("delete %s? [y/N]", item.WorkspaceName)
 			return m, nil
 		case "R":
@@ -1575,7 +1631,7 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 
 func isProgressAction(a Action) bool {
 	switch a {
-	case ActionDelete, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom:
+	case ActionDelete, ActionDeleteProject, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom:
 		return true
 	}
 	return false
@@ -1593,6 +1649,15 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 			return m.startAsyncAction(AsyncJobSpec{
 				Action:        "delete",
 				Title:         "delete · " + item.WorkspaceName,
+				RepoRoot:      item.RepoRoot,
+				WorkspaceName: item.WorkspaceName,
+				WorkspacePath: item.Path,
+				Arg:           arg,
+			})
+		case ActionDeleteProject:
+			return m.startAsyncAction(AsyncJobSpec{
+				Action:        "delete-project",
+				Title:         "delete project · " + item.ProjectName,
 				RepoRoot:      item.RepoRoot,
 				WorkspaceName: item.WorkspaceName,
 				WorkspacePath: item.Path,
@@ -1777,6 +1842,8 @@ func actionLabel(a Action, arg string) string {
 		return "open shell"
 	case ActionDelete:
 		return "delete"
+	case ActionDeleteProject:
+		return "delete project"
 	case ActionCI:
 		return "ci"
 	case ActionLastSession:
@@ -1880,7 +1947,8 @@ func (m Model) View() string {
 	parts := []string{body, strings.Repeat("\n", pad), footer}
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	if m.confirmDelete {
-		view = lipgloss.JoinVertical(lipgloss.Left, view, "", m.renderDeleteConfirm())
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.renderDeleteConfirm())
 	}
 	if m.helpMode {
 		// Center the help box over the existing view as a popover.
@@ -2163,7 +2231,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Workspace",
 			Keys: [][2]string{
 				{"r", "review a PR"},
-				{"D", "delete workspace"},
+				{"D", "delete workspace (or default → delete project)"},
 				{"R", "relink session"},
 				{",", "edit global state file in $EDITOR"},
 			},
@@ -2680,16 +2748,48 @@ func (m Model) progressFooter() string {
 }
 
 func (m Model) renderDeleteConfirm() string {
-	name := m.deleteTarget.WorkspaceName
-	if strings.TrimSpace(name) == "" {
-		name = "this workspace"
-	}
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("203")).
 		Padding(1, 2).
-		Render("Delete workspace \"" + name + "\"?\n\nPress y to confirm, n to cancel.")
-	return box
+		Width(60)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+
+	if m.deleteIsProject {
+		project := strings.TrimSpace(m.deleteTarget.ProjectName)
+		if project == "" {
+			project = "this project"
+		}
+		lines := []string{
+			titleStyle.Render("Delete project " + project + "?"),
+			"",
+			mutedStyle.Render("Removes every non-default workspace under this repo and"),
+			mutedStyle.Render("drops the project from the deck. The default workspace"),
+			mutedStyle.Render("itself is left intact."),
+			"",
+			mutedStyle.Render("Type the project name to confirm:"),
+			m.deleteInput.View(),
+		}
+		if m.deleteErr != "" {
+			lines = append(lines, "", errStyle.Render(m.deleteErr))
+		}
+		lines = append(lines, "", hintStyle.Render("enter confirm · esc cancel"))
+		return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	name := strings.TrimSpace(m.deleteTarget.WorkspaceName)
+	if name == "" {
+		name = "this workspace"
+	}
+	lines := []string{
+		titleStyle.Render("Delete workspace " + name + "?"),
+		"",
+		hintStyle.Render("y confirm · n / esc cancel"),
+	}
+	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (m Model) selected() (Item, bool) {

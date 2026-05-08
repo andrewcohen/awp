@@ -72,6 +72,27 @@ func (s *JSONStore) Save(repoRoot string, entries map[string]workspace.Entry) er
 	})
 }
 
+// DeleteRepo removes the entire entry for repoRoot from the global
+// state file. Used by project-level deletion to make a project
+// disappear from the deck.
+func (s *JSONStore) DeleteRepo(repoRoot string) error {
+	normalizedRepoRoot, err := normalizeRepoRoot(repoRoot)
+	if err != nil {
+		return err
+	}
+	return s.withLock(func() error {
+		state, err := s.readGlobalStateLocked()
+		if err != nil {
+			return err
+		}
+		if _, ok := state[normalizedRepoRoot]; !ok {
+			return nil
+		}
+		delete(state, normalizedRepoRoot)
+		return s.writeGlobalStateLocked(state)
+	})
+}
+
 // Update atomically applies fn to the entries map for repoRoot. fn receives a
 // mutable copy of the current entries; the returned map (or the same map after
 // in-place mutation) is persisted. The whole read-modify-write sequence is

@@ -87,7 +87,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `P` | Cycle scope: current project → all projects → awaiting input (persisted across runs) |
 | `L` | Switch to last tmux session |
 | `R` | Relink session |
-| `D` | Delete workspace |
+| `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
 | `?` | Help overlay |

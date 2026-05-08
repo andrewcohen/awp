@@ -749,11 +749,80 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 			}
 		}
 		return nil
+	case deckui.ActionDeleteProject:
+		return handleDeleteProjectAction(tmuxClient, svc, item, reporter)
 	case deckui.ActionRelink:
 		reporter.Step("Relink session")
 		return relinkSession(tmuxClient, svc, item)
 	}
 	return fmt.Errorf("unknown action: %q session=%q", req.Action, sessionName)
+}
+
+// handleDeleteProjectAction removes every non-default workspace under
+// item.RepoRoot, kills their tmux sessions, and drops the repo entry
+// from workspace state. The default jj workspace itself is left
+// intact — "deleting the project" is a deck concept (the project
+// disappears from the row list); the source repo and its default
+// workspace stay on disk.
+func handleDeleteProjectAction(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, reporter deckui.Reporter) error {
+	repoRoot := strings.TrimSpace(item.RepoRoot)
+	if repoRoot == "" {
+		return errors.New("delete-project: missing repo root")
+	}
+	store := state.NewJSONStore()
+	entries, err := store.Load(repoRoot)
+	if err != nil {
+		return fmt.Errorf("load workspace state: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for n := range entries {
+		if n == "default" {
+			continue
+		}
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var queuePath string
+	if sessionID, err := tmuxClient.CurrentSessionID(); err == nil {
+		if path, ok := pendingKillsPath(sessionID); ok {
+			queuePath = path
+		}
+	}
+
+	reporter.Step(fmt.Sprintf("Delete project %s (%d workspace(s))", item.ProjectName, len(names)))
+	for _, name := range names {
+		reporter.Step(fmt.Sprintf("Delete workspace %s", name))
+		opts := workspace.DeleteOptions{Force: true}
+		if queuePath != "" {
+			opts.DeferTmuxKill = func(window string) {
+				_ = appendPendingKill(queuePath, window)
+			}
+		}
+		if err := svc.DeleteWithOptions(name, opts); err != nil {
+			return fmt.Errorf("delete %s: %w", name, err)
+		}
+		sessionName := DeckSessionName(item.ProjectName, name)
+		id, err := tmuxClient.SessionIDByName(sessionName)
+		if err != nil {
+			return err
+		}
+		if id != "" {
+			if queuePath != "" {
+				_ = appendPendingAction(queuePath, "session", sessionName)
+			} else {
+				if err := tmuxClient.KillSession(sessionName); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	reporter.Step("Drop project from deck state")
+	if err := store.DeleteRepo(repoRoot); err != nil {
+		return fmt.Errorf("drop project from state: %w", err)
+	}
+	return nil
 }
 
 func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, reporter deckui.Reporter) error {
