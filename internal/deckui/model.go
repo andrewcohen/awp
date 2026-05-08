@@ -2946,7 +2946,7 @@ func deckKeyGroups() []keyGroup {
 				{"c / C", "review window: tuicr -r @  /  tuicr -r main..@"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
-				{"i", "ci window (gh run watch)"},
+				{"i", "ci window (gh run watch / glab ci view)"},
 				{"x", "user actions menu"},
 			},
 		},

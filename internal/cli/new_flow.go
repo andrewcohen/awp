@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/charm"
-	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 )
 
@@ -416,8 +415,12 @@ func runNewFlowPreScreen(runner Runner, in io.Reader, out io.Writer) (newFlowRes
 			Author  string
 			IsDraft bool
 		}, error) {
-			gh := github.New(runner)
-			prs, err := gh.ListPRs()
+			root, _ := jj.New(runner).SourceRepoRoot()
+			f, err := detectForge(runner, strings.TrimSpace(root))
+			if err != nil {
+				return nil, err
+			}
+			prs, err := f.ListPRs()
 			if err != nil {
 				return nil, err
 			}

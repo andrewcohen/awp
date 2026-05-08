@@ -49,6 +49,11 @@ type Config struct {
 		// workspace entry so the deck's PR glyph can match it against
 		// a PR's headRefName. Unset = no auto-create (default).
 		BookmarkPrefix string `json:"bookmark_prefix,omitempty"`
+		// Forge forces the host-CLI backend when auto-detection from
+		// the git remote URL can't decide (e.g. self-hosted GitLab on
+		// a non-"gitlab" hostname). Accepts "github" or "gitlab".
+		// Unset = auto-detect from remote.origin.url.
+		Forge string `json:"forge,omitempty"`
 	} `json:"deck,omitempty"`
 }
 
@@ -144,6 +149,9 @@ func merge(global, project Config) Config {
 	}
 	if strings.TrimSpace(out.Deck.BookmarkPrefix) == "" {
 		out.Deck.BookmarkPrefix = global.Deck.BookmarkPrefix
+	}
+	if strings.TrimSpace(out.Deck.Forge) == "" {
+		out.Deck.Forge = global.Deck.Forge
 	}
 	return out
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrewcohen/awp/internal/github"
+	"github.com/andrewcohen/awp/internal/forge"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -41,14 +41,14 @@ func TestParsePRNumber(t *testing.T) {
 }
 
 func TestBuildReviewPrompt(t *testing.T) {
-	pr := github.PRInfo{Number: 42, Title: "add thing", Body: "does X"}
+	pr := forge.PRInfo{Number: 42, Title: "add thing", Body: "does X"}
 	got := buildReviewPrompt(pr, "main")
 	if !strings.Contains(got, "PR #42") || !strings.Contains(got, "add thing") ||
 		!strings.Contains(got, "does X") || !strings.Contains(got, "main..@") {
 		t.Fatalf("unexpected prompt: %q", got)
 	}
 
-	empty := github.PRInfo{Number: 1, Title: "t", Body: "  "}
+	empty := forge.PRInfo{Number: 1, Title: "t", Body: "  "}
 	got = buildReviewPrompt(empty, "develop")
 	if !strings.Contains(got, "(no description)") {
 		t.Fatalf("expected placeholder for empty body, got %q", got)
@@ -131,6 +131,9 @@ type prListRunner struct {
 }
 
 func (r *prListRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	if name == "git" && len(args) >= 3 && args[0] == "remote" && args[1] == "get-url" && args[2] == "origin" {
+		return "git@github.com:foo/bar.git", nil
+	}
 	if name == "gh" && len(args) > 0 && args[0] == "pr" && args[1] == "list" {
 		return r.out, r.err
 	}

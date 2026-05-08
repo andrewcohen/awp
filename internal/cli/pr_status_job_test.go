@@ -100,6 +100,79 @@ func TestRunPRStatusFromSpecContinuesPastRepoFailure(t *testing.T) {
 	}
 }
 
+// TestRunPRStatusFromSpecSkipsNonGithubRepos verifies that a repo whose
+// origin remote is GitLab is skipped cleanly (no gh shell-out, no cache
+// write) rather than failing per-repo with a gh error.
+func TestRunPRStatusFromSpecSkipsNonGithubRepos(t *testing.T) {
+	home := withTempHome(t)
+	gitlabRepo := t.TempDir()
+	githubRepo := t.TempDir()
+
+	prJSONGH := `[{"number":11,"headRefName":"andrew/gh","url":"https://example/gh/11","state":"OPEN","isDraft":false,"reviewDecision":"","statusCheckRollup":[],"mergeStateStatus":"CLEAN"}]`
+
+	runner := &remoteAwareRunner{
+		remotes: map[string]string{
+			gitlabRepo: "git@gitlab.example.com:foo/bar.git",
+			githubRepo: "git@github.com:foo/bar.git",
+		},
+		prList: prJSONGH,
+	}
+
+	job := jobs.Job{
+		ID: "test-job",
+		Spec: jobs.Spec{
+			Action: jobs.ActionPRStatus,
+			Repos:  []string{gitlabRepo, githubRepo},
+		},
+	}
+	if err := runPRStatusFromSpec(runner, job, noopReporter{}); err != nil {
+		t.Fatalf("runPRStatusFromSpec: %v", err)
+	}
+
+	cachePath := filepath.Join(home, ".awp", prStatusCacheName)
+	body, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var cache prStatusCacheFile
+	if err := json.Unmarshal(body, &cache); err != nil {
+		t.Fatalf("parse cache: %v", err)
+	}
+	if _, present := cache.Repos[gitlabRepo]; present {
+		t.Errorf("gitlab repo should have been skipped: %+v", cache.Repos[gitlabRepo])
+	}
+	if cache.Repos[githubRepo].PRs["andrew/gh"].Number != 11 {
+		t.Errorf("github repo entry missing or wrong: %+v", cache.Repos[githubRepo])
+	}
+}
+
+// remoteAwareRunner answers `git remote get-url origin` per-repo so the
+// forge detection in pr_status_job picks the right backend, then funnels
+// gh calls through a static stub. Keeps the test fixture small.
+type remoteAwareRunner struct {
+	remotes map[string]string
+	prList  string
+}
+
+func (r *remoteAwareRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
+	if name == "git" && len(args) >= 3 && args[0] == "remote" && args[1] == "get-url" && args[2] == "origin" {
+		if url, ok := r.remotes[dir]; ok {
+			return url, nil
+		}
+		return "git@github.com:o/r.git", nil
+	}
+	if name == "gh" && len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		return `{"owner":{"login":"o"},"name":"r"}`, nil
+	}
+	if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
+		return `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`, nil
+	}
+	if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "list" {
+		return r.prList, nil
+	}
+	return "", nil
+}
+
 // sequencedRunner returns each successive output from seq in order for
 // `gh pr list` calls (one per repo). The merge-queue lookup that the
 // pr-status job runs after each ListPRStatus (`gh repo view` then
@@ -111,6 +184,10 @@ type sequencedRunner struct {
 }
 
 func (r *sequencedRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	// Forge auto-detection probes the origin remote first.
+	if name == "git" && len(args) >= 3 && args[0] == "remote" && args[1] == "get-url" && args[2] == "origin" {
+		return "git@github.com:o/r.git", nil
+	}
 	if name == "gh" && len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
 		return `{"owner":{"login":"o"},"name":"r"}`, nil
 	}
