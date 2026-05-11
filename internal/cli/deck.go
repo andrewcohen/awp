@@ -973,7 +973,7 @@ func defaultWindowCommandWithRepo(windowName, repoRoot string) string {
 	case "vcs":
 		return "jjui"
 	case "agent":
-		return config.AgentCommand(repoRoot)
+		return config.AgentInvocation(repoRoot)
 	}
 	return ""
 }
