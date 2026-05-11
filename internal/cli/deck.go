@@ -125,6 +125,12 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	if runner == nil {
 		runner = NewExecRunner()
 	}
+	// Drain the pending-kills queue on exit so deletes always tear down
+	// their tmux sessions, regardless of whether the user wired
+	// `run-shell "awp deck-cleanup"` into their popup binding. The
+	// tmux-binding path remains a redundant safety net; drainPendingActions
+	// is idempotent on an empty/missing queue file.
+	defer func() { _ = runDeckCleanup(runner, out) }()
 	j := jj.New(runner)
 	tmuxClient := tmux.New(runner)
 
