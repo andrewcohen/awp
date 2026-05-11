@@ -172,6 +172,18 @@ func (c *Client) WorkspaceRevision(name string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// HeadDescription returns the first line of the working-copy commit's
+// description at dir. --ignore-working-copy skips the snapshot pass so this
+// is safe to call repeatedly during deck refresh without churning state.
+// Returns ("", nil) for an empty / no-description commit.
+func (c *Client) HeadDescription(dir string) (string, error) {
+	out, err := c.runner.Run(context.Background(), dir, "jj", "--ignore-working-copy", "log", "-r", "@", "--no-graph", "-T", "description.first_line()")
+	if err != nil {
+		return "", formatCommandError("resolve head description", err, out)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // AllBookmarks lists every bookmark visible to jj, deduped to a logical name.
 // A remote bookmark "main@origin" is folded into "main"; if a local bookmark
 // of the same name exists it wins. The returned slice preserves the first-seen

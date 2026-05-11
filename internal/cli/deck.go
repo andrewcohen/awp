@@ -655,6 +655,15 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				}
 			}
 
+			headDesc := ""
+			if j != nil && strings.TrimSpace(e.Path) != "" {
+				// Skip the head-description fetch on the fast first paint
+				// (j == nil) — it's a synchronous jj call per workspace and
+				// the enrichment pass runs ~50 ms later anyway.
+				// --ignore-working-copy keeps it cheap; errors are ignored
+				// since a missing description is just an empty field.
+				headDesc, _ = j.HeadDescription(e.Path)
+			}
 			item := deckui.Item{
 				ProjectName:   r.project,
 				WorkspaceName: e.Name,
@@ -663,6 +672,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				Status:        status,
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,
+				HeadDesc:      headDesc,
 				TmuxWindow:    sessionName,
 				SessionName:   sessionName,
 				Active:        active,

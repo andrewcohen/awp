@@ -33,6 +33,7 @@ type Item struct {
 	Status        string
 	Unread        bool
 	PromptPreview string
+	HeadDesc      string
 	TmuxWindow    string
 	SessionName   string
 	Active        bool
@@ -2175,14 +2176,6 @@ func (m Model) renderList(width int) string {
 		}
 		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
 		rows = append(rows, lipgloss.NewStyle().Width(width-1).Render(line))
-		if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
-			promptColor := lipgloss.Color("245")
-			if dim {
-				promptColor = lipgloss.Color("238")
-			}
-			promptIndent := strings.Repeat(" ", prefixWidth+1)
-			rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(promptColor).Render(promptIndent+truncate(prompt, max(8, width-prefixWidth-3))))
-		}
 	}
 	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
 }
@@ -2285,10 +2278,15 @@ func (m Model) renderDetails(width int) string {
 		fmt.Sprintf("Session:   %s", sess),
 		fmt.Sprintf("Live:      %s", active),
 		fmt.Sprintf("Path:      %s", item.Path),
+	}
+	if head := strings.TrimSpace(item.HeadDesc); head != "" {
+		lines = append(lines, fmt.Sprintf("Head:      %s", head))
+	}
+	lines = append(lines,
 		"",
 		"Prompt:",
 		prompt,
-	}
+	)
 	if act := renderActivityBlock(m.jobs, item, width); act != "" {
 		lines = append(lines, "", act)
 	}

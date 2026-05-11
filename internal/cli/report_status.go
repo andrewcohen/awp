@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,12 +33,20 @@ var validReportStates = map[string]struct{}{
 //
 // When env vars are missing the command exits 0 silently so a misconfigured
 // hook never breaks an agent turn.
+//
+// Optional flags capture the active prompt alongside the state transition:
+//   - --prompt <text>     persist the literal text as the workspace's ActivePrompt.
+//   - --prompt-stdin      read a Claude-style hook payload JSON from stdin and
+//                         extract its top-level "prompt" field. Empty/missing
+//                         is treated as "no prompt update" rather than an error.
 func runReportStatus(args []string, out io.Writer) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(out, "Usage: awp internal report-status --state <working|idle|waiting|exited>")
+		_, _ = fmt.Fprintln(out, "Usage: awp internal report-status --state <working|idle|waiting|exited> [--prompt <text>|--prompt-stdin]")
 		return nil
 	}
 	state := ""
+	prompt := ""
+	promptStdin := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -49,6 +58,16 @@ func runReportStatus(args []string, out io.Writer) error {
 			i++
 		case strings.HasPrefix(arg, "--state="):
 			state = strings.TrimPrefix(arg, "--state=")
+		case arg == "--prompt":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--prompt requires a value")
+			}
+			prompt = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--prompt="):
+			prompt = strings.TrimPrefix(arg, "--prompt=")
+		case arg == "--prompt-stdin":
+			promptStdin = true
 		default:
 			return fmt.Errorf("unknown argument %q", arg)
 		}
@@ -60,12 +79,41 @@ func runReportStatus(args []string, out io.Writer) error {
 	if _, ok := validReportStates[state]; !ok {
 		return fmt.Errorf("invalid --state %q (want working|idle|waiting|exited)", state)
 	}
+	if promptStdin {
+		// Best-effort: a malformed payload should never break the agent turn.
+		// Silently drop errors and fall through with prompt="".
+		if stdinPrompt, ok := readPromptFromStdin(reportStatusStdin()); ok {
+			prompt = stdinPrompt
+		}
+	}
+	prompt = strings.TrimSpace(prompt)
 
 	workspaceName, repoName, repoRoot := resolveWorkspaceIdent()
 	if workspaceName == "" {
 		return nil
 	}
-	return writeWorkspaceStatus(workspaceName, repoName, repoRoot, state)
+	return writeWorkspaceStatus(workspaceName, repoName, repoRoot, state, prompt)
+}
+
+// readPromptFromStdin parses Claude's UserPromptSubmit hook payload and
+// returns the "prompt" string. Returns (_, false) when stdin is empty, not
+// JSON, or the field is missing — callers should treat that as "no prompt
+// update", not an error.
+func readPromptFromStdin(r io.Reader) (string, bool) {
+	data, err := io.ReadAll(r)
+	if err != nil || len(data) == 0 {
+		return "", false
+	}
+	var payload struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", false
+	}
+	if payload.Prompt == "" {
+		return "", false
+	}
+	return payload.Prompt, true
 }
 
 // resolveWorkspaceIdent returns (AWP_WORKSPACE, AWP_REPO, AWP_REPO_ROOT) with
@@ -129,12 +177,19 @@ func tmuxLocalEnv(key string) string {
 	return ""
 }
 
-// writeWorkspaceStatus mutates Status on the matching entry. It prefers
-// repoRoot (absolute path) for an exact match; falls back to repoName
-// (basename of each known repo root) when the root is unknown. It also
-// flips Unread=true on transitions into "attention" states so the tmux
-// badge surfaces the change.
-func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status string) error {
+// writeWorkspaceStatus mutates Status (and optionally ActivePrompt) on the
+// matching entry. It prefers repoRoot (absolute path) for an exact match;
+// falls back to repoName (basename of each known repo root) when the root
+// is unknown. It also flips Unread=true on transitions into "attention"
+// states so the tmux badge surfaces the change.
+//
+// ActivePrompt lifecycle: a non-empty prompt argument overwrites the field
+// (UserPromptSubmit / before_agent_start path). When the new status is
+// "idle" or "exited" we clear ActivePrompt because the agent is no longer
+// acting on that prompt. "working" and "waiting" leave it alone so the
+// deck keeps showing the prompt while the agent is mid-task or pinging
+// for attention.
+func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status, prompt string) error {
 	store := stateStore()
 
 	// Suppress the badge when the user is literally looking at this
@@ -148,6 +203,12 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status string) erro
 			return entries
 		}
 		entry.Status = status
+		switch {
+		case prompt != "":
+			entry.ActivePrompt = prompt
+		case status == "idle" || status == "exited":
+			entry.ActivePrompt = ""
+		}
 		if workspace.WantsAttention(status) {
 			if viewing {
 				entry.Unread = false
@@ -260,6 +321,10 @@ func sessionHasAttachedClient(repoName, workspaceName string) bool {
 
 // stateStore returns a JSONStore. Indirection exists so tests can swap it.
 var stateStore = func() reportStatusStore { return state.NewJSONStore() }
+
+// reportStatusStdin returns the reader used by --prompt-stdin. Indirection
+// exists so tests can stub in a buffer without touching os.Stdin.
+var reportStatusStdin = func() io.Reader { return os.Stdin }
 
 type reportStatusStore interface {
 	Load(repoRoot string) (map[string]workspace.Entry, error)

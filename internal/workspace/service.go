@@ -979,6 +979,9 @@ func (s *service) maybeRunPrompt(workspaceName, prompt string) error {
 	if prompt == "" {
 		return nil
 	}
+	if err := s.UpdatePrompt(workspaceName, prompt); err != nil {
+		return fmt.Errorf("persist prompt for %q: %w", workspaceName, err)
+	}
 	command := "pi " + shellQuote(prompt)
 	s.logf("▶️ Starting agent prompt in tmux window %q", workspaceName)
 	if err := s.tmux.SendCommand(workspaceName, command); err != nil {

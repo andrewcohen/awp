@@ -37,14 +37,22 @@ function log(msg: string): void {
   }
 }
 
-function report(state: "working" | "idle" | "waiting" | "exited", wait = false): Promise<void> {
+function report(
+  state: "working" | "idle" | "waiting" | "exited",
+  wait = false,
+  prompt?: string,
+): Promise<void> {
   if (!process.env.TMUX) {
     log(`skip ${state}: TMUX unset`);
     return Promise.resolve();
   }
   return new Promise((resolve) => {
     try {
-      const child = spawn(AWP_BIN, ["internal", "report-status", "--state", state], {
+      const args = ["internal", "report-status", "--state", state];
+      if (prompt && prompt.trim() !== "") {
+        args.push("--prompt", prompt);
+      }
+      const child = spawn(AWP_BIN, args, {
         stdio: "ignore",
       });
       let done = false;
@@ -79,8 +87,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async () => {
     void report("idle");
   });
-  pi.on("before_agent_start", async () => {
-    void report("working");
+  pi.on("before_agent_start", async (event) => {
+    // before_agent_start fires once per user turn with the raw prompt text,
+    // so this is the natural place to capture ActivePrompt for the deck.
+    void report("working", false, event.prompt);
   });
   pi.on("agent_end", async () => {
     void report("idle");
