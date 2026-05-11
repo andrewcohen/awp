@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -213,6 +214,10 @@ func TestHandleDeckActionDeleteUsesForceAndKillsSession(t *testing.T) {
 }
 
 func TestDefaultWindowCommand(t *testing.T) {
+	// Isolate from the developer's real ~/.config/awp/config.json so the
+	// agent default is deterministic regardless of host config.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
 	cases := map[string]string{
 		"editor": "$EDITOR",
 		"review": "tuicr -r @",
@@ -223,5 +228,27 @@ func TestDefaultWindowCommand(t *testing.T) {
 		if got := defaultWindowCommand(name); got != want {
 			t.Fatalf("defaultWindowCommand(%q) = %q want %q", name, got, want)
 		}
+	}
+}
+
+func TestDefaultWindowCommandAgentIncludesOptions(t *testing.T) {
+	// Project config wins over global; verify the agent window picks up
+	// both the command and agent_options so flags like `--model …` or
+	// `--dangerously-skip-permissions` aren't dropped on the floor.
+	repo := t.TempDir()
+	cfgDir := repo + "/.awp"
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg := `{"agent":"claude","agent_options":"--dangerously-skip-permissions"}`
+	if err := os.WriteFile(cfgDir+"/config.json", []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	got := defaultWindowCommandWithRepo("agent", repo)
+	want := "claude --dangerously-skip-permissions"
+	if got != want {
+		t.Fatalf("defaultWindowCommandWithRepo agent = %q want %q", got, want)
 	}
 }

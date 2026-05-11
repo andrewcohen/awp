@@ -49,20 +49,10 @@ type Config struct {
 // config sets one.
 const DefaultAgent = "pi"
 
-// AgentCommand returns the configured agent command (project overrides
-// global, falling back to DefaultAgent). Empty repoRoot skips the project
-// lookup.
-func AgentCommand(repoRoot string) string {
-	cfg, _ := Load(repoRoot)
-	if a := strings.TrimSpace(cfg.Agent); a != "" {
-		return a
-	}
-	return DefaultAgent
-}
-
 // AgentInvocation returns the configured agent command joined with its
-// agent_options (project overrides global). Suitable for prepending to
-// a prompt: `<invocation> '<prompt>'`.
+// agent_options (project overrides global, command falling back to
+// DefaultAgent). Suitable for prepending to a prompt: `<invocation>
+// '<prompt>'`, or for sending to a fresh agent window on its own.
 func AgentInvocation(repoRoot string) string {
 	cfg, _ := Load(repoRoot)
 	cmd := strings.TrimSpace(cfg.Agent)
