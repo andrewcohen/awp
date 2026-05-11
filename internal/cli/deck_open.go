@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -127,6 +128,20 @@ func openProjectViaTmux(runner Runner) deckui.ProjectOpener {
 				return fmt.Errorf("open: create session: %w", err)
 			}
 		}
+		// Record the project in workspace state so the deck lists it
+		// alongside workspaces created via `n`. Without this, `o` would
+		// summon a tmux session that has no representation in
+		// ~/.awp/workspace-state.json, and the project would disappear
+		// from the deck the next time it's launched.
+		_ = state.NewJSONStore().Update(path, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+			if entries == nil {
+				entries = map[string]workspace.Entry{}
+			}
+			if _, ok := entries["default"]; !ok {
+				entries["default"] = workspace.Entry{Name: "default", Path: path}
+			}
+			return entries
+		})
 		return tc.SwitchClient(sessionName)
 	}
 }

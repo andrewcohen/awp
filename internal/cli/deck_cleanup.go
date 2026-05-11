@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 )
 
@@ -84,6 +85,8 @@ func runDeckCleanup(runner Runner, _ io.Writer) error {
 	if err != nil {
 		return nil
 	}
+	defer killDesyncedAwpSessions(tc, sessionID)
+
 	path, ok := pendingKillsPath(sessionID)
 	if !ok {
 		return nil
@@ -142,4 +145,54 @@ func runDeckCleanup(runner Runner, _ io.Writer) error {
 		_ = tc.KillWindow(name)
 	}
 	return nil
+}
+
+// killDesyncedAwpSessions tears down any live [awp]<repo>__<workspace>
+// tmux sessions that don't correspond to a workspace entry in the
+// global state file. The current session is always preserved so the
+// user isn't booted out from under themselves. Failure to load state
+// is treated as "do nothing" — we'd rather leak a session than kill a
+// real one based on a transient read error.
+func killDesyncedAwpSessions(tc *tmux.Client, currentSessionID string) {
+	sessions, err := tc.ListSessions()
+	if err != nil || len(sessions) == 0 {
+		return
+	}
+	// If the state file doesn't exist at all, treat it as "no
+	// reference data" rather than "every session is orphaned" — this
+	// guards against nuking awp sessions on a fresh install or after
+	// the user wipes state by hand.
+	statePath, err := state.GlobalStorePath()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(statePath); err != nil {
+		return
+	}
+	repoMap, err := state.NewJSONStore().LoadAll()
+	if err != nil {
+		return
+	}
+	expected := make(map[string]struct{})
+	for repoRoot, entries := range repoMap {
+		project := strings.TrimSpace(filepath.Base(filepath.Clean(repoRoot)))
+		if project == "" {
+			continue
+		}
+		for name := range entries {
+			expected[DeckSessionName(project, name)] = struct{}{}
+		}
+	}
+	for _, s := range sessions {
+		if _, _, ok := parseAwpSession(s.Name); !ok {
+			continue
+		}
+		if s.ID == currentSessionID {
+			continue
+		}
+		if _, ok := expected[s.Name]; ok {
+			continue
+		}
+		_ = tc.KillSession(s.Name)
+	}
 }
