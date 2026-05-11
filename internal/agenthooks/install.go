@@ -16,15 +16,25 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 3
+const HookMarkerVersion = 4
 
 // HookCommand returns the shell snippet each Claude hook runs. It gates on
 // $TMUX so global installation never affects non-tmux Claude usage, and
 // honors $AWP_BIN for users running a non-PATH awp binary. The awp CLI
 // itself falls back to reading session env from tmux when its own env is
 // missing, so this works for processes that predate env injection.
-func HookCommand(state string) string {
-	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + ` >/dev/null 2>&1 || true`
+//
+// For UserPromptSubmit we add --prompt-stdin so report-status pulls the
+// user's prompt text from the hook's JSON payload and stores it as the
+// workspace's ActivePrompt. Other events leave ActivePrompt alone (empty
+// prompt means "no update"), so the last user message keeps showing on the
+// deck across Stop/idle transitions.
+func HookCommand(event, state string) string {
+	extra := ""
+	if event == "UserPromptSubmit" {
+		extra = " --prompt-stdin"
+	}
+	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + extra + ` >/dev/null 2>&1 || true`
 }
 
 // DesiredClaudeHooks returns the event → state mapping awp installs into
@@ -77,7 +87,7 @@ func InstallClaude() (bool, error) {
 	changed := false
 	for event, state := range DesiredClaudeHooks() {
 		entries, _ := hooks[event].([]any)
-		entries, evtChanged := upsertAwpEntry(entries, state)
+		entries, evtChanged := upsertAwpEntry(entries, event, state)
 		if evtChanged {
 			changed = true
 		}
@@ -127,7 +137,7 @@ func IsClaudeInstalled() (bool, error) {
 	}
 	for event, state := range DesiredClaudeHooks() {
 		entries, _ := hooks[event].([]any)
-		if !awpEntryMatches(entries, state) {
+		if !awpEntryMatches(entries, event, state) {
 			return false, nil
 		}
 	}
@@ -191,8 +201,8 @@ func claudeSettingsPath() (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-func upsertAwpEntry(entries []any, state string) ([]any, bool) {
-	desired := desiredEntry(state)
+func upsertAwpEntry(entries []any, event, state string) ([]any, bool) {
+	desired := desiredEntry(event, state)
 	for i, raw := range entries {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -210,8 +220,8 @@ func upsertAwpEntry(entries []any, state string) ([]any, bool) {
 	return append(entries, desired), true
 }
 
-func awpEntryMatches(entries []any, state string) bool {
-	desired := desiredEntry(state)
+func awpEntryMatches(entries []any, event, state string) bool {
+	desired := desiredEntry(event, state)
 	for _, raw := range entries {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -227,7 +237,7 @@ func awpEntryMatches(entries []any, state string) bool {
 	return false
 }
 
-func desiredEntry(state string) map[string]any {
+func desiredEntry(event, state string) map[string]any {
 	return map[string]any{
 		"x-awp": map[string]any{
 			"version": float64(HookMarkerVersion),
@@ -236,7 +246,7 @@ func desiredEntry(state string) map[string]any {
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": HookCommand(state),
+				"command": HookCommand(event, state),
 			},
 		},
 	}
