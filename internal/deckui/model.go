@@ -2165,15 +2165,13 @@ func (m Model) renderList(width int) string {
 		if item.Stale && !m.preEnrichment {
 			label += " ⚠"
 		}
-		// Pre-enrichment first paint: render the glyph slot blank rather
-		// than coloring it from JSON status. Statuses can flip from
-		// "waiting"/"exited" → "working" once tmux/state are resolved,
-		// and we don't want to flash an attention dot we're about to
-		// retract a frame later.
-		glyph := " "
-		if !m.preEnrichment {
-			glyph = statusGlyph(item.Status, dim, item.Unread)
-		}
+		// Status is canonical in JSON, so render the stored glyph
+		// immediately on the fast first paint. The only tmux-derived
+		// override is `working` → `exited` (agent shell death — Claude
+		// has no exit hook), which arrives a frame later from the
+		// enrichment pass and is rare enough that a brief flash is
+		// preferable to a blank glyph slot.
+		glyph := statusGlyph(item.Status, dim, item.Unread)
 		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
 		rows = append(rows, lipgloss.NewStyle().Width(width-1).Render(line))
 	}
