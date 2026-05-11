@@ -2047,7 +2047,7 @@ func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		j := m.jobs[m.jobsOverlayCursor]
 		text := jobDetailsForCopy(j)
-		if err := writeOSC52Clipboard(text); err != nil {
+		if err := writeSystemClipboard(text); err != nil {
 			m.status = "copy: " + err.Error()
 		} else {
 			m.status = fmt.Sprintf("copied %d bytes to clipboard", len(text))

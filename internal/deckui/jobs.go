@@ -2,8 +2,11 @@ package deckui
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -424,6 +427,56 @@ func jobDetailsForCopy(j Job) string {
 		}
 	}
 	return b.String()
+}
+
+// writeSystemClipboard writes text to the system clipboard using the
+// most reliable mechanism available. On macOS it shells out to
+// `pbcopy`; on Linux it tries `wl-copy` then `xclip -selection
+// clipboard`. If no native helper is found (or it fails) it falls back
+// to OSC 52 via the terminal.
+//
+// Native helpers are preferred because OSC 52 inside tmux additionally
+// requires both `allow-passthrough on` and `set-clipboard on`, neither
+// of which is the default — so OSC 52 silently no-ops on most setups.
+func writeSystemClipboard(text string) error {
+	if cmd, ok := clipboardCommand(); ok {
+		cmd.Stdin = strings.NewReader(text)
+		if err := cmd.Run(); err == nil {
+			return nil
+		} else if !nativeMissing(err) {
+			return fmt.Errorf("%s: %w", cmd.Path, err)
+		}
+	}
+	return writeOSC52Clipboard(text)
+}
+
+// clipboardCommand returns the preferred native clipboard helper for
+// the current platform, if one is on PATH. The bool reports whether a
+// helper was found.
+func clipboardCommand() (*exec.Cmd, bool) {
+	switch runtime.GOOS {
+	case "darwin":
+		if path, err := exec.LookPath("pbcopy"); err == nil {
+			return exec.Command(path), true
+		}
+	case "linux":
+		if os.Getenv("WAYLAND_DISPLAY") != "" {
+			if path, err := exec.LookPath("wl-copy"); err == nil {
+				return exec.Command(path), true
+			}
+		}
+		if path, err := exec.LookPath("xclip"); err == nil {
+			return exec.Command(path, "-selection", "clipboard"), true
+		}
+	}
+	return nil, false
+}
+
+// nativeMissing reports whether the error from running a native
+// helper indicates the binary itself was missing, in which case
+// callers should try the next fallback instead of surfacing the error.
+func nativeMissing(err error) bool {
+	return err != nil && (errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist))
 }
 
 // writeOSC52Clipboard writes text to the host terminal's clipboard via
