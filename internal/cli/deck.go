@@ -97,6 +97,44 @@ func (r fixedDirRunner) Run(ctx context.Context, dir string, name string, args .
 	return r.base.Run(ctx, dir, name, args...)
 }
 
+// deckDebugLogPath is the always-on diagnostic log for deck-side async work
+// (currently: the PR-status fetcher). Best-effort writes — log failures never
+// surface to the user. Tail with `tail -f /tmp/awp-deck.log` while running
+// `awp deck` to see what gh saw on each repo without crowding the TUI.
+const deckDebugLogPath = "/tmp/awp-deck.log"
+
+func deckDebugLogf(format string, args ...any) {
+	f, err := os.OpenFile(deckDebugLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, "%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+}
+
+// prHasHead reports whether the byHead map (repo's PR cache) contains the
+// given bookmark/headRefName. Used by the diagnostic log line in the link
+// handler so the user can see at a glance whether the chosen bookmark
+// matched any fetched PR's headRefName.
+func prHasHead(byHead map[string]deckui.PRStatus, head string) bool {
+	if byHead == nil {
+		return false
+	}
+	_, ok := byHead[head]
+	return ok
+}
+
+// sortedHeads returns the deduplicated, sorted set of headRefName keys from a
+// byHead map. Used only by deckDebugLogf so the log line is stable.
+func sortedHeads(byHead map[string]deckui.PRStatus) []string {
+	heads := make([]string, 0, len(byHead))
+	for h := range byHead {
+		heads = append(heads, h)
+	}
+	sort.Strings(heads)
+	return heads
+}
+
 func newDeckActionServiceWithIO(runner Runner, repoRoot string, in io.Reader, out io.Writer) workspace.Service {
 	fr := fixedDirRunner{base: runner, dir: repoRoot}
 	return workspace.NewService(workspace.Dependencies{
@@ -256,7 +294,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			if out, err := fr.Run(context.Background(), dir, "jj", "git", "fetch"); err != nil {
 				return deckui.BookmarksDoneMsg{Err: fmt.Errorf("jj git fetch: %w: %s", err, out)}
 			}
-			names, err := jj.New(fr).AllBookmarks()
+			names, err := jj.New(fr).AllBookmarksByRecency()
 			if err != nil {
 				return deckui.BookmarksDoneMsg{Err: err}
 			}
@@ -297,6 +335,146 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.PRFetchDoneMsg{PRs: items}
 		}
 	}
+	// PR-status cache survives deck restarts. Loading it before the model
+	// is built means the 60s refresh throttle has a meaningful cooldown
+	// across opens; a deck closed and reopened within a minute reuses the
+	// cached glyphs without re-running gh.
+	cachedByRepo, cachedFetchedAt, cacheErr := loadPRStatusCache()
+	if cacheErr != nil {
+		deckDebugLogf("prStatus cache load err=%v", cacheErr)
+	}
+
+	// prStatusFetcher fans out one gh-pr-list call per repo (parallel), then
+	// fans in to a single PRStatusDoneMsg. Per-repo errors are reported in
+	// Errs so a single failed repo never blocks the others. The model owns
+	// the per-repo throttle, so this fetcher just executes what it's told.
+	//
+	// On success, the new results are merged into the persisted cache so
+	// subsequent deck opens within the cooldown window have data without
+	// hitting gh.
+	//
+	// Per-repo events are appended to /tmp/awp-deck.log on a best-effort
+	// basis so `tail -f /tmp/awp-deck.log` while running `awp deck` exposes
+	// what gh saw without crowding the TUI status line.
+	prStatusFetcher := func(repos []string) tea.Cmd {
+		return func() tea.Msg {
+			deckDebugLogf("prStatus fetch start repos=%d", len(repos))
+			if len(repos) == 0 {
+				return deckui.PRStatusDoneMsg{ByRepo: map[string]map[string]deckui.PRStatus{}, FetchedAt: time.Now()}
+			}
+			type result struct {
+				repo    string
+				byHead  map[string]deckui.PRStatus
+				err     error
+			}
+			ch := make(chan result, len(repos))
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for _, r := range repos {
+				dir := r
+				go func() {
+					started := time.Now()
+					deckDebugLogf("prStatus repo=%s gh pr list start", dir)
+					gh := github.New(fixedDirRunner{base: runner, dir: dir})
+					statuses, err := gh.ListPRStatus(dir)
+					if err != nil {
+						deckDebugLogf("prStatus repo=%s err=%v dur=%s", dir, err, time.Since(started))
+						ch <- result{repo: dir, err: err}
+						return
+					}
+					byHead := make(map[string]deckui.PRStatus, len(statuses))
+					for _, s := range statuses {
+						byHead[s.HeadRefName] = deckui.PRStatus{
+							Number:         s.Number,
+							HeadRefName:    s.HeadRefName,
+							State:          deckui.PRState(s.State),
+							IsDraft:        s.IsDraft,
+							ReviewDecision: deckui.PRReviewDecision(s.ReviewDecision),
+							CIState:        deckui.PRCIState(s.CIState),
+						}
+					}
+					deckDebugLogf("prStatus repo=%s prs=%d dur=%s heads=%v", dir, len(statuses), time.Since(started), sortedHeads(byHead))
+					ch <- result{repo: dir, byHead: byHead}
+				}()
+			}
+			byRepo := make(map[string]map[string]deckui.PRStatus, len(repos))
+			errs := make(map[string]error)
+			for i := 0; i < len(repos); i++ {
+				select {
+				case r := <-ch:
+					if r.err != nil {
+						errs[r.repo] = r.err
+					} else {
+						byRepo[r.repo] = r.byHead
+					}
+				case <-ctx.Done():
+					deckDebugLogf("prStatus timeout; partial results repos_done=%d/%d", i, len(repos))
+					return deckui.PRStatusDoneMsg{ByRepo: byRepo, Errs: errs, FetchedAt: time.Now()}
+				}
+			}
+			fetchedAt := time.Now()
+			deckDebugLogf("prStatus fetch done ok=%d errs=%d", len(byRepo), len(errs))
+			// Merge into the persisted cache so the cooldown survives a
+			// deck restart. Read-merge-write each time keeps the cache
+			// honest when this process and another concurrent deck both
+			// touched it.
+			persistByRepo, persistFetchedAt, loadErr := loadPRStatusCache()
+			if loadErr != nil {
+				deckDebugLogf("prStatus cache reload err=%v", loadErr)
+				persistByRepo = map[string]map[string]deckui.PRStatus{}
+				persistFetchedAt = map[string]time.Time{}
+			}
+			for repo, byHead := range byRepo {
+				persistByRepo[repo] = byHead
+				persistFetchedAt[repo] = fetchedAt
+			}
+			if saveErr := savePRStatusCache(persistByRepo, persistFetchedAt); saveErr != nil {
+				deckDebugLogf("prStatus cache save err=%v", saveErr)
+			}
+			return deckui.PRStatusDoneMsg{ByRepo: byRepo, Errs: errs, FetchedAt: fetchedAt}
+		}
+	}
+	// bookmarkLinkHandler persists a chosen bookmark onto the workspace's
+	// stored Entry so the PR glyph can resolve via Entry.Bookmark → PR
+	// headRefName on the next refresh. Operates on the workspace's own
+	// repoRoot (which may differ from the deck's current repoRoot when
+	// scope=all surfaces a row from another project).
+	linkStore := state.NewJSONStore()
+	bookmarkLinkHandler := func(item deckui.Item, bookmark string) error {
+		repo := strings.TrimSpace(item.RepoRoot)
+		if repo == "" {
+			return fmt.Errorf("workspace %q has no repo root", item.WorkspaceName)
+		}
+		bm := strings.TrimSpace(bookmark)
+		if bm == "" {
+			return fmt.Errorf("empty bookmark")
+		}
+		name := item.WorkspaceName
+		updated := false
+		if err := linkStore.Update(repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+			if cur, ok := entries[name]; ok {
+				cur.Bookmark = bm
+				entries[name] = cur
+				updated = true
+			}
+			return entries
+		}); err != nil {
+			return err
+		}
+		if !updated {
+			return fmt.Errorf("workspace %q not found in store for repo %s", name, repo)
+		}
+		// Diagnostic: log what the PR-status cache currently knows about
+		// this repo so a "I linked X but no glyph appeared" investigation
+		// can compare the chosen bookmark name against the headRefName
+		// keys the cache holds. The mismatch is the common cause when the
+		// PR actually exists.
+		cached, _, _ := loadPRStatusCache()
+		heads := sortedHeads(cached[repo])
+		deckDebugLogf("link ws=%s repo=%s bookmark=%s cache_heads=%v match=%t",
+			name, repo, bm, heads, prHasHead(cached[repo], bm))
+		return nil
+	}
 	stateEditor := func() tea.Cmd {
 		path, err := state.GlobalStorePath()
 		if err != nil {
@@ -318,7 +496,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 
 	model := deckui.NewScoped(items, allItems, projectName, handler).
 		WithRefresher(refresher).
-		WithPRFetcher(prFetcher).WithBookmarkFetcher(bookmarkFetcher).
+		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
+		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
+		WithBookmarkFetcher(bookmarkFetcher).
+		WithBookmarkLinkHandler(bookmarkLinkHandler).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithScope(loadDeckScope()).
 		WithScopeChanged(saveDeckScope).
@@ -636,17 +817,12 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			}
 			// Without tmux info (fast first paint), trust the stored
 			// SessionID: if there is one, assume the session is still
-			// alive and not stale. Real tmux state arrives ~50 ms
-			// later from the Init-driven refresh and overwrites this.
+			// alive. Real tmux state arrives ~50 ms later from the
+			// Init-driven refresh and overwrites this.
 			active := nameMatch
-			stale := false
 			current := snap.currentSession != "" && sessionName == snap.currentSession
 			if !snap.known {
 				active = e.SessionID != ""
-			} else if e.SessionID != "" {
-				if _, ok := snap.liveByID[e.SessionID]; !ok && !nameMatch {
-					stale = true
-				}
 			}
 			if snap.known && nameMatch && snap.agentShell[sessionName] {
 				status = "exited"
@@ -675,6 +851,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				WorkspaceName: e.Name,
 				Path:          e.Path,
 				RepoRoot:      r.repo,
+				Bookmark:      strings.TrimSpace(e.Bookmark),
 				Status:        status,
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,
@@ -683,7 +860,6 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				SessionName:   sessionName,
 				Active:        active,
 				Current:       current,
-				Stale:         stale,
 			}
 			allItems = append(allItems, item)
 			if isCurrentRepo {

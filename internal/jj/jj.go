@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -127,6 +129,28 @@ func (c *Client) AddWorkspace(name string, path string, revision string) error {
 	return formatCommandError(fmt.Sprintf("create workspace %q", name), err, out)
 }
 
+// CreateBookmark creates a new local bookmark at the given revision. If
+// revision is empty, the bookmark is created at @ (the current working-copy
+// commit of whichever workspace this runner is rooted in). Returns an error
+// from jj — including the "bookmark already exists" case, which the caller
+// should treat as non-fatal for the auto-bookmark flow (a workspace re-open
+// shouldn't fail just because its bookmark is already there).
+func (c *Client) CreateBookmark(name, revision string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("empty bookmark name")
+	}
+	rev := strings.TrimSpace(revision)
+	if rev == "" {
+		rev = "@"
+	}
+	out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "create", name, "-r", rev)
+	if err != nil {
+		return formatCommandError(fmt.Sprintf("create bookmark %q at %s", name, rev), err, out)
+	}
+	return nil
+}
+
 func (c *Client) TrackBookmark(bookmarkName string) error {
 	bookmarkName = strings.TrimSpace(bookmarkName)
 	if bookmarkName == "" {
@@ -182,6 +206,66 @@ func (c *Client) HeadDescription(dir string) (string, error) {
 		return "", formatCommandError("resolve head description", err, out)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// AllBookmarksByRecency lists every bookmark deduped to a logical name, sorted
+// by the committer timestamp of the bookmark's target commit (most-recent
+// first). Bookmarks whose target cannot be resolved (e.g. conflicted, or a
+// remote-only bookmark with no fetched commit) sort to the bottom keeping
+// their original order. Used by the bookmark picker so recently-touched
+// branches surface first.
+func (c *Client) AllBookmarksByRecency() ([]string, error) {
+	// Template: "<unix-seconds>\t<name>\n". Falling back to "0" when the
+	// bookmark has no normal_target() keeps the line shape stable so the
+	// parser doesn't need a special-case.
+	const tmpl = `if(self.normal_target(), self.normal_target().committer().timestamp().format("%s"), "0") ++ "\t" ++ name ++ "\n"`
+	out, err := c.runner.Run(context.Background(), "",
+		"jj", "bookmark", "list", "--all-remotes", "-T", tmpl)
+	if err != nil {
+		return nil, formatCommandError("list bookmarks by recency", err, out)
+	}
+	type entry struct {
+		ts   int64
+		name string
+		idx  int
+	}
+	var entries []entry
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		rawName := strings.TrimSpace(parts[1])
+		if rawName == "" {
+			continue
+		}
+		name := rawName
+		if idx := strings.Index(name, "@"); idx > 0 {
+			name = name[:idx]
+		}
+		ts, _ := strconv.ParseInt(strings.TrimSpace(parts[0]), 10, 64)
+		entries = append(entries, entry{ts: ts, name: name, idx: i})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].ts != entries[j].ts {
+			return entries[i].ts > entries[j].ts
+		}
+		return entries[i].idx < entries[j].idx
+	})
+	seen := make(map[string]struct{})
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if _, ok := seen[e.name]; ok {
+			continue
+		}
+		seen[e.name] = struct{}{}
+		names = append(names, e.name)
+	}
+	return names, nil
 }
 
 // AllBookmarks lists every bookmark visible to jj, deduped to a logical name.

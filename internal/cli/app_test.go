@@ -84,6 +84,7 @@ func (f *fakeService) RecordSession(workspaceName, sessionID, sessionName string
 	f.recordedSession = sessionName
 	return nil
 }
+func (f *fakeService) RecordBookmark(string, string) error { return nil }
 func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error) { return nil, nil }
 func (f *fakeService) UpdatePrompt(string, string) error            { return nil }
 func (f *fakeService) UpdateStatus(string, string) error            { return nil }

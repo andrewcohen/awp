@@ -92,6 +92,7 @@ func (s *deckFakeService) DeleteWithOptions(name string, opts workspace.DeleteOp
 	return s.Delete(name, opts.Force)
 }
 func (s *deckFakeService) RecordSession(string, string, string) error { return nil }
+func (s *deckFakeService) RecordBookmark(string, string) error        { return nil }
 func (s *deckFakeService) UpdatePrompt(string, string) error          { return nil }
 func (s *deckFakeService) UpdateStatus(string, string) error          { return nil }
 func (s *deckFakeService) ClearSession(string) error                  { return nil }

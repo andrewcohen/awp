@@ -42,6 +42,13 @@ type Config struct {
 		// picker (`o`) searches for git/jj repos. Tilde-expanded.
 		// Example: ["~/p", "~/go/src"].
 		ProjectRoots []string `json:"project_roots,omitempty"`
+		// BookmarkPrefix, when set, causes new workspaces created via
+		// the deck or CLI new flow with no explicit bookmark to auto-
+		// create a jj bookmark named "<prefix>/<workspace-name>" on the
+		// new workspace's revision. The bookmark is persisted to the
+		// workspace entry so the deck's PR glyph can match it against
+		// a PR's headRefName. Unset = no auto-create (default).
+		BookmarkPrefix string `json:"bookmark_prefix,omitempty"`
 	} `json:"deck,omitempty"`
 }
 
@@ -134,6 +141,9 @@ func merge(global, project Config) Config {
 	}
 	if len(out.Deck.ProjectRoots) == 0 {
 		out.Deck.ProjectRoots = global.Deck.ProjectRoots
+	}
+	if strings.TrimSpace(out.Deck.BookmarkPrefix) == "" {
+		out.Deck.BookmarkPrefix = global.Deck.BookmarkPrefix
 	}
 	return out
 }

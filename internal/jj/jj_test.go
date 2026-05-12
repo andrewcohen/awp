@@ -91,6 +91,31 @@ func TestListWorkspaceNamesFormatsCommandErrors(t *testing.T) {
 	}
 }
 
+func TestAllBookmarksByRecencyOrdersAndDedupes(t *testing.T) {
+	// Two entries for "andrew/foo" (local + remote@origin) and a stale
+	// local "main" — expect andrew/foo first (most-recent timestamp),
+	// then qa, then main, with the @origin duplicate folded out.
+	r := &fakeRunner{out: "1715000000\tandrew/foo\n1714000000\tqa\n1715000000\tandrew/foo@origin\n1700000000\tmain\n"}
+	got, err := New(r).AllBookmarksByRecency()
+	if err != nil {
+		t.Fatalf("AllBookmarksByRecency err: %v", err)
+	}
+	want := []string{"andrew/foo", "qa", "main"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+	// Confirm the command used the bookmark-list path with a template arg.
+	joined := strings.Join(r.lastArgs, " ")
+	if !strings.Contains(joined, "bookmark") || !strings.Contains(joined, "-T") {
+		t.Errorf("unexpected command args: %v", r.lastArgs)
+	}
+}
+
 func TestListWorkspaceNamesUsesIgnoreWorkingCopy(t *testing.T) {
 	r := &fakeRunner{out: "default\nqa\n"}
 	c := New(r)
