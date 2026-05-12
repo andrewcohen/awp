@@ -2283,7 +2283,7 @@ func (m Model) renderDetails(width int) string {
 	lines = append(lines,
 		"",
 		"Prompt:",
-		prompt,
+		truncatePrompt(prompt, width, 4),
 	)
 	if act := renderActivityBlock(m.jobs, item, width); act != "" {
 		lines = append(lines, "", act)
@@ -3226,6 +3226,30 @@ func renderFindHint(hint string) string {
 		Foreground(lipgloss.Color("230")).
 		Background(lipgloss.Color("62")).
 		Render("[" + hint + "]")
+}
+
+// truncatePrompt wraps prompt to width and keeps the first maxLines lines,
+// appending an ellipsis when content was dropped. Long single-line prompts
+// otherwise wrap into a vertical wall that overflows the details panel.
+func truncatePrompt(prompt string, width, maxLines int) string {
+	prompt = strings.TrimRight(prompt, "\n")
+	if maxLines <= 0 || width <= 0 {
+		return prompt
+	}
+	wrapped := lipgloss.NewStyle().Width(width).Render(prompt)
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) <= maxLines {
+		return prompt
+	}
+	kept := lines[:maxLines]
+	last := strings.TrimRight(kept[maxLines-1], " ")
+	if lipgloss.Width(last)+2 > width {
+		last = truncate(last, max(1, width-1)) + "…"
+	} else {
+		last += " …"
+	}
+	kept[maxLines-1] = last
+	return strings.Join(kept, "\n")
 }
 
 func truncate(value string, width int) string {
