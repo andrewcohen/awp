@@ -937,6 +937,11 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 		} else {
 			s.logf("⏭️ Skipped workspace directory removal (%q outside managed base)", entry.Path)
 		}
+		if err := unmarkClaudeWorkspaceTrusted(entry.Path); err != nil {
+			s.logf("⚠️ Could not remove ~/.claude.json trust entry: %v", err)
+		} else {
+			s.logf("✅ Removed ~/.claude.json trust entry (if present)")
+		}
 	} else {
 		s.logf("⏭️ Skipped workspace state cleanup (%q not managed by awp)", normalized)
 	}
