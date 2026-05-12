@@ -16,6 +16,48 @@ import (
 // read-modify-write is guarded by an advisory lock and we preserve unknown
 // fields by round-tripping through map[string]any.
 func markClaudeWorkspaceTrusted(workspacePath string) error {
+	return updateClaudeProjectsEntry(workspacePath, func(projects map[string]any, abs string) bool {
+		entry, _ := projects[abs].(map[string]any)
+		if entry == nil {
+			entry = map[string]any{
+				"allowedTools":               []any{},
+				"mcpContextUris":             []any{},
+				"mcpServers":                 map[string]any{},
+				"enabledMcpjsonServers":      []any{},
+				"disabledMcpjsonServers":     []any{},
+				"projectOnboardingSeenCount": 0,
+			}
+			projects[abs] = entry
+		}
+		if entry["hasTrustDialogAccepted"] == true && entry["hasCompletedProjectOnboarding"] == true {
+			return false
+		}
+		entry["hasTrustDialogAccepted"] = true
+		entry["hasCompletedProjectOnboarding"] = true
+		return true
+	})
+}
+
+// unmarkClaudeWorkspaceTrusted removes the workspace's entry from
+// ~/.claude.json's `projects` map. Counterpart to markClaudeWorkspaceTrusted
+// so deleting a workspace doesn't leave a stale trust entry behind.
+func unmarkClaudeWorkspaceTrusted(workspacePath string) error {
+	return updateClaudeProjectsEntry(workspacePath, func(projects map[string]any, abs string) bool {
+		if _, ok := projects[abs]; !ok {
+			return false
+		}
+		delete(projects, abs)
+		return true
+	})
+}
+
+// updateClaudeProjectsEntry opens ~/.claude.json under an advisory lock, lets
+// the caller mutate the `projects` map for the given workspace path, and
+// rewrites the file atomically only if the mutator reports a change. Returns
+// nil (no-op) when ~/.claude.json doesn't exist — absence means the user's
+// agent is something else (codex, cursor, aider, …) and we shouldn't litter
+// $HOME on their behalf.
+func updateClaudeProjectsEntry(workspacePath string, mutate func(projects map[string]any, abs string) bool) error {
 	abs, err := filepath.Abs(workspacePath)
 	if err != nil {
 		return fmt.Errorf("resolve workspace path: %w", err)
@@ -26,9 +68,6 @@ func markClaudeWorkspaceTrusted(workspacePath string) error {
 	}
 	path := filepath.Join(home, ".claude.json")
 
-	// Only patch if Claude Code is in use here. Absence of ~/.claude.json
-	// means the user's agent is something else (codex, cursor, aider, …);
-	// don't litter $HOME on their behalf.
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
@@ -74,23 +113,9 @@ func markClaudeWorkspaceTrusted(workspacePath string) error {
 		projects = map[string]any{}
 		root["projects"] = projects
 	}
-	entry, _ := projects[abs].(map[string]any)
-	if entry == nil {
-		entry = map[string]any{
-			"allowedTools":             []any{},
-			"mcpContextUris":           []any{},
-			"mcpServers":               map[string]any{},
-			"enabledMcpjsonServers":    []any{},
-			"disabledMcpjsonServers":   []any{},
-			"projectOnboardingSeenCount": 0,
-		}
-		projects[abs] = entry
-	}
-	if entry["hasTrustDialogAccepted"] == true && entry["hasCompletedProjectOnboarding"] == true {
+	if !mutate(projects, abs) {
 		return nil
 	}
-	entry["hasTrustDialogAccepted"] = true
-	entry["hasCompletedProjectOnboarding"] = true
 
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
