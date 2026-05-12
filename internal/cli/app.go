@@ -433,6 +433,44 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err != nil {
 		return err
 	}
+	// Auto-create a bookmark for the new workspace if the user didn't pass
+	// one and config.Deck.BookmarkPrefix is set. Best-effort: any failure
+	// is logged but does not fail the workspace creation, since the
+	// workspace itself is already created and usable. The deck's PR glyph
+	// works against the persisted Entry.Bookmark, so on next refresh the
+	// matching PR (if any) lights up.
+	if strings.TrimSpace(req.Bookmark) == "" {
+		cfg, _ := config.Load(repoRoot)
+		prefix := strings.TrimSpace(cfg.Deck.BookmarkPrefix)
+		switch {
+		case prefix == "":
+			// No prefix configured — auto-bookmark is disabled, but the
+			// user opted out of a bookmark here too. Surface a one-shot
+			// hint so they know the feature exists and how to enable it.
+			if reporter != nil {
+				reporter.Log("no bookmark linked; set deck.bookmark_prefix in config to auto-create one")
+			}
+		default:
+			autoName := strings.TrimRight(prefix, "/") + "/" + normalized
+			if rev, revErr := j.WorkspaceRevision(normalized); revErr == nil && strings.TrimSpace(rev) != "" {
+				if createErr := j.CreateBookmark(autoName, rev); createErr != nil {
+					if reporter != nil {
+						reporter.Log(fmt.Sprintf("auto-bookmark %q: %v", autoName, createErr))
+					}
+				} else {
+					if recordErr := svc.RecordBookmark(normalized, autoName); recordErr != nil {
+						if reporter != nil {
+							reporter.Log(fmt.Sprintf("auto-bookmark %q created but state write failed: %v", autoName, recordErr))
+						}
+					} else if reporter != nil {
+						reporter.Log("auto-bookmark created: " + autoName)
+					}
+				}
+			} else if reporter != nil {
+				reporter.Log(fmt.Sprintf("auto-bookmark skipped: cannot resolve workspace revision (%v)", revErr))
+			}
+		}
+	}
 	projectName := filepath.Base(repoRoot)
 	sessionName := DeckSessionName(projectName, normalized)
 	tmuxClient := tmux.New(runner)

@@ -116,6 +116,7 @@ type Service interface {
 	Delete(name string, force bool) error
 	DeleteWithOptions(name string, opts DeleteOptions) error
 	RecordSession(workspaceName, sessionID, sessionName string) error
+	RecordBookmark(workspaceName, bookmark string) error
 	UpdatePrompt(workspaceName, prompt string) error
 	UpdateStatus(workspaceName, status string) error
 	MarkRead(workspaceName string) error
@@ -787,6 +788,13 @@ func (s *service) RecordSession(workspaceName, sessionID, sessionName string) er
 		// Summon (or any record-session) implies the user is opening this
 		// workspace, so clear the attention badge.
 		e.Unread = false
+	})
+}
+
+func (s *service) RecordBookmark(workspaceName, bookmark string) error {
+	bookmark = strings.TrimSpace(bookmark)
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.Bookmark = bookmark
 	})
 }
 

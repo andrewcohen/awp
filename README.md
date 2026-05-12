@@ -67,6 +67,26 @@ Press `?` inside the deck for the full key + status legend.
 
 The grey "notified" dot is a per-workspace unread badge: it lights up when the agent transitions into `waiting`, `idle`, or `exited`, and clears the next time you summon that workspace (any of `enter`, `a`, `e`, `c`, `v`, `s`, `i`, `x`).
 
+### PR status (the Octicon glyph after each workspace name)
+
+Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a match is found, a single glyph rendered from the Nerd Font Octicon set sits to the right of the workspace name. Workspaces with no bookmark on file, or no matching PR, show no glyph.
+
+| Glyph | Meaning |
+|---|---|
+|  | PR open — no review yet |
+|  | PR draft |
+|  | PR approved — at least one approving review |
+|  | CI pending — checks in flight |
+|  | CI failed — at least one check failing |
+|  | PR merged — safe to delete this workspace |
+|  | PR closed without merging |
+
+Priority (highest wins): merged → closed → CI failed → CI pending → approved → draft → open. So a merged PR always shows the merge icon (even if its last CI was failing); an open PR with failing CI shows the alert icon rather than the open-PR icon.
+
+The status is fetched once when the deck opens, with a single `gh pr list --state all` call per distinct repo that has at least one non-default workspace. The fetch is throttled so the same repo is never re-queried within a minute.
+
+**Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
+
 ### Key bindings
 
 | Key | Action |
@@ -87,6 +107,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 | `P` | Cycle scope: current project → all projects → awaiting input (persisted across runs) |
 | `L` | Switch to last tmux session |
 | `R` | Relink session |
+| `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
@@ -138,7 +159,8 @@ Example:
     "bootstrap": ["pnpm install", "make migrate"]
   },
   "deck": {
-    "project_roots": ["~/p", "~/go/src/github.com/andrewcohen"]
+    "project_roots": ["~/p", "~/go/src/github.com/andrewcohen"],
+    "bookmark_prefix": "andrew"
   }
 }
 ```
@@ -168,6 +190,12 @@ Shell commands run after a workspace's jj layout exists but before the agent sta
 List of directories the deck's `o` (open) screen scans for projects. Tilde-expanded. The walker descends up to 4 levels and stops at any directory containing `.git` or `.jj`. Selecting a project summons (or creates) a tmux session named `[awp]<basename>__default` at that path and records a `default` workspace entry under that repo root in `~/.awp/workspace-state.json`, so the project appears in the deck on subsequent launches.
 
 When the deck exits, `deck-cleanup` also kills any leftover `[awp]<repo>__<workspace>` tmux sessions that no longer have a matching entry in the workspace state file (the current session is always preserved). This keeps stray sessions from accumulating after a project is deleted from the deck.
+
+### `deck.bookmark_prefix`
+
+When set, a new workspace created with **no explicit bookmark** auto-creates a jj bookmark named `<prefix>/<workspace-name>` at the new workspace's revision and records it in `Entry.Bookmark`. The deck's per-row PR glyph matches `Entry.Bookmark` against PR `headRefName`, so the auto-bookmark lets a freshly-created workspace's PR (once pushed) light up in the deck without a manual `B`-link step.
+
+Unset = no auto-create. The `B` key in the deck stays available for backfilling existing workspaces whose bookmark is empty.
 
 ## Tmux status bar badge
 

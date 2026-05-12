@@ -30,6 +30,7 @@ type Item struct {
 	WorkspaceName string
 	Path          string
 	RepoRoot      string
+	Bookmark      string // jj bookmark associated with this workspace (matches PR headRefName)
 	Status        string
 	Unread        bool
 	PromptPreview string
@@ -38,7 +39,6 @@ type Item struct {
 	SessionName   string
 	Active        bool
 	Current       bool
-	Stale         bool
 }
 
 type Action int
@@ -158,6 +158,24 @@ type StateEditorLauncher func() tea.Cmd
 // StateEditDoneMsg is emitted when the state editor exits.
 type StateEditDoneMsg struct{ Err error }
 
+// bookmarkPurpose disambiguates the two flows that share the picker: the
+// new-workspace form's bookmark seed vs. linking a bookmark to an existing
+// workspace (used by the B key in row mode).
+type bookmarkPurpose int
+
+const (
+	bookmarkPurposeNewWorkspace bookmarkPurpose = iota
+	bookmarkPurposeLinkExisting
+)
+
+// BookmarkLinkHandler is called when the user picks a bookmark in the
+// "link to existing workspace" flow. The handler must persist the chosen
+// bookmark to the workspace's stored Entry.Bookmark; the deck then refreshes
+// items so the per-row PR glyph picks up the new association on the next
+// paint without any gh call (the in-memory PR cache is keyed by repo+headRef,
+// not by workspace, so changing the workspace's bookmark is a local lookup).
+type BookmarkLinkHandler func(item Item, bookmark string) error
+
 // BookmarksDoneMsg carries the result of an async bookmark fetch.
 type BookmarksDoneMsg struct {
 	Bookmarks []string
@@ -253,6 +271,64 @@ type PRFetchDoneMsg struct {
 	Err error
 }
 
+// PRState mirrors gh's pr.state field for the row-glyph projection.
+type PRState string
+
+const (
+	PRStateOpen   PRState = "OPEN"
+	PRStateClosed PRState = "CLOSED"
+	PRStateMerged PRState = "MERGED"
+)
+
+// PRReviewDecision mirrors gh's reviewDecision; "" means no review yet.
+type PRReviewDecision string
+
+const (
+	PRReviewApproved         PRReviewDecision = "APPROVED"
+	PRReviewChangesRequested PRReviewDecision = "CHANGES_REQUESTED"
+	PRReviewRequired         PRReviewDecision = "REVIEW_REQUIRED"
+)
+
+// PRCIState rolls up statusCheckRollup into one signal. NONE = no checks yet.
+type PRCIState string
+
+const (
+	PRCINone    PRCIState = "NONE"
+	PRCIPending PRCIState = "PENDING"
+	PRCIPassing PRCIState = "PASSING"
+	PRCIFailing PRCIState = "FAILING"
+)
+
+// PRStatus is the per-PR projection consumed by the row glyph.
+type PRStatus struct {
+	Number         int
+	HeadRefName    string
+	State          PRState
+	IsDraft        bool
+	ReviewDecision PRReviewDecision
+	CIState        PRCIState
+}
+
+// PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more
+// repos (one gh call per repo, parallel). The result is delivered as a
+// PRStatusDoneMsg keyed by repoRoot.
+type PRStatusFetcher func(repoRoots []string) tea.Cmd
+
+// PRStatusDoneMsg carries the result of an async PR-status fetch. ByRepo maps
+// repoRoot → headRefName → PRStatus. Errs maps repoRoot → error for any repo
+// whose fetch failed; the deck surfaces a non-blocking status-line message,
+// but rows for successful repos still render their glyphs.
+type PRStatusDoneMsg struct {
+	ByRepo    map[string]map[string]PRStatus
+	Errs      map[string]error
+	FetchedAt time.Time
+}
+
+// prStatusMinInterval is the minimum time between consecutive gh fetches for
+// the same repo. The throttle guards every entry point that might trigger a
+// fetch (cold Init, future refresh keys, future polling).
+const prStatusMinInterval = 1 * time.Minute
+
 type findStage int
 
 const (
@@ -295,9 +371,11 @@ type Model struct {
 	findPendingPrefix  rune
 	refresher          Refresher
 	refreshing         bool // true while a m.refresher() command is in flight
-	preEnrichment      bool // true until the first refreshDoneMsg arrives; suppresses caution glyphs / stale ⚠ on the JSON-only first paint
 	stateWatcher       StateChangeWatcher
 	prFetcher          PRFetcher
+	prStatusFetcher    PRStatusFetcher
+	prStatusByRepo     map[string]map[string]PRStatus // repoRoot → headRefName → status
+	prStatusFetchedAt  map[string]time.Time           // repoRoot → wall clock of last successful fetch
 	bookmarkFetcher    BookmarkFetcher
 	stateEditor        StateEditorLauncher
 	reviewMode         bool
@@ -315,6 +393,9 @@ type Model struct {
 	bookmarkCursor     int
 	bookmarkFilter     textinput.Model
 	bookmarkFiltering  bool
+	bookmarkPurpose    bookmarkPurpose
+	bookmarkLinkTarget Item
+	bookmarkLinkHandler BookmarkLinkHandler
 	userActions        []UserAction
 	actionMode         bool
 	actionAliasLookup  map[string]UserAction
@@ -416,7 +497,6 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 		bookmarkFilter:    bf,
 		openFilter:        of,
 		spinner:           sp,
-		preEnrichment:     true,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
 		m.cursor = idx
@@ -456,8 +536,37 @@ func (m Model) WithPRFetcher(f PRFetcher) Model {
 	return m
 }
 
+// WithPRStatusFetcher installs the async fetcher used to populate the per-row
+// PR glyph. Without it, no PR glyph is rendered.
+func (m Model) WithPRStatusFetcher(f PRStatusFetcher) Model {
+	m.prStatusFetcher = f
+	return m
+}
+
+// WithPRStatusSeed primes the per-row PR cache and last-fetched timestamps,
+// usually from a persisted ~/.awp/pr-status-cache.json read at startup. The
+// 60s refresh throttle uses the seeded timestamps, so a deck reopened within
+// a minute of the last fetch will reuse the cached glyphs without re-running
+// gh. Pass nil maps to leave the cache empty.
+func (m Model) WithPRStatusSeed(byRepo map[string]map[string]PRStatus, fetchedAt map[string]time.Time) Model {
+	if byRepo != nil {
+		m.prStatusByRepo = byRepo
+	}
+	if fetchedAt != nil {
+		m.prStatusFetchedAt = fetchedAt
+	}
+	return m
+}
+
 func (m Model) WithBookmarkFetcher(f BookmarkFetcher) Model {
 	m.bookmarkFetcher = f
+	return m
+}
+
+// WithBookmarkLinkHandler installs the persistence callback used by the B-key
+// bookmark linker. Without it, the linker shows a "not configured" status.
+func (m Model) WithBookmarkLinkHandler(h BookmarkLinkHandler) Model {
+	m.bookmarkLinkHandler = h
 	return m
 }
 
@@ -630,7 +739,59 @@ func (m Model) Init() tea.Cmd {
 	if m.refresher != nil {
 		cmds = append(cmds, m.refresher())
 	}
+	if cmd := m.prStatusRefreshCmd(time.Now()); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return tea.Batch(cmds...)
+}
+
+// prStatusRefreshCmd returns a tea.Cmd that fetches PR status for every repo
+// that has at least one non-default workspace AND has not been fetched within
+// prStatusMinInterval of now. Returns nil if no repos are due (or no fetcher
+// is configured).
+func (m Model) prStatusRefreshCmd(now time.Time) tea.Cmd {
+	if m.prStatusFetcher == nil {
+		return nil
+	}
+	repos := m.prStatusRepos(now)
+	if len(repos) == 0 {
+		return nil
+	}
+	return m.prStatusFetcher(repos)
+}
+
+// prStatusRepos returns the deduplicated, throttled list of repo roots that
+// should be fetched for PR status: at least one workspace whose Path differs
+// from RepoRoot (i.e. not a default-only repo), and the last fetch (if any)
+// was at least prStatusMinInterval ago.
+func (m Model) prStatusRepos(now time.Time) []string {
+	// Prefer itemsAll so we cover every repo the deck knows about, not just
+	// the currently-scoped one. The Init pass on a freshly scoped deck still
+	// hydrates all visible scopes' glyphs.
+	src := m.itemsAll
+	if len(src) == 0 {
+		src = m.itemsCurrent
+	}
+	seen := make(map[string]bool)
+	nonDefault := make(map[string]bool)
+	for _, it := range src {
+		repo := strings.TrimSpace(it.RepoRoot)
+		if repo == "" {
+			continue
+		}
+		seen[repo] = true
+		if strings.TrimSpace(it.Path) != "" && it.Path != repo {
+			nonDefault[repo] = true
+		}
+	}
+	out := make([]string, 0, len(nonDefault))
+	for repo := range nonDefault {
+		if last, ok := m.prStatusFetchedAt[repo]; ok && now.Sub(last) < prStatusMinInterval {
+			continue
+		}
+		out = append(out, repo)
+	}
+	return out
 }
 
 func (m Model) canBackgroundRefresh() bool {
@@ -838,6 +999,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openFilter.Focus()
 		m.status = "open: type to filter · enter pick · esc cancel"
 		return m, textinput.Blink
+	case PRStatusDoneMsg:
+		if m.prStatusByRepo == nil {
+			m.prStatusByRepo = make(map[string]map[string]PRStatus)
+		}
+		if m.prStatusFetchedAt == nil {
+			m.prStatusFetchedAt = make(map[string]time.Time)
+		}
+		fetchedAt := msg.FetchedAt
+		if fetchedAt.IsZero() {
+			fetchedAt = time.Now()
+		}
+		for repo, byHead := range msg.ByRepo {
+			m.prStatusByRepo[repo] = byHead
+			m.prStatusFetchedAt[repo] = fetchedAt
+		}
+		if n := len(msg.Errs); n > 0 {
+			m.status = fmt.Sprintf("PR status: %d repos failed", n)
+		}
+		return m, nil
 	case PRFetchDoneMsg:
 		m.busy = false
 		if !m.reviewMode {
@@ -859,7 +1039,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case refreshDoneMsg:
 		m.refreshing = false
-		m.preEnrichment = false
 		if msg.err != nil {
 			m.status = "refresh: " + msg.err.Error()
 			return m, nil
@@ -1086,22 +1265,78 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Filter-mode loop: keys flow into the textinput so the user can
+			// type freely. Arrows are intercepted before the input sees them
+			// so list navigation still works while filtering (fzf-style),
+			// since the textinput would otherwise treat them as in-string
+			// cursor moves. Enter commits the filter; esc clears it.
+			if m.bookmarkFiltering {
+				switch msg.String() {
+				case "esc":
+					m.bookmarkFiltering = false
+					m.bookmarkFilter.Blur()
+					m.bookmarkFilter.SetValue("")
+					m.bookmarkCursor = 0
+					return m, nil
+				case "enter":
+					// Enter while filtering selects the highlighted row
+					// rather than just committing — that's the behavior
+					// users expect from fuzzy pickers and avoids the
+					// double-enter "commit, then pick" friction.
+					picks := m.filteredBookmarks()
+					if len(picks) == 0 {
+						return m, nil
+					}
+					return m.acceptBookmarkSelection(picks[m.bookmarkCursor])
+				case "up", "ctrl+p", "ctrl+k":
+					if m.bookmarkCursor > 0 {
+						m.bookmarkCursor--
+					}
+					return m, nil
+				case "down", "ctrl+n", "ctrl+j":
+					if m.bookmarkCursor < len(m.filteredBookmarks())-1 {
+						m.bookmarkCursor++
+					}
+					return m, nil
+				}
+				var cmd tea.Cmd
+				m.bookmarkFilter, cmd = m.bookmarkFilter.Update(msg)
+				if m.bookmarkCursor >= len(m.filteredBookmarks()) {
+					m.bookmarkCursor = 0
+				}
+				return m, cmd
+			}
+			// Navigation loop.
 			switch msg.String() {
 			case "esc", "ctrl+c":
+				// First esc clears a committed filter; second esc closes
+				// the picker. Matches the review picker.
+				if strings.TrimSpace(m.bookmarkFilter.Value()) != "" && msg.String() == "esc" {
+					m.bookmarkFilter.SetValue("")
+					m.bookmarkCursor = 0
+					return m, nil
+				}
 				m.bookmarkMode = false
 				m.bookmarks = nil
 				m.bookmarkCursor = 0
 				m.bookmarkFilter.Blur()
 				m.bookmarkFilter.SetValue("")
 				m.bookmarkFiltering = false
+				m.bookmarkPurpose = bookmarkPurposeNewWorkspace
+				m.bookmarkLinkTarget = Item{}
 				m.status = "bookmark: cancelled"
 				return m, nil
-			case "down":
+			case "/":
+				m.bookmarkFiltering = true
+				m.bookmarkFilter.Focus()
+				m.bookmarkFilter.SetCursor(len(m.bookmarkFilter.Value()))
+				return m, textinput.Blink
+			case "j", "down":
 				if m.bookmarkCursor < len(m.filteredBookmarks())-1 {
 					m.bookmarkCursor++
 				}
 				return m, nil
-			case "up":
+			case "k", "up":
 				if m.bookmarkCursor > 0 {
 					m.bookmarkCursor--
 				}
@@ -1111,15 +1346,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(picks) == 0 {
 					return m, nil
 				}
-				name := picks[m.bookmarkCursor]
-				return m.launchNewForm(NewWorkspaceInitial{Bookmark: name})
+				return m.acceptBookmarkSelection(picks[m.bookmarkCursor])
 			}
-			var cmd tea.Cmd
-			m.bookmarkFilter, cmd = m.bookmarkFilter.Update(msg)
-			if m.bookmarkCursor >= len(m.filteredBookmarks()) {
-				m.bookmarkCursor = 0
-			}
-			return m, cmd
+			return m, nil
 		}
 		if m.reviewMode {
 			if m.reviewLoading {
@@ -1376,6 +1605,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "R":
 			return m.trigger(ActionRelink, "")
+		case "B":
+			item, ok := m.selected()
+			if !ok {
+				m.status = "link: select a workspace row"
+				return m, nil
+			}
+			return m.startBookmarkLinker(item)
 		case "r":
 			if m.prFetcher == nil {
 				m.status = "review: not configured"
@@ -1529,13 +1765,90 @@ func (m *Model) startBookmarkPicker() (tea.Model, tea.Cmd) {
 	}
 	m.newMenuMode = false
 	m.bookmarkMode = true
+	m.bookmarkPurpose = bookmarkPurposeNewWorkspace
 	m.bookmarkLoading = true
 	m.bookmarks = nil
 	m.bookmarkCursor = 0
+	m.bookmarkFilter.Blur()
 	m.bookmarkFilter.SetValue("")
+	m.bookmarkFiltering = false
 	m.busy = true
 	m.status = "bookmark: loading..."
 	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(m.newMenuRepo))
+}
+
+// acceptBookmarkSelection branches on bookmarkPurpose to either feed the
+// chosen name to the new-workspace form or persist it via BookmarkLinkHandler.
+// Shared between filter-mode (enter selects directly) and nav-mode (enter
+// after committing a filter) so the two paths can't diverge.
+func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
+	switch m.bookmarkPurpose {
+	case bookmarkPurposeLinkExisting:
+		target := m.bookmarkLinkTarget
+		m.bookmarkMode = false
+		m.bookmarks = nil
+		m.bookmarkCursor = 0
+		m.bookmarkFilter.Blur()
+		m.bookmarkFilter.SetValue("")
+		m.bookmarkFiltering = false
+		m.bookmarkPurpose = bookmarkPurposeNewWorkspace
+		m.bookmarkLinkTarget = Item{}
+		if m.bookmarkLinkHandler == nil {
+			m.status = "link: not configured"
+			return *m, nil
+		}
+		if err := m.bookmarkLinkHandler(target, name); err != nil {
+			m.status = "link: " + err.Error()
+			return *m, nil
+		}
+		m.status = fmt.Sprintf("linked %s → %s", target.WorkspaceName, name)
+		// Explicit link is a "tell me now" action — bypass the 60s
+		// throttle so a freshly-opened PR shows up without making the
+		// user wait or close+reopen the deck. Drop just this repo's
+		// fetchedAt so other repos are unaffected.
+		if m.prStatusFetchedAt != nil && strings.TrimSpace(target.RepoRoot) != "" {
+			delete(m.prStatusFetchedAt, target.RepoRoot)
+		}
+		cmds := []tea.Cmd{}
+		if m.refresher != nil {
+			cmds = append(cmds, m.refresher())
+		}
+		if cmd := m.prStatusRefreshCmd(time.Now()); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		if len(cmds) == 0 {
+			return *m, nil
+		}
+		return *m, tea.Batch(cmds...)
+	}
+	return m.launchNewForm(NewWorkspaceInitial{Bookmark: name})
+}
+
+// startBookmarkLinker opens the same fuzzy picker but routes the selection to
+// the BookmarkLinkHandler (writing Entry.Bookmark) instead of the new-workspace
+// form. Used by the row-mode `B` key to backfill workspaces whose bookmark
+// isn't already on file.
+func (m *Model) startBookmarkLinker(target Item) (tea.Model, tea.Cmd) {
+	if m.bookmarkFetcher == nil {
+		m.status = "link: bookmark fetcher not configured"
+		return *m, nil
+	}
+	if strings.TrimSpace(target.RepoRoot) == "" {
+		m.status = "link: select a row with a known repo"
+		return *m, nil
+	}
+	m.bookmarkMode = true
+	m.bookmarkPurpose = bookmarkPurposeLinkExisting
+	m.bookmarkLinkTarget = target
+	m.bookmarkLoading = true
+	m.bookmarks = nil
+	m.bookmarkCursor = 0
+	m.bookmarkFilter.Blur()
+	m.bookmarkFilter.SetValue("")
+	m.bookmarkFiltering = false
+	m.busy = true
+	m.status = "link: loading bookmarks..."
+	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(target.RepoRoot))
 }
 
 func (m *Model) startReviewFromMenu() (tea.Model, tea.Cmd) {
@@ -1906,8 +2219,14 @@ func (m Model) View() string {
 		left = m.renderOpenList(leftWidth)
 		right = m.renderOpenDetails(rightWidth)
 	case m.bookmarkMode:
-		left = m.renderBookmarkList(leftWidth)
-		right = m.renderBookmarkDetails(rightWidth)
+		// Full-width like the review picker. JoinHorizontal between a
+		// short loading-state left pane and a tall static right pane
+		// caused painting bleed during load (lipgloss pads with empty
+		// rows, not space-filled rows, and JoinVertical's pad newlines
+		// don't clear residue). Single-column avoids the issue and
+		// gives the list more room.
+		left = m.renderBookmarkList(m.width)
+		right = ""
 	case m.reviewMode:
 		left = m.renderReviewList(m.width)
 		right = ""
@@ -1945,7 +2264,22 @@ func (m Model) View() string {
 	if pad < 0 {
 		pad = 0
 	}
-	parts := []string{body, strings.Repeat("\n", pad), footer}
+	// Pad rows must be space-filled (width chars wide) rather than bare
+	// "\n"s. Bare newlines don't overwrite columns from the previous frame,
+	// so when a modal shrinks the body (e.g. the bookmark picker's short
+	// loading state) the prior frame's tall content bleeds through. Padding
+	// with explicit blank rows of full width gives the diff renderer
+	// something to clear with.
+	blankRow := strings.Repeat(" ", m.width)
+	padBlock := ""
+	if pad > 0 {
+		blanks := make([]string, pad)
+		for i := range blanks {
+			blanks[i] = blankRow
+		}
+		padBlock = strings.Join(blanks, "\n")
+	}
+	parts := []string{body, padBlock, footer}
 	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	if m.confirmDelete {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -2071,6 +2405,20 @@ func (m Model) renderHelp(width int) string {
 		dot("exited", true, "exited — process gone, pane back at a shell"),
 	}
 
+	prDot := func(g, color, label string) string {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(g) + "  " + label
+	}
+	prLines := []string{
+		lipgloss.NewStyle().Bold(true).Render("PR status (right glyph)"),
+		prDot(prGlyphOpen, "117", "open — PR is open, no review yet"),
+		prDot(prGlyphDraft, "245", "draft — PR is in draft"),
+		prDot(prGlyphApproved, "82", "approved — at least one approving review"),
+		prDot(prGlyphCIPend, "214", "CI pending — checks in flight"),
+		prDot(prGlyphCIFail, "203", "CI failed — at least one check failing"),
+		prDot(prGlyphMerged, "245", "merged — safe to delete this workspace"),
+		prDot(prGlyphClosed, "244", "closed — PR closed without merging"),
+	}
+
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
@@ -2089,6 +2437,8 @@ func (m Model) renderHelp(width int) string {
 		title,
 		"",
 		strings.Join(statusLines, "\n"),
+		"",
+		strings.Join(prLines, "\n"),
 		"",
 		strings.Join(keyLines, "\n"),
 	)
@@ -2162,9 +2512,6 @@ func (m Model) renderList(width int) string {
 			labelStyle = labelStyle.Foreground(lipgloss.Color("238"))
 		}
 		label := truncate(item.WorkspaceName, max(10, width-20))
-		if item.Stale && !m.preEnrichment {
-			label += " ⚠"
-		}
 		// Status is canonical in JSON, so render the stored glyph
 		// immediately on the fast first paint. The only tmux-derived
 		// override is `working` → `exited` (agent shell death — Claude
@@ -2172,7 +2519,11 @@ func (m Model) renderList(width int) string {
 		// enrichment pass and is rare enough that a brief flash is
 		// preferable to a blank glyph slot.
 		glyph := statusGlyph(item.Status, dim, item.Unread)
+		prGlyph := m.prGlyphForItem(item)
 		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
+		if prGlyph != "" {
+			line += " " + prGlyph
+		}
 		rows = append(rows, lipgloss.NewStyle().Width(width-1).Render(line))
 	}
 	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
@@ -2224,6 +2575,7 @@ func deckKeyGroups() []keyGroup {
 				{"r", "review a PR"},
 				{"D", "delete workspace (or default → delete project)"},
 				{"R", "relink session"},
+				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{",", "edit global state file in $EDITOR"},
 			},
 		},
@@ -2264,9 +2616,6 @@ func (m Model) renderDetails(width int) string {
 	if item.Active {
 		active = "yes"
 	}
-	if item.Stale {
-		active = "stale"
-	}
 	lines := []string{
 		title,
 		"",
@@ -2279,6 +2628,17 @@ func (m Model) renderDetails(width int) string {
 	}
 	if head := strings.TrimSpace(item.HeadDesc); head != "" {
 		lines = append(lines, fmt.Sprintf("Head:      %s", head))
+	}
+	bm := strings.TrimSpace(item.Bookmark)
+	if bm == "" {
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("(none — press B to link)")
+		lines = append(lines, fmt.Sprintf("Bookmark:  %s", hint))
+	} else {
+		lines = append(lines, fmt.Sprintf("Bookmark:  %s", bm))
+	}
+	if pr, label, ok := m.prStatusLabelForItem(item); ok {
+		colored := lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(pr))).Render(label)
+		lines = append(lines, fmt.Sprintf("PR:        #%d  %s", pr.Number, colored))
 	}
 	lines = append(lines,
 		"",
@@ -2485,21 +2845,85 @@ func (m Model) renderOpenDetails(width int) string {
 }
 
 func (m Model) renderBookmarkList(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("bookmark: pick one")
-	rows := []string{title, ""}
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	containerStyle := lipgloss.NewStyle().Width(width).PaddingRight(1)
+
+	titleText := "bookmark: pick one"
+	if m.bookmarkPurpose == bookmarkPurposeLinkExisting {
+		titleText = "link bookmark → " + m.bookmarkLinkTarget.WorkspaceName
+	}
+	header := titleStyle.Render(titleText)
+
 	if m.bookmarkLoading {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Loading bookmarks..."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+		return containerStyle.Render(strings.Join([]string{
+			header,
+			subtitleStyle.Render(m.spinner.View() + " loading bookmarks..."),
+		}, "\n"))
 	}
-	if m.bookmarkFiltering || strings.TrimSpace(m.bookmarkFilter.Value()) != "" {
-		rows = append(rows, "/"+m.bookmarkFilter.View(), "")
-	}
+
 	picks := m.filteredBookmarks()
-	if len(picks) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No bookmarks match."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	filterValue := strings.TrimSpace(m.bookmarkFilter.Value())
+
+	// Persistent subtitle: a single row that morphs between live filter
+	// input, committed filter summary, and the default hint. Keeping it
+	// always present means the list rows below never jump vertically.
+	var subtitle string
+	switch {
+	case m.bookmarkFiltering:
+		subtitle = "/" + m.bookmarkFilter.View()
+	case filterValue != "":
+		subtitle = subtitleStyle.Render(fmt.Sprintf("filter: %q · %d/%d  (esc clears)", filterValue, len(picks), len(m.bookmarks)))
+	default:
+		subtitle = subtitleStyle.Render(fmt.Sprintf("%d bookmarks  ·  / filter · enter select · esc cancel", len(m.bookmarks)))
 	}
-	for i, name := range picks {
+
+	rows := []string{header, subtitle, ""}
+
+	if len(m.bookmarks) == 0 {
+		rows = append(rows, mutedStyle.Render("No bookmarks."))
+		return containerStyle.Render(strings.Join(rows, "\n"))
+	}
+	if len(picks) == 0 {
+		rows = append(rows, mutedStyle.Render("No bookmarks match."))
+		return containerStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	// Bound the visible list to the terminal height. Rows we must reserve:
+	//   1 header, 1 subtitle, 1 blank gap, 1 "… X more" hint, plus 2 for
+	//   the deck's bottom status bar (job tray can take a row, plus the
+	//   status line). 6 is conservative — better to under-fill than to
+	//   push the search bar off the top of the screen when the list
+	//   exceeds the viewport.
+	reserved := 6
+	avail := m.height - reserved
+	if avail < 1 {
+		avail = 1
+	}
+	capacity := avail
+	if capacity > len(picks) {
+		capacity = len(picks)
+	}
+	if m.bookmarkCursor >= len(picks) {
+		m.bookmarkCursor = len(picks) - 1
+	}
+	if m.bookmarkCursor < 0 {
+		m.bookmarkCursor = 0
+	}
+	offset := 0
+	if m.bookmarkCursor >= capacity {
+		offset = m.bookmarkCursor - capacity + 1
+	}
+	if offset+capacity > len(picks) {
+		offset = len(picks) - capacity
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	for i := offset; i < offset+capacity; i++ {
+		name := picks[i]
 		prefix := "  "
 		style := lipgloss.NewStyle().Width(width - 1)
 		if i == m.bookmarkCursor {
@@ -2508,30 +2932,10 @@ func (m Model) renderBookmarkList(width int) string {
 		}
 		rows = append(rows, style.Render(prefix+truncate(name, max(8, width-4))))
 	}
-	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
-}
-
-func (m Model) renderBookmarkDetails(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("bookmark")
-	picks := m.filteredBookmarks()
-	current := ""
-	if m.bookmarkCursor >= 0 && m.bookmarkCursor < len(picks) {
-		current = picks[m.bookmarkCursor]
+	if offset+capacity < len(picks) {
+		rows = append(rows, mutedStyle.Render(fmt.Sprintf("  … %d more", len(picks)-(offset+capacity))))
 	}
-	lines := []string{title, ""}
-	if current != "" {
-		lines = append(lines, "Selection: "+current)
-	} else {
-		lines = append(lines, "Pick a bookmark to base the new workspace on.")
-	}
-	lines = append(lines, "",
-		"Keys:",
-		"↑/↓ j/k  navigate",
-		"/        filter",
-		"enter    select",
-		"esc      cancel",
-	)
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+	return containerStyle.Render(strings.Join(rows, "\n"))
 }
 
 func (m Model) filteredReviewPRs() []PRItem {
@@ -3155,6 +3559,172 @@ func assignHints(names []string) map[string]string {
 		return legacy
 	}
 	return out
+}
+
+// Nerd Font Octicon codepoints used for the per-row PR status glyph. The
+// deck assumes a patched font is available. Codepoints live in the Private
+// Use Area, so they encode here as \u escapes that the Go compiler turns into
+// the same UTF-8 bytes regardless of editor/rendering pipeline behavior.
+const (
+	prGlyphOpen     = "" // nf-oct-git_pull_request
+	prGlyphDraft    = "" // nf-oct-git_pull_request_draft
+	prGlyphClosed   = "" // nf-oct-git_pull_request_closed
+	prGlyphMerged   = "" // nf-oct-git_merge
+	prGlyphApproved = "" // nf-oct-check
+	prGlyphCIFail   = "" // nf-oct-x
+	prGlyphCIPend   = "" // nf-oct-hourglass
+)
+
+// prGlyphFor returns the single glyph for the given PR status per the locked
+// priority order: merged → closed → CI failed → CI pending → approved → draft
+// → open. Returns "" when no glyph should render (caller passes a zero/empty
+// status when the workspace has no matching PR).
+func prGlyphFor(s PRStatus) string {
+	if s.State == PRStateMerged {
+		return prGlyphMerged
+	}
+	if s.State == PRStateClosed {
+		return prGlyphClosed
+	}
+	switch s.CIState {
+	case PRCIFailing:
+		return prGlyphCIFail
+	case PRCIPending:
+		return prGlyphCIPend
+	}
+	if s.ReviewDecision == PRReviewApproved {
+		return prGlyphApproved
+	}
+	if s.IsDraft {
+		return prGlyphDraft
+	}
+	if s.State == PRStateOpen {
+		return prGlyphOpen
+	}
+	return ""
+}
+
+// prGlyphColor picks a foreground color from the existing statusColor palette.
+// Mapping (closest existing entries; no new palette in v1):
+//
+//	merged   → 245 (muted grey, "settled / done")
+//	closed   → 244 (also muted grey)
+//	failed   → 203 (same red as `error`)
+//	pending  → 214 (same amber as `waiting`)
+//	approved → 82  (same green as `working`)
+//	draft    → 245 (muted)
+//	open     → 117 (same cyan as `starting`)
+func prGlyphColor(s PRStatus) string {
+	if s.State == PRStateMerged {
+		return "245"
+	}
+	if s.State == PRStateClosed {
+		return "244"
+	}
+	switch s.CIState {
+	case PRCIFailing:
+		return "203"
+	case PRCIPending:
+		return "214"
+	}
+	if s.ReviewDecision == PRReviewApproved {
+		return "82"
+	}
+	if s.IsDraft {
+		return "245"
+	}
+	return "117"
+}
+
+// prStatusLabel returns a short human-readable phrase matching the glyph
+// priority order. Mirrors prGlyphFor so the words shown in the details panel
+// always agree with the glyph drawn in the row.
+func prStatusLabel(s PRStatus) string {
+	if s.State == PRStateMerged {
+		return "merged"
+	}
+	if s.State == PRStateClosed {
+		return "closed"
+	}
+	switch s.CIState {
+	case PRCIFailing:
+		if s.IsDraft {
+			return "draft · CI failing"
+		}
+		return "CI failing"
+	case PRCIPending:
+		if s.IsDraft {
+			return "draft · CI pending"
+		}
+		return "CI pending"
+	}
+	if s.ReviewDecision == PRReviewApproved {
+		return "approved"
+	}
+	if s.IsDraft {
+		return "draft"
+	}
+	if s.State == PRStateOpen {
+		if s.ReviewDecision == PRReviewChangesRequested {
+			return "open · changes requested"
+		}
+		return "open"
+	}
+	return ""
+}
+
+// prStatusLabelForItem looks up the workspace's PR (by Bookmark → headRefName)
+// and returns the matched status plus a human-readable label. ok is false
+// when there is no matching PR (no bookmark, no match, fetcher not run).
+func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
+	bm := strings.TrimSpace(item.Bookmark)
+	if bm == "" {
+		return PRStatus{}, "", false
+	}
+	repo := strings.TrimSpace(item.RepoRoot)
+	if repo == "" {
+		return PRStatus{}, "", false
+	}
+	byHead, ok := m.prStatusByRepo[repo]
+	if !ok {
+		return PRStatus{}, "", false
+	}
+	status, ok := byHead[bm]
+	if !ok {
+		return PRStatus{}, "", false
+	}
+	label := prStatusLabel(status)
+	if label == "" {
+		return PRStatus{}, "", false
+	}
+	return status, label, true
+}
+
+// prGlyphForItem resolves the workspace's bookmark to a PR (if any) and
+// returns the rendered glyph string (with ANSI color), or "" when no glyph
+// applies (no bookmark, no PR match, fetcher not configured).
+func (m Model) prGlyphForItem(item Item) string {
+	bm := strings.TrimSpace(item.Bookmark)
+	if bm == "" {
+		return ""
+	}
+	repo := strings.TrimSpace(item.RepoRoot)
+	if repo == "" {
+		return ""
+	}
+	byHead, ok := m.prStatusByRepo[repo]
+	if !ok {
+		return ""
+	}
+	status, ok := byHead[bm]
+	if !ok {
+		return ""
+	}
+	g := prGlyphFor(status)
+	if g == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(status))).Render(g)
 }
 
 // statusGlyph renders a colored ● for an agent status. Only "loud" states
