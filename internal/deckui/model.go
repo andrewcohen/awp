@@ -143,8 +143,12 @@ type progressEventMsg struct {
 // NewWorkspaceInitial pre-fills the workspace form before it is shown.
 // Bookmark, when set, becomes the bookmark field on the form (and the
 // workspace name auto-derives from it if the user leaves the name blank).
+// Name, when set, pre-fills the workspace-name field — used when the deck
+// derives a sensible default from a picked bookmark (e.g. stripping the
+// configured prefix from `andrew/foo` to propose `foo`).
 type NewWorkspaceInitial struct {
 	Bookmark string
+	Name     string
 }
 
 // BookmarkFetcher returns a tea.Cmd that lists deduped bookmarks and emits a
@@ -396,6 +400,11 @@ type Model struct {
 	bookmarkPurpose    bookmarkPurpose
 	bookmarkLinkTarget Item
 	bookmarkLinkHandler BookmarkLinkHandler
+	// bookmarkPrefix mirrors config.Deck.BookmarkPrefix. When non-empty
+	// and a bookmark picked for the new-workspace flow begins with
+	// "<prefix>/", the form's workspace-name field is pre-filled with the
+	// stripped tail so the user gets a clean default ("andrew/foo" → "foo").
+	bookmarkPrefix string
 	userActions        []UserAction
 	actionMode         bool
 	actionAliasLookup  map[string]UserAction
@@ -567,6 +576,14 @@ func (m Model) WithBookmarkFetcher(f BookmarkFetcher) Model {
 // bookmark linker. Without it, the linker shows a "not configured" status.
 func (m Model) WithBookmarkLinkHandler(h BookmarkLinkHandler) Model {
 	m.bookmarkLinkHandler = h
+	return m
+}
+
+// WithBookmarkPrefix installs the configured bookmark prefix so the deck can
+// strip it when proposing a workspace name from a picked bookmark. Pass "" to
+// disable the strip (default).
+func (m Model) WithBookmarkPrefix(prefix string) Model {
+	m.bookmarkPrefix = strings.TrimRight(strings.TrimSpace(prefix), "/")
 	return m
 }
 
@@ -1821,7 +1838,18 @@ func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
 		}
 		return *m, tea.Batch(cmds...)
 	}
-	return m.launchNewForm(NewWorkspaceInitial{Bookmark: name})
+	initial := NewWorkspaceInitial{Bookmark: name}
+	if prefix := strings.TrimSpace(m.bookmarkPrefix); prefix != "" {
+		// Propose a workspace name with the prefix stripped so picking
+		// "andrew/foo" defaults the workspace to "foo" rather than the
+		// fully-qualified bookmark. The user can still edit before
+		// submitting.
+		head := prefix + "/"
+		if strings.HasPrefix(name, head) {
+			initial.Name = strings.TrimPrefix(name, head)
+		}
+	}
+	return m.launchNewForm(initial)
 }
 
 // startBookmarkLinker opens the same fuzzy picker but routes the selection to

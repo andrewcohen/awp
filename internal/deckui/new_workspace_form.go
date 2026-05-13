@@ -61,6 +61,7 @@ var (
 func newNewWorkspaceForm(initial NewWorkspaceInitial) newWorkspaceForm {
 	workspaceInput := textinput.New()
 	workspaceInput.Placeholder = "workspace name (leave blank to derive from bookmark)"
+	workspaceInput.SetValue(strings.TrimSpace(initial.Name))
 	workspaceInput.Prompt = ""
 	workspaceInput.CharLimit = 0
 	workspaceInput.Width = 56
