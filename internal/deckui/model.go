@@ -45,7 +45,6 @@ type Action int
 
 const (
 	ActionSummon Action = iota
-	ActionRelink
 	ActionOpenWindow
 	ActionDelete
 	ActionDeleteProject
@@ -1620,8 +1619,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deleteIsProject = false
 			m.status = fmt.Sprintf("delete %s? [y/N]", item.WorkspaceName)
 			return m, nil
-		case "R":
-			return m.trigger(ActionRelink, "")
 		case "B":
 			item, ok := m.selected()
 			if !ok {
@@ -2175,8 +2172,6 @@ func actionLabel(a Action, arg string) string {
 	switch a {
 	case ActionSummon:
 		return "summon"
-	case ActionRelink:
-		return "relink"
 	case ActionOpenWindow:
 		if arg != "" {
 			return "open " + arg
@@ -2602,7 +2597,6 @@ func deckKeyGroups() []keyGroup {
 			Keys: [][2]string{
 				{"r", "review a PR"},
 				{"D", "delete workspace (or default → delete project)"},
-				{"R", "relink session"},
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{",", "edit global state file in $EDITOR"},
 			},

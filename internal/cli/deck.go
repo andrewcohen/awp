@@ -944,9 +944,6 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		return nil
 	case deckui.ActionDeleteProject:
 		return handleDeleteProjectAction(tmuxClient, svc, item, reporter)
-	case deckui.ActionRelink:
-		reporter.Step("Relink session")
-		return relinkSession(tmuxClient, svc, item)
 	}
 	return fmt.Errorf("unknown action: %q session=%q", req.Action, sessionName)
 }
@@ -1261,18 +1258,6 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 	}
 	_ = svc.MarkRead(item.WorkspaceName)
 	return tmuxClient.SwitchClient(sessionName)
-}
-
-func relinkSession(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item) error {
-	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
-	id, err := tmuxClient.SessionIDByName(sessionName)
-	if err != nil {
-		return err
-	}
-	if id != "" {
-		return svc.RecordSession(item.WorkspaceName, id, sessionName)
-	}
-	return svc.ClearSession(item.WorkspaceName)
 }
 
 func resolvePath(svc workspace.Service, item deckui.Item) string {

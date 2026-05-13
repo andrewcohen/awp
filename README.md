@@ -106,7 +106,6 @@ The status is fetched once when the deck opens, with a single `gh pr list --stat
 | `/` | Filter rows · `esc` clears |
 | `P` | Cycle scope: current project → all projects → awaiting input (persisted across runs) |
 | `L` | Switch to last tmux session |
-| `R` | Relink session |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
