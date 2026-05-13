@@ -165,13 +165,13 @@ func (m Model) syncJobActivities(jobs []Job) (Model, tea.Cmd) {
 			}
 		case JobError:
 			a.Glyph = "⚠"
-			a.Color = "203"
+			a.Color = colDanger
 			a.FinishedAt = time.Time{}
 			a.Label = jobActivityLabel(j)
 			m.activities[i] = a
 		case JobOrphaned:
 			a.Glyph = "☠"
-			a.Color = "172"
+			a.Color = colWarning
 			a.FinishedAt = time.Time{}
 			a.Label = jobActivityLabel(j)
 			m.activities[i] = a
@@ -197,10 +197,10 @@ func (m Model) syncJobActivities(jobs []Job) (Model, tea.Cmd) {
 		switch j.Status {
 		case JobError:
 			a.Glyph = "⚠"
-			a.Color = "203"
+			a.Color = colDanger
 		case JobOrphaned:
 			a.Glyph = "☠"
-			a.Color = "172"
+			a.Color = colWarning
 		case JobDone, JobCancelled:
 			// Terminal-and-clean job we hadn't tracked: skip entirely
 			// rather than flash for something the user never saw start.

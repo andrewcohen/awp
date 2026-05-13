@@ -591,7 +591,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithJobDismissHandler(asyncDismiss).
 		WithJobLogOpener(asyncLog).
 		WithJobRetryHandler(asyncRetry)
-	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
 }

@@ -286,7 +286,7 @@ func TestDeleteCanBeCancelled(t *testing.T) {
 	if called {
 		t.Fatal("expected delete not to be called")
 	}
-	if m.status != "delete: cancelled" {
+	if m.status != "" {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }
@@ -418,8 +418,8 @@ func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
 	if m.newWorkspaceRepo != "" {
 		t.Fatalf("repo should be cleared, got %q", m.newWorkspaceRepo)
 	}
-	if m.status != "new: cancelled" {
-		t.Fatalf("expected cancel status, got %q", m.status)
+	if m.status != "" {
+		t.Fatalf("expected empty status, got %q", m.status)
 	}
 }
 
@@ -502,7 +502,7 @@ func TestRenameFormCancelClearsState(t *testing.T) {
 	if m.renameMode {
 		t.Fatal("esc should leave rename mode")
 	}
-	if m.status != "rename: cancelled" {
+	if m.status != "" {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }
@@ -1016,7 +1016,7 @@ func TestReviewModeCancelWithEsc(t *testing.T) {
 	if m.reviewMode {
 		t.Fatal("expected review mode cancelled")
 	}
-	if m.status != "review: cancelled" {
+	if m.status != "" {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }
@@ -1102,7 +1102,7 @@ func TestActionModeCancelWithEsc(t *testing.T) {
 	if m.actionMode {
 		t.Fatal("expected action mode cancelled")
 	}
-	if m.status != "action: cancelled" {
+	if m.status != "" {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
 }

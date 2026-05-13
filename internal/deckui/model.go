@@ -540,7 +540,7 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	of.Placeholder = "filter projects..."
 	of.CharLimit = 96
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner))
 	m := Model{
 		itemsCurrent:      append([]Item(nil), itemsCurrent...),
 		itemsAll:          append([]Item(nil), itemsAll...),
@@ -947,7 +947,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, batchCmds(cmds...)
 	case spinner.TickMsg:
-		if m.busy {
+		// Keep spinning while there's anything in flight: m.busy
+		// (foreground action like dispatch/load) OR any activity in
+		// the bottom bar (background work — pr-status, enrich, jobs).
+		// Without the activities check the spinner glyph in the
+		// activity bar looks frozen.
+		if m.busy || len(m.activities) > 0 {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
@@ -1011,6 +1016,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var expireCmd tea.Cmd
 		m, expireCmd = m.syncJobActivities(msg.jobs)
+		// Bootstrap the spinner whenever activities exist so its glyph
+		// in the bottom bar actually animates. The spinner.TickMsg
+		// handler self-perpetuates while len(m.activities) > 0; this
+		// call is the kickstart when activities first appear from a
+		// background refresh that wasn't preceded by a foreground
+		// action (which would already batch a Tick).
+		if len(m.activities) > 0 {
+			return m, tea.Batch(expireCmd, m.spinner.Tick)
+		}
 		return m, expireCmd
 	case activityExpireMsg:
 		m = m.dropActivity(msg.id)
@@ -1049,7 +1063,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Kept for any in-flight callers; the inline form bypasses this
 		// path entirely.
 		if msg.Cancelled {
-			m.status = "new: cancelled"
+			m.status = ""
 			return m, nil
 		}
 		if msg.Err != nil {
@@ -1275,7 +1289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.deleteInput.Blur()
 					m.deleteInput.SetValue("")
 					m.deleteErr = ""
-					m.status = "delete project: cancelled"
+					m.status = ""
 					return m, tea.ClearScreen
 				case "enter":
 					typed := strings.TrimSpace(m.deleteInput.Value())
@@ -1310,7 +1324,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.startAction(ActionDelete, m.deleteTarget, "")
 			case "n", "esc", "q":
 				m.confirmDelete = false
-				m.status = "delete: cancelled"
+				m.status = ""
 				return m, nil
 			}
 			return m, nil
@@ -1356,7 +1370,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q", "ctrl+c":
 				m.newMenuMode = false
-				m.status = "new: cancelled"
+				m.status = ""
 				return m, tea.ClearScreen
 			case "j", "down":
 				if m.newMenuCursor < 2 {
@@ -1391,7 +1405,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "esc", "ctrl+c":
 					m.openMode = false
 					m.openLoading = false
-					m.status = "open: cancelled"
+					m.status = ""
 				}
 				return m, nil
 			}
@@ -1402,7 +1416,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openCursor = 0
 				m.openFilter.Blur()
 				m.openFilter.SetValue("")
-				m.status = "open: cancelled"
+				m.status = ""
 				return m, nil
 			case "down", "ctrl+n":
 				if m.openCursor < len(m.filteredProjects())-1 {
@@ -1440,7 +1454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "esc", "ctrl+c":
 					m.bookmarkMode = false
 					m.bookmarkLoading = false
-					m.status = "bookmark: cancelled"
+					m.status = ""
 				}
 				return m, nil
 			}
@@ -1503,7 +1517,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.bookmarkFiltering = false
 				m.bookmarkPurpose = bookmarkPurposeNewWorkspace
 				m.bookmarkLinkTarget = Item{}
-				m.status = "bookmark: cancelled"
+				m.status = ""
 				return m, nil
 			case "/":
 				m.bookmarkFiltering = true
@@ -1535,7 +1549,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "esc", "q", "ctrl+c":
 					m.reviewMode = false
 					m.reviewLoading = false
-					m.status = "review: cancelled"
+					m.status = ""
 				}
 				return m, nil
 			}
@@ -1576,7 +1590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reviewCursor = 0
 				m.reviewFilter = ""
 				m.filterInput.SetValue("")
-				m.status = "review: cancelled"
+				m.status = ""
 				return m, nil
 			case "/":
 				m.reviewFiltering = true
@@ -1659,13 +1673,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "q", "ctrl+c":
 				m.actionMode = false
-				m.status = "action: cancelled"
+				m.status = ""
 				return m, nil
 			}
 			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
 				alias := string(msg.Runes[0])
 				if ua, ok := m.actionAliasLookup[alias]; ok {
 					m.actionMode = false
+					// Clear the action-menu listing from the status
+					// bar — the triggered action surfaces in the
+					// activity bar (and eventually as an action result
+					// message), so duplicating it in the grey status
+					// segment is noise.
+					m.status = ""
 					return m.trigger(ActionCustom, ua.Name)
 				}
 				m.actionMode = false
@@ -1931,7 +1951,7 @@ func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case renameFormActionCancel:
 		m.renameMode = false
 		m.renameForm = renameWorkspaceForm{}
-		m.status = "rename: cancelled"
+		m.status = ""
 		return m, batchCmds(cmd, tea.ClearScreen)
 	case renameFormActionSubmit:
 		target := form.target
@@ -1968,7 +1988,7 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.newWorkspaceMode = false
 		m.newWorkspaceRepo = ""
 		m.newWorkspaceForm = newWorkspaceForm{}
-		m.status = "new: cancelled"
+		m.status = ""
 		// tea.ClearScreen on every modal exit so the row list's first
 		// frame after the modal closes overwrites every cell, not just
 		// the lines the renderer thinks changed.
@@ -2471,7 +2491,7 @@ func (m Model) View() string {
 	}
 	if m.progressMode {
 		body := m.renderProgress(m.width)
-		footer := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.progressFooter())
+		footer := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(m.progressFooter())
 		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 	}
 	if m.newWorkspaceMode {
@@ -2520,12 +2540,19 @@ func (m Model) View() string {
 	} else {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
 	}
+	// Pad every body row out to m.width so the rightmost columns get
+	// overwritten between frames. Without this, when a tall modal (menu,
+	// picker, etc.) collapses back to the normal list, the previous
+	// frame's right-edge content lingers in those columns. No bg paint
+	// — the padding spaces inherit terminal default cell bg, which is
+	// what blends with the surrounding tmux pane.
+	body = lipgloss.NewStyle().Width(m.width).Render(body)
 
 	statusText := m.status
 	if m.busy {
 		statusText = m.spinner.View() + " " + m.status
 	}
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	var rightSeg string
 	switch {
 	case m.filtering:
@@ -2537,30 +2564,36 @@ func (m Model) View() string {
 	default:
 		rightSeg = dim.Render(statusText)
 	}
-	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, m.width)
+	// Inset the footer to match the body panels (Padding(1, 1, 1, 1)):
+	// 1 col on each side AND 1 row of bottom padding so the status bar
+	// has the same breathing room below it as the panels have above
+	// their content.
+	// Footer inset matches the body panels (Padding(1, 1, 1, 1)):
+	// 1 col on each side, 1 row of padding top AND bottom so the status
+	// bar has the same breathing room above/below as the panels have
+	// around their content.
+	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, m.width-2)
+	footer = lipgloss.NewStyle().Padding(1, 1, 1, 1).Render(footer)
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
 	pad := m.height - bodyHeight - footerHeight
 	if pad < 0 {
 		pad = 0
 	}
-	// Pad rows must be space-filled (width chars wide) rather than bare
-	// "\n"s. Bare newlines don't overwrite columns from the previous frame,
-	// so when a modal shrinks the body (e.g. the bookmark picker's short
-	// loading state) the prior frame's tall content bleeds through. Padding
-	// with explicit blank rows of full width gives the diff renderer
-	// something to clear with.
-	blankRow := strings.Repeat(" ", m.width)
+	// Space-filled padding between body and footer. Each row is m.width
+	// spaces with no SGR, so it overwrites any leftover cells from a
+	// previous tall frame (modal collapse) while still inheriting the
+	// terminal's default bg.
 	padBlock := ""
 	if pad > 0 {
 		blanks := make([]string, pad)
+		blank := strings.Repeat(" ", m.width)
 		for i := range blanks {
-			blanks[i] = blankRow
+			blanks[i] = blank
 		}
 		padBlock = strings.Join(blanks, "\n")
 	}
-	parts := []string{body, padBlock, footer}
-	view := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	view := lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
 	if m.confirmDelete {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.renderDeleteConfirm())
@@ -2672,17 +2705,17 @@ func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderHelp(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("awp deck — help (?, esc, or enter to close)")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("awp deck — help (?, esc, or enter to close)")
 
 	dot := func(state string, unread bool, label string) string {
 		return statusGlyph(state, false, unread) + "  " + label
 	}
 	statusLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Agent status (left dot)"),
-		dot("working", false, "working — actively producing output / running a tool"),
-		dot("waiting", true, "waiting — paused on a permission prompt"),
-		dot("idle", true, "notified — agent finished a turn (clears on summon)"),
-		dot("exited", true, "exited — process gone, pane back at a shell"),
+		dot("working", false, "working"),
+		dot("waiting", true, "waiting"),
+		dot("idle", true, "notified"),
+		dot("exited", true, "exited"),
 	}
 
 	prDot := func(g, color, label string) string {
@@ -2690,26 +2723,28 @@ func (m Model) renderHelp(width int) string {
 	}
 	prLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("PR status (right glyph)"),
-		prDot(prGlyphOpen, "117", "open — PR is open, no review yet"),
-		prDot(prGlyphDraft, "245", "draft — PR is in draft"),
-		prDot(prGlyphApproved, "82", "approved — at least one approving review"),
-		prDot(prGlyphCIPend, "214", "CI pending — checks in flight"),
-		prDot(prGlyphCIFail, "203", "CI failed — at least one check failing"),
-		prDot(prGlyphMerged, "245", "merged — safe to delete this workspace"),
-		prDot(prGlyphClosed, "244", "closed — PR closed without merging"),
+		prDot(prGlyphOpen, colAccent, "open"),
+		prDot(prGlyphDraft, colMuted, "draft"),
+		prDot(prGlyphApproved, colSuccess, "approved"),
+		prDot(prGlyphCIPend, colWarning, "CI pending"),
+		prDot(prGlyphCIFail, colDanger, "CI failing"),
+		prDot(prGlyphMerged, colMuted, "merged"),
+		prDot(prGlyphClosed, colMuted, "closed"),
 	}
-
 	activityLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("⠼ activity — in-flight background work (pr-status N/M, enrich, jobs)"),
-		lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Render("✓") + "  finished — 500ms flash before the entry disappears",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("⚠") + "  failed job — stays visible until dismissed (J · x)",
-		lipgloss.NewStyle().Foreground(lipgloss.Color("172")).Render("☠") + "  orphaned job — subprocess died (J · x to dismiss)",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("⠼ in flight"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)).Render("✓") + "  finished",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Render("⚠") + "  failed",
+		lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Render("☠") + "  orphaned",
 	}
+	leftBlock := strings.Join(statusLines, "\n") + "\n\n" +
+		strings.Join(prLines, "\n") + "\n\n" +
+		strings.Join(activityLines, "\n")
 
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	keyLines := []string{lipgloss.NewStyle().Bold(true).Render("Keys")}
 	for i, g := range deckKeyGroups() {
 		if i > 0 {
@@ -2720,29 +2755,42 @@ func (m Model) renderHelp(width int) string {
 			keyLines = append(keyLines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
 		}
 	}
+	rightBlock := strings.Join(keyLines, "\n")
 
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		"",
-		strings.Join(statusLines, "\n"),
-		"",
-		strings.Join(prLines, "\n"),
-		"",
-		strings.Join(activityLines, "\n"),
-		"",
-		strings.Join(keyLines, "\n"),
+	// Two-column layout: status legend (with activity-bar legend) on the
+	// left, key bindings on the right. Box widens to fit both — clamps to
+	// the available viewport width and falls back to a single tall block
+	// under ~70 cols.
+	const (
+		targetWidth = 110
+		gutter      = 4
+		boxOverhead = 6 // border (2) + horizontal padding (2*2)
 	)
-	boxWidth := 70
+	boxWidth := targetWidth
 	if width > 0 && width-8 < boxWidth {
 		boxWidth = width - 8
 	}
-	if boxWidth < 40 {
-		boxWidth = 40
+	if boxWidth < 64 {
+		boxWidth = 64
 	}
+	innerWidth := boxWidth - boxOverhead
+
+	var cols string
+	if innerWidth >= 70 {
+		leftWidth := (innerWidth - gutter) * 9 / 20
+		rightWidth := innerWidth - gutter - leftWidth
+		left := lipgloss.NewStyle().Width(leftWidth).Render(leftBlock)
+		right := lipgloss.NewStyle().Width(rightWidth).Render(rightBlock)
+		cols = lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gutter), right)
+	} else {
+		// Narrow terminal — stack vertically like the old layout.
+		cols = leftBlock + "\n\n" + rightBlock
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, title, "", cols)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("117")).
-		Background(lipgloss.Color("236")).
+		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
 		Width(boxWidth).
 		Render(body)
@@ -2750,32 +2798,34 @@ func (m Model) renderHelp(width int) string {
 
 func (m Model) renderList(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("awp deck")
-	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("scope: " + scopeLabel(m.scope, m.currentRepo) + "  (P to cycle)")
+	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("scope: " + scopeLabel(m.scope, m.currentRepo) + "  (P to cycle)")
 	rows := []string{title, subtitle, ""}
 	items := m.items()
 	if len(items) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No workspaces found."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
+		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
 	}
 	projectHints, rowHints := m.findHints()
 	// Reserve a fixed-width prefix slot at all times so workspace rows
 	// and project headers don't shift horizontally between modes (no
-	// find / 1-char hint / 2-char hint).
+	// find / 1-char hint / 2-char hint). 4 cols also leaves 1 col of
+	// breathing room after a 3-char "[a]" hint so it doesn't collide
+	// with the status glyph that follows.
 	const prefixWidth = 4
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
 	lastProject := ""
 	for i, item := range items {
 		dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
 		if item.ProjectName != lastProject {
-			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 			// Add a top margin between projects, but not above the very first one.
 			if lastProject != "" {
 				headerStyle = headerStyle.MarginTop(1)
 			}
 			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
-				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color("117"))
+				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color(colAccent))
 			} else if dim {
-				headerStyle = headerStyle.Foreground(lipgloss.Color("238"))
+				headerStyle = headerStyle.Foreground(lipgloss.Color(colMuted))
 			}
 			hintStr := ""
 			if hint, ok := projectHints[item.ProjectName]; ok {
@@ -2796,12 +2846,12 @@ func (m Model) renderList(width int) string {
 		// highlighting past the dot.
 		labelStyle := lipgloss.NewStyle()
 		if i == m.cursor {
-			prefix = "› "
-			labelStyle = labelStyle.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true).Render("┃") + " "
+			labelStyle = labelStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
 		} else if dim {
-			labelStyle = labelStyle.Foreground(lipgloss.Color("238"))
+			labelStyle = labelStyle.Foreground(lipgloss.Color(colMuted))
 		}
-		label := truncate(item.WorkspaceName, max(10, width-20))
+		label := truncate(item.WorkspaceName, max(10, width-21))
 		// Status is canonical in JSON, so render the stored glyph
 		// immediately on the fast first paint. The only tmux-derived
 		// override is `working` → `exited` (agent shell death — Claude
@@ -2814,9 +2864,9 @@ func (m Model) renderList(width int) string {
 		if prGlyph != "" {
 			line += " " + prGlyph
 		}
-		rows = append(rows, lipgloss.NewStyle().Width(width-1).Render(line))
+		rows = append(rows, lipgloss.NewStyle().Width(width-2).Render(line))
 	}
-	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
 }
 
 // keyGroup is a labeled group of (key, description) rows shown in both the
@@ -2890,7 +2940,7 @@ func (m Model) renderDetails(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("details")
 	item, ok := m.selected()
 	if !ok {
-		return lipgloss.NewStyle().Width(width).Render(title + "\n\nSelect a workspace.")
+		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(title + "\n\nSelect a workspace.")
 	}
 	prompt := item.PromptPreview
 	if strings.TrimSpace(prompt) == "" {
@@ -2926,7 +2976,7 @@ func (m Model) renderDetails(width int) string {
 	}
 	bm := strings.TrimSpace(item.Bookmark)
 	if bm == "" {
-		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("(none — press B to link)")
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("(none — press B to link)")
 		lines = append(lines, fmt.Sprintf("Bookmark:  %s", hint))
 	} else {
 		lines = append(lines, fmt.Sprintf("Bookmark:  %s", bm))
@@ -2943,7 +2993,7 @@ func (m Model) renderDetails(width int) string {
 	if act := renderActivityBlock(m.jobs, item, width); act != "" {
 		lines = append(lines, "", act)
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(lines, "\n"))
 }
 
 // renderActivityBlock renders the per-workspace "Recent activity" list:
@@ -2961,8 +3011,8 @@ func renderActivityBlock(allJobs []Job, item Item, width int) string {
 	if len(matching) == 0 {
 		return ""
 	}
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	const maxRows = 5
 	rows := []string{headerStyle.Render("Recent activity")}
 	for i, j := range matching {
@@ -3000,24 +3050,24 @@ func formatActivityRow(j Job, width int) string {
 		}
 	}
 	rel := relativeTimeShort(j.StartedAt, j.EndedAt, j.Status)
-	relStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(rel)
+	relStyled := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(rel)
 	return fmt.Sprintf("%s %s   %s", glyphStyled, label, relStyled)
 }
 
 func activityGlyph(s JobStatus) (glyph, color string) {
 	switch s {
 	case JobPending, JobRunning:
-		return "▶", "39"
+		return "▶", colInfo
 	case JobDone:
-		return "✓", "42"
+		return "✓", colSuccess
 	case JobError:
-		return "⚠", "203"
+		return "⚠", colDanger
 	case JobCancelled:
-		return "·", "245"
+		return "·", colMuted
 	case JobOrphaned:
-		return "☠", "172"
+		return "☠", colWarning
 	}
-	return "·", "245"
+	return "·", colMuted
 }
 
 func relativeTimeShort(started, ended time.Time, status JobStatus) string {
@@ -3045,7 +3095,7 @@ func relativeTimeShort(started, ended time.Time, status JobStatus) string {
 }
 
 func (m Model) renderNewMenu(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("new workspace: choose start")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("new workspace: choose start")
 	options := []struct {
 		label string
 		hint  string
@@ -3059,20 +3109,20 @@ func (m Model) renderNewMenu(width int) string {
 		prefix := "  "
 		style := lipgloss.NewStyle().Width(width - 1)
 		if i == m.newMenuCursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = "┃ "
+			style = style.Foreground(lipgloss.Color(colWarning)).Bold(true)
 		}
 		quick := ""
 		switch i {
 		case 1:
-			quick = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [b]")
+			quick = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(" [b]")
 		case 2:
-			quick = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(" [r]")
+			quick = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(" [r]")
 		}
 		rows = append(rows, style.Render(fmt.Sprintf("%s%s%s", prefix, opt.label, quick)))
-		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color("245")).Render("   "+opt.hint))
+		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(colMuted)).Render("   "+opt.hint))
 	}
-	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
 }
 
 func (m Model) renderNewMenuDetails(width int) string {
@@ -3091,29 +3141,29 @@ func (m Model) renderNewMenuDetails(width int) string {
 }
 
 func (m Model) renderOpenList(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("open: pick a project")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("open: pick a project")
 	rows := []string{title, ""}
 	if m.openLoading {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("Scanning project roots..."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("Scanning project roots..."))
+		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
 	}
 	rows = append(rows, "/"+m.openFilter.View(), "")
 	picks := m.filteredProjects()
 	if len(picks) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("No projects match."))
-		return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No projects match."))
+		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
 	}
 	for i, p := range picks {
 		prefix := "  "
 		style := lipgloss.NewStyle().Width(width - 1)
 		if i == m.openCursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = "┃ "
+			style = style.Foreground(lipgloss.Color(colWarning)).Bold(true)
 		}
 		label := truncate(p.Name, max(10, width-4))
 		rows = append(rows, style.Render(prefix+label))
 	}
-	return lipgloss.NewStyle().Width(width).PaddingRight(1).Render(strings.Join(rows, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
 }
 
 func (m Model) renderOpenDetails(width int) string {
@@ -3140,10 +3190,10 @@ func (m Model) renderOpenDetails(width int) string {
 }
 
 func (m Model) renderBookmarkList(width int) string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	containerStyle := lipgloss.NewStyle().Width(width).PaddingRight(1)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
 
 	titleText := "bookmark: pick one"
 	if m.bookmarkPurpose == bookmarkPurposeLinkExisting {
@@ -3222,8 +3272,8 @@ func (m Model) renderBookmarkList(width int) string {
 		prefix := "  "
 		style := lipgloss.NewStyle().Width(width - 1)
 		if i == m.bookmarkCursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = "┃ "
+			style = style.Foreground(lipgloss.Color(colWarning)).Bold(true)
 		}
 		rows = append(rows, style.Render(prefix+truncate(name, max(8, width-4))))
 	}
@@ -3254,9 +3304,9 @@ func (m Model) filteredReviewPRs() []PRItem {
 
 func (m Model) renderReviewList(width int) string {
 	titleStyle := lipgloss.NewStyle().Bold(true)
-	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	containerStyle := lipgloss.NewStyle().Width(width).PaddingRight(1)
+	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
 
 	header := titleStyle.Render("review: select PR")
 
@@ -3327,13 +3377,13 @@ func (m Model) renderReviewList(width int) string {
 
 	const prefixWidth = 2
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
-	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	numStyleSelected := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
-	draftStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
-	titleSelected := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	titleNormal := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	authorMutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo))
+	numStyleSelected := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+	draftStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning))
+	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess))
+	titleSelected := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+	titleNormal := lipgloss.NewStyle()
+	authorMutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 
 	for i := offset; i < offset+capacity; i++ {
 		pr := prs[i]
@@ -3341,7 +3391,7 @@ func (m Model) renderReviewList(width int) string {
 
 		prefix := "  "
 		if selected {
-			prefix = "› "
+			prefix = "┃ "
 		}
 
 		numText := fmt.Sprintf("%*s", numW, fmt.Sprintf("#%d", pr.Number))
@@ -3392,10 +3442,10 @@ func (m Model) renderReviewList(width int) string {
 }
 
 func (m Model) renderProgress(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render(m.progressTitle)
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render(m.progressTitle)
 	rows := []string{title, ""}
 	if len(m.progressSteps) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(m.spinner.View()+" starting..."))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(m.spinner.View()+" starting..."))
 	}
 	for _, step := range m.progressSteps {
 		var glyph, color string
@@ -3414,17 +3464,17 @@ func (m Model) renderProgress(width int) string {
 	}
 	if m.progressErr != nil {
 		rows = append(rows, "")
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("error: "+m.progressErr.Error()))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Render("error: "+m.progressErr.Error()))
 	}
 	if len(m.progressLog) > 0 {
 		rows = append(rows, "")
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Bold(true).Render("log"))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Bold(true).Render("log"))
 		tail := m.progressLog
 		maxLines := max(4, m.height-len(m.progressSteps)-10)
 		if maxLines > 0 && len(tail) > maxLines {
 			tail = tail[len(tail)-maxLines:]
 		}
-		logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width)
+		logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(width)
 		for _, line := range tail {
 			rows = append(rows, logStyle.Render(truncate(line, max(8, width-2))))
 		}
@@ -3445,13 +3495,13 @@ func (m Model) progressFooter() string {
 func (m Model) renderDeleteConfirm() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("203")).
+		BorderForeground(lipgloss.Color(colDanger)).
 		Padding(1, 2).
 		Width(60)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colDanger))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
 
 	if m.deleteIsProject {
 		project := strings.TrimSpace(m.deleteTarget.ProjectName)
@@ -3899,36 +3949,29 @@ func prGlyphFor(s PRStatus) string {
 	return ""
 }
 
-// prGlyphColor picks a foreground color from the existing statusColor palette.
-// Mapping (closest existing entries; no new palette in v1):
-//
-//	merged   → 245 (muted grey, "settled / done")
-//	closed   → 244 (also muted grey)
-//	failed   → 203 (same red as `error`)
-//	pending  → 214 (same amber as `waiting`)
-//	approved → 82  (same green as `working`)
-//	draft    → 245 (muted)
-//	open     → 117 (same cyan as `starting`)
+// prGlyphColor picks a foreground color from the palette in palette.go.
+// Routes every PR-status branch through a semantic token so the deck
+// re-themes when the user's terminal palette changes.
 func prGlyphColor(s PRStatus) string {
 	if s.State == PRStateMerged {
-		return "245"
+		return colMuted
 	}
 	if s.State == PRStateClosed {
-		return "244"
+		return colMuted
 	}
 	switch s.CIState {
 	case PRCIFailing:
-		return "203"
+		return colDanger
 	case PRCIPending:
-		return "214"
+		return colWarning
 	}
 	if s.ReviewDecision == PRReviewApproved {
-		return "82"
+		return colSuccess
 	}
 	if s.IsDraft {
-		return "245"
+		return colMuted
 	}
-	return "117"
+	return colAccent
 }
 
 // prStatusLabel returns a short human-readable phrase matching the glyph
@@ -4047,32 +4090,20 @@ func alwaysShownStatus(status string) bool {
 }
 
 func statusColor(status string, dim bool, unread bool) string {
+	if dim {
+		return colMuted
+	}
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "working", "in progress", "in_progress", "running":
-		if dim {
-			return "65"
-		}
-		return "82"
+		return colSuccess
 	case "waiting":
-		if dim {
-			return "136"
-		}
-		return "214"
+		return colWarning
 	case "exited", "error":
-		if dim {
-			return "131"
-		}
-		return "203"
+		return colDanger
 	case "starting":
-		if dim {
-			return "67"
-		}
-		return "117"
+		return colAccent
 	default: // idle / done / unknown — only rendered when unread (notified)
-		if dim {
-			return "238"
-		}
-		return "244"
+		return colMuted
 	}
 }
 
@@ -4088,8 +4119,7 @@ func normalizeStatus(status string) string {
 func renderFindHint(hint string) string {
 	return lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("230")).
-		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color(colWarning)).
 		Render("[" + hint + "]")
 }
 

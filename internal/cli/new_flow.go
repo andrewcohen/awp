@@ -309,7 +309,7 @@ func (m newFlowModel) View() string {
 }
 
 func (m newFlowModel) viewMenu() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("new workspace: choose start")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Render("new workspace: choose start")
 	options := []struct {
 		label string
 		hint  string
@@ -323,25 +323,25 @@ func (m newFlowModel) viewMenu() string {
 		prefix := "  "
 		style := lipgloss.NewStyle()
 		if i == m.cursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = "┃ "
+			style = style.Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 		}
 		rows = append(rows, style.Render(prefix+opt.label))
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("   "+opt.hint))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Render("   "+opt.hint))
 	}
-	rows = append(rows, "", lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("↑/↓ j/k · enter select · b/r quick · esc cancel"))
+	rows = append(rows, "", lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Render("↑/↓ j/k · enter select · b/r quick · esc cancel"))
 	return strings.Join(rows, "\n") + "\n"
 }
 
 func (m newFlowModel) viewBookmark() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("bookmark: pick one")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Render("bookmark: pick one")
 	rows := []string{title, ""}
 	if m.loading {
 		rows = append(rows, "Loading bookmarks...")
 		return strings.Join(rows, "\n") + "\n"
 	}
 	if m.loadErr != nil {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("error: "+m.loadErr.Error()))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Render("error: "+m.loadErr.Error()))
 		return strings.Join(rows, "\n") + "\n"
 	}
 	if m.filtering || strings.TrimSpace(m.filter.Value()) != "" {
@@ -355,24 +355,24 @@ func (m newFlowModel) viewBookmark() string {
 		prefix := "  "
 		style := lipgloss.NewStyle()
 		if i == m.cursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = "┃ "
+			style = style.Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 		}
 		rows = append(rows, style.Render(prefix+name))
 	}
-	rows = append(rows, "", lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("↑/↓ j/k · / filter · enter select · esc cancel"))
+	rows = append(rows, "", lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Render("↑/↓ j/k · / filter · enter select · esc cancel"))
 	return strings.Join(rows, "\n") + "\n"
 }
 
 func (m newFlowModel) viewPR() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Render("review: pick a PR")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Render("review: pick a PR")
 	rows := []string{title, ""}
 	if m.loading {
 		rows = append(rows, "Loading PRs...")
 		return strings.Join(rows, "\n") + "\n"
 	}
 	if m.loadErr != nil {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("error: "+m.loadErr.Error()))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Render("error: "+m.loadErr.Error()))
 		return strings.Join(rows, "\n") + "\n"
 	}
 	if m.filtering || strings.TrimSpace(m.filter.Value()) != "" {
@@ -386,8 +386,8 @@ func (m newFlowModel) viewPR() string {
 		prefix := "  "
 		style := lipgloss.NewStyle()
 		if i == m.cursor {
-			prefix = "› "
-			style = style.Bold(true).Foreground(lipgloss.Color("230"))
+			prefix = "┃ "
+			style = style.Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 		}
 		draft := ""
 		if pr.IsDraft {
@@ -395,7 +395,7 @@ func (m newFlowModel) viewPR() string {
 		}
 		rows = append(rows, style.Render(prefix+pr.Title+draft+" — "+pr.HeadRef))
 	}
-	rows = append(rows, "", lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("↑/↓ j/k · / filter · enter select · esc cancel"))
+	rows = append(rows, "", lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Render("↑/↓ j/k · / filter · enter select · esc cancel"))
 	return strings.Join(rows, "\n") + "\n"
 }
 
