@@ -53,6 +53,7 @@ const (
 	ActionReview
 	ActionCustom
 	ActionCreateWorkspace
+	ActionRename
 )
 
 type UserAction struct {
@@ -443,6 +444,11 @@ type Model struct {
 	newWorkspaceMode bool
 	newWorkspaceForm newWorkspaceForm
 	newWorkspaceRepo string
+
+	// Rename form. Same modal-state-inside-Model pattern as the
+	// new-workspace form.
+	renameMode bool
+	renameForm renameWorkspaceForm
 }
 
 const progressLogMax = 50
@@ -960,6 +966,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.action == ActionDelete {
 			return m, nil
 		}
+		if msg.action == ActionRename {
+			m.status = fmt.Sprintf("renamed %s → %s", msg.item.WorkspaceName, msg.arg)
+			// Move the cursor to the new name once the refresh lands so
+			// the row the user just renamed stays selected.
+			m.pendingSelect = Item{ProjectName: msg.item.ProjectName, WorkspaceName: msg.arg}
+			if m.refresher != nil {
+				m.refreshing = true
+				return m, m.refresher()
+			}
+			return m, nil
+		}
 		return m, tea.Quit
 	case StateEditDoneMsg:
 		if msg.Err != nil {
@@ -1102,6 +1119,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.newWorkspaceMode {
 			return m.dispatchNewWorkspaceForm(msg)
+		}
+		if m.renameMode {
+			return m.dispatchRenameForm(msg)
 		}
 		if m.confirmDelete {
 			if m.deleteIsProject {
@@ -1619,6 +1639,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deleteIsProject = false
 			m.status = fmt.Sprintf("delete %s? [y/N]", item.WorkspaceName)
 			return m, nil
+		case "R":
+			item, ok := m.selected()
+			if !ok || strings.TrimSpace(item.WorkspaceName) == "" {
+				m.status = "rename: select a workspace row"
+				return m, nil
+			}
+			if strings.TrimSpace(item.WorkspaceName) == "default" {
+				m.status = "rename: cannot rename the default workspace"
+				return m, nil
+			}
+			m.renameMode = true
+			m.renameForm = newRenameWorkspaceForm(item)
+			m.status = "rename: type new name · enter rename · esc cancel"
+			return m, textinput.Blink
 		case "B":
 			item, ok := m.selected()
 			if !ok {
@@ -1718,6 +1752,39 @@ func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) 
 	// columns the deck row list (or the new-menu) wrote that the form
 	// doesn't. See doc.go.
 	return *m, tea.Batch(textinput.Blink, tea.ClearScreen)
+}
+
+// dispatchRenameForm forwards a message to the rename form and acts on
+// its returned action. Submit triggers ActionRename (quick action via
+// the handler); cancel closes the form.
+func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	form, cmd, action := m.renameForm.update(msg)
+	m.renameForm = form
+	switch action {
+	case renameFormActionCancel:
+		m.renameMode = false
+		m.renameForm = renameWorkspaceForm{}
+		m.status = "rename: cancelled"
+		return m, batchCmds(cmd, tea.ClearScreen)
+	case renameFormActionSubmit:
+		target := form.target
+		newName := form.value()
+		m.renameMode = false
+		m.renameForm = renameWorkspaceForm{}
+		if m.handler == nil {
+			m.status = "rename: handler not configured"
+			return m, batchCmds(cmd, tea.ClearScreen)
+		}
+		m.busy = true
+		m.status = fmt.Sprintf("renaming %s → %s...", target.WorkspaceName, newName)
+		handler := m.handler
+		dispatch := func() tea.Msg {
+			err := handler(ActionRequest{Item: target, Action: ActionRename, Arg: newName, Reporter: noopActionReporter{}})
+			return actionResultMsg{action: ActionRename, arg: newName, item: target, err: err}
+		}
+		return m, batchCmds(cmd, tea.ClearScreen, m.spinner.Tick, dispatch)
+	}
+	return m, cmd
 }
 
 // dispatchNewWorkspaceForm forwards a message to the inline form and
@@ -2194,6 +2261,8 @@ func actionLabel(a Action, arg string) string {
 		return "run action"
 	case ActionCreateWorkspace:
 		return "create"
+	case ActionRename:
+		return "rename"
 	}
 	return "action"
 }
@@ -2225,6 +2294,9 @@ func (m Model) View() string {
 		// viewport. Same pattern as progressMode above; both replace
 		// the deck body wholesale when the modal owns the screen.
 		return m.newWorkspaceForm.view(m.width, m.height)
+	}
+	if m.renameMode {
+		return m.renameForm.view(m.width, m.height)
 	}
 
 	leftWidth := max(32, m.width/2)
@@ -2596,6 +2668,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Workspace",
 			Keys: [][2]string{
 				{"r", "review a PR"},
+				{"R", "rename workspace"},
 				{"D", "delete workspace (or default → delete project)"},
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{",", "edit global state file in $EDITOR"},

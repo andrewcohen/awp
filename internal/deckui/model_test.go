@@ -422,6 +422,120 @@ func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
 	}
 }
 
+func TestRenameKeyOpensModalOnWorkspaceRow(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m := updated.(Model)
+	if !m.renameMode {
+		t.Fatal("expected rename modal to open")
+	}
+	if got := m.renameForm.target.WorkspaceName; got != "qa" {
+		t.Fatalf("expected form target to be selected row, got %q", got)
+	}
+	if got := m.renameForm.nameInput.Value(); got != "qa" {
+		t.Fatalf("expected name input prefilled with current name, got %q", got)
+	}
+}
+
+func TestRenameKeyRefusedOnDefaultWorkspace(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "default"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m := updated.(Model)
+	if m.renameMode {
+		t.Fatal("expected rename modal not to open on default workspace")
+	}
+	if m.status != "rename: cannot rename the default workspace" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestRenameFormSubmitInvokesHandler(t *testing.T) {
+	var gotAction Action
+	var gotArg string
+	var gotItem Item
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, func(req ActionRequest) error {
+		gotAction = req.Action
+		gotArg = req.Arg
+		gotItem = req.Item
+		return nil
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m := updated.(Model)
+	m.renameForm.nameInput.SetValue("qb")
+
+	updated, cmd := m.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.renameMode {
+		t.Fatal("submit should leave rename mode")
+	}
+	if cmd == nil {
+		t.Fatal("expected dispatch cmd from submit")
+	}
+	if msg := cmd(); msg != nil {
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				if sub != nil {
+					_ = sub()
+				}
+			}
+		}
+	}
+	if gotAction != ActionRename {
+		t.Fatalf("expected ActionRename, got %v", gotAction)
+	}
+	if gotArg != "qb" {
+		t.Fatalf("expected new name 'qb', got %q", gotArg)
+	}
+	if gotItem.WorkspaceName != "qa" {
+		t.Fatalf("expected handler to receive original item, got %q", gotItem.WorkspaceName)
+	}
+}
+
+func TestRenameFormCancelClearsState(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m := updated.(Model)
+
+	updated, _ = m.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.renameMode {
+		t.Fatal("esc should leave rename mode")
+	}
+	if m.status != "rename: cancelled" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestRenameFormRejectsEmptyAndUnchangedNames(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, func(req ActionRequest) error {
+		t.Fatalf("handler should not be invoked, got action %v", req.Action)
+		return nil
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m := updated.(Model)
+
+	// Unchanged name → form stays open with error.
+	updated, _ = m.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.renameMode {
+		t.Fatal("expected rename mode to stay open after unchanged-name submit")
+	}
+	if m.renameForm.err == "" {
+		t.Fatal("expected validation error for unchanged name")
+	}
+
+	// Empty name → form stays open with error.
+	m.renameForm.nameInput.SetValue("")
+	updated, _ = m.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.renameMode {
+		t.Fatal("expected rename mode to stay open after empty-name submit")
+	}
+	if m.renameForm.err == "" {
+		t.Fatal("expected validation error for empty name")
+	}
+}
+
 func TestRenderJobCountsCompactShowsCounts(t *testing.T) {
 	out := renderJobCountsCompact(JobCounts{Running: 2, Failed: 1})
 	if out == "" {
