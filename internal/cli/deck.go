@@ -944,6 +944,48 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		return nil
 	case deckui.ActionDeleteProject:
 		return handleDeleteProjectAction(tmuxClient, svc, item, reporter)
+	case deckui.ActionRename:
+		newName := strings.TrimSpace(req.Arg)
+		oldSessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
+		newSessionName := DeckSessionName(item.ProjectName, newName)
+		// Snapshot the live tmux session id (if any) before doing
+		// anything. We use it both to refuse mid-rename when an agent
+		// is running and to rebind the renamed session into state.
+		sessionID, _ := tmuxClient.SessionIDByName(oldSessionName)
+		// Refuse if the agent pane is running a non-shell process. The
+		// running agent has AWP_WORKSPACE=<old> frozen in its environ,
+		// and so does every hook subprocess it spawns. A rename would
+		// silently break status reporting until the agent restarts.
+		if sessionID != "" {
+			if cmd, err := tmuxClient.PaneCurrentCommand(oldSessionName + ":agent"); err == nil {
+				running := strings.TrimSpace(cmd)
+				if running != "" && !isShellName(running) {
+					return fmt.Errorf("workspace %q has a live agent (%s) — stop it first or pick a different time to rename", item.WorkspaceName, running)
+				}
+			}
+		}
+		reporter.Step(fmt.Sprintf("Rename workspace %s → %s", item.WorkspaceName, newName))
+		if err := svc.Rename(item.WorkspaceName, newName); err != nil {
+			return err
+		}
+		if sessionID != "" {
+			reporter.Step(fmt.Sprintf("Rename tmux session %s → %s", oldSessionName, newSessionName))
+			if err := tmuxClient.RenameSession(oldSessionName, newSessionName); err != nil {
+				return err
+			}
+			if err := svc.RecordSession(newName, sessionID, newSessionName); err != nil {
+				return err
+			}
+			// Update session env so fresh shells / hooks that fall back to
+			// `tmux show-environment` pick up the new workspace name.
+			// Existing processes keep their stale environ, but we refused
+			// above when an agent was running so that's no longer a
+			// concern.
+			if _, err := ensureWorkspaceSessionEnv(tmuxClient, newSessionName, item.ProjectName, newName, item.RepoRoot, ""); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return fmt.Errorf("unknown action: %q session=%q", req.Action, sessionName)
 }

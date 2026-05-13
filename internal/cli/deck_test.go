@@ -65,9 +65,15 @@ func (r *deckFakeRunner) Run(_ context.Context, _ string, name string, args ...s
 }
 
 type deckFakeService struct {
-	info        workspace.InfoEntry
-	deleteName  string
-	deleteForce bool
+	info         workspace.InfoEntry
+	deleteName   string
+	deleteForce  bool
+	renameOld    string
+	renameNew    string
+	renameErr    error
+	recordedName string
+	recordedID   string
+	recordedSess string
 }
 
 func (s *deckFakeService) List() ([]workspace.ListEntry, error)         { return nil, nil }
@@ -79,7 +85,11 @@ func (s *deckFakeService) PrepareWorkspace(string, string, bool) (string, string
 }
 func (s *deckFakeService) Bootstrap(string) error      { return nil }
 func (s *deckFakeService) BootstrapAll() error         { return nil }
-func (s *deckFakeService) Rename(string, string) error { return nil }
+func (s *deckFakeService) Rename(old, new string) error {
+	s.renameOld = old
+	s.renameNew = new
+	return s.renameErr
+}
 func (s *deckFakeService) Delete(name string, force bool) error {
 	s.deleteName = name
 	s.deleteForce = force
@@ -91,7 +101,12 @@ func (s *deckFakeService) DeleteWithOptions(name string, opts workspace.DeleteOp
 	}
 	return s.Delete(name, opts.Force)
 }
-func (s *deckFakeService) RecordSession(string, string, string) error { return nil }
+func (s *deckFakeService) RecordSession(name, id, sess string) error {
+	s.recordedName = name
+	s.recordedID = id
+	s.recordedSess = sess
+	return nil
+}
 func (s *deckFakeService) RecordBookmark(string, string) error        { return nil }
 func (s *deckFakeService) UpdatePrompt(string, string) error          { return nil }
 func (s *deckFakeService) UpdateStatus(string, string) error          { return nil }
@@ -191,6 +206,67 @@ func TestOpenNamedWindowReusesExistingNamedWindowInTUIAndDoesNotSendCommand(t *t
 		if strings.Contains(strings.Join(call, " "), "send-keys") {
 			t.Fatalf("unexpected send-keys call: %#v", runner.calls)
 		}
+	}
+}
+
+func TestHandleDeckActionRenameRefusesWhileAgentRuns(t *testing.T) {
+	runner := &deckFakeRunner{outs: map[string]string{
+		"tmux list-sessions -F #{session_id}\t#{session_name}":                   "$1\t[awp]repo__qa\n",
+		"tmux display-message -p -t [awp]repo__qa:agent #{pane_current_command}": "claude\n",
+	}}
+	client := tmux.New(runner)
+	svc := &deckFakeService{}
+	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa"}
+
+	err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionRename, Arg: "qb"}, noopReporter{})
+	if err == nil {
+		t.Fatal("expected rename to be refused while agent runs")
+	}
+	if !strings.Contains(err.Error(), "live agent") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if svc.renameOld != "" || svc.renameNew != "" {
+		t.Fatalf("svc.Rename should not have been called, got old=%q new=%q", svc.renameOld, svc.renameNew)
+	}
+}
+
+func TestHandleDeckActionRenameRenamesSessionWhenAgentIsShell(t *testing.T) {
+	runner := &deckFakeRunner{outs: map[string]string{
+		"tmux list-sessions -F #{session_id}\t#{session_name}":                   "$1\t[awp]repo__qa\n",
+		"tmux display-message -p -t [awp]repo__qa:agent #{pane_current_command}": "zsh\n",
+		"tmux show-environment -t [awp]repo__qb AWP_WORKSPACE":                   "AWP_WORKSPACE=qa\n",
+		"tmux show-environment -t [awp]repo__qb AWP_REPO":                        "AWP_REPO=repo\n",
+		"tmux show-environment -t [awp]repo__qb AWP_REPO_ROOT":                   "AWP_REPO_ROOT=/repo\n",
+	}}
+	client := tmux.New(runner)
+	svc := &deckFakeService{}
+	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", RepoRoot: "/repo"}
+
+	if err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionRename, Arg: "qb"}, noopReporter{}); err != nil {
+		t.Fatalf("handleDeckAction: %v", err)
+	}
+	if svc.renameOld != "qa" || svc.renameNew != "qb" {
+		t.Fatalf("unexpected rename args: old=%q new=%q", svc.renameOld, svc.renameNew)
+	}
+	if svc.recordedName != "qb" || svc.recordedSess != "[awp]repo__qb" || svc.recordedID != "$1" {
+		t.Fatalf("RecordSession not invoked with new name: name=%q sess=%q id=%q", svc.recordedName, svc.recordedSess, svc.recordedID)
+	}
+	sawSessionRename := false
+	sawEnvUpdate := false
+	for _, call := range runner.calls {
+		joined := strings.Join(call, " ")
+		if joined == "tmux rename-session -t [awp]repo__qa [awp]repo__qb" {
+			sawSessionRename = true
+		}
+		if joined == "tmux set-environment -t [awp]repo__qb AWP_WORKSPACE qb" {
+			sawEnvUpdate = true
+		}
+	}
+	if !sawSessionRename {
+		t.Fatalf("expected tmux rename-session call, calls=%#v", runner.calls)
+	}
+	if !sawEnvUpdate {
+		t.Fatalf("expected AWP_WORKSPACE env update on new session, calls=%#v", runner.calls)
 	}
 }
 
