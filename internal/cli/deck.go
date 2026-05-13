@@ -500,6 +500,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
 		WithBookmarkLinkHandler(bookmarkLinkHandler).
+		WithBookmarkPrefix(cfg.Deck.BookmarkPrefix).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithScope(loadDeckScope()).
 		WithScopeChanged(saveDeckScope).

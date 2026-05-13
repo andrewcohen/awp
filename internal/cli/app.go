@@ -479,7 +479,8 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 		return err
 	}
 	env := workspaceEnvPairs(projectName, normalized, repoRoot)
-	if id == "" {
+	sessionWasNew := id == ""
+	if sessionWasNew {
 		step("Create tmux session " + sessionName)
 		if err := tmuxClient.NewSession(sessionName, wsPath, "agent", env); err != nil {
 			return err
@@ -496,10 +497,23 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
 		return err
 	}
-	if strings.TrimSpace(req.Prompt) != "" {
-		step("Send prompt to agent")
+	// Launch the agent in the new session even when no prompt was given,
+	// so the "agent" window isn't just a bare shell. With a prompt, the
+	// agent boots with that prompt; without one, the agent starts idle
+	// and the user can interact directly. Re-opening an existing session
+	// only sends a prompt if one was provided — we don't want to stack a
+	// second agent invocation on top of an already-running pane.
+	promptArg := strings.TrimSpace(req.Prompt)
+	if sessionWasNew || promptArg != "" {
 		invocation := config.AgentInvocation(repoRoot)
-		if err := tmuxClient.SendCommand(sessionName+":agent", invocation+" "+shellSingleQuote(strings.TrimSpace(req.Prompt))); err != nil {
+		cmd := invocation
+		if promptArg != "" {
+			step("Send prompt to agent")
+			cmd += " " + shellSingleQuote(promptArg)
+		} else {
+			step("Launch agent")
+		}
+		if err := tmuxClient.SendCommand(sessionName+":agent", cmd); err != nil {
 			return err
 		}
 	}
