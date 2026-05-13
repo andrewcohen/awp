@@ -112,6 +112,29 @@ func deckDebugLogf(format string, args ...any) {
 	_, _ = fmt.Fprintf(f, "%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
 }
 
+// persistPRStatusMerge merges fresh per-repo results into the on-disk
+// cache. Best-effort: failures are logged but never surfaced. Stamps
+// each successful repo's FetchedAt with the provided wall clock so the
+// 60s refresh throttle survives a deck restart.
+func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedAt time.Time) {
+	if len(byRepo) == 0 {
+		return
+	}
+	persistByRepo, persistFetchedAt, loadErr := loadPRStatusCache()
+	if loadErr != nil {
+		deckDebugLogf("prStatus cache reload err=%v", loadErr)
+		persistByRepo = map[string]map[string]deckui.PRStatus{}
+		persistFetchedAt = map[string]time.Time{}
+	}
+	for repo, byHead := range byRepo {
+		persistByRepo[repo] = byHead
+		persistFetchedAt[repo] = fetchedAt
+	}
+	if saveErr := savePRStatusCache(persistByRepo, persistFetchedAt); saveErr != nil {
+		deckDebugLogf("prStatus cache save err=%v", saveErr)
+	}
+}
+
 // prHasHead reports whether the byHead map (repo's PR cache) contains the
 // given bookmark/headRefName. Used by the diagnostic log line in the link
 // handler so the user can see at a glance whether the chosen bookmark
@@ -344,32 +367,31 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		deckDebugLogf("prStatus cache load err=%v", cacheErr)
 	}
 
-	// prStatusFetcher fans out one gh-pr-list call per repo (parallel), then
-	// fans in to a single PRStatusDoneMsg. Per-repo errors are reported in
-	// Errs so a single failed repo never blocks the others. The model owns
-	// the per-repo throttle, so this fetcher just executes what it's told.
+	// prStatusFetcher fans out one gh-pr-list call per repo (parallel) and
+	// streams the results back to the deck as they land:
+	//
+	//   - One PRStatusRepoDoneMsg per repo, so the deck's per-row glyphs
+	//     populate incrementally (no waiting for the slowest peer) and
+	//     the global pr-status activity ticks down N/M live.
+	//   - A closing PRStatusDoneMsg when every repo has reported (or the
+	//     10s deadline fires), so the model can clear the activity.
+	//
+	// Per-repo errors land in the streamed msg's Err field so a single
+	// failed repo never blocks the others.
 	//
 	// On success, the new results are merged into the persisted cache so
 	// subsequent deck opens within the cooldown window have data without
-	// hitting gh.
-	//
-	// Per-repo events are appended to /tmp/awp-deck.log on a best-effort
-	// basis so `tail -f /tmp/awp-deck.log` while running `awp deck` exposes
-	// what gh saw without crowding the TUI status line.
+	// hitting gh. Per-repo events are appended to /tmp/awp-deck.log on
+	// a best-effort basis so `tail -f /tmp/awp-deck.log` while running
+	// `awp deck` exposes what gh saw without crowding the TUI status line.
 	prStatusFetcher := func(repos []string) tea.Cmd {
 		return func() tea.Msg {
 			deckDebugLogf("prStatus fetch start repos=%d", len(repos))
 			if len(repos) == 0 {
-				return deckui.PRStatusDoneMsg{ByRepo: map[string]map[string]deckui.PRStatus{}, FetchedAt: time.Now()}
+				return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
 			}
-			type result struct {
-				repo    string
-				byHead  map[string]deckui.PRStatus
-				err     error
-			}
-			ch := make(chan result, len(repos))
+			ch := make(chan deckui.PRStatusRepoDoneMsg, len(repos))
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
 			for _, r := range repos {
 				dir := r
 				go func() {
@@ -379,7 +401,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 					statuses, err := gh.ListPRStatus(dir)
 					if err != nil {
 						deckDebugLogf("prStatus repo=%s err=%v dur=%s", dir, err, time.Since(started))
-						ch <- result{repo: dir, err: err}
+						ch <- deckui.PRStatusRepoDoneMsg{Repo: dir, Err: err}
 						return
 					}
 					byHead := make(map[string]deckui.PRStatus, len(statuses))
@@ -394,44 +416,47 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 						}
 					}
 					deckDebugLogf("prStatus repo=%s prs=%d dur=%s heads=%v", dir, len(statuses), time.Since(started), sortedHeads(byHead))
-					ch <- result{repo: dir, byHead: byHead}
+					ch <- deckui.PRStatusRepoDoneMsg{Repo: dir, ByHead: byHead}
 				}()
 			}
+			// Collect results into a batch of tea.Cmds: one cmd per
+			// repo done message (so each shows up as an independent
+			// Update), then a final closing cmd. Bubble Tea's batch
+			// delivery preserves order within the batch, so the
+			// closing PRStatusDoneMsg always lands after the per-repo
+			// updates.
+			perRepoCmds := make([]tea.Cmd, 0, len(repos))
 			byRepo := make(map[string]map[string]deckui.PRStatus, len(repos))
-			errs := make(map[string]error)
+			errCount := 0
 			for i := 0; i < len(repos); i++ {
 				select {
 				case r := <-ch:
-					if r.err != nil {
-						errs[r.repo] = r.err
-					} else {
-						byRepo[r.repo] = r.byHead
+					rr := r
+					perRepoCmds = append(perRepoCmds, func() tea.Msg { return rr })
+					if rr.Err != nil {
+						errCount++
+					} else if rr.ByHead != nil {
+						byRepo[rr.Repo] = rr.ByHead
 					}
 				case <-ctx.Done():
+					cancel()
 					deckDebugLogf("prStatus timeout; partial results repos_done=%d/%d", i, len(repos))
-					return deckui.PRStatusDoneMsg{ByRepo: byRepo, Errs: errs, FetchedAt: time.Now()}
+					// Best-effort persist of whatever landed so far.
+					persistPRStatusMerge(byRepo, time.Now())
+					perRepoCmds = append(perRepoCmds, func() tea.Msg {
+						return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
+					})
+					return tea.BatchMsg(perRepoCmds)
 				}
 			}
+			cancel()
 			fetchedAt := time.Now()
-			deckDebugLogf("prStatus fetch done ok=%d errs=%d", len(byRepo), len(errs))
-			// Merge into the persisted cache so the cooldown survives a
-			// deck restart. Read-merge-write each time keeps the cache
-			// honest when this process and another concurrent deck both
-			// touched it.
-			persistByRepo, persistFetchedAt, loadErr := loadPRStatusCache()
-			if loadErr != nil {
-				deckDebugLogf("prStatus cache reload err=%v", loadErr)
-				persistByRepo = map[string]map[string]deckui.PRStatus{}
-				persistFetchedAt = map[string]time.Time{}
-			}
-			for repo, byHead := range byRepo {
-				persistByRepo[repo] = byHead
-				persistFetchedAt[repo] = fetchedAt
-			}
-			if saveErr := savePRStatusCache(persistByRepo, persistFetchedAt); saveErr != nil {
-				deckDebugLogf("prStatus cache save err=%v", saveErr)
-			}
-			return deckui.PRStatusDoneMsg{ByRepo: byRepo, Errs: errs, FetchedAt: fetchedAt}
+			deckDebugLogf("prStatus fetch done ok=%d errs=%d", len(byRepo), errCount)
+			persistPRStatusMerge(byRepo, fetchedAt)
+			perRepoCmds = append(perRepoCmds, func() tea.Msg {
+				return deckui.PRStatusDoneMsg{FetchedAt: fetchedAt}
+			})
+			return tea.BatchMsg(perRepoCmds)
 		}
 	}
 	// bookmarkLinkHandler persists a chosen bookmark onto the workspace's
