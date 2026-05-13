@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/diff"
 )
 
@@ -381,30 +382,30 @@ func (m Model) View() string {
 }
 
 var (
-	styleHeader             = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("110")).Padding(0, 1)
-	styleSelected           = lipgloss.NewStyle().Background(lipgloss.Color("60")).Foreground(lipgloss.Color("189")).Bold(true)
-	styleDim                = lipgloss.NewStyle().Foreground(lipgloss.Color("103"))
-	styleMuted              = lipgloss.NewStyle().Foreground(lipgloss.Color("146"))
-	stylePathDir            = lipgloss.NewStyle().Foreground(lipgloss.Color("147"))
-	stylePathBase           = lipgloss.NewStyle().Foreground(lipgloss.Color("189")).Bold(true)
-	styleAdded              = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	styleDeleted            = lipgloss.NewStyle().Foreground(lipgloss.Color("210"))
-	styleContext            = lipgloss.NewStyle().Foreground(lipgloss.Color("152"))
-	styleLineNo             = lipgloss.NewStyle().Foreground(lipgloss.Color("103"))
-	styleStatus             = lipgloss.NewStyle().Foreground(lipgloss.Color("147")).Padding(0, 1)
-	styleStatusErr          = lipgloss.NewStyle().Foreground(lipgloss.Color("210")).Padding(0, 1)
-	styleHunkHeader         = lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
-	styleFocusBorder        = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("110"))
-	styleNormalBorder       = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("60"))
-	styleAddedBadge         = lipgloss.NewStyle().Foreground(lipgloss.Color("24")).Background(lipgloss.Color("114")).Bold(true).Padding(0, 1)
-	styleDeletedBadge       = lipgloss.NewStyle().Foreground(lipgloss.Color("234")).Background(lipgloss.Color("210")).Bold(true).Padding(0, 1)
-	styleModifiedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color("234")).Background(lipgloss.Color("223")).Bold(true).Padding(0, 1)
-	styleRenameBadge        = lipgloss.NewStyle().Foreground(lipgloss.Color("24")).Background(lipgloss.Color("117")).Bold(true).Padding(0, 1)
-	styleSelectedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color("24")).Background(lipgloss.Color("189")).Bold(true).Padding(0, 1)
-	styleSelectedPathDir    = lipgloss.NewStyle().Foreground(lipgloss.Color("225"))
-	styleSelectedPathBase   = lipgloss.NewStyle().Foreground(lipgloss.Color("231")).Bold(true)
-	styleSelectedLineNo     = lipgloss.NewStyle().Foreground(lipgloss.Color("225"))
-	styleSelectedHunkHeader = lipgloss.NewStyle().Foreground(lipgloss.Color("24")).Background(lipgloss.Color("117")).Bold(true)
+	styleHeader             = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Padding(0, 1)
+	styleSelected           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleDim                = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleMuted              = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	stylePathDir            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	stylePathBase           = lipgloss.NewStyle().Bold(true)
+	styleAdded              = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success))
+	styleDeleted            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
+	styleContext            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleLineNo             = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleStatus             = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Padding(0, 1)
+	styleStatusErr          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Padding(0, 1)
+	styleHunkHeader         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	styleFocusBorder        = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(charm.Accent))
+	styleNormalBorder       = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(charm.Muted))
+	styleAddedBadge         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success)).Bold(true).Padding(0, 1)
+	styleDeletedBadge       = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true).Padding(0, 1)
+	styleModifiedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
+	styleRenameBadge        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true).Padding(0, 1)
+	styleSelectedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
+	styleSelectedPathDir    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	styleSelectedPathBase   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	styleSelectedLineNo     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	styleSelectedHunkHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 )
 
 func (m Model) renderHeader() string {

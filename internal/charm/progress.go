@@ -7,10 +7,10 @@ import (
 )
 
 var (
-	progressStep = lipgloss.NewStyle().Foreground(colorAccentStrong)
-	progressOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
-	progressInfo = lipgloss.NewStyle().Foreground(colorHint)
-	progressWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	progressStep = lipgloss.NewStyle().Foreground(colorAccent)
+	progressOK   = lipgloss.NewStyle().Foreground(lipgloss.Color(Success)).Bold(true)
+	progressInfo = lipgloss.NewStyle().Foreground(colorMuted)
+	progressWarn = lipgloss.NewStyle().Foreground(lipgloss.Color(Warning)).Bold(true)
 	progressSkip = lipgloss.NewStyle().Foreground(colorMuted)
 	progressOut  = lipgloss.NewStyle().Foreground(colorMuted)
 )

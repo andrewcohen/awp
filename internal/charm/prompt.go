@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	promptQuestion = lipgloss.NewStyle().Bold(true).Foreground(colorAccentStrong)
-	promptLabel    = lipgloss.NewStyle().Bold(true).Foreground(colorText)
-	promptHintSty  = lipgloss.NewStyle().Foreground(colorHint)
-	promptCueSty   = lipgloss.NewStyle().Bold(true).Foreground(colorAccentStrong)
+	promptQuestion = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	promptLabel    = lipgloss.NewStyle().Bold(true)
+	promptHintSty  = lipgloss.NewStyle().Foreground(colorMuted)
+	promptCueSty   = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 )
 
 func Confirm(in io.Reader, out io.Writer, question string, defaultYes bool) (bool, error) {

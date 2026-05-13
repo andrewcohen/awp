@@ -154,7 +154,7 @@ func refreshJobsListCmd(r JobsListRefresher) tea.Cmd {
 // always stays visible.
 func composeStatusBar(activities []Activity, spinnerGlyph, right string, width int) string {
 	left := renderActivitiesCompact(activities, spinnerGlyph)
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("? help")
+	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("? help")
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
 	hintW := lipgloss.Width(hint)
@@ -198,17 +198,17 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 		innerWidth = 38
 	}
 
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117")).Width(innerWidth)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Width(innerWidth)
 	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · r retry · x dismiss · o open log · y yank)")
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("241")).
+		BorderForeground(lipgloss.Color(colMuted)).
 		Padding(1, 2).
 		Width(boxWidth)
 
 	if len(jobs) == 0 {
-		empty := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(innerWidth).
+		empty := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(innerWidth).
 			Render("No jobs in flight. Press n to create a workspace.")
 		body := lipgloss.JoinVertical(lipgloss.Left, title, "", empty)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, boxStyle.Render(body))
@@ -236,11 +236,9 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 
 func renderJobsList(jobs []Job, cursor, width int) string {
 	rowStyle := lipgloss.NewStyle().Width(width)
-	selStyle := rowStyle.
-		Background(lipgloss.Color("236")).
-		Foreground(lipgloss.Color("231")).
-		Bold(true)
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	selStyle := rowStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	barStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
 
 	lines := make([]string, 0, len(jobs))
 	for i, j := range jobs {
@@ -250,7 +248,11 @@ func renderJobsList(jobs []Job, cursor, width int) string {
 		if title == "" {
 			title = j.ID
 		}
-		row := fmt.Sprintf("%s %s", glyphStyle.Render(glyph), title)
+		prefix := "  "
+		if i == cursor {
+			prefix = barStyle.Render("┃") + " "
+		}
+		row := fmt.Sprintf("%s%s %s", prefix, glyphStyle.Render(glyph), title)
 		if i == cursor {
 			lines = append(lines, selStyle.Render(row))
 		} else {
@@ -265,9 +267,9 @@ func renderJobDetails(j Job, width int) string {
 	glyph, color := jobStatusGlyph(j.Status)
 	glyphStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
 	headerStyle := lipgloss.NewStyle().Bold(true).Width(width)
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(width)
-	logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Width(width)
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Width(width)
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(width)
+	logStyle := lipgloss.NewStyle().Width(width)
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Width(width)
 
 	lines := []string{
 		headerStyle.Render(fmt.Sprintf("%s  %s", glyphStyle.Render(glyph), j.Title)),
@@ -450,16 +452,16 @@ func writeOSC52Clipboard(text string) error {
 func jobStatusGlyph(s JobStatus) (string, string) {
 	switch s {
 	case JobRunning, JobPending:
-		return "▶", "39"
+		return "▶", colInfo
 	case JobDone:
-		return "✓", "78"
+		return "✓", colSuccess
 	case JobError:
-		return "⚠", "203"
+		return "⚠", colDanger
 	case JobCancelled:
-		return "⊘", "245"
+		return "⊘", colMuted
 	case JobOrphaned:
-		return "☠", "172"
+		return "☠", colWarning
 	}
-	return "·", "245"
+	return "·", colMuted
 }
 

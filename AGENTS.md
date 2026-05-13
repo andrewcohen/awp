@@ -33,6 +33,84 @@ The deck and other TUIs are built on Bubble Tea + lipgloss. When working on UI:
 - Terminals render whole rows only — half-line gaps don't exist. If a layout feels too dense, prefer a faint top/bottom border (`BorderTop(true).BorderForeground(...)`) over stacking blanks.
 - Keep the `?` help overlay in `internal/deckui/model.go::renderHelp` updated whenever you add or rebind a key, or change a status state.
 
+### Design system (colors, padding, selection)
+
+The TUI runs against Catppuccin Macchiato as the developer's working theme.
+The conventions below keep every screen — deck, diff viewer, CLI pickers,
+charm prompts — looking consistent. **Don't introduce variant styles.**
+
+**Colors.** All colors route through the shared palette in
+`internal/charm/palette.go` (exported tokens) or its package-local aliases
+(`internal/deckui/palette.go`). The tokens are ANSI 16 indices ("0"–"15")
+so the user's terminal palette remaps them automatically:
+
+| Token | ANSI | Semantic role |
+|-------|------|---------------|
+| `Accent` | 6 (teal) | Titles, headers, "starting" status, open PR, focus |
+| `Info` | 4 (blue) | PR numbers, job-running glyph |
+| `Success` | 2 (green) | Working / approved / done / author |
+| `Warning` | 3 (yellow) | Waiting / pending / draft / **row selection** / orphaned |
+| `Danger` | 1 (red) | Errors, CI failing |
+| `Spinner` | 5 (magenta) | Spinner only |
+| `Strong` | 15 (bright white) | Emphasized text |
+| `Muted` | 8 (bright black) | Hints, footer, dim labels |
+| `BgPanel` | 0 (surface) | Reserved — currently unused |
+
+- **Never** call `lipgloss.Color("123")` with a raw 256-color code. Add a
+  semantic token to `internal/charm/palette.go` first if you need a new
+  role.
+- **Never** call `.Background(...)` on body or padding cells. The deck
+  renders in inline mode (no alt-screen — see `internal/cli/deck.go`), so
+  unpainted cells inherit the tmux pane bg and blend naturally. Painted bg
+  cells stand out as a different shade.
+
+**Selection style.** Every list / picker / overlay uses the same
+selection treatment so the eye instantly recognizes "this is the active
+row" regardless of which screen you're on:
+
+- `Foreground(charm.Warning).Bold(true)` on the row's label
+- A `┃ ` left-bar prefix in `colWarning` + bold (use the prefix slot
+  pattern — see `renderList` in `internal/deckui/model.go`)
+- No background fill, no inverse video, no border-left chip
+
+Touched lists: deck workspace list, jobs overlay, new menu, open picker,
+bookmark picker, review picker, `new_flow.go` standalone pickers, the diff
+viewer's `styleSelected`, and bubbles list theming in `charm/theme.go`.
+Add new selectable lists in the same shape.
+
+**Panel padding.** All body-area panels use `Padding(1, 1, 1, 1)` — 1 row
+top/bottom, 1 col left/right. The footer (`composeStatusBar` wrapper) does
+the same. This gives the deck a uniform 1-cell breathing margin and keeps
+every panel's content aligned at col 1.
+
+- Modals/popovers (help, jobs overlay) have their own `Padding(1, 2)`
+  inside a rounded border — keep that pattern.
+- The footer renders via `composeStatusBar(activities, spinnerGlyph,
+  rightSeg, m.width-2)` wrapped in `Padding(1, 1, 1, 1)`.
+
+**Status messages.** Cancellations clear `m.status` to `""` instead of
+printing `"...: cancelled"`. The user already pressed esc; echoing the
+fact is noise. Errors and completion messages still set `m.status` for
+durable feedback.
+
+**Spinner.** Tick handler in `case spinner.TickMsg` continues while
+either `m.busy` (foreground work) OR `len(m.activities) > 0` (background
+work in the activity bar). Bootstrap a `m.spinner.Tick` from
+`case jobsListMsg` when `len(m.activities) > 0` so the spinner glyph in
+the bottom bar actually animates from a cold start.
+
+**Inline mode (no alt-screen).** `internal/cli/deck.go` calls
+`tea.NewProgram(model, ...)` without `tea.WithAltScreen()`. The deck
+renders directly into the tmux pane so its bg blends with the surrounding
+pane. The `padBlock` between body and footer is space-filled (no SGR) to
+overwrite previous-frame cells without painting a bg.
+
+**Help overlay layout.** `renderHelp` uses a two-column layout when
+`innerWidth >= 70`: status legend (agent / PR / activity) on the left,
+key bindings on the right. Falls back to vertical stacking on narrower
+viewports. Status legend rows show glyph + state name only — no verbose
+explanations.
+
 ### Bubble Tea program structure
 
 **One program, one renderer.** The deck is a single `tea.Program`. Modal flows
