@@ -517,6 +517,17 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 			return err
 		}
 	}
+	// Invalidate the repo's PR-status cache entry so the next deck open
+	// fetches fresh data instead of reusing the previous fetch's cache
+	// inside the 60s throttle window. The deck quits after a workspace
+	// create / review-open, so the user lands in the new tmux session
+	// first; reopening the deck immediately afterwards is the common
+	// path that benefits from this.
+	if sessionWasNew {
+		if err := invalidatePRStatusCacheRepo(repoRoot); err != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("pr-status cache invalidate: %v", err))
+		}
+	}
 	if req.NoSwitch {
 		return nil
 	}

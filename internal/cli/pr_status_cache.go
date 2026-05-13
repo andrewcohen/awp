@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/andrewcohen/awp/internal/deckui"
@@ -65,6 +66,30 @@ func loadPRStatusCache() (map[string]map[string]deckui.PRStatus, map[string]time
 		}
 	}
 	return byRepo, fetchedAt, nil
+}
+
+// invalidatePRStatusCacheRepo drops one repo's entry from the persisted cache.
+// Used after a workspace-create or review-open to ensure the next deck open
+// fetches fresh PR status for that repo instead of reusing the previous
+// fetch's data within the 60s throttle window. Best-effort: caller logs but
+// does not fail on disk error.
+func invalidatePRStatusCacheRepo(repo string) error {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil
+	}
+	byRepo, fetchedAt, err := loadPRStatusCache()
+	if err != nil {
+		return err
+	}
+	if _, hadEntry := byRepo[repo]; !hadEntry {
+		if _, hadTs := fetchedAt[repo]; !hadTs {
+			return nil
+		}
+	}
+	delete(byRepo, repo)
+	delete(fetchedAt, repo)
+	return savePRStatusCache(byRepo, fetchedAt)
 }
 
 // savePRStatusCache writes the cache to disk atomically (write to a temp file
