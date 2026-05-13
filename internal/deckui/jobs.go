@@ -109,19 +109,6 @@ type JobLogOpener func(jobID string) tea.Cmd
 // the retry couldn't be dispatched (e.g. unknown id, store error).
 type JobRetryHandler func(jobID string) error
 
-// JobCounts is the small summary the tray renders. Derived from the
-// jobs list every refresh tick.
-type JobCounts struct {
-	Running  int
-	Failed   int
-	Orphaned int
-}
-
-// HasAny reports whether the tray should be visible.
-func (c JobCounts) HasAny() bool {
-	return c.Running > 0 || c.Failed > 0 || c.Orphaned > 0
-}
-
 // hasActiveJobs reports whether any cached job is non-terminal. Used to
 // gate the periodic jobs refresh so terminal records don't keep
 // triggering disk reads.
@@ -132,21 +119,6 @@ func hasActiveJobs(jobs []Job) bool {
 		}
 	}
 	return false
-}
-
-func countsFromJobs(jobs []Job) JobCounts {
-	var c JobCounts
-	for _, j := range jobs {
-		switch j.Status {
-		case JobPending, JobRunning:
-			c.Running++
-		case JobError:
-			c.Failed++
-		case JobOrphaned:
-			c.Orphaned++
-		}
-	}
-	return c
 }
 
 type jobsListMsg struct{ jobs []Job }
@@ -168,53 +140,27 @@ func refreshJobsListCmd(r JobsListRefresher) tea.Cmd {
 	}
 }
 
-// trayStyle is the lipgloss style for the async-jobs tray line. It
-// sits directly under the status line and is only rendered when
-// counts are non-zero.
-var trayStyle = lipgloss.NewStyle().
-	MarginTop(0).
-	MarginBottom(1).
-	Foreground(lipgloss.Color("245"))
-
-var trayRunningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-var trayFailedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-var trayOrphanStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("172")).Bold(true)
-var trayHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-
-// renderJobCountsCompact builds the inline counts segment used in the
-// merged status bar. Empty when no counts are non-zero.
-func renderJobCountsCompact(c JobCounts) string {
-	if !c.HasAny() {
-		return ""
-	}
-	parts := []string{}
-	if c.Running > 0 {
-		parts = append(parts, trayRunningStyle.Render(fmt.Sprintf("▶ %d", c.Running)))
-	}
-	if c.Failed > 0 {
-		parts = append(parts, trayFailedStyle.Render(fmt.Sprintf("⚠ %d", c.Failed)))
-	}
-	if c.Orphaned > 0 {
-		parts = append(parts, trayOrphanStyle.Render(fmt.Sprintf("☠ %d", c.Orphaned)))
-	}
-	return strings.Join(parts, " ")
-}
-
-// composeStatusBar lays out a single bottom line: counts on the left,
-// status/filter/mode text on the right, separated by flexible padding.
-// Width-aware so the right segment doesn't wrap on narrow terminals.
-func composeStatusBar(c JobCounts, right string, width int) string {
-	left := renderJobCountsCompact(c)
+// composeStatusBar lays out a single bottom line:
+//
+//	activities   right segment   ? help
+//
+// Activities are the unified surface for both in-flight background
+// work (pr-status, enrich, workspace rename/link) and async jobs
+// (workspace create/delete via the jobs subsystem) — callers project
+// jobs into activities via Model.syncJobActivities before rendering.
+//
+// Width-aware: drop order under width pressure is hint → activities
+// → right segment, so the filter / find-mode input on the right
+// always stays visible.
+func composeStatusBar(activities []Activity, spinnerGlyph, right string, width int) string {
+	left := renderActivitiesCompact(activities, spinnerGlyph)
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("? help")
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
 	hintW := lipgloss.Width(hint)
-	// Layout: "<left>   <right>   <hint>"  with flexible gap between
-	// left and right. Drop sections progressively if they don't fit.
 	gap := 3
 	used := leftW + rightW + hintW + 2*gap
 	if width <= 0 || used <= width {
-		// Pad so hint sits flush right.
 		fill := width - used
 		if fill < 0 {
 			fill = 0
@@ -229,27 +175,11 @@ func composeStatusBar(c JobCounts, right string, width int) string {
 		segs = append(segs, strings.Repeat(" ", fill)+hint)
 		return strings.Join(segs, strings.Repeat(" ", gap))
 	}
-	// Tight: drop hint first, then left.
+	// Tight: drop the hint first, then activities.
 	if leftW+rightW+gap <= width {
 		return left + strings.Repeat(" ", gap) + right
 	}
 	return right
-}
-
-// statusToastFor returns a brief one-line message suitable for
-// putting into Model.status when an async dispatch happens.
-func statusToastFor(spec AsyncJobSpec) string {
-	label := spec.Title
-	if label == "" {
-		label = spec.Name
-	}
-	if label == "" {
-		label = spec.Bookmark
-	}
-	if label == "" {
-		label = spec.Action
-	}
-	return fmt.Sprintf("queued · %s", label)
 }
 
 // renderJobsOverlay renders the full-screen jobs overlay at the

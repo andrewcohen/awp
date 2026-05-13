@@ -1,6 +1,7 @@
 package deckui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -536,29 +537,38 @@ func TestRenameFormRejectsEmptyAndUnchangedNames(t *testing.T) {
 	}
 }
 
-func TestRenderJobCountsCompactShowsCounts(t *testing.T) {
-	out := renderJobCountsCompact(JobCounts{Running: 2, Failed: 1})
-	if out == "" {
-		t.Fatal("expected non-empty counts segment")
-	}
-	if !contains(out, "2") || !contains(out, "1") {
-		t.Fatalf("counts segment missing counts: %q", out)
-	}
-}
-
-func TestRenderJobCountsCompactEmpty(t *testing.T) {
-	if got := renderJobCountsCompact(JobCounts{}); got != "" {
-		t.Fatalf("expected empty counts segment, got %q", got)
-	}
-}
-
 func TestComposeStatusBarIncludesHelpHint(t *testing.T) {
-	bar := composeStatusBar(JobCounts{Running: 1}, "ready", 80)
+	bar := composeStatusBar(nil, "⠼", "ready", 80)
 	if !contains(bar, "? help") {
 		t.Fatalf("status bar missing help hint: %q", bar)
 	}
 	if !contains(bar, "ready") {
 		t.Fatalf("status bar missing right segment: %q", bar)
+	}
+}
+
+func TestComposeStatusBarShowsActivityBeforeRight(t *testing.T) {
+	activities := []Activity{{ID: "pr-status", Label: "pr-status", Done: 1, Total: 3}}
+	bar := composeStatusBar(activities, "⠼", "ready", 120)
+	prIdx := strings.Index(bar, "pr-status")
+	readyIdx := strings.Index(bar, "ready")
+	if prIdx < 0 || readyIdx < 0 {
+		t.Fatalf("bar missing expected segments: %q", bar)
+	}
+	if prIdx > readyIdx {
+		t.Fatalf("expected activity before right segment, got bar=%q", bar)
+	}
+}
+
+func TestComposeStatusBarDropsActivityBeforeRightUnderWidthPressure(t *testing.T) {
+	activities := []Activity{{ID: "pr-status", Label: "pr-status fetching repos", Done: 1, Total: 9}}
+	right := "filter: \"verylongfilterneedle\" · ready"
+	bar := composeStatusBar(activities, "⠼", right, 30)
+	if !strings.Contains(bar, "ready") {
+		t.Fatalf("expected right segment to survive narrow width, got %q", bar)
+	}
+	if strings.Contains(bar, "pr-status") {
+		t.Fatalf("expected activity segment to drop under width pressure, got %q", bar)
 	}
 }
 

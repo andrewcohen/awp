@@ -314,17 +314,27 @@ type PRStatus struct {
 }
 
 // PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more
-// repos (one gh call per repo, parallel). The result is delivered as a
-// PRStatusDoneMsg keyed by repoRoot.
+// repos (one gh call per repo, parallel). The fetcher streams one
+// PRStatusRepoDoneMsg per repo as it completes (so the per-repo glyphs
+// land incrementally and the activity counter ticks down), then emits a
+// closing PRStatusDoneMsg when the fan-out completes (or times out).
 type PRStatusFetcher func(repoRoots []string) tea.Cmd
 
-// PRStatusDoneMsg carries the result of an async PR-status fetch. ByRepo maps
-// repoRoot → headRefName → PRStatus. Errs maps repoRoot → error for any repo
-// whose fetch failed; the deck surfaces a non-blocking status-line message,
-// but rows for successful repos still render their glyphs.
+// PRStatusRepoDoneMsg is emitted once per repo as its `gh pr list` call
+// finishes. The model uses these to update per-row glyphs and tick the
+// global pr-status activity incrementally. Err is set for the repo that
+// failed; ByHead is non-nil on success.
+type PRStatusRepoDoneMsg struct {
+	Repo   string
+	ByHead map[string]PRStatus
+	Err    error
+}
+
+// PRStatusDoneMsg signals the end of a PR-status fan-out — every repo
+// has either reported a PRStatusRepoDoneMsg or the 10s timeout fired.
+// FetchedAt is the wall clock used to refresh the per-repo throttle
+// timestamps for successful repos.
 type PRStatusDoneMsg struct {
-	ByRepo    map[string]map[string]PRStatus
-	Errs      map[string]error
 	FetchedAt time.Time
 }
 
@@ -432,7 +442,6 @@ type Model struct {
 	jobLogOpener       JobLogOpener
 	jobRetryHandler    JobRetryHandler
 	jobs               []Job
-	jobCounts          JobCounts
 	jobsOverlay        bool
 	jobsOverlayCursor  int
 
@@ -449,6 +458,10 @@ type Model struct {
 	// new-workspace form.
 	renameMode bool
 	renameForm renameWorkspaceForm
+
+	// activities is the ordered list of in-flight background
+	// operations rendered in the bottom status bar. See activity.go.
+	activities []Activity
 }
 
 const progressLogMax = 50
@@ -750,36 +763,40 @@ func (m Model) items() []Item {
 	return out
 }
 
+// initKickMsg drives the first-paint side effects (initial enrich
+// refresh, PR-status fan-out) from Update so they can register
+// activities on the model. Init can't mutate the model, so it dispatches
+// this self-message and lets the Update path start activities + return
+// the batched cmds.
+type initKickMsg struct{}
+
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{scheduleRefreshTick()}
 	if m.stateWatcher != nil {
 		cmds = append(cmds, m.stateWatcher())
 	}
-	// Kick the first enrichment refresh immediately so tmux-derived
-	// decorations (Active/Current/Stale, "exited" status) land within
-	// a few tens of ms of first paint instead of waiting refreshInterval.
-	if m.refresher != nil {
-		cmds = append(cmds, m.refresher())
-	}
-	if cmd := m.prStatusRefreshCmd(time.Now()); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
+	// Defer the enrichment and PR-status fan-out to Update via an
+	// initKickMsg so the matching activities can be registered on the
+	// model (Init has no way to mutate the model).
+	cmds = append(cmds, func() tea.Msg { return initKickMsg{} })
 	return tea.Batch(cmds...)
 }
 
 // prStatusRefreshCmd returns a tea.Cmd that fetches PR status for every repo
 // that has at least one non-default workspace AND has not been fetched within
-// prStatusMinInterval of now. Returns nil if no repos are due (or no fetcher
-// is configured).
-func (m Model) prStatusRefreshCmd(now time.Time) tea.Cmd {
+// prStatusMinInterval of now, and updates the model to reflect a started
+// pr-status activity. Returns the original model and a nil cmd if no repos
+// are due (or no fetcher is configured).
+func (m Model) prStatusRefreshCmd(now time.Time) (Model, tea.Cmd) {
 	if m.prStatusFetcher == nil {
-		return nil
+		return m, nil
 	}
 	repos := m.prStatusRepos(now)
 	if len(repos) == 0 {
-		return nil
+		return m, nil
 	}
-	return m.prStatusFetcher(repos)
+	m = m.startActivity("pr-status", "pr-status", len(repos))
+	return m, m.prStatusFetcher(repos)
 }
 
 // prStatusRepos returns the deduplicated, throttled list of repo roots that
@@ -830,6 +847,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+	case initKickMsg:
+		cmds := []tea.Cmd{}
+		if m.refresher != nil {
+			// enrich: register the activity for the cold-start
+			// refresh, then dispatch the fetch. The matching
+			// finishActivity runs on refreshDoneMsg.
+			m.refreshing = true
+			m = m.startActivity("enrich", "enrich", 0)
+			cmds = append(cmds, m.refresher())
+		}
+		var prCmd tea.Cmd
+		m, prCmd = m.prStatusRefreshCmd(time.Now())
+		if prCmd != nil {
+			cmds = append(cmds, prCmd)
+		}
+		return m, batchCmds(cmds...)
 	case spinner.TickMsg:
 		if m.busy {
 			var cmd tea.Cmd
@@ -874,7 +907,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case jobsListMsg:
 		m.jobs = msg.jobs
-		m.jobCounts = countsFromJobs(msg.jobs)
 		// Keep overlay cursor in range as jobs come and go.
 		if m.jobsOverlayCursor >= len(m.jobs) {
 			m.jobsOverlayCursor = len(m.jobs) - 1
@@ -882,6 +914,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.jobsOverlayCursor < 0 {
 			m.jobsOverlayCursor = 0
 		}
+		var expireCmd tea.Cmd
+		m, expireCmd = m.syncJobActivities(msg.jobs)
+		return m, expireCmd
+	case activityExpireMsg:
+		m = m.dropActivity(msg.id)
 		return m, nil
 	case JobActionDoneMsg:
 		if msg.Err != nil {
@@ -951,13 +988,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.progressDone = true
 		m.progressDoneAction = msg.action
+		var renameExpireCmd tea.Cmd
+		if msg.action == ActionRename {
+			m, renameExpireCmd = m.finishActivity("workspace:rename:" + msg.item.WorkspaceName)
+		}
 		if msg.err != nil {
 			m.progressErr = msg.err
 			if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
 				m.progressSteps[n-1].State = StepError
 			}
 			m.status = "error: " + msg.err.Error()
-			return m, nil
+			return m, renameExpireCmd
 		}
 		if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
 			m.progressSteps[n-1].State = StepDone
@@ -973,9 +1014,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingSelect = Item{ProjectName: msg.item.ProjectName, WorkspaceName: msg.arg}
 			if m.refresher != nil {
 				m.refreshing = true
-				return m, m.refresher()
+				m = m.startActivity("enrich", "enrich", 0)
+				return m, batchCmds(renameExpireCmd, m.refresher())
 			}
-			return m, nil
+			return m, renameExpireCmd
 		}
 		return m, tea.Quit
 	case StateEditDoneMsg:
@@ -986,6 +1028,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.refresher != nil {
 			m.refreshing = true
+			m = m.startActivity("enrich", "enrich", 0)
 			return m, m.refresher()
 		}
 		return m, nil
@@ -1032,25 +1075,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openFilter.Focus()
 		m.status = "open: type to filter · enter pick · esc cancel"
 		return m, textinput.Blink
-	case PRStatusDoneMsg:
+	case PRStatusRepoDoneMsg:
 		if m.prStatusByRepo == nil {
 			m.prStatusByRepo = make(map[string]map[string]PRStatus)
 		}
 		if m.prStatusFetchedAt == nil {
 			m.prStatusFetchedAt = make(map[string]time.Time)
 		}
-		fetchedAt := msg.FetchedAt
-		if fetchedAt.IsZero() {
-			fetchedAt = time.Now()
+		if msg.Err == nil && msg.ByHead != nil {
+			m.prStatusByRepo[msg.Repo] = msg.ByHead
+			m.prStatusFetchedAt[msg.Repo] = time.Now()
+		} else if msg.Err != nil {
+			m.status = "PR status: " + msg.Err.Error()
 		}
-		for repo, byHead := range msg.ByRepo {
-			m.prStatusByRepo[repo] = byHead
-			m.prStatusFetchedAt[repo] = fetchedAt
-		}
-		if n := len(msg.Errs); n > 0 {
-			m.status = fmt.Sprintf("PR status: %d repos failed", n)
-		}
+		m = m.tickActivity("pr-status", 1)
 		return m, nil
+	case PRStatusDoneMsg:
+		// Per-repo updates have already landed via PRStatusRepoDoneMsg.
+		// The closing message just finishes the global activity.
+		var expireCmd tea.Cmd
+		m, expireCmd = m.finishActivity("pr-status")
+		return m, expireCmd
 	case PRFetchDoneMsg:
 		m.busy = false
 		if !m.reviewMode {
@@ -1072,9 +1117,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case refreshDoneMsg:
 		m.refreshing = false
+		var enrichExpireCmd tea.Cmd
+		m, enrichExpireCmd = m.finishActivity("enrich")
 		if msg.err != nil {
 			m.status = "refresh: " + msg.err.Error()
-			return m, nil
+			return m, enrichExpireCmd
 		}
 		m.itemsCurrent = append([]Item(nil), msg.itemsCurrent...)
 		m.itemsAll = append([]Item(nil), msg.itemsAll...)
@@ -1093,7 +1140,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.cursor >= len(items) {
 			m.cursor = len(items) - 1
 		}
-		return m, nil
+		return m, enrichExpireCmd
 	case tea.KeyMsg:
 		if m.progressMode {
 			if !m.progressDone {
@@ -1111,6 +1158,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
 					}
 					m.refreshing = true
+					m = m.startActivity("enrich", "enrich", 0)
 					return m, m.refresher()
 				}
 				return m, nil
@@ -1777,6 +1825,8 @@ func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("renaming %s → %s...", target.WorkspaceName, newName)
+		renameID := "workspace:rename:" + target.WorkspaceName
+		m = m.startActivity(renameID, renameID, 0)
 		handler := m.handler
 		dispatch := func() tea.Msg {
 			err := handler(ActionRequest{Item: target, Action: ActionRename, Arg: newName, Reporter: noopActionReporter{}})
@@ -1891,11 +1941,22 @@ func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
 			delete(m.prStatusFetchedAt, target.RepoRoot)
 		}
 		cmds := []tea.Cmd{}
+		linkID := "workspace:link:" + target.WorkspaceName
+		*m = m.startActivity(linkID, linkID, 0)
+		updated, expireCmd := m.finishActivity(linkID)
+		*m = updated
+		if expireCmd != nil {
+			cmds = append(cmds, expireCmd)
+		}
 		if m.refresher != nil {
+			m.refreshing = true
+			*m = m.startActivity("enrich", "enrich", 0)
 			cmds = append(cmds, m.refresher())
 		}
-		if cmd := m.prStatusRefreshCmd(time.Now()); cmd != nil {
-			cmds = append(cmds, cmd)
+		var prCmd tea.Cmd
+		*m, prCmd = m.prStatusRefreshCmd(time.Now())
+		if prCmd != nil {
+			cmds = append(cmds, prCmd)
 		}
 		if len(cmds) == 0 {
 			return *m, nil
@@ -2104,10 +2165,12 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 }
 
 // startAsyncAction dispatches a non-create progress action through
-// the async launcher. No modal progress mode, no tea.Quit.
+// the async launcher. No modal progress mode, no tea.Quit. The
+// dispatched job appears in the activity bar via syncJobActivities,
+// so we deliberately do not write a "queued · …" status toast — it
+// would duplicate the activity entry.
 func (m *Model) startAsyncAction(spec AsyncJobSpec) (tea.Model, tea.Cmd) {
 	launcher := m.asyncJobLauncher
-	m.status = statusToastFor(spec)
 	dispatch := func() tea.Msg {
 		return asyncJobDispatchedMsg{spec: spec, err: launcher(spec)}
 	}
@@ -2199,7 +2262,6 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		err := launcher(spec)
 		return asyncJobDispatchedMsg{spec: spec, err: err}
 	}
-	m.status = statusToastFor(spec)
 	return *m, dispatch
 }
 
@@ -2352,7 +2414,7 @@ func (m Model) View() string {
 	default:
 		rightSeg = dim.Render(statusText)
 	}
-	footer := composeStatusBar(m.jobCounts, rightSeg, m.width)
+	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, m.width)
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
 	pad := m.height - bodyHeight - footerHeight
@@ -2514,6 +2576,14 @@ func (m Model) renderHelp(width int) string {
 		prDot(prGlyphClosed, "244", "closed — PR closed without merging"),
 	}
 
+	activityLines := []string{
+		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("⠼ activity — in-flight background work (pr-status N/M, enrich, jobs)"),
+		lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Render("✓") + "  finished — 500ms flash before the entry disappears",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render("⚠") + "  failed job — stays visible until dismissed (J · x)",
+		lipgloss.NewStyle().Foreground(lipgloss.Color("172")).Render("☠") + "  orphaned job — subprocess died (J · x to dismiss)",
+	}
+
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
@@ -2534,6 +2604,8 @@ func (m Model) renderHelp(width int) string {
 		strings.Join(statusLines, "\n"),
 		"",
 		strings.Join(prLines, "\n"),
+		"",
+		strings.Join(activityLines, "\n"),
 		"",
 		strings.Join(keyLines, "\n"),
 	)

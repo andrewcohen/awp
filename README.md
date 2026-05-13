@@ -87,6 +87,17 @@ The status is fetched once when the deck opens, with a single `gh pr list --stat
 
 **Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
 
+### Activity bar (bottom of the deck)
+
+The bottom status line shows in-flight background work as a single segment between the row body and the right-aligned status / `? help`. It surfaces:
+
+- `⠼ pr-status N/M` while gh PR-status is fanning out across repos; ticks down per repo as each one returns.
+- `⠼ enrich` during the cold-start refresh, post-rename / post-delete / post-state-edit refreshes, and post-bookmark-link refreshes. The 5-second periodic refresh runs silently.
+- `⠼ workspace:rename:<name>` / `workspace:link:<name>` for the deck-local lifecycle actions that don't go through the async-jobs subsystem.
+- Each async deck job (workspace `create`, `delete`, `review`, custom `background: true` actions). Failed (`⚠`) and orphaned (`☠`) jobs stay visible in the bar until dismissed via the `J` overlay.
+
+Finished entries flash `✓ <label>` for 500ms before disappearing. When no background work is running, the bar is empty.
+
 ### Key bindings
 
 | Key | Action |
