@@ -1,0 +1,283 @@
+package deckui
+
+import (
+	"fmt"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// MiniRow is one workspace row in the mini-deck quick-jump list.
+// Kept flat (no nested structs) so the caller can build it directly
+// from state.JSONStore entries without dragging in workspace.Service.
+type MiniRow struct {
+	Project   string
+	Workspace string
+	RepoRoot  string
+	Path      string
+	Status    string
+	Unread    bool
+}
+
+// MiniModel is a Bubble Tea model for the mini-deck: a stripped-down
+// deck that only renders workspaces with an active agent or an
+// unread notification. Enter returns the selected row to the caller
+// via Chosen(); q/esc/ctrl+c quits with Chosen()==nil.
+type MiniModel struct {
+	rows   []MiniRow
+	cursor int
+	width  int
+	height int
+	chosen *MiniRow
+
+	// Easymotion (f-find) state, mirroring the deck's findMode but
+	// flattened: no project stage, just one set of per-row hints.
+	findMode    bool
+	findHints   map[int]string
+	findLookup  map[string]int
+	findPrefix  map[rune]bool
+	findPending rune
+}
+
+func NewMiniModel(rows []MiniRow) MiniModel {
+	return MiniModel{rows: rows, width: 60, height: 20}
+}
+
+func (m MiniModel) Init() tea.Cmd { return nil }
+
+func (m MiniModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+	case tea.KeyMsg:
+		if m.findMode {
+			return m.updateFind(msg)
+		}
+		switch msg.String() {
+		case "ctrl+c", "q", "esc":
+			return m, tea.Quit
+		case "j", "down":
+			if m.cursor < len(m.rows)-1 {
+				m.cursor++
+			}
+			return m, nil
+		case "k", "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+			return m, nil
+		case "g", "home":
+			m.cursor = 0
+			return m, nil
+		case "G", "end":
+			if len(m.rows) > 0 {
+				m.cursor = len(m.rows) - 1
+			}
+			return m, nil
+		case "f":
+			if len(m.rows) > 0 {
+				m.findMode = true
+				m.findHints, m.findLookup, m.findPrefix = buildMiniRowHints(m.rows)
+				m.findPending = 0
+			}
+			return m, nil
+		case "enter":
+			if len(m.rows) == 0 {
+				return m, tea.Quit
+			}
+			row := m.rows[m.cursor]
+			m.chosen = &row
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m MiniModel) updateFind(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.cancelFind()
+		return m, nil
+	case tea.KeyEnter:
+		m.cancelFind()
+		if len(m.rows) == 0 {
+			return m, tea.Quit
+		}
+		row := m.rows[m.cursor]
+		m.chosen = &row
+		return m, tea.Quit
+	}
+	if len(msg.Runes) != 1 {
+		return m, nil
+	}
+	r := msg.Runes[0]
+	if m.findPending != 0 {
+		hint := string(m.findPending) + string(r)
+		m.findPending = 0
+		if idx, ok := m.findLookup[hint]; ok {
+			m.cursor = idx
+			m.cancelFind()
+		}
+		return m, nil
+	}
+	hint := string(r)
+	if idx, ok := m.findLookup[hint]; ok {
+		m.cursor = idx
+		m.cancelFind()
+		return m, nil
+	}
+	if m.findPrefix[r] {
+		m.findPending = r
+	}
+	return m, nil
+}
+
+func (m *MiniModel) cancelFind() {
+	m.findMode = false
+	m.findPending = 0
+	m.findHints = nil
+	m.findLookup = nil
+	m.findPrefix = nil
+}
+
+func (m MiniModel) View() string {
+	title := lipgloss.NewStyle().Bold(true).Render("awp mini-deck")
+	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
+		Render("active or notified workspaces")
+	rows := []string{title, subtitle, ""}
+
+	if len(m.rows) == 0 {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
+			Render("Nothing waiting on you."))
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
+			MarginTop(1).Render("q quit"))
+		return lipgloss.NewStyle().Width(max(m.width, 1)).Padding(1, 1, 1, 1).
+			Render(strings.Join(rows, "\n"))
+	}
+
+	// Reserve a fixed-width prefix slot so the row layout doesn't jump
+	// when find-mode toggles on/off. 3 cols fits "[a]" or "[ab]"
+	// minus the trailing space (which the slot supplies).
+	const prefixWidth = 4
+	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	lastProject := ""
+	for i, r := range m.rows {
+		if r.Project != lastProject {
+			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+			if lastProject != "" {
+				headerStyle = headerStyle.MarginTop(1)
+			}
+			rows = append(rows, headerStyle.Render(r.Project))
+			lastProject = r.Project
+		}
+		prefix := "  "
+		if m.findMode {
+			if hint, ok := m.findHints[i]; ok {
+				prefix = renderFindHint(hint)
+			}
+		}
+		labelStyle := lipgloss.NewStyle()
+		if i == m.cursor && !m.findMode {
+			prefix = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(colWarning)).Bold(true).Render("┃") + " "
+			labelStyle = labelStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
+		}
+		// Always render the glyph so unread/notified rows surface their dot.
+		glyph := statusGlyph(r.Status, false, r.Unread)
+		label := truncate(r.Workspace, max(8, m.width-12))
+		line := fmt.Sprintf("%s %s %s",
+			prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
+		rows = append(rows, lipgloss.NewStyle().Width(max(m.width-2, 1)).Render(line))
+	}
+
+	hint := "j/k move · f find · enter jump · q quit"
+	if m.findMode {
+		if m.findPending != 0 {
+			hint = fmt.Sprintf("find: %c… (esc cancel)", m.findPending)
+		} else {
+			hint = "find: type a hint (esc cancel)"
+		}
+	}
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).MarginTop(1).
+		Render(hint)
+	rows = append(rows, footer)
+	return lipgloss.NewStyle().Width(max(m.width, 1)).Padding(1, 1, 1, 1).
+		Render(strings.Join(rows, "\n"))
+}
+
+// Chosen returns the row the user selected with enter, or nil if they
+// quit without choosing.
+func (m MiniModel) Chosen() *MiniRow { return m.chosen }
+
+// Cursor returns the current cursor index (test helper).
+func (m MiniModel) Cursor() int { return m.cursor }
+
+// Rows returns the loaded rows (test helper).
+func (m MiniModel) Rows() []MiniRow { return m.rows }
+
+// FindMode reports whether the model is currently in find/easymotion
+// mode (test helper).
+func (m MiniModel) FindMode() bool { return m.findMode }
+
+// MiniIncluded reports whether an entry's status/unread combination
+// qualifies it for the mini-deck.
+//
+// Mini-deck is for "things I should pay attention to right now":
+//   - working → an agent is actively generating output or running a
+//     tool. Always surface.
+//   - waiting → Claude is blocked on a permission/notification prompt.
+//     Surface ONLY when Unread, because Unread=false in practice
+//     means "I was attached to the session when the hook fired and
+//     already saw it" — at which point the row is just stale noise.
+//   - idle → only surface when Unread, meaning "the agent finished a
+//     turn and I haven't visited since". An idle row that's been
+//     read is just a quiet workspace.
+//   - exited → never surface. The agent process is gone; there is
+//     no one waiting on the other end of an enter press.
+//
+// Rows are further freshness-checked against tmux state by the caller.
+func MiniIncluded(status string, unread bool) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "working", "in progress", "in_progress", "running":
+		return true
+	case "waiting":
+		return unread
+	case "exited", "error":
+		return false
+	case "idle", "":
+		return unread
+	default:
+		return unread
+	}
+}
+
+// buildMiniRowHints assigns easymotion hints across every row. Uses
+// "<project>/<workspace>" as the assignHints input so that (a) duplicate
+// workspace names across projects don't collide (assignHints would
+// otherwise merge them in its map) and (b) the first-letter bucket is
+// the project name's first letter, which matches the visual grouping.
+func buildMiniRowHints(rows []MiniRow) (map[int]string, map[string]int, map[rune]bool) {
+	keys := make([]string, len(rows))
+	for i, r := range rows {
+		keys[i] = r.Project + "/" + r.Workspace
+	}
+	hintByKey := assignHints(keys)
+	forward := map[int]string{}
+	lookup := map[string]int{}
+	prefix := map[rune]bool{}
+	for i, key := range keys {
+		hint, ok := hintByKey[key]
+		if !ok {
+			continue
+		}
+		forward[i] = hint
+		lookup[hint] = i
+		if len([]rune(hint)) == 2 {
+			prefix[[]rune(hint)[0]] = true
+		}
+	}
+	return forward, lookup, prefix
+}

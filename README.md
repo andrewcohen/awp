@@ -55,6 +55,39 @@ bind a display-popup -E -w 90% -h 90% awp deck \; run-shell "awp deck-cleanup"
 
 Press `?` inside the deck for the full key + status legend.
 
+### Mini deck (quick-jump)
+
+```sh
+awp mini-deck
+```
+
+A short, filtered version of the deck that surfaces only workspaces that want your attention *right now*. Use it when you want to alt-tab between live agents without scrolling the full deck.
+
+- `j` / `k` move the cursor
+- `g` / `G` jump to top / bottom
+- `f` easymotion-style hint jump — type the single (or two-char) hint that appears next to a row to land the cursor on it
+- `enter` summons (creates or focuses) the workspace's tmux session and clears its unread badge
+- `q` / `esc` quit without jumping
+
+A row qualifies for the mini-deck when **all of**:
+
+1. Its name is not `default`. The `default` workspace is the jj-created stub that exists per project and almost always sits on a long-stale `waiting` from an old Claude permission prompt — surfacing one per project drowns out the rows you actually care about.
+2. Its status is one of:
+   - `working` — agent is generating output or running a tool. Always surfaced.
+   - `waiting` **with the unread flag set** — Claude fired its `Notification` hook (typically a permission prompt). The unread flag is only true if you weren't already attached to the session when the hook fired, so requiring it skips prompts you already saw and dealt with in-session. A `waiting` row without unread is just stale noise because Claude has no "no longer waiting" hook.
+   - `idle` **with the unread flag set** — agent finished a turn since you last visited.
+
+   `exited` workspaces never appear; nothing's listening on the other end. `idle` without unread is a quiet workspace and doesn't appear either.
+3. Its tmux session is actually alive and the `:agent` pane is still running an agent, not a bare shell. This catches the common case where the agent process died without firing an exit hook (Claude has no exit hook), so a stale `working` from days ago doesn't keep cluttering the list.
+
+Suggested tmux binding under capital `A` (lowercase `a` already opens the full deck):
+
+```tmux
+bind A display-popup -E -w 50% -h 60% awp mini-deck
+```
+
+The same PATH caveats as `awp deck` apply (see above) — use absolute paths or `set-environment -g PATH ...` if the popup exits 127.
+
 ### Agent status (the colored dot at the start of each row)
 
 | Color | State | Meaning |
@@ -149,6 +182,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | Command | Purpose |
 |---|---|
 | `awp deck` | Open the workspace dashboard |
+| `awp mini-deck` | Quick-jump list of workspaces with an active agent or unread notification |
 | `awp w open [name]` | Create or attach to a workspace (interactive form when run alone) |
 | `awp w list` | List workspaces in the current repo |
 | `awp w info <name>` | Show details for a workspace |
