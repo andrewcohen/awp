@@ -441,9 +441,11 @@ type Model struct {
 	// "<prefix>/", the form's workspace-name field is pre-filled with the
 	// stripped tail so the user gets a clean default ("andrew/foo" → "foo").
 	bookmarkPrefix string
-	userActions        []UserAction
-	actionMode         bool
-	actionAliasLookup  map[string]UserAction
+	userActions         []UserAction
+	userActionsResolver UserActionsResolver
+	actionMode          bool
+	actionMenuActions   []UserAction
+	actionAliasLookup   map[string]UserAction
 	spinner            spinner.Model
 	busy               bool
 	progressMode       bool
@@ -747,7 +749,18 @@ func scopeLabel(scope Scope, currentRepo string) string {
 	}
 }
 
+// UserActionsResolver returns the user actions available for a given
+// workspace repo root. When set, the deck consults it each time the
+// action menu opens so cross-project decks resolve actions against the
+// SELECTED workspace's config, not the deck-startup repo.
+type UserActionsResolver func(repoRoot string) []UserAction
+
 func (m Model) findUserAction(name string) (UserAction, bool) {
+	for _, ua := range m.actionMenuActions {
+		if ua.Name == name {
+			return ua, true
+		}
+	}
 	for _, ua := range m.userActions {
 		if ua.Name == name {
 			return ua, true
@@ -758,13 +771,35 @@ func (m Model) findUserAction(name string) (UserAction, bool) {
 
 func (m Model) WithUserActions(actions []UserAction) Model {
 	m.userActions = actions
-	m.actionAliasLookup = make(map[string]UserAction, len(actions))
-	for _, a := range actions {
-		if a.Alias != "" {
-			m.actionAliasLookup[a.Alias] = a
+	m.actionAliasLookup = aliasLookup(actions)
+	return m
+}
+
+func (m Model) WithUserActionsResolver(r UserActionsResolver) Model {
+	m.userActionsResolver = r
+	return m
+}
+
+// userActionsForRepo returns the action set the menu should show for
+// the workspace at repoRoot. Falls back to the static list passed via
+// WithUserActions when no resolver is configured or it yields nothing.
+func (m Model) userActionsForRepo(repoRoot string) []UserAction {
+	if m.userActionsResolver != nil && strings.TrimSpace(repoRoot) != "" {
+		if list := m.userActionsResolver(repoRoot); len(list) > 0 {
+			return list
 		}
 	}
-	return m
+	return m.userActions
+}
+
+func aliasLookup(actions []UserAction) map[string]UserAction {
+	out := make(map[string]UserAction, len(actions))
+	for _, a := range actions {
+		if a.Alias != "" {
+			out[a.Alias] = a
+		}
+	}
+	return out
 }
 
 // scopedSource returns the unfiltered item slice for the active scope.
@@ -1824,10 +1859,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "editing workspace-state.json..."
 			return m, m.stateEditor()
 		case "x":
-			if len(m.userActions) == 0 {
+			item, ok := m.selected()
+			var repoRoot string
+			if ok {
+				repoRoot = item.RepoRoot
+			}
+			actions := m.userActionsForRepo(repoRoot)
+			if len(actions) == 0 {
 				m.status = "no user actions configured"
 				return m, nil
 			}
+			m.actionMenuActions = actions
+			m.actionAliasLookup = aliasLookup(actions)
 			m.actionMode = true
 			m.status = m.actionModeStatus()
 			return m, nil
@@ -2406,8 +2449,12 @@ func actionLabel(a Action, arg string) string {
 }
 
 func (m Model) actionModeStatus() string {
-	parts := make([]string, 0, len(m.userActions))
-	for _, a := range m.userActions {
+	list := m.actionMenuActions
+	if len(list) == 0 {
+		list = m.userActions
+	}
+	parts := make([]string, 0, len(list))
+	for _, a := range list {
 		if a.Alias != "" {
 			parts = append(parts, fmt.Sprintf("%s:%s", a.Alias, a.Name))
 		}
