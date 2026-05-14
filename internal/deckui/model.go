@@ -1831,7 +1831,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionMode = true
 			m.status = m.actionModeStatus()
 			return m, nil
-		case "u":
+		case "d":
 			item, ok := m.selected()
 			if !ok {
 				return m, nil
@@ -2819,7 +2819,7 @@ func deckKeyGroups() []keyGroup {
 				{"R", "rename workspace"},
 				{"D", "delete workspace (or default → delete project)"},
 				{"B", "link bookmark to workspace (drives PR glyph)"},
-				{"u", "open dev URL in browser (auto-discovered)"},
+				{"d", "open dev URL in browser (auto-discovered)"},
 				{",", "edit global state file in $EDITOR"},
 			},
 		},
