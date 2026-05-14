@@ -22,6 +22,7 @@ import (
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/jobs"
+	"github.com/andrewcohen/awp/internal/portcapture"
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -519,8 +520,25 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		go runJobsStartupCleanup()
 	}
 
+	// devURLDiscoverer fans out one tmux pane-PID enumeration + one
+	// platform listener call per tick and returns a DevURLsMsg keyed by
+	// session name. Silent — no activity-bar entry.
+	devURLDiscoverer := func() tea.Cmd {
+		return func() tea.Msg {
+			panePIDs, err := tmuxClient.PanePIDsBySession()
+			if err != nil || len(panePIDs) == 0 {
+				return deckui.DevURLsMsg{URLs: nil}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			urls, _ := portcapture.Discover(ctx, panePIDs)
+			return deckui.DevURLsMsg{URLs: urls}
+		}
+	}
+
 	model := deckui.NewScoped(items, allItems, projectName, handler).
 		WithRefresher(refresher).
+		WithDevURLDiscoverer(devURLDiscoverer).
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).

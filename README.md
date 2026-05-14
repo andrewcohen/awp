@@ -98,6 +98,14 @@ The bottom status line shows in-flight background work as a single segment betwe
 
 Finished entries flash `✓ <label>` for 500ms before disappearing. When no background work is running, the bar is empty.
 
+### Dev URL capture
+
+When a workspace's tmux session has a process listening on a TCP port (e.g. `pnpm dev` launching Vite on 5173), the deck auto-discovers it and shows a `Dev: http://localhost:<port>` line in the right details panel. Press `u` to open the URL in your default browser.
+
+Detection works by enumerating listening sockets owned by descendants of any tmux pane in the workspace's session (no log scraping, no per-framework config), then picking the numerically lowest port in the range **1024–9999** — typically the HTTP server, since dev-tool sidecars like Vite's HMR socket sit on random high ports. The 1024–9999 cap also keeps ephemeral-range listeners (Claude Code's IPC socket, MCP servers, language servers) from being mistaken for dev URLs. The URL is always `http://localhost:<port>` regardless of whether the server binds to `127.0.0.1` or `0.0.0.0`; the bind address controls who can *reach* the server, not what URL works locally. The line disappears within ~2 seconds of the server stopping.
+
+Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a silent no-op.
+
 ### Key bindings
 
 | Key | Action |
@@ -119,6 +127,7 @@ Finished entries flash `✓ <label>` for 500ms before disappearing. When no back
 | `L` | Switch to last tmux session |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
+| `u` | Open the selected workspace's auto-discovered dev URL in your default browser |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
