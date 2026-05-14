@@ -27,6 +27,7 @@ type doctorService interface {
 
 type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error
+type miniDeckWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
 type newFlowWorkflow func(runner Runner, in io.Reader, out io.Writer) (newFlowResult, error)
 
@@ -41,6 +42,7 @@ type App struct {
 	newFlow       newFlowWorkflow
 	diff          diffWorkflow
 	deck          deckWorkflow
+	miniDeck      miniDeckWorkflow
 	review        reviewWorkflow
 	isPiped       func(io.Reader) bool
 	isInteractive func(io.Reader) bool
@@ -57,6 +59,7 @@ func NewApp(svc workspace.Service, out io.Writer) *App {
 		newFlow:       runNewFlowPreScreen,
 		diff:          runDiffWithCharm,
 		deck:          runDeckWithCharm,
+		miniDeck:      runMiniDeck,
 		review:        runReviewWithCharm,
 		isPiped:       isPipedInput,
 		isInteractive: isInteractiveInput,
@@ -76,6 +79,8 @@ func (a *App) Run(args []string) error {
 		return a.runDiff(args[1:])
 	case "deck":
 		return a.runDeck(args[1:])
+	case "mini-deck":
+		return a.runMiniDeck(args[1:])
 	case "deck-cleanup":
 		return runDeckCleanup(a.runner, a.out)
 	case "run-job":
@@ -692,6 +697,26 @@ func (a *App) runDeck(args []string) error {
 	return a.deck(a.runner, a.svc, a.in, a.out)
 }
 
+func (a *App) runMiniDeck(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp mini-deck")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Quick-jump list of workspaces with an active agent or an unread")
+		_, _ = fmt.Fprintln(a.out, "notification. j/k to move, enter to summon, q/esc to quit.")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Suggested tmux binding (capital A):")
+		_, _ = fmt.Fprintln(a.out, "  bind A display-popup -E -w 50% -h 60% awp mini-deck")
+		return nil
+	}
+	if len(args) != 0 {
+		return errors.New("mini-deck takes no arguments")
+	}
+	if a.miniDeck == nil {
+		return errors.New("mini-deck is not configured")
+	}
+	return a.miniDeck(a.runner, a.in, a.out)
+}
+
 func (a *App) runReview(args []string) error {
 	if isHelpArgSlice(args) {
 		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\nWith no argument, opens an interactive picker over `gh pr list`.")
@@ -721,7 +746,7 @@ func (a *App) runReview(args []string) error {
 }
 
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|diff|doctor|review|config|workspace|w> ...")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|mini-deck|diff|doctor|review|config|workspace|w> ...")
 	return nil
 }
 
