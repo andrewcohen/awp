@@ -1263,11 +1263,11 @@ func TestDevURLsMsgPopulatesDetails(t *testing.T) {
 	}
 }
 
-func TestUKeyOpensURLWhenAvailable(t *testing.T) {
+func TestDKeyOpensURLWhenAvailable(t *testing.T) {
 	item := Item{ProjectName: "awp", WorkspaceName: "x", SessionName: "awp/x"}
 	model := New([]Item{item}, nil)
 	// No URL discovered yet → status surfaces the empty case, no crash.
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m := updated.(Model)
 	if !strings.Contains(m.status, "no dev url") {
 		t.Fatalf("expected 'no dev url' status, got %q", m.status)
