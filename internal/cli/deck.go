@@ -247,9 +247,39 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			Focus:      focus,
 		})
 	}
-	actionsByName := make(map[string]deckui.UserAction, len(userActions))
-	for _, a := range userActions {
-		actionsByName[a.Name] = a
+	// userActionsForRepo loads the merged global+per-repo actions for
+	// the workspace at repoRoot. Returning a fresh list lets the deck
+	// resolve actions against the SELECTED workspace's repo each time
+	// the action menu opens — cross-project decks would otherwise show
+	// the deck-startup repo's actions for every selection.
+	userActionsForRepo := func(root string) []deckui.UserAction {
+		c, err := config.Load(root)
+		if err != nil {
+			return nil
+		}
+		out := make([]deckui.UserAction, 0, len(c.Actions))
+		for name, act := range c.Actions {
+			focus := true
+			if act.Focus != nil {
+				focus = *act.Focus
+			}
+			out = append(out, deckui.UserAction{
+				Name:       name,
+				Command:    act.Command,
+				Alias:      act.Alias,
+				Background: act.Background,
+				Focus:      focus,
+			})
+		}
+		return out
+	}
+	resolveUserAction := func(root, name string) (deckui.UserAction, bool) {
+		for _, a := range userActionsForRepo(root) {
+			if a.Name == name {
+				return a, true
+			}
+		}
+		return deckui.UserAction{}, false
 	}
 	handler := func(req deckui.ActionRequest) error {
 		if req.Action == deckui.ActionCreateWorkspace {
@@ -292,9 +322,13 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			reporter = noopReporter{}
 		}
 		if req.Action == deckui.ActionCustom {
-			ua, ok := actionsByName[req.Arg]
+			lookupRoot := strings.TrimSpace(req.Item.RepoRoot)
+			if lookupRoot == "" {
+				lookupRoot = repoRoot
+			}
+			ua, ok := resolveUserAction(lookupRoot, req.Arg)
 			if !ok {
-				return fmt.Errorf("unknown user action %q", req.Arg)
+				return fmt.Errorf("unknown user action %q in %s", req.Arg, lookupRoot)
 			}
 			actionSvc := svc
 			if strings.TrimSpace(req.Item.RepoRoot) != "" {
@@ -545,6 +579,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithBookmarkLinkHandler(bookmarkLinkHandler).
 		WithBookmarkPrefix(cfg.Deck.BookmarkPrefix).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
+		WithUserActionsResolver(userActionsForRepo).
 		WithScope(loadDeckScope()).
 		WithScopeChanged(saveDeckScope).
 		WithStateChangeWatcher(newDeckStateChangeWatcher()).
