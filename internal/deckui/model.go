@@ -19,10 +19,21 @@ import (
 // the tick is just a backstop for tmux-only transitions.
 const refreshInterval = 5 * time.Second
 
+// devURLInterval is how often the deck polls for dev-server URLs.
+// Tighter than refreshInterval because the "I just started pnpm dev"
+// → "URL appears in the right panel" feedback loop is the whole point
+// of the feature.
+const devURLInterval = 2 * time.Second
+
 type refreshTickMsg time.Time
+type devURLTickMsg time.Time
 
 func scheduleRefreshTick() tea.Cmd {
 	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg { return refreshTickMsg(t) })
+}
+
+func scheduleDevURLTick() tea.Cmd {
+	return tea.Tick(devURLInterval, func(t time.Time) tea.Msg { return devURLTickMsg(t) })
 }
 
 type Item struct {
@@ -187,6 +198,21 @@ type BookmarksDoneMsg struct {
 }
 
 type Refresher func() tea.Cmd
+
+// DevURLDiscoverer returns a tea.Cmd that performs port discovery for
+// every active tmux session and emits a DevURLsMsg. The deck owns the
+// 2s tick that drives the discoverer; the discoverer itself is
+// stateless. Without it, the `u` key is a no-op.
+type DevURLDiscoverer func() tea.Cmd
+
+// DevURLsMsg carries one snapshot of discovered dev URLs, keyed by
+// tmux session name. Missing keys mean "no URL discovered for that
+// session this tick" — the model treats every snapshot as authoritative
+// and replaces the cached map wholesale, so a URL that disappears
+// (server stopped) drops on the next tick.
+type DevURLsMsg struct {
+	URLs map[string]string
+}
 
 // StateChangeWatcher returns a command that emits StateChangedMsg when the
 // persisted workspace state file changes. It is an optimization layered on
@@ -462,6 +488,12 @@ type Model struct {
 	// activities is the ordered list of in-flight background
 	// operations rendered in the bottom status bar. See activity.go.
 	activities []Activity
+
+	// devURLs holds the most recent dev-server URL discovered for each
+	// tmux session, keyed by session name. Replaced wholesale on every
+	// DevURLsMsg so disappearing servers clear automatically.
+	devURLs          map[string]string
+	devURLDiscoverer DevURLDiscoverer
 }
 
 const progressLogMax = 50
@@ -550,6 +582,16 @@ func (m Model) indexCurrent() int {
 
 func (m Model) WithRefresher(r Refresher) Model {
 	m.refresher = r
+	return m
+}
+
+// WithDevURLDiscoverer installs the callback that resolves tmux
+// sessions to dev-server URLs (one per session, see
+// internal/portcapture). When set, the deck schedules a 2s tick that
+// dispatches the discoverer; the `u` key opens the URL of the
+// selected workspace in the system browser.
+func (m Model) WithDevURLDiscoverer(d DevURLDiscoverer) Model {
+	m.devURLDiscoverer = d
 	return m
 }
 
@@ -775,6 +817,12 @@ func (m Model) Init() tea.Cmd {
 	if m.stateWatcher != nil {
 		cmds = append(cmds, m.stateWatcher())
 	}
+	if m.devURLDiscoverer != nil {
+		// Kick off the dev-URL fan-out immediately so users don't wait
+		// 2 s for the first paint when reopening a deck with running
+		// servers, then enter the recurring tick from the result.
+		cmds = append(cmds, m.devURLDiscoverer(), scheduleDevURLTick())
+	}
 	// Defer the enrichment and PR-status fan-out to Update via an
 	// initKickMsg so the matching activities can be registered on the
 	// model (Init has no way to mutate the model).
@@ -895,6 +943,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(jobsCmd, scheduleRefreshTick())
 		}
 		return m, scheduleRefreshTick()
+	case devURLTickMsg:
+		// Background poll: fire the discoverer (if installed) and
+		// reschedule the next tick. The result lands as DevURLsMsg.
+		// Unlike refresh, we don't bother gating on overlay state —
+		// the discoverer is a silent fan-out that touches no UI.
+		if m.devURLDiscoverer == nil {
+			return m, nil
+		}
+		return m, tea.Batch(m.devURLDiscoverer(), scheduleDevURLTick())
+	case DevURLsMsg:
+		m.devURLs = msg.URLs
+		return m, nil
 	case StateChangedMsg:
 		cmds := []tea.Cmd{}
 		if m.stateWatcher != nil {
@@ -1770,6 +1830,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.actionMode = true
 			m.status = m.actionModeStatus()
+			return m, nil
+		case "u":
+			item, ok := m.selected()
+			if !ok {
+				return m, nil
+			}
+			url := m.devURLs[item.SessionName]
+			if url == "" {
+				m.status = "no dev url discovered for this workspace"
+				return m, nil
+			}
+			if err := openBrowser(url); err != nil {
+				m.status = "open url: " + err.Error()
+			} else {
+				m.status = "open: " + url
+			}
 			return m, nil
 		}
 	}
@@ -2743,6 +2819,7 @@ func deckKeyGroups() []keyGroup {
 				{"R", "rename workspace"},
 				{"D", "delete workspace (or default → delete project)"},
 				{"B", "link bookmark to workspace (drives PR glyph)"},
+				{"u", "open dev URL in browser (auto-discovered)"},
 				{",", "edit global state file in $EDITOR"},
 			},
 		},
@@ -2795,6 +2872,10 @@ func (m Model) renderDetails(width int) string {
 	}
 	if head := strings.TrimSpace(item.HeadDesc); head != "" {
 		lines = append(lines, fmt.Sprintf("Head:      %s", head))
+	}
+	if url := m.devURLs[item.SessionName]; url != "" {
+		linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
+		lines = append(lines, fmt.Sprintf("Dev:       %s", linkStyle.Render(url)))
 	}
 	bm := strings.TrimSpace(item.Bookmark)
 	if bm == "" {

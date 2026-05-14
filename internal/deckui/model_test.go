@@ -1229,3 +1229,92 @@ var errTest = fmtErr("boom")
 type fmtErr string
 
 func (e fmtErr) Error() string { return string(e) }
+
+func TestDevURLsMsgPopulatesDetails(t *testing.T) {
+	item := Item{
+		ProjectName:   "awp",
+		WorkspaceName: "port-capture",
+		Path:          "/tmp/awp/port-capture",
+		Status:        "in-progress",
+		SessionName:   "awp/port-capture",
+		Active:        true,
+	}
+	model := New([]Item{item}, nil)
+	// Before any DevURLsMsg, the Dev line must not appear.
+	if got := model.renderDetails(80); strings.Contains(got, "Dev:") {
+		t.Fatalf("renderDetails should not show Dev line before msg:\n%s", got)
+	}
+	updated, _ := model.Update(DevURLsMsg{URLs: map[string]string{
+		"awp/port-capture": "http://localhost:5173",
+	}})
+	m := updated.(Model)
+	got := m.renderDetails(80)
+	if !strings.Contains(got, "Dev:") {
+		t.Fatalf("renderDetails should show Dev line after msg:\n%s", got)
+	}
+	if !strings.Contains(got, "http://localhost:5173") {
+		t.Fatalf("renderDetails should contain the URL:\n%s", got)
+	}
+	// New snapshot with no URL clears the line.
+	updated, _ = m.Update(DevURLsMsg{URLs: map[string]string{}})
+	m = updated.(Model)
+	if strings.Contains(m.renderDetails(80), "Dev:") {
+		t.Fatal("renderDetails should clear Dev line when URL drops")
+	}
+}
+
+func TestUKeyOpensURLWhenAvailable(t *testing.T) {
+	item := Item{ProjectName: "awp", WorkspaceName: "x", SessionName: "awp/x"}
+	model := New([]Item{item}, nil)
+	// No URL discovered yet → status surfaces the empty case, no crash.
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	m := updated.(Model)
+	if !strings.Contains(m.status, "no dev url") {
+		t.Fatalf("expected 'no dev url' status, got %q", m.status)
+	}
+}
+
+func TestDevURLTickMsgReschedulesAndDispatches(t *testing.T) {
+	called := 0
+	discoverer := func() tea.Cmd {
+		return func() tea.Msg {
+			called++
+			return DevURLsMsg{URLs: map[string]string{"s": "http://localhost:5173"}}
+		}
+	}
+	model := New(nil, nil).WithDevURLDiscoverer(discoverer)
+	updated, cmd := model.Update(devURLTickMsg(time.Now()))
+	if cmd == nil {
+		t.Fatal("expected cmd from devURLTickMsg")
+	}
+	// Execute the batch: it must contain the discoverer's tea.Msg
+	// (DevURLsMsg) and a rescheduled tick.
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected BatchMsg, got %T", cmd())
+	}
+	sawDevURL := false
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if _, ok := c().(DevURLsMsg); ok {
+			sawDevURL = true
+		}
+	}
+	if !sawDevURL {
+		t.Fatal("expected a DevURLsMsg in the batch")
+	}
+	if called != 1 {
+		t.Fatalf("expected discoverer to be invoked once, got %d", called)
+	}
+	_ = updated
+}
+
+func TestDevURLTickNoopWithoutDiscoverer(t *testing.T) {
+	model := New(nil, nil)
+	_, cmd := model.Update(devURLTickMsg(time.Now()))
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when discoverer is unset, got %T", cmd())
+	}
+}

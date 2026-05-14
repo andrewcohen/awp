@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -372,6 +373,37 @@ func (c *Client) ListPanes() ([]Pane, error) {
 		panes = append(panes, Pane{Session: parts[0], Window: parts[1], Command: parts[2]})
 	}
 	return panes, nil
+}
+
+// PanePIDsBySession returns the shell PID of every pane across every
+// live tmux session, bucketed by session name. One shell-out replaces
+// N per-session list calls; the deck uses this to feed the dev-URL
+// port discoverer (internal/portcapture). Empty map and nil error
+// when tmux has no sessions.
+func (c *Client) PanePIDsBySession() (map[string][]int, error) {
+	out, err := c.runner.Run(context.Background(), "", "tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}")
+	if err != nil {
+		if strings.Contains(err.Error(), "exit status") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	by := map[string][]int{}
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		pid, perr := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if perr != nil {
+			continue
+		}
+		by[parts[0]] = append(by[parts[0]], pid)
+	}
+	return by, nil
 }
 
 func (c *Client) PaneCurrentCommand(target string) (string, error) {
