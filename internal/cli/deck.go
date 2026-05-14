@@ -227,7 +227,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// session name so the initial cursor lands on the workspace the
 	// user launched from. The full enrichment refresh follows ~50 ms
 	// later and fills in caution glyphs / stale decorations.
-	items, allItems, err := loadDeckItems(nil, tmuxClient, true, svc, repoRoot, projectName, nil, nil)
+	items, err := loadDeckItems(nil, tmuxClient, true, svc, repoRoot, projectName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -361,8 +361,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 	refresher := func() tea.Cmd {
 		return func() tea.Msg {
-			items, allItems, err := loadDeckItems(j, tmuxClient, false, svc, repoRoot, projectName, in, out)
-			return deckui.RefreshDoneMsg(items, allItems, err)
+			items, err := loadDeckItems(j, tmuxClient, false, svc, repoRoot, projectName, in, out)
+			return deckui.RefreshDoneMsg(items, err)
 		}
 	}
 	prFetcher := func(itemRepoRoot string) tea.Cmd {
@@ -508,7 +508,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 	}
 
-	model := deckui.NewScoped(items, allItems, projectName, handler).
+	model := deckui.New(items, handler).
 		WithRefresher(refresher).
 		WithDevURLDiscoverer(devURLDiscoverer).
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
@@ -518,8 +518,6 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithBookmarkPrefix(cfg.Deck.BookmarkPrefix).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithUserActionsResolver(userActionsForRepo).
-		WithScope(loadDeckScope()).
-		WithScopeChanged(saveDeckScope).
 		WithStateChangeWatcher(newDeckStateChangeWatcher()).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
 		WithProjectOpener(openProjectViaTmux(runner)).
@@ -764,7 +762,7 @@ func captureDeckTmuxSnapshot(tmuxClient *tmux.Client, fast bool) deckTmuxSnapsho
 // per-row tmux calls. Workspaces created externally via `jj workspace
 // add` won't appear until the deck reconciles via a write path
 // (deck-driven create/delete already does this).
-func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, []deckui.Item, error) {
+func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, error) {
 	_ = j
 	_ = in
 	_ = out
@@ -772,7 +770,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 	store := state.NewJSONStore()
 	repoMap, err := store.LoadAll()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	snap := captureDeckTmuxSnapshot(tmuxClient, fastTmux)
@@ -800,7 +798,6 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 	})
 
 	var items []deckui.Item
-	var allItems []deckui.Item
 	for _, r := range repos {
 		entries := repoMap[r.repo]
 		names := make([]string, 0, len(entries))
@@ -888,10 +885,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				Active:        active,
 				Current:       current,
 			}
-			allItems = append(allItems, item)
-			if isCurrentRepo {
-				items = append(items, item)
-			}
+			items = append(items, item)
 		}
 	}
 
@@ -915,7 +909,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		})
 	}
 
-	return items, allItems, nil
+	return items, nil
 }
 
 func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Runner, req deckui.ActionRequest, reporter deckui.Reporter) error {

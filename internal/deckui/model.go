@@ -224,42 +224,17 @@ type StateChangeWatcher func() tea.Cmd
 // keeps polling as the correctness fallback.
 type StateChangedMsg struct{}
 
-// Scope controls which items are shown in the deck list.
+// Scope controls which items are shown in the deck list. Cycled with `P`;
+// not persisted — every deck launch starts at ScopeAll.
 type Scope int
 
 const (
-	ScopeCurrent  Scope = iota // workspaces in the current project
-	ScopeAll                   // workspaces across all projects
-	ScopeAwaiting              // only workspaces with status=waiting (any project)
+	ScopeAll       Scope = iota // every known workspace across all projects
+	ScopeOpenPR                 // workspaces whose bookmark maps to a non-draft open PR
+	ScopeAttention              // matches the mini-deck filter: active agent or unread notification
 )
 
-// String returns the persisted token for a Scope.
-func (s Scope) String() string {
-	switch s {
-	case ScopeAll:
-		return "all"
-	case ScopeAwaiting:
-		return "awaiting"
-	default:
-		return "current"
-	}
-}
-
-// ParseScope returns the Scope for a persisted token, defaulting to current.
-func ParseScope(s string) Scope {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "all":
-		return ScopeAll
-	case "awaiting":
-		return ScopeAwaiting
-	default:
-		return ScopeCurrent
-	}
-}
-
-// ScopeChangedHandler is invoked when the user toggles scope (P), so the
-// caller can persist the choice across runs.
-type ScopeChangedHandler func(Scope)
+const scopeCount = 3
 
 // PRItem is a lightweight PR summary for the review picker.
 type PRItem struct {
@@ -397,11 +372,8 @@ const (
 const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
 type Model struct {
-	itemsCurrent       []Item
 	itemsAll           []Item
 	scope              Scope
-	scopeChanged       ScopeChangedHandler
-	currentRepo        string
 	cursor             int
 	width              int
 	height             int
@@ -534,21 +506,15 @@ type actionResultMsg struct {
 }
 
 type refreshDoneMsg struct {
-	itemsCurrent []Item
-	itemsAll     []Item
-	err          error
+	items []Item
+	err   error
 }
 
-func RefreshDoneMsg(itemsCurrent, itemsAll []Item, err error) tea.Msg {
-	return refreshDoneMsg{itemsCurrent: itemsCurrent, itemsAll: itemsAll, err: err}
+func RefreshDoneMsg(items []Item, err error) tea.Msg {
+	return refreshDoneMsg{items: items, err: err}
 }
 
 func New(items []Item, handler Handler) Model {
-	return NewScoped(items, nil, "", handler)
-}
-
-// NewScoped builds a model with both scopes and a toggle key (P).
-func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handler) Model {
 	fi := textinput.New()
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
@@ -561,11 +527,8 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner))
 	m := Model{
-		itemsCurrent:      append([]Item(nil), itemsCurrent...),
-		itemsAll:          append([]Item(nil), itemsAll...),
-		currentRepo:       currentRepo,
-		scope:             defaultInitialScope(itemsAll),
-		status:            "",
+		itemsAll:          append([]Item(nil), items...),
+		scope:             ScopeAll,
 		findProjectHints:  map[string]string{},
 		findProjectLookup: map[string]string{},
 		findProjectPrefix: map[rune]bool{},
@@ -584,16 +547,8 @@ func NewScoped(itemsCurrent, itemsAll []Item, currentRepo string, handler Handle
 	return m
 }
 
-func defaultInitialScope(itemsAll []Item) Scope {
-	if len(itemsAll) > 0 {
-		return ScopeAll
-	}
-	return ScopeCurrent
-}
-
 func (m Model) indexCurrent() int {
-	src := m.scopedSource()
-	for i, it := range src {
+	for i, it := range m.itemsAll {
 		if it.Current {
 			return i
 		}
@@ -733,38 +688,17 @@ func (m Model) WithJobRetryHandler(h JobRetryHandler) Model {
 	return m
 }
 
-// WithScope sets the initial scope (called by the deck launcher after loading
-// the persisted preference). Has no effect if scope is invalid.
-func (m Model) WithScope(scope Scope) Model {
-	if scope == ScopeCurrent || scope == ScopeAll || scope == ScopeAwaiting {
-		m.scope = scope
-		if idx := m.indexCurrent(); idx >= 0 {
-			m.cursor = idx
-		}
-	}
-	return m
-}
-
-// WithScopeChanged installs a callback invoked whenever the user cycles scope.
-func (m Model) WithScopeChanged(h ScopeChangedHandler) Model {
-	m.scopeChanged = h
-	return m
-}
-
 // Scope returns the active scope (used by tests).
 func (m Model) Scope() Scope { return m.scope }
 
-func scopeLabel(scope Scope, currentRepo string) string {
+func scopeLabel(scope Scope) string {
 	switch scope {
-	case ScopeAll:
-		return "all projects"
-	case ScopeAwaiting:
-		return "awaiting input"
+	case ScopeOpenPR:
+		return "open PR"
+	case ScopeAttention:
+		return "attention"
 	default:
-		if strings.TrimSpace(currentRepo) != "" {
-			return currentRepo
-		}
-		return "current project"
+		return "all"
 	}
 }
 
@@ -821,25 +755,21 @@ func aliasLookup(actions []UserAction) map[string]UserAction {
 	return out
 }
 
-// scopedSource returns the unfiltered item slice for the active scope.
-func (m Model) scopedSource() []Item {
-	switch m.scope {
-	case ScopeAll, ScopeAwaiting:
-		if len(m.itemsAll) > 0 {
-			return m.itemsAll
-		}
-		return m.itemsCurrent
-	default:
-		return m.itemsCurrent
-	}
-}
-
 func (m Model) items() []Item {
-	src := m.scopedSource()
-	if m.scope == ScopeAwaiting {
+	src := m.itemsAll
+	switch m.scope {
+	case ScopeOpenPR:
 		filtered := make([]Item, 0, len(src))
 		for _, it := range src {
-			if strings.EqualFold(strings.TrimSpace(it.Status), "waiting") {
+			if m.itemHasOpenPR(it) {
+				filtered = append(filtered, it)
+			}
+		}
+		src = filtered
+	case ScopeAttention:
+		filtered := make([]Item, 0, len(src))
+		for _, it := range src {
+			if MiniIncluded(it.Status, it.Unread) {
 				filtered = append(filtered, it)
 			}
 		}
@@ -857,6 +787,28 @@ func (m Model) items() []Item {
 		}
 	}
 	return out
+}
+
+// itemHasOpenPR returns true when the workspace's bookmark maps to a PR in
+// the cache that is OPEN and not a draft. Used by ScopeOpenPR.
+func (m Model) itemHasOpenPR(it Item) bool {
+	bm := strings.TrimSpace(it.Bookmark)
+	if bm == "" {
+		return false
+	}
+	repo := strings.TrimSpace(it.RepoRoot)
+	if repo == "" {
+		return false
+	}
+	byHead, ok := m.prStatusByRepo[repo]
+	if !ok {
+		return false
+	}
+	st, ok := byHead[bm]
+	if !ok {
+		return false
+	}
+	return st.State == PRStateOpen && !st.IsDraft
 }
 
 // initKickMsg drives the first-paint side effects (initial enrich
@@ -922,13 +874,7 @@ func (m Model) forcePRStatusRefresh(repo string) (Model, tea.Cmd) {
 // from RepoRoot (i.e. not a default-only repo), and the last fetch (if any)
 // was at least prStatusMinInterval ago.
 func (m Model) prStatusRepos(now time.Time) []string {
-	// Prefer itemsAll so we cover every repo the deck knows about, not just
-	// the currently-scoped one. The Init pass on a freshly scoped deck still
-	// hydrates all visible scopes' glyphs.
 	src := m.itemsAll
-	if len(src) == 0 {
-		src = m.itemsCurrent
-	}
 	seen := make(map[string]bool)
 	nonDefault := make(map[string]bool)
 	for _, it := range src {
@@ -1268,8 +1214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "refresh: " + msg.err.Error()
 			return m, enrichExpireCmd
 		}
-		m.itemsCurrent = append([]Item(nil), msg.itemsCurrent...)
-		m.itemsAll = append([]Item(nil), msg.itemsAll...)
+		m.itemsAll = append([]Item(nil), msg.items...)
 		items := m.items()
 		if pending := m.pendingSelect; pending.WorkspaceName != "" {
 			for i, it := range items {
@@ -1817,12 +1762,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "P":
-			m.scope = (m.scope + 1) % 3
+			m.scope = (m.scope + 1) % scopeCount
 			m.cursor = 0
-			m.status = "scope: " + scopeLabel(m.scope, m.currentRepo)
-			if m.scopeChanged != nil {
-				m.scopeChanged(m.scope)
-			}
+			m.status = "scope: " + scopeLabel(m.scope)
 			return m, tea.ClearScreen
 		case "k", "up":
 			if m.cursor > 0 {
@@ -2891,7 +2833,7 @@ func (m Model) renderHelp(width int) string {
 
 func (m Model) renderList(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("awp deck")
-	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("scope: " + scopeLabel(m.scope, m.currentRepo) + "  (P to cycle)")
+	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("scope: " + scopeLabel(m.scope) + "  (P to cycle)")
 	rows := []string{title, subtitle, ""}
 	items := m.items()
 	if len(items) == 0 {
@@ -2982,7 +2924,7 @@ func deckKeyGroups() []keyGroup {
 				{"↑/↓ j/k", "move cursor"},
 				{"/", "filter rows · esc clears"},
 				{"f", "find: project → workspace easymotion jump"},
-				{"P", "cycle scope (current → all → awaiting)"},
+				{"P", "cycle scope (all → open PR → attention)"},
 				{"L", "switch to last tmux session"},
 			},
 		},

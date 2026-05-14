@@ -165,7 +165,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style project → workspace jump |
 | `/` | Filter rows · `esc` clears |
-| `P` | Cycle scope: current project → all projects → awaiting input (persisted across runs) |
+| `P` | Cycle scope: all → open PR (bookmark maps to a non-draft open PR) → attention (mini-deck criteria: active agent or unread notification). Resets to `all` each launch — not persisted. |
 | `L` | Switch to last tmux session |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |

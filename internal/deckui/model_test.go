@@ -125,19 +125,68 @@ func TestCIKeyInvokesCIAction(t *testing.T) {
 	}
 }
 
-func TestScopedModelStartsInAllProjectsViewWhenAvailable(t *testing.T) {
-	model := NewScoped(
-		[]Item{{ProjectName: "repo-a", WorkspaceName: "one"}},
+func TestModelStartsAllScopeWithCursorOnCurrentWorkspace(t *testing.T) {
+	model := New(
 		[]Item{{ProjectName: "repo-a", WorkspaceName: "one"}, {ProjectName: "repo-b", WorkspaceName: "two", Current: true}},
-		"repo-a",
 		nil,
 	)
+	if model.Scope() != ScopeAll {
+		t.Fatalf("expected ScopeAll on launch, got %v", model.Scope())
+	}
 	items := model.items()
 	if len(items) != 2 || items[1].WorkspaceName != "two" {
-		t.Fatalf("expected all-project items first, got %#v", items)
+		t.Fatalf("expected both workspaces, got %#v", items)
 	}
 	if model.cursor != 1 {
 		t.Fatalf("expected cursor on current workspace, got %d", model.cursor)
+	}
+}
+
+func TestScopeAttentionMatchesMiniDeckCriteria(t *testing.T) {
+	items := []Item{
+		{ProjectName: "a", WorkspaceName: "working", Status: "working"},
+		{ProjectName: "a", WorkspaceName: "waiting-read", Status: "waiting", Unread: false},
+		{ProjectName: "a", WorkspaceName: "waiting-unread", Status: "waiting", Unread: true},
+		{ProjectName: "a", WorkspaceName: "idle-read", Status: "idle"},
+		{ProjectName: "a", WorkspaceName: "idle-unread", Status: "idle", Unread: true},
+		{ProjectName: "a", WorkspaceName: "exited-unread", Status: "exited", Unread: true},
+	}
+	model := New(items, nil)
+	model.scope = ScopeAttention
+	got := model.items()
+	gotNames := map[string]bool{}
+	for _, it := range got {
+		gotNames[it.WorkspaceName] = true
+	}
+	want := []string{"working", "waiting-unread", "idle-unread"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %d: %#v", len(want), len(got), got)
+	}
+	for _, w := range want {
+		if !gotNames[w] {
+			t.Fatalf("expected %q in attention scope, got %#v", w, got)
+		}
+	}
+}
+
+func TestScopeOpenPRFiltersToNonDraftOpenPRs(t *testing.T) {
+	items := []Item{
+		{ProjectName: "repo-a", WorkspaceName: "no-bookmark"},
+		{ProjectName: "repo-a", WorkspaceName: "open", RepoRoot: "/repo-a", Bookmark: "feat/open"},
+		{ProjectName: "repo-a", WorkspaceName: "draft", RepoRoot: "/repo-a", Bookmark: "feat/draft"},
+		{ProjectName: "repo-a", WorkspaceName: "merged", RepoRoot: "/repo-a", Bookmark: "feat/merged"},
+	}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/repo-a": {
+			"feat/open":   {State: PRStateOpen, IsDraft: false},
+			"feat/draft":  {State: PRStateOpen, IsDraft: true},
+			"feat/merged": {State: PRStateMerged},
+		},
+	}, nil)
+	model.scope = ScopeOpenPR
+	got := model.items()
+	if len(got) != 1 || got[0].WorkspaceName != "open" {
+		t.Fatalf("expected only the non-draft open workspace, got %#v", got)
 	}
 }
 
@@ -148,7 +197,7 @@ func TestStateChangedRefreshesAndResubscribes(t *testing.T) {
 		WithRefresher(func() tea.Cmd {
 			return func() tea.Msg {
 				refreshed++
-				return RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa", Status: "working"}}, nil, nil)
+				return RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa", Status: "working"}}, nil)
 			}
 		}).
 		WithStateChangeWatcher(func() tea.Cmd {
@@ -185,7 +234,7 @@ func TestStateChangedDoesNotRefreshDuringOverlay(t *testing.T) {
 		WithRefresher(func() tea.Cmd {
 			return func() tea.Msg {
 				refreshed++
-				return RefreshDoneMsg(nil, nil, nil)
+				return RefreshDoneMsg(nil, nil)
 			}
 		}).
 		WithStateChangeWatcher(func() tea.Cmd {
@@ -219,7 +268,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 	}).WithRefresher(func() tea.Cmd {
 		return func() tea.Msg {
 			refreshed = true
-			return RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qb"}}, nil, nil)
+			return RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qb"}}, nil)
 		}
 	})
 
