@@ -402,98 +402,34 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		deckDebugLogf("prStatus cache load err=%v", cacheErr)
 	}
 
-	// prStatusFetcher fans out one gh-pr-list call per repo (parallel) and
-	// streams the results back to the deck as they land:
+	// prStatusFetcher dispatches PR-status work to a detached subprocess
+	// (awp internal pr-status-job) so killing the deck mid-fetch doesn't
+	// drop in-flight gh calls. Pipeline:
 	//
-	//   - One PRStatusRepoDoneMsg per repo, so the deck's per-row glyphs
-	//     populate incrementally (no waiting for the slowest peer) and
-	//     the global pr-status activity ticks down N/M live.
-	//   - A closing PRStatusDoneMsg when every repo has reported (or the
-	//     10s deadline fires), so the model can clear the activity.
-	//
-	// Per-repo errors land in the streamed msg's Err field so a single
-	// failed repo never blocks the others.
-	//
-	// On success, the new results are merged into the persisted cache so
-	// subsequent deck opens within the cooldown window have data without
-	// hitting gh. Per-repo events are appended to /tmp/awp-deck.log on
-	// a best-effort basis so `tail -f /tmp/awp-deck.log` while running
-	// `awp deck` exposes what gh saw without crowding the TUI status line.
+	//   - If no live job exists, spawn one for the supplied repos.
+	//   - If a live job is already running (from a previous deck open
+	//     that was closed mid-fetch, or a sibling deck), reuse it.
+	//   - Either way, poll the run file + cache every 250ms and emit
+	//     one PRStatusRepoDoneMsg per repo as its entry appears in the
+	//     cache. When the run file disappears (subprocess finished),
+	//     emit the closing PRStatusDoneMsg.
 	prStatusFetcher := func(repos []string) tea.Cmd {
 		return func() tea.Msg {
 			deckDebugLogf("prStatus fetch start repos=%d", len(repos))
 			if len(repos) == 0 {
 				return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
 			}
-			ch := make(chan deckui.PRStatusRepoDoneMsg, len(repos))
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			for _, r := range repos {
-				dir := r
-				go func() {
-					started := time.Now()
-					deckDebugLogf("prStatus repo=%s gh pr list start", dir)
-					gh := github.New(fixedDirRunner{base: runner, dir: dir})
-					statuses, err := gh.ListPRStatus(dir)
-					if err != nil {
-						deckDebugLogf("prStatus repo=%s err=%v dur=%s", dir, err, time.Since(started))
-						ch <- deckui.PRStatusRepoDoneMsg{Repo: dir, Err: err}
-						return
-					}
-					byHead := make(map[string]deckui.PRStatus, len(statuses))
-					for _, s := range statuses {
-						byHead[s.HeadRefName] = deckui.PRStatus{
-							Number:           s.Number,
-							HeadRefName:      s.HeadRefName,
-							URL:              s.URL,
-							State:            deckui.PRState(s.State),
-							IsDraft:          s.IsDraft,
-							ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
-							CIState:          deckui.PRCIState(s.CIState),
-							MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),
-						}
-					}
-					deckDebugLogf("prStatus repo=%s prs=%d dur=%s heads=%v", dir, len(statuses), time.Since(started), sortedHeads(byHead))
-					ch <- deckui.PRStatusRepoDoneMsg{Repo: dir, ByHead: byHead}
-				}()
-			}
-			// Collect results into a batch of tea.Cmds: one cmd per
-			// repo done message (so each shows up as an independent
-			// Update), then a final closing cmd. Bubble Tea's batch
-			// delivery preserves order within the batch, so the
-			// closing PRStatusDoneMsg always lands after the per-repo
-			// updates.
-			perRepoCmds := make([]tea.Cmd, 0, len(repos))
-			byRepo := make(map[string]map[string]deckui.PRStatus, len(repos))
-			errCount := 0
-			for i := 0; i < len(repos); i++ {
-				select {
-				case r := <-ch:
-					rr := r
-					perRepoCmds = append(perRepoCmds, func() tea.Msg { return rr })
-					if rr.Err != nil {
-						errCount++
-					} else if rr.ByHead != nil {
-						byRepo[rr.Repo] = rr.ByHead
-					}
-				case <-ctx.Done():
-					cancel()
-					deckDebugLogf("prStatus timeout; partial results repos_done=%d/%d", i, len(repos))
-					// Best-effort persist of whatever landed so far.
-					persistPRStatusMerge(byRepo, time.Now())
-					perRepoCmds = append(perRepoCmds, func() tea.Msg {
-						return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
-					})
-					return tea.BatchMsg(perRepoCmds)
+			if existing, ok := findActivePRStatusJob(); ok {
+				deckDebugLogf("prStatus reusing job id=%s pid=%d", existing.ID, existing.PID)
+			} else {
+				job, err := spawnPRStatusJob(repos)
+				if err != nil {
+					deckDebugLogf("prStatus spawn err=%v", err)
+					return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
 				}
+				deckDebugLogf("prStatus spawned detached job id=%s pid=%d repos=%d", job.ID, job.PID, len(repos))
 			}
-			cancel()
-			fetchedAt := time.Now()
-			deckDebugLogf("prStatus fetch done ok=%d errs=%d", len(byRepo), errCount)
-			persistPRStatusMerge(byRepo, fetchedAt)
-			perRepoCmds = append(perRepoCmds, func() tea.Msg {
-				return deckui.PRStatusDoneMsg{FetchedAt: fetchedAt}
-			})
-			return tea.BatchMsg(perRepoCmds)
+			return pollPRStatusJob(repos, map[string]bool{})
 		}
 	}
 	// bookmarkLinkHandler persists a chosen bookmark onto the workspace's
@@ -640,12 +576,22 @@ func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRe
 	}
 	logOpen := func(id string) tea.Cmd {
 		path := store.LogPath(jobs.JobID(id))
-		pager := strings.TrimSpace(os.Getenv("PAGER"))
-		if pager == "" {
-			pager = "less"
+		// For jobs still in flight, open with `less +F` (follow mode) so
+		// new output streams in like `tail -f`. Ctrl-C inside less drops
+		// into normal navigation. Terminal jobs use $PAGER (defaulting to
+		// less) — no need to follow a file that won't grow.
+		job, _ := store.Get(jobs.JobID(id))
+		var c *exec.Cmd
+		if job.IsActive() {
+			c = exec.Command("sh", "-c", `exec less +F "$1"`, "sh", path)
+		} else {
+			pager := strings.TrimSpace(os.Getenv("PAGER"))
+			if pager == "" {
+				pager = "less"
+			}
+			c = exec.Command("sh", "-c", `exec "$PAGER" "$1"`, "sh", path)
+			c.Env = append(os.Environ(), "PAGER="+pager)
 		}
-		c := exec.Command("sh", "-c", `exec "$PAGER" "$1"`, "sh", path)
-		c.Env = append(os.Environ(), "PAGER="+pager)
 		return tea.ExecProcess(c, func(err error) tea.Msg {
 			return deckui.JobActionDoneMsg{JobID: id, Kind: "log", Err: err}
 		})

@@ -12,3 +12,8 @@ import "syscall"
 func detachAttrs() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true}
 }
+
+// DetachAttrs exposes detachAttrs to callers outside the jobs package
+// (e.g. the deck-side pr-status job spawn) so every detached
+// subprocess shares the same OS-level isolation.
+func DetachAttrs() *syscall.SysProcAttr { return detachAttrs() }

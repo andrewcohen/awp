@@ -92,6 +92,8 @@ When an open PR is out of date with its base branch, a second glyph renders to t
 
 The status is fetched once when the deck opens, with a single `gh pr list --state all` call per distinct repo that has at least one non-default workspace. The fetch is throttled so the same repo is never re-queried within a minute.
 
+The fan-out runs as a **detached job** in the same jobs subsystem that powers workspace create / delete / review. It's spawned via `Setsid`, so closing the deck (or its tmux popup) mid-fetch no longer drops in-flight work. Per-repo PRs are persisted to `~/.awp/pr-status-cache.json` atomically as each repo finishes; the job record itself lives at `~/.awp/jobs/<id>.json` and shows up in the deck's `J` overlay (you can dismiss / open the log there). The next deck open reuses an existing active pr-status job instead of spawning a duplicate.
+
 **Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
 
 ### Activity bar (bottom of the deck)
@@ -272,7 +274,7 @@ Press `J` to open the jobs overlay:
 | `c` | Cancel the selected running job (sends `SIGTERM`; subprocess flushes a `cancelled` record before exiting) |
 | `r` | Retry a failed/cancelled/orphaned job (re-spawns from the original spec; useful after manually resolving a stale workspace and similar fixable conditions) |
 | `x` | Dismiss a finished/failed/orphaned record (deletes the JSON + log file) |
-| `o` | Open the sidecar log file in `$PAGER` |
+| `o` | Open the sidecar log file. Active jobs open with `less +F` (follow mode — new output streams in like `tail -f`; press Ctrl-C inside less to drop into normal navigation). Terminal jobs open with `$PAGER` (default `less`). |
 | `y` | Yank current job details (id, status, error, steps, recent log) to the system clipboard via OSC 52 |
 | `esc` / `q` / `J` | Close the overlay |
 

@@ -119,6 +119,8 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 		err = runReviewJob(runner, actionSvc, job, reporter)
 	case jobs.ActionCustom:
 		err = runCustomJob(job, reporter)
+	case jobs.ActionPRStatus:
+		err = runPRStatusFromSpec(runner, job, reporter)
 	default:
 		err = fmt.Errorf("unsupported job action %q", job.Spec.Action)
 	}

@@ -10,3 +10,7 @@ import "syscall"
 func detachAttrs() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{}
 }
+
+// DetachAttrs mirrors the Unix counterpart so cross-platform callers
+// compile cleanly.
+func DetachAttrs() *syscall.SysProcAttr { return detachAttrs() }
