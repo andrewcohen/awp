@@ -255,7 +255,7 @@ func TestPRStatusDoneFinishesActivity(t *testing.T) {
 
 func TestRefreshTickDoesNotRegisterEnrichActivity(t *testing.T) {
 	model := New(nil, nil).WithRefresher(func() tea.Cmd {
-		return func() tea.Msg { return RefreshDoneMsg(nil, nil, nil) }
+		return func() tea.Msg { return RefreshDoneMsg(nil, nil) }
 	})
 	updated, _ := model.Update(refreshTickMsg(time.Now()))
 	m := updated.(Model)
@@ -266,7 +266,7 @@ func TestRefreshTickDoesNotRegisterEnrichActivity(t *testing.T) {
 
 func TestInitKickRegistersEnrichActivity(t *testing.T) {
 	model := New([]Item{{WorkspaceName: "ws"}}, nil).WithRefresher(func() tea.Cmd {
-		return func() tea.Msg { return RefreshDoneMsg(nil, nil, nil) }
+		return func() tea.Msg { return RefreshDoneMsg(nil, nil) }
 	})
 	updated, _ := model.Update(initKickMsg{})
 	m := updated.(Model)
