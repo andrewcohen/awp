@@ -24,6 +24,7 @@ const (
 	ActionCustom          JobAction = "custom"
 	ActionDelete          JobAction = "delete"
 	ActionDeleteProject   JobAction = "delete-project"
+	ActionPRStatus        JobAction = "pr-status"
 )
 
 // JobStatus is the lifecycle state of a job. Terminal states are
@@ -81,6 +82,10 @@ type Spec struct {
 	// Workspace context for actions that operate on a specific workspace.
 	WorkspaceName string `json:"workspace_name,omitempty"`
 	WorkspacePath string `json:"workspace_path,omitempty"`
+
+	// Repos lists repo roots the action operates over. Populated by
+	// ActionPRStatus (one gh-pr-list call per entry).
+	Repos []string `json:"repos,omitempty"`
 }
 
 // Job is the persisted record on disk at ~/.awp/jobs/<id>.json.

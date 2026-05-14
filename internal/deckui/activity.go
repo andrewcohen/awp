@@ -129,6 +129,12 @@ func (m Model) hasActivity(id string) bool {
 // explicit ones (pr-status, enrich, …) when reconciling.
 const jobActivityIDPrefix = "job:"
 
+// prStatusJobAction mirrors jobs.ActionPRStatus as a plain string so
+// the deckui package doesn't need to import internal/jobs (which would
+// create a dependency cycle via internal/cli). The actual constant
+// lives in internal/jobs/types.go.
+const prStatusJobAction = "pr-status"
+
 // syncJobActivities reconciles m.activities with the current job list:
 // running/pending jobs are added (or updated) as activities; terminal
 // jobs that need attention (error, orphaned) stay visible with a
@@ -140,6 +146,14 @@ const jobActivityIDPrefix = "job:"
 func (m Model) syncJobActivities(jobs []Job) (Model, tea.Cmd) {
 	known := make(map[string]Job, len(jobs))
 	for _, j := range jobs {
+		// pr-status jobs are surfaced by the legacy `pr-status`
+		// activity (with N/M progress); skipping them here keeps the
+		// activity bar from showing two entries for the same fetch.
+		// They still appear in the J overlay because that reads the
+		// jobs list directly.
+		if j.Action == string(prStatusJobAction) {
+			continue
+		}
 		known[jobActivityIDPrefix+j.ID] = j
 	}
 
