@@ -1707,13 +1707,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "?":
 			m.helpMode = true
-			return m, nil
+			// tea.ClearScreen on modal entry: the renderer's
+			// previous-frame buffer otherwise leaves stripes of the
+			// underlying view visible wherever the popover doesn't
+			// write. See doc.go and the matching pattern on `/`
+			// (filtering) + the new-workspace form.
+			return m, tea.ClearScreen
 		case "J":
 			m.jobsOverlay = true
 			m.jobsOverlayCursor = 0
-			// Force an immediate refresh so the overlay isn't blank
-			// for up to 2 s after opening.
-			return m, refreshJobsListCmd(m.jobsListRefresher)
+			// tea.ClearScreen on modal entry — same rationale as `?`
+			// above. Without this, the deck row list bleeds through
+			// the surrounding area of the jobs popover.
+			return m, tea.Batch(tea.ClearScreen, refreshJobsListCmd(m.jobsListRefresher))
 		case "q", "esc", "ctrl+c":
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
