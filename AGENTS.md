@@ -111,6 +111,15 @@ key bindings on the right. Falls back to vertical stacking on narrower
 viewports. Status legend rows show glyph + state name only — no verbose
 explanations.
 
+**Modal open must dispatch `tea.ClearScreen`.** Any handler that flips a
+modal flag (`m.jobsOverlay`, `m.helpMode`, `m.newWorkspaceMode`,
+`m.filtering`, etc.) MUST return `tea.ClearScreen` in its command batch
+on the transition. The deck shares one renderer across modals, and the
+renderer's previous-frame buffer otherwise leaves stripes of the
+underlying view visible wherever the modal doesn't write
+(`lipgloss.Place` padding alone does not cure it — see the
+new-workspace-form site and the `/` filter site for the pattern).
+
 ### Bubble Tea program structure
 
 **One program, one renderer.** The deck is a single `tea.Program`. Modal flows
