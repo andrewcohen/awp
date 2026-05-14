@@ -901,6 +901,22 @@ func (m Model) prStatusRefreshCmd(now time.Time) (Model, tea.Cmd) {
 	return m, m.prStatusFetcher(repos)
 }
 
+// forcePRStatusRefresh drops the throttle entry for repo and returns a
+// refresh cmd, bypassing the prStatusMinInterval cooldown so the next
+// fetch goes out immediately. Used by flows where the user just did
+// something that materially affects which PR belongs to which workspace
+// (new workspace from bookmark, review of a PR) — the row needs to
+// reflect the new association without waiting up to a minute.
+func (m Model) forcePRStatusRefresh(repo string) (Model, tea.Cmd) {
+	if strings.TrimSpace(repo) == "" {
+		return m, nil
+	}
+	if m.prStatusFetchedAt != nil {
+		delete(m.prStatusFetchedAt, repo)
+	}
+	return m.prStatusRefreshCmd(time.Now())
+}
+
 // prStatusRepos returns the deduplicated, throttled list of repo roots that
 // should be fetched for PR status: at least one workspace whose Path differs
 // from RepoRoot (i.e. not a default-only repo), and the last fetch (if any)
@@ -1673,7 +1689,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reviewMode = false
 				m.reviewFilter = ""
 				m.filterInput.SetValue("")
-				return m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
+				var prCmd tea.Cmd
+				m, prCmd = m.forcePRStatusRefresh(item.RepoRoot)
+				updated, dispatchCmd := m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
+				return updated, batchCmds(prCmd, dispatchCmd)
 			}
 			return m, nil
 		}
@@ -2437,7 +2456,11 @@ func (m *Model) startCreateAction(req NewWorkspaceRequest, repoRoot string) (tea
 		}
 		return nil
 	}
-	return *m, tea.Batch(m.spinner.Tick, dispatch, waitForProgress(m.progressChan))
+	var prCmd tea.Cmd
+	if strings.TrimSpace(req.Bookmark) != "" {
+		*m, prCmd = m.forcePRStatusRefresh(repoRoot)
+	}
+	return *m, batchCmds(m.spinner.Tick, dispatch, waitForProgress(m.progressChan), prCmd)
 }
 
 // startAsyncCreateAction dispatches a workspace-create job to the
@@ -2465,7 +2488,11 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		err := launcher(spec)
 		return asyncJobDispatchedMsg{spec: spec, err: err}
 	}
-	return *m, dispatch
+	var prCmd tea.Cmd
+	if strings.TrimSpace(req.Bookmark) != "" {
+		*m, prCmd = m.forcePRStatusRefresh(repoRoot)
+	}
+	return *m, batchCmds(dispatch, prCmd)
 }
 
 // asyncJobDispatchedMsg is emitted once the async launcher returns
