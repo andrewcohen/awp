@@ -83,6 +83,13 @@ Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a ma
 
 Priority (highest wins): merged → closed → CI failed → CI pending → approved → draft → open. So a merged PR always shows the merge icon (even if its last CI was failing); an open PR with failing CI shows the alert icon rather than the open-PR icon.
 
+When an open PR is out of date with its base branch, a second glyph renders to the right of the primary PR glyph:
+
+| Glyph | Meaning |
+|---|---|
+|  | Behind base — the base branch has moved past this PR. Only signaled when the repo's branch protection requires up-to-date branches before merging; otherwise GitHub reports the PR as clean even when behind. |
+|  | Merge conflicts — the PR can't merge cleanly until the conflicts are resolved. |
+
 The status is fetched once when the deck opens, with a single `gh pr list --state all` call per distinct repo that has at least one non-default workspace. The fetch is throttled so the same repo is never re-queried within a minute.
 
 **Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
@@ -128,6 +135,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
 | `d` | Open the selected workspace's auto-discovered dev URL in your default browser |
+| `p o` | Open the selected workspace's PR in your default browser (chord — press `p`, then `o`). `esc` cancels the chord. |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |

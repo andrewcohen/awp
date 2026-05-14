@@ -85,14 +85,32 @@ const (
 	CIFailing CIState = "FAILING"
 )
 
+// MergeStateStatus mirrors gh's mergeStateStatus field. BEHIND only fires when
+// the repo's branch protection requires up-to-date branches before merging;
+// repos without that rule report CLEAN even when the PR is behind.
+type MergeStateStatus string
+
+const (
+	MergeStateBehind   MergeStateStatus = "BEHIND"
+	MergeStateBlocked  MergeStateStatus = "BLOCKED"
+	MergeStateClean    MergeStateStatus = "CLEAN"
+	MergeStateDirty    MergeStateStatus = "DIRTY"
+	MergeStateDraft    MergeStateStatus = "DRAFT"
+	MergeStateHasHooks MergeStateStatus = "HAS_HOOKS"
+	MergeStateUnknown  MergeStateStatus = "UNKNOWN"
+	MergeStateUnstable MergeStateStatus = "UNSTABLE"
+)
+
 // PRStatus is the per-PR projection the deck consumes to render a glyph.
 type PRStatus struct {
-	Number         int
-	HeadRefName    string
-	State          PRState
-	IsDraft        bool
-	ReviewDecision ReviewDecision
-	CIState        CIState
+	Number           int
+	HeadRefName      string
+	URL              string
+	State            PRState
+	IsDraft          bool
+	ReviewDecision   ReviewDecision
+	CIState          CIState
+	MergeStateStatus MergeStateStatus
 }
 
 // rawCheck is the (partial) shape of an entry in statusCheckRollup. gh returns
@@ -106,12 +124,14 @@ type rawCheck struct {
 }
 
 type rawPRStatus struct {
-	Number            int            `json:"number"`
-	HeadRefName       string         `json:"headRefName"`
-	State             PRState        `json:"state"`
-	IsDraft           bool           `json:"isDraft"`
-	ReviewDecision    ReviewDecision `json:"reviewDecision"`
-	StatusCheckRollup []rawCheck     `json:"statusCheckRollup"`
+	Number            int              `json:"number"`
+	HeadRefName       string           `json:"headRefName"`
+	URL               string           `json:"url"`
+	State             PRState          `json:"state"`
+	IsDraft           bool             `json:"isDraft"`
+	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
+	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
+	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
 }
 
 // ListPRStatus fetches PRs (any state) for the repo at repoDir via gh and
@@ -123,7 +143,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,state,isDraft,reviewDecision,statusCheckRollup",
+		"--json", "number,headRefName,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -135,12 +155,14 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 	statuses := make([]PRStatus, len(raws))
 	for i, r := range raws {
 		statuses[i] = PRStatus{
-			Number:         r.Number,
-			HeadRefName:    r.HeadRefName,
-			State:          r.State,
-			IsDraft:        r.IsDraft,
-			ReviewDecision: r.ReviewDecision,
-			CIState:        rollupCIState(r.StatusCheckRollup),
+			Number:           r.Number,
+			HeadRefName:      r.HeadRefName,
+			URL:              r.URL,
+			State:            r.State,
+			IsDraft:          r.IsDraft,
+			ReviewDecision:   r.ReviewDecision,
+			CIState:          rollupCIState(r.StatusCheckRollup),
+			MergeStateStatus: r.MergeStateStatus,
 		}
 	}
 	return statuses, nil

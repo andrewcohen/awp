@@ -442,12 +442,14 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 					byHead := make(map[string]deckui.PRStatus, len(statuses))
 					for _, s := range statuses {
 						byHead[s.HeadRefName] = deckui.PRStatus{
-							Number:         s.Number,
-							HeadRefName:    s.HeadRefName,
-							State:          deckui.PRState(s.State),
-							IsDraft:        s.IsDraft,
-							ReviewDecision: deckui.PRReviewDecision(s.ReviewDecision),
-							CIState:        deckui.PRCIState(s.CIState),
+							Number:           s.Number,
+							HeadRefName:      s.HeadRefName,
+							URL:              s.URL,
+							State:            deckui.PRState(s.State),
+							IsDraft:          s.IsDraft,
+							ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
+							CIState:          deckui.PRCIState(s.CIState),
+							MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),
 						}
 					}
 					deckDebugLogf("prStatus repo=%s prs=%d dur=%s heads=%v", dir, len(statuses), time.Since(started), sortedHeads(byHead))

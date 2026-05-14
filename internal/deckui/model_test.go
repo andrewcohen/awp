@@ -1318,3 +1318,53 @@ func TestDevURLTickNoopWithoutDiscoverer(t *testing.T) {
 		t.Fatalf("expected nil cmd when discoverer is unset, got %T", cmd())
 	}
 }
+
+func TestPRStaleGlyphAndLabel(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    PRStatus
+		wantGlyph string
+		wantLabel string
+	}{
+		{
+			name:      "open + behind base",
+			status:    PRStatus{State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind},
+			wantGlyph: prGlyphBehind,
+			wantLabel: "open · behind base",
+		},
+		{
+			name:      "open + dirty",
+			status:    PRStatus{State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateDirty},
+			wantGlyph: prGlyphDirty,
+			wantLabel: "open · merge conflicts",
+		},
+		{
+			name:      "open + clean — no stale glyph",
+			status:    PRStatus{State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean},
+			wantGlyph: "",
+			wantLabel: "open",
+		},
+		{
+			name:      "merged + behind — never stale (already merged)",
+			status:    PRStatus{State: PRStateMerged, MergeStateStatus: PRMergeStateBehind},
+			wantGlyph: "",
+			wantLabel: "merged",
+		},
+		{
+			name:      "open + approved + behind — base label kept, stale suffix appended",
+			status:    PRStatus{State: PRStateOpen, ReviewDecision: PRReviewApproved, MergeStateStatus: PRMergeStateBehind},
+			wantGlyph: prGlyphBehind,
+			wantLabel: "approved · behind base",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if g := prStaleGlyph(tc.status); g != tc.wantGlyph {
+				t.Errorf("prStaleGlyph: got %q want %q", g, tc.wantGlyph)
+			}
+			if l := prStatusLabel(tc.status); l != tc.wantLabel {
+				t.Errorf("prStatusLabel: got %q want %q", l, tc.wantLabel)
+			}
+		})
+	}
+}
