@@ -329,14 +329,32 @@ const (
 	PRCIFailing PRCIState = "FAILING"
 )
 
+// PRMergeStateStatus mirrors gh's mergeStateStatus. BEHIND only surfaces when
+// the repo's branch protection requires up-to-date branches; otherwise an
+// out-of-date PR is reported as CLEAN.
+type PRMergeStateStatus string
+
+const (
+	PRMergeStateBehind   PRMergeStateStatus = "BEHIND"
+	PRMergeStateBlocked  PRMergeStateStatus = "BLOCKED"
+	PRMergeStateClean    PRMergeStateStatus = "CLEAN"
+	PRMergeStateDirty    PRMergeStateStatus = "DIRTY"
+	PRMergeStateDraft    PRMergeStateStatus = "DRAFT"
+	PRMergeStateHasHooks PRMergeStateStatus = "HAS_HOOKS"
+	PRMergeStateUnknown  PRMergeStateStatus = "UNKNOWN"
+	PRMergeStateUnstable PRMergeStateStatus = "UNSTABLE"
+)
+
 // PRStatus is the per-PR projection consumed by the row glyph.
 type PRStatus struct {
-	Number         int
-	HeadRefName    string
-	State          PRState
-	IsDraft        bool
-	ReviewDecision PRReviewDecision
-	CIState        PRCIState
+	Number           int
+	HeadRefName      string
+	URL              string
+	State            PRState
+	IsDraft          bool
+	ReviewDecision   PRReviewDecision
+	CIState          PRCIState
+	MergeStateStatus PRMergeStateStatus
 }
 
 // PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more
@@ -427,6 +445,7 @@ type Model struct {
 	newMenuMode        bool
 	newMenuCursor      int
 	newMenuRepo        string
+	prMenuMode         bool
 	bookmarkMode       bool
 	bookmarkLoading    bool
 	bookmarks          []string
@@ -921,7 +940,8 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.confirmDelete && !m.filtering &&
 		!m.findMode && !m.actionMode &&
 		!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
-		!m.openMode && !m.helpMode && !m.newWorkspaceMode
+		!m.openMode && !m.helpMode && !m.newWorkspaceMode &&
+		!m.prMenuMode
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1365,6 +1385,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, batchCmds(cmd, tea.ClearScreen)
 			}
 			return m, cmd
+		}
+		if m.prMenuMode {
+			switch msg.String() {
+			case "esc", "q", "ctrl+c":
+				m.prMenuMode = false
+				m.status = "pr: cancelled"
+				return m, nil
+			case "o":
+				m.prMenuMode = false
+				item, ok := m.selected()
+				if !ok {
+					return m, nil
+				}
+				status, _, ok := m.prStatusLabelForItem(item)
+				if !ok {
+					m.status = "pr: no PR for this workspace"
+					return m, nil
+				}
+				url := strings.TrimSpace(status.URL)
+				if url == "" {
+					m.status = "pr: no URL on cached PR (re-open the deck to refresh)"
+					return m, nil
+				}
+				if err := openBrowser(url); err != nil {
+					m.status = "pr: " + err.Error()
+				} else {
+					m.status = "pr: opened " + url
+				}
+				return m, nil
+			}
+			return m, nil
 		}
 		if m.newMenuMode {
 			switch msg.String() {
@@ -1915,6 +1966,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "open: " + url
 			}
+			return m, nil
+		case "p":
+			if _, ok := m.selected(); !ok {
+				return m, nil
+			}
+			m.prMenuMode = true
+			m.status = "pr: o open in browser · esc cancel"
 			return m, nil
 		}
 	}
@@ -2736,6 +2794,8 @@ func (m Model) renderHelp(width int) string {
 		prDot(prGlyphCIFail, colDanger, "CI failing"),
 		prDot(prGlyphMerged, colMuted, "merged"),
 		prDot(prGlyphClosed, colMuted, "closed"),
+		prDot(prGlyphBehind, colWarning, "behind base"),
+		prDot(prGlyphDirty, colDanger, "merge conflicts"),
 	}
 	activityLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
@@ -2866,9 +2926,13 @@ func (m Model) renderList(width int) string {
 		// preferable to a blank glyph slot.
 		glyph := statusGlyph(item.Status, dim, item.Unread)
 		prGlyph := m.prGlyphForItem(item)
+		staleGlyph := m.prStaleGlyphForItem(item)
 		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
 		if prGlyph != "" {
 			line += " " + prGlyph
+		}
+		if staleGlyph != "" {
+			line += " " + staleGlyph
 		}
 		rows = append(rows, lipgloss.NewStyle().Width(width-2).Render(line))
 	}
@@ -2923,6 +2987,7 @@ func deckKeyGroups() []keyGroup {
 				{"D", "delete workspace (or default → delete project)"},
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{"d", "open dev URL in browser (auto-discovered)"},
+				{"p o", "open this workspace's PR in browser"},
 				{",", "edit global state file in $EDITOR"},
 			},
 		},
@@ -3924,6 +3989,8 @@ const (
 	prGlyphApproved = "" // nf-oct-check
 	prGlyphCIFail   = "" // nf-oct-x
 	prGlyphCIPend   = "" // nf-oct-hourglass
+	prGlyphBehind   = "" // nf-oct-arrow_down — PR is behind the base branch
+	prGlyphDirty    = "" // nf-oct-alert — merge conflicts with the base branch
 )
 
 // prGlyphFor returns the single glyph for the given PR status per the locked
@@ -3984,6 +4051,18 @@ func prGlyphColor(s PRStatus) string {
 // priority order. Mirrors prGlyphFor so the words shown in the details panel
 // always agree with the glyph drawn in the row.
 func prStatusLabel(s PRStatus) string {
+	base := prStatusBaseLabel(s)
+	suffix := prStaleLabelSuffix(s)
+	if base == "" {
+		return ""
+	}
+	if suffix == "" {
+		return base
+	}
+	return base + " · " + suffix
+}
+
+func prStatusBaseLabel(s PRStatus) string {
 	if s.State == PRStateMerged {
 		return "merged"
 	}
@@ -4015,6 +4094,49 @@ func prStatusLabel(s PRStatus) string {
 		return "open"
 	}
 	return ""
+}
+
+// prStaleLabelSuffix returns a short phrase for the merge-state-status signal
+// (behind base or merge conflicts), or "" if the PR is up-to-date or the
+// state isn't a stale variant. Merged/closed PRs never report stale — there's
+// nothing to update.
+func prStaleLabelSuffix(s PRStatus) string {
+	if s.State != PRStateOpen {
+		return ""
+	}
+	switch s.MergeStateStatus {
+	case PRMergeStateBehind:
+		return "behind base"
+	case PRMergeStateDirty:
+		return "merge conflicts"
+	}
+	return ""
+}
+
+// prStaleGlyph returns the glyph to render alongside the primary PR glyph
+// when the PR is out of date with its base branch. Empty when up-to-date or
+// when the PR isn't open. BEHIND only fires on repos whose branch protection
+// requires up-to-date branches; otherwise an out-of-date PR reads as CLEAN.
+func prStaleGlyph(s PRStatus) string {
+	if s.State != PRStateOpen {
+		return ""
+	}
+	switch s.MergeStateStatus {
+	case PRMergeStateBehind:
+		return prGlyphBehind
+	case PRMergeStateDirty:
+		return prGlyphDirty
+	}
+	return ""
+}
+
+// prStaleGlyphColor picks a palette entry matching the stale state. Behind →
+// amber (attention but recoverable). Dirty → red (blocked, needs manual fix).
+func prStaleGlyphColor(s PRStatus) string {
+	if s.MergeStateStatus == PRMergeStateDirty {
+		return "203"
+	}
+	return "214"
 }
 
 // prStatusLabelForItem looks up the workspace's PR (by Bookmark → headRefName)
@@ -4069,6 +4191,33 @@ func (m Model) prGlyphForItem(item Item) string {
 		return ""
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(status))).Render(g)
+}
+
+// prStaleGlyphForItem mirrors prGlyphForItem for the secondary "behind base"
+// glyph rendered next to the primary PR glyph. Returns "" when the PR is
+// up-to-date, no longer open, or there's no matching PR record.
+func (m Model) prStaleGlyphForItem(item Item) string {
+	bm := strings.TrimSpace(item.Bookmark)
+	if bm == "" {
+		return ""
+	}
+	repo := strings.TrimSpace(item.RepoRoot)
+	if repo == "" {
+		return ""
+	}
+	byHead, ok := m.prStatusByRepo[repo]
+	if !ok {
+		return ""
+	}
+	status, ok := byHead[bm]
+	if !ok {
+		return ""
+	}
+	g := prStaleGlyph(status)
+	if g == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(prStaleGlyphColor(status))).Render(g)
 }
 
 // statusGlyph renders a colored ● for an agent status. Only "loud" states

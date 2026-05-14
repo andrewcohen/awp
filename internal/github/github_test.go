@@ -62,11 +62,11 @@ func TestFetchPRParseError(t *testing.T) {
 
 func TestListPRStatusParses(t *testing.T) {
 	r := &fakeRunner{out: `[
-		{"number":1,"headRefName":"andrew/a","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]},
-		{"number":2,"headRefName":"andrew/b","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[]},
-		{"number":3,"headRefName":"andrew/c","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[{"status":"IN_PROGRESS"},{"conclusion":"SUCCESS","status":"COMPLETED"}]},
-		{"number":4,"headRefName":"andrew/d","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}]},
-		{"number":5,"headRefName":"andrew/e","state":"CLOSED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"PENDING"}]}
+		{"number":1,"headRefName":"andrew/a","url":"https://github.com/o/r/pull/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"},
+		{"number":2,"headRefName":"andrew/b","url":"https://github.com/o/r/pull/2","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeStateStatus":"CLEAN"},
+		{"number":3,"headRefName":"andrew/c","url":"https://github.com/o/r/pull/3","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[{"status":"IN_PROGRESS"},{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"},
+		{"number":4,"headRefName":"andrew/d","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"},
+		{"number":5,"headRefName":"andrew/e","url":"https://github.com/o/r/pull/5","state":"CLOSED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"PENDING"}],"mergeStateStatus":"UNKNOWN"}
 	]`}
 	c := New(r)
 	got, err := c.ListPRStatus("/tmp/repo")
@@ -77,11 +77,11 @@ func TestListPRStatusParses(t *testing.T) {
 		t.Fatalf("expected 5 PRs, got %d", len(got))
 	}
 	want := []PRStatus{
-		{Number: 1, HeadRefName: "andrew/a", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing},
-		{Number: 2, HeadRefName: "andrew/b", State: PRStateMerged, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CINone},
-		{Number: 3, HeadRefName: "andrew/c", State: PRStateOpen, IsDraft: true, ReviewDecision: "", CIState: CIPending},
-		{Number: 4, HeadRefName: "andrew/d", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing},
-		{Number: 5, HeadRefName: "andrew/e", State: PRStateClosed, IsDraft: false, ReviewDecision: "", CIState: CIPending},
+		{Number: 1, HeadRefName: "andrew/a", URL: "https://github.com/o/r/pull/1", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateClean},
+		{Number: 2, HeadRefName: "andrew/b", URL: "https://github.com/o/r/pull/2", State: PRStateMerged, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CINone, MergeStateStatus: MergeStateClean},
+		{Number: 3, HeadRefName: "andrew/c", URL: "https://github.com/o/r/pull/3", State: PRStateOpen, IsDraft: true, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateBehind},
+		{Number: 4, HeadRefName: "andrew/d", URL: "https://github.com/o/r/pull/4", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing, MergeStateStatus: MergeStateDirty},
+		{Number: 5, HeadRefName: "andrew/e", URL: "https://github.com/o/r/pull/5", State: PRStateClosed, IsDraft: false, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateUnknown},
 	}
 	for i, w := range want {
 		if got[i] != w {
@@ -96,7 +96,7 @@ func TestListPRStatusParses(t *testing.T) {
 	for _, a := range r.gotArgs {
 		joined += " " + a
 	}
-	for _, want := range []string{"--state", "all", "reviewDecision", "statusCheckRollup"} {
+	for _, want := range []string{"--state", "all", "url", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
 		if !contains(joined, want) {
 			t.Errorf("expected %q in args, got %q", want, joined)
 		}
