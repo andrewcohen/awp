@@ -59,7 +59,9 @@ func TestBuildMiniDeckRowsDropsStaleActiveRows(t *testing.T) {
 			"keep-me": {Name: "keep-me", Path: "/ws/r/keep", Status: "working"},
 			// Session exists but the agent pane fell back to a shell.
 			"agent-died": {Name: "agent-died", Path: "/ws/r/dead", Status: "working"},
-			// Stale unread + no session: still dropped, nothing to jump to.
+			// idle+unread with no session: the Stop hook fired and the
+			// user hasn't acknowledged the turn. Surface it — mini-deck
+			// recreates the session on jump.
 			"pinged-but-dead": {Name: "pinged-but-dead", Path: "/ws/r/pinged", Status: "idle", Unread: true},
 			// Status exited — never surfaces in mini-deck, even with unread.
 			"finished": {Name: "finished", Path: "/ws/r/finished", Status: "exited", Unread: true},
@@ -88,8 +90,8 @@ func TestBuildMiniDeckRowsDropsStaleActiveRows(t *testing.T) {
 	if got["agent-died"] {
 		t.Error("expected stale agent-died (agent pane back at shell) to be dropped")
 	}
-	if got["pinged-but-dead"] {
-		t.Error("expected unread row with no session to be dropped (nothing to jump to)")
+	if !got["pinged-but-dead"] {
+		t.Error("expected idle+unread with no session to be kept (unread is the user's signal; session is recreated on jump)")
 	}
 	if got["finished"] {
 		t.Error("expected exited row to be dropped even when unread")
@@ -97,8 +99,35 @@ func TestBuildMiniDeckRowsDropsStaleActiveRows(t *testing.T) {
 	if !got["keep-me"] {
 		t.Error("expected keep-me (session live, agent running) to be kept")
 	}
-	if len(rows) != 1 {
-		t.Fatalf("expected only keep-me to survive, got %d rows: %+v", len(rows), rows)
+	if len(rows) != 2 {
+		t.Fatalf("expected keep-me and pinged-but-dead to survive, got %d rows: %+v", len(rows), rows)
+	}
+}
+
+// Regression: idle+unread with a live session whose agent pane has
+// fallen back to a bare shell (user quit Claude after a turn finished)
+// must still surface. The unread bit is the durable signal that there's
+// an unacknowledged turn to read, independent of whether the agent
+// process is still alive.
+func TestBuildMiniDeckRowsKeepsIdleUnreadWithDeadAgentShell(t *testing.T) {
+	all := map[string]map[string]workspace.Entry{
+		"/repos/redwood": {
+			"finished-turn": {Name: "finished-turn", Path: "/ws/r/ft", Status: "idle", Unread: true},
+		},
+	}
+	session := DeckSessionName("redwood", "finished-turn")
+	snap := deckTmuxSnapshot{
+		known: true,
+		liveByName: map[string]string{
+			session: "$1",
+		},
+		agentShell: map[string]bool{
+			session: true,
+		},
+	}
+	rows := buildMiniDeckRows(all, snap)
+	if len(rows) != 1 || rows[0].Workspace != "finished-turn" {
+		t.Fatalf("expected finished-turn to survive freshness check (idle+unread is durable), got %+v", rows)
 	}
 }
 

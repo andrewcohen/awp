@@ -88,13 +88,17 @@ func jumpToMiniDeckRow(tc *tmux.Client, store *state.JSONStore, row deckui.MiniR
 //     avoid one nuisance row per project from stale Claude prompts).
 //  2. MiniIncluded says its (status, unread) tuple is actionable — see
 //     that function for the per-status rules.
-//  3. The tmux state (when known) confirms a live agent: a session
-//     named [awp]<repo>__<workspace> exists and its `:agent` pane is
-//     not a bare shell.
+//  3. For "working" rows only, the tmux state (when known) confirms a
+//     live agent: a session named [awp]<repo>__<workspace> exists and
+//     its `:agent` pane is not a bare shell.
 //
-// (3) is the freshness check. The deck has the same one — without it,
-// any workspace whose agent process died without firing an "exited"
-// hook (Claude has no exit hook) would look "working" forever.
+// (3) is the freshness check, and it's scoped to "working" because
+// that's the one status that can go stale silently: Claude has no exit
+// hook, so a crashed agent leaves status=working forever. Idle / waiting
+// statuses are written by hooks that fire AFTER the work, so they
+// accurately reflect a turn the user hasn't acknowledged — surface them
+// regardless of whether the agent process is still alive (jumpToMiniDeckRow
+// recreates the session if needed).
 //
 // Sorted by project name then workspace name so the list is stable.
 func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxSnapshot) []deckui.MiniRow {
@@ -114,7 +118,7 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 			if !deckui.MiniIncluded(e.Status, e.Unread) {
 				continue
 			}
-			if snap.known {
+			if snap.known && isWorkingStatus(e.Status) {
 				sessionName := DeckSessionName(project, name)
 				if _, alive := snap.liveByName[sessionName]; !alive {
 					continue
@@ -140,4 +144,15 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 		return rows[i].Workspace < rows[j].Workspace
 	})
 	return rows
+}
+
+// isWorkingStatus reports whether the stored status indicates active
+// work that should be cross-checked against tmux. Mirrors the working
+// branch of deckui.MiniIncluded.
+func isWorkingStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "working", "in progress", "in_progress", "running":
+		return true
+	}
+	return false
 }
