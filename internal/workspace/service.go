@@ -1328,23 +1328,48 @@ func (s *service) rollbackNewWorkspaceStart(repoRoot, name, path string) error {
 }
 
 func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revision string) (int, error) {
+	forgotten := 0
+	seen := map[string]struct{}{}
+	forget := func(name string) error {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil
+		}
+		if _, dup := seen[name]; dup {
+			return nil
+		}
+		seen[name] = struct{}{}
+		if err := s.jj.ForgetBookmark(name); err != nil {
+			return fmt.Errorf("forget bookmark %q: %w", name, err)
+		}
+		forgotten++
+		return nil
+	}
+
+	// jj bookmarks don't auto-advance with @, so the stored bookmark is
+	// usually on an ancestor of the workspace's working-copy commit, not
+	// on @ itself. Forget it by name directly — a revision scan would
+	// only find it in the narrow case where the user never committed
+	// past the original branch point.
+	if err := forget(storedBookmark); err != nil {
+		return forgotten, err
+	}
+
 	revision = strings.TrimSpace(revision)
 	if revision == "" {
-		return 0, nil
+		return forgotten, nil
 	}
 	bookmarks, err := s.jj.BookmarksAtRevision(revision)
 	if err != nil {
-		return 0, fmt.Errorf("list bookmarks at revision %q: %w", revision, err)
+		return forgotten, fmt.Errorf("list bookmarks at revision %q: %w", revision, err)
 	}
-	forgotten := 0
 	for _, bookmark := range bookmarks {
 		if !bookmarkMatchesWorkspace(workspaceName, storedBookmark, bookmark) {
 			continue
 		}
-		if err := s.jj.ForgetBookmark(bookmark); err != nil {
-			return forgotten, fmt.Errorf("forget bookmark %q: %w", bookmark, err)
+		if err := forget(bookmark); err != nil {
+			return forgotten, err
 		}
-		forgotten++
 	}
 	return forgotten, nil
 }

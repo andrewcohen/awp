@@ -655,6 +655,36 @@ func TestDeleteForgetsStoredBookmarkForReviewWorkspace(t *testing.T) {
 	}
 }
 
+func TestDeleteForgetsStoredBookmarkNotAtWorkspaceRevision(t *testing.T) {
+	// Regression: jj bookmarks don't auto-advance with @. If the user
+	// committed past the original branch point, the stored bookmark
+	// lives on an ancestor commit, not the workspace's working-copy
+	// commit. Cleanup must still forget it.
+	repoRoot := t.TempDir()
+	workspaceName := "feat-x"
+	bookmark := "andrew/feat-x"
+	jj := &fakeJJ{
+		repoRoot:      repoRoot,
+		existing:      map[string]bool{workspaceName: true},
+		workspaceRevs: map[string]string{workspaceName: "tip999"},
+		// bookmarksByRev intentionally has no entry for "tip999" — the
+		// bookmark exists in the repo but on an ancestor commit.
+		bookmarksByRev: map[string][]string{},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{workspaceName: true}}
+	store := &fakeStore{entries: map[string]Entry{
+		workspaceName: {Name: workspaceName, Bookmark: bookmark, Path: filepath.Join(repoRoot, ".awp", "workspaces", workspaceName)},
+	}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete(workspaceName, true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if len(jj.forgottenBookmarks) != 1 || jj.forgottenBookmarks[0] != bookmark {
+		t.Fatalf("expected stored bookmark %q to be forgotten, got %+v", bookmark, jj.forgottenBookmarks)
+	}
+}
+
 func TestPrepareWorkspaceRecordsBookmark(t *testing.T) {
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
