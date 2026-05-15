@@ -124,7 +124,7 @@ func openProjectViaTmux(runner Runner) deckui.ProjectOpener {
 		}
 		if id == "" {
 			env := workspaceEnvPairs(repoName, "default", path)
-			if err := tc.NewSession(sessionName, path, "agent", env); err != nil {
+			if _, err := createWorkspaceSession(tc, sessionName, path, path, env); err != nil {
 				return fmt.Errorf("open: create session: %w", err)
 			}
 		}

@@ -66,7 +66,7 @@ func jumpToMiniDeckRow(tc *tmux.Client, store *state.JSONStore, row deckui.MiniR
 			return fmt.Errorf("workspace %q has no recorded path; open it from the deck first", row.Workspace)
 		}
 		env := workspaceEnvPairs(row.Project, row.Workspace, row.RepoRoot)
-		if err := tc.NewSession(sessionName, row.Path, "agent", env); err != nil {
+		if _, err := createWorkspaceSession(tc, sessionName, row.Path, row.RepoRoot, env); err != nil {
 			return err
 		}
 	}
