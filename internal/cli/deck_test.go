@@ -209,6 +209,68 @@ func TestOpenNamedWindowReusesExistingNamedWindowInTUIAndDoesNotSendCommand(t *t
 	}
 }
 
+// TestSummonWorkspaceSessionLaunchesAgentOnNewSession locks in the fix for
+// the async-create regression where pressing enter on a freshly-created
+// workspace row before the create-workspace job finished produced a tmux
+// session whose "agent" window was a bare shell. Whenever a deck handler
+// creates the session itself, it must send the configured AgentInvocation
+// to :agent so the user never lands in a non-agent shell. Without this
+// the async create-workspace job's `sessionWasNew` check in app.go silently
+// no-ops the agent launch on its end.
+func TestSummonWorkspaceSessionLaunchesAgentOnNewSession(t *testing.T) {
+	// Isolate from the developer's ~/.config/awp/config.json so
+	// AgentInvocation resolves to the default "pi" instead of whatever the
+	// host has configured.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	runner := &deckFakeRunner{outs: map[string]string{
+		// list-sessions returns empty: no [awp]repo__qa session exists yet.
+	}}
+	client := tmux.New(runner)
+	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
+	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws", RepoRoot: "/tmp/repo"}
+
+	if err := summonWorkspaceSession(client, svc, item, noopReporter{}); err != nil {
+		t.Fatalf("summonWorkspaceSession: %v", err)
+	}
+
+	newSessionIdx := -1
+	agentSendKeysIdx := -1
+	switchClientIdx := -1
+	for i, call := range runner.calls {
+		if len(call) < 2 || call[0] != "tmux" {
+			continue
+		}
+		joined := strings.Join(call, " ")
+		switch {
+		case call[1] == "new-session":
+			newSessionIdx = i
+		case call[1] == "send-keys" && len(call) >= 6 && call[3] == "[awp]repo__qa:agent" && call[4] == "-l" && call[5] == "pi":
+			if agentSendKeysIdx < 0 {
+				agentSendKeysIdx = i
+			}
+		case call[1] == "switch-client":
+			switchClientIdx = i
+		}
+		_ = joined
+	}
+	if newSessionIdx < 0 {
+		t.Fatalf("expected tmux new-session; got %#v", runner.calls)
+	}
+	if agentSendKeysIdx < 0 {
+		t.Fatalf("expected tmux send-keys -l pi to [awp]repo__qa:agent; got %#v", runner.calls)
+	}
+	if agentSendKeysIdx <= newSessionIdx {
+		t.Fatalf("agent send-keys must come after new-session; new-session@%d send-keys@%d", newSessionIdx, agentSendKeysIdx)
+	}
+	if switchClientIdx < 0 {
+		t.Fatalf("expected tmux switch-client; got %#v", runner.calls)
+	}
+	if switchClientIdx < agentSendKeysIdx {
+		t.Fatalf("switch-client must come after agent send-keys; switch@%d send-keys@%d", switchClientIdx, agentSendKeysIdx)
+	}
+}
+
 func TestHandleDeckActionRenameRefusesWhileAgentRuns(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
 		"tmux list-sessions -F #{session_id}\t#{session_name}":                   "$1\t[awp]repo__qa\n",

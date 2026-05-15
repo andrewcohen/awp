@@ -1077,6 +1077,27 @@ func handleDeleteProjectAction(tmuxClient *tmux.Client, svc workspace.Service, i
 	return nil
 }
 
+// createWorkspaceSession runs tmux new-session for the workspace and
+// launches the configured agent in the freshly-created "agent" window so
+// the user doesn't land in a bare shell. Returns the new session id.
+//
+// Every deck-side handler that creates a workspace session must go
+// through this helper (not raw tmux.NewSession), or the async
+// create-workspace flow's agent-auto-launch silently no-ops when the
+// session was created out-of-band: app.go's `sessionWasNew` check sees
+// the pre-existing session and skips the SendCommand for the agent
+// invocation.
+func createWorkspaceSession(tmuxClient *tmux.Client, sessionName, path, repoRoot string, env []string) (string, error) {
+	if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
+		return "", err
+	}
+	id, _ := tmuxClient.SessionIDByName(sessionName)
+	if invocation := strings.TrimSpace(config.AgentInvocation(repoRoot)); invocation != "" {
+		_ = tmuxClient.SendCommand(sessionName+":agent", invocation)
+	}
+	return id, nil
+}
+
 func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, reporter deckui.Reporter) error {
 	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
 	id, err := tmuxClient.SessionIDByName(sessionName)
@@ -1087,10 +1108,11 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 	if id == "" {
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
 		path := resolvePath(svc, item)
-		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
+		newID, err := createWorkspaceSession(tmuxClient, sessionName, path, item.RepoRoot, env)
+		if err != nil {
 			return err
 		}
-		id, _ = tmuxClient.SessionIDByName(sessionName)
+		id = newID
 	}
 	if stale, envErr := ensureWorkspaceSessionEnv(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot, sessionName+":agent"); envErr != nil {
 		reporter.Log(fmt.Sprintf("warning: failed to set session env: %v", envErr))
@@ -1122,10 +1144,11 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
-		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
+		newID, err := createWorkspaceSession(tmuxClient, sessionName, path, item.RepoRoot, env)
+		if err != nil {
 			return err
 		}
-		id, _ = tmuxClient.SessionIDByName(sessionName)
+		id = newID
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
 	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
@@ -1237,10 +1260,11 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 	}
 	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
-		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
+		newID, err := createWorkspaceSession(tmuxClient, sessionName, path, item.RepoRoot, env)
+		if err != nil {
 			return err
 		}
-		id, _ = tmuxClient.SessionIDByName(sessionName)
+		id = newID
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
 	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
@@ -1282,10 +1306,11 @@ func openCustomActionWindow(tmuxClient *tmux.Client, svc workspace.Service, item
 	path := resolvePath(svc, item)
 	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
 	if id == "" {
-		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
+		newID, err := createWorkspaceSession(tmuxClient, sessionName, path, item.RepoRoot, env)
+		if err != nil {
 			return err
 		}
-		id, _ = tmuxClient.SessionIDByName(sessionName)
+		id = newID
 		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
 	}
 	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
