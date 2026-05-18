@@ -198,6 +198,15 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 		innerWidth = 38
 	}
 
+	// Vertical overhead: 2 rows of border + 2 rows of padding (Padding(1,2)
+	// applies 1 row top + 1 row bottom) + 1 row title + 1 blank line below
+	// the title = 6 rows. Reserve a 1-row bottom margin so a tall list
+	// never crowds against the viewport edge.
+	bodyHeight := height - 6 - 1
+	if bodyHeight < 4 {
+		bodyHeight = 4
+	}
+
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Width(innerWidth)
 	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · r retry · x dismiss · o open log · y yank)")
 
@@ -226,22 +235,60 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 	listWidth := (innerWidth - gutter) / 2
 	detailsWidth := innerWidth - gutter - listWidth
 
-	list := renderJobsList(jobs, cursor, listWidth)
-	details := renderJobDetails(jobs[cursor], detailsWidth)
+	list := renderJobsList(jobs, cursor, listWidth, bodyHeight)
+	details := clampLines(renderJobDetails(jobs[cursor], detailsWidth), bodyHeight)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", details)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
 		boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body)))
 }
 
-func renderJobsList(jobs []Job, cursor, width int) string {
+// clampLines truncates a pre-rendered, newline-separated block to at
+// most maxLines lines so a tall column can't push the popover past the
+// viewport edge (the deck runs inline — overflow scrolls the host pane).
+func clampLines(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[:maxLines], "\n")
+}
+
+func renderJobsList(jobs []Job, cursor, width, maxRows int) string {
 	rowStyle := lipgloss.NewStyle().Width(width)
 	selStyle := rowStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	barStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
 
-	lines := make([]string, 0, len(jobs))
-	for i, j := range jobs {
+	// Reserve 2 rows at the bottom for the blank separator + footer.
+	rowsArea := maxRows - 2
+	if rowsArea < 1 {
+		rowsArea = 1
+	}
+
+	// Window the rows around the cursor so it stays visible when the
+	// list overflows the available height. Without this the popover
+	// grows past the viewport and (because the deck renders inline,
+	// no alt-screen) scrolls the entire UI off the top of the pane.
+	start, end := 0, len(jobs)
+	if rowsArea < len(jobs) {
+		start = cursor - rowsArea/2
+		if start < 0 {
+			start = 0
+		}
+		end = start + rowsArea
+		if end > len(jobs) {
+			end = len(jobs)
+			start = end - rowsArea
+		}
+	}
+
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		j := jobs[i]
 		glyph, color := jobStatusGlyph(j.Status)
 		glyphStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
 		title := j.Title
@@ -259,7 +306,11 @@ func renderJobsList(jobs []Job, cursor, width int) string {
 			lines = append(lines, rowStyle.Render(row))
 		}
 	}
-	footer := mutedStyle.Render(fmt.Sprintf("%d job(s)", len(jobs)))
+	footerText := fmt.Sprintf("%d job(s)", len(jobs))
+	if start > 0 || end < len(jobs) {
+		footerText = fmt.Sprintf("%d–%d / %d", start+1, end, len(jobs))
+	}
+	footer := mutedStyle.Render(footerText)
 	return lipgloss.JoinVertical(lipgloss.Left, append(lines, "", footer)...)
 }
 
