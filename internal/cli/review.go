@@ -112,8 +112,8 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	if err != nil {
 		return err
 	}
+	env := workspaceEnvPairs(project, name, repoRoot)
 	if !exists {
-		env := workspaceEnvPairs(project, name, repoRoot)
 		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
 		if err := tmuxClient.NewSession(sessionName, wsPath, prDescWindow, env); err != nil {
 			return err
@@ -121,6 +121,34 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		if err := tmuxClient.SendCommand(prDescTarget, prDescCmd); err != nil {
 			return err
 		}
+	} else {
+		reporter.Log(fmt.Sprintf("tmux session %s already exists; ensuring review windows", sessionName))
+	}
+
+	// Add whichever of the three review windows is missing. Necessary
+	// because the session may have been created out-of-band (e.g. an
+	// earlier `enter` on the workspace row summons a session with only
+	// an `agent` window) — without this idempotent setup, review.go
+	// would attach to that bare session and leave the user without the
+	// `pr description` and `review` windows.
+	windows, werr := tmuxClient.ListWindowsInSession(sessionName)
+	if werr != nil {
+		return werr
+	}
+	have := make(map[string]bool, len(windows))
+	for _, w := range windows {
+		have[w.Name] = true
+	}
+	if !have[prDescWindow] {
+		reporter.Step("Open PR description window")
+		if err := tmuxClient.NewWindowInSession(sessionName, prDescWindow, wsPath, env); err != nil {
+			return err
+		}
+		if err := tmuxClient.SendCommand(prDescTarget, prDescCmd); err != nil {
+			return err
+		}
+	}
+	if !have["agent"] {
 		reporter.Step("Open agent window")
 		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath, env); err != nil {
 			return err
@@ -128,6 +156,19 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		if err := tmuxClient.SendCommand(sessionName+":agent", config.AgentInvocation(repoRoot)+" "+shellSingleQuote(prompt)); err != nil {
 			return err
 		}
+	} else {
+		// Agent window pre-existed (typically from a prior summon
+		// that launched the default agent without a prompt). Feed the
+		// review prompt to it as user input so the agent picks up the
+		// review context. Use PasteText so the prompt's embedded
+		// newlines don't each submit as separate messages — bracketed
+		// paste lets the agent receive the whole block in one go.
+		reporter.Step("Send review prompt to agent")
+		if err := tmuxClient.PasteText(sessionName+":agent", prompt); err != nil {
+			return err
+		}
+	}
+	if !have["review"] {
 		reporter.Step("Open review window")
 		if err := tmuxClient.NewWindowInSession(sessionName, "review", wsPath, env); err != nil {
 			return err
@@ -135,13 +176,13 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		if err := tmuxClient.SendCommand(sessionName+":review", reviewCmd); err != nil {
 			return err
 		}
-		if !noSwitch {
-			if err := tmuxClient.SwitchToWindow(prDescTarget); err != nil {
-				return err
-			}
-		}
-	} else {
-		reporter.Log(fmt.Sprintf("tmux session %s already exists; attaching", sessionName))
+	}
+	// Set the session's current-window pointer to pr-description so a
+	// later switch into the session lands the user on the PR view
+	// instead of whatever window was last focused (commonly `agent`,
+	// when the session was summoned out-of-band before review ran).
+	if err := tmuxClient.SwitchToWindow(prDescTarget); err != nil {
+		return err
 	}
 
 	if noSwitch {
