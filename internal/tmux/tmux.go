@@ -72,6 +72,25 @@ func (c *Client) SendCommand(name string, command string) error {
 	return nil
 }
 
+// PasteText pastes multi-line text into the target pane via the tmux
+// buffer, using bracketed paste (-p) so the receiving program sees the
+// whole block as one paste rather than a stream of submit-on-newline
+// keypresses. Sends a single Enter afterward to commit if the receiver
+// is an interactive REPL (Claude / Pi / a shell). Use this instead of
+// SendCommand whenever the payload may contain embedded newlines.
+func (c *Client) PasteText(name string, text string) error {
+	if _, err := c.runner.Run(context.Background(), "", "tmux", "set-buffer", "--", text); err != nil {
+		return fmt.Errorf("set tmux paste buffer: %w", err)
+	}
+	if _, err := c.runner.Run(context.Background(), "", "tmux", "paste-buffer", "-p", "-t", name); err != nil {
+		return fmt.Errorf("paste into tmux window %q: %w", name, err)
+	}
+	if _, err := c.runner.Run(context.Background(), "", "tmux", "send-keys", "-t", name, "Enter"); err != nil {
+		return fmt.Errorf("submit pasted text in tmux window %q: %w", name, err)
+	}
+	return nil
+}
+
 func (c *Client) SwitchToWindow(name string) error {
 	_, err := c.runner.Run(context.Background(), "", "tmux", "select-window", "-t", name)
 	if err != nil {
