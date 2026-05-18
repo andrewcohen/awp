@@ -223,9 +223,9 @@ func (m MiniModel) Rows() []MiniRow { return m.rows }
 func (m MiniModel) FindMode() bool { return m.findMode }
 
 // MiniIncluded reports whether an entry's status/unread combination
-// qualifies it for the mini-deck.
+// qualifies it for the mini-deck / attention scope.
 //
-// Mini-deck is for "things I should pay attention to right now":
+// "Attention" is "things I should pay attention to right now":
 //   - working → an agent is actively generating output or running a
 //     tool. Always surface.
 //   - waiting → Claude is blocked on a permission/notification prompt.
@@ -238,7 +238,10 @@ func (m MiniModel) FindMode() bool { return m.findMode }
 //   - exited → never surface. The agent process is gone; there is
 //     no one waiting on the other end of an enter press.
 //
-// Rows are further freshness-checked against tmux state by the caller.
+// This is the (status, unread) half of the filter. The full attention
+// filter (AttentionIncluded) layers on a freshness check that drops
+// stale "working" rows whose tmux session is gone or whose agent pane
+// has fallen back to a bare shell.
 func MiniIncluded(status string, unread bool) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "working", "in progress", "in_progress", "running":
@@ -252,6 +255,42 @@ func MiniIncluded(status string, unread bool) bool {
 	default:
 		return unread
 	}
+}
+
+// AttentionIncluded is the shared "this row needs your attention" filter
+// used by both the deck's ScopeAttention and the mini-deck. It composes
+// MiniIncluded with a freshness check: a stored "working" status only
+// counts when the row is actually fresh (live tmux session whose :agent
+// pane is the real agent, not a bare shell). Without the freshness
+// check, a crashed agent — Claude has no exit hook — would leave
+// "working" pinned in the attention scope forever.
+//
+// active should be true when the row's tmux session exists and its
+// :agent pane is running an agent, OR when tmux state is not yet known
+// (fast first paint — trust the stored status and let a later refresh
+// correct it).
+//
+// active is only consulted for "working" statuses. For waiting/idle the
+// Unread flag is the durable signal (Claude wrote it after the turn
+// finished), so the row surfaces regardless of whether the agent
+// process is still alive — the mini-deck will recreate the session on
+// jump if necessary.
+func AttentionIncluded(status string, unread, active bool) bool {
+	if !MiniIncluded(status, unread) {
+		return false
+	}
+	if isWorkingStatus(status) && !active {
+		return false
+	}
+	return true
+}
+
+func isWorkingStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "working", "in progress", "in_progress", "running":
+		return true
+	}
+	return false
 }
 
 // buildMiniRowHints assigns easymotion hints across every row. Uses

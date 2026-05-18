@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -82,23 +81,13 @@ func jumpToMiniDeckRow(tc *tmux.Client, store *state.JSONStore, row deckui.MiniR
 }
 
 // buildMiniDeckRows projects a global state snapshot into the mini-deck
-// row list. A workspace shows up only if all of:
-//
-//  1. Its name is not "default" (jj-created stub workspace; skipped to
-//     avoid one nuisance row per project from stale Claude prompts).
-//  2. MiniIncluded says its (status, unread) tuple is actionable — see
-//     that function for the per-status rules.
-//  3. For "working" rows only, the tmux state (when known) confirms a
-//     live agent: a session named [awp]<repo>__<workspace> exists and
-//     its `:agent` pane is not a bare shell.
-//
-// (3) is the freshness check, and it's scoped to "working" because
-// that's the one status that can go stale silently: Claude has no exit
-// hook, so a crashed agent leaves status=working forever. Idle / waiting
-// statuses are written by hooks that fire AFTER the work, so they
-// accurately reflect a turn the user hasn't acknowledged — surface them
-// regardless of whether the agent process is still alive (jumpToMiniDeckRow
-// recreates the session if needed).
+// row list, using the same deckui.AttentionIncluded predicate that the
+// regular deck's ScopeAttention applies. The only mini-deck-specific
+// work here is computing the `active` flag from the tmux snapshot:
+// a workspace counts as active when its [awp]<repo>__<workspace>
+// session exists and the :agent pane is not a bare shell. When the
+// snapshot is unknown (fast first paint), we trust the stored status
+// and let a later refresh correct it.
 //
 // Sorted by project name then workspace name so the list is stable.
 func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxSnapshot) []deckui.MiniRow {
@@ -106,26 +95,14 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 	for repoRoot, entries := range all {
 		project := projectNameForRepo(repoRoot)
 		for name, e := range entries {
-			// The "default" workspace is the jj-created stub per
-			// project — users don't intentionally run agents in it,
-			// and its tmux session almost always lingers with a
-			// stale "waiting" status from a prior Claude
-			// permission prompt. Filtering it out is a much better
-			// default than surfacing one nuisance row per project.
-			if strings.EqualFold(strings.TrimSpace(name), "default") {
-				continue
-			}
-			if !deckui.MiniIncluded(e.Status, e.Unread) {
-				continue
-			}
-			if snap.known && isWorkingStatus(e.Status) {
+			active := true
+			if snap.known {
 				sessionName := DeckSessionName(project, name)
-				if _, alive := snap.liveByName[sessionName]; !alive {
-					continue
-				}
-				if snap.agentShell[sessionName] {
-					continue
-				}
+				_, alive := snap.liveByName[sessionName]
+				active = alive && !snap.agentShell[sessionName]
+			}
+			if !deckui.AttentionIncluded(e.Status, e.Unread, active) {
+				continue
 			}
 			rows = append(rows, deckui.MiniRow{
 				Project:   project,
@@ -144,15 +121,4 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 		return rows[i].Workspace < rows[j].Workspace
 	})
 	return rows
-}
-
-// isWorkingStatus reports whether the stored status indicates active
-// work that should be cross-checked against tmux. Mirrors the working
-// branch of deckui.MiniIncluded.
-func isWorkingStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "working", "in progress", "in_progress", "running":
-		return true
-	}
-	return false
 }

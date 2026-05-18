@@ -144,7 +144,12 @@ func TestModelStartsAllScopeWithCursorOnCurrentWorkspace(t *testing.T) {
 
 func TestScopeAttentionMatchesMiniDeckCriteria(t *testing.T) {
 	items := []Item{
-		{ProjectName: "a", WorkspaceName: "working", Status: "working"},
+		// Active=true: live tmux session with a real agent. Surfaces.
+		{ProjectName: "a", WorkspaceName: "working", Status: "working", Active: true},
+		// Active=false: stale "working" from a crashed agent — drops out
+		// via the AttentionIncluded freshness check so we don't keep
+		// showing dead rows.
+		{ProjectName: "a", WorkspaceName: "working-stale", Status: "working", Active: false},
 		{ProjectName: "a", WorkspaceName: "waiting-read", Status: "waiting", Unread: false},
 		{ProjectName: "a", WorkspaceName: "waiting-unread", Status: "waiting", Unread: true},
 		{ProjectName: "a", WorkspaceName: "idle-read", Status: "idle"},
@@ -166,6 +171,9 @@ func TestScopeAttentionMatchesMiniDeckCriteria(t *testing.T) {
 		if !gotNames[w] {
 			t.Fatalf("expected %q in attention scope, got %#v", w, got)
 		}
+	}
+	if gotNames["working-stale"] {
+		t.Fatal("expected stale working row (Active=false) to be dropped by freshness check")
 	}
 }
 
