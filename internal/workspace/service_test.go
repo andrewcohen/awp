@@ -30,6 +30,9 @@ type fakeJJ struct {
 	workspaceRevs        map[string]string
 	bookmarksByRev       map[string][]string
 	forgottenBookmarks   []string
+	forgetBookmarkErrs   map[string][]error
+	updateStaleErr       error
+	updateStaleCalls     int
 	emptyRevisions       map[string]bool
 	abandoned            []string
 	abandonErr           error
@@ -106,8 +109,20 @@ func (f *fakeJJ) BookmarksAtRevision(revision string) ([]string, error) {
 }
 
 func (f *fakeJJ) ForgetBookmark(name string) error {
+	if queue, ok := f.forgetBookmarkErrs[name]; ok && len(queue) > 0 {
+		err := queue[0]
+		f.forgetBookmarkErrs[name] = queue[1:]
+		if err != nil {
+			return err
+		}
+	}
 	f.forgottenBookmarks = append(f.forgottenBookmarks, name)
 	return nil
+}
+
+func (f *fakeJJ) UpdateStale() error {
+	f.updateStaleCalls++
+	return f.updateStaleErr
 }
 
 func (f *fakeJJ) IsRevisionEmpty(revision string) (bool, error) {
@@ -682,6 +697,40 @@ func TestDeleteForgetsStoredBookmarkNotAtWorkspaceRevision(t *testing.T) {
 	}
 	if len(jj.forgottenBookmarks) != 1 || jj.forgottenBookmarks[0] != bookmark {
 		t.Fatalf("expected stored bookmark %q to be forgotten, got %+v", bookmark, jj.forgottenBookmarks)
+	}
+}
+
+func TestDeleteRecoversFromStaleWorkingCopyDuringBookmarkForget(t *testing.T) {
+	// Regression: the first jj bookmark forget can fail with "working copy
+	// is stale" (typically when another workspace's @ has drifted). The
+	// delete flow must call jj workspace update-stale and retry once
+	// rather than leaving the workspace half-deleted.
+	repoRoot := t.TempDir()
+	workspaceName := "main-preview"
+	bookmark := "andrew/preview-deploys-from-main"
+	staleErr := errors.New("Error: The working copy is stale (not updated since operation 10b9b74564e2).\nHint: Run `jj workspace update-stale` to update it.")
+	jj := &fakeJJ{
+		repoRoot:      repoRoot,
+		existing:      map[string]bool{workspaceName: true},
+		workspaceRevs: map[string]string{workspaceName: "abc123"},
+		forgetBookmarkErrs: map[string][]error{
+			bookmark: {staleErr},
+		},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{workspaceName: true}}
+	store := &fakeStore{entries: map[string]Entry{
+		workspaceName: {Name: workspaceName, Bookmark: bookmark, Path: filepath.Join(repoRoot, ".awp", "workspaces", workspaceName)},
+	}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete(workspaceName, true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if jj.updateStaleCalls != 1 {
+		t.Fatalf("expected UpdateStale to be called once, got %d", jj.updateStaleCalls)
+	}
+	if len(jj.forgottenBookmarks) != 1 || jj.forgottenBookmarks[0] != bookmark {
+		t.Fatalf("expected stored bookmark %q to be forgotten after retry, got %+v", bookmark, jj.forgottenBookmarks)
 	}
 }
 
