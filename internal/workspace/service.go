@@ -28,6 +28,7 @@ type JJClient interface {
 	ForgetBookmark(name string) error
 	IsRevisionEmpty(revision string) (bool, error)
 	AbandonRevision(revision string) error
+	UpdateStale() error
 }
 
 type TmuxClient interface {
@@ -1339,7 +1340,14 @@ func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revis
 			return nil
 		}
 		seen[name] = struct{}{}
-		if err := s.jj.ForgetBookmark(name); err != nil {
+		err := s.jj.ForgetBookmark(name)
+		if err != nil && isStaleWorkingCopyError(err) {
+			if updateErr := s.jj.UpdateStale(); updateErr != nil {
+				return fmt.Errorf("forget bookmark %q: working copy stale and recovery failed: %w", name, updateErr)
+			}
+			err = s.jj.ForgetBookmark(name)
+		}
+		if err != nil {
 			return fmt.Errorf("forget bookmark %q: %w", name, err)
 		}
 		forgotten++
@@ -1372,6 +1380,14 @@ func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revis
 		}
 	}
 	return forgotten, nil
+}
+
+func isStaleWorkingCopyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "working copy is stale") || strings.Contains(text, "workspace update-stale")
 }
 
 func bookmarkMatchesWorkspace(workspaceName, storedBookmark, bookmark string) bool {
