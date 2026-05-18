@@ -131,13 +131,15 @@ func TestBuildMiniDeckRowsKeepsIdleUnreadWithDeadAgentShell(t *testing.T) {
 	}
 }
 
-func TestBuildMiniDeckRowsExcludesDefaultWorkspaces(t *testing.T) {
+// The mini-deck filter mirrors the regular deck's attention scope, which
+// has no name-based exclusion. A "default" row that satisfies
+// MiniIncluded (e.g. an agent really is running there) must surface,
+// otherwise the two scopes drift out of sync.
+func TestBuildMiniDeckRowsKeepsDefaultWorkspaces(t *testing.T) {
 	all := map[string]map[string]workspace.Entry{
 		"/repos/redwood": {
 			"default":   {Name: "default", Path: "/ws/r/default", Status: "working"},
 			"feature-x": {Name: "feature-x", Path: "/ws/r/fx", Status: "working"},
-			" default ": {Name: "default", Path: "/ws/r/d2", Status: "working"},
-			"DEFAULT":   {Name: "DEFAULT", Path: "/ws/r/d3", Status: "working"},
 		},
 	}
 	snap := deckTmuxSnapshot{
@@ -145,17 +147,22 @@ func TestBuildMiniDeckRowsExcludesDefaultWorkspaces(t *testing.T) {
 		liveByName: map[string]string{
 			DeckSessionName("redwood", "default"):   "$1",
 			DeckSessionName("redwood", "feature-x"): "$2",
-			DeckSessionName("redwood", " default "): "$3",
-			DeckSessionName("redwood", "DEFAULT"):   "$4",
 		},
 		agentShell: map[string]bool{},
 	}
 	rows := buildMiniDeckRows(all, snap)
-	if len(rows) != 1 {
-		t.Fatalf("expected only feature-x to survive (defaults excluded), got %d rows: %+v", len(rows), rows)
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.Workspace] = true
 	}
-	if rows[0].Workspace != "feature-x" {
-		t.Fatalf("expected feature-x, got %q", rows[0].Workspace)
+	if !got["default"] {
+		t.Error("expected default workspace to surface when it matches the attention filter")
+	}
+	if !got["feature-x"] {
+		t.Error("expected feature-x to surface")
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %+v", len(rows), rows)
 	}
 }
 

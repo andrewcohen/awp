@@ -769,7 +769,7 @@ func (m Model) items() []Item {
 	case ScopeAttention:
 		filtered := make([]Item, 0, len(src))
 		for _, it := range src {
-			if MiniIncluded(it.Status, it.Unread) {
+			if AttentionIncluded(it.Status, it.Unread, it.Active) {
 				filtered = append(filtered, it)
 			}
 		}

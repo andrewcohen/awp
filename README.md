@@ -69,16 +69,17 @@ A short, filtered version of the deck that surfaces only workspaces that want yo
 - `enter` summons (creates or focuses) the workspace's tmux session and clears its unread badge
 - `q` / `esc` quit without jumping
 
-A row qualifies for the mini-deck when **all of**:
+A row qualifies for the mini-deck when **all of** (the same rules the full deck's `P`-cycled "attention" scope uses, so the two stay in sync):
 
-1. Its name is not `default`. The `default` workspace is the jj-created stub that exists per project and almost always sits on a long-stale `waiting` from an old Claude permission prompt — surfacing one per project drowns out the rows you actually care about.
-2. Its status is one of:
+1. Its status is one of:
    - `working` — agent is generating output or running a tool. Always surfaced.
    - `waiting` **with the unread flag set** — Claude fired its `Notification` hook (typically a permission prompt). The unread flag is only true if you weren't already attached to the session when the hook fired, so requiring it skips prompts you already saw and dealt with in-session. A `waiting` row without unread is just stale noise because Claude has no "no longer waiting" hook.
    - `idle` **with the unread flag set** — agent finished a turn since you last visited.
 
    `exited` workspaces never appear; nothing's listening on the other end. `idle` without unread is a quiet workspace and doesn't appear either.
-3. Its tmux session is actually alive and the `:agent` pane is still running an agent, not a bare shell. This catches the common case where the agent process died without firing an exit hook (Claude has no exit hook), so a stale `working` from days ago doesn't keep cluttering the list.
+2. Its tmux session is actually alive and the `:agent` pane is still running an agent, not a bare shell. This catches the common case where the agent process died without firing an exit hook (Claude has no exit hook), so a stale `working` from days ago doesn't keep cluttering the list.
+
+The `default` workspace per project is no longer filtered out by name — if an agent really is running in it (or it has an unread turn waiting on you), it surfaces just like any other row.
 
 Suggested tmux binding under capital `A` (lowercase `a` already opens the full deck):
 
