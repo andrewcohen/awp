@@ -153,7 +153,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 
 | Key | Action |
 |---|---|
-| `enter` | Summon (create or focus) the workspace's tmux session |
+| `enter` | Summon (create or focus) the workspace's tmux session. If the row has the unread badge, lands you on the `:agent` window so you see what changed; otherwise tmux's last-focused window wins |
 | `a` | Open agent window — re-launches the agent if its pane is at a shell |
 | `e` | Open editor window (`$EDITOR`) |
 | `c` / `C` | Review window: `tuicr -r @` / `tuicr -r main..@` |

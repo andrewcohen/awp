@@ -1120,6 +1120,13 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 		reporter.Log("agent missing AWP_WORKSPACE — restart agent to enable status reporting")
 	}
 	_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
+	// Land on the agent window when the row had unread agent output —
+	// the badge is the signal the user is reacting to, so complete the
+	// gesture by putting them on what changed. Done before MarkRead so
+	// the Unread flag still reflects the state the user clicked on.
+	if item.Unread {
+		_ = tmuxClient.SwitchToWindow(sessionName + ":agent")
+	}
 	_ = svc.MarkRead(item.WorkspaceName)
 	reporter.Step(fmt.Sprintf("Switch to %s", sessionName))
 	return tmuxClient.SwitchClient(sessionName)

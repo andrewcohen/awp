@@ -271,6 +271,75 @@ func TestSummonWorkspaceSessionLaunchesAgentOnNewSession(t *testing.T) {
 	}
 }
 
+func TestSummonWorkspaceSessionUnreadLandsOnAgentWindow(t *testing.T) {
+	// When a row has unread agent output, summoning should land the
+	// user on the :agent window (not whatever tmux last focused) so
+	// the badge → focus gesture is completed in one step.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	runner := &deckFakeRunner{outs: map[string]string{
+		// Session already exists — exercise the path where summon
+		// doesn't create the session itself but should still land on
+		// :agent because Unread is set.
+		"tmux list-sessions -F #{session_id}\t#{session_name}": "$1\t[awp]repo__qa\n",
+	}}
+	client := tmux.New(runner)
+	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
+	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws", RepoRoot: "/tmp/repo", Unread: true}
+
+	if err := summonWorkspaceSession(client, svc, item, noopReporter{}); err != nil {
+		t.Fatalf("summonWorkspaceSession: %v", err)
+	}
+
+	selectAgentIdx := -1
+	switchClientIdx := -1
+	for i, call := range runner.calls {
+		if len(call) < 2 || call[0] != "tmux" {
+			continue
+		}
+		switch {
+		case call[1] == "select-window" && len(call) >= 4 && call[3] == "[awp]repo__qa:agent":
+			if selectAgentIdx < 0 {
+				selectAgentIdx = i
+			}
+		case call[1] == "switch-client":
+			switchClientIdx = i
+		}
+	}
+	if selectAgentIdx < 0 {
+		t.Fatalf("expected select-window -t [awp]repo__qa:agent; got %#v", runner.calls)
+	}
+	if switchClientIdx < 0 {
+		t.Fatalf("expected switch-client; got %#v", runner.calls)
+	}
+	if selectAgentIdx >= switchClientIdx {
+		t.Fatalf("select-window must come before switch-client; select@%d switch@%d", selectAgentIdx, switchClientIdx)
+	}
+}
+
+func TestSummonWorkspaceSessionNoUnreadSkipsAgentSelect(t *testing.T) {
+	// Without unread, summon should not force focus to :agent — tmux's
+	// natural last-focused window behavior should win.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	runner := &deckFakeRunner{outs: map[string]string{
+		"tmux list-sessions -F #{session_id}\t#{session_name}": "$1\t[awp]repo__qa\n",
+	}}
+	client := tmux.New(runner)
+	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
+	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws", RepoRoot: "/tmp/repo"}
+
+	if err := summonWorkspaceSession(client, svc, item, noopReporter{}); err != nil {
+		t.Fatalf("summonWorkspaceSession: %v", err)
+	}
+
+	for _, call := range runner.calls {
+		if len(call) >= 4 && call[0] == "tmux" && call[1] == "select-window" && call[3] == "[awp]repo__qa:agent" {
+			t.Fatalf("did not expect select-window :agent when Unread=false; got %#v", runner.calls)
+		}
+	}
+}
+
 func TestHandleDeckActionRenameRefusesWhileAgentRuns(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
 		"tmux list-sessions -F #{session_id}\t#{session_name}":                   "$1\t[awp]repo__qa\n",
