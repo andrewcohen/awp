@@ -130,7 +130,6 @@ type rawPRStatus struct {
 	URL               string           `json:"url"`
 	State             PRState          `json:"state"`
 	IsDraft           bool             `json:"isDraft"`
-	IsInMergeQueue    bool             `json:"isInMergeQueue"`
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
 	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
 	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
@@ -145,7 +144,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,url,state,isDraft,isInMergeQueue,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -162,7 +161,6 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 			URL:              r.URL,
 			State:            r.State,
 			IsDraft:          r.IsDraft,
-			IsInMergeQueue:   r.IsInMergeQueue,
 			ReviewDecision:   r.ReviewDecision,
 			CIState:          rollupCIState(r.StatusCheckRollup),
 			MergeStateStatus: r.MergeStateStatus,
@@ -207,6 +205,67 @@ func rollupCIState(checks []rawCheck) CIState {
 		return CIPending
 	}
 	return CIPassing
+}
+
+// ListMergeQueuedHeads returns the set of OPEN PR headRefNames that GitHub
+// reports as currently in the repo's merge queue. The signal lives only in
+// GraphQL — `gh pr list --json` does not expose `isInMergeQueue` — so we
+// resolve owner/name from the local repo and run a small graphql query. An
+// empty map (with nil error) means nothing is queued or the repo has no
+// merge queue configured.
+func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
+	out, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "repo", "view", "--json", "owner,name",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh repo view: %w: %s", err, out)
+	}
+	var owner struct {
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(out), &owner); err != nil {
+		return nil, fmt.Errorf("parse gh repo view: %w", err)
+	}
+	if owner.Owner.Login == "" || owner.Name == "" {
+		return nil, fmt.Errorf("gh repo view: missing owner or name")
+	}
+	const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{headRefName isInMergeQueue}}}}`
+	gOut, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "api", "graphql",
+		"-F", "owner="+owner.Owner.Login,
+		"-F", "name="+owner.Name,
+		"-f", "query="+query,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh api graphql: %w: %s", err, gOut)
+	}
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequests struct {
+					Nodes []struct {
+						HeadRefName    string `json:"headRefName"`
+						IsInMergeQueue bool   `json:"isInMergeQueue"`
+					} `json:"nodes"`
+				} `json:"pullRequests"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(gOut), &resp); err != nil {
+		return nil, fmt.Errorf("parse gh api graphql: %w", err)
+	}
+	queued := make(map[string]bool)
+	for _, n := range resp.Data.Repository.PullRequests.Nodes {
+		if n.IsInMergeQueue && n.HeadRefName != "" {
+			queued[n.HeadRefName] = true
+		}
+	}
+	return queued, nil
 }
 
 func (c *Client) FetchPR(num int) (PRInfo, error) {
