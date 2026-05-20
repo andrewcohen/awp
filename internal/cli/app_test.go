@@ -509,3 +509,84 @@ func TestOpenWorkspaceNoSwitchInjectsEnvBeforeAgentInvocation(t *testing.T) {
 		}
 	}
 }
+
+// existingSessionRunner is a recordingRunner variant that reports the
+// target session as already existing — so openWorkspaceWithReporter takes
+// the "reuse" path and the agent is presumed already running.
+type existingSessionRunner struct {
+	recordingRunner
+}
+
+func (r *existingSessionRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if name == "tmux" && len(args) >= 1 && args[0] == "list-sessions" {
+		_, _ = r.recordingRunner.Run(ctx, dir, name, args...)
+		return "$1\t[awp]repo__qa\n", nil
+	}
+	return r.recordingRunner.Run(ctx, dir, name, args...)
+}
+
+// TestOpenWorkspaceExistingSessionPastesPromptInsteadOfReTypingInvocation
+// locks in the bug fix: when the session is already up (deck summoned it
+// before this run, so the agent is running), we must NOT send "<agent>
+// '<prompt>'" — that types literal shell syntax into the running agent's
+// input box. Paste the bare prompt instead so the agent sees one user
+// message.
+func TestOpenWorkspaceExistingSessionPastesPromptInsteadOfReTypingInvocation(t *testing.T) {
+	svc := &fakeService{}
+	runner := &existingSessionRunner{}
+	err := openWorkspaceWithReporter(runner, svc, openRequest{
+		Name:     "qa",
+		Prompt:   "fix tests",
+		Yes:      true,
+		NoSwitch: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("openWorkspaceWithReporter: %v", err)
+	}
+
+	for _, call := range runner.calls {
+		if len(call) >= 2 && call[0] == "tmux" && call[1] == "new-session" {
+			t.Fatalf("must not call tmux new-session when session already exists; got %#v", runner.calls)
+		}
+	}
+
+	sawPasteBuffer := false
+	sawSetBuffer := false
+	for _, call := range runner.calls {
+		if len(call) >= 2 && call[0] == "tmux" {
+			switch call[1] {
+			case "set-buffer":
+				for _, a := range call {
+					if a == "fix tests" {
+						sawSetBuffer = true
+					}
+				}
+			case "paste-buffer":
+				for i := 0; i < len(call)-1; i++ {
+					if call[i] == "-t" && call[i+1] == "[awp]repo__qa:agent" {
+						sawPasteBuffer = true
+					}
+				}
+			}
+		}
+	}
+	if !sawSetBuffer {
+		t.Errorf("expected tmux set-buffer to carry the prompt text; got %#v", runner.calls)
+	}
+	if !sawPasteBuffer {
+		t.Errorf("expected tmux paste-buffer -t :agent; got %#v", runner.calls)
+	}
+
+	for _, call := range runner.calls {
+		if len(call) < 6 || call[0] != "tmux" || call[1] != "send-keys" {
+			continue
+		}
+		if call[4] != "-l" {
+			continue
+		}
+		body := call[5]
+		if strings.Contains(body, "fix tests") && (strings.Contains(body, " '") || strings.Contains(body, "pi ") || strings.Contains(body, "claude ")) {
+			t.Errorf("send-keys must not deliver \"<invocation> '<prompt>'\" to an existing agent pane; got %q", body)
+		}
+	}
+}
