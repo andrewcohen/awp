@@ -39,14 +39,21 @@ var validReportStates = map[string]struct{}{
 //   - --prompt-stdin      read a Claude-style hook payload JSON from stdin and
 //                         extract its top-level "prompt" field. Empty/missing
 //                         is treated as "no prompt update" rather than an error.
+//   - --waiting-when-tool <list>
+//                         comma-separated tool names. When the PreToolUse hook
+//                         payload's tool_name matches any, override --state to
+//                         "waiting". Lets a single catch-all PreToolUse hook
+//                         emit "waiting" for input-blocking tools (e.g.
+//                         AskUserQuestion) and "working" for everything else.
 func runReportStatus(args []string, out io.Writer) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(out, "Usage: awp internal report-status --state <working|idle|waiting|exited> [--prompt <text>|--prompt-stdin]")
+		_, _ = fmt.Fprintln(out, "Usage: awp internal report-status --state <working|idle|waiting|exited> [--prompt <text>|--prompt-stdin] [--waiting-when-tool <tool>[,<tool>...]]")
 		return nil
 	}
 	state := ""
 	prompt := ""
 	promptStdin := false
+	var waitingTools []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -68,6 +75,14 @@ func runReportStatus(args []string, out io.Writer) error {
 			prompt = strings.TrimPrefix(arg, "--prompt=")
 		case arg == "--prompt-stdin":
 			promptStdin = true
+		case arg == "--waiting-when-tool":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--waiting-when-tool requires a value")
+			}
+			waitingTools = parseToolList(args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--waiting-when-tool="):
+			waitingTools = parseToolList(strings.TrimPrefix(arg, "--waiting-when-tool="))
 		default:
 			return fmt.Errorf("unknown argument %q", arg)
 		}
@@ -79,11 +94,32 @@ func runReportStatus(args []string, out io.Writer) error {
 	if _, ok := validReportStates[state]; !ok {
 		return fmt.Errorf("invalid --state %q (want working|idle|waiting|exited)", state)
 	}
-	if promptStdin {
+	// One stdin payload may carry both a prompt (UserPromptSubmit) and a
+	// tool_name (PreToolUse). Read once and route both extractions through
+	// the same buffer so a hook invocation can use either flag without
+	// stepping on the other — and so the stdin handle isn't drained twice.
+	var stdinBytes []byte
+	needStdin := promptStdin || len(waitingTools) > 0
+	if needStdin {
 		// Best-effort: a malformed payload should never break the agent turn.
-		// Silently drop errors and fall through with prompt="".
-		if stdinPrompt, ok := readPromptFromStdin(reportStatusStdin()); ok {
+		// Silently drop errors and fall through with prompt="" / no override.
+		if data, err := io.ReadAll(reportStatusStdin()); err == nil {
+			stdinBytes = data
+		}
+	}
+	if promptStdin {
+		if stdinPrompt, ok := readPromptFromBytes(stdinBytes); ok {
 			prompt = stdinPrompt
+		}
+	}
+	if len(waitingTools) > 0 {
+		if toolName, ok := readToolNameFromBytes(stdinBytes); ok {
+			for _, t := range waitingTools {
+				if t == toolName {
+					state = "waiting"
+					break
+				}
+			}
 		}
 	}
 	prompt = strings.TrimSpace(prompt)
@@ -104,6 +140,13 @@ func readPromptFromStdin(r io.Reader) (string, bool) {
 	if err != nil || len(data) == 0 {
 		return "", false
 	}
+	return readPromptFromBytes(data)
+}
+
+func readPromptFromBytes(data []byte) (string, bool) {
+	if len(data) == 0 {
+		return "", false
+	}
 	var payload struct {
 		Prompt string `json:"prompt"`
 	}
@@ -114,6 +157,38 @@ func readPromptFromStdin(r io.Reader) (string, bool) {
 		return "", false
 	}
 	return payload.Prompt, true
+}
+
+// readToolNameFromBytes extracts "tool_name" from a Claude PreToolUse hook
+// payload. Returns (_, false) on empty/non-JSON/missing-field — callers
+// treat that as "no tool match", not an error.
+func readToolNameFromBytes(data []byte) (string, bool) {
+	if len(data) == 0 {
+		return "", false
+	}
+	var payload struct {
+		ToolName string `json:"tool_name"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", false
+	}
+	name := strings.TrimSpace(payload.ToolName)
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+func parseToolList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // resolveWorkspaceIdent returns (AWP_WORKSPACE, AWP_REPO, AWP_REPO_ROOT) with

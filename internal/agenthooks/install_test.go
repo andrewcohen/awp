@@ -16,7 +16,7 @@ func TestHookCommandUserPromptSubmitReadsStdin(t *testing.T) {
 }
 
 func TestHookCommandOtherEventsDoNotReadStdin(t *testing.T) {
-	for _, event := range []string{"Stop", "SessionStart", "PreToolUse", "Notification"} {
+	for _, event := range []string{"Stop", "SessionStart", "PreToolUse", "PostToolUse", "Notification"} {
 		cmd := HookCommand(event, "idle")
 		if strings.Contains(cmd, "--prompt-stdin") {
 			t.Errorf("event %q should not include --prompt-stdin; got %q", event, cmd)
@@ -24,11 +24,39 @@ func TestHookCommandOtherEventsDoNotReadStdin(t *testing.T) {
 	}
 }
 
+func TestHookCommandPreToolUseDeclaresBlockingTools(t *testing.T) {
+	cmd := HookCommand("PreToolUse", "working")
+	if !strings.Contains(cmd, "--waiting-when-tool") {
+		t.Errorf("PreToolUse hook should include --waiting-when-tool so AskUserQuestion flips state to waiting; got %q", cmd)
+	}
+	for _, tool := range BlockingTools {
+		if !strings.Contains(cmd, tool) {
+			t.Errorf("PreToolUse hook should mention blocking tool %q; got %q", tool, cmd)
+		}
+	}
+}
+
+func TestHookCommandOtherEventsOmitWaitingWhenTool(t *testing.T) {
+	for _, event := range []string{"UserPromptSubmit", "PostToolUse", "Stop", "SessionStart", "Notification"} {
+		cmd := HookCommand(event, "working")
+		if strings.Contains(cmd, "--waiting-when-tool") {
+			t.Errorf("event %q should not include --waiting-when-tool; got %q", event, cmd)
+		}
+	}
+}
+
+func TestDesiredClaudeHooksIncludesPostToolUse(t *testing.T) {
+	hooks := DesiredClaudeHooks()
+	if state, ok := hooks["PostToolUse"]; !ok || state != "working" {
+		t.Errorf("DesiredClaudeHooks PostToolUse = %q (ok=%v), want \"working\" so the row flips back from waiting after a blocking tool returns", state, ok)
+	}
+}
+
 func TestHookMarkerVersionBumped(t *testing.T) {
-	// Guard: dropping the version below 4 would let stale installs from
-	// before the prompt-capture rollout keep their version-3 entries,
-	// which lack --prompt-stdin on UserPromptSubmit.
-	if HookMarkerVersion < 4 {
-		t.Fatalf("HookMarkerVersion = %d, want >= 4 so existing installs re-write to capture prompts", HookMarkerVersion)
+	// Guard: dropping the version below 5 would let stale installs from
+	// before the blocking-tool / PostToolUse rollout keep their older
+	// entries, which lack the AskUserQuestion → waiting wiring.
+	if HookMarkerVersion < 5 {
+		t.Fatalf("HookMarkerVersion = %d, want >= 5 so existing installs re-write to pick up --waiting-when-tool", HookMarkerVersion)
 	}
 }

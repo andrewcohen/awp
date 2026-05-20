@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed assets/awp-status.ts
@@ -16,7 +17,13 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 4
+const HookMarkerVersion = 5
+
+// BlockingTools lists tool names that block on user input. When a
+// PreToolUse hook fires for one of these, awp reports "waiting" instead of
+// "working" so the deck row reflects that the agent is paused on the user
+// — not actively producing output.
+var BlockingTools = []string{"AskUserQuestion"}
 
 // HookCommand returns the shell snippet each Claude hook runs. It gates on
 // $TMUX so global installation never affects non-tmux Claude usage, and
@@ -29,10 +36,20 @@ const HookMarkerVersion = 4
 // workspace's ActivePrompt. Other events leave ActivePrompt alone (empty
 // prompt means "no update"), so the last user message keeps showing on the
 // deck across Stop/idle transitions.
+//
+// For PreToolUse we add --waiting-when-tool so report-status flips the
+// state to "waiting" when the tool being invoked blocks on user input
+// (e.g. AskUserQuestion). Without this the row would stay "working" while
+// the agent is actually paused on a question to the user.
 func HookCommand(event, state string) string {
 	extra := ""
-	if event == "UserPromptSubmit" {
+	switch event {
+	case "UserPromptSubmit":
 		extra = " --prompt-stdin"
+	case "PreToolUse":
+		if len(BlockingTools) > 0 {
+			extra = " --waiting-when-tool " + strings.Join(BlockingTools, ",")
+		}
 	}
 	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + extra + ` >/dev/null 2>&1 || true`
 }
@@ -41,11 +58,16 @@ func HookCommand(event, state string) string {
 // Claude's global settings. SessionStart marks the workspace idle as soon
 // as Claude attaches, so summoned-but-not-yet-prompted agents stop showing
 // the previous run's state.
+//
+// PostToolUse → working flips the row back to "working" once a blocking
+// tool (e.g. AskUserQuestion) returns, so the deck doesn't linger in
+// "waiting" while the agent is generating its follow-up response.
 func DesiredClaudeHooks() map[string]string {
 	return map[string]string{
 		"SessionStart":     "idle",
 		"UserPromptSubmit": "working",
 		"PreToolUse":       "working",
+		"PostToolUse":      "working",
 		"Stop":             "idle",
 		"Notification":     "waiting",
 	}

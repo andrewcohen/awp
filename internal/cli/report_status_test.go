@@ -223,6 +223,67 @@ func TestRunReportStatusValidatesState(t *testing.T) {
 	}
 }
 
+func TestReportStatusWaitingWhenToolMatchesOverridesState(t *testing.T) {
+	const root = "/tmp/awp-test-repo"
+	fs := newFakeStore()
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"feat-x": {Name: "feat-x", Path: root + "/.jj/awp/feat-x"},
+	}
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-test-repo", root)
+	withStdin(t, `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`)
+
+	if err := runReportStatus([]string{"--state", "working", "--waiting-when-tool", "AskUserQuestion"}, io.Discard); err != nil {
+		t.Fatalf("runReportStatus: %v", err)
+	}
+
+	got := fs.byRepo[root]["feat-x"]
+	if got.Status != "waiting" {
+		t.Errorf("Status = %q, want %q (override should kick in)", got.Status, "waiting")
+	}
+	if !got.Unread {
+		t.Errorf("Unread = false, want true (waiting transition should badge the row)")
+	}
+}
+
+func TestReportStatusWaitingWhenToolNonMatchKeepsState(t *testing.T) {
+	const root = "/tmp/awp-test-repo"
+	fs := newFakeStore()
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"feat-x": {Name: "feat-x", Path: root + "/.jj/awp/feat-x"},
+	}
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-test-repo", root)
+	withStdin(t, `{"hook_event_name":"PreToolUse","tool_name":"Read"}`)
+
+	if err := runReportStatus([]string{"--state", "working", "--waiting-when-tool", "AskUserQuestion"}, io.Discard); err != nil {
+		t.Fatalf("runReportStatus: %v", err)
+	}
+
+	if got := fs.byRepo[root]["feat-x"]; got.Status != "working" {
+		t.Errorf("Status = %q, want %q (non-matching tool keeps --state value)", got.Status, "working")
+	}
+}
+
+func TestReportStatusWaitingWhenToolEmptyStdinKeepsState(t *testing.T) {
+	const root = "/tmp/awp-test-repo"
+	fs := newFakeStore()
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"feat-x": {Name: "feat-x", Path: root + "/.jj/awp/feat-x"},
+	}
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-test-repo", root)
+	withStdin(t, ``)
+
+	if err := runReportStatus([]string{"--state", "working", "--waiting-when-tool", "AskUserQuestion"}, io.Discard); err != nil {
+		t.Fatalf("runReportStatus: %v", err)
+	}
+
+	if got := fs.byRepo[root]["feat-x"]; got.Status != "working" {
+		t.Errorf("Status = %q, want %q (empty stdin must not crash or override)", got.Status, "working")
+	}
+}
+
 func TestRunReportStatusHelp(t *testing.T) {
 	var out bytes.Buffer
 	if err := runReportStatus([]string{"--help"}, &out); err != nil {
