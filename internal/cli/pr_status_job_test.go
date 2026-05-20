@@ -100,15 +100,23 @@ func TestRunPRStatusFromSpecContinuesPastRepoFailure(t *testing.T) {
 	}
 }
 
-// sequencedRunner returns each successive output from seq in order,
-// ignoring argv. Useful when the github runner is invoked once per
-// repo and we want each call to get a different payload.
+// sequencedRunner returns each successive output from seq in order for
+// `gh pr list` calls (one per repo). The merge-queue lookup that the
+// pr-status job runs after each ListPRStatus (`gh repo view` then
+// `gh api graphql`) is answered with a benign "nothing queued" payload
+// so the test fixture only needs to declare the bulk-status outputs.
 type sequencedRunner struct {
 	seq     []string
 	counter *int
 }
 
-func (r *sequencedRunner) Run(_ context.Context, _ string, _ string, _ ...string) (string, error) {
+func (r *sequencedRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	if name == "gh" && len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		return `{"owner":{"login":"o"},"name":"r"}`, nil
+	}
+	if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
+		return `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`, nil
+	}
 	i := *r.counter
 	if i >= len(r.seq) {
 		return "", nil

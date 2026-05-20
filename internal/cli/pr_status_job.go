@@ -51,7 +51,14 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 			reporter.Step(fmt.Sprintf("%s — error: %v", repo, err))
 			continue
 		}
-		byHead := convertGithubStatusesToDeckui(statuses)
+		// Merge-queue membership is graphql-only — `gh pr list --json`
+		// does not expose isInMergeQueue. Best-effort; a failure here
+		// must not lose the bulk PR status we already fetched.
+		queued, qErr := gh.ListMergeQueuedHeads(repo)
+		if qErr != nil {
+			reporter.Step(fmt.Sprintf("%s — merge-queue lookup failed: %v", repo, qErr))
+		}
+		byHead := convertGithubStatusesToDeckui(statuses, queued)
 		persistPRStatusMerge(map[string]map[string]deckui.PRStatus{repo: byHead}, time.Now())
 		reporter.Step(fmt.Sprintf("%s — %d PRs (%s)", repo, len(statuses), time.Since(started).Round(time.Millisecond)))
 	}
@@ -59,8 +66,10 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 }
 
 // convertGithubStatusesToDeckui translates the github.PRStatus list into
-// the deckui.PRStatus map keyed by headRefName.
-func convertGithubStatusesToDeckui(statuses []github.PRStatus) map[string]deckui.PRStatus {
+// the deckui.PRStatus map keyed by headRefName. queuedHeads stamps
+// IsInMergeQueue=true on PRs whose head ref appears in the set; a nil or
+// empty map leaves every entry's IsInMergeQueue at false.
+func convertGithubStatusesToDeckui(statuses []github.PRStatus, queuedHeads map[string]bool) map[string]deckui.PRStatus {
 	byHead := make(map[string]deckui.PRStatus, len(statuses))
 	for _, s := range statuses {
 		byHead[s.HeadRefName] = deckui.PRStatus{
@@ -69,7 +78,7 @@ func convertGithubStatusesToDeckui(statuses []github.PRStatus) map[string]deckui
 			URL:              s.URL,
 			State:            deckui.PRState(s.State),
 			IsDraft:          s.IsDraft,
-			IsInMergeQueue:   s.IsInMergeQueue,
+			IsInMergeQueue:   queuedHeads[s.HeadRefName],
 			ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
 			CIState:          deckui.PRCIState(s.CIState),
 			MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),
