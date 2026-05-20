@@ -23,7 +23,7 @@ awp init hooks   # one-time: install Claude Code + pi.dev integrations globally
 
 `awp init hooks` installs:
 
-- `~/.claude/settings.json` — hooks that report state to awp on `SessionStart` (idle), `UserPromptSubmit` / `PreToolUse` (working), `Stop` (idle), and `Notification` (waiting). The `UserPromptSubmit` hook also pipes the prompt JSON into `awp internal report-status --prompt-stdin` so the deck can show the active prompt under each workspace.
+- `~/.claude/settings.json` — hooks that report state to awp on `SessionStart` (idle), `UserPromptSubmit` / `PreToolUse` / `PostToolUse` (working), `Stop` (idle), and `Notification` (waiting). The `UserPromptSubmit` hook also pipes the prompt JSON into `awp internal report-status --prompt-stdin` so the deck can show the active prompt under each workspace. The `PreToolUse` hook passes `--waiting-when-tool AskUserQuestion` so the row flips to `waiting` while the agent is paused on an `AskUserQuestion` call (which never fires `Notification`); `PostToolUse` flips it back to `working` once the answer is in.
 - `~/.pi/agent/extensions/awp-status.ts` — a pi.dev extension that reports state on `session_start` / `before_agent_start` / `agent_end` / `tool_execution_start` / quit-time `session_shutdown`. `before_agent_start` forwards the user's prompt text so the deck stays in sync with Claude. If statuses aren't landing, set `AWP_DEBUG=1` in the pi pane to write diagnostics to `~/.awp/pi-extension.log`.
 
 Both integrations are no-ops outside awp-managed sessions (they only run in tmux and `awp internal report-status` ignores sessions without awp workspace metadata), so they never affect your standalone Claude or pi usage. Both honor `$AWP_BIN` if you need the hook to invoke a non-PATH `awp`.
@@ -198,7 +198,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |
 | `awp config init` | Bootstrap `<repo>/.awp/config.json` (must run from repo root) |
 | `awp config edit [--global]` | Open the project (or `--global`) config in `$EDITOR` |
-| `awp internal report-status --state <…> [--prompt <text>\|--prompt-stdin]` | Hidden — used by hooks to write status. `--prompt` stores the active prompt text on the workspace; `--prompt-stdin` reads it from a Claude-style hook JSON payload on stdin. |
+| `awp internal report-status --state <…> [--prompt <text>\|--prompt-stdin] [--waiting-when-tool <list>]` | Hidden — used by hooks to write status. `--prompt` stores the active prompt text on the workspace; `--prompt-stdin` reads it from a Claude-style hook JSON payload on stdin. `--waiting-when-tool` takes a comma-separated list of tool names; when a `PreToolUse` payload's `tool_name` matches, the recorded state is overridden to `waiting` so blocking tools (e.g. `AskUserQuestion`) badge the row instead of staying in `working`. |
 | `awp internal unread-summary` | Print a tmux-status-bar badge of workspaces needing attention (waiting + notified counts). Empty when nothing's unread. |
 | `awp internal mark-read [--workspace <name>]` | Clear the unread badge for one workspace. Resolves from `$AWP_WORKSPACE` when no flag given. |
 
