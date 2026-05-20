@@ -108,6 +108,7 @@ type PRStatus struct {
 	URL              string
 	State            PRState
 	IsDraft          bool
+	IsInMergeQueue   bool
 	ReviewDecision   ReviewDecision
 	CIState          CIState
 	MergeStateStatus MergeStateStatus
@@ -129,6 +130,7 @@ type rawPRStatus struct {
 	URL               string           `json:"url"`
 	State             PRState          `json:"state"`
 	IsDraft           bool             `json:"isDraft"`
+	IsInMergeQueue    bool             `json:"isInMergeQueue"`
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
 	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
 	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
@@ -143,7 +145,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,url,state,isDraft,isInMergeQueue,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -160,6 +162,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 			URL:              r.URL,
 			State:            r.State,
 			IsDraft:          r.IsDraft,
+			IsInMergeQueue:   r.IsInMergeQueue,
 			ReviewDecision:   r.ReviewDecision,
 			CIState:          rollupCIState(r.StatusCheckRollup),
 			MergeStateStatus: r.MergeStateStatus,
