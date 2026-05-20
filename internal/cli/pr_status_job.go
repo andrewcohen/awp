@@ -69,6 +69,7 @@ func convertGithubStatusesToDeckui(statuses []github.PRStatus) map[string]deckui
 			URL:              s.URL,
 			State:            deckui.PRState(s.State),
 			IsDraft:          s.IsDraft,
+			IsInMergeQueue:   s.IsInMergeQueue,
 			ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
 			CIState:          deckui.PRCIState(s.CIState),
 			MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),

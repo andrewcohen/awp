@@ -110,12 +110,13 @@ Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a ma
 |  | PR open — no review yet |
 |  | PR draft |
 |  | PR approved — at least one approving review |
+|  | PR in merge queue — GitHub has queued the PR to merge |
 |  | CI pending — checks in flight |
 |  | CI failed — at least one check failing |
 |  | PR merged — safe to delete this workspace |
 |  | PR closed without merging |
 
-Priority (highest wins): merged → closed → CI failed → CI pending → approved → draft → open. So a merged PR always shows the merge icon (even if its last CI was failing); an open PR with failing CI shows the alert icon rather than the open-PR icon.
+Priority (highest wins): merged → closed → CI failed → CI pending → in merge queue → approved → draft → open. So a merged PR always shows the merge icon (even if its last CI was failing); an open PR with failing CI shows the alert icon rather than the open-PR icon; once a PR enters GitHub's merge queue (and CI is still green) it reads as queued rather than approved.
 
 When an open PR is out of date with its base branch, a second glyph renders to the right of the primary PR glyph:
 

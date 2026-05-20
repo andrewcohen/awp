@@ -1425,3 +1425,69 @@ func TestPRStaleGlyphAndLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestPRInMergeQueueGlyphAndLabel(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    PRStatus
+		wantGlyph string
+		wantLabel string
+		wantColor string
+	}{
+		{
+			name:      "open + in queue — queue wins over plain open",
+			status:    PRStatus{State: PRStateOpen, IsInMergeQueue: true},
+			wantGlyph: prGlyphInQueue,
+			wantLabel: "in merge queue",
+			wantColor: colSuccess,
+		},
+		{
+			name:      "approved + in queue — queue wins over approved",
+			status:    PRStatus{State: PRStateOpen, IsInMergeQueue: true, ReviewDecision: PRReviewApproved, CIState: PRCIPassing},
+			wantGlyph: prGlyphInQueue,
+			wantLabel: "in merge queue",
+			wantColor: colSuccess,
+		},
+		{
+			name:      "in queue + CI failing — CI failing wins",
+			status:    PRStatus{State: PRStateOpen, IsInMergeQueue: true, CIState: PRCIFailing},
+			wantGlyph: prGlyphCIFail,
+			wantLabel: "CI failing",
+			wantColor: colDanger,
+		},
+		{
+			name:      "in queue + CI pending — CI pending wins",
+			status:    PRStatus{State: PRStateOpen, IsInMergeQueue: true, CIState: PRCIPending},
+			wantGlyph: prGlyphCIPend,
+			wantLabel: "CI pending",
+			wantColor: colWarning,
+		},
+		{
+			name:      "merged + stale in-queue flag — merged terminal state wins",
+			status:    PRStatus{State: PRStateMerged, IsInMergeQueue: true},
+			wantGlyph: prGlyphMerged,
+			wantLabel: "merged",
+			wantColor: colMuted,
+		},
+		{
+			name:      "in queue + behind base — base label kept, stale suffix appended",
+			status:    PRStatus{State: PRStateOpen, IsInMergeQueue: true, MergeStateStatus: PRMergeStateBehind},
+			wantGlyph: prGlyphInQueue,
+			wantLabel: "in merge queue · behind base",
+			wantColor: colSuccess,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if g := prGlyphFor(tc.status); g != tc.wantGlyph {
+				t.Errorf("prGlyphFor: got %q want %q", g, tc.wantGlyph)
+			}
+			if l := prStatusLabel(tc.status); l != tc.wantLabel {
+				t.Errorf("prStatusLabel: got %q want %q", l, tc.wantLabel)
+			}
+			if c := prGlyphColor(tc.status); c != tc.wantColor {
+				t.Errorf("prGlyphColor: got %q want %q", c, tc.wantColor)
+			}
+		})
+	}
+}

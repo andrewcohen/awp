@@ -327,6 +327,7 @@ type PRStatus struct {
 	URL              string
 	State            PRState
 	IsDraft          bool
+	IsInMergeQueue   bool
 	ReviewDecision   PRReviewDecision
 	CIState          PRCIState
 	MergeStateStatus PRMergeStateStatus
@@ -2759,6 +2760,7 @@ func (m Model) renderHelp(width int) string {
 		prDot(prGlyphOpen, colAccent, "open"),
 		prDot(prGlyphDraft, colMuted, "draft"),
 		prDot(prGlyphApproved, colSuccess, "approved"),
+		prDot(prGlyphInQueue, colSuccess, "in merge queue"),
 		prDot(prGlyphCIPend, colWarning, "CI pending"),
 		prDot(prGlyphCIFail, colDanger, "CI failing"),
 		prDot(prGlyphMerged, colMuted, "merged"),
@@ -3956,6 +3958,7 @@ const (
 	prGlyphClosed   = "" // nf-oct-git_pull_request_closed
 	prGlyphMerged   = "" // nf-oct-git_merge
 	prGlyphApproved = "" // nf-oct-check
+	prGlyphInQueue  = "" // nf-oct-rocket — PR is in the merge queue
 	prGlyphCIFail   = "" // nf-oct-x
 	prGlyphCIPend   = "" // nf-oct-hourglass
 	prGlyphBehind   = "" // nf-oct-arrow_down — PR is behind the base branch
@@ -3963,9 +3966,9 @@ const (
 )
 
 // prGlyphFor returns the single glyph for the given PR status per the locked
-// priority order: merged → closed → CI failed → CI pending → approved → draft
-// → open. Returns "" when no glyph should render (caller passes a zero/empty
-// status when the workspace has no matching PR).
+// priority order: merged → closed → CI failed → CI pending → in merge queue →
+// approved → draft → open. Returns "" when no glyph should render (caller
+// passes a zero/empty status when the workspace has no matching PR).
 func prGlyphFor(s PRStatus) string {
 	if s.State == PRStateMerged {
 		return prGlyphMerged
@@ -3978,6 +3981,9 @@ func prGlyphFor(s PRStatus) string {
 		return prGlyphCIFail
 	case PRCIPending:
 		return prGlyphCIPend
+	}
+	if s.IsInMergeQueue && s.State == PRStateOpen {
+		return prGlyphInQueue
 	}
 	if s.ReviewDecision == PRReviewApproved {
 		return prGlyphApproved
@@ -4006,6 +4012,9 @@ func prGlyphColor(s PRStatus) string {
 		return colDanger
 	case PRCIPending:
 		return colWarning
+	}
+	if s.IsInMergeQueue && s.State == PRStateOpen {
+		return colSuccess
 	}
 	if s.ReviewDecision == PRReviewApproved {
 		return colSuccess
@@ -4049,6 +4058,9 @@ func prStatusBaseLabel(s PRStatus) string {
 			return "draft · CI pending"
 		}
 		return "CI pending"
+	}
+	if s.IsInMergeQueue && s.State == PRStateOpen {
+		return "in merge queue"
 	}
 	if s.ReviewDecision == PRReviewApproved {
 		return "approved"
