@@ -502,14 +502,20 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
 		return err
 	}
-	// Launch the agent in the new session even when no prompt was given,
-	// so the "agent" window isn't just a bare shell. With a prompt, the
-	// agent boots with that prompt; without one, the agent starts idle
-	// and the user can interact directly. Re-opening an existing session
-	// only sends a prompt if one was provided — we don't want to stack a
-	// second agent invocation on top of an already-running pane.
+	// Agent launch / prompt delivery splits on whether we own the
+	// freshly-created session:
+	//   • New session: pane is a shell — type "<invocation> '<prompt>'"
+	//     so the shell execs the agent CLI with the prompt as argv[1].
+	//   • Existing session: the agent is already running (the deck's
+	//     summon path runs createWorkspaceSession which launches it).
+	//     Sending the invocation again would just type "claude
+	//     --dangerously-skip-permissions 'prompt'" into the running
+	//     agent's input box as a literal user message — definitely not
+	//     what we want. Paste just the prompt instead so the agent
+	//     receives it as one bracketed-paste user message.
 	promptArg := strings.TrimSpace(req.Prompt)
-	if sessionWasNew || promptArg != "" {
+	switch {
+	case sessionWasNew:
 		invocation := config.AgentInvocation(repoRoot)
 		cmd := invocation
 		if promptArg != "" {
@@ -519,6 +525,11 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 			step("Launch agent")
 		}
 		if err := tmuxClient.SendCommand(sessionName+":agent", cmd); err != nil {
+			return err
+		}
+	case promptArg != "":
+		step("Send prompt to agent")
+		if err := tmuxClient.PasteText(sessionName+":agent", promptArg); err != nil {
 			return err
 		}
 	}
