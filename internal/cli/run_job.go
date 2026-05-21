@@ -130,6 +130,14 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 		return err
 	}
 	finalize(jobs.StatusDone, "")
+	// PR-status jobs are background polls the user never inspects when
+	// they succeed — only failures are interesting. Auto-delete the
+	// record on success so ~/.awp/jobs/ doesn't accumulate ~78 noise
+	// entries per long-running deck session. Failures still persist
+	// because runJobsStartupCleanup's retention is the right knob there.
+	if job.Spec.Action == jobs.ActionPRStatus {
+		_ = store.Delete(id)
+	}
 	return nil
 }
 
