@@ -135,6 +135,7 @@ const HeartbeatStale = 30 * time.Second
 // RetentionDone is how long terminal records persist before GC.
 const RetentionDone = 24 * time.Hour
 
-// RetentionOrphaned is how long orphan records persist (longer so
-// the user has a chance to notice and debug).
-const RetentionOrphaned = 7 * 24 * time.Hour
+// RetentionOrphaned is how long orphan records persist. Same cap as
+// RetentionDone — 24h is enough to notice and debug a wedged subprocess
+// the next morning, and anything older is more noise than signal.
+const RetentionOrphaned = 24 * time.Hour

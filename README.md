@@ -297,9 +297,12 @@ what `install` or `lint` last did without opening the `J` overlay.
 - `⚠` Failed — error details visible in the `J` overlay.
 - `☠` Orphaned — subprocess died without flushing a final state (SIGKILL,
   OOM, crash). Detected via heartbeat staleness + `kill(pid, 0)` + a
-  process-start-time check that also catches PID reuse. Orphans persist
-  for 7 days; clean terminal records are GC'd after 24 hours on next deck
+  process-start-time check that also catches PID reuse. Terminal records
+  — done, failed, or orphaned — are GC'd after 24 hours on next deck
   startup (cleanup runs in a background `tea.Cmd`, never blocks startup).
+  Successful `pr-status` jobs are deleted as soon as the subprocess exits
+  cleanly, since they're background polls the user never inspects;
+  failures stick around so the `J` overlay can surface them.
 
 Press `J` to open the jobs overlay:
 
