@@ -3,6 +3,7 @@ package charm
 import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -52,6 +53,56 @@ func NewHelp() help.Model {
 	h.Styles.FullSeparator = lipgloss.NewStyle().Foreground(colorMuted)
 	h.Styles.Ellipsis = lipgloss.NewStyle().Foreground(colorMuted)
 	return h
+}
+
+// HuhTheme returns a huh.Theme that routes every color through this
+// package's palette tokens (ANSI 16 slots). Because the slots are
+// remapped by the user's terminal color scheme, huh forms inherit the
+// same Catppuccin (or whatever the user is running) palette as the
+// rest of the deck instead of being stuck on huh's hardcoded
+// pink/indigo "Charm" colors.
+func HuhTheme() *huh.Theme {
+	t := huh.ThemeBase()
+
+	t.Focused.Base = t.Focused.Base.BorderForeground(colorMuted)
+	t.Focused.Card = t.Focused.Base
+	t.Focused.Title = t.Focused.Title.Foreground(colorAccent).Bold(true)
+	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(colorAccent).Bold(true).MarginBottom(1)
+	t.Focused.Directory = t.Focused.Directory.Foreground(colorAccent)
+	t.Focused.Description = t.Focused.Description.Foreground(colorMuted)
+	t.Focused.ErrorIndicator = t.Focused.ErrorIndicator.Foreground(colorDanger)
+	t.Focused.ErrorMessage = t.Focused.ErrorMessage.Foreground(colorDanger)
+	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(colorWarning)
+	t.Focused.NextIndicator = t.Focused.NextIndicator.Foreground(colorWarning)
+	t.Focused.PrevIndicator = t.Focused.PrevIndicator.Foreground(colorWarning)
+	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(colorWarning)
+	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(colorWarning).Bold(true)
+	t.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(colorWarning).SetString("✓ ")
+	t.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(colorMuted).SetString("• ")
+	t.Focused.FocusedButton = t.Focused.FocusedButton.
+		Foreground(lipgloss.Color(BgPanel)).
+		Background(colorWarning).
+		Bold(true)
+	t.Focused.Next = t.Focused.FocusedButton
+	t.Focused.BlurredButton = t.Focused.BlurredButton.
+		Foreground(colorMuted).
+		Background(lipgloss.NoColor{})
+
+	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(colorWarning)
+	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.Foreground(colorMuted)
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(colorAccent)
+
+	// Blurred styles mirror Focused but drop the left bar so unselected
+	// groups don't compete visually with the active one.
+	t.Blurred = t.Focused
+	t.Blurred.Base = t.Focused.Base.BorderStyle(lipgloss.HiddenBorder())
+	t.Blurred.Card = t.Blurred.Base
+	t.Blurred.NextIndicator = lipgloss.NewStyle()
+	t.Blurred.PrevIndicator = lipgloss.NewStyle()
+
+	t.Group.Title = t.Focused.Title
+	t.Group.Description = t.Focused.Description
+	return t
 }
 
 func ApplyListTheme(m *list.Model, d *list.DefaultDelegate) {
