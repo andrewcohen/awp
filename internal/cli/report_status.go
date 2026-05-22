@@ -267,16 +267,24 @@ func tmuxLocalEnv(key string) string {
 func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status, prompt string) error {
 	store := stateStore()
 
-	// Suppress the badge when the user is literally looking at this
-	// workspace's session — same logic as the deck's auto-clear, applied
-	// at write time so the tmux status bar stays accurate without waiting
-	// for a deck refresh.
-	viewing := sessionHasAttachedClient(repoName, workspaceName)
 	apply := func(entries map[string]workspace.Entry) map[string]workspace.Entry {
-		entry, ok := entries[workspaceName]
+		// Reconcile against the live entry set first. A running agent's
+		// process env freezes AWP_WORKSPACE at launch, so a workspace
+		// rename leaves the agent reporting under the old name — and
+		// every hook subprocess it spawns inherits the same stale env.
+		// Rename preserves Entry.Path and updates the tmux session env,
+		// so fall back to those before giving up.
+		name := resolveLiveWorkspaceName(entries, workspaceName)
+		entry, ok := entries[name]
 		if !ok {
 			return entries
 		}
+		// Suppress the badge when the user is literally looking at this
+		// workspace's session — same logic as the deck's auto-clear,
+		// applied at write time so the tmux status bar stays accurate
+		// without waiting for a deck refresh. Computed against the
+		// resolved name so a renamed session still matches.
+		viewing := sessionHasAttachedClient(repoName, name)
 		entry.Status = status
 		switch {
 		case prompt != "":
@@ -291,7 +299,7 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status, prompt stri
 				entry.Unread = true
 			}
 		}
-		entries[workspaceName] = entry
+		entries[name] = entry
 		return entries
 	}
 
@@ -367,6 +375,44 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status, prompt stri
 	default:
 		return nil
 	}
+}
+
+// resolveLiveWorkspaceName reconciles a possibly-stale workspace name (e.g.
+// from an agent process env frozen before a rename) against the live entry
+// set. Returns name unchanged on the happy path; otherwise falls back to
+// Entry.Path matching the hook's CWD (rename preserves Path; Claude's hook
+// subprocesses inherit Claude's CWD, which is the workspace root) and then
+// to the tmux session env (rename updates AWP_WORKSPACE on the session).
+//
+// CWD matching uses os.SameFile so symlinked roots (e.g. macOS /var →
+// /private/var) still resolve.
+func resolveLiveWorkspaceName(entries map[string]workspace.Entry, name string) string {
+	if _, ok := entries[name]; ok {
+		return name
+	}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		cwdInfo, statErr := os.Stat(cwd)
+		for entryName, e := range entries {
+			if e.Path == "" {
+				continue
+			}
+			if e.Path == cwd {
+				return entryName
+			}
+			if statErr != nil {
+				continue
+			}
+			if entryInfo, err := os.Stat(e.Path); err == nil && os.SameFile(cwdInfo, entryInfo) {
+				return entryName
+			}
+		}
+	}
+	if fresh := strings.TrimSpace(tmuxLocalEnv("AWP_WORKSPACE")); fresh != "" && fresh != name {
+		if _, ok := entries[fresh]; ok {
+			return fresh
+		}
+	}
+	return name
 }
 
 type updater interface {

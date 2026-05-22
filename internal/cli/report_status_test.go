@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -91,6 +92,18 @@ func withWorkspaceEnv(t *testing.T, name, repo, root string) {
 	t.Setenv("AWP_WORKSPACE", name)
 	t.Setenv("AWP_REPO", repo)
 	t.Setenv("AWP_REPO_ROOT", root)
+}
+
+func withCWD(t *testing.T, dir string) {
+	t.Helper()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir %q: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
 }
 
 func TestReportStatusPersistsPromptFromFlag(t *testing.T) {
@@ -281,6 +294,34 @@ func TestReportStatusWaitingWhenToolEmptyStdinKeepsState(t *testing.T) {
 
 	if got := fs.byRepo[root]["feat-x"]; got.Status != "working" {
 		t.Errorf("Status = %q, want %q (empty stdin must not crash or override)", got.Status, "working")
+	}
+}
+
+func TestReportStatusStaleNameResolvesByCWD(t *testing.T) {
+	// Regression: renaming a workspace previously orphaned the agent. The
+	// running agent's process env froze AWP_WORKSPACE=<old>, so every hook
+	// looked up an entry that no longer exists and the status update was
+	// silently dropped. Rename preserves Entry.Path, so the CWD fallback
+	// (which Claude's hook subprocesses inherit from Claude's CWD = the
+	// workspace root) must route the report to the renamed entry.
+	const root = "/tmp/awp-test-repo"
+	wsPath := t.TempDir()
+	fs := newFakeStore()
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"renamed": {Name: "renamed", Path: wsPath},
+	}
+	withFakeStore(t, fs)
+	// Agent's env is stale: it was launched as "old-name" before the rename.
+	withWorkspaceEnv(t, "old-name", "awp-test-repo", root)
+	withCWD(t, wsPath)
+
+	if err := runReportStatus([]string{"--state", "working"}, io.Discard); err != nil {
+		t.Fatalf("runReportStatus: %v", err)
+	}
+
+	got := fs.byRepo[root]["renamed"]
+	if got.Status != "working" {
+		t.Errorf("renamed entry Status = %q, want %q (CWD fallback should have routed the stale name)", got.Status, "working")
 	}
 }
 
