@@ -37,6 +37,13 @@ type fakeJJ struct {
 	abandoned            []string
 	abandonErr           error
 	revisionLookupErr    error
+	editRevCalls         []editRevCall
+	editRevErr           error
+}
+
+type editRevCall struct {
+	Path     string
+	Revision string
 }
 
 func (f *fakeJJ) RepoRoot() (string, error)       { return f.repoRoot, f.repoRootErr }
@@ -73,6 +80,14 @@ func (f *fakeJJ) AddWorkspace(name, path, revision string) error {
 
 func (f *fakeJJ) TrackBookmark(bookmarkName string) error {
 	f.trackedBookmark = bookmarkName
+	return nil
+}
+
+func (f *fakeJJ) EditRevision(path, revision string) error {
+	if f.editRevErr != nil {
+		return f.editRevErr
+	}
+	f.editRevCalls = append(f.editRevCalls, editRevCall{Path: path, Revision: revision})
 	return nil
 }
 func (f *fakeJJ) RenameWorkspace(path, newName string) error {
@@ -769,6 +784,75 @@ func TestPrepareWorkspaceBackfillsBookmarkOnExisting(t *testing.T) {
 	}
 	if got := store.entries[name].Bookmark; got != "foo/bar" {
 		t.Fatalf("expected backfilled bookmark %q, got %q", "foo/bar", got)
+	}
+}
+
+func TestPrepareWorkspaceAlignsExistingWorkspaceToBookmark(t *testing.T) {
+	// Regression: when PrepareWorkspace was called for a workspace
+	// that already existed (e.g. a half-finished review run had left
+	// it behind), the old `if exists { return }` branch skipped the
+	// step that aligns the working copy to the requested bookmark.
+	// Reviewing the same PR a second time then "succeeded" but the
+	// code wasn't actually checked out at the PR branch. The reconcile
+	// shape always calls jj.EditRevision when a bookmark is given.
+	repoRoot := t.TempDir()
+	name := "pr-1-saltor-default-new-workspace-to-main"
+	bookmark := "saltor/default-new-workspace-to-main"
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{name: true}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{
+		name: {Name: name, Path: filepath.Join(repoRoot, ".awp", "workspaces", name)},
+	}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if _, _, err := svc.PrepareWorkspace(name, bookmark, false); err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+	if len(jj.editRevCalls) != 1 {
+		t.Fatalf("expected one EditRevision call to align @ to %q, got %d: %+v", bookmark, len(jj.editRevCalls), jj.editRevCalls)
+	}
+	if jj.editRevCalls[0].Revision != bookmark {
+		t.Errorf("EditRevision revision = %q, want %q", jj.editRevCalls[0].Revision, bookmark)
+	}
+}
+
+func TestPrepareWorkspaceAlignsFreshWorkspaceToBookmark(t *testing.T) {
+	// A newly-created workspace already lands on the bookmark via
+	// `jj workspace add -r <bookmark>`, but the reconcile shape still
+	// calls EditRevision unconditionally so the invariant ("after
+	// PrepareWorkspace, @ is on the bookmark") doesn't depend on
+	// AddWorkspace's revision arg succeeding silently. The redundant
+	// call is cheap and makes failure modes easier to reason about.
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if _, _, err := svc.PrepareWorkspace("pr-9-feat", "feat/x", false); err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+	if len(jj.editRevCalls) != 1 || jj.editRevCalls[0].Revision != "feat/x" {
+		t.Errorf("expected EditRevision(_, %q), got %+v", "feat/x", jj.editRevCalls)
+	}
+}
+
+func TestPrepareWorkspaceSkipsEditRevisionWithNoBookmark(t *testing.T) {
+	// No bookmark means no alignment work — the workspace lands on @
+	// from jj's perspective and we leave it alone. Without this guard
+	// the reconcile would try to `jj edit ""` and bomb on a missing
+	// revision arg.
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if _, _, err := svc.PrepareWorkspace("scratch", "", false); err != nil {
+		t.Fatalf("PrepareWorkspace returned error: %v", err)
+	}
+	if len(jj.editRevCalls) != 0 {
+		t.Errorf("expected no EditRevision calls when bookmark is empty; got %+v", jj.editRevCalls)
 	}
 }
 

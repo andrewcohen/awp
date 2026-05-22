@@ -152,8 +152,15 @@ func TestUpdateStaleFormatsCommandErrors(t *testing.T) {
 	}
 }
 
-func TestWorkspaceExistsChecksWorkingCopyRev(t *testing.T) {
-	r := &fakeRunner{out: "abc123\n"}
+func TestWorkspaceExistsChecksRegistry(t *testing.T) {
+	// Regression: WorkspaceExists used to run `jj log -r <name>@`
+	// which reports "no revisions to show" for orphaned workspaces
+	// (registered with jj but with a broken @). That made
+	// PrepareWorkspace think the workspace was gone and try to create
+	// it again, only for jj to reject the create with "already
+	// exists." The registry view (`jj workspace list`) is what
+	// reflects collision risk and what we now use.
+	r := &fakeRunner{out: "default\nqa\nreview\n"}
 	c := New(r)
 
 	exists, err := c.WorkspaceExists("qa")
@@ -163,14 +170,14 @@ func TestWorkspaceExistsChecksWorkingCopyRev(t *testing.T) {
 	if !exists {
 		t.Fatal("expected workspace to exist")
 	}
-	wantArgs := []string{"log", "-r", "qa@", "--no-graph", "-T", "commit_id.short() ++ \"\\n\""}
+	wantArgs := []string{"--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\""}
 	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
 	}
 }
 
-func TestWorkspaceExistsReturnsFalseForMissingRevision(t *testing.T) {
-	r := &fakeRunner{out: "Error: Revision `qa` doesn't exist\n", err: context.DeadlineExceeded}
+func TestWorkspaceExistsReturnsFalseWhenAbsentFromRegistry(t *testing.T) {
+	r := &fakeRunner{out: "default\nother\n"}
 	c := New(r)
 
 	exists, err := c.WorkspaceExists("qa")
@@ -205,7 +212,8 @@ func TestTrackBookmarkPrefersOriginName(t *testing.T) {
 	if err := c.TrackBookmark("my-bookmark"); err != nil {
 		t.Fatalf("TrackBookmark returned error: %v", err)
 	}
-	wantArgs := []string{"bookmark", "track", "my-bookmark@origin"}
+	// Modern jj syntax: `--remote=origin` instead of the deprecated `@origin`.
+	wantArgs := []string{"bookmark", "track", "my-bookmark", "--remote=origin"}
 	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
 	}
@@ -222,11 +230,35 @@ func TestTrackBookmarkPrefersOriginThenFallsBackLocal(t *testing.T) {
 		t.Fatalf("TrackBookmark returned error: %v", err)
 	}
 	want := [][]string{
-		{"bookmark", "track", "feature/foo@origin"},
+		{"bookmark", "track", "feature/foo", "--remote=origin"},
 		{"bookmark", "track", "feature/foo"},
 	}
 	if !reflect.DeepEqual(r.calls, want) {
 		t.Fatalf("unexpected calls: got %#v want %#v", r.calls, want)
+	}
+}
+
+func TestTrackBookmarkFallsThroughOnNoMatchingRemoteBookmarks(t *testing.T) {
+	// Regression: jj exits 0 with a "No matching remote bookmarks"
+	// warning when the tracked name doesn't exist on the remote. The
+	// old TrackBookmark treated that as success and never tried the
+	// bare-name fallback, leaving callers downstream to fail with the
+	// real "revision doesn't exist" surprise. Now we scan the output
+	// and re-classify it as a failure so the next candidate runs.
+	r := &sequenceRunner{steps: []runStep{
+		{out: "Warning: No matching remote bookmarks for names: feature/foo\nNothing changed.\n"},
+		{},
+	}}
+	c := New(r)
+
+	if err := c.TrackBookmark("feature/foo"); err != nil {
+		t.Fatalf("TrackBookmark returned error: %v", err)
+	}
+	if len(r.calls) != 2 {
+		t.Fatalf("expected fall-through to bare-name candidate; got %#v", r.calls)
+	}
+	if !reflect.DeepEqual(r.calls[1], []string{"bookmark", "track", "feature/foo"}) {
+		t.Fatalf("unexpected second-attempt args: %#v", r.calls[1])
 	}
 }
 

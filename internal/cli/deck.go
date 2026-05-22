@@ -487,7 +487,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.StateEditDoneMsg{Err: err}
 		})
 	}
-	asyncLauncher, asyncList, asyncCancel, asyncDismiss, asyncLog, asyncRetry := buildAsyncJobs(repoRoot)
+	asyncLauncher, asyncList, asyncCancel, asyncDismiss, asyncLog, asyncRetry, asyncDeleteRetry := buildAsyncJobs(repoRoot, runner)
 	if asyncLauncher != nil {
 		go runJobsStartupCleanup()
 	}
@@ -526,7 +526,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithJobCancelHandler(asyncCancel).
 		WithJobDismissHandler(asyncDismiss).
 		WithJobLogOpener(asyncLog).
-		WithJobRetryHandler(asyncRetry)
+		WithJobRetryHandler(asyncRetry).
+		WithJobDeleteWorkspaceRetryHandler(asyncDeleteRetry)
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
@@ -540,10 +541,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 // open log in $PAGER). Returns nil-valued functions if the jobs
 // store can't be initialized; the deck silently falls back to the
 // synchronous path.
-func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRefresher, deckui.JobCancelHandler, deckui.JobDismissHandler, deckui.JobLogOpener, deckui.JobRetryHandler) {
+func buildAsyncJobs(repoRoot string, runner Runner) (deckui.AsyncJobLauncher, deckui.JobsListRefresher, deckui.JobCancelHandler, deckui.JobDismissHandler, deckui.JobLogOpener, deckui.JobRetryHandler, deckui.JobDeleteWorkspaceRetryHandler) {
 	store, err := jobs.NewStore()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil, nil
 	}
 	launcher := func(spec deckui.AsyncJobSpec) error {
 		root := strings.TrimSpace(spec.RepoRoot)
@@ -602,7 +603,37 @@ func buildAsyncJobs(repoRoot string) (deckui.AsyncJobLauncher, deckui.JobsListRe
 		_, err = store.Spawn(orig.Spec, orig.Title, jobs.SpawnOptions{})
 		return err
 	}
-	return launcher, listRefresher, cancel, dismiss, logOpen, retry
+	// deleteAndRetry is the typed recovery for ErrorKindStaleWorkspace
+	// failures: nuke the workspace the failure attached to, then
+	// re-spawn the original job. CRITICAL: target ErrorWorkspace, not
+	// Spec.WorkspaceName — for review jobs they differ (the spec
+	// carries the row the user was on when they pressed `r`, often
+	// `default`, while the failure is against `pr-N-<branch>`).
+	// Falling back to Spec.WorkspaceName would silently delete the
+	// user's home row, which we did once and shouldn't do again.
+	deleteAndRetry := func(id string) error {
+		orig, err := store.Get(jobs.JobID(id))
+		if err != nil {
+			return err
+		}
+		name := strings.TrimSpace(orig.ErrorWorkspace)
+		if name == "" {
+			return fmt.Errorf("delete+retry: job %q has no error workspace recorded — refusing to guess", id)
+		}
+		root := strings.TrimSpace(orig.Spec.RepoRoot)
+		if root == "" {
+			root = repoRoot
+		}
+		svc := newDeckActionServiceWithIO(runner, root, nil, io.Discard)
+		if err := svc.Delete(name, true); err != nil {
+			return fmt.Errorf("delete+retry: delete %q: %w", name, err)
+		}
+		if _, err := store.Spawn(orig.Spec, orig.Title, jobs.SpawnOptions{}); err != nil {
+			return fmt.Errorf("delete+retry: re-spawn: %w", err)
+		}
+		return nil
+	}
+	return launcher, listRefresher, cancel, dismiss, logOpen, retry, deleteAndRetry
 }
 
 // projectJobs builds the deckui-side projection of the jobs
@@ -661,8 +692,10 @@ func toDeckJob(j jobs.Job, store *jobs.Store) deckui.Job {
 		EndedAt:       ended,
 		Steps:         steps,
 		LogsTail:      j.LogsInline,
-		ErrMsg:        j.ErrMsg,
-		LogPath:       store.LogPath(j.ID),
+		ErrMsg:         j.ErrMsg,
+		ErrorKind:      j.ErrorKind,
+		ErrorWorkspace: j.ErrorWorkspace,
+		LogPath:        store.LogPath(j.ID),
 		PID:           j.PID,
 		WorkspaceName: j.Spec.WorkspaceName,
 		WorkspacePath: j.Spec.WorkspacePath,

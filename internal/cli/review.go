@@ -85,6 +85,29 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		return fmt.Errorf("jj git fetch: %w: %s", err, fetchOut)
 	}
 
+	// Fork PRs: the head branch isn't on origin, so the jj fetch above
+	// doesn't pick it up. Pull it from the head repo directly into a
+	// local ref so jj's bookmark resolution finds it on the next op.
+	// No-op when the PR comes from origin (the ref already exists from
+	// the fetch above; git -c gc.auto=0 fetch is cheap regardless).
+	if pr.HeadRepoURL != "" && pr.HeadRef != "" {
+		fetchURL := strings.TrimSuffix(pr.HeadRepoURL, "/")
+		if !strings.HasSuffix(fetchURL, ".git") {
+			fetchURL += ".git"
+		}
+		refspec := pr.HeadRef + ":refs/heads/" + pr.HeadRef
+		reporter.Step(fmt.Sprintf("git fetch %s/%s %s", pr.HeadRepoOwner, pr.HeadRepoName, pr.HeadRef))
+		if out, err := runner.Run(context.Background(), defaultRoot, "git", "fetch", "--no-tags", fetchURL, refspec); err != nil {
+			return fmt.Errorf("fetch PR head from %s: %w: %s", fetchURL, err, out)
+		}
+		// jj caches its view of git refs per-operation; force a fresh
+		// import so the bookmark added above is visible to the
+		// PrepareWorkspace step that follows.
+		if out, err := runner.Run(context.Background(), defaultRoot, "jj", "git", "import"); err != nil {
+			return fmt.Errorf("jj git import after fork fetch: %w: %s", err, out)
+		}
+	}
+
 	wsName := fmt.Sprintf("pr-%d-%s", pr.Number, branch)
 	reporter.Step(fmt.Sprintf("Prepare jj workspace %s (bookmark %s)", wsName, branch))
 	name, wsPath, err := svc.PrepareWorkspace(wsName, branch, true)

@@ -53,11 +53,11 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 	// guard don't double-write. Once any branch transitions to a
 	// terminal state, set this flag and don't transition again.
 	var terminal atomic.Bool
-	finalize := func(status jobs.JobStatus, msg string) {
+	finalize := func(status jobs.JobStatus, msg, kind, workspaceName string) {
 		if !terminal.CompareAndSwap(false, true) {
 			return
 		}
-		_ = store.MarkDone(id, status, msg)
+		_ = store.MarkDone(id, status, msg, kind, workspaceName)
 	}
 
 	// Signal handlers: any of these should flush `cancelled` and
@@ -67,17 +67,17 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	go func() {
 		s := <-sigCh
-		finalize(jobs.StatusCancelled, fmt.Sprintf("received %s", s))
+		finalize(jobs.StatusCancelled, fmt.Sprintf("received %s", s), "", "")
 		os.Exit(130)
 	}()
 	defer func() {
 		if r := recover(); r != nil {
-			finalize(jobs.StatusError, fmt.Sprintf("panic: %v", r))
+			finalize(jobs.StatusError, fmt.Sprintf("panic: %v", r), "", "")
 			panic(r)
 		}
 		// Ensure we never leave a `running` record behind even if a
 		// dispatch path forgot to mark a terminal state.
-		finalize(jobs.StatusError, "process exited without finalizing")
+		finalize(jobs.StatusError, "process exited without finalizing", "", "")
 	}()
 
 	// Heartbeat keeps LastHeartbeat fresh so the deck-side orphan
@@ -126,10 +126,18 @@ func runRunJob(svc workspace.Service, runner Runner, args []string) error {
 	}
 
 	if err != nil {
-		finalize(jobs.StatusError, err.Error())
+		kind := ""
+		workspaceName := ""
+		if workspace.IsStaleWorkspaceError(err) {
+			kind = jobs.ErrorKindStaleWorkspace
+			if name, ok := workspace.StaleWorkspaceName(err); ok {
+				workspaceName = name
+			}
+		}
+		finalize(jobs.StatusError, err.Error(), kind, workspaceName)
 		return err
 	}
-	finalize(jobs.StatusDone, "")
+	finalize(jobs.StatusDone, "", "", "")
 	// PR-status jobs are background polls the user never inspects when
 	// they succeed — only failures are interesting. Auto-delete the
 	// record on success so ~/.awp/jobs/ doesn't accumulate ~78 noise

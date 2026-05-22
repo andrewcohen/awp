@@ -202,14 +202,20 @@ func (s *Store) MarkRunning(id JobID) error {
 }
 
 // MarkDone transitions to a terminal status. The trailing running step
-// (if any) is moved to a final state matching the outcome.
-func (s *Store) MarkDone(id JobID, status JobStatus, errMsg string) error {
+// (if any) is moved to a final state matching the outcome. errKind is
+// optional and tags the error for the UI's typed-recovery flows (see
+// ErrorKind* constants); pass "" for generic failures. errWorkspace
+// names the workspace the failure attached to — empty for failures
+// that don't target a specific workspace.
+func (s *Store) MarkDone(id JobID, status JobStatus, errMsg, errKind, errWorkspace string) error {
 	return s.Update(id, func(j *Job) error {
 		if j.Status.IsTerminal() {
 			return nil
 		}
 		j.Status = status
 		j.ErrMsg = errMsg
+		j.ErrorKind = errKind
+		j.ErrorWorkspace = errWorkspace
 		now := time.Now()
 		j.EndedAt = &now
 		j.LastHeartbeat = now

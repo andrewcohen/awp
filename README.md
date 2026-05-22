@@ -312,6 +312,7 @@ Press `J` to open the jobs overlay:
 | `g` / `G` | Jump to top / bottom |
 | `c` | Cancel the selected running job (sends `SIGTERM`; subprocess flushes a `cancelled` record before exiting) |
 | `r` | Retry a failed/cancelled/orphaned job (re-spawns from the original spec; useful after manually resolving a stale workspace and similar fixable conditions) |
+| `D` | Delete the workspace named in the spec and re-spawn the job. Only enabled when the failed job's `ErrorKind` is `stale_workspace` — surfaced today by the workspace reconciler when an existing workspace can't be aligned to the requested bookmark (e.g. a half-finished prior review left it in a weird state). Press `D` to start clean. |
 | `x` | Dismiss a finished/failed/orphaned record (deletes the JSON + log file) |
 | `o` | Open the sidecar log file. Active jobs open with `less +F` (follow mode — new output streams in like `tail -f`; press Ctrl-C inside less to drop into normal navigation). Terminal jobs open with `$PAGER` (default `less`). |
 | `y` | Yank current job details (id, status, error, steps, recent log) to the system clipboard via OSC 52 |

@@ -78,7 +78,20 @@ type Job struct {
 	Steps         []JobStep
 	LogsTail      []string
 	ErrMsg        string
-	LogPath       string
+	// ErrorKind tags failures the overlay can offer typed recovery for.
+	// Empty for generic failures. Currently the only kind is
+	// "stale_workspace" (mirrors jobs.ErrorKindStaleWorkspace) — when
+	// set, the overlay surfaces a `D` key to delete the workspace
+	// named by ErrorWorkspace and re-spawn the job in one step.
+	ErrorKind string
+	// ErrorWorkspace is the workspace the failure attached to —
+	// populated from the typed error rather than the spec. For review
+	// jobs this is the `pr-N-<branch>` workspace; for create/delete
+	// jobs it matches Spec.WorkspaceName. The deck's `D` action
+	// targets THIS, not Spec.WorkspaceName, so we don't accidentally
+	// nuke `default` when the user was sitting on that row.
+	ErrorWorkspace string
+	LogPath        string
 	PID           int
 	WorkspaceName string
 	WorkspacePath string
@@ -108,6 +121,15 @@ type JobLogOpener func(jobID string) tea.Cmd
 // re-spawns a new job from the original Spec. Returns an error if
 // the retry couldn't be dispatched (e.g. unknown id, store error).
 type JobRetryHandler func(jobID string) error
+
+// JobDeleteWorkspaceRetryHandler is invoked when the user presses `D`
+// on a job that failed with ErrorKind "stale_workspace". The wiring
+// layer deletes the workspace referenced by the spec, then re-spawns
+// a fresh job from the original Spec. One-shot recovery for the
+// "review attached to a workspace that's in a state we can't reconcile"
+// case — the underlying workspace gets nuked, so callers must only
+// pass this through when the user explicitly opts in.
+type JobDeleteWorkspaceRetryHandler func(jobID string) error
 
 // hasActiveJobs reports whether any cached job is non-terminal. Used to
 // gate the periodic jobs refresh so terminal records don't keep
@@ -208,7 +230,15 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Width(innerWidth)
-	title := titleStyle.Render("awp deck — jobs (esc/J close · c cancel · r retry · x dismiss · o open log · y yank)")
+	titleText := "awp deck — jobs (esc/J close · c cancel · r retry · x dismiss · o open log · y yank)"
+	// Surface the typed-recovery affordance only when the currently
+	// selected job actually qualifies. Hiding it the rest of the time
+	// keeps the title slim and prevents the user from learning a
+	// keystroke that would no-op against their selection.
+	if cursor >= 0 && cursor < len(jobs) && jobs[cursor].ErrorKind == "stale_workspace" {
+		titleText += " · D delete workspace + retry"
+	}
+	title := titleStyle.Render(titleText)
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

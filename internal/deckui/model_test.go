@@ -702,6 +702,91 @@ func TestJobsOverlayDismissRequiresTerminal(t *testing.T) {
 	}
 }
 
+func TestJobsOverlayDeleteAndRetryInvokesHandlerOnStaleWorkspace(t *testing.T) {
+	called := ""
+	model := New(nil, nil).
+		WithJobDeleteWorkspaceRetryHandler(func(id string) error {
+			called = id
+			return nil
+		})
+	model.jobsOverlay = true
+	// CRITICAL: WorkspaceName is the row the user was on (often
+	// `default`), but ErrorWorkspace is what the failure attached to
+	// (the pr-N-* workspace). D must dispatch on the latter.
+	model.jobs = []Job{{
+		ID:             "stale-1",
+		Status:         JobError,
+		ErrorKind:      "stale_workspace",
+		WorkspaceName:  "default",
+		ErrorWorkspace: "pr-1-feat",
+	}}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if cmd == nil {
+		t.Fatal("expected D to dispatch a cmd for a stale-workspace job")
+	}
+	_ = cmd()
+	_ = updated
+	if called != "stale-1" {
+		t.Fatalf("delete-and-retry called with %q, want %q", called, "stale-1")
+	}
+}
+
+func TestJobsOverlayDeleteAndRetryRefusesNonStaleJob(t *testing.T) {
+	calls := 0
+	model := New(nil, nil).
+		WithJobDeleteWorkspaceRetryHandler(func(id string) error { calls++; return nil })
+	model.jobsOverlay = true
+	// Generic failure with no ErrorKind — D must not fire even with
+	// ErrorWorkspace populated.
+	model.jobs = []Job{{
+		ID:             "generic-1",
+		Status:         JobError,
+		WorkspaceName:  "default",
+		ErrorWorkspace: "pr-2-bar",
+	}}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if cmd != nil {
+		_ = cmd()
+	}
+	m := updated.(Model)
+	if calls != 0 {
+		t.Fatal("D must not dispatch on a non-stale job")
+	}
+	if m.status == "" {
+		t.Fatal("expected status hint explaining why D was rejected")
+	}
+}
+
+func TestJobsOverlayDeleteAndRetryRefusesWithoutErrorWorkspace(t *testing.T) {
+	// Regression: D used to read Spec.WorkspaceName as the deletion
+	// target, which silently nuked the user's home row (often
+	// `default`). The guard now keys on ErrorWorkspace, and refuses
+	// to act when it's empty rather than guessing from the spec.
+	calls := 0
+	model := New(nil, nil).
+		WithJobDeleteWorkspaceRetryHandler(func(id string) error { calls++; return nil })
+	model.jobsOverlay = true
+	model.jobs = []Job{{
+		ID:            "no-ws-1",
+		Status:        JobError,
+		ErrorKind:     "stale_workspace",
+		WorkspaceName: "default",
+		// ErrorWorkspace intentionally empty — falling back to
+		// WorkspaceName here is exactly the bug we're avoiding.
+	}}
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if cmd != nil {
+		_ = cmd()
+	}
+	m := updated.(Model)
+	if calls != 0 {
+		t.Fatal("D must not dispatch when ErrorWorkspace is empty — falling back to WorkspaceName would delete the home row")
+	}
+	if m.status == "" {
+		t.Fatal("expected status hint explaining the missing error workspace")
+	}
+}
+
 func TestAsyncReviewSkipsProgressMode(t *testing.T) {
 	var got AsyncJobSpec
 	model := New([]Item{{ProjectName: "p", WorkspaceName: "w", RepoRoot: "/repo"}}, nil).

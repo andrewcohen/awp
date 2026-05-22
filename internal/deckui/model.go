@@ -457,13 +457,14 @@ type Model struct {
 	projectOpener      ProjectOpener
 	asyncJobLauncher   AsyncJobLauncher
 	jobsListRefresher  JobsListRefresher
-	jobCancelHandler   JobCancelHandler
-	jobDismissHandler  JobDismissHandler
-	jobLogOpener       JobLogOpener
-	jobRetryHandler    JobRetryHandler
-	jobs               []Job
-	jobsOverlay        bool
-	jobsOverlayCursor  int
+	jobCancelHandler        JobCancelHandler
+	jobDismissHandler       JobDismissHandler
+	jobLogOpener            JobLogOpener
+	jobRetryHandler         JobRetryHandler
+	jobDeleteWorkspaceRetry JobDeleteWorkspaceRetryHandler
+	jobs                    []Job
+	jobsOverlay             bool
+	jobsOverlayCursor       int
 
 	// New-workspace form. When newWorkspaceMode is true the deck's
 	// View renders the form in place of the row list and Update
@@ -686,6 +687,15 @@ func (m Model) WithJobLogOpener(o JobLogOpener) Model {
 // original Spec).
 func (m Model) WithJobRetryHandler(h JobRetryHandler) Model {
 	m.jobRetryHandler = h
+	return m
+}
+
+// WithJobDeleteWorkspaceRetryHandler installs the recovery handler used
+// by `D` in the jobs overlay for jobs whose ErrorKind is
+// "stale_workspace". The handler deletes the workspace named in the
+// spec and re-spawns the original job.
+func (m Model) WithJobDeleteWorkspaceRetryHandler(h JobDeleteWorkspaceRetryHandler) Model {
+	m.jobDeleteWorkspaceRetry = h
 	return m
 }
 
@@ -2715,6 +2725,31 @@ func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := j.ID
 		return m, func() tea.Msg {
 			return JobActionDoneMsg{JobID: id, Kind: "retry", Err: handler(id)}
+		}
+	case "D":
+		// Delete-workspace-and-retry. Only meaningful for jobs whose
+		// ErrorKind tags them as recoverable via this affordance. The
+		// workspace we'd delete comes from ErrorWorkspace (the
+		// workspace the failure attached to) and NOT WorkspaceName
+		// (the row the user was on when dispatching the job) — those
+		// differ for review jobs and confusing them deletes the
+		// user's home row.
+		if len(m.jobs) == 0 || m.jobDeleteWorkspaceRetry == nil {
+			return m, nil
+		}
+		j := m.jobs[m.jobsOverlayCursor]
+		if j.ErrorKind != "stale_workspace" {
+			m.status = "D: only applies to jobs failed with a stale workspace"
+			return m, nil
+		}
+		if strings.TrimSpace(j.ErrorWorkspace) == "" {
+			m.status = "D: job has no error workspace recorded"
+			return m, nil
+		}
+		handler := m.jobDeleteWorkspaceRetry
+		id := j.ID
+		return m, func() tea.Msg {
+			return JobActionDoneMsg{JobID: id, Kind: "delete-and-retry", Err: handler(id)}
 		}
 	case "o":
 		if len(m.jobs) == 0 || m.jobLogOpener == nil {
