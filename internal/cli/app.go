@@ -387,7 +387,7 @@ func (a *App) runOpen(args []string) error {
 					return errors.New("review is not configured")
 				}
 				return a.review(a.runner, a.svc, result.prNumber, a.in, a.out)
-			case newFlowBookmark:
+			case newFlowDefault, newFlowBookmark:
 				req.Bookmark = result.bookmark
 			}
 		}
