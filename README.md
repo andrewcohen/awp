@@ -163,7 +163,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `i` | CI window (`gh run watch`) |
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config) |
-| `n` | New workspace (inline form: workspace name / bookmark / agent prompt) |
+| `n` | New workspace (inline form: workspace name / bookmark / agent prompt). Submitting with both name and bookmark blank generates a random three-word name and forks off `trunk()`. |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style project → workspace jump |
 | `/` | Filter rows · `esc` clears |
@@ -185,7 +185,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 |---|---|
 | `awp deck` | Open the workspace dashboard |
 | `awp mini-deck` | Quick-jump list of workspaces with an active agent or unread notification |
-| `awp w open [name]` | Create or attach to a workspace (interactive form when run alone) |
+| `awp w open [name]` | Create or attach to a workspace (interactive form when run alone). Submitting the form with no name and no bookmark spawns a scratch workspace off `trunk()` with a random three-word name. |
 | `awp w list` | List workspaces in the current repo |
 | `awp w info <name>` | Show details for a workspace |
 | `awp w rename <old> <new>` | Rename |

@@ -289,7 +289,16 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	if err := s.guardRepoRoot(repoRoot); err != nil {
 		return "", "", false, err
 	}
-	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
+	forkFromTrunk := false
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) == "" {
+		generated, err := s.uniqueRandomWorkspaceName()
+		if err != nil {
+			return "", "", false, err
+		}
+		name = generated
+		forkFromTrunk = true
+		s.logf("ℹ️ No name or bookmark provided; generated %q and forking off trunk()", name)
+	} else if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
 		name = bookmark
 	}
 	normalized, err := s.resolveName(name)
@@ -338,7 +347,9 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 		return "", "", false, err
 	}
 	startRevision := "@"
-	if strings.TrimSpace(bookmark) != "" {
+	if forkFromTrunk {
+		startRevision = "trunk()"
+	} else if strings.TrimSpace(bookmark) != "" {
 		if err := s.trackBookmark(bookmark); err != nil {
 			return "", "", false, err
 		}
@@ -393,7 +404,16 @@ func (s *service) createWorkspace(name string, bookmark string, prompt string, r
 	}
 	s.logf("✅ Resolved repo root: %s", repoRoot)
 
-	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
+	forkFromTrunk := false
+	if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) == "" {
+		generated, err := s.uniqueRandomWorkspaceName()
+		if err != nil {
+			return err
+		}
+		name = generated
+		forkFromTrunk = true
+		s.logf("ℹ️ No name or bookmark provided; generated %q and forking off trunk()", name)
+	} else if strings.TrimSpace(name) == "" && strings.TrimSpace(bookmark) != "" {
 		name = bookmark
 		s.logf("ℹ️ Using bookmark as default workspace name: %q", name)
 	}
@@ -427,7 +447,10 @@ func (s *service) createWorkspace(name string, bookmark string, prompt string, r
 		return err
 	}
 	startRevision := "@"
-	if strings.TrimSpace(bookmark) != "" {
+	if forkFromTrunk {
+		startRevision = "trunk()"
+		s.logf("▶️ Forking new workspace off trunk()")
+	} else if strings.TrimSpace(bookmark) != "" {
 		s.logf("▶️ Tracking bookmark %q before workspace creation", strings.TrimSpace(bookmark))
 		if err := s.trackBookmark(bookmark); err != nil {
 			return err
@@ -986,6 +1009,29 @@ func (s *service) resolveName(name string) (string, error) {
 		return "", err
 	}
 	return NormalizeName(line)
+}
+
+// uniqueRandomWorkspaceName generates random three-word names until it finds
+// one that does not collide with an existing jj workspace. With ~60×60×80
+// combinations collisions are vanishingly rare, but we retry a handful of
+// times before giving up so a stale match never silently reopens an old
+// workspace instead of creating a new one.
+func (s *service) uniqueRandomWorkspaceName() (string, error) {
+	const attempts = 8
+	for i := 0; i < attempts; i++ {
+		candidate, err := RandomName()
+		if err != nil {
+			return "", err
+		}
+		exists, err := s.jj.WorkspaceExists(candidate)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not generate a unique workspace name after %d attempts", attempts)
 }
 
 func (s *service) maybeRunPrompt(workspaceName, prompt string) error {

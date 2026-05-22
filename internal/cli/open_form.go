@@ -53,7 +53,7 @@ type promptEditedMsg struct {
 
 func newOpenFormModel(initial openRequest, _ []string) openFormModel {
 	workspaceInput := textinput.New()
-	workspaceInput.Placeholder = "workspace name (leave blank to derive from bookmark)"
+	workspaceInput.Placeholder = "workspace name (blank → random name off trunk, or derive from bookmark)"
 	workspaceInput.SetValue(strings.TrimSpace(initial.Name))
 	workspaceInput.Prompt = ""
 	workspaceInput.CharLimit = 0
@@ -104,11 +104,7 @@ func runOpenWithCharm(initial openRequest, workspaces []string, in io.Reader, ou
 	if result.cancel {
 		return openRequest{}, errors.New("open cancelled")
 	}
-	request := result.currentRequest()
-	if strings.TrimSpace(request.Name) == "" && strings.TrimSpace(request.Bookmark) == "" {
-		return openRequest{}, errors.New("workspace open requires a workspace name or bookmark")
-	}
-	return request, nil
+	return result.currentRequest(), nil
 }
 
 func (m openFormModel) Init() tea.Cmd { return textinput.Blink }
@@ -189,11 +185,6 @@ func (m *openFormModel) handleSubmit() (tea.Model, tea.Cmd) {
 	if m.actionIndex == 1 {
 		m.cancel = true
 		return *m, tea.Quit
-	}
-	request := m.currentRequest()
-	if strings.TrimSpace(request.Name) == "" && strings.TrimSpace(request.Bookmark) == "" {
-		m.err = "workspace name or bookmark is required"
-		return *m, nil
 	}
 	return *m, tea.Quit
 }

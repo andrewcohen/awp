@@ -60,7 +60,7 @@ var (
 
 func newNewWorkspaceForm(initial NewWorkspaceInitial) newWorkspaceForm {
 	workspaceInput := textinput.New()
-	workspaceInput.Placeholder = "workspace name (leave blank to derive from bookmark)"
+	workspaceInput.Placeholder = "workspace name (blank → random name off trunk, or derive from bookmark)"
 	workspaceInput.SetValue(strings.TrimSpace(initial.Name))
 	workspaceInput.Prompt = ""
 	workspaceInput.CharLimit = 0
@@ -129,11 +129,6 @@ func (f newWorkspaceForm) update(msg tea.Msg) (newWorkspaceForm, tea.Cmd, newFor
 			if f.activeField == 3 {
 				if f.actionIndex == 1 {
 					return f, nil, newFormActionCancel
-				}
-				if strings.TrimSpace(f.workspaceInput.Value()) == "" &&
-					strings.TrimSpace(f.bookmarkInput.Value()) == "" {
-					f.err = "workspace name or bookmark is required"
-					return f, nil, newFormActionNone
 				}
 				return f, nil, newFormActionSubmit
 			}

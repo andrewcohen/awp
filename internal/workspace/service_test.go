@@ -348,24 +348,44 @@ func TestStartRemovesStaleManagedWorkspaceDir(t *testing.T) {
 	}
 }
 
-func TestStartPromptsForNameWhenMissing(t *testing.T) {
+func TestStartGeneratesRandomNameAndForksTrunkWhenMissing(t *testing.T) {
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
 	store := &fakeStore{entries: map[string]Entry{}}
-	in := bytes.NewBufferString("My Feature\n")
-	out := &bytes.Buffer{}
 
-	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: in, Out: out})
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
 	if err := svc.createWorkspace("", "", "", true); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	if !strings.Contains(out.String(), "Name: ") {
-		t.Fatalf("expected prompt output to contain %q, got %q", "Name: ", out.String())
+	if len(jj.added) != 1 {
+		t.Fatalf("expected 1 workspace add, got %d", len(jj.added))
 	}
-	if _, ok := store.entries["my-feature"]; !ok {
-		t.Fatal("expected normalized prompted name in store")
+	generated := jj.added[0].Name
+	if strings.Count(generated, "-") != 2 {
+		t.Fatalf("expected three-word generated name, got %q", generated)
 	}
+	if jj.addRevision != "trunk()" {
+		t.Fatalf("expected start revision trunk(), got %q", jj.addRevision)
+	}
+	if jj.trackedBookmark != "" {
+		t.Fatalf("expected no bookmark tracking, got %q", jj.trackedBookmark)
+	}
+	entry, ok := store.entries[generated]
+	if !ok {
+		t.Fatalf("expected generated name %q in store entries (got keys %v)", generated, mapKeys(store.entries))
+	}
+	if entry.Bookmark != "" {
+		t.Fatalf("expected stored entry to have empty bookmark, got %q", entry.Bookmark)
+	}
+}
+
+func mapKeys(m map[string]Entry) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func TestStartOpensExistingWorkspace(t *testing.T) {

@@ -7,16 +7,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestOpenFormSubmitRequiresNameOrBookmark(t *testing.T) {
+func TestOpenFormSubmitWithEmptyFieldsSucceeds(t *testing.T) {
 	model := newOpenFormModel(openRequest{}, nil)
 	model.activeField = 3
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := updated.(openFormModel)
-	if got.err == "" {
-		t.Fatal("expected validation error")
+	if got.err != "" {
+		t.Fatalf("did not expect validation error, got %q", got.err)
 	}
 	if got.cancel {
 		t.Fatal("did not expect cancel")
+	}
+	if cmd == nil {
+		t.Fatal("expected submit to quit (tea.Cmd), got nil")
 	}
 }
 
