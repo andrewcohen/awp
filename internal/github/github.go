@@ -12,12 +12,38 @@ type Runner interface {
 }
 
 type PRInfo struct {
-	Number   int    `json:"number"`
-	HeadRef  string `json:"headRefName"`
-	BaseRef  string `json:"baseRefName"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	URL      string `json:"url"`
+	Number  int    `json:"number"`
+	HeadRef string `json:"headRefName"`
+	BaseRef string `json:"baseRefName"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	URL     string `json:"url"`
+	// HeadRepoOwner / HeadRepoName identify the repo the head branch
+	// lives in. For non-fork PRs this matches the origin repo. For fork
+	// PRs the branch is on a different repo and origin won't have it —
+	// the review flow uses these to fetch the branch directly from the
+	// fork before trying to align a workspace to it.
+	HeadRepoOwner string
+	HeadRepoName  string
+	HeadRepoURL   string
+}
+
+// prViewResponse mirrors `gh pr view --json` output. PRInfo flattens it
+// because the nested struct only exists at the gh-call boundary.
+type prViewResponse struct {
+	Number         int    `json:"number"`
+	HeadRefName    string `json:"headRefName"`
+	BaseRefName    string `json:"baseRefName"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	URL            string `json:"url"`
+	HeadRepository struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	} `json:"headRepository"`
+	HeadRepositoryOwner struct {
+		Login string `json:"login"`
+	} `json:"headRepositoryOwner"`
 }
 
 type Client struct {
@@ -272,14 +298,32 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 	out, err := c.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "view", strconv.Itoa(num),
-		"--json", "number,headRefName,baseRefName,title,body,url",
+		"--json", "number,headRefName,baseRefName,title,body,url,headRepository,headRepositoryOwner",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
 	}
-	var info PRInfo
-	if err := json.Unmarshal([]byte(out), &info); err != nil {
+	var raw prViewResponse
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
 		return PRInfo{}, fmt.Errorf("parse gh pr view output: %w", err)
+	}
+	info := PRInfo{
+		Number:        raw.Number,
+		HeadRef:       raw.HeadRefName,
+		BaseRef:       raw.BaseRefName,
+		Title:         raw.Title,
+		Body:          raw.Body,
+		URL:           raw.URL,
+		HeadRepoOwner: raw.HeadRepositoryOwner.Login,
+		HeadRepoName:  raw.HeadRepository.Name,
+		HeadRepoURL:   raw.HeadRepository.URL,
+	}
+	// gh's default `headRepository` payload doesn't include `url`,
+	// so the field above is usually empty. Synthesize it from
+	// owner+name so callers (e.g. the review flow fetching a fork
+	// branch) always have a working clone URL to feed git fetch.
+	if info.HeadRepoURL == "" && info.HeadRepoOwner != "" && info.HeadRepoName != "" {
+		info.HeadRepoURL = fmt.Sprintf("https://github.com/%s/%s", info.HeadRepoOwner, info.HeadRepoName)
 	}
 	return info, nil
 }

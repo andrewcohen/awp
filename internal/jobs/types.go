@@ -109,7 +109,28 @@ type Job struct {
 	LogsInline []string `json:"logs_inline,omitempty"`
 	LogFile    string   `json:"log_file,omitempty"`
 	ErrMsg     string   `json:"error,omitempty"`
+	// ErrorKind tags failures the UI can offer typed recovery for. Empty
+	// for generic failures; non-empty values are tested against the
+	// ErrorKind* constants below. Currently the only kind is
+	// ErrorKindStaleWorkspace, surfaced by the deck's jobs overlay so
+	// the user can press `D` to delete the workspace and re-spawn the
+	// job in one step.
+	ErrorKind string `json:"error_kind,omitempty"`
+	// ErrorWorkspace names the workspace the failure actually attached
+	// to — populated from the typed error (e.g. StaleWorkspaceError)
+	// rather than Spec.WorkspaceName. For review jobs these differ:
+	// Spec.WorkspaceName is the row the user was on when they pressed
+	// `r` (often `default`), while the failure is against the
+	// `pr-N-<branch>` workspace the job tried to build. The deck's
+	// delete-and-retry uses this field so `D` nukes the right
+	// workspace, not the user's home row.
+	ErrorWorkspace string `json:"error_workspace,omitempty"`
 }
+
+// ErrorKindStaleWorkspace marks failures from the workspace package's
+// reconcile path that couldn't align an existing workspace to the
+// requested state. Recoverable: delete the workspace, re-spawn the job.
+const ErrorKindStaleWorkspace = "stale_workspace"
 
 // IsActive reports whether the job is still in flight (pending or
 // running and not orphaned).

@@ -123,12 +123,12 @@ func TestStoreMarkDoneIdempotent(t *testing.T) {
 	if err := s.Save(Job{ID: id, Status: StatusRunning, StartedAt: time.Now()}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := s.MarkDone(id, StatusDone, ""); err != nil {
+	if err := s.MarkDone(id, StatusDone, "", "", ""); err != nil {
 		t.Fatalf("MarkDone: %v", err)
 	}
 	first, _ := s.Get(id)
 	// Second MarkDone should be a no-op (don't overwrite a terminal state).
-	if err := s.MarkDone(id, StatusError, "boom"); err != nil {
+	if err := s.MarkDone(id, StatusError, "boom", "", ""); err != nil {
 		t.Fatalf("MarkDone twice: %v", err)
 	}
 	second, _ := s.Get(id)
@@ -146,7 +146,7 @@ func TestStoreMarkDoneFinalizesTrailingStep(t *testing.T) {
 	if err := s.AppendStep(id, "doing thing"); err != nil {
 		t.Fatalf("AppendStep: %v", err)
 	}
-	if err := s.MarkDone(id, StatusError, "boom"); err != nil {
+	if err := s.MarkDone(id, StatusError, "boom", "", ""); err != nil {
 		t.Fatalf("MarkDone: %v", err)
 	}
 	got, _ := s.Get(id)

@@ -76,15 +76,26 @@ func (c *Client) DiffGit(dir string, revision string) (string, error) {
 	return out, nil
 }
 
+// WorkspaceExists reports whether jj has a workspace registered under
+// this name, regardless of whether its working-copy commit currently
+// resolves. We check the workspace registry (`jj workspace list`) and
+// NOT `jj log -r <name>@` — the latter returns "no revisions to show"
+// for orphaned workspaces whose @ was abandoned, which makes the
+// caller think the workspace is gone and try to create it again. jj
+// then rejects the create with "already exists" because the name is
+// still in the registry. The registry view is what reflects the state
+// we'd collide with.
 func (c *Client) WorkspaceExists(name string) (bool, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "log", "-r", name+"@", "--no-graph", "-T", "commit_id.short() ++ \"\\n\"")
+	names, err := c.ListWorkspaceNames()
 	if err != nil {
-		if isMissingRevisionError(out, err) {
-			return false, nil
-		}
-		return false, formatCommandError(fmt.Sprintf("check workspace %q", name), err, out)
+		return false, err
 	}
-	return strings.TrimSpace(out) != "", nil
+	for _, n := range names {
+		if n == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Client) ListWorkspaceNames() ([]string, error) {
@@ -151,6 +162,18 @@ func (c *Client) CreateBookmark(name, revision string) error {
 	return nil
 }
 
+// TrackBookmark attempts to make `bookmarkName` resolvable as a local
+// bookmark by tracking it from a known remote. Tries `--remote=origin`
+// first (the modern syntax — `<name>@<remote>` is deprecated and emits
+// a warning), then falls through to a bare-name track for the case
+// where the bookmark already exists locally.
+//
+// jj's `bookmark track` exits 0 even when no remote bookmark matched
+// ("Nothing changed."), which previously fooled this method into
+// reporting success. We now scan the output for the unmatched warning
+// and treat it as a soft failure so the next candidate gets a chance.
+// Returning nil only when at least one candidate actually established
+// the bookmark.
 func (c *Client) TrackBookmark(bookmarkName string) error {
 	bookmarkName = strings.TrimSpace(bookmarkName)
 	if bookmarkName == "" {
@@ -159,17 +182,51 @@ func (c *Client) TrackBookmark(bookmarkName string) error {
 	var lastOut string
 	var lastErr error
 	for _, candidate := range bookmarkTrackCandidates(bookmarkName) {
-		out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "track", candidate)
-		if err == nil {
+		args := candidate.args()
+		out, err := c.runner.Run(context.Background(), "", "jj", args...)
+		if err == nil && !trackOutputIndicatesNoMatch(out) {
 			return nil
 		}
+		if err == nil {
+			// jj exited 0 but with "no matching remote bookmarks" —
+			// pretend it was a failure so the loop tries the next
+			// candidate (and, on exhaustion, reports something useful).
+			lastErr = fmt.Errorf("no matching remote bookmark for %s", candidate.describe(bookmarkName))
+		} else {
+			lastErr = err
+		}
 		lastOut = out
-		lastErr = err
 	}
 	if lastErr == nil {
 		return nil
 	}
 	return formatCommandError(fmt.Sprintf("track bookmark %q", bookmarkName), lastErr, lastOut)
+}
+
+// trackOutputIndicatesNoMatch detects the jj output that says "I ran
+// successfully but the bookmark you named doesn't exist on the remote
+// you named." Without this, jj's exit-0 + warning behavior silently
+// makes our tracker think the bookmark is now local when it isn't.
+func trackOutputIndicatesNoMatch(out string) bool {
+	low := strings.ToLower(out)
+	return strings.Contains(low, "no matching remote bookmarks")
+}
+
+// EditRevision moves the working-copy commit of the workspace rooted at
+// `path` onto `revision` (a bookmark name, change id, or any jj revset
+// that resolves to one commit). Idempotent when the workspace is
+// already on that revision. Run from `path` so jj resolves the correct
+// workspace context.
+func (c *Client) EditRevision(path, revision string) error {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return fmt.Errorf("empty revision")
+	}
+	out, err := c.runner.Run(context.Background(), path, "jj", "edit", revision)
+	if err != nil {
+		return formatCommandError(fmt.Sprintf("edit revision %q", revision), err, out)
+	}
+	return nil
 }
 
 func (c *Client) RenameWorkspace(path string, newName string) error {
@@ -352,15 +409,45 @@ func trackCandidates(revision string) []string {
 	return candidates
 }
 
-func bookmarkTrackCandidates(bookmark string) []string {
+// trackCandidate is one attempt at `jj bookmark track <args>`. We model
+// the args as a slice so we can use the modern `<name> --remote=<remote>`
+// form (which doesn't emit jj's deprecation warning) while still being
+// able to describe the candidate compactly in error messages.
+type trackCandidate struct {
+	bookmark string
+	remote   string // empty = no --remote arg (bare-name fallback)
+}
+
+func (t trackCandidate) args() []string {
+	args := []string{"bookmark", "track", t.bookmark}
+	if t.remote != "" {
+		args = append(args, "--remote="+t.remote)
+	}
+	return args
+}
+
+func (t trackCandidate) describe(bookmark string) string {
+	if t.remote == "" {
+		return bookmark
+	}
+	return fmt.Sprintf("%s@%s", bookmark, t.remote)
+}
+
+func bookmarkTrackCandidates(bookmark string) []trackCandidate {
 	bookmark = strings.TrimSpace(bookmark)
 	if bookmark == "" {
 		return nil
 	}
-	if strings.Contains(bookmark, "@") {
-		return []string{bookmark}
+	// Honor the legacy `<name>@<remote>` form when the caller passed it
+	// explicitly. Otherwise fan out from origin (the common case) before
+	// trying the bare name (for bookmarks that are already local).
+	if at := strings.LastIndexByte(bookmark, '@'); at > 0 {
+		return []trackCandidate{{bookmark: bookmark[:at], remote: bookmark[at+1:]}}
 	}
-	return []string{bookmark + "@origin", bookmark}
+	return []trackCandidate{
+		{bookmark: bookmark, remote: "origin"},
+		{bookmark: bookmark},
+	}
 }
 
 func isMissingRevisionError(output string, err error) bool {

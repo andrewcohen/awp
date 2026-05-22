@@ -14,12 +14,62 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 )
 
+// StaleWorkspaceError marks a PrepareWorkspace failure where the jj
+// workspace was already registered but couldn't be reconciled to the
+// caller's intent (e.g. EditRevision rejected the bookmark, or the
+// `already exists` retry path couldn't recover). The deck recognizes
+// this via IsStaleWorkspaceError and offers a "delete the workspace
+// and retry the job" affordance on the failed job in the jobs overlay.
+type StaleWorkspaceError struct {
+	Name  string
+	Cause error
+}
+
+func (e *StaleWorkspaceError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Cause == nil {
+		return fmt.Sprintf("workspace %q is in a stale state", e.Name)
+	}
+	return fmt.Sprintf("workspace %q is in a stale state: %v", e.Name, e.Cause)
+}
+
+func (e *StaleWorkspaceError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// IsStaleWorkspaceError reports whether err (or anything it wraps) is a
+// StaleWorkspaceError. Lets callers in other packages branch on the
+// "recoverable by deleting the workspace" condition without importing
+// the error type directly.
+func IsStaleWorkspaceError(err error) bool {
+	var s *StaleWorkspaceError
+	return errors.As(err, &s)
+}
+
+// StaleWorkspaceName extracts the workspace name from a wrapped
+// StaleWorkspaceError so callers can dispatch a delete-and-retry on the
+// right workspace without re-parsing the spec. Returns ("", false)
+// when err isn't a stale-workspace error.
+func StaleWorkspaceName(err error) (string, bool) {
+	var s *StaleWorkspaceError
+	if !errors.As(err, &s) || s == nil {
+		return "", false
+	}
+	return s.Name, true
+}
+
 type JJClient interface {
 	RepoRoot() (string, error)
 	SourceRepoRoot() (string, error)
 	WorkspaceExists(name string) (bool, error)
 	ListWorkspaceNames() ([]string, error)
 	AddWorkspace(name string, path string, revision string) error
+	EditRevision(path, revision string) error
 	TrackBookmark(bookmarkName string) error
 	RenameWorkspace(path string, newName string) error
 	ForgetWorkspace(name string) error
@@ -275,7 +325,19 @@ func (s *service) PrepareWorkspace(name string, bookmark string, runHooks bool) 
 	return normalized, workspacePath, err
 }
 
-// prepareWorkspaceInternal does all non-tmux work. It returns (normalized, path, alreadyExists, err).
+// prepareWorkspaceInternal reconciles the workspace's state with the
+// caller's intent: at exit, jj has a workspace named `normalized` at
+// `workspacePath`, the working copy is on `bookmark` (when one is
+// given), the store has a matching entry, the bookmark is tracked, and
+// builtin bootstrap has run. Returns (normalized, path, alreadyExisted,
+// err) so callers can distinguish "first run for this workspace" from
+// "re-open" — e.g. post-start hooks only run on first creation.
+//
+// Each step is idempotent. No branch skips reconciliation work just
+// because the workspace already existed — that's the regression we hit
+// when a half-finished review left a workspace at the wrong revision
+// and the next review attempt happily re-attached without aligning the
+// working copy to the requested bookmark.
 func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHooks bool) (string, string, bool, error) {
 	s.logf("▶️ Preparing workspace (name=%q, bookmark=%q)", strings.TrimSpace(name), strings.TrimSpace(bookmark))
 	currentRoot, err := s.jj.RepoRoot()
@@ -296,86 +358,117 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	if err != nil {
 		return "", "", false, err
 	}
-	exists, err := s.jj.WorkspaceExists(normalized)
+	workspacePath := s.defaultWorkspacePath(repoRoot, normalized)
+	trimmedBookmark := strings.TrimSpace(bookmark)
+
+	existedBefore, err := s.jj.WorkspaceExists(normalized)
 	if err != nil {
 		return "", "", false, err
 	}
-	if exists {
-		entries, err := s.store.Load(repoRoot)
-		if err != nil {
+
+	// Step 1: ensure the bookmark is tracked locally before any
+	// operation that names it as a revision (AddWorkspace -r, EditRevision).
+	if trimmedBookmark != "" {
+		if err := s.trackBookmark(trimmedBookmark); err != nil {
 			return "", "", false, err
 		}
-		entry, ok := entries[normalized]
-		trimmedBookmark := strings.TrimSpace(bookmark)
-		mutated := false
-		if !ok {
-			entry = Entry{Name: normalized, Path: s.defaultWorkspacePath(repoRoot, normalized)}
-			mutated = true
+	}
+
+	// Step 2: ensure the jj workspace exists at workspacePath. On a
+	// race where jj remembers the workspace but our state says it's
+	// gone, forget + retry once.
+	if !existedBefore {
+		if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+			return "", "", false, fmt.Errorf("create workspace parent dir: %w", err)
 		}
-		if trimmedBookmark != "" && entry.Bookmark != trimmedBookmark {
-			entry.Bookmark = trimmedBookmark
-			mutated = true
+		if err := s.prepareWorkspacePath(workspacePath); err != nil {
+			return "", "", false, err
 		}
-		if mutated {
-			entries[normalized] = entry
-			if err := s.store.Save(repoRoot, entries); err != nil {
+		startRevision := "@"
+		if trimmedBookmark != "" {
+			startRevision = trimmedBookmark
+		}
+		if err := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
 				return "", "", false, err
 			}
-		}
-		if err := s.trackBookmark(bookmark); err != nil {
-			return "", "", false, err
-		}
-		if err := s.runBuiltinBootstrap(repoRoot, entry.Path); err != nil {
-			return "", "", false, err
-		}
-		return normalized, entry.Path, true, nil
-	}
-	workspacePath := s.defaultWorkspacePath(repoRoot, normalized)
-	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
-		return "", "", false, fmt.Errorf("create workspace parent dir: %w", err)
-	}
-	if err := s.prepareWorkspacePath(workspacePath); err != nil {
-		return "", "", false, err
-	}
-	startRevision := "@"
-	if strings.TrimSpace(bookmark) != "" {
-		if err := s.trackBookmark(bookmark); err != nil {
-			return "", "", false, err
-		}
-		startRevision = strings.TrimSpace(bookmark)
-	}
-	if err := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			return "", "", false, err
-		}
-		_ = s.jj.ForgetWorkspace(normalized)
-		if prepErr := s.prepareWorkspacePath(workspacePath); prepErr != nil {
-			return "", "", false, prepErr
-		}
-		if err2 := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err2 != nil {
-			return "", "", false, err2
+			s.logf("⚠️ jj reported workspace already exists; retrying after forget")
+			_ = s.jj.ForgetWorkspace(normalized)
+			if prepErr := s.prepareWorkspacePath(workspacePath); prepErr != nil {
+				return "", "", false, prepErr
+			}
+			if err2 := s.jj.AddWorkspace(normalized, workspacePath, startRevision); err2 != nil {
+				return "", "", false, err2
+			}
 		}
 	}
+
+	// Step 3: align the working copy to the requested bookmark. Always
+	// run when a bookmark is given — even if the workspace already
+	// existed at the wrong revision (the bug we just hit), or if jj
+	// add already placed @ there on fresh create (no-op cost is one jj
+	// command, worth the simpler invariant).
+	if trimmedBookmark != "" {
+		if err := s.jj.EditRevision(workspacePath, trimmedBookmark); err != nil {
+			wrapped := fmt.Errorf("align workspace %q to bookmark %q: %w", normalized, trimmedBookmark, err)
+			// If the workspace was already on disk when we arrived, the
+			// failure is recoverable by deleting + retrying. Surface that
+			// to callers (deck jobs overlay) via the typed sentinel.
+			if existedBefore {
+				return "", "", true, &StaleWorkspaceError{Name: normalized, Cause: wrapped}
+			}
+			return "", "", false, wrapped
+		}
+	}
+
+	// Step 4: upsert the store entry. Only writes when something
+	// changed so we don't churn the JSON file on every reopen.
 	entries, err := s.store.Load(repoRoot)
 	if err != nil {
-		return "", "", false, err
+		return "", "", existedBefore, err
 	}
-	entries[normalized] = Entry{Name: normalized, Path: workspacePath, Bookmark: strings.TrimSpace(bookmark)}
-	if err := s.store.Save(repoRoot, entries); err != nil {
-		return "", "", false, err
+	entry, ok := entries[normalized]
+	mutated := false
+	if !ok {
+		entry = Entry{Name: normalized, Path: workspacePath}
+		mutated = true
 	}
-	if err := s.runBuiltinBootstrap(repoRoot, workspacePath); err != nil {
-		return "", "", false, err
+	if entry.Path == "" {
+		entry.Path = workspacePath
+		mutated = true
 	}
-	if runHooks {
-		if err := s.runPostWorkspaceStartHooks(repoRoot, normalized, workspacePath); err != nil {
-			if cleanupErr := s.rollbackNewWorkspaceStart(repoRoot, normalized, workspacePath); cleanupErr != nil {
+	if trimmedBookmark != "" && entry.Bookmark != trimmedBookmark {
+		entry.Bookmark = trimmedBookmark
+		mutated = true
+	}
+	if mutated {
+		entries[normalized] = entry
+		if err := s.store.Save(repoRoot, entries); err != nil {
+			return "", "", existedBefore, err
+		}
+	}
+
+	// Step 5: builtin bootstrap (project rc loading, etc.). Idempotent
+	// — runs on every reconcile because its body is cheap and may pick
+	// up newly-added config.
+	if err := s.runBuiltinBootstrap(repoRoot, entry.Path); err != nil {
+		return "", "", existedBefore, err
+	}
+
+	// Step 6: post-start hooks (pnpm install and similar). Only on
+	// first creation — these are expensive and shouldn't re-run on
+	// every reopen. Failure rolls back the new workspace so a botched
+	// install doesn't leave half-state behind.
+	if !existedBefore && runHooks {
+		if err := s.runPostWorkspaceStartHooks(repoRoot, normalized, entry.Path); err != nil {
+			if cleanupErr := s.rollbackNewWorkspaceStart(repoRoot, normalized, entry.Path); cleanupErr != nil {
 				return "", "", false, fmt.Errorf("%w (rollback failed: %v)", err, cleanupErr)
 			}
 			return "", "", false, err
 		}
 	}
-	return normalized, workspacePath, false, nil
+
+	return normalized, entry.Path, existedBefore, nil
 }
 
 func (s *service) createWorkspace(name string, bookmark string, prompt string, runHooks bool) error {
