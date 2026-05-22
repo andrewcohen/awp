@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -89,12 +90,15 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	// doesn't pick it up. Pull it from the head repo directly into a
 	// local ref so jj's bookmark resolution finds it on the next op.
 	// No-op when the PR comes from origin (the ref already exists from
-	// the fetch above; git -c gc.auto=0 fetch is cheap regardless).
-	if pr.HeadRepoURL != "" && pr.HeadRef != "" {
-		fetchURL := strings.TrimSuffix(pr.HeadRepoURL, "/")
-		if !strings.HasSuffix(fetchURL, ".git") {
-			fetchURL += ".git"
-		}
+	// the fetch above; git fetch is cheap regardless).
+	if pr.HeadRepoOwner != "" && pr.HeadRepoName != "" && pr.HeadRef != "" {
+		// Derive the fetch URL from `origin`'s URL so private forks
+		// keep working: the user's auth (SSH keys, GH PAT in https
+		// credential helper, etc.) is tied to a specific URL format,
+		// and hard-coding HTTPS prompts for a username on private
+		// repos. Falls back to https://github.com/... when origin
+		// can't be resolved or parsed.
+		fetchURL := forkFetchURLFromOrigin(runner, defaultRoot, pr.HeadRepoOwner, pr.HeadRepoName)
 		refspec := pr.HeadRef + ":refs/heads/" + pr.HeadRef
 		reporter.Step(fmt.Sprintf("git fetch %s/%s %s", pr.HeadRepoOwner, pr.HeadRepoName, pr.HeadRef))
 		if out, err := runner.Run(context.Background(), defaultRoot, "git", "fetch", "--no-tags", fetchURL, refspec); err != nil {
@@ -311,6 +315,68 @@ func buildReviewPrompt(pr github.PRInfo, base string) string {
 
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// forkFetchURLFromOrigin builds a git fetch URL for <headOwner>/<headName>
+// that mirrors the user's existing `origin` URL format — same scheme,
+// host, and user — so their git auth keeps working. Hard-coding
+// `https://github.com/...` would prompt for a username on private
+// forks (the `Device not configured: fatal: could not read Username`
+// failure we just hit) when the user's auth is SSH-key based.
+//
+// Falls back to `https://github.com/<owner>/<repo>.git` when origin
+// can't be resolved or parsed — same behavior as the previous
+// implementation, just used as a last resort.
+func forkFetchURLFromOrigin(runner Runner, repoRoot, headOwner, headName string) string {
+	fallback := fmt.Sprintf("https://github.com/%s/%s.git", headOwner, headName)
+	out, err := runner.Run(context.Background(), repoRoot, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return fallback
+	}
+	return rewriteFetchURL(strings.TrimSpace(out), headOwner, headName, fallback)
+}
+
+// rewriteFetchURL replaces the path/repo portion of `origin` with
+// `<owner>/<name>.git`, preserving the URL's scheme/host/user so the
+// caller's git credentials still apply. Returns `fallback` for any
+// origin that doesn't match a known form.
+//
+// Recognized inputs:
+//   - URL form:  ssh://git@host/old/repo[.git]   → ssh://git@host/<owner>/<name>.git
+//                https://host/old/repo[.git]     → https://host/<owner>/<name>.git
+//   - SCP form:  git@host:old/repo.git           → git@host:<owner>/<name>.git
+func rewriteFetchURL(origin, owner, name, fallback string) string {
+	owner = strings.TrimSpace(owner)
+	name = strings.TrimSuffix(strings.TrimSpace(name), ".git")
+	if origin == "" || owner == "" || name == "" {
+		return fallback
+	}
+	target := owner + "/" + name + ".git"
+
+	// URL form: prefer net/url for ssh://, https://, http://, git://.
+	if strings.Contains(origin, "://") {
+		u, err := url.Parse(origin)
+		if err == nil && u.Host != "" {
+			u.Path = "/" + target
+			u.RawQuery = ""
+			u.Fragment = ""
+			return u.String()
+		}
+		return fallback
+	}
+
+	// SCP form: <user>@<host>:<path>. Detect by requiring an '@'
+	// before the first ':' and no '://' (handled above).
+	if at := strings.IndexByte(origin, '@'); at > 0 {
+		rest := origin[at+1:]
+		if colon := strings.IndexByte(rest, ':'); colon > 0 {
+			host := rest[:colon]
+			user := origin[:at]
+			return fmt.Sprintf("%s@%s:%s", user, host, target)
+		}
+	}
+
+	return fallback
 }
 
 func parsePRNumber(arg string) (int, error) {
