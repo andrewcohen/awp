@@ -2,10 +2,14 @@ package deckui
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/andrewcohen/awp/internal/charm"
 )
 
 // MiniRow is one workspace row in the mini-deck quick-jump list.
@@ -20,13 +24,66 @@ type MiniRow struct {
 	Unread    bool
 }
 
+// miniItem wraps MiniRow for the bubbles/list integration. FilterValue
+// concatenates project + workspace so the list's default fuzzy filter
+// matches either.
+type miniItem struct{ row MiniRow }
+
+func (m miniItem) FilterValue() string { return m.row.Project + " " + m.row.Workspace }
+func (m miniItem) Title() string       { return m.row.Workspace }
+func (m miniItem) Description() string { return m.row.Project }
+
+// miniItemDelegate renders "[project] glyph workspace" with the shared
+// selection treatment (┃  + warning fg) and the find-mode hint chip
+// when an easymotion lookup is active.
+type miniItemDelegate struct {
+	findHints map[int]string
+	findMode  bool
+}
+
+func (miniItemDelegate) Height() int                             { return 1 }
+func (miniItemDelegate) Spacing() int                            { return 0 }
+func (miniItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func (d miniItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(miniItem)
+	if !ok {
+		return
+	}
+	r := item.row
+	selected := index == m.Index()
+	width := m.Width()
+
+	const prefixWidth = 4
+	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+
+	prefix := "  "
+	if d.findMode {
+		if hint, ok := d.findHints[index]; ok {
+			prefix = renderFindHint(hint)
+		}
+	}
+	labelStyle := lipgloss.NewStyle()
+	if selected && !d.findMode {
+		prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true).Render("┃") + " "
+		labelStyle = labelStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
+	}
+
+	projectChip := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("[" + r.Project + "] ")
+	glyph := statusGlyph(r.Status, false, r.Unread)
+	label := truncate(r.Workspace, max(8, width-12-lipgloss.Width(projectChip)))
+	line := fmt.Sprintf("%s %s %s%s",
+		prefixSlot.Render(prefix), glyph, projectChip, labelStyle.Render(label))
+	fmt.Fprint(w, lipgloss.NewStyle().Width(max(width, 1)).Render(line))
+}
+
 // MiniModel is a Bubble Tea model for the mini-deck: a stripped-down
 // deck that only renders workspaces with an active agent or an
 // unread notification. Enter returns the selected row to the caller
 // via Chosen(); q/esc/ctrl+c quits with Chosen()==nil.
 type MiniModel struct {
 	rows   []MiniRow
-	cursor int
+	list   list.Model
 	width  int
 	height int
 	chosen *MiniRow
@@ -41,7 +98,17 @@ type MiniModel struct {
 }
 
 func NewMiniModel(rows []MiniRow) MiniModel {
-	return MiniModel{rows: rows, width: 60, height: 20}
+	items := make([]list.Item, 0, len(rows))
+	for _, r := range rows {
+		items = append(items, miniItem{row: r})
+	}
+	l := list.New(items, miniItemDelegate{}, 0, 0)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+	l.DisableQuitKeybindings()
+	charm.ApplyListTheme(&l, nil)
+	return MiniModel{rows: rows, list: l, width: 60, height: 20}
 }
 
 func (m MiniModel) Init() tea.Cmd { return nil }
@@ -59,39 +126,25 @@ func (m MiniModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
 			return m, tea.Quit
-		case "j", "down":
-			if m.cursor < len(m.rows)-1 {
-				m.cursor++
-			}
-			return m, nil
-		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-			return m, nil
-		case "g", "home":
-			m.cursor = 0
-			return m, nil
-		case "G", "end":
-			if len(m.rows) > 0 {
-				m.cursor = len(m.rows) - 1
-			}
-			return m, nil
 		case "f":
 			if len(m.rows) > 0 {
 				m.findMode = true
 				m.findHints, m.findLookup, m.findPrefix = buildMiniRowHints(m.rows)
 				m.findPending = 0
+				m.list.SetDelegate(miniItemDelegate{findMode: true, findHints: m.findHints})
 			}
 			return m, nil
 		case "enter":
 			if len(m.rows) == 0 {
 				return m, tea.Quit
 			}
-			row := m.rows[m.cursor]
+			row := m.rows[m.list.Index()]
 			m.chosen = &row
 			return m, tea.Quit
 		}
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -106,31 +159,16 @@ func (m MiniModel) updateFind(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.rows) == 0 {
 			return m, tea.Quit
 		}
-		row := m.rows[m.cursor]
+		row := m.rows[m.list.Index()]
 		m.chosen = &row
 		return m, tea.Quit
 	}
 	if len(msg.Runes) != 1 {
 		return m, nil
 	}
-	r := msg.Runes[0]
-	if m.findPending != 0 {
-		hint := string(m.findPending) + string(r)
-		m.findPending = 0
-		if idx, ok := m.findLookup[hint]; ok {
-			m.cursor = idx
-			m.cancelFind()
-		}
-		return m, nil
-	}
-	hint := string(r)
-	if idx, ok := m.findLookup[hint]; ok {
-		m.cursor = idx
+	if idx, ok := findHintStep(msg.Runes[0], m.findLookup, m.findPrefix, &m.findPending); ok {
+		m.list.Select(idx)
 		m.cancelFind()
-		return m, nil
-	}
-	if m.findPrefix[r] {
-		m.findPending = r
 	}
 	return m, nil
 }
@@ -141,6 +179,7 @@ func (m *MiniModel) cancelFind() {
 	m.findHints = nil
 	m.findLookup = nil
 	m.findPrefix = nil
+	m.list.SetDelegate(miniItemDelegate{})
 }
 
 func (m MiniModel) View() string {
@@ -158,40 +197,11 @@ func (m MiniModel) View() string {
 			Render(strings.Join(rows, "\n"))
 	}
 
-	// Reserve a fixed-width prefix slot so the row layout doesn't jump
-	// when find-mode toggles on/off. 3 cols fits "[a]" or "[ab]"
-	// minus the trailing space (which the slot supplies).
-	const prefixWidth = 4
-	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
-	lastProject := ""
-	for i, r := range m.rows {
-		if r.Project != lastProject {
-			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-			if lastProject != "" {
-				headerStyle = headerStyle.MarginTop(1)
-			}
-			rows = append(rows, headerStyle.Render(r.Project))
-			lastProject = r.Project
-		}
-		prefix := "  "
-		if m.findMode {
-			if hint, ok := m.findHints[i]; ok {
-				prefix = renderFindHint(hint)
-			}
-		}
-		labelStyle := lipgloss.NewStyle()
-		if i == m.cursor && !m.findMode {
-			prefix = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(colWarning)).Bold(true).Render("┃") + " "
-			labelStyle = labelStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
-		}
-		// Always render the glyph so unread/notified rows surface their dot.
-		glyph := statusGlyph(r.Status, false, r.Unread)
-		label := truncate(r.Workspace, max(8, m.width-12))
-		line := fmt.Sprintf("%s %s %s",
-			prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
-		rows = append(rows, lipgloss.NewStyle().Width(max(m.width-2, 1)).Render(line))
-	}
+	listWidth := max(m.width-2, 1)
+	// Reserve title + subtitle + blank + footer + container padding.
+	listHeight := max(m.height-6, 3)
+	m.list.SetSize(listWidth, listHeight)
+	rows = append(rows, m.list.View())
 
 	hint := "j/k move · f find · enter jump · q quit"
 	if m.findMode {
@@ -213,7 +223,7 @@ func (m MiniModel) View() string {
 func (m MiniModel) Chosen() *MiniRow { return m.chosen }
 
 // Cursor returns the current cursor index (test helper).
-func (m MiniModel) Cursor() int { return m.cursor }
+func (m MiniModel) Cursor() int { return m.list.Index() }
 
 // Rows returns the loaded rows (test helper).
 func (m MiniModel) Rows() []MiniRow { return m.rows }

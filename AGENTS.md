@@ -33,6 +33,150 @@ The deck and other TUIs are built on Bubble Tea + lipgloss. When working on UI:
 - Terminals render whole rows only — half-line gaps don't exist. If a layout feels too dense, prefer a faint top/bottom border (`BorderTop(true).BorderForeground(...)`) over stacking blanks.
 - Keep the `?` help overlay in `internal/deckui/model.go::renderHelp` updated whenever you add or rebind a key, or change a status state.
 
+### Components: which primitive to reach for
+
+The "Design system" and "Bubble Tea program structure" subsections below
+tell you how to *finish* a TUI screen — colors, padding, selection
+style, modal repaint, no nested programs. This subsection tells you how
+to *start* one: which Charm primitive to reach for. If you find
+yourself hand-rolling something on the smell list, you've taken the
+wrong primitive and the rest of the work will compound the mistake.
+
+**Decision table.**
+
+| You need… | Reach for | Reference implementation |
+|-----------|-----------|--------------------------|
+| Selectable list / picker | `bubbles/list` + `charm.ApplyListTheme` | `internal/cli/picker.go` |
+| Scrollable text region (log, long body, details pane) | `bubbles/viewport` | adopt — debt list below |
+| Multi-field form (input + textarea + submit) | `huh.Form` | adopt — debt list below |
+| `?` help footer / overlay | `bubbles/help` reading from `deckKeyGroups` | `new_workspace_form.go` short help |
+| Key dispatch | `key.Binding` + `key.Matches(msg, binding)` | `internal/cli/picker.go`, form key maps |
+| Single-line input | `bubbles/textinput` | filter / bookmark modes |
+| Spinner | `bubbles/spinner` | activity bar |
+| Rendered markdown | `glamour` | adopt only when there's markdown to render |
+
+`internal/cli/picker.go` is the canonical `list.Model` integration —
+mirror it for every new selectable list. Theme via
+`charm.ApplyListTheme(&l, &delegate)` so selection style matches
+everything else.
+
+**Smells (these mean you took the wrong primitive).**
+
+If you find yourself writing any of these, stop and pick the right
+bubble:
+
+- `*Cursor`, `*Offset`, `capacity`, or `clamp*` fields on a `Model` →
+  `bubbles/list` (selection + scroll) or `bubbles/viewport`
+  (scroll-only) owns this state.
+- `if cursor >= len(...)` math inside a render function → same.
+- "… N more" footers built by hand → `list.Model`'s paginator.
+- Manual two-char easymotion mapping duplicated across surfaces →
+  the consolidated easymotion helper (post-phase 8 of the cleanup
+  spec).
+- Hand-rolled `tab` / `shift+tab` between `textinput.Model`s →
+  `huh.Form` owns field navigation.
+- A `msg.String()` switch on key names (`"esc"`, `"enter"`, `"tab"`)
+  → `key.Binding` + `key.Matches`.
+- A string-literal 256-color code inside `lipgloss.Color(...)` — like
+  `lipgloss.Color("245")` — anywhere outside
+  `internal/charm/palette.go`. Add a palette token instead.
+- `lipgloss.NewStyle()` inside `View` or a per-row render helper →
+  cache the style on the shared `Theme` or `Model`. (Initialization
+  paths are fine.)
+
+**Don't follow hand-rolled precedent.** The conventions below are
+load-bearing — every panel uses `Padding(1, 1, 1, 1)`, every selection
+uses `Foreground(Warning).Bold(true)` + `┃ `. Component choice is the
+same kind of rule: if you're scrolling, you're using `viewport`. If
+existing code hand-rolls a primitive that exists in bubbles, it is
+**tech debt to replace**, not a precedent to extend. The debt list
+below names the current offenders.
+
+**Check for a bubble before adding state to `Model`.** Any time you
+reach for a new `*Cursor`, `*Offset`, or `*Filter` field on
+`deckui.Model`, first check whether a bubble already owns that state
+internally. The default answer is yes — `list.Model` owns cursor,
+filter, paginator; `viewport.Model` owns scroll offset; `huh.Form`
+owns focus and validation.
+
+**Pre-migration debt list.** These surfaces currently hand-roll Charm
+primitives. Each line is tech debt — do not extend, do not copy as
+precedent. Phases reference
+`specs/20260522-gaq9-deckui-charm-cleanup-spec.md`; strike entries
+here as each phase lands.
+
+- ~~`internal/deckui/model.go:430` — bookmark picker
+  (`bookmarkCursor`, bespoke filter input)~~ → phase 2 ✓ (migrated to
+  `bubbles/list` via `bookmarkList`).
+- ~~`internal/deckui/model.go:420` — review picker (`reviewCursor`)~~ →
+  phase 3 ✓ (migrated to `bubbles/list` with custom
+  `reviewItemDelegate` for per-field PR row colors).
+- ~~`internal/deckui/model.go:459` — open / project picker
+  (`openCursor`)~~ → phase 4 ✓ (migrated to `bubbles/list` via
+  `openList`; gained `/` filter to match the other pickers).
+- ~~`internal/deckui/model.go:471` + `internal/deckui/jobs.go:249`
+  (`clampLines`) — jobs overlay (`jobsOverlayCursor`, line-truncation
+  hack)~~ → phase 5 ✓ (left pane = `bubbles/list` with
+  `jobItemDelegate`; right pane = `bubbles/viewport` with pgup/pgdn
+  scroll; `clampLines` deleted).
+- ~~`internal/deckui/mini.go` — mini-deck selection~~ → phase 6 ✓
+  (selection moved onto `bubbles/list` with a `miniItemDelegate`;
+  inline project headers replaced with `[project]` prefix chips).
+- ~~`internal/deckui/model.go:383` — deck row list scroll
+  (`deckListOffset`, `clampDeckListOffset`, `scrollDeckBody`)~~ →
+  phase 7 ✓ (deck row list scrolls via `bubbles/viewport`; sticky
+  project header rendered as a static line above the viewport when
+  the cursor's project header has scrolled off; `scrollDeckBody`
+  deleted, `clampDeckListOffset` renamed to `clampDeckViewport` and
+  now drives `deckYOffset` → `viewport.SetYOffset`).
+- ~~`internal/deckui/model.go` + `internal/deckui/mini.go` — duplicate
+  easymotion implementations~~ → phase 8 ✓ (the rune-step state
+  machine lives in one generic `findHintStep[T]` helper; mini-deck,
+  deck project stage, and deck workspace stage all call it).
+- ~~`internal/deckui/new_workspace_form.go` — hand-rolled
+  `textinput`/`textarea` composite with manual tab/shift-tab~~ →
+  phase 9 ✓ (rebuilt on `huh.Form`; tab/shift-tab navigation,
+  validation, and `Ctrl+G → $EDITOR` all owned by huh).
+- ~~`internal/deckui/rename_workspace_form.go` — same shape~~ →
+  phase 10 ✓ (one-field `huh.Form` with inline `Validate` for empty
+  and unchanged-name rejection; `formWrap` and the bespoke key
+  bindings deleted).
+- ~~`internal/deckui/model.go:2760` (`renderHelp`) — ~500-line
+  string-assembly help overlay~~ → phase 11 ✓ (key-binding column
+  rendered via `bubbles/help.Model.FullHelpView`; the status / PR /
+  activity legend column stays custom since it's glyph art, not a
+  key map).
+- ~~`internal/deckui/model.go:498` (`progressLogMax = 50`) — progress
+  modal log cap with no scroll~~ → phase 12 ✓ (log lines stream into
+  a `bubbles/viewport`; pgup/pgdn/ctrl+u/ctrl+d scroll back through
+  history with auto-follow when pinned to the tail).
+- ~~`internal/deckui/model.go` — ~22 `msg.String()` switches throughout
+  `Update`~~ → phase 13 ✓ (partial — the central `deckKeyMap` is the
+  canonical source for row-mode bindings, and the main `case
+  tea.KeyMsg` switch in row mode dispatches via `key.Matches`. ~17
+  smaller `switch msg.String()` blocks remain inside modal / picker /
+  overlay close-key handlers; those are the deck's internal
+  "esc/q/ctrl+c → close" pattern rather than user-discoverable
+  bindings. Converting them to `key.Matches` if-chains would add
+  boilerplate without changing behavior — left as a follow-up if
+  modal key patterns ever need to be themed or rebindable).
+- ~~`internal/deckui/model.go` — ~92 `lipgloss.NewStyle()` calls in hot
+  render paths~~ → phase 14 ✓ (partial — `deckStyles` struct in
+  `internal/deckui/styles.go` caches the base lipgloss styles the
+  deck reaches for, and the deck row-list render loop reuses them
+  via `m.styles`. Lipgloss styles are immutable value types so
+  cheaper than they look; the remaining `lipgloss.NewStyle()` sites
+  in cold-path renderers are intentionally left alone — new code
+  should prefer `m.styles`).
+- ~~`internal/deckui/activity.go:271-272`,
+  `internal/deckui/model.go:3226` — raw 256-color codes
+  (`lipgloss.Color("245" / "78" / "39")`)~~ → phase 15 ✓ (all
+  routed through palette tokens; added `charm.Link` for the
+  underlined-hyperlink role. Progress-step glyph color strings
+  (`"82"`/`"203"`/`"117"`/`"245"`) and `activity.go`'s default glyph
+  color (`"245"`) also converted. `grep -E 'lipgloss\.Color\("[0-9]'`
+  across `internal/deckui` and `internal/charm` returns zero hits).
+
 ### Design system (colors, padding, selection)
 
 The TUI runs against Catppuccin Macchiato as the developer's working theme.
@@ -59,10 +203,13 @@ so the user's terminal palette remaps them automatically:
 - **Never** call `lipgloss.Color("123")` with a raw 256-color code. Add a
   semantic token to `internal/charm/palette.go` first if you need a new
   role.
-- **Never** call `.Background(...)` on body or padding cells. The deck
-  renders in inline mode (no alt-screen — see `internal/cli/deck.go`), so
-  unpainted cells inherit the tmux pane bg and blend naturally. Painted bg
-  cells stand out as a different shade.
+- Prefer leaving body and padding cells unpainted — they pick up the
+  terminal's default bg, which is what blends with the rest of the
+  app surface. Background fills are reserved for buttons, chips, and
+  selection treatments where the contrast is intentional. (The
+  historical "never .Background()" rule applied to inline mode; the
+  deck now runs alt-screen so painted bg cells are no longer load-
+  bearing for blending with the surrounding tmux pane.)
 
 **Selection style.** Every list / picker / overlay uses the same
 selection treatment so the eye instantly recognizes "this is the active
@@ -99,26 +246,35 @@ work in the activity bar). Bootstrap a `m.spinner.Tick` from
 `case jobsListMsg` when `len(m.activities) > 0` so the spinner glyph in
 the bottom bar actually animates from a cold start.
 
-**Inline mode (no alt-screen).** `internal/cli/deck.go` calls
-`tea.NewProgram(model, ...)` without `tea.WithAltScreen()`. The deck
-renders directly into the tmux pane so its bg blends with the surrounding
-pane. The `padBlock` between body and footer is space-filled (no SGR) to
-overwrite previous-frame cells without painting a bg.
+**Alt-screen mode.** `internal/cli/deck.go` runs
+`tea.NewProgram(model, tea.WithAltScreen(), ...)`. Every frame paints
+the full screen, so cells the current frame doesn't write are blanked
+by the renderer rather than carrying leftover content from a previous
+frame. Practical consequences:
+
+- The `padBlock` between body and footer still exists for vertical
+  positioning (keeps the footer pinned to the bottom of the
+  viewport), but no longer needs the "space-fill to overwrite
+  previous-frame cells" property — the renderer does that.
+- Modal transitions don't need explicit `tea.ClearScreen` for
+  correctness. The existing `tea.ClearScreen` calls scattered
+  through `Update` are harmless under alt-screen but no longer
+  load-bearing; new modal handlers can omit them.
+- Exiting the deck restores the terminal to its prior state — deck
+  frames don't accumulate in tmux scrollback.
+
+Historical note: the deck previously ran inline (no alt-screen)
+because a nested `tea.Program` for the new-workspace form caused
+alt-screen bleed during the entry/exit handoff. Since phase 9 of the
+deckui-charm-cleanup spec all forms are states of the deck's own
+program, so there's only one renderer and one alt-screen — the bleed
+class is gone.
 
 **Help overlay layout.** `renderHelp` uses a two-column layout when
 `innerWidth >= 70`: status legend (agent / PR / activity) on the left,
 key bindings on the right. Falls back to vertical stacking on narrower
 viewports. Status legend rows show glyph + state name only — no verbose
 explanations.
-
-**Modal open must dispatch `tea.ClearScreen`.** Any handler that flips a
-modal flag (`m.jobsOverlay`, `m.helpMode`, `m.newWorkspaceMode`,
-`m.filtering`, etc.) MUST return `tea.ClearScreen` in its command batch
-on the transition. The deck shares one renderer across modals, and the
-renderer's previous-frame buffer otherwise leaves stripes of the
-underlying view visible wherever the modal doesn't write
-(`lipgloss.Place` padding alone does not cure it — see the
-new-workspace-form site and the `/` filter site for the pattern).
 
 ### Bubble Tea program structure
 
@@ -128,13 +284,15 @@ quick-action prompts, etc.) live as **states inside `deckui.Model`** — flags
 plus sub-component structs that `Update` routes keys to, and `View` renders in
 place of the row list.
 
-- **Do not** launch a second `tea.Program` from inside the deck. `tea.Exec` /
-  `tea.ExecProcess` is for **external** commands (`$EDITOR`, `git`, `vi`,
-  pagers) — never for another Bubble Tea program. Nested Bubble Tea programs
-  cause alt-screen bleed during the entry/exit handoff that no amount of
-  `tea.ClearScreen` / `lipgloss.Place` padding fully cures (see
-  `specs/20260505-ucc0-deck-inline-new-workspace-form-spec.md` for the
-  postmortem).
+- **Do not** launch a second `tea.Program` from inside the deck.
+  `tea.Exec` / `tea.ExecProcess` is for **external** commands
+  (`$EDITOR`, `git`, `vi`, pagers) — never for another Bubble Tea
+  program. Two programs sharing the deck's alt-screen leak frames
+  into each other during the entry/exit handoff (see
+  `specs/20260505-ucc0-deck-inline-new-workspace-form-spec.md` for
+  the postmortem — the conclusion blamed alt-screen but the actual
+  root cause was the nested-program handoff; one program +
+  alt-screen is fine).
 - Reference patterns in `internal/deckui/model.go`: `jobsOverlay`,
   `confirmDelete`, `newMenuMode`, `bookmarkMode`, `reviewMode`, `findMode`.
   Mirror those when adding a new modal: a `bool` flag (or enum) on `Model`,

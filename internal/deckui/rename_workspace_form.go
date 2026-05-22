@@ -1,10 +1,11 @@
 package deckui
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -14,10 +15,15 @@ import (
 // renameWorkspaceForm is the deck-internal rename dialog. Plain struct,
 // not a tea.Model — see new_workspace_form.go for the architectural
 // rationale (single tea.Program, no nested renderers).
+//
+// The form is a one-field huh.Form: a single Input bound to the new
+// workspace name. Validation rejects empty names and a name that
+// matches the current one. huh owns Enter-to-submit, esc-to-cancel,
+// and the validation-error rendering.
 type renameWorkspaceForm struct {
-	target    Item
-	nameInput textinput.Model
-	err       string
+	target  Item
+	form    *huh.Form
+	nameVal *string
 }
 
 type renameFormAction int
@@ -28,87 +34,82 @@ const (
 	renameFormActionSubmit
 )
 
-var (
-	renameFormKeySubmit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "rename"))
-	renameFormKeyCancel = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))
-)
+// newRenameWorkspaceForm builds the rename form. The returned tea.Cmd
+// MUST be dispatched by the caller so huh activates the input field —
+// without it, enter/esc no-op.
+func newRenameWorkspaceForm(target Item) (renameWorkspaceForm, tea.Cmd) {
+	nameVal := target.WorkspaceName
 
-func newRenameWorkspaceForm(target Item) renameWorkspaceForm {
-	input := textinput.New()
-	input.Placeholder = "new workspace name"
-	input.SetValue(target.WorkspaceName)
-	input.Prompt = ""
-	input.CharLimit = 0
-	input.Width = 56
-	input.Focus()
-	// Cursor at end of the prefilled value so users can append/backspace
-	// without retyping.
-	input.SetCursor(len(target.WorkspaceName))
-	return renameWorkspaceForm{
-		target:    target,
-		nameInput: input,
+	km := huh.NewDefaultKeyMap()
+	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"), key.WithHelp("esc", "cancel"))
+
+	current := target.WorkspaceName
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("New name").
+				Description("Renames the jj workspace, tmux session + window, and workspace state — the on-disk directory keeps its original path.").
+				Placeholder("new workspace name").
+				CharLimit(0).
+				Value(&nameVal).
+				Validate(func(s string) error {
+					trimmed := strings.TrimSpace(s)
+					if trimmed == "" {
+						return errors.New("new workspace name is required")
+					}
+					if trimmed == current {
+						return errors.New("new name is the same as the current name")
+					}
+					return nil
+				}),
+		),
+	).
+		WithKeyMap(km).
+		WithTheme(charm.HuhTheme()).
+		WithShowHelp(true).
+		WithShowErrors(true)
+
+	f := renameWorkspaceForm{
+		target:  target,
+		form:    form,
+		nameVal: &nameVal,
 	}
+	return f, form.Init()
 }
 
 func (f renameWorkspaceForm) update(msg tea.Msg) (renameWorkspaceForm, tea.Cmd, renameFormAction) {
-	f.err = ""
-	if km, ok := msg.(tea.KeyMsg); ok {
-		switch km.String() {
-		case "ctrl+c", "esc":
-			return f, nil, renameFormActionCancel
-		case "enter":
-			candidate := strings.TrimSpace(f.nameInput.Value())
-			if candidate == "" {
-				f.err = "new workspace name is required"
-				return f, nil, renameFormActionNone
-			}
-			if candidate == f.target.WorkspaceName {
-				f.err = "new name is the same as the current name"
-				return f, nil, renameFormActionNone
-			}
-			return f, nil, renameFormActionSubmit
-		}
+	if f.form == nil {
+		return f, nil, renameFormActionNone
 	}
-	var cmd tea.Cmd
-	f.nameInput, cmd = f.nameInput.Update(msg)
+	m, cmd := f.form.Update(msg)
+	if updated, ok := m.(*huh.Form); ok {
+		f.form = updated
+	}
+	switch f.form.State {
+	case huh.StateAborted:
+		return f, cmd, renameFormActionCancel
+	case huh.StateCompleted:
+		return f, cmd, renameFormActionSubmit
+	}
 	return f, cmd, renameFormActionNone
 }
 
 func (f renameWorkspaceForm) value() string {
-	return strings.TrimSpace(f.nameInput.Value())
+	if f.nameVal == nil {
+		return ""
+	}
+	return strings.TrimSpace(*f.nameVal)
 }
 
 func (f renameWorkspaceForm) view(width, height int) string {
+	if f.form == nil {
+		return ""
+	}
 	const cardWidth = 84
-	const contentWidth = 74
-
 	theme := charm.DefaultTheme()
 	card := theme.Card.Width(cardWidth)
-	title := theme.Title.Render("Rename workspace")
-	subtitle := theme.Subtitle.Render(formWrap("Renaming \""+f.target.WorkspaceName+"\". This updates the jj workspace, tmux session + window, and workspace state — the on-disk directory keeps its original path.", contentWidth))
-	label := theme.Label.Render("New name:")
-
-	var b strings.Builder
-	b.WriteString(title)
-	b.WriteString("\n")
-	b.WriteString(subtitle)
-	b.WriteString("\n\n")
-	b.WriteString(label)
-	b.WriteString("\n")
-	b.WriteString(f.nameInput.View())
-
-	if strings.TrimSpace(f.err) != "" {
-		b.WriteString("\n\n")
-		b.WriteString(theme.Error.Render(formWrap("Error: "+f.err, contentWidth)))
-	}
-
-	b.WriteString("\n\n")
-	helpModel := charm.NewHelp()
-	b.WriteString(helpModel.ShortHelpView([]key.Binding{
-		renameFormKeySubmit, renameFormKeyCancel,
-	}))
-
-	rendered := card.Render(b.String())
+	body := f.form.WithWidth(cardWidth - 4).View()
+	rendered := card.Render(theme.Title.Render("Rename workspace") + "\n\n" + body)
 	if width <= 0 || height <= 0 {
 		return rendered
 	}

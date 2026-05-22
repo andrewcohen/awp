@@ -4,14 +4,20 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/andrewcohen/awp/internal/charm"
 )
 
 // AsyncJobSpec describes the work the deck wants to dispatch to a
@@ -164,24 +170,36 @@ func refreshJobsListCmd(r JobsListRefresher) tea.Cmd {
 
 // composeStatusBar lays out a single bottom line:
 //
-//	activities   right segment   ? help
+//	activities   right segment   hint
 //
 // Activities are the unified surface for both in-flight background
 // work (pr-status, enrich, workspace rename/link) and async jobs
 // (workspace create/delete via the jobs subsystem) — callers project
 // jobs into activities via Model.syncJobActivities before rendering.
 //
+// hint is the right-edge text (typically "? help" in row mode). Pass
+// an empty string to omit it — modal/picker screens drop the hint
+// because the deck help overlay describes row-mode bindings that
+// don't apply there.
+//
 // Width-aware: drop order under width pressure is hint → activities
 // → right segment, so the filter / find-mode input on the right
 // always stays visible.
-func composeStatusBar(activities []Activity, spinnerGlyph, right string, width int) string {
+func composeStatusBar(activities []Activity, spinnerGlyph, right, hint string, width int) string {
 	left := renderActivitiesCompact(activities, spinnerGlyph)
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("? help")
+	var hintRendered string
+	if hint != "" {
+		hintRendered = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(hint)
+	}
 	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
-	hintW := lipgloss.Width(hint)
+	hintW := lipgloss.Width(hintRendered)
 	gap := 3
-	used := leftW + rightW + hintW + 2*gap
+	gapCount := 1
+	if hintRendered != "" {
+		gapCount++
+	}
+	used := leftW + rightW + hintW + gapCount*gap
 	if width <= 0 || used <= width {
 		fill := width - used
 		if fill < 0 {
@@ -194,7 +212,11 @@ func composeStatusBar(activities []Activity, spinnerGlyph, right string, width i
 		if right != "" {
 			segs = append(segs, right)
 		}
-		segs = append(segs, strings.Repeat(" ", fill)+hint)
+		if hintRendered != "" {
+			segs = append(segs, strings.Repeat(" ", fill)+hintRendered)
+		} else if fill > 0 {
+			segs = append(segs, strings.Repeat(" ", fill))
+		}
 		return strings.Join(segs, strings.Repeat(" ", gap))
 	}
 	// Tight: drop the hint first, then activities.
@@ -204,14 +226,129 @@ func composeStatusBar(activities []Activity, spinnerGlyph, right string, width i
 	return right
 }
 
-// renderJobsOverlay renders the full-screen jobs overlay at the
-// supplied dimensions. Uses lipgloss styles, no ad-hoc spacing per
-// CLAUDE.md. Returns a centered popover string; caller is
-// responsible for placing it within the viewport.
-func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
-	// Box overhead: 2 cols of border + 2*2 cols of horizontal padding.
+// jobItem wraps a Job for list.Model. FilterValue feeds the built-in
+// fuzzy filter; jobItemDelegate owns row rendering so the
+// glyph + selection-bar layout matches the previous hand-rolled view.
+type jobItem struct{ job Job }
+
+func (j jobItem) FilterValue() string {
+	title := j.job.Title
+	if title == "" {
+		title = j.job.ID
+	}
+	return title + " " + j.job.Action + " " + string(j.job.Status)
+}
+
+type jobItemDelegate struct{}
+
+func (jobItemDelegate) Height() int                                { return 1 }
+func (jobItemDelegate) Spacing() int                               { return 0 }
+func (jobItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd    { return nil }
+func (jobItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(jobItem)
+	if !ok {
+		return
+	}
+	j := item.job
+	selected := index == m.Index()
+	width := m.Width()
+
+	rowStyle := lipgloss.NewStyle().Width(width)
+	glyph, color := jobStatusGlyph(j.Status)
+	glyphStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
+	barStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+
+	title := j.Title
+	if title == "" {
+		title = j.ID
+	}
+	prefix := "  "
+	if selected {
+		prefix = barStyle.Render("┃") + " "
+	}
+	row := fmt.Sprintf("%s%s %s", prefix, glyphStyle.Render(glyph), title)
+	if selected {
+		row = lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(colWarning)).Bold(true).Render(row)
+	} else {
+		row = rowStyle.Render(row)
+	}
+	fmt.Fprint(w, row)
+}
+
+// jobsGotoTopKey / jobsGotoBottomKey are explicit g/G bindings layered
+// on top of list.Model's built-in nav so the existing overlay shortcuts
+// survive the migration.
+var (
+	jobsGotoTopKey    = key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top"))
+	jobsGotoBottomKey = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
+
+	// Action bindings surfaced in the overlay footer via the same
+	// help.Model as the bookmark/review/open pickers — so the colors
+	// (accent keys + muted descriptions + muted separators) match.
+	jobsCloseKey   = key.NewBinding(key.WithKeys("esc", "J"), key.WithHelp("esc/J", "close"))
+	jobsCancelKey  = key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "cancel"))
+	jobsRetryKey   = key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "retry"))
+	jobsDismissKey = key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "dismiss"))
+	jobsOpenLogKey = key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open log"))
+	jobsYankKey    = key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank"))
+	jobsScrollKey  = key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("pgup/pgdn", "scroll"))
+	jobsDeleteKey  = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete workspace + retry"))
+)
+
+// jobsShortHelp returns the binding list rendered in the overlay's
+// footer help line. Mirrors pickerShortHelp's role for the picker
+// modes — same shape (a slice of key.Binding fed to
+// help.Model.ShortHelpView) so the rendered colors are identical.
+func jobsShortHelp(l *list.Model) []key.Binding {
+	bindings := []key.Binding{
+		jobsCloseKey,
+		jobsCancelKey,
+		jobsRetryKey,
+		jobsDismissKey,
+		jobsOpenLogKey,
+		jobsYankKey,
+		jobsScrollKey,
+	}
+	// Surface the typed-recovery affordance only when the selected job
+	// actually qualifies — same gating as the previous title-string did.
+	if it, ok := l.SelectedItem().(jobItem); ok && it.job.ErrorKind == "stale_workspace" {
+		bindings = append(bindings, jobsDeleteKey)
+	}
+	return bindings
+}
+
+func newJobsList() list.Model {
+	l := list.New(nil, jobItemDelegate{}, 0, 0)
+	l.SetShowTitle(false)
+	l.SetStatusBarItemName("job", "jobs")
+	l.SetShowHelp(false)
+	l.DisableQuitKeybindings()
+	charm.ApplyListTheme(&l, nil)
+	return l
+}
+
+func newJobsViewport() viewport.Model {
+	v := viewport.New(0, 0)
+	v.KeyMap = viewport.KeyMap{
+		PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "scroll log")),
+		PageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "scroll log")),
+		HalfPageDown: key.NewBinding(
+			key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "½ pg dn"),
+		),
+		HalfPageUp: key.NewBinding(
+			key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "½ pg up"),
+		),
+	}
+	return v
+}
+
+// renderJobsOverlay renders the centered popover containing the jobs
+// list (left) and the selected-job details viewport (right). Both
+// bubbles are owned by the caller (Model); this function just lays out
+// the chrome around them.
+func renderJobsOverlay(width, height int, l *list.Model, v *viewport.Model, empty bool) string {
 	const boxOverhead = 6
-	boxWidth := width - 4 // leave a small margin so the border never clips the viewport edge
+	boxWidth := width - 4
 	if boxWidth < 44 {
 		boxWidth = 44
 	}
@@ -219,26 +356,21 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 	if innerWidth < 38 {
 		innerWidth = 38
 	}
-
-	// Vertical overhead: 2 rows of border + 2 rows of padding (Padding(1,2)
-	// applies 1 row top + 1 row bottom) + 1 row title + 1 blank line below
-	// the title = 6 rows. Reserve a 1-row bottom margin so a tall list
-	// never crowds against the viewport edge.
-	bodyHeight := height - 6 - 1
+	// Box chrome eats 6 rows (border + padding); title + blank below it
+	// is 2; blank + help footer below the body is 2.
+	bodyHeight := height - 6 - 2 - 2
 	if bodyHeight < 4 {
 		bodyHeight = 4
 	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Width(innerWidth)
-	titleText := "awp deck — jobs (esc/J close · c cancel · r retry · x dismiss · o open log · y yank)"
-	// Surface the typed-recovery affordance only when the currently
-	// selected job actually qualifies. Hiding it the rest of the time
-	// keeps the title slim and prevents the user from learning a
-	// keystroke that would no-op against their selection.
-	if cursor >= 0 && cursor < len(jobs) && jobs[cursor].ErrorKind == "stale_workspace" {
-		titleText += " · D delete workspace + retry"
-	}
-	title := titleStyle.Render(titleText)
+	title := titleStyle.Render("awp deck — jobs")
+
+	// Help footer goes through the same themed help.Model the picker
+	// modes use (charm.ApplyListTheme wires it onto l.Help). That gets
+	// us accent-colored keys + muted descriptions + muted separators —
+	// matching the bookmark/review/open footer styling exactly.
+	help := lipgloss.NewStyle().Width(innerWidth).Render(l.Help.ShortHelpView(jobsShortHelp(l)))
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -246,102 +378,23 @@ func renderJobsOverlay(jobs []Job, cursor, width, height int) string {
 		Padding(1, 2).
 		Width(boxWidth)
 
-	if len(jobs) == 0 {
-		empty := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(innerWidth).
+	if empty {
+		emptyMsg := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(innerWidth).
 			Render("No jobs in flight. Press n to create a workspace.")
-		body := lipgloss.JoinVertical(lipgloss.Left, title, "", empty)
+		body := lipgloss.JoinVertical(lipgloss.Left, title, "", emptyMsg, "", help)
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, boxStyle.Render(body))
 	}
 
-	if cursor < 0 {
-		cursor = 0
-	}
-	if cursor >= len(jobs) {
-		cursor = len(jobs) - 1
-	}
-
-	// 50/50 split, with a 2-col gutter between the columns.
 	const gutter = 2
 	listWidth := (innerWidth - gutter) / 2
 	detailsWidth := innerWidth - gutter - listWidth
+	l.SetSize(listWidth, bodyHeight)
+	v.Width = detailsWidth
+	v.Height = bodyHeight
 
-	list := renderJobsList(jobs, cursor, listWidth, bodyHeight)
-	details := clampLines(renderJobDetails(jobs[cursor], detailsWidth), bodyHeight)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", details)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, l.View(), "  ", v.View())
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-		boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body)))
-}
-
-// clampLines truncates a pre-rendered, newline-separated block to at
-// most maxLines lines so a tall column can't push the popover past the
-// viewport edge (the deck runs inline — overflow scrolls the host pane).
-func clampLines(s string, maxLines int) string {
-	if maxLines <= 0 {
-		return ""
-	}
-	lines := strings.Split(s, "\n")
-	if len(lines) <= maxLines {
-		return s
-	}
-	return strings.Join(lines[:maxLines], "\n")
-}
-
-func renderJobsList(jobs []Job, cursor, width, maxRows int) string {
-	rowStyle := lipgloss.NewStyle().Width(width)
-	selStyle := rowStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	barStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
-
-	// Reserve 2 rows at the bottom for the blank separator + footer.
-	rowsArea := maxRows - 2
-	if rowsArea < 1 {
-		rowsArea = 1
-	}
-
-	// Window the rows around the cursor so it stays visible when the
-	// list overflows the available height. Without this the popover
-	// grows past the viewport and (because the deck renders inline,
-	// no alt-screen) scrolls the entire UI off the top of the pane.
-	start, end := 0, len(jobs)
-	if rowsArea < len(jobs) {
-		start = cursor - rowsArea/2
-		if start < 0 {
-			start = 0
-		}
-		end = start + rowsArea
-		if end > len(jobs) {
-			end = len(jobs)
-			start = end - rowsArea
-		}
-	}
-
-	lines := make([]string, 0, end-start)
-	for i := start; i < end; i++ {
-		j := jobs[i]
-		glyph, color := jobStatusGlyph(j.Status)
-		glyphStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
-		title := j.Title
-		if title == "" {
-			title = j.ID
-		}
-		prefix := "  "
-		if i == cursor {
-			prefix = barStyle.Render("┃") + " "
-		}
-		row := fmt.Sprintf("%s%s %s", prefix, glyphStyle.Render(glyph), title)
-		if i == cursor {
-			lines = append(lines, selStyle.Render(row))
-		} else {
-			lines = append(lines, rowStyle.Render(row))
-		}
-	}
-	footerText := fmt.Sprintf("%d job(s)", len(jobs))
-	if start > 0 || end < len(jobs) {
-		footerText = fmt.Sprintf("%d–%d / %d", start+1, end, len(jobs))
-	}
-	footer := mutedStyle.Render(footerText)
-	return lipgloss.JoinVertical(lipgloss.Left, append(lines, "", footer)...)
+		boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", help)))
 }
 
 func renderJobDetails(j Job, width int) string {

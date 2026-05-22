@@ -268,8 +268,8 @@ func renderActivitiesCompact(activities []Activity, spinnerGlyph string) string 
 	if len(activities) == 0 {
 		return ""
 	}
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("78")).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	doneStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)).Bold(true)
 	parts := make([]string, 0, len(activities))
 	for _, a := range activities {
 		var glyph string
@@ -279,7 +279,7 @@ func renderActivitiesCompact(activities []Activity, spinnerGlyph string) string 
 		case a.Glyph != "":
 			color := a.Color
 			if color == "" {
-				color = "245"
+				color = colMuted
 			}
 			glyph = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(a.Glyph)
 		default:
