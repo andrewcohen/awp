@@ -730,7 +730,7 @@ func (a *App) runMiniDeck(args []string) error {
 
 func (a *App) runReview(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\nWith no argument, opens an interactive picker over `gh pr list`.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#|mr#]\nWith no argument, opens an interactive picker over open PRs/MRs (auto-detected from the git remote — gh for GitHub, glab for GitLab).")
 		return nil
 	}
 	if len(args) > 1 {

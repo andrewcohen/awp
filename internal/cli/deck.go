@@ -19,7 +19,6 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
-	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/jobs"
 	"github.com/andrewcohen/awp/internal/portcapture"
@@ -371,8 +370,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			if dir == "" {
 				dir = repoRoot
 			}
-			gh := github.New(fixedDirRunner{base: runner, dir: dir})
-			prs, err := gh.ListPRs()
+			f, err := detectForge(fixedDirRunner{base: runner, dir: dir}, dir)
+			if err != nil {
+				return deckui.PRFetchDoneMsg{Err: err}
+			}
+			prs, err := f.ListPRs()
 			if err != nil {
 				return deckui.PRFetchDoneMsg{Err: err}
 			}
@@ -1251,9 +1253,10 @@ func defaultWindowCommandWithRepo(windowName, repoRoot string) string {
 }
 
 // openCIWindow opens (or reuses) a `ci` tmux window in the workspace and runs
-// `gh run watch` with a fallback to `gh run view`. gh resolves the repo and
-// branch from the workspace's cwd.
-func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item deckui.Item, reporter deckui.Reporter) error {
+// the detected forge's CI-watch command (`gh run watch` for GitHub,
+// `glab ci view` for GitLab). The CLI resolves the repo and branch from the
+// workspace's cwd.
+func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, runner Runner, item deckui.Item, reporter deckui.Reporter) error {
 	reporter.Step("Open ci window")
 	path := resolvePath(svc, item)
 	if strings.TrimSpace(path) == "" {
@@ -1290,7 +1293,11 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 			return err
 		}
 	}
-	cmd := `bash -c 'b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"'`
+	f, err := detectForge(fixedDirRunner{base: runner, dir: path}, item.RepoRoot)
+	if err != nil {
+		return err
+	}
+	cmd := f.CIWatchCommand()
 	if !exists || paneIsShell(tmuxClient, target) {
 		if err := tmuxClient.SendCommand(target, cmd); err != nil {
 			return err

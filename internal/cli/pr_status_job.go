@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andrewcohen/awp/internal/deckui"
-	"github.com/andrewcohen/awp/internal/github"
+	"github.com/andrewcohen/awp/internal/forge"
 	"github.com/andrewcohen/awp/internal/jobs"
 )
 
@@ -45,7 +45,20 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	}
 	for _, repo := range repos {
 		started := time.Now()
-		gh := github.New(fixedDirRunner{base: runner, dir: repo})
+		fr := fixedDirRunner{base: runner, dir: repo}
+		// PR-status is GitHub-only (the merge-queue lookup is gh-specific
+		// GraphQL). Detect the forge first so GitLab/unknown-host repos
+		// skip cleanly instead of failing per-repo with a gh error.
+		f, fErr := detectForge(fr, repo)
+		if fErr != nil || f.Name() != "github" {
+			name := "non-github"
+			if f != nil {
+				name = f.Name()
+			}
+			reporter.Step(fmt.Sprintf("%s — skipped (%s)", repo, name))
+			continue
+		}
+		gh := forge.NewGitHub(fr)
 		statuses, err := gh.ListPRStatus(repo)
 		if err != nil {
 			reporter.Step(fmt.Sprintf("%s — error: %v", repo, err))
@@ -65,11 +78,11 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	return nil
 }
 
-// convertGithubStatusesToDeckui translates the github.PRStatus list into
+// convertGithubStatusesToDeckui translates the forge.PRStatus list into
 // the deckui.PRStatus map keyed by headRefName. queuedHeads stamps
 // IsInMergeQueue=true on PRs whose head ref appears in the set; a nil or
 // empty map leaves every entry's IsInMergeQueue at false.
-func convertGithubStatusesToDeckui(statuses []github.PRStatus, queuedHeads map[string]bool) map[string]deckui.PRStatus {
+func convertGithubStatusesToDeckui(statuses []forge.PRStatus, queuedHeads map[string]bool) map[string]deckui.PRStatus {
 	byHead := make(map[string]deckui.PRStatus, len(statuses))
 	for _, s := range statuses {
 		byHead[s.HeadRefName] = deckui.PRStatus{

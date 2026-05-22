@@ -160,7 +160,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `c` / `C` | Review window: `tuicr -r @` / `tuicr -r main..@` |
 | `v` | VCS window (`jjui`) |
 | `s` | Shell window |
-| `i` | CI window (`gh run watch`) |
+| `i` | CI window (`gh run watch` for GitHub, `glab ci view` for GitLab) |
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config) |
 | `n` | New workspace (inline form: workspace name / bookmark / agent prompt) |
@@ -193,7 +193,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `awp w prune [--dry-run] [--force]` | Remove orphan workspace dirs under `~/.awp/workspaces` not tracked in state |
 | `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
 | `awp w bootstrap --all` | Re-run bootstrap hooks for every tracked workspace in the current repo (continues on failure) |
-| `awp review [pr#]` | Pick or open a PR for review in a fresh workspace |
+| `awp review [pr#\|mr#]` | Pick or open a PR/MR for review in a fresh workspace (auto-detects gh / glab from the git remote) |
 | `awp diff` | Charm-styled diff viewer |
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |
@@ -226,7 +226,8 @@ Example:
   },
   "deck": {
     "project_roots": ["~/p", "~/go/src/github.com/andrewcohen"],
-    "bookmark_prefix": "andrew"
+    "bookmark_prefix": "andrew",
+    "forge": "gitlab"
   }
 }
 ```
@@ -262,6 +263,10 @@ When the deck exits, `deck-cleanup` also kills any leftover `[awp]<repo>__<works
 When set, a new workspace created with **no explicit bookmark** auto-creates a jj bookmark named `<prefix>/<workspace-name>` at the new workspace's revision and records it in `Entry.Bookmark`. The deck's per-row PR glyph matches `Entry.Bookmark` against PR `headRefName`, so the auto-bookmark lets a freshly-created workspace's PR (once pushed) light up in the deck without a manual `B`-link step.
 
 Unset = no auto-create. The `B` key in the deck stays available for backfilling existing workspaces whose bookmark is empty.
+
+### `deck.forge`
+
+Forces the host-CLI backend for review/PR-picker/CI-window flows. Accepts `"github"` (use `gh`) or `"gitlab"` (use `glab`). Unset = auto-detect from `git remote get-url origin` — hostnames containing `"github"` route to `gh`, hostnames containing `"gitlab"` route to `glab`, anything else errors. Override exists for self-hosted GitLab on hostnames that don't contain `"gitlab"` (e.g. `code.company.com`).
 
 ## Tmux status bar badge
 
@@ -367,7 +372,7 @@ If the deck's status looks stuck, run `awp doctor --fix` to repair env injection
 - `internal/config/` — project + global JSON config
 - `internal/state/` — workspace state JSON store
 - `internal/doctor/` — `awp doctor`
-- `internal/diff/`, `internal/review/`, `internal/github/` — diff and PR review flows
+- `internal/diff/`, `internal/review/`, `internal/forge/` — diff and PR/MR review flows (forge picks gh or glab from the git remote)
 - `specs/` — feature specs (start from `specs/spec-template.md`; use `scripts/new-spec`)
 
 See `AGENTS.md` for contributor and AI-agent guidance.

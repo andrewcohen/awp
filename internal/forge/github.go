@@ -1,4 +1,4 @@
-package github
+package forge
 
 import (
 	"context"
@@ -7,39 +7,20 @@ import (
 	"strconv"
 )
 
-type Runner interface {
-	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
-}
-
-type PRInfo struct {
-	Number   int    `json:"number"`
-	HeadRef  string `json:"headRefName"`
-	BaseRef  string `json:"baseRefName"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	URL      string `json:"url"`
-}
-
-type Client struct {
+// GitHub is the gh-backed Forge implementation. Exposed (rather than kept
+// private) so deck-side GitHub-specific code — PR-status rollup, merge-queue
+// lookup — can call it directly without going through the Forge interface.
+type GitHub struct {
 	runner Runner
 }
 
-func New(runner Runner) *Client {
-	return &Client{runner: runner}
-}
+// NewGitHub builds a gh-backed Forge tied to the given runner.
+func NewGitHub(runner Runner) *GitHub { return &GitHub{runner: runner} }
 
-type PRSummary struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	HeadRef string `json:"headRefName"`
-	Author  struct {
-		Login string `json:"login"`
-	} `json:"author"`
-	IsDraft bool `json:"isDraft"`
-}
+func (g *GitHub) Name() string { return "github" }
 
-func (c *Client) ListPRs() ([]PRSummary, error) {
-	out, err := c.runner.Run(
+func (g *GitHub) ListPRs() ([]PRSummary, error) {
+	out, err := g.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "list",
 		"--json", "number,title,headRefName,author,isDraft",
@@ -53,6 +34,30 @@ func (c *Client) ListPRs() ([]PRSummary, error) {
 		return nil, fmt.Errorf("parse gh pr list output: %w", err)
 	}
 	return prs, nil
+}
+
+func (g *GitHub) FetchPR(num int) (PRInfo, error) {
+	out, err := g.runner.Run(
+		context.Background(), "",
+		"gh", "pr", "view", strconv.Itoa(num),
+		"--json", "number,headRefName,baseRefName,title,body,url",
+	)
+	if err != nil {
+		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
+	}
+	var info PRInfo
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		return PRInfo{}, fmt.Errorf("parse gh pr view output: %w", err)
+	}
+	return info, nil
+}
+
+func (g *GitHub) PRDescriptionCommand(num int) string {
+	return fmt.Sprintf("GH_FORCE_TTY=100%% gh pr view %d | less -R", num)
+}
+
+func (g *GitHub) CIWatchCommand() string {
+	return `bash -c 'b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"'`
 }
 
 // PRState mirrors gh's PR state field.
@@ -138,8 +143,8 @@ type rawPRStatus struct {
 // ListPRStatus fetches PRs (any state) for the repo at repoDir via gh and
 // returns a normalized status projection per PR. repoDir scopes the runner's
 // working directory; gh derives the owner/name from that repo's remote.
-func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
-	out, err := c.runner.Run(
+func (g *GitHub) ListPRStatus(repoDir string) ([]PRStatus, error) {
+	out, err := g.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "list",
 		"--state", "all",
@@ -213,8 +218,8 @@ func rollupCIState(checks []rawCheck) CIState {
 // resolve owner/name from the local repo and run a small graphql query. An
 // empty map (with nil error) means nothing is queued or the repo has no
 // merge queue configured.
-func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
-	out, err := c.runner.Run(
+func (g *GitHub) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
+	out, err := g.runner.Run(
 		context.Background(), repoDir,
 		"gh", "repo", "view", "--json", "owner,name",
 	)
@@ -234,7 +239,7 @@ func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
 		return nil, fmt.Errorf("gh repo view: missing owner or name")
 	}
 	const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{headRefName isInMergeQueue}}}}`
-	gOut, err := c.runner.Run(
+	gOut, err := g.runner.Run(
 		context.Background(), repoDir,
 		"gh", "api", "graphql",
 		"-F", "owner="+owner.Owner.Login,
@@ -266,20 +271,4 @@ func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
 		}
 	}
 	return queued, nil
-}
-
-func (c *Client) FetchPR(num int) (PRInfo, error) {
-	out, err := c.runner.Run(
-		context.Background(), "",
-		"gh", "pr", "view", strconv.Itoa(num),
-		"--json", "number,headRefName,baseRefName,title,body,url",
-	)
-	if err != nil {
-		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
-	}
-	var info PRInfo
-	if err := json.Unmarshal([]byte(out), &info); err != nil {
-		return PRInfo{}, fmt.Errorf("parse gh pr view output: %w", err)
-	}
-	return info, nil
 }

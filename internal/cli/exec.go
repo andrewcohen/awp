@@ -6,11 +6,24 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/andrewcohen/awp/internal/config"
+	"github.com/andrewcohen/awp/internal/forge"
 )
 
 // Runner runs external commands.
 type Runner interface {
 	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
+}
+
+// detectForge resolves the forge backend for repoRoot, honoring an
+// optional `deck.forge` override in the awp config. repoRoot may be ""
+// — only the global config is consulted in that case. Call sites that
+// already pin runner to a directory should pass the same dir as
+// repoRoot so project config wins.
+func detectForge(runner Runner, repoRoot string) (forge.Forge, error) {
+	cfg, _ := config.Load(repoRoot)
+	return forge.Detect(runner, cfg.Deck.Forge)
 }
 
 // ExecRunner is the production command runner.

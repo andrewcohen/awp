@@ -11,7 +11,7 @@ import (
 
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
-	"github.com/andrewcohen/awp/internal/github"
+	"github.com/andrewcohen/awp/internal/forge"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -65,11 +65,14 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		return fmt.Errorf("resolve default workspace: %w", derr)
 	}
 	runner = fixedDirRunner{base: runner, dir: defaultRoot}
-	gh := github.New(runner)
+	f, err := detectForge(runner, defaultRoot)
+	if err != nil {
+		return err
+	}
 	tmuxClient := tmux.New(runner)
 
-	reporter.Step(fmt.Sprintf("Fetch PR #%d from GitHub", prNumber))
-	pr, err := gh.FetchPR(prNumber)
+	reporter.Step(fmt.Sprintf("Fetch PR #%d from %s", prNumber, f.Name()))
+	pr, err := f.FetchPR(prNumber)
 	if err != nil {
 		return err
 	}
@@ -106,7 +109,7 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	reviewCmd := fmt.Sprintf("tuicr -r %s..@", shellSingleQuote(base))
 	prDescWindow := "pr description"
 	prDescTarget := sessionName + ":" + prDescWindow
-	prDescCmd := fmt.Sprintf("GH_FORCE_TTY=100%% gh pr view %d | less -R", pr.Number)
+	prDescCmd := f.PRDescriptionCommand(pr.Number)
 
 	exists, err := tmuxClient.SessionExists(sessionName)
 	if err != nil {
@@ -236,13 +239,17 @@ func repoRootFromPath(p string) (string, error) {
 	}
 }
 
-// pickPRNumber lists open PRs via gh and prompts the user to pick one.
+// pickPRNumber lists open PRs/MRs via the detected forge and prompts the user to pick one.
 func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 	if runner == nil {
 		runner = NewExecRunner()
 	}
-	gh := github.New(runner)
-	prs, err := gh.ListPRs()
+	root, _ := jj.New(runner).SourceRepoRoot()
+	f, err := detectForge(runner, strings.TrimSpace(root))
+	if err != nil {
+		return 0, err
+	}
+	prs, err := f.ListPRs()
 	if err != nil {
 		return 0, err
 	}
@@ -275,7 +282,7 @@ func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 	return n, nil
 }
 
-func buildReviewPrompt(pr github.PRInfo, base string) string {
+func buildReviewPrompt(pr forge.PRInfo, base string) string {
 	body := strings.TrimSpace(pr.Body)
 	if body == "" {
 		body = "(no description)"
