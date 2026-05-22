@@ -156,6 +156,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 |---|---|
 | `enter` | Summon (create or focus) the workspace's tmux session. If the row has the unread badge, lands you on the `:agent` window so you see what changed; otherwise tmux's last-focused window wins |
 | `a` | Open agent window — re-launches the agent if its pane is at a shell |
+| `A` | Send a typed prompt to the workspace's agent (inline form). Header confirms the target project/workspace. If the agent is already running, the prompt is bracket-pasted as a user message; if it isn't, the agent launches with the prompt as its first message. Deck stays in focus — switch with `a` once you want to follow along. |
 | `e` | Open editor window (`$EDITOR`) |
 | `c` / `C` | Review window: `tuicr -r @` / `tuicr -r main..@` |
 | `v` | VCS window (`jjui`) |

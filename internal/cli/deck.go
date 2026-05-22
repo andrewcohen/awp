@@ -1039,8 +1039,89 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 			}
 		}
 		return nil
+	case deckui.ActionSendPrompt:
+		return sendPromptToAgent(tmuxClient, svc, item, req.Arg, reporter)
 	}
 	return fmt.Errorf("unknown action: %q session=%q", req.Action, sessionName)
+}
+
+// sendPromptToAgent dispatches `prompt` to the workspace's agent. If
+// the workspace tmux session doesn't exist yet, it's created with the
+// agent CLI being invoked with the prompt as its first argument
+// (mirrors `awp w open --prompt`). If the session exists but the agent
+// window is sitting at a shell prompt, the agent is launched there.
+// Otherwise the prompt is bracket-pasted into the running agent as a
+// user message. Never switches the tmux client — the deck stays in
+// focus by design.
+func sendPromptToAgent(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, prompt string, reporter deckui.Reporter) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return errors.New("prompt is empty")
+	}
+	if strings.TrimSpace(item.WorkspaceName) == "" {
+		return errors.New("send-prompt: workspace name required")
+	}
+	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
+	env := workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)
+
+	id, err := tmuxClient.SessionIDByName(sessionName)
+	if err != nil {
+		return err
+	}
+	sessionWasNew := id == ""
+	if sessionWasNew {
+		reporter.Step(fmt.Sprintf("Create tmux session %s", sessionName))
+		path := resolvePath(svc, item)
+		// NewSession rather than createWorkspaceSession: we want full
+		// control over the agent window's initial command so we can
+		// pass the prompt as argv[1] to the CLI in one go.
+		if err := tmuxClient.NewSession(sessionName, path, "agent", env); err != nil {
+			return err
+		}
+		id, _ = tmuxClient.SessionIDByName(sessionName)
+		_ = svc.RecordSession(item.WorkspaceName, id, sessionName)
+	}
+	_ = ensureWorkspaceSessionEnvForItem(tmuxClient, sessionName, item.ProjectName, item.WorkspaceName, item.RepoRoot)
+
+	// Make sure an agent window exists. If the session was created
+	// above this is the window NewSession just opened; otherwise we
+	// create it on-demand so users can dispatch a prompt without
+	// having pressed `a` first.
+	agentTarget := sessionName + ":agent"
+	windows, _ := tmuxClient.ListWindowsInSession(sessionName)
+	haveAgent := false
+	for _, w := range windows {
+		if w.Name == "agent" {
+			haveAgent = true
+			break
+		}
+	}
+	if !haveAgent {
+		reporter.Step("Open agent window")
+		path := resolvePath(svc, item)
+		if err := tmuxClient.NewWindowInSession(sessionName, "agent", path, env); err != nil {
+			return err
+		}
+	}
+
+	// If the agent pane is sitting at a shell (no agent running yet),
+	// start the agent with the prompt as argv[1] — the same trick
+	// `awp w open --prompt` uses on a brand-new session.
+	if sessionWasNew || !haveAgent || paneIsShell(tmuxClient, agentTarget) {
+		invocation := strings.TrimSpace(config.AgentInvocation(item.RepoRoot))
+		if invocation == "" {
+			return errors.New("send-prompt: no agent invocation configured")
+		}
+		reporter.Step("Launch agent with prompt")
+		cmd := invocation + " " + shellSingleQuote(prompt)
+		return tmuxClient.SendCommand(agentTarget, cmd)
+	}
+
+	// Agent is already running — paste the prompt as a user message
+	// via bracketed paste so multi-line prompts don't fire as
+	// separate submits.
+	reporter.Step("Send prompt to agent")
+	return tmuxClient.PasteText(agentTarget, prompt)
 }
 
 // handleDeleteProjectAction removes every non-default workspace under
