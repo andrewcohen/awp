@@ -145,3 +145,64 @@ func TestShellSingleQuote(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestRewriteFetchURL(t *testing.T) {
+	const fallback = "https://github.com/SalTor/awp.git"
+	cases := []struct {
+		name   string
+		origin string
+		want   string
+	}{
+		// SSH URL form — the one that bit us with private forks when
+		// we used https://github.com/... and got prompted for a
+		// username. Must preserve ssh:// + user so SSH-key auth works.
+		{
+			name:   "ssh URL form",
+			origin: "ssh://git@github.com/andrewcohen/awp",
+			want:   "ssh://git@github.com/SalTor/awp.git",
+		},
+		{
+			name:   "ssh URL form with .git suffix",
+			origin: "ssh://git@github.com/andrewcohen/awp.git",
+			want:   "ssh://git@github.com/SalTor/awp.git",
+		},
+		{
+			name:   "https URL form",
+			origin: "https://github.com/andrewcohen/awp.git",
+			want:   "https://github.com/SalTor/awp.git",
+		},
+		// SCP form: the most common shape (`git clone git@host:owner/repo`).
+		// net/url can't parse this, so we detect it by the `<user>@<host>:`
+		// pattern and rebuild manually.
+		{
+			name:   "scp form",
+			origin: "git@github.com:andrewcohen/awp.git",
+			want:   "git@github.com:SalTor/awp.git",
+		},
+		// Enterprise host stays preserved.
+		{
+			name:   "ssh URL on enterprise host",
+			origin: "ssh://git@ghe.example.com/team/repo",
+			want:   "ssh://git@ghe.example.com/SalTor/awp.git",
+		},
+		// Malformed input falls back to the safe default.
+		{
+			name:   "empty origin falls back",
+			origin: "",
+			want:   fallback,
+		},
+		{
+			name:   "garbage origin falls back",
+			origin: "not a url at all",
+			want:   fallback,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := rewriteFetchURL(c.origin, "SalTor", "awp", fallback)
+			if got != c.want {
+				t.Errorf("rewriteFetchURL(%q, SalTor, awp) = %q, want %q", c.origin, got, c.want)
+			}
+		})
+	}
+}
