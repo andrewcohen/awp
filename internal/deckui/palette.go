@@ -16,4 +16,5 @@ const (
 	colStrong  = charm.Strong
 	colMuted   = charm.Muted
 	colBgPanel = charm.BgPanel
+	colLink    = charm.Link
 )

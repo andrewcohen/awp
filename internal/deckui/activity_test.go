@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 )
 
 func TestStartActivityAppendsEntry(t *testing.T) {
@@ -321,8 +322,12 @@ func TestRenameSubmitStartsAndFinishesActivity(t *testing.T) {
 	target := Item{ProjectName: "repo", WorkspaceName: "old"}
 	model := New([]Item{target}, func(req ActionRequest) error { return nil })
 	model.renameMode = true
-	model.renameForm = newRenameWorkspaceForm(target)
-	model.renameForm.nameInput.SetValue("new")
+	form, _ := newRenameWorkspaceForm(target)
+	model.renameForm = form
+	*model.renameForm.nameVal = "new"
+	// Short-circuit huh's keystream by setting state directly; same
+	// pattern as the new-workspace form test.
+	model.renameForm.form.State = huh.StateCompleted
 
 	updated, _ := model.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m := updated.(Model)

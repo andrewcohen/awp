@@ -2,15 +2,21 @@ package deckui
 
 import (
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/andrewcohen/awp/internal/charm"
 )
 
 // refreshInterval is how often the deck polls for live tmux state
@@ -189,6 +195,244 @@ const (
 	bookmarkPurposeNewWorkspace bookmarkPurpose = iota
 	bookmarkPurposeLinkExisting
 )
+
+// bookmarkItem is the list.Item shape for the bookmark picker. Only Title
+// is rendered (delegate.ShowDescription is false); FilterValue feeds
+// list.Model's built-in fuzzy filter.
+type bookmarkItem struct{ name string }
+
+func (b bookmarkItem) FilterValue() string { return b.name }
+func (b bookmarkItem) Title() string       { return b.name }
+func (b bookmarkItem) Description() string { return "" }
+
+// loadingItem occupies the items area of a picker while its fetch is in
+// flight. Without it bubbles/list renders the empty-state "No bookmarks"
+// in both the status bar AND the items area — visible as a duplicate
+// message. Slotting in a single placeholder keeps the items area
+// non-empty so the list only renders the items-area branch.
+type loadingItem struct{ label string }
+
+func (l loadingItem) FilterValue() string { return "" }
+func (l loadingItem) Title() string       { return l.label }
+func (l loadingItem) Description() string { return "" }
+
+// newBookmarkList mirrors the canonical list integration in
+// internal/cli/picker.go: single-line items via DefaultDelegate with
+// description hidden and zero spacing, themed via charm.ApplyListTheme so
+// selection style (warning fg + ┃ left bar) matches every other picker.
+func newBookmarkList() list.Model {
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = false
+	delegate.SetSpacing(0)
+	l := list.New(nil, delegate, 0, 0)
+	l.SetShowTitle(true)
+	l.SetShowHelp(false)
+	l.SetStatusBarItemName("bookmark", "bookmarks")
+	l.DisableQuitKeybindings()
+	charm.ApplyListTheme(&l, &delegate)
+	l.SetDelegate(delegate)
+	return l
+}
+
+// resetBookmarkList clears items, cursor, and filter on the picker's
+// list.Model. Called from every close/cancel path so the picker reopens
+// in a clean state.
+func resetBookmarkList(l *list.Model) {
+	l.SetItems(nil)
+	l.ResetFilter()
+	l.ResetSelected()
+}
+
+func bookmarkPickerTitle(p bookmarkPurpose, target Item) string {
+	if p == bookmarkPurposeLinkExisting {
+		return "link bookmark → " + target.WorkspaceName
+	}
+	return "bookmark: pick one"
+}
+
+// reviewItem wraps a PRItem for the review picker. FilterValue feeds
+// list.Model's built-in fuzzy filter — it matches what the row visibly
+// shows (number, title, author) and deliberately excludes HeadRef so PRs
+// don't surface for invisible reasons.
+type reviewItem struct{ pr PRItem }
+
+func (r reviewItem) FilterValue() string {
+	return fmt.Sprintf("%d %s %s", r.pr.Number, r.pr.Title, r.pr.Author)
+}
+
+// reviewItemDelegate renders the per-field-colored PR row (number, title,
+// author, optional draft chip) instead of the DefaultDelegate's
+// Title/Description layout. numW is the widest PR-number string so titles
+// align across rows; refreshed by reviewItemDelegate.recompute when items
+// change.
+type reviewItemDelegate struct {
+	numW int
+}
+
+func (d *reviewItemDelegate) Height() int  { return 1 }
+func (d *reviewItemDelegate) Spacing() int { return 0 }
+func (d *reviewItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d *reviewItemDelegate) recompute(prs []list.Item) {
+	d.numW = 0
+	for _, it := range prs {
+		ri, ok := it.(reviewItem)
+		if !ok {
+			continue
+		}
+		if w := len(fmt.Sprintf("#%d", ri.pr.Number)); w > d.numW {
+			d.numW = w
+		}
+	}
+}
+
+func (d *reviewItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	if li, ok := listItem.(loadingItem); ok {
+		fmt.Fprint(w, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("  "+li.label))
+		return
+	}
+	item, ok := listItem.(reviewItem)
+	if !ok {
+		return
+	}
+	pr := item.pr
+	selected := index == m.Index()
+	width := m.Width()
+
+	const prefixWidth = 2
+	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	prefix := "  "
+	if selected {
+		prefix = "┃ "
+	}
+
+	numText := fmt.Sprintf("%*s", d.numW, fmt.Sprintf("#%d", pr.Number))
+	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo))
+	if selected {
+		numStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+	}
+	numRendered := numStyle.Render(numText)
+
+	author := "@" + pr.Author
+	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	if selected {
+		authorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess))
+	}
+	authorRendered := authorStyle.Render(author)
+
+	draft := ""
+	if pr.IsDraft {
+		draft = " " + lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Render("draft")
+	}
+
+	fixed := prefixWidth + d.numW + 1 + 1 + lipgloss.Width("@"+pr.Author) + lipgloss.Width(draft)
+	titleRoom := width - 1 - fixed
+	if titleRoom < 10 {
+		titleRoom = 10
+	}
+	titleText := truncate(pr.Title, titleRoom)
+	titleStyle := lipgloss.NewStyle()
+	if selected {
+		titleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+	}
+	titleRendered := titleStyle.Render(titleText)
+
+	fmt.Fprintf(w, "%s%s  %s  %s%s",
+		prefixSlot.Render(prefix), numRendered, titleRendered, authorRendered, draft)
+}
+
+// newReviewList builds the review picker's list.Model with our custom
+// delegate. List chrome (title, status bar, filter, pagination) goes
+// through charm.ApplyListTheme; row rendering is owned by
+// reviewItemDelegate.
+func newReviewList() (list.Model, *reviewItemDelegate) {
+	d := &reviewItemDelegate{}
+	l := list.New(nil, d, 0, 0)
+	l.SetShowTitle(true)
+	l.SetShowHelp(false)
+	l.Title = "review: select PR"
+	l.SetStatusBarItemName("PR", "PRs")
+	l.DisableQuitKeybindings()
+	charm.ApplyListTheme(&l, nil)
+	return l, d
+}
+
+func resetReviewList(l *list.Model) {
+	l.SetItems(nil)
+	l.ResetFilter()
+	l.ResetSelected()
+}
+
+// projectItem is the list.Item shape for the open / project picker.
+// FilterValue concatenates Name and Path so the user can fuzzy-match on
+// either; Title shows only the Name to keep rows compact.
+type projectItem struct{ project ProjectItem }
+
+func (p projectItem) FilterValue() string { return p.project.Name + " " + p.project.Path }
+func (p projectItem) Title() string       { return p.project.Name }
+func (p projectItem) Description() string { return "" }
+
+func newOpenList() list.Model {
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = false
+	delegate.SetSpacing(0)
+	l := list.New(nil, delegate, 0, 0)
+	l.SetShowTitle(true)
+	l.SetShowHelp(false)
+	l.Title = "open: pick a project"
+	l.SetStatusBarItemName("project", "projects")
+	l.DisableQuitKeybindings()
+	charm.ApplyListTheme(&l, &delegate)
+	l.SetDelegate(delegate)
+	return l
+}
+
+func resetOpenList(l *list.Model) {
+	l.SetItems(nil)
+	l.ResetFilter()
+	l.ResetSelected()
+}
+
+// newDeckViewport returns the viewport for the project-grouped workspace
+// list. Its key bindings are wiped: the deck owns navigation via its own
+// j/k handling (which mutates m.cursor and then calls clampDeckViewport
+// to keep the cursor row in view).
+func newDeckViewport() viewport.Model {
+	v := viewport.New(0, 0)
+	v.KeyMap = viewport.KeyMap{}
+	return v
+}
+
+
+// newProgressViewport returns the viewport for the progress modal's
+// streaming log. pgup/pgdn and ctrl+u/ctrl+d scroll back through
+// history while syncProgressViewport auto-follows the tail when the
+// user is already pinned to the bottom.
+func newProgressViewport() viewport.Model {
+	v := viewport.New(0, 0)
+	v.KeyMap = viewport.KeyMap{
+		PageDown:     key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "scroll log")),
+		PageUp:       key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "scroll log")),
+		HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "½ pg dn")),
+		HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "½ pg up")),
+	}
+	return v
+}
+
+// syncProgressViewport pushes the accumulated progressLog into the
+// viewport. If the user was already at the bottom (auto-follow), the
+// view scrolls to keep the tail visible; otherwise YOffset is left
+// alone so the user can read older lines without the stream yanking
+// them away.
+func (m *Model) syncProgressViewport() {
+	atBottom := m.progressViewport.AtBottom()
+	m.progressViewport.SetContent(strings.Join(m.progressLog, "\n"))
+	if atBottom {
+		m.progressViewport.GotoBottom()
+	}
+}
 
 // BookmarkLinkHandler is called when the user picks a bookmark in the
 // "link to existing workspace" flow. The handler must persist the chosen
@@ -390,6 +634,23 @@ type Model struct {
 	itemsAll           []Item
 	scope              Scope
 	cursor             int
+	// keymap is the single source of truth for the deck's row-mode key
+	// bindings. Update routes through key.Matches against these
+	// fields; renderHelp / deckKeyGroups derive their visible labels
+	// from the same struct.
+	keymap deckKeyMap
+	// styles caches the deck's commonly-reached-for lipgloss styles
+	// so hot render paths don't re-allocate them per frame. Initialized
+	// in New(); see deckStyles in styles.go for the migration policy.
+	styles deckStyles
+	// deckViewport renders the windowed deck body each frame.
+	// deckYOffset is the persistent first-visible row index (the
+	// edge-triggered scroll position that survives across frames);
+	// renderList syncs it into deckViewport.YOffset after content is
+	// loaded so viewport's internal clamp doesn't reset it to zero
+	// against an empty content buffer.
+	deckViewport viewport.Model
+	deckYOffset  int
 	width              int
 	height             int
 	status             string
@@ -425,10 +686,8 @@ type Model struct {
 	stateEditor        StateEditorLauncher
 	reviewMode         bool
 	reviewLoading      bool
-	reviewPRs          []PRItem
-	reviewCursor       int
-	reviewFiltering    bool
-	reviewFilter       string
+	reviewList         list.Model
+	reviewDelegate     *reviewItemDelegate
 	newMenuMode        bool
 	newMenuCursor      int
 	newMenuRepo        string
@@ -442,10 +701,7 @@ type Model struct {
 	prNumberLinkHandler PRNumberLinkHandler
 	bookmarkMode       bool
 	bookmarkLoading    bool
-	bookmarks          []string
-	bookmarkCursor     int
-	bookmarkFilter     textinput.Model
-	bookmarkFiltering  bool
+	bookmarkList       list.Model
 	bookmarkPurpose    bookmarkPurpose
 	bookmarkLinkTarget Item
 	bookmarkLinkHandler BookmarkLinkHandler
@@ -461,6 +717,7 @@ type Model struct {
 	actionAliasLookup   map[string]UserAction
 	spinner            spinner.Model
 	busy               bool
+	progressViewport   viewport.Model
 	progressMode       bool
 	progressTitle      string
 	progressSteps      []ProgressStep
@@ -471,9 +728,7 @@ type Model struct {
 	progressChan       chan progressEvent
 	openMode           bool
 	openLoading        bool
-	openProjects       []ProjectItem
-	openCursor         int
-	openFilter         textinput.Model
+	openList           list.Model
 	projectFinder      ProjectFinder
 	projectOpener      ProjectOpener
 	asyncJobLauncher   AsyncJobLauncher
@@ -485,7 +740,8 @@ type Model struct {
 	jobDeleteWorkspaceRetry JobDeleteWorkspaceRetryHandler
 	jobs                    []Job
 	jobsOverlay             bool
-	jobsOverlayCursor       int
+	jobsList                list.Model
+	jobsViewport            viewport.Model
 
 	// New-workspace form. When newWorkspaceMode is true the deck's
 	// View renders the form in place of the row list and Update
@@ -518,7 +774,6 @@ type Model struct {
 	devURLDiscoverer DevURLDiscoverer
 }
 
-const progressLogMax = 50
 
 type NewWorkspaceDoneMsg struct {
 	Err       error
@@ -547,14 +802,9 @@ func New(items []Item, handler Handler) Model {
 	fi := textinput.New()
 	fi.Placeholder = "filter..."
 	fi.CharLimit = 64
-	bf := textinput.New()
-	bf.Placeholder = "filter bookmarks..."
-	bf.CharLimit = 64
-	of := textinput.New()
-	of.Placeholder = "filter projects..."
-	of.CharLimit = 96
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner))
+	reviewList, reviewDelegate := newReviewList()
 	m := Model{
 		itemsAll:          append([]Item(nil), items...),
 		scope:             ScopeAll,
@@ -566,8 +816,16 @@ func New(items []Item, handler Handler) Model {
 		findRowPrefix:     map[rune]bool{},
 		handler:           handler,
 		filterInput:       fi,
-		bookmarkFilter:    bf,
-		openFilter:        of,
+		bookmarkList:      newBookmarkList(),
+		reviewList:        reviewList,
+		reviewDelegate:    reviewDelegate,
+		openList:          newOpenList(),
+		jobsList:          newJobsList(),
+		jobsViewport:      newJobsViewport(),
+		deckViewport:      newDeckViewport(),
+		progressViewport:  newProgressViewport(),
+		keymap:            newDeckKeyMap(),
+		styles:            newDeckStyles(),
 		spinner:           sp,
 	}
 	if idx := m.indexCurrent(); idx >= 0 {
@@ -970,7 +1228,38 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.prMenuMode && !m.prNumberSetMode
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
+	// After every Update, re-clamp the deck-list scroll offset so the
+	// cursor stays in view if it moved (j/k/jump/etc.) and so the offset
+	// stays sane when items shrink or the window resizes. Centralizing
+	// this here means individual handlers don't have to remember to call
+	// the helper — value-receiver Update means our mutation here flows
+	// back to the caller via the named return.
+	defer func() {
+		mm, ok := model.(Model)
+		if !ok {
+			return
+		}
+		(&mm).clampDeckViewport()
+		model = mm
+	}()
+	// huh-backed form modals are stateful tea.Models — they need to
+	// receive non-KeyMsg messages too (nextFieldMsg, updateFieldMsg,
+	// the Init sequence, etc.). Route every message through the
+	// active form's update before falling into the main switch so the
+	// form's state machine actually progresses. The dispatch helpers
+	// return immediately, never falling through to the deck's normal
+	// handlers, which is the right semantics while the form has modal
+	// focus.
+	if m.newWorkspaceMode {
+		return m.dispatchNewWorkspaceForm(msg)
+	}
+	if m.renameMode {
+		return m.dispatchRenameForm(msg)
+	}
+	if m.promptMode {
+		return m.dispatchPromptForm(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -998,12 +1287,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the bottom bar (background work — pr-status, enrich, jobs).
 		// Without the activities check the spinner glyph in the
 		// activity bar looks frozen.
-		if m.busy || len(m.activities) > 0 {
-			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
-			return m, cmd
+		if !m.busy && len(m.activities) == 0 {
+			return m, nil
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		// Refresh the inline loadingItem glyph for any picker that's
+		// currently fetching. SetItems is cheap (single placeholder
+		// item, no list state reset) and re-reading m.spinner.View()
+		// each tick is the simplest way to animate the glyph next to
+		// the loading message without writing a custom delegate.
+		glyph := m.spinner.View()
+		if m.bookmarkMode && m.bookmarkLoading {
+			m.bookmarkList.SetItems([]list.Item{loadingItem{label: glyph + " loading bookmarks..."}})
+		}
+		if m.reviewMode && m.reviewLoading {
+			m.reviewList.SetItems([]list.Item{loadingItem{label: glyph + " loading PRs..."}})
+		}
+		if m.openMode && m.openLoading {
+			m.openList.SetItems([]list.Item{loadingItem{label: glyph + " scanning project roots..."}})
+		}
+		return m, cmd
 	case refreshTickMsg:
 		// Background poll: fetch fresh state for status updates from
 		// agent hooks. Pause during interactive overlays so we don't
@@ -1053,13 +1357,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case jobsListMsg:
 		m.jobs = msg.jobs
-		// Keep overlay cursor in range as jobs come and go.
-		if m.jobsOverlayCursor >= len(m.jobs) {
-			m.jobsOverlayCursor = len(m.jobs) - 1
-		}
-		if m.jobsOverlayCursor < 0 {
-			m.jobsOverlayCursor = 0
-		}
+		m.syncJobsListItems()
+		m.refreshJobsViewport()
 		var expireCmd tea.Cmd
 		m, expireCmd = m.syncJobActivities(msg.jobs)
 		// Bootstrap the spinner whenever activities exist so its glyph
@@ -1093,17 +1392,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "running" count immediately rather than waiting up to 2 s
 		// for the next tick.
 		return m, refreshJobsListCmd(m.jobsListRefresher)
-	case promptEditedMsg:
-		// Editor exec returns here after the user finishes editing the
-		// new-workspace prompt in $EDITOR. Route to the form so it can
-		// stash the edited value (or surface the error). When the form
-		// isn't open we drop the message — the editor exec only fires
-		// from inside the form, so a stale message here means the user
-		// cancelled out before the editor returned.
-		if !m.newWorkspaceMode {
-			return m, nil
-		}
-		return m.dispatchNewWorkspaceForm(msg)
 	case NewWorkspaceDoneMsg:
 		// Legacy message from the now-removed nested-tea.Program form.
 		// Kept for any in-flight callers; the inline form bypasses this
@@ -1132,9 +1420,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.progressSteps = append(m.progressSteps, ProgressStep{Label: msg.ev.label, State: StepRunning})
 		case progressEventLog:
 			m.progressLog = append(m.progressLog, msg.ev.line)
-			if len(m.progressLog) > progressLogMax {
-				m.progressLog = m.progressLog[len(m.progressLog)-progressLogMax:]
-			}
+			m.syncProgressViewport()
 		case progressEventDone:
 			return m.Update(actionResultMsg{action: msg.ev.action, arg: msg.ev.arg, item: msg.ev.item, err: msg.ev.err})
 		}
@@ -1211,12 +1497,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "bookmark: no bookmarks found"
 			return m, nil
 		}
-		m.bookmarks = msg.Bookmarks
-		m.bookmarkCursor = 0
-		m.bookmarkFiltering = true
-		m.bookmarkFilter.Focus()
-		m.status = "bookmark: type to filter · enter pick · esc cancel"
-		return m, textinput.Blink
+		items := make([]list.Item, 0, len(msg.Bookmarks))
+		for _, b := range msg.Bookmarks {
+			items = append(items, bookmarkItem{name: b})
+		}
+		m.bookmarkList.SetShowStatusBar(true)
+		m.bookmarkList.SetItems(items)
+		m.bookmarkList.ResetSelected()
+		m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, m.bookmarkLinkTarget)
+		// list.Model renders its own key-help footer (/, enter, esc);
+		// duplicating it in the deck's status bar would show the same
+		// hints twice.
+		m.status = ""
+		return m, nil
 	case ProjectsDoneMsg:
 		m.busy = false
 		if !m.openMode {
@@ -1233,11 +1526,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "open: no projects found (configure deck.project_roots)"
 			return m, nil
 		}
-		m.openProjects = msg.Projects
-		m.openCursor = 0
-		m.openFilter.Focus()
-		m.status = "open: type to filter · enter pick · esc cancel"
-		return m, textinput.Blink
+		items := make([]list.Item, 0, len(msg.Projects))
+		for _, p := range msg.Projects {
+			items = append(items, projectItem{project: p})
+		}
+		m.openList.SetShowStatusBar(true)
+		m.openList.SetItems(items)
+		m.openList.ResetSelected()
+		// list.Model renders its own key-help footer; clear the status
+		// so the deck's bottom bar doesn't duplicate the picker's hints.
+		m.status = ""
+		return m, nil
 	case PRStatusRepoDoneMsg:
 		if m.prStatusByRepo == nil {
 			m.prStatusByRepo = make(map[string]map[string]PRStatus)
@@ -1270,12 +1569,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "review: " + msg.Err.Error()
 			return m, nil
 		}
-		m.reviewPRs = msg.PRs
-		m.reviewCursor = 0
+		items := make([]list.Item, 0, len(msg.PRs))
+		for _, pr := range msg.PRs {
+			items = append(items, reviewItem{pr: pr})
+		}
+		m.reviewList.SetShowStatusBar(true)
+		m.reviewList.SetItems(items)
+		m.reviewList.ResetSelected()
+		m.reviewDelegate.recompute(items)
 		if len(msg.PRs) == 0 {
 			m.status = "review: no open PRs (esc to cancel)"
 		} else {
-			m.status = "review: select PR (enter confirm, / filter, esc cancel)"
+			// list.Model renders its own key-help footer; clear the
+			// status so the picker's chrome isn't duplicated in the
+			// deck's bottom bar.
+			m.status = ""
 		}
 		return m, nil
 	case refreshDoneMsg:
@@ -1318,6 +1626,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, batchCmds(cmds...)
 	case tea.KeyMsg:
 		if m.progressMode {
+			// Allow scrolling the log even while the action is still
+			// running — useful for long create/delete pipelines where
+			// the user wants to read earlier output without waiting
+			// for the action to finish.
+			switch msg.String() {
+			case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+				var cmd tea.Cmd
+				m.progressViewport, cmd = m.progressViewport.Update(msg)
+				return m, cmd
+			}
 			if !m.progressDone {
 				return m, nil
 			}
@@ -1326,6 +1644,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.progressMode = false
 				m.progressSteps = nil
 				m.progressLog = nil
+				m.progressViewport.SetContent("")
 				m.progressErr = nil
 				m.progressDone = false
 				if m.progressDoneAction == ActionDelete && m.refresher != nil {
@@ -1339,15 +1658,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
-		}
-		if m.newWorkspaceMode {
-			return m.dispatchNewWorkspaceForm(msg)
-		}
-		if m.renameMode {
-			return m.dispatchRenameForm(msg)
-		}
-		if m.promptMode {
-			return m.dispatchPromptForm(msg)
 		}
 		if m.confirmDelete {
 			if m.deleteIsProject {
@@ -1621,43 +1931,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			filtering := m.openList.FilterState() == list.Filtering
 			switch msg.String() {
-			case "esc", "ctrl+c":
-				m.openMode = false
-				m.openProjects = nil
-				m.openCursor = 0
-				m.openFilter.Blur()
-				m.openFilter.SetValue("")
-				m.status = ""
-				return m, nil
-			case "down", "ctrl+n":
-				if m.openCursor < len(m.filteredProjects())-1 {
-					m.openCursor++
-				}
-				return m, nil
-			case "up", "ctrl+p":
-				if m.openCursor > 0 {
-					m.openCursor--
-				}
-				return m, nil
 			case "enter":
-				picks := m.filteredProjects()
-				if len(picks) == 0 || m.projectOpener == nil {
+				// See bookmark mode for rationale: enter during filter
+				// commits the filter; second enter actually picks.
+				if filtering {
+					break
+				}
+				if m.projectOpener == nil {
 					return m, nil
 				}
-				pick := picks[m.openCursor]
-				err := m.projectOpener(pick)
-				if err != nil {
+				it, ok := m.openList.SelectedItem().(projectItem)
+				if !ok {
+					return m, nil
+				}
+				if err := m.projectOpener(it.project); err != nil {
 					m.status = "open: " + err.Error()
 					return m, nil
 				}
 				return m, tea.Quit
+			case "esc", "ctrl+c":
+				if !filtering && m.openList.FilterState() != list.FilterApplied {
+					m.openMode = false
+					resetOpenList(&m.openList)
+					m.status = ""
+					return m, nil
+				}
 			}
 			var cmd tea.Cmd
-			m.openFilter, cmd = m.openFilter.Update(msg)
-			if m.openCursor >= len(m.filteredProjects()) {
-				m.openCursor = 0
-			}
+			m.openList, cmd = m.openList.Update(msg)
 			return m, cmd
 		}
 		if m.bookmarkMode {
@@ -1670,90 +1973,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Filter-mode loop: keys flow into the textinput so the user can
-			// type freely. Arrows are intercepted before the input sees them
-			// so list navigation still works while filtering (fzf-style),
-			// since the textinput would otherwise treat them as in-string
-			// cursor moves. Enter commits the filter; esc clears it.
-			if m.bookmarkFiltering {
-				switch msg.String() {
-				case "esc":
-					m.bookmarkFiltering = false
-					m.bookmarkFilter.Blur()
-					m.bookmarkFilter.SetValue("")
-					m.bookmarkCursor = 0
-					return m, nil
-				case "enter":
-					// Enter while filtering selects the highlighted row
-					// rather than just committing — that's the behavior
-					// users expect from fuzzy pickers and avoids the
-					// double-enter "commit, then pick" friction.
-					picks := m.filteredBookmarks()
-					if len(picks) == 0 {
-						return m, nil
-					}
-					return m.acceptBookmarkSelection(picks[m.bookmarkCursor])
-				case "up", "ctrl+p", "ctrl+k":
-					if m.bookmarkCursor > 0 {
-						m.bookmarkCursor--
-					}
-					return m, nil
-				case "down", "ctrl+n", "ctrl+j":
-					if m.bookmarkCursor < len(m.filteredBookmarks())-1 {
-						m.bookmarkCursor++
-					}
-					return m, nil
-				}
-				var cmd tea.Cmd
-				m.bookmarkFilter, cmd = m.bookmarkFilter.Update(msg)
-				if m.bookmarkCursor >= len(m.filteredBookmarks()) {
-					m.bookmarkCursor = 0
-				}
-				return m, cmd
-			}
-			// Navigation loop.
+			// list.Model owns cursor + filter + paginator state. We only
+			// intercept the keys whose default semantics don't match the
+			// existing picker UX:
+			//   - enter: select the highlighted row directly, even while
+			//     filtering (list's default would just commit the filter,
+			//     forcing a double-enter to pick).
+			//   - esc / ctrl+c while not filtering: close the picker
+			//     (list's default is no-op at that point; first esc still
+			//     clears an active filter via list's own handling).
+			filtering := m.bookmarkList.FilterState() == list.Filtering
 			switch msg.String() {
-			case "esc", "ctrl+c":
-				// First esc clears a committed filter; second esc closes
-				// the picker. Matches the review picker.
-				if strings.TrimSpace(m.bookmarkFilter.Value()) != "" && msg.String() == "esc" {
-					m.bookmarkFilter.SetValue("")
-					m.bookmarkCursor = 0
-					return m, nil
-				}
-				m.bookmarkMode = false
-				m.bookmarks = nil
-				m.bookmarkCursor = 0
-				m.bookmarkFilter.Blur()
-				m.bookmarkFilter.SetValue("")
-				m.bookmarkFiltering = false
-				m.bookmarkPurpose = bookmarkPurposeNewWorkspace
-				m.bookmarkLinkTarget = Item{}
-				m.status = ""
-				return m, nil
-			case "/":
-				m.bookmarkFiltering = true
-				m.bookmarkFilter.Focus()
-				m.bookmarkFilter.SetCursor(len(m.bookmarkFilter.Value()))
-				return m, textinput.Blink
-			case "j", "down":
-				if m.bookmarkCursor < len(m.filteredBookmarks())-1 {
-					m.bookmarkCursor++
-				}
-				return m, nil
-			case "k", "up":
-				if m.bookmarkCursor > 0 {
-					m.bookmarkCursor--
-				}
-				return m, nil
 			case "enter":
-				picks := m.filteredBookmarks()
-				if len(picks) == 0 {
+				// During filter typing the DefaultDelegate hides the
+				// selection indicator (intentional: list disables
+				// CursorUp/Down while filtering). Defer enter to the
+				// list so AcceptWhileFiltering commits the filter —
+				// the selector becomes visible, j/k navigates, and a
+				// second enter actually picks.
+				if filtering {
+					break
+				}
+				if it, ok := m.bookmarkList.SelectedItem().(bookmarkItem); ok && strings.TrimSpace(it.name) != "" {
+					return m.acceptBookmarkSelection(it.name)
+				}
+				return m, nil
+			case "esc", "ctrl+c":
+				if !filtering && m.bookmarkList.FilterState() != list.FilterApplied {
+					m.bookmarkMode = false
+					resetBookmarkList(&m.bookmarkList)
+					m.bookmarkPurpose = bookmarkPurposeNewWorkspace
+					m.bookmarkLinkTarget = Item{}
+					m.status = ""
 					return m, nil
 				}
-				return m.acceptBookmarkSelection(picks[m.bookmarkCursor])
 			}
-			return m, nil
+			var cmd tea.Cmd
+			m.bookmarkList, cmd = m.bookmarkList.Update(msg)
+			return m, cmd
 		}
 		if m.reviewMode {
 			if m.reviewLoading {
@@ -1765,81 +2022,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.reviewFiltering {
-				switch msg.String() {
-				case "esc":
-					m.reviewFiltering = false
-					m.filterInput.Blur()
-					m.reviewFilter = ""
-					m.filterInput.SetValue("")
-					m.reviewCursor = 0
-					return m, nil
-				case "enter":
-					m.reviewFiltering = false
-					m.filterInput.Blur()
-					m.reviewFilter = m.filterInput.Value()
-					m.reviewCursor = 0
-					return m, nil
-				}
-				var cmd tea.Cmd
-				m.filterInput, cmd = m.filterInput.Update(msg)
-				m.reviewFilter = m.filterInput.Value()
-				if m.reviewCursor >= len(m.filteredReviewPRs()) {
-					m.reviewCursor = 0
-				}
-				return m, cmd
-			}
+			filtering := m.reviewList.FilterState() == list.Filtering
 			switch msg.String() {
-			case "esc", "q", "ctrl+c":
-				if m.reviewFilter != "" && msg.String() == "esc" {
-					m.reviewFilter = ""
-					m.filterInput.SetValue("")
-					m.reviewCursor = 0
-					return m, nil
-				}
-				m.reviewMode = false
-				m.reviewPRs = nil
-				m.reviewCursor = 0
-				m.reviewFilter = ""
-				m.filterInput.SetValue("")
-				m.status = ""
-				return m, nil
-			case "/":
-				m.reviewFiltering = true
-				m.filterInput.Focus()
-				m.filterInput.SetValue(m.reviewFilter)
-				m.filterInput.SetCursor(len(m.reviewFilter))
-				return m, textinput.Blink
-			case "j", "down":
-				prs := m.filteredReviewPRs()
-				if m.reviewCursor < len(prs)-1 {
-					m.reviewCursor++
-				}
-				return m, nil
-			case "k", "up":
-				if m.reviewCursor > 0 {
-					m.reviewCursor--
-				}
-				return m, nil
 			case "enter":
-				prs := m.filteredReviewPRs()
-				if len(prs) == 0 || m.handler == nil {
+				// See bookmark mode for rationale: enter during filter
+				// commits the filter; second enter actually picks.
+				if filtering {
+					break
+				}
+				if m.handler == nil {
 					return m, nil
 				}
-				if m.reviewCursor < 0 || m.reviewCursor >= len(prs) {
+				it, ok := m.reviewList.SelectedItem().(reviewItem)
+				if !ok {
 					return m, nil
 				}
-				pr := prs[m.reviewCursor]
+				pr := it.pr
 				item, _ := m.selected()
 				m.reviewMode = false
-				m.reviewFilter = ""
-				m.filterInput.SetValue("")
+				resetReviewList(&m.reviewList)
 				var prCmd tea.Cmd
 				m, prCmd = m.forcePRStatusRefresh(item.RepoRoot)
 				updated, dispatchCmd := m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
 				return updated, batchCmds(prCmd, dispatchCmd)
+			case "esc", "ctrl+c":
+				if !filtering && m.reviewList.FilterState() != list.FilterApplied {
+					m.reviewMode = false
+					resetReviewList(&m.reviewList)
+					m.status = ""
+					return m, nil
+				}
+			case "q":
+				if !filtering {
+					m.reviewMode = false
+					resetReviewList(&m.reviewList)
+					m.status = ""
+					return m, nil
+				}
 			}
-			return m, nil
+			var cmd tea.Cmd
+			m.reviewList, cmd = m.reviewList.Update(msg)
+			return m, cmd
 		}
 		if m.findMode {
 			switch msg.String() {
@@ -1919,8 +2142,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.jobsOverlay {
 			return m.updateJobsOverlay(msg)
 		}
-		switch msg.String() {
-		case "?":
+		km := m.keymap
+		switch {
+		case key.Matches(msg, km.Help):
 			m.helpMode = true
 			// tea.ClearScreen on modal entry: the renderer's
 			// previous-frame buffer otherwise leaves stripes of the
@@ -1928,14 +2152,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// write. See doc.go and the matching pattern on `/`
 			// (filtering) + the new-workspace form.
 			return m, tea.ClearScreen
-		case "J":
+		case key.Matches(msg, km.Jobs):
 			m.jobsOverlay = true
-			m.jobsOverlayCursor = 0
+			m.jobsList.ResetSelected()
+			m.syncJobsListItems()
+			m.refreshJobsViewport()
 			// tea.ClearScreen on modal entry — same rationale as `?`
 			// above. Without this, the deck row list bleeds through
 			// the surrounding area of the jobs popover.
 			return m, tea.Batch(tea.ClearScreen, refreshJobsListCmd(m.jobsListRefresher))
-		case "q", "esc", "ctrl+c":
+		case key.Matches(msg, km.Quit):
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
 				m.filterInput.SetValue("")
@@ -1943,39 +2169,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
-		case "/":
+		case key.Matches(msg, km.Filter):
 			m.filtering = true
 			m.filterInput.Focus()
 			m.filterInput.SetValue(m.filter)
 			// tea.ClearScreen on modal entry; see doc.go and the
 			// matching tea.ClearScreen on exit above.
 			return m, tea.ClearScreen
-		case "f", "F":
+		case key.Matches(msg, km.Find):
 			if len(m.items()) == 0 {
 				return m, nil
 			}
 			m.startFind()
 			return m, nil
-		case "j", "down":
+		case key.Matches(msg, km.Down):
 			if m.cursor < len(m.items())-1 {
 				m.cursor++
 			}
 			return m, nil
-		case "P":
+		case key.Matches(msg, km.ScopeCycle):
 			m.scope = (m.scope + 1) % scopeCount
 			m.cursor = 0
 			m.status = "scope: " + scopeLabel(m.scope)
 			return m, tea.ClearScreen
-		case "k", "up":
+		case key.Matches(msg, km.Up):
 			if m.cursor > 0 {
 				m.cursor--
 			}
 			return m, nil
-		case "enter":
+		case key.Matches(msg, km.Enter):
 			return m.trigger(ActionSummon, "")
-		case "a":
+		case key.Matches(msg, km.AgentWindow):
 			return m.trigger(ActionOpenWindow, "agent")
-		case "A":
+		case key.Matches(msg, km.SendPrompt):
 			item, ok := m.selected()
 			if !ok {
 				m.status = "send prompt: select a workspace row"
@@ -1986,29 +2212,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.promptMode = true
-			m.promptForm = newPromptForm(item)
+			var initCmd tea.Cmd
+			m.promptForm, initCmd = newPromptForm(item)
 			m.status = "send prompt: type message · enter submit · ctrl+g $EDITOR · esc cancel"
 			// tea.ClearScreen on modal entry — same rationale as the
 			// other modals (see doc.go).
-			return m, tea.Batch(tea.ClearScreen, textinput.Blink)
-		case "e":
+			return m, batchCmds(initCmd, tea.ClearScreen)
+		case key.Matches(msg, km.EditorWindow):
 			return m.trigger(ActionOpenWindow, "editor")
-		case "c":
+		case key.Matches(msg, km.ReviewWindow):
 			return m.trigger(ActionOpenWindow, "review")
-		case "C":
+		case key.Matches(msg, km.ReviewMainWin):
 			return m.trigger(ActionOpenWindow, "review:tuicr -r main..@")
-		case "v":
+		case key.Matches(msg, km.VCSWindow):
 			return m.trigger(ActionOpenWindow, "vcs")
-		case "s":
+		case key.Matches(msg, km.ShellWindow):
 			return m.trigger(ActionOpenWindow, "")
-		case "i":
+		case key.Matches(msg, km.CIWindow):
 			return m.trigger(ActionCI, "")
-		case "L":
+		case key.Matches(msg, km.LastSession):
 			if m.handler == nil {
 				return m, nil
 			}
 			return m.startQuickAction(ActionLastSession, Item{}, "")
-		case "D":
+		case key.Matches(msg, km.Delete):
 			item, ok := m.selected()
 			if !ok {
 				return m, nil
@@ -2036,7 +2263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.deleteIsProject = false
 			m.status = fmt.Sprintf("delete %s? [y/N]", item.WorkspaceName)
 			return m, nil
-		case "R":
+		case key.Matches(msg, km.Rename):
 			item, ok := m.selected()
 			if !ok || strings.TrimSpace(item.WorkspaceName) == "" {
 				m.status = "rename: select a workspace row"
@@ -2047,17 +2274,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.renameMode = true
-			m.renameForm = newRenameWorkspaceForm(item)
+			var initCmd tea.Cmd
+			m.renameForm, initCmd = newRenameWorkspaceForm(item)
 			m.status = "rename: type new name · enter rename · esc cancel"
-			return m, textinput.Blink
-		case "B":
+			return m, batchCmds(initCmd, tea.ClearScreen)
+		case key.Matches(msg, km.LinkBookmark):
 			item, ok := m.selected()
 			if !ok {
 				m.status = "link: select a workspace row"
 				return m, nil
 			}
 			return m.startBookmarkLinker(item)
-		case "r":
+		case msg.String() == "r":
+			// "r" doubles as inline-review from a row. Not exposed on
+			// the keymap because the same key behaves differently in
+			// the new-menu modal (review picker from new-workspace
+			// flow); kept inline here to avoid making the central
+			// keymap context-aware.
 			if m.prFetcher == nil {
 				m.status = "review: not configured"
 				return m, nil
@@ -2069,12 +2302,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.reviewMode = true
 			m.reviewLoading = true
-			m.reviewPRs = nil
-			m.reviewCursor = 0
+			resetReviewList(&m.reviewList)
+			m.reviewList.SetShowStatusBar(false)
+			m.reviewList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading PRs..."}})
 			m.busy = true
-			m.status = "review: loading PRs..."
+			m.status = ""
 			return m, tea.Batch(m.spinner.Tick, m.prFetcher(item.RepoRoot))
-		case "n":
+		case key.Matches(msg, km.NewMenu):
 			item, ok := m.selected()
 			if !ok || strings.TrimSpace(item.RepoRoot) == "" {
 				m.status = "new: select a row with a known repo"
@@ -2092,27 +2326,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// occupied by stale row-list content. See doc.go for the
 			// "modal-state, full repaint on entry" pattern.
 			return m, tea.ClearScreen
-		case "o":
+		case key.Matches(msg, km.Open):
 			if m.projectFinder == nil {
 				m.status = "open: not configured (set deck.project_roots in config)"
 				return m, nil
 			}
 			m.openMode = true
 			m.openLoading = true
-			m.openProjects = nil
-			m.openCursor = 0
-			m.openFilter.SetValue("")
+			resetOpenList(&m.openList)
+			m.openList.SetShowStatusBar(false)
+			m.openList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " scanning project roots..."}})
 			m.busy = true
-			m.status = "open: scanning project roots..."
+			m.status = ""
 			return m, tea.Batch(m.spinner.Tick, m.projectFinder())
-		case ",":
+		case key.Matches(msg, km.EditState):
 			if m.stateEditor == nil {
 				m.status = "edit state: not configured"
 				return m, nil
 			}
 			m.status = "editing workspace-state.json..."
 			return m, m.stateEditor()
-		case "x":
+		case key.Matches(msg, km.UserActions):
 			item, ok := m.selected()
 			var repoRoot string
 			if ok {
@@ -2128,7 +2362,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionMode = true
 			m.status = m.actionModeStatus()
 			return m, nil
-		case "d":
+		case key.Matches(msg, km.OpenURL):
 			item, ok := m.selected()
 			if !ok {
 				return m, nil
@@ -2144,7 +2378,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "open: " + url
 			}
 			return m, nil
-		case "p":
+		case key.Matches(msg, km.PRMenu):
 			if _, ok := m.selected(); !ok {
 				return m, nil
 			}
@@ -2153,7 +2387,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	// Picker lists drive themselves with async commands — FilterMatchesMsg
+	// from the filter input, cursor.BlinkMsg from the filter cursor,
+	// statusMessageTimeoutMsg from status timers. The KeyMsg branches
+	// above route keys to the active picker; this fallthrough catches
+	// everything else so those internal messages reach the list and the
+	// filter actually applies as the user types.
+	if m.bookmarkMode {
+		var cmd tea.Cmd
+		m.bookmarkList, cmd = m.bookmarkList.Update(msg)
+		return m, cmd
+	}
+	if m.reviewMode {
+		var cmd tea.Cmd
+		m.reviewList, cmd = m.reviewList.Update(msg)
+		return m, cmd
+	}
+	if m.openMode {
+		var cmd tea.Cmd
+		m.openList, cmd = m.openList.Update(msg)
+		return m, cmd
+	}
 	return m, nil
+}
+
+// pickerShortHelp builds the short-help binding list rendered in the
+// deck footer when a picker (bookmark / review / open) is active. We
+// don't use list.Model.ShortHelp() directly because it surfaces "?
+// more" (toggles list's own full help — which we hide via
+// SetShowHelp(false)) and "q quit" (no-op for our pickers). Instead
+// we surface the actually-actionable bindings plus the deck's enter
+// pick / esc cancel conventions.
+func pickerShortHelp(l list.Model) []key.Binding {
+	bindings := []key.Binding{
+		l.KeyMap.CursorUp,
+		l.KeyMap.CursorDown,
+	}
+	if l.FilterState() == list.Filtering {
+		bindings = append(bindings,
+			l.KeyMap.AcceptWhileFiltering,
+			l.KeyMap.CancelWhileFiltering,
+		)
+	} else {
+		bindings = append(bindings, l.KeyMap.Filter)
+		if l.FilterState() == list.FilterApplied {
+			bindings = append(bindings, l.KeyMap.ClearFilter)
+		}
+		bindings = append(bindings,
+			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "pick")),
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		)
+	}
+	return bindings
 }
 
 // launchNewForm enters inline new-workspace-form mode. The form is a
@@ -2164,22 +2449,21 @@ func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) 
 	repo := m.newMenuRepo
 	m.newMenuMode = false
 	m.bookmarkMode = false
-	m.bookmarks = nil
-	m.bookmarkCursor = 0
-	m.bookmarkFilter.SetValue("")
+	resetBookmarkList(&m.bookmarkList)
 	if strings.TrimSpace(repo) == "" {
 		m.status = "new: select a row with a known repo"
 		return *m, nil
 	}
 	m.newWorkspaceMode = true
 	m.newWorkspaceRepo = repo
-	m.newWorkspaceForm = newNewWorkspaceForm(initial)
+	var initCmd tea.Cmd
+	m.newWorkspaceForm, initCmd = newNewWorkspaceForm(initial)
 	m.status = "new workspace..."
 	// tea.ClearScreen so the renderer drops its previous-frame buffer
 	// and the form's first paint overwrites every cell, including
 	// columns the deck row list (or the new-menu) wrote that the form
 	// doesn't. See doc.go.
-	return *m, tea.Batch(textinput.Blink, tea.ClearScreen)
+	return *m, tea.Batch(initCmd, tea.ClearScreen)
 }
 
 // dispatchRenameForm forwards a message to the rename form and acts on
@@ -2314,13 +2598,12 @@ func (m *Model) startBookmarkPicker() (tea.Model, tea.Cmd) {
 	m.bookmarkMode = true
 	m.bookmarkPurpose = bookmarkPurposeNewWorkspace
 	m.bookmarkLoading = true
-	m.bookmarks = nil
-	m.bookmarkCursor = 0
-	m.bookmarkFilter.Blur()
-	m.bookmarkFilter.SetValue("")
-	m.bookmarkFiltering = false
+	resetBookmarkList(&m.bookmarkList)
+	m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, m.bookmarkLinkTarget)
+	m.bookmarkList.SetShowStatusBar(false)
+	m.bookmarkList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading bookmarks..."}})
 	m.busy = true
-	m.status = "bookmark: loading..."
+	m.status = ""
 	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(m.newMenuRepo))
 }
 
@@ -2333,11 +2616,7 @@ func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
 	case bookmarkPurposeLinkExisting:
 		target := m.bookmarkLinkTarget
 		m.bookmarkMode = false
-		m.bookmarks = nil
-		m.bookmarkCursor = 0
-		m.bookmarkFilter.Blur()
-		m.bookmarkFilter.SetValue("")
-		m.bookmarkFiltering = false
+		resetBookmarkList(&m.bookmarkList)
 		m.bookmarkPurpose = bookmarkPurposeNewWorkspace
 		m.bookmarkLinkTarget = Item{}
 		if m.bookmarkLinkHandler == nil {
@@ -2410,13 +2689,12 @@ func (m *Model) startBookmarkLinker(target Item) (tea.Model, tea.Cmd) {
 	m.bookmarkPurpose = bookmarkPurposeLinkExisting
 	m.bookmarkLinkTarget = target
 	m.bookmarkLoading = true
-	m.bookmarks = nil
-	m.bookmarkCursor = 0
-	m.bookmarkFilter.Blur()
-	m.bookmarkFilter.SetValue("")
-	m.bookmarkFiltering = false
+	resetBookmarkList(&m.bookmarkList)
+	m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, m.bookmarkLinkTarget)
+	m.bookmarkList.SetShowStatusBar(false)
+	m.bookmarkList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading bookmarks..."}})
 	m.busy = true
-	m.status = "link: loading bookmarks..."
+	m.status = ""
 	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(target.RepoRoot))
 }
 
@@ -2433,39 +2711,12 @@ func (m *Model) startReviewFromMenu() (tea.Model, tea.Cmd) {
 	m.newMenuMode = false
 	m.reviewMode = true
 	m.reviewLoading = true
-	m.reviewPRs = nil
-	m.reviewCursor = 0
+	resetReviewList(&m.reviewList)
+	m.reviewList.SetShowStatusBar(false)
+	m.reviewList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading PRs..."}})
 	m.busy = true
-	m.status = "review: loading PRs..."
+	m.status = ""
 	return *m, tea.Batch(m.spinner.Tick, m.prFetcher(repo))
-}
-
-func (m Model) filteredBookmarks() []string {
-	q := strings.ToLower(strings.TrimSpace(m.bookmarkFilter.Value()))
-	if q == "" {
-		return append([]string(nil), m.bookmarks...)
-	}
-	out := make([]string, 0, len(m.bookmarks))
-	for _, b := range m.bookmarks {
-		if strings.Contains(strings.ToLower(b), q) {
-			out = append(out, b)
-		}
-	}
-	return out
-}
-
-func (m Model) filteredProjects() []ProjectItem {
-	q := strings.ToLower(strings.TrimSpace(m.openFilter.Value()))
-	if q == "" {
-		return append([]ProjectItem(nil), m.openProjects...)
-	}
-	out := make([]ProjectItem, 0, len(m.openProjects))
-	for _, p := range m.openProjects {
-		if fuzzyMatch(strings.ToLower(p.Name), q) || fuzzyMatch(strings.ToLower(p.Path), q) {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // fuzzyMatch returns true if every rune of needle appears in haystack in
@@ -2794,20 +3045,42 @@ func (m Model) View() string {
 		return m.promptForm.view(m.width, m.height)
 	}
 
-	leftWidth := max(32, m.width/2)
-	if leftWidth > m.width-24 {
-		leftWidth = m.width - 24
+	// 70/30 split with a 3-col gap between panes when the terminal is
+	// wide enough; right pane caps at a 28-col minimum so PR titles stay
+	// readable. Below `deckStackThreshold` cols the right pane is
+	// hidden entirely — the list renders full-width like the
+	// bookmark/review pickers do. Hiding (rather than stacking on top)
+	// keeps the deck row positions stable as the cursor moves over rows
+	// with different per-workspace detail heights.
+	narrow := m.deckStacked()
+	const gap = 3
+	var leftWidth, rightWidth int
+	if narrow {
+		leftWidth = m.width
+		rightWidth = 0
+	} else {
+		rightWidth = max(28, (m.width-gap)*30/100)
+		leftWidth = m.width - rightWidth - gap
+		if leftWidth < 32 {
+			// Pathological narrow case above the threshold — guarantee
+			// the list its min and let the right shrink.
+			leftWidth = 32
+			rightWidth = max(0, m.width-leftWidth-gap)
+		}
 	}
-	rightWidth := max(20, m.width-leftWidth-3)
 
 	var left, right string
 	switch {
 	case m.newMenuMode:
 		left = m.renderNewMenu(leftWidth)
-		right = m.renderNewMenuDetails(rightWidth)
+		if !narrow {
+			right = m.renderNewMenuDetails(rightWidth)
+		}
 	case m.openMode:
 		left = m.renderOpenList(leftWidth)
-		right = m.renderOpenDetails(rightWidth)
+		if !narrow {
+			right = m.renderOpenDetails(rightWidth)
+		}
 	case m.bookmarkMode:
 		// Full-width like the review picker. JoinHorizontal between a
 		// short loading-state left pane and a tall static right pane
@@ -2816,13 +3089,13 @@ func (m Model) View() string {
 		// don't clear residue). Single-column avoids the issue and
 		// gives the list more room.
 		left = m.renderBookmarkList(m.width)
-		right = ""
 	case m.reviewMode:
 		left = m.renderReviewList(m.width)
-		right = ""
 	default:
 		left = m.renderList(leftWidth)
-		right = m.renderDetails(rightWidth)
+		if !narrow {
+			right = m.renderDetails(rightWidth)
+		}
 	}
 	var body string
 	if right == "" {
@@ -2849,6 +3122,18 @@ func (m Model) View() string {
 		rightSeg = "/" + m.filterInput.View()
 	case m.findMode || m.actionMode:
 		rightSeg = dim.Render(m.status + " (esc cancel)")
+	// Picker modes hide their own bottom help bar (SetShowHelp(false))
+	// and surface the bindings here so they align on the same row as
+	// the deck's "? help" hint instead of floating mid-screen above
+	// the footer. pickerShortHelp drops the list's "? more" / "q quit"
+	// (neither does anything useful in our pickers) and adds the
+	// deck's enter pick / esc cancel conventions.
+	case m.reviewMode && !m.reviewLoading:
+		rightSeg = m.reviewList.Help.ShortHelpView(pickerShortHelp(m.reviewList))
+	case m.bookmarkMode && !m.bookmarkLoading:
+		rightSeg = m.bookmarkList.Help.ShortHelpView(pickerShortHelp(m.bookmarkList))
+	case m.openMode && !m.openLoading:
+		rightSeg = m.openList.Help.ShortHelpView(pickerShortHelp(m.openList))
 	case m.filter != "":
 		rightSeg = dim.Render(fmt.Sprintf("filter: %q · %s", m.filter, statusText))
 	default:
@@ -2862,7 +3147,16 @@ func (m Model) View() string {
 	// 1 col on each side, 1 row of padding top AND bottom so the status
 	// bar has the same breathing room above/below as the panels have
 	// around their content.
-	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, m.width-2)
+	// "? help" describes the deck row-mode help overlay. Suppress it on
+	// modal screens (pickers, menus, jobs overlay, find/action chords)
+	// since the overlay doesn't apply there — those screens surface
+	// their own actionable hints in rightSeg.
+	hint := "? help"
+	if m.newMenuMode || m.bookmarkMode || m.reviewMode || m.openMode ||
+		m.jobsOverlay || m.prMenuMode || m.findMode || m.actionMode {
+		hint = ""
+	}
+	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, hint, m.width-2)
 	footer = lipgloss.NewStyle().Padding(1, 1, 1, 1).Render(footer)
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
@@ -2870,10 +3164,13 @@ func (m Model) View() string {
 	if pad < 0 {
 		pad = 0
 	}
-	// Space-filled padding between body and footer. Each row is m.width
-	// spaces with no SGR, so it overwrites any leftover cells from a
-	// previous tall frame (modal collapse) while still inheriting the
-	// terminal's default bg.
+	// Padding between body and footer to pin the footer to the bottom
+	// of the alt-screen viewport. Under alt-screen the renderer paints
+	// every cell each frame, so we no longer need the space-fill to
+	// overwrite leftover cells from a previous tall frame — the bg-
+	// blending property of the inline-mode design is also moot.
+	// Keeping the rendering as plain spaces (no SGR) so it stays cheap
+	// and the alt-screen canvas's default bg shows through unpainted.
 	padBlock := ""
 	if pad > 0 {
 		blanks := make([]string, pad)
@@ -2898,129 +3195,194 @@ func (m Model) View() string {
 			m.renderHelp(m.width))
 	}
 	if m.jobsOverlay {
-		view = renderJobsOverlay(m.jobs, m.jobsOverlayCursor, m.width, m.height)
+		view = renderJobsOverlay(m.width, m.height, &m.jobsList, &m.jobsViewport, len(m.jobs) == 0)
 	}
 	return view
 }
 
 // updateJobsOverlay handles keypresses while the J overlay is active.
-// Closes on esc/J/q, navigates with j/k/arrows, dispatches c (cancel)
-// / x (dismiss) / o (open log) via the configured handlers.
+// Selection + scroll are owned by bubbles (jobsList and jobsViewport);
+// this function intercepts the overlay's close keys and job-action
+// shortcuts (c/x/r/o/y), then delegates the rest to the appropriate
+// bubble. Actions only fire when the list isn't actively filtering so
+// the letter keys can be typed into the filter input.
 func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "q", "J":
-		m.jobsOverlay = false
-		return m, nil
-	case "j", "down":
-		if m.jobsOverlayCursor < len(m.jobs)-1 {
-			m.jobsOverlayCursor++
-		}
-		return m, nil
-	case "k", "up":
-		if m.jobsOverlayCursor > 0 {
-			m.jobsOverlayCursor--
-		}
-		return m, nil
-	case "g":
-		m.jobsOverlayCursor = 0
-		return m, nil
-	case "G":
-		m.jobsOverlayCursor = len(m.jobs) - 1
-		if m.jobsOverlayCursor < 0 {
-			m.jobsOverlayCursor = 0
-		}
-		return m, nil
-	case "c":
-		if len(m.jobs) == 0 || m.jobCancelHandler == nil {
+	filtering := m.jobsList.FilterState() == list.Filtering
+	if !filtering {
+		switch msg.String() {
+		case "esc", "q", "J":
+			if m.jobsList.FilterState() == list.FilterApplied {
+				m.jobsList.ResetFilter()
+				return m, nil
+			}
+			m.jobsOverlay = false
+			return m, nil
+		case "g":
+			m.jobsList.Select(0)
+			m.refreshJobsViewport()
+			return m, nil
+		case "G":
+			if n := len(m.jobsList.Items()); n > 0 {
+				m.jobsList.Select(n - 1)
+				m.refreshJobsViewport()
+			}
+			return m, nil
+		case "c":
+			j, ok := m.selectedJob()
+			if !ok || m.jobCancelHandler == nil {
+				return m, nil
+			}
+			if j.Status.IsTerminal() {
+				m.status = "cancel: job already finished"
+				return m, nil
+			}
+			handler := m.jobCancelHandler
+			id := j.ID
+			return m, func() tea.Msg {
+				return JobActionDoneMsg{JobID: id, Kind: "cancel", Err: handler(id)}
+			}
+		case "x":
+			j, ok := m.selectedJob()
+			if !ok || m.jobDismissHandler == nil {
+				return m, nil
+			}
+			if !j.Status.IsTerminal() {
+				m.status = "dismiss: cancel a running job first"
+				return m, nil
+			}
+			handler := m.jobDismissHandler
+			id := j.ID
+			return m, func() tea.Msg {
+				return JobActionDoneMsg{JobID: id, Kind: "dismiss", Err: handler(id)}
+			}
+		case "r":
+			j, ok := m.selectedJob()
+			if !ok || m.jobRetryHandler == nil {
+				return m, nil
+			}
+			if !j.Status.IsTerminal() {
+				m.status = "retry: job is still running"
+				return m, nil
+			}
+			if j.Status == JobDone {
+				m.status = "retry: job already succeeded"
+				return m, nil
+			}
+			handler := m.jobRetryHandler
+			id := j.ID
+			return m, func() tea.Msg {
+				return JobActionDoneMsg{JobID: id, Kind: "retry", Err: handler(id)}
+			}
+		case "D":
+			// Delete-workspace-and-retry. Only meaningful for jobs whose
+			// ErrorKind tags them as recoverable via this affordance.
+			j, ok := m.selectedJob()
+			if !ok || m.jobDeleteWorkspaceRetry == nil {
+				return m, nil
+			}
+			if j.ErrorKind != "stale_workspace" {
+				m.status = "D: only applies to jobs failed with a stale workspace"
+				return m, nil
+			}
+			if strings.TrimSpace(j.ErrorWorkspace) == "" {
+				m.status = "D: job has no error workspace recorded"
+				return m, nil
+			}
+			handler := m.jobDeleteWorkspaceRetry
+			id := j.ID
+			return m, func() tea.Msg {
+				return JobActionDoneMsg{JobID: id, Kind: "delete-and-retry", Err: handler(id)}
+			}
+		case "o":
+			j, ok := m.selectedJob()
+			if !ok || m.jobLogOpener == nil {
+				return m, nil
+			}
+			return m, m.jobLogOpener(j.ID)
+		case "y":
+			j, ok := m.selectedJob()
+			if !ok {
+				return m, nil
+			}
+			text := jobDetailsForCopy(j)
+			if err := writeSystemClipboard(text); err != nil {
+				m.status = "copy: " + err.Error()
+			} else {
+				m.status = fmt.Sprintf("copied %d bytes to clipboard", len(text))
+			}
 			return m, nil
 		}
-		j := m.jobs[m.jobsOverlayCursor]
-		if j.Status.IsTerminal() {
-			m.status = "cancel: job already finished"
-			return m, nil
-		}
-		handler := m.jobCancelHandler
-		id := j.ID
-		return m, func() tea.Msg {
-			return JobActionDoneMsg{JobID: id, Kind: "cancel", Err: handler(id)}
-		}
-	case "x":
-		if len(m.jobs) == 0 || m.jobDismissHandler == nil {
-			return m, nil
-		}
-		j := m.jobs[m.jobsOverlayCursor]
-		if !j.Status.IsTerminal() {
-			m.status = "dismiss: cancel a running job first"
-			return m, nil
-		}
-		handler := m.jobDismissHandler
-		id := j.ID
-		return m, func() tea.Msg {
-			return JobActionDoneMsg{JobID: id, Kind: "dismiss", Err: handler(id)}
-		}
-	case "r":
-		if len(m.jobs) == 0 || m.jobRetryHandler == nil {
-			return m, nil
-		}
-		j := m.jobs[m.jobsOverlayCursor]
-		if !j.Status.IsTerminal() {
-			m.status = "retry: job is still running"
-			return m, nil
-		}
-		if j.Status == JobDone {
-			m.status = "retry: job already succeeded"
-			return m, nil
-		}
-		handler := m.jobRetryHandler
-		id := j.ID
-		return m, func() tea.Msg {
-			return JobActionDoneMsg{JobID: id, Kind: "retry", Err: handler(id)}
-		}
-	case "D":
-		// Delete-workspace-and-retry. Only meaningful for jobs whose
-		// ErrorKind tags them as recoverable via this affordance. The
-		// workspace we'd delete comes from ErrorWorkspace (the
-		// workspace the failure attached to) and NOT WorkspaceName
-		// (the row the user was on when dispatching the job) — those
-		// differ for review jobs and confusing them deletes the
-		// user's home row.
-		if len(m.jobs) == 0 || m.jobDeleteWorkspaceRetry == nil {
-			return m, nil
-		}
-		j := m.jobs[m.jobsOverlayCursor]
-		if j.ErrorKind != "stale_workspace" {
-			m.status = "D: only applies to jobs failed with a stale workspace"
-			return m, nil
-		}
-		if strings.TrimSpace(j.ErrorWorkspace) == "" {
-			m.status = "D: job has no error workspace recorded"
-			return m, nil
-		}
-		handler := m.jobDeleteWorkspaceRetry
-		id := j.ID
-		return m, func() tea.Msg {
-			return JobActionDoneMsg{JobID: id, Kind: "delete-and-retry", Err: handler(id)}
-		}
-	case "o":
-		if len(m.jobs) == 0 || m.jobLogOpener == nil {
-			return m, nil
-		}
-		j := m.jobs[m.jobsOverlayCursor]
-		return m, m.jobLogOpener(j.ID)
-	case "y":
-		if len(m.jobs) == 0 {
-			return m, nil
-		}
-		j := m.jobs[m.jobsOverlayCursor]
-		text := jobDetailsForCopy(j)
-		if err := writeSystemClipboard(text); err != nil {
-			m.status = "copy: " + err.Error()
-		} else {
-			m.status = fmt.Sprintf("copied %d bytes to clipboard", len(text))
-		}
-		return m, nil
+	} else if msg.String() == "esc" {
+		// While actively filtering, esc cancels the filter (list owns
+		// that) — never closes the overlay.
+		var cmd tea.Cmd
+		m.jobsList, cmd = m.jobsList.Update(msg)
+		m.refreshJobsViewport()
+		return m, cmd
 	}
-	return m, nil
+	// Route pgup/pgdn/ctrl+u/ctrl+d to the details viewport so the user
+	// can scroll the log without moving the list selection.
+	switch msg.String() {
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		var cmd tea.Cmd
+		m.jobsViewport, cmd = m.jobsViewport.Update(msg)
+		return m, cmd
+	}
+	priorIdx := m.jobsList.Index()
+	var cmd tea.Cmd
+	m.jobsList, cmd = m.jobsList.Update(msg)
+	if m.jobsList.Index() != priorIdx {
+		m.refreshJobsViewport()
+	}
+	return m, cmd
+}
+
+// selectedJob returns the currently highlighted Job and ok=true, or
+// ok=false when there are no items or the cast fails.
+func (m Model) selectedJob() (Job, bool) {
+	it, ok := m.jobsList.SelectedItem().(jobItem)
+	if !ok {
+		return Job{}, false
+	}
+	return it.job, true
+}
+
+// syncJobsListItems projects m.jobs into the bubbles/list items slice
+// while preserving the cursor on the same Job ID when possible. Called
+// from jobsListMsg (live refresh) and from the J open path.
+func (m *Model) syncJobsListItems() {
+	var selectedID string
+	if it, ok := m.jobsList.SelectedItem().(jobItem); ok {
+		selectedID = it.job.ID
+	}
+	items := make([]list.Item, 0, len(m.jobs))
+	keepIdx := -1
+	for i, j := range m.jobs {
+		items = append(items, jobItem{job: j})
+		if j.ID == selectedID {
+			keepIdx = i
+		}
+	}
+	m.jobsList.SetItems(items)
+	if keepIdx >= 0 {
+		m.jobsList.Select(keepIdx)
+	}
+}
+
+// refreshJobsViewport re-renders the details pane content from the
+// currently selected job. viewport.SetContent preserves YOffset when
+// the existing scroll position is still valid, so this is safe to call
+// on every Update tick.
+func (m *Model) refreshJobsViewport() {
+	width := m.jobsViewport.Width
+	if width <= 0 {
+		width = 40
+	}
+	if j, ok := m.selectedJob(); ok {
+		m.jobsViewport.SetContent(renderJobDetails(j, width))
+	} else {
+		m.jobsViewport.SetContent("")
+	}
 }
 
 func (m Model) renderHelp(width int) string {
@@ -3064,8 +3426,16 @@ func (m Model) renderHelp(width int) string {
 		strings.Join(prLines, "\n") + "\n\n" +
 		strings.Join(activityLines, "\n")
 
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	// Right block: key bindings rendered via bubbles/help. Each group
+	// from deckKeyGroups becomes a section with its own title; within
+	// the section the bindings flow through help.ShortHelpView so key
+	// + description styling stays consistent with every other place
+	// that uses charm.NewHelp().
+	helpModel := charm.NewHelp()
+	helpModel.ShowAll = true
+	helpModel.Styles.FullKey = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
+	helpModel.Styles.FullDesc = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	helpModel.Styles.FullSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	keyLines := []string{lipgloss.NewStyle().Bold(true).Render("Keys")}
 	for i, g := range deckKeyGroups() {
@@ -3073,9 +3443,18 @@ func (m Model) renderHelp(width int) string {
 			keyLines = append(keyLines, "")
 		}
 		keyLines = append(keyLines, headerStyle.Render(g.Title))
+		bindings := make([]key.Binding, 0, len(g.Keys))
 		for _, kr := range g.Keys {
-			keyLines = append(keyLines, fmt.Sprintf("  %s  %s", keyStyle.Width(8).Render(kr[0]), descStyle.Render(kr[1])))
+			bindings = append(bindings, key.NewBinding(
+				key.WithKeys(kr[0]),
+				key.WithHelp(kr[0], kr[1]),
+			))
 		}
+		// FullHelpView lays each binding on its own line. Passing a
+		// single column ([]key.Binding wrapped in [][]) keeps the
+		// previous "key   description" stacked layout.
+		section := helpModel.FullHelpView([][]key.Binding{bindings})
+		keyLines = append(keyLines, lipgloss.NewStyle().Padding(0, 0, 0, 2).Render(section))
 	}
 	rightBlock := strings.Join(keyLines, "\n")
 
@@ -3121,11 +3500,11 @@ func (m Model) renderHelp(width int) string {
 func (m Model) renderList(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("awp deck")
 	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("scope: " + scopeLabel(m.scope) + "  (P to cycle)")
-	rows := []string{title, subtitle, ""}
+	header := []string{title, subtitle, ""}
 	items := m.items()
 	if len(items) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
-		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
+		rows := append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
+		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(rows, "\n"))
 	}
 	projectHints, rowHints := m.findHints()
 	// Reserve a fixed-width prefix slot at all times so workspace rows
@@ -3135,26 +3514,44 @@ func (m Model) renderList(width int) string {
 	// with the status glyph that follows.
 	const prefixWidth = 4
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	// Build the scrollable region (project headers + workspace rows) and
+	// in parallel record which scrollable index belongs to each project
+	// header. We use this below to scroll cursor-into-view without
+	// stripping the project header off a row that needs it for context.
+	var body []string
+	// projectHeaderForRow[i] = scrollable index of the most recent
+	// project header at or before row i. -1 means "no header" (only true
+	// before any project header is emitted — shouldn't happen in practice
+	// since each project emits one before its first row).
+	projectHeaderForRow := make([]int, 0, len(items)*2)
+	cursorRow := -1
 	lastProject := ""
+	lastProjectHeaderIdx := -1
+	s := m.styles
 	for i, item := range items {
 		dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
 		if item.ProjectName != lastProject {
-			headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-			// Add a top margin between projects, but not above the very first one.
+			// Visually space projects with an explicit blank row entry
+			// (one slice element = one rendered line) rather than
+			// MarginTop on the header. MarginTop would make this entry
+			// a 2-line string, breaking the row-count-based scroll
+			// capacity math.
 			if lastProject != "" {
-				headerStyle = headerStyle.MarginTop(1)
+				body = append(body, "")
+				projectHeaderForRow = append(projectHeaderForRow, lastProjectHeaderIdx)
 			}
+			headerStyle := s.Muted
 			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
-				headerStyle = headerStyle.Bold(true).Foreground(lipgloss.Color(colAccent))
-			} else if dim {
-				headerStyle = headerStyle.Foreground(lipgloss.Color(colMuted))
+				headerStyle = s.Accent
 			}
 			hintStr := ""
 			if hint, ok := projectHints[item.ProjectName]; ok {
 				hintStr = renderFindHint(hint)
 			}
-			header := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), item.ProjectName)
-			rows = append(rows, headerStyle.Render(header))
+			headerLine := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), item.ProjectName)
+			body = append(body, headerStyle.Render(headerLine))
+			projectHeaderForRow = append(projectHeaderForRow, len(body)-1)
+			lastProjectHeaderIdx = len(body) - 1
 			lastProject = item.ProjectName
 		}
 		prefix := "  "
@@ -3168,10 +3565,10 @@ func (m Model) renderList(width int) string {
 		// highlighting past the dot.
 		labelStyle := lipgloss.NewStyle()
 		if i == m.cursor {
-			prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true).Render("┃") + " "
-			labelStyle = labelStyle.Foreground(lipgloss.Color(colWarning)).Bold(true)
+			prefix = s.Bar.Render("┃") + " "
+			labelStyle = s.Selected
 		} else if dim {
-			labelStyle = labelStyle.Foreground(lipgloss.Color(colMuted))
+			labelStyle = s.Muted
 		}
 		label := truncate(item.WorkspaceName, max(10, width-21))
 		// Status is canonical in JSON, so render the stored glyph
@@ -3190,9 +3587,228 @@ func (m Model) renderList(width int) string {
 		if staleGlyph != "" {
 			line += " " + staleGlyph
 		}
-		rows = append(rows, lipgloss.NewStyle().Width(width-2).Render(line))
+		body = append(body, lipgloss.NewStyle().Width(width-2).Render(line))
+		projectHeaderForRow = append(projectHeaderForRow, lastProjectHeaderIdx)
+		if i == m.cursor {
+			cursorRow = len(body) - 1
+		}
 	}
-	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
+
+	capacity := m.deckBodyCapacity()
+	yoff := m.deckYOffset
+	// Sticky project header: when the cursor's project header is
+	// scrolled above the viewport, pin it as a static line above the
+	// viewport's first visible row so the user always knows which
+	// project they're navigating in. clampDeckViewport has already
+	// adjusted yoff to account for the lost row.
+	var stickyHeader string
+	cursorHdr := -1
+	if cursorRow >= 0 && cursorRow < len(projectHeaderForRow) {
+		cursorHdr = projectHeaderForRow[cursorRow]
+	}
+	if cursorHdr >= 0 && cursorHdr < yoff {
+		stickyHeader = body[cursorHdr]
+		if capacity > 1 {
+			capacity--
+		}
+	}
+	m.deckViewport.Width = width - 2
+	m.deckViewport.Height = capacity
+	m.deckViewport.SetContent(strings.Join(body, "\n"))
+	m.deckViewport.SetYOffset(yoff)
+
+	out := make([]string, 0, len(header)+2)
+	out = append(out, header...)
+	if stickyHeader != "" {
+		out = append(out, stickyHeader)
+	}
+	out = append(out, m.deckViewport.View())
+	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(out, "\n"))
+}
+
+// deckStackThreshold is the minimum terminal width (cols) for the deck
+// to render in side-by-side layout. Below this the right details pane
+// is hidden entirely and the list renders full-width — varying
+// per-row right-pane height would otherwise make the list jump on
+// every cursor move.
+const deckStackThreshold = 90
+
+// deckStacked reports whether the deck is in the narrow-terminal
+// layout where the right pane is hidden and the list renders
+// full-width.
+func (m Model) deckStacked() bool {
+	return m.width > 0 && m.width < deckStackThreshold
+}
+
+// deckBodyCapacity returns the number of scrollable body rows the left
+// column can show given the terminal height. Subtracts the chrome the
+// caller renders around the body: title + subtitle + blank header
+// (3 lines), the panel's own Padding(2, 1, 1, 1) (3 lines = 2 top + 1
+// bottom), and the footer row + its Padding (3 lines). Each entry in
+// `body` is exactly 1 rendered line, so the math is precise without
+// slack. Falls back to a generous capacity when height is unknown so
+// tests and initial paints don't accidentally hide rows.
+func (m Model) deckBodyCapacity() int {
+	if m.height <= 0 {
+		return len(m.items()) * 2
+	}
+	const chrome = 3 + 3 + 3
+	rows := m.height - chrome
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// deckScrollOff is the number of rows kept visible above and below the
+// cursor before the viewport starts scrolling — vim's `scrolloff`. The
+// effect is a soft "deadzone" near the top and bottom edges: rather
+// than scrolling the instant the cursor reaches the edge, the viewport
+// follows the cursor as it enters a margin band, so the user always
+// has context rows ahead of where they're heading.
+const deckScrollOff = 3
+
+// clampDeckViewport keeps the deck row list's cursor in view by
+// adjusting deckYOffset. Uses a scrolloff-style margin (deckScrollOff)
+// rather than strict edge-triggering: the viewport follows the cursor
+// while it's within `deckScrollOff` rows of either edge, so there's
+// always a small look-ahead band of context.
+//
+// The actual viewport.YOffset is synced from deckYOffset in renderList
+// after SetContent loads the body so viewport's internal clamp doesn't
+// reset us against an empty content buffer. Accounts for the sticky
+// project-header line rendered ABOVE the viewport when the cursor's
+// project header has scrolled off — that reduces the visible window
+// by one row.
+func (m *Model) clampDeckViewport() {
+	items := m.items()
+	if len(items) == 0 || m.height <= 0 {
+		m.deckYOffset = 0
+		return
+	}
+	capacity := m.deckBodyCapacity()
+	total := deckBodyTotalRows(items)
+	if total <= capacity {
+		m.deckYOffset = 0
+		return
+	}
+	// Scrolloff can't claim more than half the window — otherwise the
+	// top and bottom margins overlap and the cursor's reserved
+	// position would lie outside the viewport.
+	scrolloff := deckScrollOff
+	if max := (capacity - 1) / 2; scrolloff > max {
+		scrolloff = max
+	}
+	if scrolloff < 0 {
+		scrolloff = 0
+	}
+	cursorRow := deckBodyCursorRow(items, m.cursor)
+	cursorHdr := deckBodyHeaderRowForCursor(items, m.cursor)
+	yoff := m.deckYOffset
+	// Top margin: scroll up so the cursor sits at least scrolloff rows
+	// below the top edge of the viewport.
+	if cursorRow-scrolloff < yoff {
+		yoff = cursorRow - scrolloff
+	}
+	// Bottom margin: scroll down so the cursor sits at least
+	// scrolloff rows above the bottom edge.
+	if cursorRow+scrolloff >= yoff+capacity {
+		yoff = cursorRow + scrolloff - capacity + 1
+	}
+	// Re-check with sticky-aware effective capacity. The sticky header
+	// shrinks the visible window by one row, so the bottom margin can
+	// push the cursor off; recompute with the shrunken capacity.
+	if cursorHdr >= 0 && cursorHdr < yoff {
+		effective := capacity - 1
+		if effective < 1 {
+			effective = 1
+		}
+		if cursorRow+scrolloff >= yoff+effective {
+			yoff = cursorRow + scrolloff - effective + 1
+		}
+	}
+	maxOffset := total - capacity
+	if cursorHdr >= 0 && cursorHdr < yoff {
+		// Sticky takes a row, so the effective window is one row
+		// smaller and yoff can correspondingly be one larger while
+		// still keeping the last body row reachable.
+		maxOffset = total - capacity + 1
+	}
+	if yoff > maxOffset {
+		yoff = maxOffset
+	}
+	if yoff < 0 {
+		yoff = 0
+	}
+	m.deckYOffset = yoff
+}
+
+// deckBodyCursorRow returns the body-row index of the workspace row
+// corresponding to items[cursor], mirroring renderList's body layout:
+// each project starts with a 1-line header, and every project after
+// the first is preceded by a 1-line blank spacer.
+func deckBodyCursorRow(items []Item, cursor int) int {
+	if cursor < 0 || cursor >= len(items) {
+		return 0
+	}
+	seen := map[string]bool{}
+	projects := 0
+	for i := 0; i <= cursor; i++ {
+		if !seen[items[i].ProjectName] {
+			seen[items[i].ProjectName] = true
+			projects++
+		}
+	}
+	// body layout: P headers + (P-1) spacers before cursor's row;
+	// cursor's row itself sits at index = cursor + headersBefore + spacers
+	// where headersBefore == projects and spacers == projects - 1.
+	return cursor + 2*projects - 1
+}
+
+// deckBodyHeaderRowForCursor returns the body-row index of the project
+// header for items[cursor], mirroring renderList's body layout. Returns
+// -1 when cursor is out of range. clampDeckViewport uses this to detect
+// when the cursor's project header has scrolled above the viewport so
+// renderList can pin it as a sticky line above the viewport.
+func deckBodyHeaderRowForCursor(items []Item, cursor int) int {
+	if cursor < 0 || cursor >= len(items) {
+		return -1
+	}
+	cursorProj := items[cursor].ProjectName
+	seen := map[string]bool{}
+	bodyRow := 0
+	for i := 0; i < len(items); i++ {
+		if !seen[items[i].ProjectName] {
+			seen[items[i].ProjectName] = true
+			if len(seen) > 1 {
+				bodyRow++ // spacer between projects
+			}
+			if items[i].ProjectName == cursorProj {
+				return bodyRow // header row for cursor's project
+			}
+			bodyRow++ // advance past header line
+		}
+		bodyRow++ // advance past item line
+	}
+	return -1
+}
+
+// deckBodyTotalRows returns the total number of body rows renderList
+// will produce for the given items slice (workspace rows + project
+// headers + inter-project spacers).
+func deckBodyTotalRows(items []Item) int {
+	if len(items) == 0 {
+		return 0
+	}
+	seen := map[string]bool{}
+	projects := 0
+	for _, it := range items {
+		if !seen[it.ProjectName] {
+			seen[it.ProjectName] = true
+			projects++
+		}
+	}
+	return len(items) + 2*projects - 1
 }
 
 // keyGroup is a labeled group of (key, description) rows shown in both the
@@ -3267,67 +3883,72 @@ func deckKeyGroups() []keyGroup {
 }
 
 func (m Model) renderDetails(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("details")
 	item, ok := m.selected()
 	if !ok {
-		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(title + "\n\nSelect a workspace.")
+		title := lipgloss.NewStyle().Bold(true).Render("details")
+		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(title + "\n\nSelect a workspace.")
 	}
-	prompt := item.PromptPreview
-	if strings.TrimSpace(prompt) == "" {
-		prompt = "No active prompt"
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true)
+	// Title: bold workspace name + muted dot + muted project name.
+	// Replaces the redundant Project / Workspace / Status / Live rows.
+	titleLine := lipgloss.NewStyle().Bold(true).Render(item.WorkspaceName)
+	if p := strings.TrimSpace(item.ProjectName); p != "" {
+		titleLine += muted.Render("  ·  " + p)
 	}
-	sess := item.SessionName
-	if strings.TrimSpace(sess) == "" {
-		sess = item.TmuxWindow
+	// Faint horizontal rule between section blocks. Sized to the panel's
+	// inner content width (panel padding eats 2 cols, leave 2 more for
+	// breathing room).
+	ruleWidth := width - 4
+	if ruleWidth < 4 {
+		ruleWidth = 4
 	}
-	if strings.TrimSpace(sess) == "" {
-		sess = "not linked"
+	rule := muted.Render(strings.Repeat("─", ruleWidth))
+	// Label column for PR / Head / Dev. Fixed-width muted prefix so the
+	// values line up cleanly, and a 6-col continuation indent for the
+	// PR title wrap.
+	const labelW = 6
+	labelSlot := lipgloss.NewStyle().Width(labelW).Foreground(lipgloss.Color(colMuted))
+	contIndent := strings.Repeat(" ", labelW)
+
+	lines := []string{titleLine, ""}
+	// Each section is appended only if it has content; the rule is the
+	// separator between adjacent non-empty sections, so we only emit it
+	// when prior content already exists.
+	hasContent := false
+	addSection := func(rows ...string) {
+		if hasContent {
+			lines = append(lines, rule)
+		}
+		lines = append(lines, rows...)
+		hasContent = true
 	}
-	active := "no"
-	if item.Active {
-		active = "yes"
-	}
-	lines := []string{
-		title,
-		"",
-		fmt.Sprintf("Project:   %s", item.ProjectName),
-		fmt.Sprintf("Workspace: %s", item.WorkspaceName),
-		fmt.Sprintf("Status:    %s", normalizeStatus(item.Status)),
-		fmt.Sprintf("Session:   %s", sess),
-		fmt.Sprintf("Live:      %s", active),
-		fmt.Sprintf("Path:      %s", item.Path),
+
+	var topRows []string
+	if pr, label, ok := m.prStatusLabelForItem(item); ok {
+		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(pr)))
+		topRows = append(topRows, fmt.Sprintf("%s#%d · %s", labelSlot.Render("PR"), pr.Number, statusStyle.Render(label)))
+		if t := strings.TrimSpace(pr.Title); t != "" {
+			topRows = append(topRows, contIndent+t)
+		}
 	}
 	if head := strings.TrimSpace(item.HeadDesc); head != "" {
-		lines = append(lines, fmt.Sprintf("Head:      %s", head))
+		topRows = append(topRows, labelSlot.Render("Head")+head)
 	}
 	if url := m.devURLs[item.SessionName]; url != "" {
-		linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Underline(true)
-		lines = append(lines, fmt.Sprintf("Dev:       %s", linkStyle.Render(url)))
+		linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colLink)).Underline(true)
+		topRows = append(topRows, labelSlot.Render("Dev")+linkStyle.Render(url))
 	}
-	bm := strings.TrimSpace(item.Bookmark)
-	if bm == "" {
-		hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("(none — press B to link)")
-		lines = append(lines, fmt.Sprintf("Bookmark:  %s", hint))
-	} else {
-		lines = append(lines, fmt.Sprintf("Bookmark:  %s", bm))
+	if len(topRows) > 0 {
+		addSection(topRows...)
 	}
-	if pr, label, ok := m.prStatusLabelForItem(item); ok {
-		colored := lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(pr))).Render(label)
-		titleSeg := ""
-		if t := strings.TrimSpace(pr.Title); t != "" {
-			titleSeg = "  " + t
-		}
-		lines = append(lines, fmt.Sprintf("PR:        #%d%s  %s", pr.Number, titleSeg, colored))
+	if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
+		addSection(accent.Render("Prompt"), truncatePrompt(prompt, width, 4))
 	}
-	lines = append(lines,
-		"",
-		"Prompt:",
-		truncatePrompt(prompt, width, 4),
-	)
 	if act := renderActivityBlock(m.jobs, item, width); act != "" {
-		lines = append(lines, "", act)
+		addSection(act)
 	}
-	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(lines, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(lines, "\n"))
 }
 
 // renderActivityBlock renders the per-workspace "Recent activity" list:
@@ -3456,7 +4077,7 @@ func (m Model) renderNewMenu(width int) string {
 		rows = append(rows, style.Render(fmt.Sprintf("%s%s%s", prefix, opt.label, quick)))
 		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(colMuted)).Render("   "+opt.hint))
 	}
-	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(rows, "\n"))
 }
 
 func (m Model) renderNewMenuDetails(width int) string {
@@ -3474,48 +4095,34 @@ func (m Model) renderNewMenuDetails(width int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
-func (m Model) renderOpenList(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("open: pick a project")
-	rows := []string{title, ""}
-	if m.openLoading {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("Scanning project roots..."))
-		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
+func (m *Model) renderOpenList(width int) string {
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
+	listWidth := width - 2
+	if listWidth < 8 {
+		listWidth = 8
 	}
-	rows = append(rows, "/"+m.openFilter.View(), "")
-	picks := m.filteredProjects()
-	if len(picks) == 0 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No projects match."))
-		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
+	listHeight := m.height - 5
+	if listHeight < 3 {
+		listHeight = 3
 	}
-	for i, p := range picks {
-		prefix := "  "
-		style := lipgloss.NewStyle().Width(width - 1)
-		if i == m.openCursor {
-			prefix = "┃ "
-			style = style.Foreground(lipgloss.Color(colWarning)).Bold(true)
-		}
-		label := truncate(p.Name, max(10, width-4))
-		rows = append(rows, style.Render(prefix+label))
-	}
-	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(rows, "\n"))
+	m.openList.SetSize(listWidth, listHeight)
+	return containerStyle.Render(m.openList.View())
 }
 
 func (m Model) renderOpenDetails(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("open")
-	picks := m.filteredProjects()
 	lines := []string{title, ""}
-	if m.openCursor >= 0 && m.openCursor < len(picks) {
-		p := picks[m.openCursor]
+	if it, ok := m.openList.SelectedItem().(projectItem); ok {
 		lines = append(lines,
-			"Selection: "+p.Name,
-			"Path:      "+p.Path,
+			"Selection: "+it.project.Name,
+			"Path:      "+it.project.Path,
 		)
 	} else {
 		lines = append(lines, "Pick a project to summon (or create) its default workspace.")
 	}
 	lines = append(lines, "",
 		"Keys:",
-		"type     fuzzy filter",
+		"/        fuzzy filter",
 		"↑/↓      navigate",
 		"enter    open",
 		"esc      cancel",
@@ -3523,259 +4130,40 @@ func (m Model) renderOpenDetails(width int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
-func (m Model) renderBookmarkList(width int) string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
-	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
-
-	titleText := "bookmark: pick one"
-	if m.bookmarkPurpose == bookmarkPurposeLinkExisting {
-		titleText = "link bookmark → " + m.bookmarkLinkTarget.WorkspaceName
+func (m *Model) renderBookmarkList(width int) string {
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
+	// Reserve 2 rows for container padding plus 3 for the deck's bottom
+	// footer (status line + 1 row top/bottom padding). list.Model handles
+	// its own title, status bar, paginator, and help footer inside the
+	// remaining space — and a single loadingItem during the fetch so
+	// the chrome's shape stays constant.
+	listWidth := width - 2
+	if listWidth < 8 {
+		listWidth = 8
 	}
-	header := titleStyle.Render(titleText)
-
-	if m.bookmarkLoading {
-		return containerStyle.Render(strings.Join([]string{
-			header,
-			subtitleStyle.Render(m.spinner.View() + " loading bookmarks..."),
-		}, "\n"))
+	listHeight := m.height - 5
+	if listHeight < 3 {
+		listHeight = 3
 	}
-
-	picks := m.filteredBookmarks()
-	filterValue := strings.TrimSpace(m.bookmarkFilter.Value())
-
-	// Persistent subtitle: a single row that morphs between live filter
-	// input, committed filter summary, and the default hint. Keeping it
-	// always present means the list rows below never jump vertically.
-	var subtitle string
-	switch {
-	case m.bookmarkFiltering:
-		subtitle = "/" + m.bookmarkFilter.View()
-	case filterValue != "":
-		subtitle = subtitleStyle.Render(fmt.Sprintf("filter: %q · %d/%d  (esc clears)", filterValue, len(picks), len(m.bookmarks)))
-	default:
-		subtitle = subtitleStyle.Render(fmt.Sprintf("%d bookmarks  ·  / filter · enter select · esc cancel", len(m.bookmarks)))
-	}
-
-	rows := []string{header, subtitle, ""}
-
-	if len(m.bookmarks) == 0 {
-		rows = append(rows, mutedStyle.Render("No bookmarks."))
-		return containerStyle.Render(strings.Join(rows, "\n"))
-	}
-	if len(picks) == 0 {
-		rows = append(rows, mutedStyle.Render("No bookmarks match."))
-		return containerStyle.Render(strings.Join(rows, "\n"))
-	}
-
-	// Bound the visible list to the terminal height. Rows we must reserve:
-	//   1 header, 1 subtitle, 1 blank gap, 1 "… X more" hint, plus 2 for
-	//   the deck's bottom status bar (job tray can take a row, plus the
-	//   status line). 6 is conservative — better to under-fill than to
-	//   push the search bar off the top of the screen when the list
-	//   exceeds the viewport.
-	reserved := 6
-	avail := m.height - reserved
-	if avail < 1 {
-		avail = 1
-	}
-	capacity := avail
-	if capacity > len(picks) {
-		capacity = len(picks)
-	}
-	if m.bookmarkCursor >= len(picks) {
-		m.bookmarkCursor = len(picks) - 1
-	}
-	if m.bookmarkCursor < 0 {
-		m.bookmarkCursor = 0
-	}
-	offset := 0
-	if m.bookmarkCursor >= capacity {
-		offset = m.bookmarkCursor - capacity + 1
-	}
-	if offset+capacity > len(picks) {
-		offset = len(picks) - capacity
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	for i := offset; i < offset+capacity; i++ {
-		name := picks[i]
-		prefix := "  "
-		style := lipgloss.NewStyle().Width(width - 1)
-		if i == m.bookmarkCursor {
-			prefix = "┃ "
-			style = style.Foreground(lipgloss.Color(colWarning)).Bold(true)
-		}
-		rows = append(rows, style.Render(prefix+truncate(name, max(8, width-4))))
-	}
-	if offset+capacity < len(picks) {
-		rows = append(rows, mutedStyle.Render(fmt.Sprintf("  … %d more", len(picks)-(offset+capacity))))
-	}
-	return containerStyle.Render(strings.Join(rows, "\n"))
+	m.bookmarkList.SetSize(listWidth, listHeight)
+	return containerStyle.Render(m.bookmarkList.View())
 }
 
-func (m Model) filteredReviewPRs() []PRItem {
-	f := strings.ToLower(strings.TrimSpace(m.reviewFilter))
-	if f == "" {
-		return m.reviewPRs
+func (m *Model) renderReviewList(width int) string {
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
+	listWidth := width - 2
+	if listWidth < 8 {
+		listWidth = 8
 	}
-	out := make([]PRItem, 0, len(m.reviewPRs))
-	for _, pr := range m.reviewPRs {
-		// Match only against fields the user actually sees in the row:
-		// PR number, title, and author. Including the branch caused PRs
-		// with the substring in their HeadRef to show up with no visible
-		// reason why.
-		hay := strings.ToLower(fmt.Sprintf("%d %s %s", pr.Number, pr.Title, pr.Author))
-		if strings.Contains(hay, f) {
-			out = append(out, pr)
-		}
+	listHeight := m.height - 5
+	if listHeight < 3 {
+		listHeight = 3
 	}
-	return out
+	m.reviewList.SetSize(listWidth, listHeight)
+	return containerStyle.Render(m.reviewList.View())
 }
 
-func (m Model) renderReviewList(width int) string {
-	titleStyle := lipgloss.NewStyle().Bold(true)
-	subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
-
-	header := titleStyle.Render("review: select PR")
-
-	if m.reviewLoading {
-		return containerStyle.Render(strings.Join([]string{
-			header,
-			subtitleStyle.Render(m.spinner.View() + " loading PRs..."),
-		}, "\n"))
-	}
-
-	prs := m.filteredReviewPRs()
-
-	var subtitle string
-	switch {
-	case m.reviewFiltering:
-		subtitle = "/" + m.filterInput.View()
-	case m.reviewFilter != "":
-		subtitle = subtitleStyle.Render(fmt.Sprintf("filter: %q · %d/%d  (esc clears)", m.reviewFilter, len(prs), len(m.reviewPRs)))
-	default:
-		subtitle = subtitleStyle.Render(fmt.Sprintf("%d open  ·  / filter · enter open · esc cancel", len(m.reviewPRs)))
-	}
-
-	rows := []string{header, subtitle, ""}
-
-	if len(m.reviewPRs) == 0 {
-		rows = append(rows, mutedStyle.Render("No open PRs."))
-		return containerStyle.Render(strings.Join(rows, "\n"))
-	}
-	if len(prs) == 0 {
-		rows = append(rows, mutedStyle.Render("No matching PRs."))
-		return containerStyle.Render(strings.Join(rows, "\n"))
-	}
-
-	// One row per PR. Reserve header + subtitle + blank + scroll hint.
-	reserved := 4
-	avail := m.height - reserved
-	if avail < 1 {
-		avail = 1
-	}
-	capacity := avail
-	if capacity > len(prs) {
-		capacity = len(prs)
-	}
-	if m.reviewCursor >= len(prs) {
-		m.reviewCursor = len(prs) - 1
-	}
-	if m.reviewCursor < 0 {
-		m.reviewCursor = 0
-	}
-	offset := 0
-	if m.reviewCursor >= capacity {
-		offset = m.reviewCursor - capacity + 1
-	}
-	if offset+capacity > len(prs) {
-		offset = len(prs) - capacity
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	// Right-align PR numbers within the widest number's width so titles align.
-	numW := 0
-	for _, pr := range m.reviewPRs {
-		if w := len(fmt.Sprintf("#%d", pr.Number)); w > numW {
-			numW = w
-		}
-	}
-
-	const prefixWidth = 2
-	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
-	numStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo))
-	numStyleSelected := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
-	draftStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning))
-	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess))
-	titleSelected := lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
-	titleNormal := lipgloss.NewStyle()
-	authorMutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-
-	for i := offset; i < offset+capacity; i++ {
-		pr := prs[i]
-		selected := i == m.reviewCursor
-
-		prefix := "  "
-		if selected {
-			prefix = "┃ "
-		}
-
-		numText := fmt.Sprintf("%*s", numW, fmt.Sprintf("#%d", pr.Number))
-		var numRendered string
-		if selected {
-			numRendered = numStyleSelected.Render(numText)
-		} else {
-			numRendered = numStyle.Render(numText)
-		}
-
-		author := "@" + pr.Author
-		if selected {
-			author = authorStyle.Render(author)
-		} else {
-			author = authorMutedStyle.Render(author)
-		}
-
-		draft := ""
-		if pr.IsDraft {
-			draft = " " + draftStyle.Render("draft")
-		}
-
-		// width = prefix + num + space + title + space + author + draft
-		fixed := prefixWidth + numW + 1 + 1 + lipgloss.Width("@"+pr.Author) + lipgloss.Width(draft)
-		titleRoom := width - 1 - fixed
-		if titleRoom < 10 {
-			titleRoom = 10
-		}
-		titleText := truncate(pr.Title, titleRoom)
-		var titleRendered string
-		if selected {
-			titleRendered = titleSelected.Render(titleText)
-		} else {
-			titleRendered = titleNormal.Render(titleText)
-		}
-
-		line := fmt.Sprintf("%s%s  %s  %s%s",
-			prefixSlot.Render(prefix), numRendered, titleRendered, author, draft)
-		rows = append(rows, line)
-	}
-
-	if len(prs) > capacity {
-		hint := fmt.Sprintf("  %d–%d of %d", offset+1, offset+capacity, len(prs))
-		rows = append(rows, mutedStyle.Render(hint))
-	}
-
-	return containerStyle.Render(strings.Join(rows, "\n"))
-}
-
-func (m Model) renderProgress(width int) string {
+func (m *Model) renderProgress(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render(m.progressTitle)
 	rows := []string{title, ""}
 	if len(m.progressSteps) == 0 {
@@ -3785,13 +4173,13 @@ func (m Model) renderProgress(width int) string {
 		var glyph, color string
 		switch step.State {
 		case StepDone:
-			glyph, color = "✓", "82"
+			glyph, color = "✓", colSuccess
 		case StepError:
-			glyph, color = "✗", "203"
+			glyph, color = "✗", colDanger
 		case StepRunning:
-			glyph, color = m.spinner.View(), "117"
+			glyph, color = m.spinner.View(), colInfo
 		default:
-			glyph, color = "○", "245"
+			glyph, color = "○", colMuted
 		}
 		line := fmt.Sprintf("%s %s", lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(glyph), step.Label)
 		rows = append(rows, line)
@@ -3803,15 +4191,19 @@ func (m Model) renderProgress(width int) string {
 	if len(m.progressLog) > 0 {
 		rows = append(rows, "")
 		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Bold(true).Render("log"))
-		tail := m.progressLog
-		maxLines := max(4, m.height-len(m.progressSteps)-10)
-		if maxLines > 0 && len(tail) > maxLines {
-			tail = tail[len(tail)-maxLines:]
+		// Reserve rows already accounted for above + 4 for the modal
+		// footer / status line. Whatever's left of the height is the
+		// log viewport's vertical space; the user pages through with
+		// pgup/pgdn/ctrl+u/ctrl+d if the log overflows.
+		logHeight := m.height - len(rows) - 4
+		if logHeight < 4 {
+			logHeight = 4
 		}
-		logStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(width)
-		for _, line := range tail {
-			rows = append(rows, logStyle.Render(truncate(line, max(8, width-2))))
-		}
+		m.progressViewport.Width = width - 2
+		m.progressViewport.Height = logHeight
+		m.progressViewport.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+		m.progressViewport.SetContent(strings.Join(m.progressLog, "\n"))
+		rows = append(rows, m.progressViewport.View())
 	}
 	return lipgloss.NewStyle().Width(width).Padding(1, 2).Render(strings.Join(rows, "\n"))
 }
@@ -3945,42 +4337,22 @@ func (m *Model) cancelFind(status string) {
 }
 
 func (m Model) handleFindRune(r rune) (tea.Model, tea.Cmd) {
-	if m.findPendingPrefix != 0 {
-		hint := string(m.findPendingPrefix) + string(r)
-		m.findPendingPrefix = 0
-		if m.findStage == findStageProject {
-			project, ok := m.findProjectLookup[hint]
-			if !ok {
-				m.status = stageStatus(m.findStage)
-				return m, nil
-			}
-			return m.enterWorkspaceStage(project), nil
-		}
-		idx, ok := m.findRowLookup[hint]
-		if !ok {
-			m.status = stageStatus(m.findStage)
-			return m, nil
-		}
-		m.cursor = idx
-		m.cancelFind("")
-		if item, ok := m.selected(); ok {
-			m.status = "find: " + item.WorkspaceName
-		}
-		return m, nil
-	}
-
-	hint := string(r)
+	hadPending := m.findPendingPrefix != 0
 	if m.findStage == findStageProject {
-		if project, ok := m.findProjectLookup[hint]; ok {
+		project, ok := findHintStep(r, m.findProjectLookup, m.findProjectPrefix, &m.findPendingPrefix)
+		if ok {
 			return m.enterWorkspaceStage(project), nil
 		}
-		if m.findProjectPrefix[r] {
-			m.findPendingPrefix = r
-			m.status = fmt.Sprintf("find: project %c…", r)
+		switch {
+		case hadPending:
+			m.status = stageStatus(m.findStage)
+		case m.findPendingPrefix != 0:
+			m.status = fmt.Sprintf("find: project %c…", m.findPendingPrefix)
 		}
 		return m, nil
 	}
-	if idx, ok := m.findRowLookup[hint]; ok {
+	idx, ok := findHintStep(r, m.findRowLookup, m.findRowPrefix, &m.findPendingPrefix)
+	if ok {
 		m.cursor = idx
 		m.cancelFind("")
 		if item, ok := m.selected(); ok {
@@ -3988,9 +4360,11 @@ func (m Model) handleFindRune(r rune) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.findRowPrefix[r] {
-		m.findPendingPrefix = r
-		m.status = fmt.Sprintf("find: workspace %c…", r)
+	switch {
+	case hadPending:
+		m.status = stageStatus(m.findStage)
+	case m.findPendingPrefix != 0:
+		m.status = fmt.Sprintf("find: workspace %c…", m.findPendingPrefix)
 	}
 	return m, nil
 }
@@ -4618,20 +4992,38 @@ func statusColor(status string, dim bool, unread bool) string {
 	}
 }
 
-func normalizeStatus(status string) string {
-	s := strings.TrimSpace(strings.ToLower(status))
-	if s == "" {
-		return "idle"
-	}
-	s = strings.ReplaceAll(s, "_", " ")
-	return s
-}
-
 func renderFindHint(hint string) string {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(colWarning)).
 		Render("[" + hint + "]")
+}
+
+// findHintStep advances one keystroke through an easymotion lookup
+// table. It returns (destination, true) when r — or the previously
+// pending prefix combined with r — completes a known hint, and
+// otherwise sets *pending when r is a registered first-of-two-key
+// prefix. Shared between every easymotion surface (mini-deck flat,
+// deck's project stage, deck's workspace stage) so the runtime
+// behavior can't drift across them.
+func findHintStep[T any](r rune, lookup map[string]T, prefix map[rune]bool, pending *rune) (T, bool) {
+	var zero T
+	if *pending != 0 {
+		hint := string(*pending) + string(r)
+		*pending = 0
+		v, ok := lookup[hint]
+		if !ok {
+			return zero, false
+		}
+		return v, true
+	}
+	if v, ok := lookup[string(r)]; ok {
+		return v, true
+	}
+	if prefix[r] {
+		*pending = r
+	}
+	return zero, false
 }
 
 // truncatePrompt wraps prompt to width and keeps the first maxLines lines,

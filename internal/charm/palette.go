@@ -20,4 +20,9 @@ const (
 	Strong   = "15" // bright white — emphasized text
 	Muted    = "8"  // bright black — hints, footer, dim labels
 	BgPanel  = "0"  // surface — chip backgrounds (use sparingly)
+
+	// Link is rendered identically to Info today but exists as a
+	// distinct semantic token so a future theme tweak can recolor
+	// underlined hyperlinks without disturbing PR numbers.
+	Link = Info
 )
