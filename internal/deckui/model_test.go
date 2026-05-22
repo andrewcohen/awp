@@ -594,6 +594,106 @@ func TestRenameFormRejectsEmptyAndUnchangedNames(t *testing.T) {
 	}
 }
 
+func TestSendPromptKeyOpensModalOnWorkspaceRow(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m := updated.(Model)
+	if !m.promptMode {
+		t.Fatal("expected prompt modal to open")
+	}
+	if got := m.promptForm.target.WorkspaceName; got != "qa" {
+		t.Fatalf("expected form target to be selected row, got %q", got)
+	}
+	if got := m.promptForm.target.ProjectName; got != "agent-deck" {
+		t.Fatalf("expected form target project, got %q", got)
+	}
+}
+
+func TestSendPromptViewIncludesTarget(t *testing.T) {
+	form := newPromptForm(Item{ProjectName: "agent-deck", WorkspaceName: "qa"})
+	out := form.view(120, 30)
+	if !strings.Contains(out, "agent-deck") {
+		t.Fatalf("view should show project name: %q", out)
+	}
+	if !strings.Contains(out, "qa") {
+		t.Fatalf("view should show workspace name: %q", out)
+	}
+}
+
+func TestSendPromptFormSubmitInvokesHandler(t *testing.T) {
+	var gotAction Action
+	var gotArg string
+	var gotItem Item
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, func(req ActionRequest) error {
+		gotAction = req.Action
+		gotArg = req.Arg
+		gotItem = req.Item
+		return nil
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m := updated.(Model)
+	m.promptForm.promptInput.SetValue("refactor the foo")
+
+	updated, cmd := m.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.promptMode {
+		t.Fatal("submit should leave prompt mode")
+	}
+	if cmd == nil {
+		t.Fatal("expected dispatch cmd from submit")
+	}
+	if msg := cmd(); msg != nil {
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				if sub != nil {
+					_ = sub()
+				}
+			}
+		}
+	}
+	if gotAction != ActionSendPrompt {
+		t.Fatalf("expected ActionSendPrompt, got %v", gotAction)
+	}
+	if gotArg != "refactor the foo" {
+		t.Fatalf("expected prompt arg, got %q", gotArg)
+	}
+	if gotItem.WorkspaceName != "qa" {
+		t.Fatalf("expected handler to receive selected item, got %q", gotItem.WorkspaceName)
+	}
+}
+
+func TestSendPromptFormRejectsEmpty(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, func(req ActionRequest) error {
+		t.Fatalf("handler should not be invoked, got action %v", req.Action)
+		return nil
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m := updated.(Model)
+	updated, _ = m.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.promptMode {
+		t.Fatal("empty submit should keep prompt modal open")
+	}
+	if m.promptForm.err == "" {
+		t.Fatal("expected validation error for empty prompt")
+	}
+}
+
+func TestSendPromptFormCancelClearsState(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	m := updated.(Model)
+
+	updated, _ = m.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.promptMode {
+		t.Fatal("esc should leave prompt mode")
+	}
+	if m.status != "" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
 func TestComposeStatusBarIncludesHelpHint(t *testing.T) {
 	bar := composeStatusBar(nil, "⠼", "ready", 80)
 	if !contains(bar, "? help") {

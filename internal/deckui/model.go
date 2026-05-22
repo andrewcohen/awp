@@ -65,6 +65,12 @@ const (
 	ActionCustom
 	ActionCreateWorkspace
 	ActionRename
+	// ActionSendPrompt dispatches the prompt in Arg to the workspace's
+	// agent. The handler is responsible for ensuring the session/agent
+	// window exists — if the agent isn't running yet it should start
+	// the agent with the prompt; if it is, it should paste the prompt
+	// as a user message.
+	ActionSendPrompt
 )
 
 type UserAction struct {
@@ -479,6 +485,12 @@ type Model struct {
 	// new-workspace form.
 	renameMode bool
 	renameForm renameWorkspaceForm
+
+	// Send-prompt form: A on a workspace row opens a modal that lets
+	// the user type a prompt and dispatch it to the workspace's agent.
+	// Same modal-state-inside-Model pattern as the rename form.
+	promptMode bool
+	promptForm promptForm
 
 	// activities is the ordered list of in-flight background
 	// operations rendered in the bottom status bar. See activity.go.
@@ -1094,13 +1106,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.action == ActionRename {
 			m, renameExpireCmd = m.finishActivity("workspace:rename:" + msg.item.WorkspaceName)
 		}
+		var promptExpireCmd tea.Cmd
+		if msg.action == ActionSendPrompt {
+			m, promptExpireCmd = m.finishActivity("workspace:prompt:" + msg.item.WorkspaceName)
+		}
 		if msg.err != nil {
 			m.progressErr = msg.err
 			if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
 				m.progressSteps[n-1].State = StepError
 			}
 			m.status = "error: " + msg.err.Error()
-			return m, renameExpireCmd
+			return m, batchCmds(renameExpireCmd, promptExpireCmd)
 		}
 		if n := len(m.progressSteps); n > 0 && m.progressSteps[n-1].State == StepRunning {
 			m.progressSteps[n-1].State = StepDone
@@ -1120,6 +1136,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, batchCmds(renameExpireCmd, m.refresher())
 			}
 			return m, renameExpireCmd
+		}
+		if msg.action == ActionSendPrompt {
+			m.status = fmt.Sprintf("sent prompt → %s/%s", msg.item.ProjectName, msg.item.WorkspaceName)
+			return m, promptExpireCmd
 		}
 		return m, tea.Quit
 	case StateEditDoneMsg:
@@ -1271,6 +1291,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.renameMode {
 			return m.dispatchRenameForm(msg)
+		}
+		if m.promptMode {
+			return m.dispatchPromptForm(msg)
 		}
 		if m.confirmDelete {
 			if m.deleteIsProject {
@@ -1786,6 +1809,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.trigger(ActionSummon, "")
 		case "a":
 			return m.trigger(ActionOpenWindow, "agent")
+		case "A":
+			item, ok := m.selected()
+			if !ok {
+				m.status = "send prompt: select a workspace row"
+				return m, nil
+			}
+			if strings.TrimSpace(item.WorkspaceName) == "" {
+				m.status = "send prompt: select a workspace row"
+				return m, nil
+			}
+			m.promptMode = true
+			m.promptForm = newPromptForm(item)
+			m.status = "send prompt: type message · enter submit · ctrl+g $EDITOR · esc cancel"
+			// tea.ClearScreen on modal entry — same rationale as the
+			// other modals (see doc.go).
+			return m, tea.Batch(tea.ClearScreen, textinput.Blink)
 		case "e":
 			return m.trigger(ActionOpenWindow, "editor")
 		case "c":
@@ -2006,6 +2045,42 @@ func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		dispatch := func() tea.Msg {
 			err := handler(ActionRequest{Item: target, Action: ActionRename, Arg: newName, Reporter: noopActionReporter{}})
 			return actionResultMsg{action: ActionRename, arg: newName, item: target, err: err}
+		}
+		return m, batchCmds(cmd, tea.ClearScreen, m.spinner.Tick, dispatch)
+	}
+	return m, cmd
+}
+
+// dispatchPromptForm forwards a message to the prompt form. Submit
+// fires ActionSendPrompt through the handler (synchronously, via the
+// quick-action path) so the agent receives the typed prompt; cancel
+// closes the form. Mirrors dispatchRenameForm.
+func (m Model) dispatchPromptForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	form, cmd, action := m.promptForm.update(msg)
+	m.promptForm = form
+	switch action {
+	case promptFormActionCancel:
+		m.promptMode = false
+		m.promptForm = promptForm{}
+		m.status = ""
+		return m, batchCmds(cmd, tea.ClearScreen)
+	case promptFormActionSubmit:
+		target := form.target
+		prompt := form.value()
+		m.promptMode = false
+		m.promptForm = promptForm{}
+		if m.handler == nil {
+			m.status = "send prompt: handler not configured"
+			return m, batchCmds(cmd, tea.ClearScreen)
+		}
+		m.busy = true
+		m.status = fmt.Sprintf("sending prompt to %s/%s...", target.ProjectName, target.WorkspaceName)
+		actID := "workspace:prompt:" + target.WorkspaceName
+		m = m.startActivity(actID, actID, 0)
+		handler := m.handler
+		dispatch := func() tea.Msg {
+			err := handler(ActionRequest{Item: target, Action: ActionSendPrompt, Arg: prompt, Reporter: noopActionReporter{}})
+			return actionResultMsg{action: ActionSendPrompt, arg: prompt, item: target, err: err}
 		}
 		return m, batchCmds(cmd, tea.ClearScreen, m.spinner.Tick, dispatch)
 	}
@@ -2508,6 +2583,8 @@ func actionLabel(a Action, arg string) string {
 		return "create"
 	case ActionRename:
 		return "rename"
+	case ActionSendPrompt:
+		return "send prompt"
 	}
 	return "action"
 }
@@ -2546,6 +2623,9 @@ func (m Model) View() string {
 	}
 	if m.renameMode {
 		return m.renameForm.view(m.width, m.height)
+	}
+	if m.promptMode {
+		return m.promptForm.view(m.width, m.height)
 	}
 
 	leftWidth := max(32, m.width/2)
@@ -2977,6 +3057,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Windows",
 			Keys: [][2]string{
 				{"a", "agent window (re-attach without re-prompting)"},
+				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
 				{"c / C", "review window: tuicr -r @  /  tuicr -r main..@"},
 				{"v", "vcs window (jjui)"},
