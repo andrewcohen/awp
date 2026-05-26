@@ -42,6 +42,7 @@ type Item struct {
 	Path          string
 	RepoRoot      string
 	Bookmark      string // jj bookmark associated with this workspace (matches PR headRefName)
+	PROverride    int    // pinned PR number; when > 0, supersedes Bookmark for PR-status lookup
 	Status        string
 	Unread        bool
 	PromptPreview string
@@ -197,6 +198,12 @@ const (
 // not by workspace, so changing the workspace's bookmark is a local lookup).
 type BookmarkLinkHandler func(item Item, bookmark string) error
 
+// PRNumberLinkHandler is called when the user pins (or clears) a PR
+// number override via the `p s` chord. prNumber == 0 clears the
+// override; positive values pin the workspace to that PR number,
+// overriding bookmark-based PR-status resolution.
+type PRNumberLinkHandler func(item Item, prNumber int) error
+
 // BookmarksDoneMsg carries the result of an async bookmark fetch.
 type BookmarksDoneMsg struct {
 	Bookmarks []string
@@ -330,6 +337,7 @@ const (
 type PRStatus struct {
 	Number           int
 	HeadRefName      string
+	Title            string
 	URL              string
 	State            PRState
 	IsDraft          bool
@@ -425,6 +433,13 @@ type Model struct {
 	newMenuCursor      int
 	newMenuRepo        string
 	prMenuMode         bool
+	// prNumberSetMode is true while the `p s` chord's numeric input
+	// modal is open. prNumberInput / prNumberTarget back the modal.
+	prNumberSetMode     bool
+	prNumberInput       textinput.Model
+	prNumberTarget      Item
+	prNumberErr         string
+	prNumberLinkHandler PRNumberLinkHandler
 	bookmarkMode       bool
 	bookmarkLoading    bool
 	bookmarks          []string
@@ -626,6 +641,13 @@ func (m Model) WithBookmarkFetcher(f BookmarkFetcher) Model {
 // bookmark linker. Without it, the linker shows a "not configured" status.
 func (m Model) WithBookmarkLinkHandler(h BookmarkLinkHandler) Model {
 	m.bookmarkLinkHandler = h
+	return m
+}
+
+// WithPRNumberLinkHandler installs the persistence callback used by the
+// `p s` chord. Without it, the chord shows a "not configured" status.
+func (m Model) WithPRNumberLinkHandler(h PRNumberLinkHandler) Model {
+	m.prNumberLinkHandler = h
 	return m
 }
 
@@ -926,7 +948,7 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.findMode && !m.actionMode &&
 		!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
 		!m.openMode && !m.helpMode && !m.newWorkspaceMode &&
-		!m.prMenuMode
+		!m.prMenuMode && !m.prNumberSetMode
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1381,6 +1403,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		}
+		if m.prNumberSetMode {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.prNumberSetMode = false
+				m.prNumberInput.Blur()
+				m.prNumberInput.SetValue("")
+				m.prNumberErr = ""
+				m.status = ""
+				return m, tea.ClearScreen
+			case "enter":
+				typed := strings.TrimSpace(m.prNumberInput.Value())
+				prNumber := 0
+				if typed != "" {
+					n, err := strconv.Atoi(typed)
+					if err != nil || n < 0 {
+						m.prNumberErr = "enter a non-negative integer (or blank to clear)"
+						return m, nil
+					}
+					prNumber = n
+				}
+				if m.prNumberLinkHandler == nil {
+					m.prNumberSetMode = false
+					m.prNumberInput.Blur()
+					m.prNumberInput.SetValue("")
+					m.status = "pr: set PR # handler not configured"
+					return m, tea.ClearScreen
+				}
+				target := m.prNumberTarget
+				if err := m.prNumberLinkHandler(target, prNumber); err != nil {
+					m.prNumberErr = err.Error()
+					return m, nil
+				}
+				m.prNumberSetMode = false
+				m.prNumberInput.Blur()
+				m.prNumberInput.SetValue("")
+				m.prNumberErr = ""
+				if prNumber == 0 {
+					m.status = fmt.Sprintf("pr: cleared PR # override on %s/%s", target.ProjectName, target.WorkspaceName)
+				} else {
+					m.status = fmt.Sprintf("pr: pinned %s/%s → PR #%d", target.ProjectName, target.WorkspaceName, prNumber)
+				}
+				// Force a PR-status refetch alongside the row refresh:
+				// the override may point at a PR not in the cache yet
+				// (cold start, stale cache, or the PR appeared after the
+				// last gh poll). Bypassing the 60s throttle ensures the
+				// pinned PR's status shows up on the next paint instead
+				// of waiting up to a minute.
+				var prCmd tea.Cmd
+				m, prCmd = m.forcePRStatusRefresh(target.RepoRoot)
+				if m.refresher != nil {
+					m.refreshing = true
+					m = m.startActivity("enrich", "enrich", 0)
+					return m, batchCmds(tea.ClearScreen, m.refresher(), prCmd)
+				}
+				return m, batchCmds(tea.ClearScreen, prCmd)
+			}
+			var cmd tea.Cmd
+			m.prNumberInput, cmd = m.prNumberInput.Update(msg)
+			m.prNumberErr = ""
+			return m, cmd
+		}
 		if m.prMenuMode {
 			switch msg.String() {
 			case "esc", "q", "ctrl+c":
@@ -1409,6 +1492,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "pr: opened " + url
 				}
 				return m, nil
+			case "r":
+				m.prMenuMode = false
+				item, ok := m.selected()
+				if !ok {
+					return m, nil
+				}
+				status, label, ok := m.prStatusLabelForItem(item)
+				if !ok {
+					m.status = "pr: no PR for this workspace"
+					return m, nil
+				}
+				prompt := prRepairPrompt(status)
+				if prompt == "" {
+					m.status = "pr: nothing to repair (" + label + ")"
+					return m, nil
+				}
+				if m.handler == nil {
+					m.status = "pr: send-prompt handler not configured"
+					return m, nil
+				}
+				m.busy = true
+				m.status = fmt.Sprintf("repair PR #%d → %s/%s...", status.Number, item.ProjectName, item.WorkspaceName)
+				actID := "workspace:prompt:" + item.WorkspaceName
+				m = m.startActivity(actID, actID, 0)
+				handler := m.handler
+				target := item
+				dispatch := func() tea.Msg {
+					err := handler(ActionRequest{Item: target, Action: ActionSendPrompt, Arg: prompt, Reporter: noopActionReporter{}})
+					return actionResultMsg{action: ActionSendPrompt, arg: prompt, item: target, err: err}
+				}
+				return m, batchCmds(tea.ClearScreen, m.spinner.Tick, dispatch)
+			case "s":
+				m.prMenuMode = false
+				item, ok := m.selected()
+				if !ok || strings.TrimSpace(item.WorkspaceName) == "" {
+					m.status = "pr: select a workspace row"
+					return m, nil
+				}
+				ti := textinput.New()
+				ti.Placeholder = "PR # (blank or 0 to clear)"
+				ti.CharLimit = 12
+				if item.PROverride > 0 {
+					ti.SetValue(strconv.Itoa(item.PROverride))
+				}
+				ti.Focus()
+				m.prNumberInput = ti
+				m.prNumberTarget = item
+				m.prNumberErr = ""
+				m.prNumberSetMode = true
+				m.status = fmt.Sprintf("set PR # for %s/%s — enter saves · esc cancels", item.ProjectName, item.WorkspaceName)
+				return m, batchCmds(tea.ClearScreen, textinput.Blink)
 			}
 			return m, nil
 		}
@@ -1983,7 +2117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.prMenuMode = true
-			m.status = "pr: o open in browser · esc cancel"
+			m.status = "pr: o open in browser · r repair · s set PR # · esc cancel"
 			return m, nil
 		}
 	}
@@ -2722,6 +2856,10 @@ func (m Model) View() string {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.renderDeleteConfirm())
 	}
+	if m.prNumberSetMode {
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.renderPRNumberSet())
+	}
 	if m.helpMode {
 		// Center the help box over the existing view as a popover.
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -3075,6 +3213,8 @@ func deckKeyGroups() []keyGroup {
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{"d", "open dev URL in browser (auto-discovered)"},
 				{"p o", "open this workspace's PR in browser"},
+				{"p r", "repair this workspace's PR (sends a fix prompt to the agent for merge conflicts / failing CI / behind base)"},
+				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
 			},
 		},
@@ -3141,7 +3281,11 @@ func (m Model) renderDetails(width int) string {
 	}
 	if pr, label, ok := m.prStatusLabelForItem(item); ok {
 		colored := lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(pr))).Render(label)
-		lines = append(lines, fmt.Sprintf("PR:        #%d  %s", pr.Number, colored))
+		titleSeg := ""
+		if t := strings.TrimSpace(pr.Title); t != "" {
+			titleSeg = "  " + t
+		}
+		lines = append(lines, fmt.Sprintf("PR:        #%d%s  %s", pr.Number, titleSeg, colored))
 	}
 	lines = append(lines,
 		"",
@@ -3703,6 +3847,43 @@ func (m Model) selected() (Item, bool) {
 	return items[m.cursor], true
 }
 
+func (m Model) renderPRNumberSet() string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colAccent)).
+		Padding(1, 2).
+		Width(60)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
+
+	target := strings.TrimSpace(m.prNumberTarget.WorkspaceName)
+	if target == "" {
+		target = "this workspace"
+	}
+	current := "none"
+	if m.prNumberTarget.PROverride > 0 {
+		current = fmt.Sprintf("#%d", m.prNumberTarget.PROverride)
+	}
+	lines := []string{
+		titleStyle.Render("Pin PR # for " + target),
+		"",
+		mutedStyle.Render("Overrides bookmark → PR-headRef lookup so the deck"),
+		mutedStyle.Render("can show PR status when names don't match."),
+		"",
+		mutedStyle.Render("Current override: " + current),
+		"",
+		mutedStyle.Render("PR number (blank or 0 clears):"),
+		m.prNumberInput.View(),
+	}
+	if m.prNumberErr != "" {
+		lines = append(lines, "", errStyle.Render(m.prNumberErr))
+	}
+	lines = append(lines, "", hintStyle.Render("enter save · esc cancel"))
+	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
 func (m *Model) startFind() {
 	m.findMode = true
 	m.findStage = findStageProject
@@ -4210,6 +4391,57 @@ func prStaleLabelSuffix(s PRStatus) string {
 	return ""
 }
 
+// prRepairPrompt builds an agent prompt asking the workspace's agent to
+// address the PR's actionable problems — merge conflicts, failing CI, or
+// an out-of-date base branch. Returns "" when the PR is healthy or in a
+// terminal (merged/closed) state. When multiple issues apply, every one
+// is listed in a single prompt so the agent can fix them together.
+func prRepairPrompt(s PRStatus) string {
+	if s.State != PRStateOpen {
+		return ""
+	}
+	type issue struct{ label, ask string }
+	var issues []issue
+	if s.MergeStateStatus == PRMergeStateDirty {
+		issues = append(issues, issue{
+			label: "merge conflicts against its base branch",
+			ask:   "resolve the conflicts on this branch (rebase or merge the base in)",
+		})
+	}
+	if s.CIState == PRCIFailing {
+		issues = append(issues, issue{
+			label: "failing CI checks",
+			ask:   "diagnose the failing checks (e.g. `gh run list`, `gh run view`) and fix the underlying issues",
+		})
+	}
+	if s.MergeStateStatus == PRMergeStateBehind {
+		issues = append(issues, issue{
+			label: "an out-of-date base branch",
+			ask:   "update this branch with the latest base",
+		})
+	}
+	if len(issues) == 0 {
+		return ""
+	}
+	ref := "this PR"
+	if s.Number > 0 {
+		ref = fmt.Sprintf("PR #%d", s.Number)
+	}
+	if u := strings.TrimSpace(s.URL); u != "" {
+		ref += " (" + u + ")"
+	}
+	if len(issues) == 1 {
+		return fmt.Sprintf("%s has %s. Please %s, then push the fix.", ref, issues[0].label, issues[0].ask)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s has multiple issues to address:\n", ref)
+	for _, it := range issues {
+		fmt.Fprintf(&b, "- %s — please %s.\n", it.label, it.ask)
+	}
+	b.WriteString("Push the fixes when done.")
+	return b.String()
+}
+
 // prStaleGlyph returns the glyph to render alongside the primary PR glyph
 // when the PR is out of date with its base branch. Empty when up-to-date or
 // when the PR isn't open. BEHIND only fires on repos whose branch protection
@@ -4236,14 +4468,11 @@ func prStaleGlyphColor(s PRStatus) string {
 	return "214"
 }
 
-// prStatusLabelForItem looks up the workspace's PR (by Bookmark → headRefName)
-// and returns the matched status plus a human-readable label. ok is false
-// when there is no matching PR (no bookmark, no match, fetcher not run).
+// prStatusLabelForItem resolves the workspace's PR and returns the
+// matched status plus a human-readable label. Order:
+//  1. If item.PROverride > 0, look up by PR number (explicit pin wins).
+//  2. Otherwise fall back to Bookmark → headRefName lookup.
 func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
-	bm := strings.TrimSpace(item.Bookmark)
-	if bm == "" {
-		return PRStatus{}, "", false
-	}
 	repo := strings.TrimSpace(item.RepoRoot)
 	if repo == "" {
 		return PRStatus{}, "", false
@@ -4252,8 +4481,23 @@ func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
 	if !ok {
 		return PRStatus{}, "", false
 	}
-	status, ok := byHead[bm]
-	if !ok {
+	var status PRStatus
+	found := false
+	if item.PROverride > 0 {
+		for _, s := range byHead {
+			if s.Number == item.PROverride {
+				status = s
+				found = true
+				break
+			}
+		}
+	} else if bm := strings.TrimSpace(item.Bookmark); bm != "" {
+		if s, ok := byHead[bm]; ok {
+			status = s
+			found = true
+		}
+	}
+	if !found {
 		return PRStatus{}, "", false
 	}
 	label := prStatusLabel(status)

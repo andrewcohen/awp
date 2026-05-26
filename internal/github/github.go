@@ -135,6 +135,7 @@ const (
 type PRStatus struct {
 	Number           int
 	HeadRefName      string
+	Title            string
 	URL              string
 	State            PRState
 	IsDraft          bool
@@ -157,6 +158,7 @@ type rawCheck struct {
 type rawPRStatus struct {
 	Number            int              `json:"number"`
 	HeadRefName       string           `json:"headRefName"`
+	Title             string           `json:"title"`
 	URL               string           `json:"url"`
 	State             PRState          `json:"state"`
 	IsDraft           bool             `json:"isDraft"`
@@ -174,7 +176,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,title,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -188,6 +190,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		statuses[i] = PRStatus{
 			Number:           r.Number,
 			HeadRefName:      r.HeadRefName,
+			Title:            r.Title,
 			URL:              r.URL,
 			State:            r.State,
 			IsDraft:          r.IsDraft,
@@ -197,6 +200,39 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		}
 	}
 	return statuses, nil
+}
+
+// GetPRStatus fetches a single PR by number via `gh pr view` and returns
+// the same projection as ListPRStatus. Used by the deck to top up
+// pinned PRs (PROverride) that fell outside the bulk `gh pr list
+// --limit 100` window — common in busy repos with high PR churn.
+func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
+	if n <= 0 {
+		return PRStatus{}, fmt.Errorf("GetPRStatus: invalid PR number %d", n)
+	}
+	out, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "pr", "view", fmt.Sprintf("%d", n),
+		"--json", "number,headRefName,title,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+	)
+	if err != nil {
+		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
+	}
+	var r rawPRStatus
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		return PRStatus{}, fmt.Errorf("parse gh pr view %d: %w", n, err)
+	}
+	return PRStatus{
+		Number:           r.Number,
+		HeadRefName:      r.HeadRefName,
+		Title:            r.Title,
+		URL:              r.URL,
+		State:            r.State,
+		IsDraft:          r.IsDraft,
+		ReviewDecision:   r.ReviewDecision,
+		CIState:          rollupCIState(r.StatusCheckRollup),
+		MergeStateStatus: r.MergeStateStatus,
+	}, nil
 }
 
 // rollupCIState reduces gh's heterogeneous statusCheckRollup list to a single
