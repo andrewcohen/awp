@@ -41,19 +41,142 @@ func TestParsePRNumber(t *testing.T) {
 }
 
 func TestBuildReviewPrompt(t *testing.T) {
-	pr := github.PRInfo{Number: 42, Title: "add thing", Body: "does X"}
-	got := buildReviewPrompt(pr, "main")
+	pr := github.PRInfo{
+		Number: 42,
+		Title:  "add thing",
+		Body:   "does X",
+		URL:    "https://github.com/acme/widget/pull/42",
+	}
+	got := buildReviewPrompt(
+		pr,
+		"main",
+		"abc123..def456",
+		"gh:acme/widget/pr/42",
+		"/Users/x/Library/Application Support/tuicr/reviews/sessions/abcd.json",
+		"/Users/x/Library/Application Support/tuicr",
+	)
 	if !strings.Contains(got, "PR #42") || !strings.Contains(got, "add thing") ||
-		!strings.Contains(got, "does X") || !strings.Contains(got, "main..@") {
-		t.Fatalf("unexpected prompt: %q", got)
+		!strings.Contains(got, "does X") || !strings.Contains(got, "abc123..def456") {
+		t.Fatalf("unexpected prompt header: %q", got)
+	}
+	// Load-bearing guidance lines — assert each so a future trim doesn't
+	// silently delete the bits that fix real reported failures (session
+	// resolution via abs path, --username rationale, type taxonomy,
+	// volume target, no-test-ping rule, closing summary).
+	mustContain := []string{
+		"/Users/x/Library/Application Support/tuicr/reviews/sessions/abcd.json",
+		"gh:acme/widget/pr/42",
+		"index.json",
+		`--username "awp-agent"`,
+		"3-8 comments",
+		"Do not send a test ping",
+		"Closing summary",
+		"Report back in chat",
+		"a concrete failure mode you can name",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing guidance line %q", want)
+		}
 	}
 
 	empty := github.PRInfo{Number: 1, Title: "t", Body: "  "}
-	got = buildReviewPrompt(empty, "develop")
+	got = buildReviewPrompt(empty, "develop", "develop..@", "", "", "")
 	if !strings.Contains(got, "(no description)") {
 		t.Fatalf("expected placeholder for empty body, got %q", got)
 	}
+	// Empty session path triggers the recovery prose, not a literal
+	// empty string in the template.
+	if !strings.Contains(got, "not yet registered") {
+		t.Fatalf("expected recovery prose for empty session path, got %q", got)
+	}
 }
+
+func TestResolveDiffRange(t *testing.T) {
+	cases := []struct {
+		name      string
+		runner    Runner
+		wsPath    string
+		baseRef   string
+		headSHA   string
+		want      string
+		describe  string
+		precision string
+	}{
+		{
+			name:    "happy path uses merge-base against origin/<base>",
+			wsPath:  "/some/ws",
+			baseRef: "main",
+			headSHA: "791d740",
+			runner: scriptedRunner{out: map[string]string{
+				"git merge-base origin/main 791d740": "abc123\n",
+			}},
+			want: "abc123..791d740",
+		},
+		{
+			name:    "falls back to bare ref when origin/<base> missing",
+			wsPath:  "/some/ws",
+			baseRef: "main",
+			headSHA: "791d740",
+			runner: scriptedRunner{
+				out: map[string]string{
+					"git merge-base main 791d740": "abc999\n",
+				},
+				errs: map[string]bool{
+					"git merge-base origin/main 791d740": true,
+				},
+			},
+			want: "abc999..791d740",
+		},
+		{
+			name:    "falls back to ref-name range when all git calls error",
+			wsPath:  "/some/ws",
+			baseRef: "main",
+			headSHA: "791d740",
+			runner: scriptedRunner{errs: map[string]bool{
+				"git merge-base origin/main 791d740": true,
+				"git merge-base main 791d740":        true,
+			}},
+			want: "main..@",
+		},
+		{
+			name:    "empty headSHA falls back without calling git",
+			wsPath:  "/some/ws",
+			baseRef: "main",
+			headSHA: "",
+			runner:  scriptedRunner{},
+			want:    "main..@",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := resolveDiffRange(c.runner, c.wsPath, c.baseRef, c.headSHA)
+			if got != c.want {
+				t.Errorf("resolveDiffRange = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// scriptedRunner answers Run by joining the command into a key and
+// looking it up in `out` (or returning an error if listed in `errs`).
+// Used by TestResolveDiffRange — full Runner contract is overkill here.
+type scriptedRunner struct {
+	out  map[string]string
+	errs map[string]bool
+}
+
+func (r scriptedRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	key := name + " " + strings.Join(args, " ")
+	if r.errs[key] {
+		return "", &runnerErr{key: key}
+	}
+	return r.out[key], nil
+}
+
+type runnerErr struct{ key string }
+
+func (e *runnerErr) Error() string { return "scripted err: " + e.key }
 
 func TestRunReviewDispatches(t *testing.T) {
 	svc := &fakeService{}

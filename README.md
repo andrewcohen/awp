@@ -194,7 +194,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `awp w prune [--dry-run] [--force]` | Remove orphan workspace dirs under `~/.awp/workspaces` not tracked in state |
 | `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
 | `awp w bootstrap --all` | Re-run bootstrap hooks for every tracked workspace in the current repo (continues on failure) |
-| `awp review [pr#]` | Pick or open a PR for review in a fresh workspace |
+| `awp review [pr#]` | Pick or open a PR for review in a fresh workspace. Opens a `review` window running `tuicr pr <n>`, resolves the persisted session JSON path from tuicr's `active_sessions.json` / `index.json`, and primes the agent with that absolute path plus a precise commit-SHA diff range so it can `tuicr review add` findings without falling back to the (broken-for-PR-mode) `--repo .` lookup. Agent makes no file edits, commits, or GitHub comments. |
 | `awp diff` | Charm-styled diff viewer |
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |

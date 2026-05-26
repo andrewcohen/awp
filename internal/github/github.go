@@ -15,6 +15,8 @@ type PRInfo struct {
 	Number  int    `json:"number"`
 	HeadRef string `json:"headRefName"`
 	BaseRef string `json:"baseRefName"`
+	HeadSHA string `json:"headRefOid"`
+	BaseSHA string `json:"baseRefOid"`
 	Title   string `json:"title"`
 	Body    string `json:"body"`
 	URL     string `json:"url"`
@@ -34,6 +36,8 @@ type prViewResponse struct {
 	Number         int    `json:"number"`
 	HeadRefName    string `json:"headRefName"`
 	BaseRefName    string `json:"baseRefName"`
+	HeadRefOid     string `json:"headRefOid"`
+	BaseRefOid     string `json:"baseRefOid"`
 	Title          string `json:"title"`
 	Body           string `json:"body"`
 	URL            string `json:"url"`
@@ -298,7 +302,7 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 	out, err := c.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "view", strconv.Itoa(num),
-		"--json", "number,headRefName,baseRefName,title,body,url,headRepository,headRepositoryOwner",
+		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
@@ -311,6 +315,8 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 		Number:        raw.Number,
 		HeadRef:       raw.HeadRefName,
 		BaseRef:       raw.BaseRefName,
+		HeadSHA:       raw.HeadRefOid,
+		BaseSHA:       raw.BaseRefOid,
 		Title:         raw.Title,
 		Body:          raw.Body,
 		URL:           raw.URL,

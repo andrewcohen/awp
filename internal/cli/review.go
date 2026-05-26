@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
@@ -17,6 +19,16 @@ import (
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
+
+//go:embed review_prompt.md
+var reviewPromptTemplate string
+
+// sessionDiscoveryTimeout caps how long we wait for `tuicr pr <n>` to
+// register its persisted session in active_sessions.json before we
+// build the agent prompt without a resolved JSON path. Five seconds is
+// well above the ~1s we've observed in practice and short enough that
+// nothing's noticeably stuck for the user.
+const sessionDiscoveryTimeout = 5 * time.Second
 
 type writerReporter struct{ out io.Writer }
 
@@ -129,8 +141,7 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	project := filepath.Base(repoRoot)
 	sessionName := DeckSessionName(project, name)
 
-	prompt := buildReviewPrompt(pr, base)
-	reviewCmd := fmt.Sprintf("tuicr -r %s..@", shellSingleQuote(base))
+	reviewCmd := fmt.Sprintf("tuicr pr %d", pr.Number)
 	prDescWindow := "pr description"
 	prDescTarget := sessionName + ":" + prDescWindow
 	prDescCmd := fmt.Sprintf("GH_FORCE_TTY=100%% gh pr view %d | less -R", pr.Number)
@@ -175,6 +186,38 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 			return err
 		}
 	}
+	// Open the review window *before* the agent so `tuicr pr <n>` has
+	// a head start writing active_sessions.json. The agent prompt then
+	// embeds the resolved session JSON path: tuicr's --repo-scoped
+	// session lookup can't find PR-mode sessions from a local checkout
+	// (repo_path is stored as forge:github.com/..., not a filesystem
+	// path), so the agent has to pass --session <abs-path> instead.
+	if !have["review"] {
+		reporter.Step("Open review window")
+		if err := tmuxClient.NewWindowInSession(sessionName, "review", wsPath, env); err != nil {
+			return err
+		}
+		if err := tmuxClient.SendCommand(sessionName+":review", reviewCmd); err != nil {
+			return err
+		}
+	}
+
+	// TODO(tuicr#368): the slug + data-dir + JSON-file lookup chain is a
+	// workaround for tuicr's --repo-scoped session resolution not
+	// finding PR-mode sessions (their repo_path is "forge:github.com/...",
+	// not a local path). Replace once tuicr exposes a stable agent
+	// discovery protocol. https://github.com/agavra/tuicr/issues/368
+	slug := tuicrSessionSlug(pr.URL, pr.Number)
+	dataDir := tuicrDataDir()
+	sessionPath := awaitTuicrSessionPath(context.Background(), dataDir, slug, sessionDiscoveryTimeout)
+	if sessionPath != "" {
+		reporter.Log(fmt.Sprintf("tuicr session: %s", sessionPath))
+	} else if slug != "" {
+		reporter.Log(fmt.Sprintf("tuicr session not yet registered for %s; agent will resolve at use time", slug))
+	}
+	diffRange := resolveDiffRange(runner, wsPath, base, pr.HeadSHA)
+	prompt := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir)
+
 	if !have["agent"] {
 		reporter.Step("Open agent window")
 		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath, env); err != nil {
@@ -192,15 +235,6 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		// paste lets the agent receive the whole block in one go.
 		reporter.Step("Send review prompt to agent")
 		if err := tmuxClient.PasteText(sessionName+":agent", prompt); err != nil {
-			return err
-		}
-	}
-	if !have["review"] {
-		reporter.Step("Open review window")
-		if err := tmuxClient.NewWindowInSession(sessionName, "review", wsPath, env); err != nil {
-			return err
-		}
-		if err := tmuxClient.SendCommand(sessionName+":review", reviewCmd); err != nil {
 			return err
 		}
 	}
@@ -302,15 +336,74 @@ func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 	return n, nil
 }
 
-func buildReviewPrompt(pr github.PRInfo, base string) string {
+func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dataDir string) string {
 	body := strings.TrimSpace(pr.Body)
 	if body == "" {
 		body = "(no description)"
 	}
-	return fmt.Sprintf(
-		"Please review PR #%d: %s\n\n%s\n\nDiff range: %s..@",
-		pr.Number, pr.Title, body, base,
-	)
+	if strings.TrimSpace(diffRange) == "" {
+		diffRange = base + "..@"
+	}
+	if strings.TrimSpace(slug) == "" {
+		slug = "(unknown — gh: prefixed slug could not be derived from PR URL)"
+	}
+	pathField := sessionPath
+	if strings.TrimSpace(pathField) == "" {
+		pathField = "(not yet registered — see the fallback discovery snippet below)"
+	}
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "<unknown>"
+	}
+	return strings.NewReplacer(
+		"{{number}}", strconv.Itoa(pr.Number),
+		"{{title}}", pr.Title,
+		"{{body}}", body,
+		"{{base}}", base,
+		"{{diff_range}}", diffRange,
+		"{{slug}}", slug,
+		"{{session_path}}", pathField,
+		"{{data_dir}}", dataDir,
+	).Replace(reviewPromptTemplate)
+}
+
+// resolveDiffRange returns the commit-SHA range that mirrors what tuicr
+// shows in the review pane: <merge-base(origin/base, headSHA)>..<headSHA>.
+// Pre-baking SHAs into the prompt avoids the failure mode where the
+// agent computes `<baseRef>..@` against a branch whose origin/<base>
+// has drifted far ahead, producing a diff full of unrelated upstream
+// churn.
+//
+// We pass headSHA explicitly (from `gh pr view --json headRefOid`)
+// instead of resolving the workspace's HEAD, because jj workspaces
+// don't always align HEAD with the PR head — `jj workspace add` may
+// land at a different revision (commonly the source repo's tip) and
+// reviewing against that gives the wrong range.
+//
+// Falls back to "<baseRef>..@" when any input is missing or git errors
+// out (e.g. the workspace doesn't have origin/<base> fetched, the head
+// SHA isn't reachable locally yet). Functional but imprecise — the
+// agent's prompt will still steer it toward the right files via tuicr.
+func resolveDiffRange(runner Runner, wsPath, baseRef, headSHA string) string {
+	base := strings.TrimSpace(baseRef)
+	head := strings.TrimSpace(headSHA)
+	if base == "" || head == "" || runner == nil || strings.TrimSpace(wsPath) == "" {
+		return base + "..@"
+	}
+	ctx := context.Background()
+	// Prefer the remote-tracking ref so we follow GitHub's view of the
+	// base. Fall back to the bare ref name (may be local-only in some
+	// jj setups) before giving up.
+	for _, cand := range []string{"origin/" + base, base} {
+		mbOut, err := runner.Run(ctx, wsPath, "git", "merge-base", cand, head)
+		if err != nil {
+			continue
+		}
+		mb := strings.TrimSpace(mbOut)
+		if mb != "" {
+			return mb + ".." + head
+		}
+	}
+	return base + "..@"
 }
 
 func shellSingleQuote(s string) string {
