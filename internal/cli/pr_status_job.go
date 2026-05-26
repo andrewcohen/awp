@@ -12,6 +12,7 @@ import (
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jobs"
+	"github.com/andrewcohen/awp/internal/state"
 )
 
 // pr-status job: a detached subprocess that fetches PR status across one
@@ -43,12 +44,14 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	if len(repos) == 0 {
 		return errors.New("pr-status: spec carries no repos")
 	}
+	store := state.NewJSONStore()
 	for _, repo := range repos {
 		started := time.Now()
 		gh := github.New(fixedDirRunner{base: runner, dir: repo})
 		statuses, err := gh.ListPRStatus(repo)
 		if err != nil {
 			reporter.Step(fmt.Sprintf("%s — error: %v", repo, err))
+			deckDebugLogf("prStatus fetch err repo=%s err=%v", repo, err)
 			continue
 		}
 		// Merge-queue membership is graphql-only — `gh pr list --json`
@@ -59,10 +62,93 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 			reporter.Step(fmt.Sprintf("%s — merge-queue lookup failed: %v", repo, qErr))
 		}
 		byHead := convertGithubStatusesToDeckui(statuses, queued)
+		// Top up pinned-PR overrides that fell outside the bulk
+		// window. Walk this repo's workspace entries for PROverride > 0,
+		// see which numbers are absent from byHead, and fetch each
+		// individually via `gh pr view`. Single-PR fetches are cheap
+		// and rare (only workspaces actually pinned), so it's safe to
+		// do on every refresh.
+		topUps := topUpMissingOverrides(store, gh, repo, byHead)
+		for head, status := range topUps {
+			byHead[head] = status
+		}
 		persistPRStatusMerge(map[string]map[string]deckui.PRStatus{repo: byHead}, time.Now())
-		reporter.Step(fmt.Sprintf("%s — %d PRs (%s)", repo, len(statuses), time.Since(started).Round(time.Millisecond)))
+		reporter.Step(fmt.Sprintf("%s — %d PRs (+%d pinned) (%s)", repo, len(statuses), len(topUps), time.Since(started).Round(time.Millisecond)))
+		// Diagnostic: log every PR # and head ref returned for this
+		// repo. If a PR you expect to see isn't in `numbers=[...]`, gh
+		// didn't return it — most likely the repo has more PRs than
+		// the `gh pr list --limit 100` cap and the PR is older than
+		// the cutoff. The `truncated` flag flags that condition
+		// explicitly (count == limit).
+		numbers := sortedPRNumbers(byHead)
+		truncated := len(statuses) >= 100
+		deckDebugLogf("prStatus fetched repo=%s count=%d topup=%d truncated=%t numbers=%v",
+			repo, len(statuses), len(topUps), truncated, numbers)
 	}
 	return nil
+}
+
+// topUpMissingOverrides walks this repo's workspace state for
+// PROverride > 0 entries whose PR numbers aren't already in byHead, and
+// fetches each one individually via `gh pr view`. Returns a map of
+// headRefName → PRStatus to merge into byHead.
+//
+// Pinned PRs are typically older than the bulk-list window — a busy
+// repo can have hundreds of PRs more recent than the one a user is
+// trying to surface, and `gh pr list --limit 100` cuts them off. This
+// helper closes that gap.
+func topUpMissingOverrides(store *state.JSONStore, gh *github.Client, repo string, byHead map[string]deckui.PRStatus) map[string]deckui.PRStatus {
+	entries, err := store.Load(repo)
+	if err != nil {
+		deckDebugLogf("prStatus topUp load err repo=%s err=%v", repo, err)
+		return nil
+	}
+	wantNumbers := map[int]bool{}
+	for _, e := range entries {
+		if e.PROverride > 0 {
+			wantNumbers[e.PROverride] = true
+		}
+	}
+	if len(wantNumbers) == 0 {
+		return nil
+	}
+	have := map[int]bool{}
+	for _, s := range byHead {
+		if s.Number > 0 {
+			have[s.Number] = true
+		}
+	}
+	out := map[string]deckui.PRStatus{}
+	for n := range wantNumbers {
+		if have[n] {
+			continue
+		}
+		s, err := gh.GetPRStatus(repo, n)
+		if err != nil {
+			deckDebugLogf("prStatus topUp gh pr view err repo=%s pr=%d err=%v", repo, n, err)
+			continue
+		}
+		// Coerce empty headRefName (shouldn't happen for a real PR)
+		// to a synthetic key so an over-eager gh response that elides
+		// the field doesn't collide with another entry.
+		key := s.HeadRefName
+		if key == "" {
+			key = fmt.Sprintf("__pin_%d", n)
+		}
+		out[key] = deckui.PRStatus{
+			Number:           s.Number,
+			HeadRefName:      s.HeadRefName,
+			Title:            s.Title,
+			URL:              s.URL,
+			State:            deckui.PRState(s.State),
+			IsDraft:          s.IsDraft,
+			ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
+			CIState:          deckui.PRCIState(s.CIState),
+			MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),
+		}
+		deckDebugLogf("prStatus topUp ok repo=%s pr=%d head=%s state=%s", repo, n, s.HeadRefName, s.State)
+	}
+	return out
 }
 
 // convertGithubStatusesToDeckui translates the github.PRStatus list into
@@ -75,6 +161,7 @@ func convertGithubStatusesToDeckui(statuses []github.PRStatus, queuedHeads map[s
 		byHead[s.HeadRefName] = deckui.PRStatus{
 			Number:           s.Number,
 			HeadRefName:      s.HeadRefName,
+			Title:            s.Title,
 			URL:              s.URL,
 			State:            deckui.PRState(s.State),
 			IsDraft:          s.IsDraft,
@@ -169,21 +256,28 @@ const prStatusPollMaxWait = 2 * time.Minute
 
 // pollPRStatusJob returns a tea.Msg that batches:
 //   - one PRStatusRepoDoneMsg for each repo whose entry has newly
-//     landed in the cache since the previous poll
+//     landed in the cache since the poll started (entries written
+//     before pollStartedAt are stale leftovers from a prior fetch and
+//     get skipped)
 //   - either a closing PRStatusDoneMsg (job complete or absent) or a
 //     tea.Tick command that re-invokes pollPRStatusJob 250ms later
 //
-// "seen" tracks which repos this fetcher has already reported. The
-// caller threads it through each tick.
-func pollPRStatusJob(watching []string, seen map[string]bool) tea.Msg {
-	return pollPRStatusJobAt(watching, seen, time.Now())
+// "seen" tracks which repos this fetcher has already reported.
+// pollStartedAt is when the deck-side fetcher closure was invoked; we
+// use it both as the timeout baseline AND as the freshness boundary so
+// a forced refresh (`p s` save, new workspace, etc.) doesn't consume
+// the stale cache entry from a previous fetch and immediately declare
+// itself done.
+func pollPRStatusJob(watching []string, seen map[string]bool, pollStartedAt time.Time) tea.Msg {
+	return pollPRStatusJobAt(watching, seen, pollStartedAt)
 }
 
 // pollPRStatusJobAt is the tick-time variant — pollPRStatusJob calls
-// this with time.Now(); the recursive retick calls it with the tick's
-// timestamp so the elapsed-time guard is stable.
-func pollPRStatusJobAt(watching []string, seen map[string]bool, firstSeenAt time.Time) tea.Msg {
-	byRepo, _, _ := loadPRStatusCache()
+// this with the fetcher's invocation timestamp; the recursive retick
+// calls it with the same timestamp so the elapsed-time guard is stable
+// and the freshness boundary doesn't drift.
+func pollPRStatusJobAt(watching []string, seen map[string]bool, pollStartedAt time.Time) tea.Msg {
+	byRepo, fetchedAt, _ := loadPRStatusCache()
 
 	cmds := make([]tea.Cmd, 0, len(watching)+1)
 	for _, repo := range watching {
@@ -192,6 +286,16 @@ func pollPRStatusJobAt(watching []string, seen map[string]bool, firstSeenAt time
 		}
 		entry, ok := byRepo[repo]
 		if !ok {
+			continue
+		}
+		// Only treat this repo's entry as a fresh result for the
+		// current fetch if it was written after the poll started. The
+		// cache file persists across deck sessions, so without this
+		// check the very first poll tick would consume the prior
+		// fetch's entry and mark the repo "done" before the new
+		// subprocess has had a chance to write — defeating
+		// forcePRStatusRefresh on flows like the `p s` chord.
+		if ts, ok := fetchedAt[repo]; !ok || ts.Before(pollStartedAt) {
 			continue
 		}
 		seen[repo] = true
@@ -210,21 +314,21 @@ func pollPRStatusJobAt(watching []string, seen map[string]bool, firstSeenAt time
 		}
 	}
 	_, jobAlive := findActivePRStatusJob()
-	timedOut := time.Since(firstSeenAt) >= prStatusPollMaxWait
+	timedOut := time.Since(pollStartedAt) >= prStatusPollMaxWait
 	if allSeen || !jobAlive || timedOut {
-		fetchedAt := time.Now()
+		fetchedAtNow := time.Now()
 		if timedOut {
 			deckDebugLogf("prStatus poll timed out after %s watching=%d seen=%d", prStatusPollMaxWait, len(watching), len(seen))
 		}
 		cmds = append(cmds, func() tea.Msg {
-			return deckui.PRStatusDoneMsg{FetchedAt: fetchedAt}
+			return deckui.PRStatusDoneMsg{FetchedAt: fetchedAtNow}
 		})
 		return tea.BatchMsg(cmds)
 	}
 
 	watchingCopy := append([]string(nil), watching...)
 	cmds = append(cmds, tea.Tick(prStatusPollInterval, func(_ time.Time) tea.Msg {
-		return pollPRStatusJobAt(watchingCopy, seen, firstSeenAt)
+		return pollPRStatusJobAt(watchingCopy, seen, pollStartedAt)
 	}))
 	return tea.BatchMsg(cmds)
 }

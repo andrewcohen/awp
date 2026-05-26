@@ -114,9 +114,13 @@ func deckDebugLogf(format string, args ...any) {
 }
 
 // persistPRStatusMerge merges fresh per-repo results into the on-disk
-// cache. Best-effort: failures are logged but never surfaced. Stamps
-// each successful repo's FetchedAt with the provided wall clock so the
-// 60s refresh throttle survives a deck restart.
+// cache, per-PR-number. New entries overwrite (so transitions like
+// open→merged land), but existing entries that aren't in the fresh
+// fetch are kept — a PR that drops out of the bulk `gh pr list
+// --limit 100` window stays visible at its last-known state instead of
+// silently vanishing from the cache. Stamps each successful repo's
+// FetchedAt with the provided wall clock so the 60s refresh throttle
+// survives a deck restart.
 func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedAt time.Time) {
 	if len(byRepo) == 0 {
 		return
@@ -127,8 +131,15 @@ func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedA
 		persistByRepo = map[string]map[string]deckui.PRStatus{}
 		persistFetchedAt = map[string]time.Time{}
 	}
-	for repo, byHead := range byRepo {
-		persistByRepo[repo] = byHead
+	for repo, fresh := range byRepo {
+		existing := persistByRepo[repo]
+		if existing == nil {
+			existing = map[string]deckui.PRStatus{}
+		}
+		for head, status := range fresh {
+			existing[head] = status
+		}
+		persistByRepo[repo] = existing
 		persistFetchedAt[repo] = fetchedAt
 	}
 	if saveErr := savePRStatusCache(persistByRepo, persistFetchedAt); saveErr != nil {
@@ -157,6 +168,34 @@ func sortedHeads(byHead map[string]deckui.PRStatus) []string {
 	}
 	sort.Strings(heads)
 	return heads
+}
+
+// sortedPRNumbers returns the sorted PR numbers from a byHead map. Used
+// by deckDebugLogf so a "pr-override" line can show the user whether
+// the PR # they typed is in the cache at all.
+func sortedPRNumbers(byHead map[string]deckui.PRStatus) []int {
+	nums := make([]int, 0, len(byHead))
+	for _, s := range byHead {
+		if s.Number > 0 {
+			nums = append(nums, s.Number)
+		}
+	}
+	sort.Ints(nums)
+	return nums
+}
+
+// prCacheHasNumber reports whether the byHead map contains a PR with
+// the given number. Mirrors prHasHead for the `p s` chord's diagnostic.
+func prCacheHasNumber(byHead map[string]deckui.PRStatus, n int) bool {
+	if byHead == nil || n <= 0 {
+		return false
+	}
+	for _, s := range byHead {
+		if s.Number == n {
+			return true
+		}
+	}
+	return false
 }
 
 func newDeckActionServiceWithIO(runner Runner, repoRoot string, in io.Reader, out io.Writer) workspace.Service {
@@ -415,9 +454,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	//     emit the closing PRStatusDoneMsg.
 	prStatusFetcher := func(repos []string) tea.Cmd {
 		return func() tea.Msg {
+			pollStartedAt := time.Now()
 			deckDebugLogf("prStatus fetch start repos=%d", len(repos))
 			if len(repos) == 0 {
-				return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
+				return deckui.PRStatusDoneMsg{FetchedAt: pollStartedAt}
 			}
 			if existing, ok := findActivePRStatusJob(); ok {
 				deckDebugLogf("prStatus reusing job id=%s pid=%d", existing.ID, existing.PID)
@@ -425,11 +465,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 				job, err := spawnPRStatusJob(repos)
 				if err != nil {
 					deckDebugLogf("prStatus spawn err=%v", err)
-					return deckui.PRStatusDoneMsg{FetchedAt: time.Now()}
+					return deckui.PRStatusDoneMsg{FetchedAt: pollStartedAt}
 				}
 				deckDebugLogf("prStatus spawned detached job id=%s pid=%d repos=%d", job.ID, job.PID, len(repos))
 			}
-			return pollPRStatusJob(repos, map[string]bool{})
+			return pollPRStatusJob(repos, map[string]bool{}, pollStartedAt)
 		}
 	}
 	// bookmarkLinkHandler persists a chosen bookmark onto the workspace's
@@ -471,6 +511,44 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		heads := sortedHeads(cached[repo])
 		deckDebugLogf("link ws=%s repo=%s bookmark=%s cache_heads=%v match=%t",
 			name, repo, bm, heads, prHasHead(cached[repo], bm))
+		return nil
+	}
+	// prNumberLinkHandler persists a PR-number override onto the
+	// workspace's stored Entry. Drives the deck `p s` chord.
+	// prNumber == 0 clears the override.
+	prNumberLinkHandler := func(item deckui.Item, prNumber int) error {
+		repo := strings.TrimSpace(item.RepoRoot)
+		if repo == "" {
+			return fmt.Errorf("workspace %q has no repo root", item.WorkspaceName)
+		}
+		name := item.WorkspaceName
+		updated := false
+		if err := linkStore.Update(repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+			if cur, ok := entries[name]; ok {
+				cur.PROverride = prNumber
+				entries[name] = cur
+				updated = true
+			}
+			return entries
+		}); err != nil {
+			return err
+		}
+		if !updated {
+			return fmt.Errorf("workspace %q not found in store for repo %s", name, repo)
+		}
+		// Diagnostic: log whether the PR # the user typed is actually in
+		// the current PR-status cache. A `match=false` here with a
+		// non-empty cache_numbers list is the most common failure mode —
+		// either the PR is older than the gh `--limit 100` window, or
+		// the deck hasn't fetched this repo yet.
+		cached, fetchedAt, _ := loadPRStatusCache()
+		numbers := sortedPRNumbers(cached[repo])
+		fetched := "never"
+		if t, ok := fetchedAt[repo]; ok {
+			fetched = t.Format("15:04:05")
+		}
+		deckDebugLogf("pr-override ws=%s repo=%s pr=%d cache_count=%d cache_numbers=%v fetched_at=%s match=%t",
+			name, repo, prNumber, len(numbers), numbers, fetched, prCacheHasNumber(cached[repo], prNumber))
 		return nil
 	}
 	stateEditor := func() tea.Cmd {
@@ -515,6 +593,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
 		WithBookmarkLinkHandler(bookmarkLinkHandler).
+		WithPRNumberLinkHandler(prNumberLinkHandler).
 		WithBookmarkPrefix(cfg.Deck.BookmarkPrefix).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithUserActionsResolver(userActionsForRepo).
@@ -909,6 +988,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				Path:          e.Path,
 				RepoRoot:      r.repo,
 				Bookmark:      strings.TrimSpace(e.Bookmark),
+				PROverride:    e.PROverride,
 				Status:        status,
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,

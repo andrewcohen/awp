@@ -1676,3 +1676,243 @@ func TestPRInMergeQueueGlyphAndLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestDetailsRendersPRTitleAndStatus(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, Title: "Add the widget", URL: "https://example/pr/42",
+			State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+		}},
+	}, nil)
+	model.width = 120
+	model.height = 30
+	out := model.renderDetails(60)
+	for _, want := range []string{"#42", "Add the widget", "open"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in details, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestPRRepairPrompt(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  PRStatus
+		want    string
+		wantSub []string
+	}{
+		{"healthy", PRStatus{Number: 1, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "", nil},
+		{"merged", PRStatus{Number: 1, State: PRStateMerged, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", nil},
+		{"closed", PRStatus{Number: 1, State: PRStateClosed, CIState: PRCIFailing}, "", nil},
+		{"merge conflicts only", PRStatus{Number: 7, URL: "https://example/pr/7", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty},
+			"PR #7 (https://example/pr/7) has merge conflicts against its base branch. Please resolve the conflicts on this branch (rebase or merge the base in), then push the fix.", nil},
+		{"failing CI only", PRStatus{Number: 8, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean},
+			"PR #8 has failing CI checks. Please diagnose the failing checks (e.g. `gh run list`, `gh run view`) and fix the underlying issues, then push the fix.", nil},
+		{"behind base only", PRStatus{Number: 9, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind},
+			"PR #9 has an out-of-date base branch. Please update this branch with the latest base, then push the fix.", nil},
+		{"composite", PRStatus{Number: 11, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "",
+			[]string{"PR #11 has multiple issues to address:", "merge conflicts against its base branch", "failing CI checks", "Push the fixes when done."}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := prRepairPrompt(tc.status)
+			if tc.wantSub != nil {
+				for _, sub := range tc.wantSub {
+					if !strings.Contains(got, sub) {
+						t.Errorf("prRepairPrompt missing %q in:\n%s", sub, got)
+					}
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("prRepairPrompt:\n got: %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPRStatusLabelHonorsPROverride(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "missing", PROverride: 99}
+	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"someone-elses/branch": {
+			Number: 99, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+		}},
+	}, nil)
+	pr, _, ok := model.prStatusLabelForItem(item)
+	if !ok {
+		t.Fatalf("expected PR # override to resolve PR even when bookmark doesn't match")
+	}
+	if pr.Number != 99 {
+		t.Fatalf("expected #99, got #%d", pr.Number)
+	}
+}
+
+func TestPRMenuRepairKeyDispatchesPrompt(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	var gotAction Action
+	var gotArg string
+	handler := func(req ActionRequest) error {
+		gotAction = req.Action
+		gotArg = req.Arg
+		return nil
+	}
+	model := New([]Item{item}, handler).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, URL: "https://example/pr/42", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty,
+		}},
+	}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	if !updated.(Model).prMenuMode {
+		t.Fatalf("expected prMenuMode after p")
+	}
+	updated, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if updated.(Model).prMenuMode {
+		t.Fatalf("expected prMenuMode false after r")
+	}
+	if cmd == nil {
+		t.Fatalf("expected dispatch cmd")
+	}
+	if msg := drainCmdForActionResult(t, cmd); msg.action != ActionSendPrompt {
+		t.Fatalf("expected ActionSendPrompt, got %v", msg.action)
+	}
+	if gotAction != ActionSendPrompt || !strings.Contains(gotArg, "merge conflicts") {
+		t.Fatalf("handler not invoked correctly; action=%v arg=%q", gotAction, gotArg)
+	}
+}
+
+func TestPRMenuRepairKeyNoopsWhenNothingToRepair(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	calls := 0
+	model := New([]Item{item}, func(ActionRequest) error { calls++; return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/r": {"feat": {Number: 42, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}},
+		}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if calls != 0 {
+		t.Fatalf("handler should not run; got calls=%d", calls)
+	}
+	if !strings.Contains(updated.(Model).status, "nothing to repair") {
+		t.Fatalf("expected status to mention 'nothing to repair', got %q", updated.(Model).status)
+	}
+}
+
+func TestPRMenuSetKeyPersistsNumber(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	gotPR := -1
+	model := New([]Item{item}, nil).WithPRNumberLinkHandler(func(_ Item, n int) error {
+		gotPR = n
+		return nil
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m := updated.(Model)
+	if !m.prNumberSetMode {
+		t.Fatalf("expected prNumberSetMode after p s")
+	}
+	m.prNumberInput.SetValue("123")
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if gotPR != 123 {
+		t.Fatalf("expected handler called with 123, got %d", gotPR)
+	}
+	if updated.(Model).prNumberSetMode {
+		t.Fatalf("expected prNumberSetMode false after enter")
+	}
+}
+
+func TestPRMenuSetKeyForcesPRStatusRefetch(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Path: "/ws/path", Bookmark: "feat"}
+	fetched := 0
+	var fetchedRepos []string
+	model := New([]Item{item}, nil).
+		WithPRNumberLinkHandler(func(Item, int) error { return nil }).
+		WithPRStatusFetcher(func(repos []string) tea.Cmd {
+			fetched++
+			fetchedRepos = append([]string(nil), repos...)
+			return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
+		})
+	// Pre-stamp the throttle so a cold-init refetch doesn't count: only
+	// the forcePRStatusRefresh call after the override save should fire.
+	model.prStatusFetchedAt = map[string]time.Time{"/r": time.Now()}
+	fetched = 0
+	fetchedRepos = nil
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m := updated.(Model)
+	m.prNumberInput.SetValue("77")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = updated
+	if cmd == nil {
+		t.Fatalf("expected cmd from override save")
+	}
+	// Drain the batch — looking for the PRStatusDoneMsg the fake fetcher
+	// returns to confirm it ran.
+	drainCmd(cmd)
+	if fetched != 1 {
+		t.Fatalf("expected 1 PR-status fetcher call, got %d", fetched)
+	}
+	if len(fetchedRepos) != 1 || fetchedRepos[0] != "/r" {
+		t.Fatalf("expected fetcher called for /r, got %v", fetchedRepos)
+	}
+}
+
+func drainCmd(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	queue := []tea.Cmd{cmd}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if c == nil {
+			continue
+		}
+		msg := c()
+		if b, ok := msg.(tea.BatchMsg); ok {
+			queue = append(queue, b...)
+		}
+	}
+}
+
+func TestPRMenuSetKeyBlankClearsOverride(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat", PROverride: 42}
+	gotPR := -1
+	model := New([]Item{item}, nil).WithPRNumberLinkHandler(func(_ Item, n int) error {
+		gotPR = n
+		return nil
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m := updated.(Model)
+	m.prNumberInput.SetValue("")
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if gotPR != 0 {
+		t.Fatalf("expected blank submit to call handler with 0, got %d", gotPR)
+	}
+}
+
+// drainCmdForActionResult walks a tea.Cmd batch tree and returns the first
+// actionResultMsg it produces.
+func drainCmdForActionResult(t *testing.T, cmd tea.Cmd) actionResultMsg {
+	t.Helper()
+	queue := []tea.Cmd{cmd}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if c == nil {
+			continue
+		}
+		msg := c()
+		switch v := msg.(type) {
+		case actionResultMsg:
+			return v
+		case tea.BatchMsg:
+			queue = append(queue, v...)
+		}
+	}
+	t.Fatal("no actionResultMsg observed")
+	return actionResultMsg{}
+}
+

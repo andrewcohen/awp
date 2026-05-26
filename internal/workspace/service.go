@@ -117,9 +117,13 @@ type CommandRunner interface {
 }
 
 type Entry struct {
-	Name          string
-	Path          string
-	Bookmark      string `json:",omitempty"`
+	Name     string
+	Path     string
+	Bookmark string `json:",omitempty"`
+	// PROverride pins this workspace to a specific PR number, bypassing
+	// bookmark → headRefName lookup. Useful when the workspace's
+	// bookmark doesn't match the PR's head ref. Zero means no override.
+	PROverride    int    `json:",omitempty"`
 	SessionID     string `json:",omitempty"`
 	SessionName   string `json:",omitempty"`
 	AgentWindowID string `json:",omitempty"`
@@ -168,6 +172,7 @@ type Service interface {
 	DeleteWithOptions(name string, opts DeleteOptions) error
 	RecordSession(workspaceName, sessionID, sessionName string) error
 	RecordBookmark(workspaceName, bookmark string) error
+	RecordPROverride(workspaceName string, prNumber int) error
 	UpdatePrompt(workspaceName, prompt string) error
 	UpdateStatus(workspaceName, status string) error
 	MarkRead(workspaceName string) error
@@ -889,6 +894,17 @@ func (s *service) RecordBookmark(workspaceName, bookmark string) error {
 	bookmark = strings.TrimSpace(bookmark)
 	return s.mutateEntry(workspaceName, func(e *Entry) {
 		e.Bookmark = bookmark
+	})
+}
+
+// RecordPROverride pins (or clears, via prNumber == 0) the PR number
+// for this workspace. Drives the deck `p s` chord's persistence.
+func (s *service) RecordPROverride(workspaceName string, prNumber int) error {
+	if prNumber < 0 {
+		prNumber = 0
+	}
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.PROverride = prNumber
 	})
 }
 
