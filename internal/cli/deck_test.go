@@ -108,6 +108,7 @@ func (s *deckFakeService) RecordSession(name, id, sess string) error {
 	return nil
 }
 func (s *deckFakeService) RecordBookmark(string, string) error        { return nil }
+func (s *deckFakeService) RecordPROverride(string, int) error         { return nil }
 func (s *deckFakeService) UpdatePrompt(string, string) error          { return nil }
 func (s *deckFakeService) UpdateStatus(string, string) error          { return nil }
 func (s *deckFakeService) ClearSession(string) error                  { return nil }

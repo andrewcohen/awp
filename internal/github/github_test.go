@@ -62,7 +62,7 @@ func TestFetchPRParseError(t *testing.T) {
 
 func TestListPRStatusParses(t *testing.T) {
 	r := &fakeRunner{out: `[
-		{"number":1,"headRefName":"andrew/a","url":"https://github.com/o/r/pull/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"},
+		{"number":1,"headRefName":"andrew/a","title":"Fix the thing","url":"https://github.com/o/r/pull/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"},
 		{"number":2,"headRefName":"andrew/b","url":"https://github.com/o/r/pull/2","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeStateStatus":"CLEAN"},
 		{"number":3,"headRefName":"andrew/c","url":"https://github.com/o/r/pull/3","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[{"status":"IN_PROGRESS"},{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"},
 		{"number":4,"headRefName":"andrew/d","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"},
@@ -77,7 +77,7 @@ func TestListPRStatusParses(t *testing.T) {
 		t.Fatalf("expected 5 PRs, got %d", len(got))
 	}
 	want := []PRStatus{
-		{Number: 1, HeadRefName: "andrew/a", URL: "https://github.com/o/r/pull/1", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateClean},
+		{Number: 1, HeadRefName: "andrew/a", Title: "Fix the thing", URL: "https://github.com/o/r/pull/1", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateClean},
 		{Number: 2, HeadRefName: "andrew/b", URL: "https://github.com/o/r/pull/2", State: PRStateMerged, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CINone, MergeStateStatus: MergeStateClean},
 		{Number: 3, HeadRefName: "andrew/c", URL: "https://github.com/o/r/pull/3", State: PRStateOpen, IsDraft: true, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateBehind},
 		{Number: 4, HeadRefName: "andrew/d", URL: "https://github.com/o/r/pull/4", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing, MergeStateStatus: MergeStateDirty},
@@ -96,7 +96,7 @@ func TestListPRStatusParses(t *testing.T) {
 	for _, a := range r.gotArgs {
 		joined += " " + a
 	}
-	for _, want := range []string{"--state", "all", "url", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
+	for _, want := range []string{"--state", "all", "title", "url", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
 		if !contains(joined, want) {
 			t.Errorf("expected %q in args, got %q", want, joined)
 		}
@@ -114,6 +114,42 @@ func TestListPRStatusParseError(t *testing.T) {
 	r := &fakeRunner{out: "not json"}
 	if _, err := New(r).ListPRStatus(""); err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestGetPRStatusParses(t *testing.T) {
+	r := &fakeRunner{out: `{"number":1717,"headRefName":"old/branch","title":"Old PR","url":"https://github.com/o/r/pull/1717","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"}`}
+	got, err := New(r).GetPRStatus("/tmp/repo", 1717)
+	if err != nil {
+		t.Fatalf("GetPRStatus err: %v", err)
+	}
+	want := PRStatus{
+		Number: 1717, HeadRefName: "old/branch", Title: "Old PR",
+		URL: "https://github.com/o/r/pull/1717", State: PRStateOpen,
+		ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateBehind,
+	}
+	if got != want {
+		t.Errorf("GetPRStatus: got %+v want %+v", got, want)
+	}
+	// gh invocation: gh pr view 1717 --json ...
+	if r.gotName != "gh" || len(r.gotArgs) < 3 || r.gotArgs[0] != "pr" || r.gotArgs[1] != "view" || r.gotArgs[2] != "1717" {
+		t.Errorf("expected `gh pr view 1717 ...`, got %s %v", r.gotName, r.gotArgs)
+	}
+}
+
+func TestGetPRStatusRejectsNonPositive(t *testing.T) {
+	if _, err := New(&fakeRunner{}).GetPRStatus("/tmp/repo", 0); err == nil {
+		t.Fatal("expected error for pr=0")
+	}
+	if _, err := New(&fakeRunner{}).GetPRStatus("/tmp/repo", -1); err == nil {
+		t.Fatal("expected error for pr=-1")
+	}
+}
+
+func TestGetPRStatusRunnerError(t *testing.T) {
+	r := &fakeRunner{err: errors.New("boom"), out: "bad"}
+	if _, err := New(r).GetPRStatus("/tmp/repo", 1); err == nil {
+		t.Fatal("expected error")
 	}
 }
 
