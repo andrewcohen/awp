@@ -253,16 +253,22 @@ func (c *Client) WorkspaceRevision(name string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// HeadDescription returns the first line of the working-copy commit's
-// description at dir. --ignore-working-copy skips the snapshot pass so this
-// is safe to call repeatedly during deck refresh without churning state.
-// Returns ("", nil) for an empty / no-description commit.
-func (c *Client) HeadDescription(dir string) (string, error) {
-	out, err := c.runner.Run(context.Background(), dir, "jj", "--ignore-working-copy", "log", "-r", "@", "--no-graph", "-T", "description.first_line()")
-	if err != nil {
-		return "", formatCommandError("resolve head description", err, out)
+// HeadDescription returns the working-copy commit's short change-id and
+// first description line at dir, tab-separated in the underlying jj
+// call. --ignore-working-copy skips the snapshot pass so this is safe to
+// call repeatedly during deck refresh without churning state. Either
+// field may be empty; both are when jj errors.
+func (c *Client) HeadDescription(dir string) (changeID, description string, err error) {
+	const tmpl = `change_id.shortest(8) ++ "\t" ++ description.first_line()`
+	out, runErr := c.runner.Run(context.Background(), dir, "jj", "--ignore-working-copy", "log", "-r", "@", "--no-graph", "-T", tmpl)
+	if runErr != nil {
+		return "", "", formatCommandError("resolve head description", runErr, out)
 	}
-	return strings.TrimSpace(out), nil
+	line := strings.TrimRight(out, "\n")
+	if i := strings.IndexByte(line, '\t'); i >= 0 {
+		return strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:]), nil
+	}
+	return strings.TrimSpace(line), "", nil
 }
 
 // AllBookmarksByRecency lists every bookmark deduped to a logical name, sorted

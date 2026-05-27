@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1049,6 +1050,43 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		return repos[i].repo < repos[k].repo
 	})
 
+	// Fan out jj HeadDescription per workspace path in parallel. Each
+	// call spawns a `jj log` subprocess (~10–30ms with
+	// --ignore-working-copy); serialized across N workspaces this used
+	// to dominate the enrichment pass. Running concurrently drops wall
+	// time to roughly the slowest single call. Skipped on the fast
+	// first paint where j == nil.
+	type headInfo struct{ changeID, desc string }
+	var headByPath map[string]headInfo
+	if j != nil {
+		var paths []string
+		seen := map[string]bool{}
+		for _, r := range repos {
+			for _, e := range repoMap[r.repo] {
+				p := strings.TrimSpace(e.Path)
+				if p == "" || seen[p] {
+					continue
+				}
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+		headByPath = make(map[string]headInfo, len(paths))
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, p := range paths {
+			wg.Add(1)
+			go func(p string) {
+				defer wg.Done()
+				id, desc, _ := j.HeadDescription(p)
+				mu.Lock()
+				headByPath[p] = headInfo{changeID: id, desc: desc}
+				mu.Unlock()
+			}(p)
+		}
+		wg.Wait()
+	}
+
 	var items []deckui.Item
 	for _, r := range repos {
 		entries := repoMap[r.repo]
@@ -1113,15 +1151,12 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				}
 			}
 
-			headDesc := ""
-			if j != nil && strings.TrimSpace(e.Path) != "" {
-				// Skip the head-description fetch on the fast first paint
-				// (j == nil) — it's a synchronous jj call per workspace and
-				// the enrichment pass runs ~50 ms later anyway.
-				// --ignore-working-copy keeps it cheap; errors are ignored
-				// since a missing description is just an empty field.
-				headDesc, _ = j.HeadDescription(e.Path)
-			}
+			// Head info comes from the parallel pre-fetch above; missing
+			// entry (e.g. j == nil on fast first paint, or empty path)
+			// leaves both fields blank — the enrichment pass ~50 ms
+			// later fills them in.
+			head := headByPath[strings.TrimSpace(e.Path)]
+			headDesc, headChangeID := head.desc, head.changeID
 			item := deckui.Item{
 				ProjectName:   r.project,
 				WorkspaceName: e.Name,
@@ -1133,6 +1168,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,
 				HeadDesc:      headDesc,
+				HeadChangeID:  headChangeID,
 				TmuxWindow:    sessionName,
 				SessionName:   sessionName,
 				Active:        active,

@@ -31,7 +31,7 @@ func TestBuildMiniDeckRowsFiltersAndSorts(t *testing.T) {
 		},
 		agentShell: map[string]bool{},
 	}
-	rows := buildMiniDeckRows(all, snap)
+	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows after filter, got %d: %+v", len(rows), rows)
 	}
@@ -79,7 +79,7 @@ func TestBuildMiniDeckRowsDropsStaleActiveRows(t *testing.T) {
 			deadSession: true,
 		},
 	}
-	rows := buildMiniDeckRows(all, snap)
+	rows := buildMiniDeckRows(all, snap, nil)
 	got := map[string]bool{}
 	for _, r := range rows {
 		got[r.Workspace] = true
@@ -125,7 +125,7 @@ func TestBuildMiniDeckRowsKeepsIdleUnreadWithDeadAgentShell(t *testing.T) {
 			session: true,
 		},
 	}
-	rows := buildMiniDeckRows(all, snap)
+	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 1 || rows[0].Workspace != "finished-turn" {
 		t.Fatalf("expected finished-turn to survive freshness check (idle+unread is durable), got %+v", rows)
 	}
@@ -150,7 +150,7 @@ func TestBuildMiniDeckRowsKeepsDefaultWorkspaces(t *testing.T) {
 		},
 		agentShell: map[string]bool{},
 	}
-	rows := buildMiniDeckRows(all, snap)
+	rows := buildMiniDeckRows(all, snap, nil)
 	got := map[string]bool{}
 	for _, r := range rows {
 		got[r.Workspace] = true
@@ -174,7 +174,7 @@ func TestBuildMiniDeckRowsKeepsAllWhenTmuxUnknown(t *testing.T) {
 	}
 	// snap.known == false (fast path / no tmux) → trust stored status.
 	snap := deckTmuxSnapshot{liveByName: map[string]string{}, agentShell: map[string]bool{}}
-	rows := buildMiniDeckRows(all, snap)
+	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row (snapshot unknown trusts state), got %d", len(rows))
 	}
