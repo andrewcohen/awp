@@ -147,6 +147,58 @@ func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedA
 	}
 }
 
+// migrateBookmarkPRNumbersIfNeeded resolves Bookmark → PR number using
+// the on-disk pr-status cache and persists the result on workspace
+// entries that pre-date the PROverride→PRNumber collapse (i.e. have a
+// bookmark but no PRNumber). Each successfully resolved entry is
+// rewritten via store.Update; entries we couldn't match are left
+// alone — they'll be retried next load if the cache picks the PR up.
+//
+// Mutates repoMap in place so the caller's downstream Item construction
+// reflects the freshly populated PRNumber field without re-reading the
+// store.
+func migrateBookmarkPRNumbersIfNeeded(store *state.JSONStore, repoMap map[string]map[string]workspace.Entry) {
+	cache, _, err := loadPRStatusCache()
+	if err != nil || len(cache) == 0 {
+		return
+	}
+	for repo, entries := range repoMap {
+		byHead, ok := cache[repo]
+		if !ok || len(byHead) == 0 {
+			continue
+		}
+		for name, e := range entries {
+			if e.PRNumber > 0 {
+				continue
+			}
+			bm := strings.TrimSpace(e.Bookmark)
+			if bm == "" {
+				continue
+			}
+			status, found := byHead[bm]
+			if !found || status.Number <= 0 {
+				continue
+			}
+			e.PRNumber = status.Number
+			entries[name] = e
+			capturedRepo := repo
+			capturedName := name
+			capturedPR := status.Number
+			if uerr := store.Update(repo, func(persisted map[string]workspace.Entry) map[string]workspace.Entry {
+				if cur, ok := persisted[capturedName]; ok && cur.PRNumber == 0 {
+					cur.PRNumber = capturedPR
+					persisted[capturedName] = cur
+				}
+				return persisted
+			}); uerr != nil {
+				deckDebugLogf("pr-number migrate err repo=%s ws=%s pr=%d err=%v", capturedRepo, capturedName, capturedPR, uerr)
+			} else {
+				deckDebugLogf("pr-number migrate ok repo=%s ws=%s bookmark=%s pr=%d", capturedRepo, capturedName, bm, capturedPR)
+			}
+		}
+	}
+}
+
 // prHasHead reports whether the byHead map (repo's PR cache) contains the
 // given bookmark/headRefName. Used by the diagnostic log line in the link
 // handler so the user can see at a glance whether the chosen bookmark
@@ -525,7 +577,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		updated := false
 		if err := linkStore.Update(repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
 			if cur, ok := entries[name]; ok {
-				cur.PROverride = prNumber
+				cur.PRNumber = prNumber
 				entries[name] = cur
 				updated = true
 			}
@@ -885,6 +937,16 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		return nil, err
 	}
 
+	// One-time lazy migration: for entries that pre-date the
+	// Bookmark+PROverride → PRNumber collapse, resolve Bookmark →
+	// headRefName via the current pr-status cache. If a match exists,
+	// persist Entry.PRNumber so future loads (and the new direct-lookup
+	// path) don't depend on the cache to identify the PR. Idempotent:
+	// entries already migrated (PRNumber > 0) and entries with no
+	// bookmark match (cache cold for that repo, or bookmark drifted)
+	// are no-ops.
+	migrateBookmarkPRNumbersIfNeeded(store, repoMap)
+
 	snap := captureDeckTmuxSnapshot(tmuxClient, fastTmux)
 
 	// adoptable: live [awp]<projectName>__* sessions not represented in state.
@@ -988,7 +1050,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				Path:          e.Path,
 				RepoRoot:      r.repo,
 				Bookmark:      strings.TrimSpace(e.Bookmark),
-				PROverride:    e.PROverride,
+				PRNumber:      e.PRNumber,
 				Status:        status,
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,
