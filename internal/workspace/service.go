@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -120,10 +121,17 @@ type Entry struct {
 	Name     string
 	Path     string
 	Bookmark string `json:",omitempty"`
-	// PROverride pins this workspace to a specific PR number, bypassing
-	// bookmark → headRefName lookup. Useful when the workspace's
-	// bookmark doesn't match the PR's head ref. Zero means no override.
-	PROverride    int    `json:",omitempty"`
+	// PRNumber pins this workspace to a specific PR. Set by `awp review`
+	// (the PR being reviewed), the `p s` chord, and the `B` link flow
+	// when the chosen bookmark resolves to exactly one PR. Zero means
+	// the workspace isn't associated with a PR — its bookmark is
+	// resolved via the bulk pr-status cache, or it simply doesn't have a
+	// PR yet.
+	//
+	// The JSON tag accepts the legacy field name "PROverride" via the
+	// custom UnmarshalJSON below — state files written before the
+	// rename keep loading.
+	PRNumber      int    `json:",omitempty"`
 	SessionID     string `json:",omitempty"`
 	SessionName   string `json:",omitempty"`
 	AgentWindowID string `json:",omitempty"`
@@ -135,6 +143,25 @@ type Entry struct {
 	// summons the workspace. Surfaces as a tmux status badge and the
 	// "notified" dot in the deck.
 	Unread bool `json:",omitempty"`
+}
+
+// UnmarshalJSON keeps reading old state files that still use the
+// "PROverride" key. The field was renamed to "PRNumber" as part of
+// collapsing the bookmark+PROverride lookup into a single PRNumber
+// path. Reads accept either key; writes always emit "PRNumber".
+func (e *Entry) UnmarshalJSON(data []byte) error {
+	type entryAlias Entry
+	aux := struct {
+		*entryAlias
+		PROverride int `json:",omitempty"`
+	}{entryAlias: (*entryAlias)(e)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if e.PRNumber == 0 && aux.PROverride != 0 {
+		e.PRNumber = aux.PROverride
+	}
+	return nil
 }
 
 type ListEntry struct {
@@ -898,13 +925,15 @@ func (s *service) RecordBookmark(workspaceName, bookmark string) error {
 }
 
 // RecordPROverride pins (or clears, via prNumber == 0) the PR number
-// for this workspace. Drives the deck `p s` chord's persistence.
+// for this workspace. Drives the deck `p s` chord's persistence and
+// the awp review write-through. Kept as "RecordPROverride" for service
+// interface stability — the underlying field is now Entry.PRNumber.
 func (s *service) RecordPROverride(workspaceName string, prNumber int) error {
 	if prNumber < 0 {
 		prNumber = 0
 	}
 	return s.mutateEntry(workspaceName, func(e *Entry) {
-		e.PROverride = prNumber
+		e.PRNumber = prNumber
 	})
 }
 

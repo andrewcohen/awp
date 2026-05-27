@@ -61,7 +61,7 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 		if qErr != nil {
 			reporter.Step(fmt.Sprintf("%s — merge-queue lookup failed: %v", repo, qErr))
 		}
-		byHead := convertGithubStatusesToDeckui(statuses, queued)
+		byHead := prStatusMapFromGithub(statuses, queued)
 		// Top up pinned-PR overrides that fell outside the bulk
 		// window. Walk this repo's workspace entries for PROverride > 0,
 		// see which numbers are absent from byHead, and fetch each
@@ -88,10 +88,10 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	return nil
 }
 
-// topUpMissingOverrides walks this repo's workspace state for
-// PROverride > 0 entries whose PR numbers aren't already in byHead, and
-// fetches each one individually via `gh pr view`. Returns a map of
-// headRefName → PRStatus to merge into byHead.
+// topUpMissingOverrides walks this repo's workspace state for entries
+// with PRNumber > 0 whose PRs aren't already in byHead, and fetches each
+// one individually via `gh pr view`. Returns a map of headRefName →
+// PRStatus to merge into byHead.
 //
 // Pinned PRs are typically older than the bulk-list window — a busy
 // repo can have hundreds of PRs more recent than the one a user is
@@ -105,8 +105,8 @@ func topUpMissingOverrides(store *state.JSONStore, gh *github.Client, repo strin
 	}
 	wantNumbers := map[int]bool{}
 	for _, e := range entries {
-		if e.PROverride > 0 {
-			wantNumbers[e.PROverride] = true
+		if e.PRNumber > 0 {
+			wantNumbers[e.PRNumber] = true
 		}
 	}
 	if len(wantNumbers) == 0 {
@@ -135,43 +135,10 @@ func topUpMissingOverrides(store *state.JSONStore, gh *github.Client, repo strin
 		if key == "" {
 			key = fmt.Sprintf("__pin_%d", n)
 		}
-		out[key] = deckui.PRStatus{
-			Number:           s.Number,
-			HeadRefName:      s.HeadRefName,
-			Title:            s.Title,
-			URL:              s.URL,
-			State:            deckui.PRState(s.State),
-			IsDraft:          s.IsDraft,
-			ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
-			CIState:          deckui.PRCIState(s.CIState),
-			MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),
-		}
+		out[key] = prStatusFromGithub(s, false)
 		deckDebugLogf("prStatus topUp ok repo=%s pr=%d head=%s state=%s", repo, n, s.HeadRefName, s.State)
 	}
 	return out
-}
-
-// convertGithubStatusesToDeckui translates the github.PRStatus list into
-// the deckui.PRStatus map keyed by headRefName. queuedHeads stamps
-// IsInMergeQueue=true on PRs whose head ref appears in the set; a nil or
-// empty map leaves every entry's IsInMergeQueue at false.
-func convertGithubStatusesToDeckui(statuses []github.PRStatus, queuedHeads map[string]bool) map[string]deckui.PRStatus {
-	byHead := make(map[string]deckui.PRStatus, len(statuses))
-	for _, s := range statuses {
-		byHead[s.HeadRefName] = deckui.PRStatus{
-			Number:           s.Number,
-			HeadRefName:      s.HeadRefName,
-			Title:            s.Title,
-			URL:              s.URL,
-			State:            deckui.PRState(s.State),
-			IsDraft:          s.IsDraft,
-			IsInMergeQueue:   queuedHeads[s.HeadRefName],
-			ReviewDecision:   deckui.PRReviewDecision(s.ReviewDecision),
-			CIState:          deckui.PRCIState(s.CIState),
-			MergeStateStatus: deckui.PRMergeStateStatus(s.MergeStateStatus),
-		}
-	}
-	return byHead
 }
 
 // spawnPRStatusJob spawns a detached subprocess via the jobs subsystem.

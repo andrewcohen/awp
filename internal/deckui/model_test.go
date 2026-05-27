@@ -1733,7 +1733,7 @@ func TestPRRepairPrompt(t *testing.T) {
 }
 
 func TestPRStatusLabelHonorsPROverride(t *testing.T) {
-	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "missing", PROverride: 99}
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "missing", PRNumber: 99}
 	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
 		"/r": {"someone-elses/branch": {
 			Number: 99, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
@@ -1877,7 +1877,7 @@ func drainCmd(cmd tea.Cmd) {
 }
 
 func TestPRMenuSetKeyBlankClearsOverride(t *testing.T) {
-	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat", PROverride: 42}
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat", PRNumber: 42}
 	gotPR := -1
 	model := New([]Item{item}, nil).WithPRNumberLinkHandler(func(_ Item, n int) error {
 		gotPR = n

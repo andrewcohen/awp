@@ -141,6 +141,25 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	project := filepath.Base(repoRoot)
 	sessionName := DeckSessionName(project, name)
 
+	// Write the just-fetched PR into the pr-status cache so the deck's
+	// `p o` chord (and the row glyph) resolve immediately. Without this
+	// write-through there's a race window between the new workspace
+	// appearing in workspace-state.json and the next pr-status fetch
+	// completing — during which prStatusLabelForItem returns "no PR".
+	// The cache merge is the same writer the periodic job uses.
+	if pr.URL != "" {
+		status := prStatusFromGithub(github.PRStatusFromInfo(pr), false)
+		persistPRStatusMerge(map[string]map[string]deckui.PRStatus{
+			repoRoot: {pr.HeadRef: status},
+		}, time.Now())
+		deckDebugLogf("review wrote-through pr=#%d head=%s repo=%s", pr.Number, pr.HeadRef, repoRoot)
+		// Pin the workspace to this PR number so the lookup is direct
+		// regardless of bookmark drift.
+		if err := svc.RecordPROverride(name, pr.Number); err != nil {
+			deckDebugLogf("review RecordPROverride err ws=%s pr=%d err=%v", name, pr.Number, err)
+		}
+	}
+
 	reviewCmd := fmt.Sprintf("tuicr pr %d", pr.Number)
 	prDescWindow := "pr description"
 	prDescTarget := sessionName + ":" + prDescWindow
