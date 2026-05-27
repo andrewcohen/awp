@@ -3,6 +3,8 @@ package deckui
 import (
 	"fmt"
 	"io"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +55,7 @@ type Item struct {
 	Unread        bool
 	PromptPreview string
 	HeadDesc      string
+	HeadChangeID  string // jj short change-id of the working-copy commit
 	TmuxWindow    string
 	SessionName   string
 	Active        bool
@@ -582,6 +585,7 @@ type PRStatus struct {
 	Number           int
 	HeadRefName      string
 	Title            string
+	Author           string
 	URL              string
 	State            PRState
 	IsDraft          bool
@@ -834,8 +838,13 @@ func New(items []Item, handler Handler) Model {
 	return m
 }
 
+// indexCurrent returns the index in the visible items() list of the
+// workspace whose tmux session the user is currently focused on, or -1
+// when none. The cursor is indexed into items() (filtered + sorted), so
+// callers that set m.cursor from this must walk the visible list, not
+// itemsAll.
 func (m Model) indexCurrent() int {
-	for i, it := range m.itemsAll {
+	for i, it := range m.items() {
 		if it.Current {
 			return i
 		}
@@ -886,6 +895,14 @@ func (m Model) WithPRStatusSeed(byRepo map[string]map[string]PRStatus, fetchedAt
 	}
 	if fetchedAt != nil {
 		m.prStatusFetchedAt = fetchedAt
+	}
+	// items() ordering depends on the PR cache (titles drive the sort).
+	// New() set m.cursor against the pre-seed order, so once the seed
+	// lands the cursor would point at a different row. Re-resolve to
+	// the "current" workspace's new index so the deck opens onto the
+	// workspace the user is actually in.
+	if idx := m.indexCurrent(); idx >= 0 {
+		m.cursor = idx
 	}
 	return m
 }
@@ -1079,17 +1096,124 @@ func (m Model) items() []Item {
 		src = filtered
 	}
 	f := strings.ToLower(strings.TrimSpace(m.filter))
-	if f == "" {
-		return src
+	if f != "" {
+		out := make([]Item, 0, len(src))
+		for _, it := range src {
+			if strings.Contains(strings.ToLower(it.WorkspaceName), f) ||
+				strings.Contains(strings.ToLower(it.ProjectName), f) ||
+				strings.Contains(strings.ToLower(m.displayLabel(it)), f) {
+				out = append(out, it)
+			}
+		}
+		src = out
 	}
-	out := make([]Item, 0, len(src))
-	for _, it := range src {
-		if strings.Contains(strings.ToLower(it.WorkspaceName), f) ||
-			strings.Contains(strings.ToLower(it.ProjectName), f) {
-			out = append(out, it)
+	// Sort by (project, displayed label) so rows alphabetize by what the
+	// user actually sees — PR title when one is resolved from the cache,
+	// workspace name otherwise. Stable sort preserves the upstream
+	// ordering for ties.
+	sorted := append([]Item(nil), src...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].ProjectName != sorted[j].ProjectName {
+			return sorted[i].ProjectName < sorted[j].ProjectName
+		}
+		return strings.ToLower(m.displayLabel(sorted[i])) < strings.ToLower(m.displayLabel(sorted[j]))
+	})
+	return sorted
+}
+
+// displayLabel returns the text that renders on a row: "#N title" when a
+// PR is resolvable from the cache, falling back to the workspace name.
+func (m Model) displayLabel(it Item) string {
+	if pr, ok := m.resolvePRStatus(it); ok {
+		if t := strings.TrimSpace(pr.Title); t != "" {
+			return fmt.Sprintf("#%d %s", pr.Number, t)
 		}
 	}
-	return out
+	return it.WorkspaceName
+}
+
+// Nerd Font glyphs used on the meta line. Both require a Nerd Font
+// to render \u2014 they fall back to missing-glyph boxes otherwise.
+const (
+	glyphBranch   = "\uf418"     // nf-oct-git_branch
+	glyphKeyboard = "\U000F030C" // nf-md-keyboard
+)
+
+// metaLine returns the secondary text for a workspace row in a dense
+// glyph-prefixed format: "@author · <branch> · :port · <kbd> \"prompt\"".
+// Glyphs disambiguate segments so labels can stay out:
+//   @                 author (PR author)
+//   nf-oct-git_branch branch (jj bookmark; HeadDesc fallback)
+//   :                 port   (dev URL's port)
+//   nf-md-keyboard    prompt (truncated PromptPreview, quoted)
+// Each slot drops out when empty; falls back to the workspace name
+// when none of the slots resolve.
+func (m Model) metaLine(it Item) string {
+	var parts []string
+	if pr, ok := m.resolvePRStatus(it); ok {
+		if author := strings.TrimSpace(pr.Author); author != "" {
+			parts = append(parts, "@"+author)
+		}
+	}
+	// Bookmark wins over HeadDesc — see note in the prior revision:
+	// bookmarks load sync; HeadDesc arrives via the async jj enrichment
+	// pass and would visibly "pop" the slot from branch name → commit
+	// subject if preferred.
+	branch := strings.TrimSpace(it.Bookmark)
+	if branch == "" {
+		branch = strings.TrimSpace(it.HeadDesc)
+	}
+	if branch != "" {
+		parts = append(parts, glyphBranch+" "+branch)
+	}
+	if port := devURLPort(m.devURLs[it.SessionName]); port != "" {
+		parts = append(parts, ":"+port)
+	}
+	if prompt := promptPreviewSnippet(it.PromptPreview, 40); prompt != "" {
+		parts = append(parts, glyphKeyboard+` "`+prompt+`"`)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " · ")
+	}
+	// Fallback when no PR/branch/dev/prompt slots resolve: show the
+	// branch glyph + jj short change-id. Keep the shape constant from
+	// first paint — render "<glyph> …" while the change-id is still
+	// loading from the async enrichment pass, then fill it in. Avoids
+	// the workspace-name → change-id swap that previously read as a
+	// "pop" in the row.
+	id := strings.TrimSpace(it.HeadChangeID)
+	if id == "" {
+		id = "…"
+	}
+	return glyphBranch + " " + id
+}
+
+// devURLPort extracts the port from a dev URL like
+// "http://localhost:5173" → "5173". Returns "" when the URL can't be
+// parsed or has no port.
+func devURLPort(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Port()
+}
+
+// promptPreviewSnippet sanitizes a multi-line prompt preview into a
+// single-line snippet of at most n characters. Replaces newlines with
+// spaces, collapses runs of whitespace, and truncates with an ellipsis
+// — so even a long pasted prompt fits cleanly on the meta line.
+func promptPreviewSnippet(p string, n int) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.Join(strings.Fields(p), " ")
+	return truncate(p, n)
 }
 
 // itemHasOpenPR returns true when the workspace's bookmark maps to a PR in
@@ -2930,6 +3054,16 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		Bookmark: strings.TrimSpace(req.Bookmark),
 		Prompt:   strings.TrimSpace(req.Prompt),
 	}
+	// Pre-arm pendingSelect with the new workspace's likely name so the
+	// cursor snaps to it as soon as the refresh after the subprocess
+	// write lands. If the eventual name differs (e.g. the create flow
+	// generated a name when both Name and Bookmark were blank) the
+	// snap will be a no-op and the cursor stays put.
+	if n := strings.TrimSpace(req.Name); n != "" {
+		m.pendingSelect = Item{WorkspaceName: n}
+	} else if b := strings.TrimSpace(req.Bookmark); b != "" {
+		m.pendingSelect = Item{WorkspaceName: b}
+	}
 	launcher := m.asyncJobLauncher
 	dispatch := func() tea.Msg {
 		err := launcher(spec)
@@ -3047,57 +3181,37 @@ func (m Model) View() string {
 		return m.promptForm.view(m.width, m.height)
 	}
 
-	// 70/30 split with a 3-col gap between panes when the terminal is
-	// wide enough; right pane caps at a 28-col minimum so PR titles stay
-	// readable. Below `deckStackThreshold` cols the right pane is
-	// hidden entirely — the list renders full-width like the
-	// bookmark/review pickers do. Hiding (rather than stacking on top)
-	// keeps the deck row positions stable as the cursor moves over rows
-	// with different per-workspace detail heights.
-	narrow := m.deckStacked()
-	const gap = 3
-	var leftWidth, rightWidth int
-	if narrow {
-		leftWidth = m.width
-		rightWidth = 0
-	} else {
-		rightWidth = max(28, (m.width-gap)*30/100)
-		leftWidth = m.width - rightWidth - gap
-		if leftWidth < 32 {
-			// Pathological narrow case above the threshold — guarantee
-			// the list its min and let the right shrink.
-			leftWidth = 32
-			rightWidth = max(0, m.width-leftWidth-gap)
-		}
-	}
-
+	// The workspace row list runs full-width — per-row metadata lives
+	// on the second line of each row (see metaLine). The new-menu and
+	// open pickers keep their 70/30 right-pane help block when the
+	// terminal is wide enough, falling back to full-width below
+	// deckStackThreshold cols. Other pickers (bookmark, review) are
+	// always single-column.
 	var left, right string
 	switch {
 	case m.newMenuMode:
-		left = m.renderNewMenu(leftWidth)
-		if !narrow {
-			right = m.renderNewMenuDetails(rightWidth)
+		leftW, rightW := pickerSplit(m.width, m.deckStacked())
+		left = m.renderNewMenu(leftW)
+		if rightW > 0 {
+			right = m.renderNewMenuDetails(rightW)
 		}
 	case m.openMode:
-		left = m.renderOpenList(leftWidth)
-		if !narrow {
-			right = m.renderOpenDetails(rightWidth)
+		leftW, rightW := pickerSplit(m.width, m.deckStacked())
+		left = m.renderOpenList(leftW)
+		if rightW > 0 {
+			right = m.renderOpenDetails(rightW)
 		}
 	case m.bookmarkMode:
-		// Full-width like the review picker. JoinHorizontal between a
-		// short loading-state left pane and a tall static right pane
-		// caused painting bleed during load (lipgloss pads with empty
-		// rows, not space-filled rows, and JoinVertical's pad newlines
-		// don't clear residue). Single-column avoids the issue and
-		// gives the list more room.
+		// JoinHorizontal between a short loading-state left pane and a
+		// tall static right pane caused painting bleed during load
+		// (lipgloss pads with empty rows, not space-filled rows, and
+		// JoinVertical's pad newlines don't clear residue).
+		// Single-column avoids the issue and gives the list more room.
 		left = m.renderBookmarkList(m.width)
 	case m.reviewMode:
 		left = m.renderReviewList(m.width)
 	default:
-		left = m.renderList(leftWidth)
-		if !narrow {
-			right = m.renderDetails(rightWidth)
-		}
+		left = m.renderList(m.width)
 	}
 	var body string
 	if right == "" {
@@ -3572,7 +3686,7 @@ func (m Model) renderList(width int) string {
 		} else if dim {
 			labelStyle = s.Muted
 		}
-		label := truncate(item.WorkspaceName, max(10, width-21))
+		label := truncate(m.displayLabel(item), max(10, width-21))
 		// Status is canonical in JSON, so render the stored glyph
 		// immediately on the fast first paint. The only tmux-derived
 		// override is `working` → `exited` (agent shell death — Claude
@@ -3594,6 +3708,17 @@ func (m Model) renderList(width int) string {
 		if i == m.cursor {
 			cursorRow = len(body) - 1
 		}
+		// Secondary line: muted @author · head · dev. Indented past
+		// where the label starts so it visually sits *under* the row
+		// rather than next to it — gives the eye a clear "this belongs
+		// to the row above" cue without adding row height.
+		// Truncated to fit; lipgloss.Width pads but doesn't clip.
+		const metaIndentW = prefixWidth + 1 + 1 + 1 + 4 // prefix + space + glyph + space + extra subordinate indent
+		metaIndent := strings.Repeat(" ", metaIndentW)
+		metaRoom := max(10, width-2-metaIndentW)
+		metaText := truncate(m.metaLine(item), metaRoom)
+		body = append(body, metaIndent+s.Muted.Render(metaText))
+		projectHeaderForRow = append(projectHeaderForRow, lastProjectHeaderIdx)
 	}
 
 	capacity := m.deckBodyCapacity()
@@ -3628,18 +3753,33 @@ func (m Model) renderList(width int) string {
 	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(out, "\n"))
 }
 
-// deckStackThreshold is the minimum terminal width (cols) for the deck
-// to render in side-by-side layout. Below this the right details pane
-// is hidden entirely and the list renders full-width — varying
-// per-row right-pane height would otherwise make the list jump on
-// every cursor move.
+// deckStackThreshold is the minimum terminal width (cols) for the
+// new-menu / open pickers to render in side-by-side layout with a
+// right-pane help block. Below this the picker takes the full width
+// (mirroring the bookmark/review pickers).
 const deckStackThreshold = 90
 
 // deckStacked reports whether the deck is in the narrow-terminal
-// layout where the right pane is hidden and the list renders
-// full-width.
+// layout where pickers render full-width without a right pane.
 func (m Model) deckStacked() bool {
 	return m.width > 0 && m.width < deckStackThreshold
+}
+
+// pickerSplit returns (leftWidth, rightWidth) for the new-menu / open
+// pickers: a 70/30 split with a 3-col gutter when wide enough, or full
+// width with a zero right pane in stacked mode.
+func pickerSplit(total int, stacked bool) (int, int) {
+	if stacked {
+		return total, 0
+	}
+	const gap = 3
+	right := max(28, (total-gap)*30/100)
+	left := total - right - gap
+	if left < 32 {
+		left = 32
+		right = max(0, total-left-gap)
+	}
+	return left, right
 }
 
 // deckBodyCapacity returns the number of scrollable body rows the left
@@ -3745,10 +3885,17 @@ func (m *Model) clampDeckViewport() {
 	m.deckYOffset = yoff
 }
 
-// deckBodyCursorRow returns the body-row index of the workspace row
-// corresponding to items[cursor], mirroring renderList's body layout:
-// each project starts with a 1-line header, and every project after
-// the first is preceded by a 1-line blank spacer.
+// itemBodyHeight is the number of body lines each workspace item
+// occupies: a primary row (status + label + PR glyph) and a secondary
+// muted metadata line (@author · head · dev). Project headers and
+// inter-project spacers remain 1 line each.
+const itemBodyHeight = 2
+
+// deckBodyCursorRow returns the body-row index of the PRIMARY line of
+// the workspace row corresponding to items[cursor]. Mirrors
+// renderList's body layout: each project starts with a 1-line header,
+// every project after the first is preceded by a 1-line blank spacer,
+// and each item contributes itemBodyHeight lines.
 func deckBodyCursorRow(items []Item, cursor int) int {
 	if cursor < 0 || cursor >= len(items) {
 		return 0
@@ -3761,10 +3908,7 @@ func deckBodyCursorRow(items []Item, cursor int) int {
 			projects++
 		}
 	}
-	// body layout: P headers + (P-1) spacers before cursor's row;
-	// cursor's row itself sits at index = cursor + headersBefore + spacers
-	// where headersBefore == projects and spacers == projects - 1.
-	return cursor + 2*projects - 1
+	return cursor*itemBodyHeight + 2*projects - 1
 }
 
 // deckBodyHeaderRowForCursor returns the body-row index of the project
@@ -3790,7 +3934,7 @@ func deckBodyHeaderRowForCursor(items []Item, cursor int) int {
 			}
 			bodyRow++ // advance past header line
 		}
-		bodyRow++ // advance past item line
+		bodyRow += itemBodyHeight // advance past item (primary + meta lines)
 	}
 	return -1
 }
@@ -3810,7 +3954,7 @@ func deckBodyTotalRows(items []Item) int {
 			projects++
 		}
 	}
-	return len(items) + 2*projects - 1
+	return len(items)*itemBodyHeight + 2*projects - 1
 }
 
 // keyGroup is a labeled group of (key, description) rows shown in both the
@@ -3881,173 +4025,6 @@ func deckKeyGroups() []keyGroup {
 				{"q / esc", "quit"},
 			},
 		},
-	}
-}
-
-func (m Model) renderDetails(width int) string {
-	item, ok := m.selected()
-	if !ok {
-		title := lipgloss.NewStyle().Bold(true).Render("details")
-		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(title + "\n\nSelect a workspace.")
-	}
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true)
-	// Title: bold workspace name + muted dot + muted project name.
-	// Replaces the redundant Project / Workspace / Status / Live rows.
-	titleLine := lipgloss.NewStyle().Bold(true).Render(item.WorkspaceName)
-	if p := strings.TrimSpace(item.ProjectName); p != "" {
-		titleLine += muted.Render("  ·  " + p)
-	}
-	// Faint horizontal rule between section blocks. Sized to the panel's
-	// inner content width (panel padding eats 2 cols, leave 2 more for
-	// breathing room).
-	ruleWidth := width - 4
-	if ruleWidth < 4 {
-		ruleWidth = 4
-	}
-	rule := muted.Render(strings.Repeat("─", ruleWidth))
-	// Label column for PR / Head / Dev. Fixed-width muted prefix so the
-	// values line up cleanly, and a 6-col continuation indent for the
-	// PR title wrap.
-	const labelW = 6
-	labelSlot := lipgloss.NewStyle().Width(labelW).Foreground(lipgloss.Color(colMuted))
-	contIndent := strings.Repeat(" ", labelW)
-
-	lines := []string{titleLine, ""}
-	// Each section is appended only if it has content; the rule is the
-	// separator between adjacent non-empty sections, so we only emit it
-	// when prior content already exists.
-	hasContent := false
-	addSection := func(rows ...string) {
-		if hasContent {
-			lines = append(lines, rule)
-		}
-		lines = append(lines, rows...)
-		hasContent = true
-	}
-
-	var topRows []string
-	if pr, label, ok := m.prStatusLabelForItem(item); ok {
-		statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(pr)))
-		topRows = append(topRows, fmt.Sprintf("%s#%d · %s", labelSlot.Render("PR"), pr.Number, statusStyle.Render(label)))
-		if t := strings.TrimSpace(pr.Title); t != "" {
-			topRows = append(topRows, contIndent+t)
-		}
-	}
-	if head := strings.TrimSpace(item.HeadDesc); head != "" {
-		topRows = append(topRows, labelSlot.Render("Head")+head)
-	}
-	if url := m.devURLs[item.SessionName]; url != "" {
-		linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colLink)).Underline(true)
-		topRows = append(topRows, labelSlot.Render("Dev")+linkStyle.Render(url))
-	}
-	if len(topRows) > 0 {
-		addSection(topRows...)
-	}
-	if prompt := strings.TrimSpace(item.PromptPreview); prompt != "" {
-		addSection(accent.Render("Prompt"), truncatePrompt(prompt, width, 4))
-	}
-	if act := renderActivityBlock(m.jobs, item, width); act != "" {
-		addSection(act)
-	}
-	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(lines, "\n"))
-}
-
-// renderActivityBlock renders the per-workspace "Recent activity" list:
-// up to 5 most-recent jobs whose Spec ties them to the selected
-// workspace. Returns "" when no jobs match — the caller decides whether
-// to show a placeholder.
-func renderActivityBlock(allJobs []Job, item Item, width int) string {
-	matching := make([]Job, 0, 8)
-	for _, j := range allJobs {
-		if !jobMatchesWorkspace(j, item) {
-			continue
-		}
-		matching = append(matching, j)
-	}
-	if len(matching) == 0 {
-		return ""
-	}
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	const maxRows = 5
-	rows := []string{headerStyle.Render("Recent activity")}
-	for i, j := range matching {
-		if i >= maxRows {
-			rows = append(rows, dimStyle.Render(fmt.Sprintf("  … %d more (J)", len(matching)-maxRows)))
-			break
-		}
-		rows = append(rows, "  "+formatActivityRow(j, width-2))
-	}
-	return strings.Join(rows, "\n")
-}
-
-func jobMatchesWorkspace(j Job, item Item) bool {
-	if strings.TrimSpace(item.Path) != "" && j.WorkspacePath == item.Path {
-		return true
-	}
-	if strings.TrimSpace(item.WorkspaceName) != "" &&
-		j.WorkspaceName == item.WorkspaceName &&
-		j.RepoRoot == item.RepoRoot {
-		return true
-	}
-	return false
-}
-
-func formatActivityRow(j Job, width int) string {
-	glyph, color := activityGlyph(j.Status)
-	glyphStyled := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true).Render(glyph)
-	label := j.Action
-	if j.Action == "custom" && strings.TrimSpace(j.Title) != "" {
-		// Title is "<name> · <workspace>"; take the leading component.
-		if idx := strings.Index(j.Title, " · "); idx > 0 {
-			label = j.Title[:idx]
-		} else {
-			label = j.Title
-		}
-	}
-	rel := relativeTimeShort(j.StartedAt, j.EndedAt, j.Status)
-	relStyled := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(rel)
-	return fmt.Sprintf("%s %s   %s", glyphStyled, label, relStyled)
-}
-
-func activityGlyph(s JobStatus) (glyph, color string) {
-	switch s {
-	case JobPending, JobRunning:
-		return "▶", colInfo
-	case JobDone:
-		return "✓", colSuccess
-	case JobError:
-		return "⚠", colDanger
-	case JobCancelled:
-		return "·", colMuted
-	case JobOrphaned:
-		return "☠", colWarning
-	}
-	return "·", colMuted
-}
-
-func relativeTimeShort(started, ended time.Time, status JobStatus) string {
-	ref := ended
-	if ref.IsZero() {
-		ref = started
-	}
-	if ref.IsZero() {
-		return ""
-	}
-	d := time.Since(ref)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
 
@@ -5026,30 +5003,6 @@ func findHintStep[T any](r rune, lookup map[string]T, prefix map[rune]bool, pend
 		*pending = r
 	}
 	return zero, false
-}
-
-// truncatePrompt wraps prompt to width and keeps the first maxLines lines,
-// appending an ellipsis when content was dropped. Long single-line prompts
-// otherwise wrap into a vertical wall that overflows the details panel.
-func truncatePrompt(prompt string, width, maxLines int) string {
-	prompt = strings.TrimRight(prompt, "\n")
-	if maxLines <= 0 || width <= 0 {
-		return prompt
-	}
-	wrapped := lipgloss.NewStyle().Width(width).Render(prompt)
-	lines := strings.Split(wrapped, "\n")
-	if len(lines) <= maxLines {
-		return prompt
-	}
-	kept := lines[:maxLines]
-	last := strings.TrimRight(kept[maxLines-1], " ")
-	if lipgloss.Width(last)+2 > width {
-		last = truncate(last, max(1, width-1)) + "…"
-	} else {
-		last += " …"
-	}
-	kept[maxLines-1] = last
-	return strings.Join(kept, "\n")
 }
 
 func truncate(value string, width int) string {

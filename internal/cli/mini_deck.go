@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -26,7 +27,8 @@ func runMiniDeck(runner Runner, in io.Reader, out io.Writer) error {
 	}
 	tc := tmux.New(runner)
 	snap := captureDeckTmuxSnapshot(tc, false)
-	rows := buildMiniDeckRows(all, snap)
+	prCache, _, _ := loadPRStatusCache()
+	rows := buildMiniDeckRows(all, snap, prCache)
 
 	// Always launch the TUI, even with zero rows — the empty-state
 	// view renders "Nothing waiting on you." and lets the user
@@ -90,7 +92,7 @@ func jumpToMiniDeckRow(tc *tmux.Client, store *state.JSONStore, row deckui.MiniR
 // and let a later refresh correct it.
 //
 // Sorted by project name then workspace name so the list is stable.
-func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxSnapshot) []deckui.MiniRow {
+func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxSnapshot, prCache map[string]map[string]deckui.PRStatus) []deckui.MiniRow {
 	var rows []deckui.MiniRow
 	for repoRoot, entries := range all {
 		project := projectNameForRepo(repoRoot)
@@ -104,6 +106,7 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 			if !deckui.AttentionIncluded(e.Status, e.Unread, active) {
 				continue
 			}
+			prTitle, prNum := resolvePR(prCache, repoRoot, e.PRNumber, e.Bookmark)
 			rows = append(rows, deckui.MiniRow{
 				Project:   project,
 				Workspace: name,
@@ -111,6 +114,8 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 				Path:      e.Path,
 				Status:    e.Status,
 				Unread:    e.Unread,
+				PRTitle:   prTitle,
+				PRNumber:  prNum,
 			})
 		}
 	}
@@ -118,7 +123,45 @@ func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxS
 		if rows[i].Project != rows[j].Project {
 			return rows[i].Project < rows[j].Project
 		}
-		return rows[i].Workspace < rows[j].Workspace
+		return strings.ToLower(miniDisplayLabel(rows[i])) < strings.ToLower(miniDisplayLabel(rows[j]))
 	})
 	return rows
+}
+
+// miniDisplayLabel returns the text that will render on a mini-deck row:
+// "#N PRTitle" when a PR is resolved from the cache, workspace name
+// otherwise.
+func miniDisplayLabel(r deckui.MiniRow) string {
+	if t := strings.TrimSpace(r.PRTitle); t != "" && r.PRNumber > 0 {
+		return fmt.Sprintf("#%d %s", r.PRNumber, t)
+	}
+	return r.Workspace
+}
+
+// resolvePR mirrors deckui.Model.resolvePRStatus: prefer the pinned
+// PRNumber, fall back to bookmark-keyed lookup. Returns the PR title
+// and number, or ("", 0) when no matching PR is present in the cache.
+func resolvePR(cache map[string]map[string]deckui.PRStatus, repo string, prNumber int, bookmark string) (string, int) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return "", 0
+	}
+	byHead, ok := cache[repo]
+	if !ok {
+		return "", 0
+	}
+	if prNumber > 0 {
+		for _, s := range byHead {
+			if s.Number == prNumber {
+				return s.Title, s.Number
+			}
+		}
+		return "", 0
+	}
+	if bm := strings.TrimSpace(bookmark); bm != "" {
+		if s, ok := byHead[bm]; ok {
+			return s.Title, s.Number
+		}
+	}
+	return "", 0
 }

@@ -1517,7 +1517,7 @@ type fmtErr string
 
 func (e fmtErr) Error() string { return string(e) }
 
-func TestDevURLsMsgPopulatesDetails(t *testing.T) {
+func TestDevURLsMsgPopulatesMetaLine(t *testing.T) {
 	item := Item{
 		ProjectName:   "awp",
 		WorkspaceName: "port-capture",
@@ -1527,26 +1527,22 @@ func TestDevURLsMsgPopulatesDetails(t *testing.T) {
 		Active:        true,
 	}
 	model := New([]Item{item}, nil)
-	// Before any DevURLsMsg, the Dev line must not appear.
-	if got := model.renderDetails(80); strings.Contains(got, "Dev ") {
-		t.Fatalf("renderDetails should not show Dev line before msg:\n%s", got)
+	// Before any DevURLsMsg, the meta line must not advertise a port.
+	if got := model.metaLine(item); strings.Contains(got, ":5173") {
+		t.Fatalf("metaLine should not show :5173 before msg, got %q", got)
 	}
 	updated, _ := model.Update(DevURLsMsg{URLs: map[string]string{
 		"awp/port-capture": "http://localhost:5173",
 	}})
 	m := updated.(Model)
-	got := m.renderDetails(80)
-	if !strings.Contains(got, "Dev ") {
-		t.Fatalf("renderDetails should show Dev line after msg:\n%s", got)
+	if got := m.metaLine(item); !strings.Contains(got, ":5173") {
+		t.Fatalf("metaLine should show :5173 after msg, got %q", got)
 	}
-	if !strings.Contains(got, "http://localhost:5173") {
-		t.Fatalf("renderDetails should contain the URL:\n%s", got)
-	}
-	// New snapshot with no URL clears the line.
+	// New snapshot with no URL clears the segment.
 	updated, _ = m.Update(DevURLsMsg{URLs: map[string]string{}})
 	m = updated.(Model)
-	if strings.Contains(m.renderDetails(80), "Dev ") {
-		t.Fatal("renderDetails should clear Dev line when URL drops")
+	if got := m.metaLine(item); strings.Contains(got, ":5173") {
+		t.Fatalf("metaLine should clear :5173 when URL drops, got %q", got)
 	}
 }
 
@@ -1722,7 +1718,7 @@ func TestPRInMergeQueueGlyphAndLabel(t *testing.T) {
 	}
 }
 
-func TestDetailsRendersPRTitleAndStatus(t *testing.T) {
+func TestRowLabelRendersPRNumberAndTitle(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
 		"/r": {"feat": {
@@ -1730,13 +1726,8 @@ func TestDetailsRendersPRTitleAndStatus(t *testing.T) {
 			State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
 		}},
 	}, nil)
-	model.width = 120
-	model.height = 30
-	out := model.renderDetails(60)
-	for _, want := range []string{"#42", "Add the widget", "open"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("expected %q in details, got:\n%s", want, out)
-		}
+	if got := model.displayLabel(item); !strings.Contains(got, "#42") || !strings.Contains(got, "Add the widget") {
+		t.Fatalf("displayLabel should contain '#42' and the PR title, got %q", got)
 	}
 }
 
@@ -1982,14 +1973,12 @@ func TestClampDeckViewportEdgeTriggered(t *testing.T) {
 	}
 
 	// Move cursor down within the scrolloff-aware safe zone — YOffset
-	// must NOT change. cursorBodyRow = cursor + 1 (header at body[0],
-	// cursor's row at body[cursor+1]). With deckScrollOff = 3 and
-	// capacity = 12, the cursor enters the bottom margin when
-	// cursorRow + scrolloff >= capacity, i.e. cursorRow >= 9 (c >= 8).
-	// So c = 1..7 keeps yoff at 0.
+	// must NOT change. cursorBodyRow = cursor*itemBodyHeight + 1 (header
+	// at body[0], cursor's primary row at body[cursor*H+1]). The cursor
+	// enters the bottom margin when cursorRow + scrolloff >= capacity.
 	prior := m.deckYOffset
 	cap := m.deckBodyCapacity()
-	safeUpper := cap - 2 - deckScrollOff // last c that stays inside the safe zone
+	safeUpper := (cap - 1 - deckScrollOff - 1) / itemBodyHeight // last c that stays inside the safe zone
 	for c := 1; c <= safeUpper; c++ {
 		m.cursor = c
 		(&m).clampDeckViewport()
