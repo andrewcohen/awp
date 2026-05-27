@@ -37,11 +37,11 @@ type fakeJJ struct {
 	abandoned            []string
 	abandonErr           error
 	revisionLookupErr    error
-	editRevCalls         []editRevCall
-	editRevErr           error
+	newRevCalls          []newRevCall
+	newRevErr            error
 }
 
-type editRevCall struct {
+type newRevCall struct {
 	Path     string
 	Revision string
 }
@@ -83,11 +83,11 @@ func (f *fakeJJ) TrackBookmark(bookmarkName string) error {
 	return nil
 }
 
-func (f *fakeJJ) EditRevision(path, revision string) error {
-	if f.editRevErr != nil {
-		return f.editRevErr
+func (f *fakeJJ) NewOnRevision(path, revision string) error {
+	if f.newRevErr != nil {
+		return f.newRevErr
 	}
-	f.editRevCalls = append(f.editRevCalls, editRevCall{Path: path, Revision: revision})
+	f.newRevCalls = append(f.newRevCalls, newRevCall{Path: path, Revision: revision})
 	return nil
 }
 func (f *fakeJJ) RenameWorkspace(path, newName string) error {
@@ -794,7 +794,7 @@ func TestPrepareWorkspaceAlignsExistingWorkspaceToBookmark(t *testing.T) {
 	// step that aligns the working copy to the requested bookmark.
 	// Reviewing the same PR a second time then "succeeded" but the
 	// code wasn't actually checked out at the PR branch. The reconcile
-	// shape always calls jj.EditRevision when a bookmark is given.
+	// shape always calls jj.NewOnRevision when a bookmark is given.
 	repoRoot := t.TempDir()
 	name := "pr-1-saltor-default-new-workspace-to-main"
 	bookmark := "saltor/default-new-workspace-to-main"
@@ -808,21 +808,22 @@ func TestPrepareWorkspaceAlignsExistingWorkspaceToBookmark(t *testing.T) {
 	if _, _, err := svc.PrepareWorkspace(name, bookmark, false); err != nil {
 		t.Fatalf("PrepareWorkspace returned error: %v", err)
 	}
-	if len(jj.editRevCalls) != 1 {
-		t.Fatalf("expected one EditRevision call to align @ to %q, got %d: %+v", bookmark, len(jj.editRevCalls), jj.editRevCalls)
+	if len(jj.newRevCalls) != 1 {
+		t.Fatalf("expected one NewOnRevision call to align @ to %q, got %d: %+v", bookmark, len(jj.newRevCalls), jj.newRevCalls)
 	}
-	if jj.editRevCalls[0].Revision != bookmark {
-		t.Errorf("EditRevision revision = %q, want %q", jj.editRevCalls[0].Revision, bookmark)
+	if jj.newRevCalls[0].Revision != bookmark {
+		t.Errorf("NewOnRevision revision = %q, want %q", jj.newRevCalls[0].Revision, bookmark)
 	}
 }
 
 func TestPrepareWorkspaceAlignsFreshWorkspaceToBookmark(t *testing.T) {
-	// A newly-created workspace already lands on the bookmark via
-	// `jj workspace add -r <bookmark>`, but the reconcile shape still
-	// calls EditRevision unconditionally so the invariant ("after
-	// PrepareWorkspace, @ is on the bookmark") doesn't depend on
-	// AddWorkspace's revision arg succeeding silently. The redundant
-	// call is cheap and makes failure modes easier to reason about.
+	// A newly-created workspace already lands on a child of the bookmark
+	// via `jj workspace add -r <bookmark>`, but the reconcile shape still
+	// calls NewOnRevision unconditionally so the invariant ("after
+	// PrepareWorkspace, @ is a fresh child of the bookmark") doesn't
+	// depend on AddWorkspace's revision arg succeeding silently. The
+	// repeat is cheap (jj abandons the empty @) and makes failure modes
+	// easier to reason about.
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
@@ -832,15 +833,15 @@ func TestPrepareWorkspaceAlignsFreshWorkspaceToBookmark(t *testing.T) {
 	if _, _, err := svc.PrepareWorkspace("pr-9-feat", "feat/x", false); err != nil {
 		t.Fatalf("PrepareWorkspace returned error: %v", err)
 	}
-	if len(jj.editRevCalls) != 1 || jj.editRevCalls[0].Revision != "feat/x" {
-		t.Errorf("expected EditRevision(_, %q), got %+v", "feat/x", jj.editRevCalls)
+	if len(jj.newRevCalls) != 1 || jj.newRevCalls[0].Revision != "feat/x" {
+		t.Errorf("expected NewOnRevision(_, %q), got %+v", "feat/x", jj.newRevCalls)
 	}
 }
 
-func TestPrepareWorkspaceSkipsEditRevisionWithNoBookmark(t *testing.T) {
+func TestPrepareWorkspaceSkipsNewOnRevisionWithNoBookmark(t *testing.T) {
 	// No bookmark means no alignment work — the workspace lands on @
 	// from jj's perspective and we leave it alone. Without this guard
-	// the reconcile would try to `jj edit ""` and bomb on a missing
+	// the reconcile would try to `jj new ""` and bomb on a missing
 	// revision arg.
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{}}
@@ -851,8 +852,8 @@ func TestPrepareWorkspaceSkipsEditRevisionWithNoBookmark(t *testing.T) {
 	if _, _, err := svc.PrepareWorkspace("scratch", "", false); err != nil {
 		t.Fatalf("PrepareWorkspace returned error: %v", err)
 	}
-	if len(jj.editRevCalls) != 0 {
-		t.Errorf("expected no EditRevision calls when bookmark is empty; got %+v", jj.editRevCalls)
+	if len(jj.newRevCalls) != 0 {
+		t.Errorf("expected no NewOnRevision calls when bookmark is empty; got %+v", jj.newRevCalls)
 	}
 }
 

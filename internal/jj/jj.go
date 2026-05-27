@@ -212,19 +212,31 @@ func trackOutputIndicatesNoMatch(out string) bool {
 	return strings.Contains(low, "no matching remote bookmarks")
 }
 
-// EditRevision moves the working-copy commit of the workspace rooted at
-// `path` onto `revision` (a bookmark name, change id, or any jj revset
-// that resolves to one commit). Idempotent when the workspace is
-// already on that revision. Run from `path` so jj resolves the correct
-// workspace context.
-func (c *Client) EditRevision(path, revision string) error {
+// NewOnRevision bases the working copy of the workspace rooted at `path`
+// on `revision` (a bookmark name, change id, or any jj revset resolving
+// to one commit) by creating a fresh, empty working-copy commit as its
+// child — i.e. `jj new <revision>`. Run from `path` so jj resolves the
+// correct workspace context.
+//
+// We deliberately do NOT `jj edit <revision>`: that makes the target
+// commit itself the (rewritable) working copy, which jj refuses when the
+// commit is immutable. Review workspaces point at already-pushed PR
+// branches, whose commits are immutable under jj's default policy, so
+// `jj edit` always fails there. `jj new` works regardless and still
+// leaves the working copy showing the target's tree.
+//
+// Effectively idempotent across re-opens: jj abandons the previous
+// working-copy commit when it is empty and undescribed, so re-running on
+// an already-aligned workspace leaves a single empty child of `revision`
+// rather than a stack of empties.
+func (c *Client) NewOnRevision(path, revision string) error {
 	revision = strings.TrimSpace(revision)
 	if revision == "" {
 		return fmt.Errorf("empty revision")
 	}
-	out, err := c.runner.Run(context.Background(), path, "jj", "edit", revision)
+	out, err := c.runner.Run(context.Background(), path, "jj", "new", revision)
 	if err != nil {
-		return formatCommandError(fmt.Sprintf("edit revision %q", revision), err, out)
+		return formatCommandError(fmt.Sprintf("new commit on revision %q", revision), err, out)
 	}
 	return nil
 }

@@ -16,7 +16,7 @@ import (
 
 // StaleWorkspaceError marks a PrepareWorkspace failure where the jj
 // workspace was already registered but couldn't be reconciled to the
-// caller's intent (e.g. EditRevision rejected the bookmark, or the
+// caller's intent (e.g. NewOnRevision rejected the bookmark, or the
 // `already exists` retry path couldn't recover). The deck recognizes
 // this via IsStaleWorkspaceError and offers a "delete the workspace
 // and retry the job" affordance on the failed job in the jobs overlay.
@@ -69,7 +69,7 @@ type JJClient interface {
 	WorkspaceExists(name string) (bool, error)
 	ListWorkspaceNames() ([]string, error)
 	AddWorkspace(name string, path string, revision string) error
-	EditRevision(path, revision string) error
+	NewOnRevision(path, revision string) error
 	TrackBookmark(bookmarkName string) error
 	RenameWorkspace(path string, newName string) error
 	ForgetWorkspace(name string) error
@@ -332,9 +332,10 @@ func (s *service) PrepareWorkspace(name string, bookmark string, runHooks bool) 
 
 // prepareWorkspaceInternal reconciles the workspace's state with the
 // caller's intent: at exit, jj has a workspace named `normalized` at
-// `workspacePath`, the working copy is on `bookmark` (when one is
-// given), the store has a matching entry, the bookmark is tracked, and
-// builtin bootstrap has run. Returns (normalized, path, alreadyExisted,
+// `workspacePath`, the working copy is based on `bookmark` — a fresh
+// child commit on top of it (when one is given), the store has a
+// matching entry, the bookmark is tracked, and builtin bootstrap has
+// run. Returns (normalized, path, alreadyExisted,
 // err) so callers can distinguish "first run for this workspace" from
 // "re-open" — e.g. post-start hooks only run on first creation.
 //
@@ -372,7 +373,7 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	}
 
 	// Step 1: ensure the bookmark is tracked locally before any
-	// operation that names it as a revision (AddWorkspace -r, EditRevision).
+	// operation that names it as a revision (AddWorkspace -r, NewOnRevision).
 	if trimmedBookmark != "" {
 		if err := s.trackBookmark(trimmedBookmark); err != nil {
 			return "", "", false, err
@@ -408,13 +409,16 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 		}
 	}
 
-	// Step 3: align the working copy to the requested bookmark. Always
-	// run when a bookmark is given — even if the workspace already
-	// existed at the wrong revision (the bug we just hit), or if jj
-	// add already placed @ there on fresh create (no-op cost is one jj
-	// command, worth the simpler invariant).
+	// Step 3: base the working copy on the requested bookmark by putting
+	// a fresh child commit on top of it (jj new). Always run when a
+	// bookmark is given — even if the workspace already existed at the
+	// wrong revision (the bug we just hit), or if jj add already placed @
+	// there on fresh create. jj abandons an empty, undescribed @ on the
+	// way out, so the repeat is effectively a no-op. NewOnRevision is
+	// used instead of `jj edit` so this works on immutable PR branches —
+	// editing an already-pushed commit is what jj refuses.
 	if trimmedBookmark != "" {
-		if err := s.jj.EditRevision(workspacePath, trimmedBookmark); err != nil {
+		if err := s.jj.NewOnRevision(workspacePath, trimmedBookmark); err != nil {
 			wrapped := fmt.Errorf("align workspace %q to bookmark %q: %w", normalized, trimmedBookmark, err)
 			// If the workspace was already on disk when we arrived, the
 			// failure is recoverable by deleting + retrying. Surface that
