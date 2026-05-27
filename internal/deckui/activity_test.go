@@ -258,18 +258,42 @@ func TestRefreshDoneTriggersPRStatusForNewlyEligibleRepo(t *testing.T) {
 	}
 }
 
-func TestRefreshDoneSkipsRepoWithoutPRNumber(t *testing.T) {
+func TestRefreshDoneSkipsRepoWithNeitherPRNumberNorBookmark(t *testing.T) {
 	called := 0
 	model := New(nil, nil).WithPRStatusFetcher(func(repos []string) tea.Cmd {
 		called++
 		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
 	})
 	updated, _ := model.Update(refreshDoneMsg{items: []Item{
-		{ProjectName: "p", WorkspaceName: "ws", RepoRoot: "/r"},
+		{ProjectName: "p", WorkspaceName: "default", RepoRoot: "/r"},
 	}})
 	_ = updated
 	if called != 0 {
-		t.Fatalf("expected no fetch for workspace without PRNumber, got %d", called)
+		t.Fatalf("expected no fetch for workspace with neither PRNumber nor Bookmark, got %d", called)
+	}
+}
+
+func TestRefreshDoneTriggersPRStatusForBookmarkOnlyWorkspace(t *testing.T) {
+	// Regression: legacy entries with Bookmark but no PRNumber (created
+	// before the rename) must keep their repo eligible — otherwise the
+	// on-load Bookmark→PRNumber migration has no cache data to match
+	// against, and the entries stay un-linked forever.
+	called := 0
+	var fetchedRepos []string
+	model := New(nil, nil).WithPRStatusFetcher(func(repos []string) tea.Cmd {
+		called++
+		fetchedRepos = append([]string(nil), repos...)
+		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
+	})
+	updated, _ := model.Update(refreshDoneMsg{items: []Item{
+		{ProjectName: "p", WorkspaceName: "feat", RepoRoot: "/r", Bookmark: "andrew/feat"},
+	}})
+	_ = updated
+	if called != 1 {
+		t.Fatalf("expected fetcher to be invoked for bookmark-only workspace, got %d", called)
+	}
+	if len(fetchedRepos) != 1 || fetchedRepos[0] != "/r" {
+		t.Fatalf("expected fetcher called for /r, got %v", fetchedRepos)
 	}
 }
 

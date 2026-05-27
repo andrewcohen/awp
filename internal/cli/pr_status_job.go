@@ -62,17 +62,16 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 			reporter.Step(fmt.Sprintf("%s — merge-queue lookup failed: %v", repo, qErr))
 		}
 		byHead := prStatusMapFromGithub(statuses, queued)
-		// Top up pinned-PR overrides that fell outside the bulk
-		// window. Walk this repo's workspace entries for PROverride > 0,
-		// see which numbers are absent from byHead, and fetch each
-		// individually via `gh pr view`. Single-PR fetches are cheap
-		// and rare (only workspaces actually pinned), so it's safe to
-		// do on every refresh.
-		topUps := topUpMissingOverrides(store, gh, repo, byHead)
+		pinned := pinnedPRNumbersForRepo(store, repo)
+		topUps := topUpMissingOverrides(gh, repo, byHead, pinned)
 		for head, status := range topUps {
 			byHead[head] = status
 		}
-		persistPRStatusMerge(map[string]map[string]deckui.PRStatus{repo: byHead}, time.Now())
+		persistPRStatusBulkMerge(
+			map[string]map[string]deckui.PRStatus{repo: byHead},
+			map[string]map[int]bool{repo: pinned},
+			time.Now(),
+		)
 		reporter.Step(fmt.Sprintf("%s — %d PRs (+%d pinned) (%s)", repo, len(statuses), len(topUps), time.Since(started).Round(time.Millisecond)))
 		// Diagnostic: log every PR # and head ref returned for this
 		// repo. If a PR you expect to see isn't in `numbers=[...]`, gh
@@ -88,28 +87,39 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	return nil
 }
 
-// topUpMissingOverrides walks this repo's workspace state for entries
-// with PRNumber > 0 whose PRs aren't already in byHead, and fetches each
-// one individually via `gh pr view`. Returns a map of headRefName →
-// PRStatus to merge into byHead.
+// pinnedPRNumbersForRepo walks this repo's workspace state and
+// returns the set of PR numbers any entry has explicitly pinned via
+// Entry.PRNumber. Returns nil on store-load error (callers treat that
+// as "no pins"). Used twice per bulk-fetch pass: by topUpMissingOverrides
+// (to fetch pins that fell outside the bulk window) and by
+// persistPRStatusBulkMerge (to keep pinned terminal PRs from being
+// pruned).
+func pinnedPRNumbersForRepo(store *state.JSONStore, repo string) map[int]bool {
+	entries, err := store.Load(repo)
+	if err != nil {
+		deckDebugLogf("prStatus pinned-numbers load err repo=%s err=%v", repo, err)
+		return nil
+	}
+	pinned := map[int]bool{}
+	for _, e := range entries {
+		if e.PRNumber > 0 {
+			pinned[e.PRNumber] = true
+		}
+	}
+	return pinned
+}
+
+// topUpMissingOverrides fetches each pinned PR (pinned ⊆ a workspace's
+// PRNumber for this repo) that isn't already in byHead, one at a time
+// via `gh pr view`. Returns a map of headRefName → PRStatus to merge
+// into byHead.
 //
 // Pinned PRs are typically older than the bulk-list window — a busy
 // repo can have hundreds of PRs more recent than the one a user is
 // trying to surface, and `gh pr list --limit 100` cuts them off. This
 // helper closes that gap.
-func topUpMissingOverrides(store *state.JSONStore, gh *github.Client, repo string, byHead map[string]deckui.PRStatus) map[string]deckui.PRStatus {
-	entries, err := store.Load(repo)
-	if err != nil {
-		deckDebugLogf("prStatus topUp load err repo=%s err=%v", repo, err)
-		return nil
-	}
-	wantNumbers := map[int]bool{}
-	for _, e := range entries {
-		if e.PRNumber > 0 {
-			wantNumbers[e.PRNumber] = true
-		}
-	}
-	if len(wantNumbers) == 0 {
+func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]deckui.PRStatus, pinned map[int]bool) map[string]deckui.PRStatus {
+	if len(pinned) == 0 {
 		return nil
 	}
 	have := map[int]bool{}
@@ -119,7 +129,7 @@ func topUpMissingOverrides(store *state.JSONStore, gh *github.Client, repo strin
 		}
 	}
 	out := map[string]deckui.PRStatus{}
-	for n := range wantNumbers {
+	for n := range pinned {
 		if have[n] {
 			continue
 		}

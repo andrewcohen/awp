@@ -115,12 +115,13 @@ func deckDebugLogf(format string, args ...any) {
 
 // persistPRStatusMerge merges fresh per-repo results into the on-disk
 // cache, per-PR-number. New entries overwrite (so transitions like
-// open→merged land), but existing entries that aren't in the fresh
-// fetch are kept — a PR that drops out of the bulk `gh pr list
-// --limit 100` window stays visible at its last-known state instead of
-// silently vanishing from the cache. Stamps each successful repo's
-// FetchedAt with the provided wall clock so the 60s refresh throttle
-// survives a deck restart.
+// open→merged land); existing entries that aren't in the fresh fetch
+// are kept untouched — used by the review write-through path, which
+// only knows about the one PR it just fetched.
+//
+// For the periodic bulk-fetch path use persistPRStatusBulkMerge: that
+// variant also prunes terminal cached PRs that have drifted out of
+// `gh pr list --limit 100` so the cache doesn't grow monotonically.
 func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedAt time.Time) {
 	if len(byRepo) == 0 {
 		return
@@ -145,6 +146,83 @@ func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedA
 	if saveErr := savePRStatusCache(persistByRepo, persistFetchedAt); saveErr != nil {
 		deckDebugLogf("prStatus cache save err=%v", saveErr)
 	}
+}
+
+// persistPRStatusBulkMerge is the bulk-fetch persistence path. It
+// merges fresh per-repo PRs into the cache like persistPRStatusMerge,
+// then prunes cached entries that:
+//   - have a terminal State (MERGED or CLOSED) — once terminal, the
+//     PR can't transition further, so a cached "last-known state" is
+//     just historical noise; AND
+//   - whose headRefName is NOT in this repo's fresh set; AND
+//   - whose PR number is NOT in pinnedByRepo[repo] (workspaces with
+//     an explicit PRNumber pin keep their PR in the cache regardless
+//     of bulk-window drift so the next refresh doesn't have to
+//     topUpMissingOverrides them back in).
+//
+// Non-terminal cached entries missing from the fresh set are left
+// alone: an OPEN PR temporarily absent from gh's response (race,
+// label filter glitch, etc.) is more useful kept than dropped, and a
+// future fetch will eventually surface its terminal state if it ever
+// closes.
+//
+// Defensive: a repo whose fresh set is empty is treated as "nothing
+// to merge, definitely don't prune" — that's the upstream-error shape
+// (gh returned [] when we know there are PRs). The throttle stamp
+// still updates so the next refresh respects the cooldown.
+func persistPRStatusBulkMerge(byRepo map[string]map[string]deckui.PRStatus, pinnedByRepo map[string]map[int]bool, fetchedAt time.Time) {
+	if len(byRepo) == 0 {
+		return
+	}
+	persistByRepo, persistFetchedAt, loadErr := loadPRStatusCache()
+	if loadErr != nil {
+		deckDebugLogf("prStatus cache reload err=%v", loadErr)
+		persistByRepo = map[string]map[string]deckui.PRStatus{}
+		persistFetchedAt = map[string]time.Time{}
+	}
+	for repo, fresh := range byRepo {
+		if len(fresh) == 0 {
+			persistFetchedAt[repo] = fetchedAt
+			continue
+		}
+		existing := persistByRepo[repo]
+		if existing == nil {
+			existing = map[string]deckui.PRStatus{}
+		}
+		pinned := pinnedByRepo[repo]
+		pruned := 0
+		for head, cached := range existing {
+			if _, inFresh := fresh[head]; inFresh {
+				continue
+			}
+			if pinned[cached.Number] {
+				continue
+			}
+			if isTerminalPRState(cached.State) {
+				delete(existing, head)
+				pruned++
+			}
+		}
+		for head, status := range fresh {
+			existing[head] = status
+		}
+		persistByRepo[repo] = existing
+		persistFetchedAt[repo] = fetchedAt
+		if pruned > 0 {
+			deckDebugLogf("prStatus prune repo=%s dropped=%d remaining=%d", repo, pruned, len(existing))
+		}
+	}
+	if saveErr := savePRStatusCache(persistByRepo, persistFetchedAt); saveErr != nil {
+		deckDebugLogf("prStatus cache save err=%v", saveErr)
+	}
+}
+
+// isTerminalPRState reports whether a PR's state is one we can safely
+// drop from the cache when the bulk fetch no longer returns it.
+// MERGED and CLOSED are terminal — once a PR is in either state it
+// doesn't transition further.
+func isTerminalPRState(s deckui.PRState) bool {
+	return s == deckui.PRStateMerged || s == deckui.PRStateClosed
 }
 
 // migrateBookmarkPRNumbersIfNeeded resolves Bookmark → PR number using

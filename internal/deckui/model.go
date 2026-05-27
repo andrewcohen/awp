@@ -1179,16 +1179,9 @@ func (m Model) forcePRStatusRefresh(repo string) (Model, tea.Cmd) {
 
 // prStatusRepos returns the deduplicated, throttled list of repo roots
 // that should be fetched for PR status. A repo is eligible iff at least
-// one of its workspace items has PRNumber > 0 — i.e. some workspace
-// genuinely cares about PR data. The throttle (prStatusMinInterval)
+// one of its workspace items has PRNumber > 0 or a tracked Bookmark
+// (see prStatusReposPolicy). The throttle (prStatusMinInterval)
 // suppresses repos whose last successful fetch is too recent.
-//
-// Replaces the previous "non-default workspace" heuristic, which skipped
-// repos until they had a workspace whose Path differed from RepoRoot.
-// That worked for ad-hoc deck-created workspaces but left external
-// flows (notably `awp review`) trapped in a race: the deck saw the new
-// workspace before any fetch covered its repo. Tying eligibility to
-// PRNumber makes the trigger semantic, not structural.
 func (m Model) prStatusRepos(now time.Time) []string {
 	return prStatusReposPolicy(m.itemsAll, m.prStatusFetchedAt, now)
 }
@@ -1198,6 +1191,15 @@ func (m Model) prStatusRepos(now time.Time) []string {
 // here so the eligibility + throttle logic lives in one place. Splitting
 // it out lets callers (and tests) reason about the policy without
 // constructing a full Model.
+//
+// Eligibility: any workspace under the repo that either pins a PR
+// explicitly (PRNumber > 0) OR has a tracked bookmark. The bookmark
+// branch keeps legacy entries (created before the PROverride→PRNumber
+// rename) in the fetch loop, which is the precondition the on-load
+// migration in loadDeckItems needs in order to populate PRNumber.
+// Without it, a repo whose entries all only have Bookmark set would be
+// locked out of the cache forever — no fetch → no cache data → no
+// migration match → no PRNumber → no eligibility, etc.
 func prStatusReposPolicy(items []Item, lastFetch map[string]time.Time, now time.Time) []string {
 	eligible := make(map[string]bool)
 	for _, it := range items {
@@ -1205,7 +1207,7 @@ func prStatusReposPolicy(items []Item, lastFetch map[string]time.Time, now time.
 		if repo == "" {
 			continue
 		}
-		if it.PRNumber > 0 {
+		if it.PRNumber > 0 || strings.TrimSpace(it.Bookmark) != "" {
 			eligible[repo] = true
 		}
 	}
