@@ -107,6 +107,144 @@ func TestPollPRStatusJobConsumesFreshCacheEntries(t *testing.T) {
 	}
 }
 
+func TestInvalidatePRStatusCacheRepoPreservesPRData(t *testing.T) {
+	// Regression: invalidatePRStatusCacheRepo used to delete the repo's
+	// PR data along with the throttle stamp, which wiped every cached
+	// PR for the repo on every `awp w open`. Repos whose only
+	// workspaces had `Bookmark` (no PRNumber) then got stuck — the
+	// eligibility check would skip them, leaving the cache permanently
+	// empty.
+	t.Setenv("HOME", t.TempDir())
+	repo := "/r"
+	prs := map[string]deckui.PRStatus{
+		"andrew/x": {Number: 1, HeadRefName: "andrew/x", State: deckui.PRStateOpen},
+		"andrew/y": {Number: 2, HeadRefName: "andrew/y", State: deckui.PRStateOpen},
+	}
+	if err := savePRStatusCache(
+		map[string]map[string]deckui.PRStatus{repo: prs},
+		map[string]time.Time{repo: time.Now()},
+	); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if err := invalidatePRStatusCacheRepo(repo); err != nil {
+		t.Fatalf("invalidate: %v", err)
+	}
+
+	byRepo, fetchedAt, err := loadPRStatusCache()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, ok := fetchedAt[repo]; ok {
+		t.Errorf("expected fetched_at to be cleared so the throttle expires")
+	}
+	if len(byRepo[repo]) != 2 {
+		t.Errorf("expected PR data to survive invalidation, got %v", byRepo[repo])
+	}
+	if _, ok := byRepo[repo]["andrew/x"]; !ok {
+		t.Errorf("expected andrew/x to survive invalidation")
+	}
+}
+
+func TestPersistPRStatusBulkMergePrunesTerminalNotInFresh(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := "/r"
+
+	// Seed: one merged + one closed PR that won't be in the next bulk
+	// fetch (they aged out of the gh window), one open PR likewise
+	// missing, and one current open PR.
+	persistPRStatusMerge(map[string]map[string]deckui.PRStatus{
+		repo: {
+			"andrew/old-merged": {Number: 10, HeadRefName: "andrew/old-merged", State: deckui.PRStateMerged},
+			"andrew/old-closed": {Number: 11, HeadRefName: "andrew/old-closed", State: deckui.PRStateClosed},
+			"andrew/old-open":   {Number: 12, HeadRefName: "andrew/old-open", State: deckui.PRStateOpen},
+			"andrew/current":    {Number: 13, HeadRefName: "andrew/current", State: deckui.PRStateOpen},
+		},
+	}, time.Now())
+
+	// Bulk fetch returns only the current PR.
+	fresh := map[string]map[string]deckui.PRStatus{
+		repo: {
+			"andrew/current": {Number: 13, HeadRefName: "andrew/current", State: deckui.PRStateOpen},
+		},
+	}
+	persistPRStatusBulkMerge(fresh, nil, time.Now())
+
+	got, _, err := loadPRStatusCache()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	byHead := got[repo]
+	if _, ok := byHead["andrew/current"]; !ok {
+		t.Errorf("current PR should remain")
+	}
+	if _, ok := byHead["andrew/old-open"]; !ok {
+		t.Errorf("OPEN PR missing from fresh should be kept (non-terminal)")
+	}
+	if _, ok := byHead["andrew/old-merged"]; ok {
+		t.Errorf("MERGED PR missing from fresh should be pruned")
+	}
+	if _, ok := byHead["andrew/old-closed"]; ok {
+		t.Errorf("CLOSED PR missing from fresh should be pruned")
+	}
+}
+
+func TestPersistPRStatusBulkMergeKeepsPinnedTerminalPRs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := "/r"
+
+	persistPRStatusMerge(map[string]map[string]deckui.PRStatus{
+		repo: {
+			"andrew/pinned-merged": {Number: 100, HeadRefName: "andrew/pinned-merged", State: deckui.PRStateMerged},
+		},
+	}, time.Now())
+
+	// Bulk fetch doesn't include the pinned PR (typical: it's older
+	// than the gh window). Pinned set covers it → it must survive.
+	fresh := map[string]map[string]deckui.PRStatus{
+		repo: {
+			"andrew/other": {Number: 200, HeadRefName: "andrew/other", State: deckui.PRStateOpen},
+		},
+	}
+	pinned := map[string]map[int]bool{repo: {100: true}}
+	persistPRStatusBulkMerge(fresh, pinned, time.Now())
+
+	got, _, err := loadPRStatusCache()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, ok := got[repo]["andrew/pinned-merged"]; !ok {
+		t.Errorf("pinned MERGED PR must be retained across bulk merge")
+	}
+}
+
+func TestPersistPRStatusBulkMergeSkipsPruneOnEmptyFresh(t *testing.T) {
+	// Defensive: an upstream gh failure returning []  must not be
+	// treated as "every cached PR is gone" and trigger a wipe.
+	t.Setenv("HOME", t.TempDir())
+	repo := "/r"
+
+	persistPRStatusMerge(map[string]map[string]deckui.PRStatus{
+		repo: {
+			"andrew/keep": {Number: 1, HeadRefName: "andrew/keep", State: deckui.PRStateMerged},
+		},
+	}, time.Now())
+
+	persistPRStatusBulkMerge(
+		map[string]map[string]deckui.PRStatus{repo: {}},
+		nil,
+		time.Now(),
+	)
+
+	got, _, err := loadPRStatusCache()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, ok := got[repo]["andrew/keep"]; !ok {
+		t.Errorf("empty fresh set must not prune the cache (likely upstream error)")
+	}
+}
+
 func TestPersistPRStatusMergeOverwritesEntriesByHeadRefName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repo := "/r"
