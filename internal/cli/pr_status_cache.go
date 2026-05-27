@@ -68,11 +68,14 @@ func loadPRStatusCache() (map[string]map[string]deckui.PRStatus, map[string]time
 	return byRepo, fetchedAt, nil
 }
 
-// invalidatePRStatusCacheRepo drops one repo's entry from the persisted cache.
-// Used after a workspace-create or review-open to ensure the next deck open
-// fetches fresh PR status for that repo instead of reusing the previous
-// fetch's data within the 60s throttle window. Best-effort: caller logs but
-// does not fail on disk error.
+// invalidatePRStatusCacheRepo expires the 60s refresh throttle for one
+// repo so the next deck open dispatches a fresh fetch immediately
+// instead of reusing the throttle. The repo's PR data (`byRepo[repo]`)
+// is left in place — losing it would leave `p o` / row glyphs blank
+// until the bulk fetch completes, and (worse) would erase every
+// workspace's PR association for the repo if the next fetch happens
+// to be skipped by eligibility. Best-effort: caller logs but does not
+// fail on disk error.
 func invalidatePRStatusCacheRepo(repo string) error {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
@@ -82,12 +85,9 @@ func invalidatePRStatusCacheRepo(repo string) error {
 	if err != nil {
 		return err
 	}
-	if _, hadEntry := byRepo[repo]; !hadEntry {
-		if _, hadTs := fetchedAt[repo]; !hadTs {
-			return nil
-		}
+	if _, hadTs := fetchedAt[repo]; !hadTs {
+		return nil
 	}
-	delete(byRepo, repo)
 	delete(fetchedAt, repo)
 	return savePRStatusCache(byRepo, fetchedAt)
 }
