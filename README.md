@@ -175,7 +175,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `d` | Open the selected workspace's auto-discovered dev URL in your default browser |
 | `p o` | Open the selected workspace's PR in your default browser (chord — press `p`, then `o`). `esc` cancels the chord. |
 | `p r` | Repair the selected workspace's PR. Detects actionable conditions (merge conflicts, failing CI, branch behind base) and sends a fix prompt to the workspace's agent via the same path as `A`. Reports "nothing to repair" if the PR is healthy. |
-| `p s` | Set (or clear, via blank/0) a PR # override for the selected workspace. Pins the workspace to a specific PR when the bookmark doesn't match the PR's head ref. Persisted to `~/.awp/...` workspace state. |
+| `p s` | Set (or clear, via blank/0) the PR # for the selected workspace. Pins the workspace to a specific PR so the deck resolves status by number rather than guessing from the bookmark. Persisted to `~/.awp/...` workspace state. |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
@@ -196,7 +196,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `awp w prune [--dry-run] [--force]` | Remove orphan workspace dirs under `~/.awp/workspaces` not tracked in state |
 | `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
 | `awp w bootstrap --all` | Re-run bootstrap hooks for every tracked workspace in the current repo (continues on failure) |
-| `awp review [pr#]` | Pick or open a PR for review in a fresh workspace. Opens a `review` window running `tuicr pr <n>`, resolves the persisted session JSON path from tuicr's `active_sessions.json` / `index.json`, and primes the agent with that absolute path plus a precise commit-SHA diff range so it can `tuicr review add` findings without falling back to the (broken-for-PR-mode) `--repo .` lookup. Agent makes no file edits, commits, or GitHub comments. |
+| `awp review [pr#]` | Pick or open a PR for review in a fresh workspace. Opens a `review` window running `tuicr pr <n>`, resolves the persisted session JSON path from tuicr's `active_sessions.json` / `index.json`, and primes the agent with that absolute path plus a precise commit-SHA diff range so it can `tuicr review add` findings without falling back to the (broken-for-PR-mode) `--repo .` lookup. The fetched PR is also written through to `~/.awp/pr-status-cache.json` and pinned to the new workspace as `PRNumber`, so `p o` / row glyphs resolve the instant `awp review` returns — no waiting for the next periodic fetch. Agent makes no file edits, commits, or GitHub comments. |
 | `awp diff` | Charm-styled diff viewer |
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |

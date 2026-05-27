@@ -44,6 +44,45 @@ func TestFetchPRParses(t *testing.T) {
 	}
 }
 
+func TestFetchPRParsesStatusFields(t *testing.T) {
+	r := &fakeRunner{out: `{"number":42,"headRefName":"saltor/foo","baseRefName":"main","title":"t","body":"b","url":"https://github.com/o/r/pull/42","state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"}`}
+	pr, err := New(r).FetchPR(42)
+	if err != nil {
+		t.Fatalf("FetchPR err: %v", err)
+	}
+	if pr.State != PRStateOpen || !pr.IsDraft || pr.ReviewDecision != ReviewApproved ||
+		pr.CIState != CIFailing || pr.MergeStateStatus != MergeStateDirty {
+		t.Errorf("status fields not parsed: %+v", pr)
+	}
+	// gh args must request the new fields.
+	joined := ""
+	for _, a := range r.gotArgs {
+		joined += " " + a
+	}
+	for _, want := range []string{"state", "isDraft", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
+		if !contains(joined, want) {
+			t.Errorf("expected %q in args, got %q", want, joined)
+		}
+	}
+}
+
+func TestPRStatusFromInfo(t *testing.T) {
+	info := PRInfo{
+		Number: 7, HeadRef: "feat/x", Title: "t", URL: "u",
+		State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved,
+		CIState: CIPassing, MergeStateStatus: MergeStateClean,
+	}
+	got := PRStatusFromInfo(info)
+	want := PRStatus{
+		Number: 7, HeadRefName: "feat/x", Title: "t", URL: "u",
+		State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved,
+		CIState: CIPassing, MergeStateStatus: MergeStateClean,
+	}
+	if got != want {
+		t.Errorf("PRStatusFromInfo: got %+v want %+v", got, want)
+	}
+}
+
 func TestFetchPRRunnerError(t *testing.T) {
 	r := &fakeRunner{err: errors.New("boom"), out: "bad"}
 	_, err := New(r).FetchPR(1)

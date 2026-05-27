@@ -41,8 +41,8 @@ type Item struct {
 	WorkspaceName string
 	Path          string
 	RepoRoot      string
-	Bookmark      string // jj bookmark associated with this workspace (matches PR headRefName)
-	PROverride    int    // pinned PR number; when > 0, supersedes Bookmark for PR-status lookup
+	Bookmark      string // jj bookmark associated with this workspace (still used for the new-workspace form, not for PR lookup)
+	PRNumber      int    // PR this workspace is associated with; when > 0, used to resolve PR status
 	Status        string
 	Unread        bool
 	PromptPreview string
@@ -898,43 +898,62 @@ func (m Model) prStatusRefreshCmd(now time.Time) (Model, tea.Cmd) {
 	return m, m.prStatusFetcher(repos)
 }
 
-// forcePRStatusRefresh drops the throttle entry for repo and returns a
-// refresh cmd, bypassing the prStatusMinInterval cooldown so the next
-// fetch goes out immediately. Used by flows where the user just did
-// something that materially affects which PR belongs to which workspace
-// (new workspace from bookmark, review of a PR) — the row needs to
-// reflect the new association without waiting up to a minute.
+// forcePRStatusRefresh dispatches an immediate fetch for the named
+// repo, bypassing both the prStatusMinInterval cooldown AND the
+// "must have a PR-bearing workspace" eligibility check that the
+// periodic policy applies. Used by flows where the user just did
+// something that materially affects which PR belongs to which
+// workspace (new workspace from bookmark, review of a PR, `p s` save)
+// — the trigger is a direct user signal, not a state observation, so
+// the row needs to reflect the new association even before the
+// downstream m.itemsAll picks up the PRNumber.
 func (m Model) forcePRStatusRefresh(repo string) (Model, tea.Cmd) {
-	if strings.TrimSpace(repo) == "" {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || m.prStatusFetcher == nil {
 		return m, nil
 	}
 	if m.prStatusFetchedAt != nil {
 		delete(m.prStatusFetchedAt, repo)
 	}
-	return m.prStatusRefreshCmd(time.Now())
+	m = m.startActivity("pr-status", "pr-status", 1)
+	return m, m.prStatusFetcher([]string{repo})
 }
 
-// prStatusRepos returns the deduplicated, throttled list of repo roots that
-// should be fetched for PR status: at least one workspace whose Path differs
-// from RepoRoot (i.e. not a default-only repo), and the last fetch (if any)
-// was at least prStatusMinInterval ago.
+// prStatusRepos returns the deduplicated, throttled list of repo roots
+// that should be fetched for PR status. A repo is eligible iff at least
+// one of its workspace items has PRNumber > 0 — i.e. some workspace
+// genuinely cares about PR data. The throttle (prStatusMinInterval)
+// suppresses repos whose last successful fetch is too recent.
+//
+// Replaces the previous "non-default workspace" heuristic, which skipped
+// repos until they had a workspace whose Path differed from RepoRoot.
+// That worked for ad-hoc deck-created workspaces but left external
+// flows (notably `awp review`) trapped in a race: the deck saw the new
+// workspace before any fetch covered its repo. Tying eligibility to
+// PRNumber makes the trigger semantic, not structural.
 func (m Model) prStatusRepos(now time.Time) []string {
-	src := m.itemsAll
-	seen := make(map[string]bool)
-	nonDefault := make(map[string]bool)
-	for _, it := range src {
+	return prStatusReposPolicy(m.itemsAll, m.prStatusFetchedAt, now)
+}
+
+// prStatusReposPolicy is the pure-function form of prStatusRepos. The
+// model-level wrapper above plus forcePRStatusRefresh both go through
+// here so the eligibility + throttle logic lives in one place. Splitting
+// it out lets callers (and tests) reason about the policy without
+// constructing a full Model.
+func prStatusReposPolicy(items []Item, lastFetch map[string]time.Time, now time.Time) []string {
+	eligible := make(map[string]bool)
+	for _, it := range items {
 		repo := strings.TrimSpace(it.RepoRoot)
 		if repo == "" {
 			continue
 		}
-		seen[repo] = true
-		if strings.TrimSpace(it.Path) != "" && it.Path != repo {
-			nonDefault[repo] = true
+		if it.PRNumber > 0 {
+			eligible[repo] = true
 		}
 	}
-	out := make([]string, 0, len(nonDefault))
-	for repo := range nonDefault {
-		if last, ok := m.prStatusFetchedAt[repo]; ok && now.Sub(last) < prStatusMinInterval {
+	out := make([]string, 0, len(eligible))
+	for repo := range eligible {
+		if last, ok := lastFetch[repo]; ok && now.Sub(last) < prStatusMinInterval {
 			continue
 		}
 		out = append(out, repo)
@@ -1283,7 +1302,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.cursor >= len(items) {
 			m.cursor = len(items) - 1
 		}
-		return m, enrichExpireCmd
+		// Items just changed — a workspace may have appeared from
+		// outside the deck (`awp review`, `jj workspace add`,
+		// concurrent deck instance). Re-evaluate the pr-status
+		// eligible-repo set; the policy function throttles per repo,
+		// so already-fresh repos no-op. Without this trigger, the
+		// deck would wait for the next init/link/p-s before noticing
+		// a newly-eligible repo.
+		var prCmd tea.Cmd
+		m, prCmd = m.prStatusRefreshCmd(time.Now())
+		cmds := []tea.Cmd{enrichExpireCmd}
+		if prCmd != nil {
+			cmds = append(cmds, prCmd)
+		}
+		return m, batchCmds(cmds...)
 	case tea.KeyMsg:
 		if m.progressMode {
 			if !m.progressDone {
@@ -1533,8 +1565,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ti := textinput.New()
 				ti.Placeholder = "PR # (blank or 0 to clear)"
 				ti.CharLimit = 12
-				if item.PROverride > 0 {
-					ti.SetValue(strconv.Itoa(item.PROverride))
+				if item.PRNumber > 0 {
+					ti.SetValue(strconv.Itoa(item.PRNumber))
 				}
 				ti.Focus()
 				m.prNumberInput = ti
@@ -3863,16 +3895,16 @@ func (m Model) renderPRNumberSet() string {
 		target = "this workspace"
 	}
 	current := "none"
-	if m.prNumberTarget.PROverride > 0 {
-		current = fmt.Sprintf("#%d", m.prNumberTarget.PROverride)
+	if m.prNumberTarget.PRNumber > 0 {
+		current = fmt.Sprintf("#%d", m.prNumberTarget.PRNumber)
 	}
 	lines := []string{
 		titleStyle.Render("Pin PR # for " + target),
 		"",
-		mutedStyle.Render("Overrides bookmark → PR-headRef lookup so the deck"),
-		mutedStyle.Render("can show PR status when names don't match."),
+		mutedStyle.Render("Pins this workspace to a specific PR so the deck"),
+		mutedStyle.Render("resolves status directly by number."),
 		"",
-		mutedStyle.Render("Current override: " + current),
+		mutedStyle.Render("Current PR: " + current),
 		"",
 		mutedStyle.Render("PR number (blank or 0 clears):"),
 		m.prNumberInput.View(),
@@ -4468,36 +4500,44 @@ func prStaleGlyphColor(s PRStatus) string {
 	return "214"
 }
 
-// prStatusLabelForItem resolves the workspace's PR and returns the
-// matched status plus a human-readable label. Order:
-//  1. If item.PROverride > 0, look up by PR number (explicit pin wins).
-//  2. Otherwise fall back to Bookmark → headRefName lookup.
-func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
+// resolvePRStatus is the one PR-lookup entry point. Returns the cached
+// PR for this workspace via item.PRNumber. Falls back to a bookmark →
+// headRefName lookup ONLY when PRNumber is unset and a bookmark is
+// present — kept as a compat path so workspaces created before the
+// rename (and not yet migrated by the deck's state load) still resolve.
+// Once the migration runs against every stale entry, the bookmark
+// branch is dead code; we'll delete it in a follow-up after the next
+// deck release.
+func (m Model) resolvePRStatus(item Item) (PRStatus, bool) {
 	repo := strings.TrimSpace(item.RepoRoot)
 	if repo == "" {
-		return PRStatus{}, "", false
+		return PRStatus{}, false
 	}
 	byHead, ok := m.prStatusByRepo[repo]
 	if !ok {
-		return PRStatus{}, "", false
+		return PRStatus{}, false
 	}
-	var status PRStatus
-	found := false
-	if item.PROverride > 0 {
+	if item.PRNumber > 0 {
 		for _, s := range byHead {
-			if s.Number == item.PROverride {
-				status = s
-				found = true
-				break
+			if s.Number == item.PRNumber {
+				return s, true
 			}
 		}
-	} else if bm := strings.TrimSpace(item.Bookmark); bm != "" {
+		return PRStatus{}, false
+	}
+	if bm := strings.TrimSpace(item.Bookmark); bm != "" {
 		if s, ok := byHead[bm]; ok {
-			status = s
-			found = true
+			return s, true
 		}
 	}
-	if !found {
+	return PRStatus{}, false
+}
+
+// prStatusLabelForItem resolves the workspace's PR and returns the
+// matched status plus a human-readable label.
+func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
+	status, ok := m.resolvePRStatus(item)
+	if !ok {
 		return PRStatus{}, "", false
 	}
 	label := prStatusLabel(status)
@@ -4507,23 +4547,10 @@ func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
 	return status, label, true
 }
 
-// prGlyphForItem resolves the workspace's bookmark to a PR (if any) and
-// returns the rendered glyph string (with ANSI color), or "" when no glyph
-// applies (no bookmark, no PR match, fetcher not configured).
+// prGlyphForItem returns the rendered PR glyph (with ANSI color) for this
+// workspace, or "" when no PR is associated (or no cached status exists).
 func (m Model) prGlyphForItem(item Item) string {
-	bm := strings.TrimSpace(item.Bookmark)
-	if bm == "" {
-		return ""
-	}
-	repo := strings.TrimSpace(item.RepoRoot)
-	if repo == "" {
-		return ""
-	}
-	byHead, ok := m.prStatusByRepo[repo]
-	if !ok {
-		return ""
-	}
-	status, ok := byHead[bm]
+	status, ok := m.resolvePRStatus(item)
 	if !ok {
 		return ""
 	}
@@ -4534,23 +4561,11 @@ func (m Model) prGlyphForItem(item Item) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(prGlyphColor(status))).Render(g)
 }
 
-// prStaleGlyphForItem mirrors prGlyphForItem for the secondary "behind base"
-// glyph rendered next to the primary PR glyph. Returns "" when the PR is
-// up-to-date, no longer open, or there's no matching PR record.
+// prStaleGlyphForItem mirrors prGlyphForItem for the secondary
+// "behind base" / "merge conflicts" glyph. Returns "" when the PR is
+// up-to-date, no longer open, or has no cached status.
 func (m Model) prStaleGlyphForItem(item Item) string {
-	bm := strings.TrimSpace(item.Bookmark)
-	if bm == "" {
-		return ""
-	}
-	repo := strings.TrimSpace(item.RepoRoot)
-	if repo == "" {
-		return ""
-	}
-	byHead, ok := m.prStatusByRepo[repo]
-	if !ok {
-		return ""
-	}
-	status, ok := byHead[bm]
+	status, ok := m.resolvePRStatus(item)
 	if !ok {
 		return ""
 	}

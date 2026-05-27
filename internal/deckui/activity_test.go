@@ -211,7 +211,10 @@ var _ tea.Msg = activityExpireMsg{}
 func TestInitKickStartsPRStatusActivity(t *testing.T) {
 	called := 0
 	model := New([]Item{
-		{ProjectName: "repo-a", WorkspaceName: "ws", RepoRoot: "/r/a", Path: "/r/a/ws"},
+		// PRNumber > 0 marks the workspace as PR-status eligible. The
+		// "Path != RepoRoot" heuristic was removed in favor of explicit
+		// PR association (see prStatusReposPolicy).
+		{ProjectName: "repo-a", WorkspaceName: "ws", RepoRoot: "/r/a", Path: "/r/a/ws", PRNumber: 1},
 	}, nil).WithPRStatusFetcher(func(repos []string) tea.Cmd {
 		called++
 		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
@@ -227,6 +230,45 @@ func TestInitKickStartsPRStatusActivity(t *testing.T) {
 	}
 	if m.activities[0].Total != 1 {
 		t.Fatalf("expected Total=1, got %d", m.activities[0].Total)
+	}
+}
+
+func TestRefreshDoneTriggersPRStatusForNewlyEligibleRepo(t *testing.T) {
+	called := 0
+	var fetchedRepos []string
+	model := New(nil, nil).WithPRStatusFetcher(func(repos []string) tea.Cmd {
+		called++
+		fetchedRepos = append([]string(nil), repos...)
+		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
+	})
+	// Simulate refreshDoneMsg landing with a new PR-bearing workspace
+	// in a repo the deck never saw before (typical awp-review-from-
+	// outside scenario). The refresh handler must dispatch a fetch
+	// for that repo without waiting on a separate trigger.
+	updated, _ := model.Update(refreshDoneMsg{items: []Item{
+		{ProjectName: "p", WorkspaceName: "ws", RepoRoot: "/r", PRNumber: 7},
+	}})
+	_ = updated
+	if called != 1 {
+		t.Fatalf("expected fetcher to be invoked once on refreshDoneMsg, got %d", called)
+	}
+	if len(fetchedRepos) != 1 || fetchedRepos[0] != "/r" {
+		t.Fatalf("expected fetcher called for /r, got %v", fetchedRepos)
+	}
+}
+
+func TestRefreshDoneSkipsRepoWithoutPRNumber(t *testing.T) {
+	called := 0
+	model := New(nil, nil).WithPRStatusFetcher(func(repos []string) tea.Cmd {
+		called++
+		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
+	})
+	updated, _ := model.Update(refreshDoneMsg{items: []Item{
+		{ProjectName: "p", WorkspaceName: "ws", RepoRoot: "/r"},
+	}})
+	_ = updated
+	if called != 0 {
+		t.Fatalf("expected no fetch for workspace without PRNumber, got %d", called)
 	}
 }
 

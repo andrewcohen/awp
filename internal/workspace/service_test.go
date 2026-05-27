@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -10,6 +11,50 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestEntryUnmarshalReadsLegacyPROverride(t *testing.T) {
+	// Old state file written before the rename uses "PROverride";
+	// new code should still read it into PRNumber.
+	var legacy Entry
+	if err := json.Unmarshal([]byte(`{"Name":"ws","PROverride":17}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacy.PRNumber != 17 {
+		t.Errorf("expected PRNumber=17 from legacy PROverride, got %d", legacy.PRNumber)
+	}
+
+	// New file uses PRNumber.
+	var modern Entry
+	if err := json.Unmarshal([]byte(`{"Name":"ws","PRNumber":42}`), &modern); err != nil {
+		t.Fatalf("unmarshal modern: %v", err)
+	}
+	if modern.PRNumber != 42 {
+		t.Errorf("expected PRNumber=42, got %d", modern.PRNumber)
+	}
+
+	// Both keys present: explicit PRNumber wins.
+	var both Entry
+	if err := json.Unmarshal([]byte(`{"Name":"ws","PRNumber":1,"PROverride":2}`), &both); err != nil {
+		t.Fatalf("unmarshal both: %v", err)
+	}
+	if both.PRNumber != 1 {
+		t.Errorf("expected PRNumber=1 to win over PROverride, got %d", both.PRNumber)
+	}
+}
+
+func TestEntryMarshalEmitsPRNumberNotPROverride(t *testing.T) {
+	e := Entry{Name: "ws", PRNumber: 7}
+	out, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `"PRNumber":7`) {
+		t.Errorf("expected PRNumber in JSON, got %s", out)
+	}
+	if strings.Contains(string(out), `PROverride`) {
+		t.Errorf("did not expect legacy PROverride in JSON, got %s", out)
+	}
+}
 
 type fakeJJ struct {
 	repoRoot             string

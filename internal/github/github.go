@@ -28,6 +28,16 @@ type PRInfo struct {
 	HeadRepoOwner string
 	HeadRepoName  string
 	HeadRepoURL   string
+
+	// Status fields mirror what ListPRStatus pulls per PR — populated
+	// from the same `gh pr view --json` call so the review flow can
+	// write the projection into the PR-status cache without a second
+	// network hop.
+	State            PRState
+	IsDraft          bool
+	ReviewDecision   ReviewDecision
+	CIState          CIState
+	MergeStateStatus MergeStateStatus
 }
 
 // prViewResponse mirrors `gh pr view --json` output. PRInfo flattens it
@@ -48,6 +58,11 @@ type prViewResponse struct {
 	HeadRepositoryOwner struct {
 		Login string `json:"login"`
 	} `json:"headRepositoryOwner"`
+	State             PRState          `json:"state"`
+	IsDraft           bool             `json:"isDraft"`
+	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
+	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
+	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
 }
 
 type Client struct {
@@ -202,10 +217,29 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 	return statuses, nil
 }
 
+// PRStatusFromInfo projects a PRInfo (the FetchPR result, augmented with
+// status fields in its `gh pr view --json` call) into the same PRStatus
+// shape ListPRStatus produces. Used by the review flow to write the
+// just-fetched PR into the PR-status cache without a second gh call.
+func PRStatusFromInfo(p PRInfo) PRStatus {
+	return PRStatus{
+		Number:           p.Number,
+		HeadRefName:      p.HeadRef,
+		Title:            p.Title,
+		URL:              p.URL,
+		State:            p.State,
+		IsDraft:          p.IsDraft,
+		ReviewDecision:   p.ReviewDecision,
+		CIState:          p.CIState,
+		MergeStateStatus: p.MergeStateStatus,
+	}
+}
+
 // GetPRStatus fetches a single PR by number via `gh pr view` and returns
 // the same projection as ListPRStatus. Used by the deck to top up
-// pinned PRs (PROverride) that fell outside the bulk `gh pr list
-// --limit 100` window — common in busy repos with high PR churn.
+// PR-pinned workspaces (entries with PRNumber > 0) that fell outside the
+// bulk `gh pr list --limit 100` window — common in busy repos with high
+// PR churn.
 func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	if n <= 0 {
 		return PRStatus{}, fmt.Errorf("GetPRStatus: invalid PR number %d", n)
@@ -338,7 +372,7 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 	out, err := c.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "view", strconv.Itoa(num),
-		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner",
+		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
@@ -348,17 +382,22 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 		return PRInfo{}, fmt.Errorf("parse gh pr view output: %w", err)
 	}
 	info := PRInfo{
-		Number:        raw.Number,
-		HeadRef:       raw.HeadRefName,
-		BaseRef:       raw.BaseRefName,
-		HeadSHA:       raw.HeadRefOid,
-		BaseSHA:       raw.BaseRefOid,
-		Title:         raw.Title,
-		Body:          raw.Body,
-		URL:           raw.URL,
-		HeadRepoOwner: raw.HeadRepositoryOwner.Login,
-		HeadRepoName:  raw.HeadRepository.Name,
-		HeadRepoURL:   raw.HeadRepository.URL,
+		Number:           raw.Number,
+		HeadRef:          raw.HeadRefName,
+		BaseRef:          raw.BaseRefName,
+		HeadSHA:          raw.HeadRefOid,
+		BaseSHA:          raw.BaseRefOid,
+		Title:            raw.Title,
+		Body:             raw.Body,
+		URL:              raw.URL,
+		HeadRepoOwner:    raw.HeadRepositoryOwner.Login,
+		HeadRepoName:     raw.HeadRepository.Name,
+		HeadRepoURL:      raw.HeadRepository.URL,
+		State:            raw.State,
+		IsDraft:          raw.IsDraft,
+		ReviewDecision:   raw.ReviewDecision,
+		CIState:          rollupCIState(raw.StatusCheckRollup),
+		MergeStateStatus: raw.MergeStateStatus,
 	}
 	// gh's default `headRepository` payload doesn't include `url`,
 	// so the field above is usually empty. Synthesize it from
