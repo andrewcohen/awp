@@ -18,6 +18,7 @@ type PRInfo struct {
 	HeadSHA string `json:"headRefOid"`
 	BaseSHA string `json:"baseRefOid"`
 	Title   string `json:"title"`
+	Author  string `json:"-"`
 	Body    string `json:"body"`
 	URL     string `json:"url"`
 	// HeadRepoOwner / HeadRepoName identify the repo the head branch
@@ -58,6 +59,9 @@ type prViewResponse struct {
 	HeadRepositoryOwner struct {
 		Login string `json:"login"`
 	} `json:"headRepositoryOwner"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
 	State             PRState          `json:"state"`
 	IsDraft           bool             `json:"isDraft"`
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
@@ -151,6 +155,7 @@ type PRStatus struct {
 	Number           int
 	HeadRefName      string
 	Title            string
+	Author           string
 	URL              string
 	State            PRState
 	IsDraft          bool
@@ -175,6 +180,9 @@ type rawPRStatus struct {
 	HeadRefName       string           `json:"headRefName"`
 	Title             string           `json:"title"`
 	URL               string           `json:"url"`
+	Author            struct {
+		Login string `json:"login"`
+	} `json:"author"`
 	State             PRState          `json:"state"`
 	IsDraft           bool             `json:"isDraft"`
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
@@ -191,7 +199,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,title,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -206,6 +214,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 			Number:           r.Number,
 			HeadRefName:      r.HeadRefName,
 			Title:            r.Title,
+			Author:           r.Author.Login,
 			URL:              r.URL,
 			State:            r.State,
 			IsDraft:          r.IsDraft,
@@ -226,6 +235,7 @@ func PRStatusFromInfo(p PRInfo) PRStatus {
 		Number:           p.Number,
 		HeadRefName:      p.HeadRef,
 		Title:            p.Title,
+		Author:           p.Author,
 		URL:              p.URL,
 		State:            p.State,
 		IsDraft:          p.IsDraft,
@@ -247,7 +257,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
-		"--json", "number,headRefName,title,url,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
@@ -260,6 +270,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 		Number:           r.Number,
 		HeadRefName:      r.HeadRefName,
 		Title:            r.Title,
+		Author:           r.Author.Login,
 		URL:              r.URL,
 		State:            r.State,
 		IsDraft:          r.IsDraft,
@@ -372,7 +383,7 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 	out, err := c.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "view", strconv.Itoa(num),
-		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
@@ -388,6 +399,7 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 		HeadSHA:          raw.HeadRefOid,
 		BaseSHA:          raw.BaseRefOid,
 		Title:            raw.Title,
+		Author:           raw.Author.Login,
 		Body:             raw.Body,
 		URL:              raw.URL,
 		HeadRepoOwner:    raw.HeadRepositoryOwner.Login,

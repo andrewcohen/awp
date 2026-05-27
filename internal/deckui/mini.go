@@ -22,14 +22,24 @@ type MiniRow struct {
 	Path      string
 	Status    string
 	Unread    bool
+	// PRTitle / PRNumber describe the workspace's associated PR when one
+	// is resolvable from the persisted PR-status cache. PRNumber == 0
+	// means no PR is linked. When both are present the row renders
+	// "#N PRTitle" in place of the workspace name.
+	PRTitle  string
+	PRNumber int
 }
 
 // miniItem wraps MiniRow for the bubbles/list integration. FilterValue
-// concatenates project + workspace so the list's default fuzzy filter
-// matches either.
+// concatenates project + workspace + PR title so the list's default fuzzy
+// filter matches any of them — the visible row text is whichever of
+// workspace or PR title resolves, so filtering by what's on screen has
+// to include both candidates.
 type miniItem struct{ row MiniRow }
 
-func (m miniItem) FilterValue() string { return m.row.Project + " " + m.row.Workspace }
+func (m miniItem) FilterValue() string {
+	return strings.Join([]string{m.row.Project, m.row.Workspace, m.row.PRTitle}, " ")
+}
 func (m miniItem) Title() string       { return m.row.Workspace }
 func (m miniItem) Description() string { return m.row.Project }
 
@@ -71,7 +81,11 @@ func (d miniItemDelegate) Render(w io.Writer, m list.Model, index int, listItem 
 
 	projectChip := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("[" + r.Project + "] ")
 	glyph := statusGlyph(r.Status, false, r.Unread)
-	label := truncate(r.Workspace, max(8, width-12-lipgloss.Width(projectChip)))
+	labelText := r.Workspace
+	if t := strings.TrimSpace(r.PRTitle); t != "" && r.PRNumber > 0 {
+		labelText = fmt.Sprintf("#%d %s", r.PRNumber, t)
+	}
+	label := truncate(labelText, max(8, width-12-lipgloss.Width(projectChip)))
 	line := fmt.Sprintf("%s %s %s%s",
 		prefixSlot.Render(prefix), glyph, projectChip, labelStyle.Render(label))
 	fmt.Fprint(w, lipgloss.NewStyle().Width(max(width, 1)).Render(line))
