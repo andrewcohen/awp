@@ -23,7 +23,9 @@ awp init hooks   # one-time: install Claude Code + pi.dev integrations globally
 
 `awp init hooks` installs:
 
-- `~/.claude/settings.json` — hooks that report state to awp on `SessionStart` (idle), `UserPromptSubmit` / `PreToolUse` / `PostToolUse` (working), `Stop` (idle), and `Notification` (waiting). The `UserPromptSubmit` hook also pipes the prompt JSON into `awp internal report-status --prompt-stdin` so the deck can show the active prompt under each workspace. The `PreToolUse` hook passes `--waiting-when-tool AskUserQuestion` so the row flips to `waiting` while the agent is paused on an `AskUserQuestion` call (which never fires `Notification`); `PostToolUse` flips it back to `working` once the answer is in.
+- `~/.claude/settings.json` — hooks that report state to awp on `SessionStart` (idle), `UserPromptSubmit` / `PreToolUse` / `PostToolUse` (working), `Stop` (idle), and `Notification` / `PermissionRequest` / `Elicitation` (waiting). The `UserPromptSubmit` hook also pipes the prompt JSON into `awp internal report-status --prompt-stdin` so the deck can show the active prompt under each workspace. The `PreToolUse` hook passes `--waiting-when-tool AskUserQuestion` so the row flips to `waiting` while the agent is paused on an `AskUserQuestion` call (which never fires `Notification`); `PostToolUse` flips it back to `working` once the answer is in. `PermissionRequest` (a permission dialog is up — approve/deny a Bash command or file write) and `Elicitation` (an MCP server is requesting form input) are the dedicated "blocked on you" events: they badge the row `waiting` even when desktop notifications aren't configured. Unknown events are ignored by older Claude Code builds, so these are safe to install regardless of client version.
+
+  These hooks re-sync automatically: opening the deck fires an idempotent install in the background, so after an awp upgrade (which may add events or bump the hook schema version) the global hooks self-heal on the next `awp deck` without you re-running `awp init hooks`. It only writes when something has actually drifted.
 - `~/.pi/agent/extensions/awp-status.ts` — a pi.dev extension that reports state on `session_start` / `before_agent_start` / `agent_end` / `tool_execution_start` / quit-time `session_shutdown`. `before_agent_start` forwards the user's prompt text so the deck stays in sync with Claude. If statuses aren't landing, set `AWP_DEBUG=1` in the pi pane to write diagnostics to `~/.awp/pi-extension.log`.
 
 Both integrations are no-ops outside awp-managed sessions (they only run in tmux and `awp internal report-status` ignores sessions without awp workspace metadata), so they never affect your standalone Claude or pi usage. Both honor `$AWP_BIN` if you need the hook to invoke a non-PATH `awp`.
@@ -73,7 +75,7 @@ A row qualifies for the mini-deck when **all of** (the same rules the full deck'
 
 1. Its status is one of:
    - `working` — agent is generating output or running a tool. Always surfaced.
-   - `waiting` **with the unread flag set** — Claude fired its `Notification` hook (typically a permission prompt). The unread flag is only true if you weren't already attached to the session when the hook fired, so requiring it skips prompts you already saw and dealt with in-session. A `waiting` row without unread is just stale noise because Claude has no "no longer waiting" hook.
+   - `waiting` **with the unread flag set** — Claude is blocked on you: a permission dialog (`PermissionRequest`), an `AskUserQuestion`, an MCP form (`Elicitation`), or a `Notification`. The unread flag is only true if you weren't already attached to the session when the hook fired, so requiring it skips prompts you already saw and dealt with in-session. A `waiting` row without unread is just stale noise — the row self-heals to `working`/`idle` on the next tool use or turn end.
    - `idle` **with the unread flag set** — agent finished a turn since you last visited.
 
    `exited` workspaces never appear; nothing's listening on the other end. `idle` without unread is a quiet workspace and doesn't appear either.
@@ -94,7 +96,7 @@ The same PATH caveats as `awp deck` apply (see above) — use absolute paths or 
 | Color | State | Meaning |
 |---|---|---|
 | 🟢 Green | `working` | Agent is actively producing output or running a tool |
-| 🟡 Yellow | `waiting` | Paused on a permission prompt — needs your input |
+| 🟡 Yellow | `waiting` | Blocked on you — permission prompt, `AskUserQuestion`, or MCP form |
 | ⚪ Grey | `notified` | Agent finished a turn (or exited) and you haven't summoned the workspace since |
 | 🔴 Red | `exited` | Process gone, pane back at a shell (rendered when notified) |
 | _(blank)_ | `idle` / `starting` | Quiet — no badge until the agent actually surfaces something |
