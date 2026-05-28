@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -382,8 +383,33 @@ func TestRunDiffCallsWorkflow(t *testing.T) {
 func TestRunDeckRejectsArgs(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"deck", "extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
+	if err := app.Run([]string{"deck", "extra"}); err == nil || !strings.Contains(err.Error(), "unexpected argument") {
 		t.Fatalf("expected deck arg error, got %v", err)
+	}
+	if err := app.Run([]string{"deck", "--scope=bogus"}); err == nil || !strings.Contains(err.Error(), "invalid --scope") {
+		t.Fatalf("expected invalid --scope error, got %v", err)
+	}
+}
+
+func TestRunDeckPassesScopeFlag(t *testing.T) {
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	var gotScope deckui.Scope
+	app.deck = func(runner Runner, _ workspace.Service, _ io.Reader, _ io.Writer, scope deckui.Scope) error {
+		gotScope = scope
+		return nil
+	}
+	if err := app.Run([]string{"deck", "--scope=attention"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if gotScope != deckui.ScopeAttention {
+		t.Fatalf("expected ScopeAttention, got %v", gotScope)
+	}
+	if err := app.Run([]string{"deck", "--scope=open-pr"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if gotScope != deckui.ScopeOpenPR {
+		t.Fatalf("expected ScopeOpenPR, got %v", gotScope)
 	}
 }
 
@@ -391,10 +417,13 @@ func TestRunDeckCallsWorkflow(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
 	called := false
-	app.deck = func(runner Runner, gotSvc workspace.Service, in io.Reader, out io.Writer) error {
+	app.deck = func(runner Runner, gotSvc workspace.Service, in io.Reader, out io.Writer, scope deckui.Scope) error {
 		called = true
 		if gotSvc != svc {
 			t.Fatal("expected service to be passed to deck workflow")
+		}
+		if scope != deckui.ScopeAll {
+			t.Fatalf("expected default scope ScopeAll, got %v", scope)
 		}
 		return nil
 	}

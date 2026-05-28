@@ -347,7 +347,7 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 	return newDeckActionServiceWithIO(runner, repoRoot, in, io.Discard)
 }
 
-func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
+func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope) error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp deck must run inside tmux (hint: bind a display-popup -E awp deck)")
 	}
@@ -718,6 +718,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 
 	model := deckui.New(items, handler).
+		WithInitialScope(initialScope).
 		WithRefresher(refresher).
 		WithDevURLDiscoverer(devURLDiscoverer).
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).

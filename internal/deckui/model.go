@@ -485,16 +485,32 @@ type StateChangeWatcher func() tea.Cmd
 type StateChangedMsg struct{}
 
 // Scope controls which items are shown in the deck list. Cycled with `P`;
-// not persisted — every deck launch starts at ScopeAll.
+// not persisted unless an initial scope is supplied via `awp deck --scope`.
+// Declaration order is the cycle order (all → attention → open PR → all).
 type Scope int
 
 const (
 	ScopeAll       Scope = iota // every known workspace across all projects
-	ScopeOpenPR                 // workspaces whose bookmark maps to a non-draft open PR
 	ScopeAttention              // matches the mini-deck filter: active agent or unread notification
+	ScopeOpenPR                 // workspaces whose bookmark maps to a non-draft open PR
 )
 
 const scopeCount = 3
+
+// ParseScope maps the user-facing names accepted by `awp deck --scope`
+// onto Scope values. Names are matched case-insensitively; hyphens and
+// spaces are interchangeable so both `open-pr` and `open pr` work.
+func ParseScope(s string) (Scope, bool) {
+	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(s, " ", "-"))) {
+	case "all":
+		return ScopeAll, true
+	case "attention":
+		return ScopeAttention, true
+	case "open-pr", "pr":
+		return ScopeOpenPR, true
+	}
+	return ScopeAll, false
+}
 
 // PRItem is a lightweight PR summary for the review picker.
 type PRItem struct {
@@ -1010,6 +1026,13 @@ func (m Model) WithJobDeleteWorkspaceRetryHandler(h JobDeleteWorkspaceRetryHandl
 
 // Scope returns the active scope (used by tests).
 func (m Model) Scope() Scope { return m.scope }
+
+// WithInitialScope sets the scope the deck starts in. Cycling via `P`
+// still moves through every scope; this only changes the entry point.
+func (m Model) WithInitialScope(s Scope) Model {
+	m.scope = s
+	return m
+}
 
 func scopeLabel(scope Scope) string {
 	switch scope {
@@ -3973,7 +3996,7 @@ func deckKeyGroups() []keyGroup {
 				{"↑/↓ j/k", "move cursor"},
 				{"/", "filter rows · esc clears"},
 				{"f", "find: project → workspace easymotion jump"},
-				{"P", "cycle scope (all → open PR → attention)"},
+				{"P", "cycle scope (all → attention → open PR)"},
 				{"L", "switch to last tmux session"},
 			},
 		},
