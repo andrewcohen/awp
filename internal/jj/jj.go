@@ -212,19 +212,21 @@ func trackOutputIndicatesNoMatch(out string) bool {
 	return strings.Contains(low, "no matching remote bookmarks")
 }
 
-// EditRevision moves the working-copy commit of the workspace rooted at
-// `path` onto `revision` (a bookmark name, change id, or any jj revset
-// that resolves to one commit). Idempotent when the workspace is
-// already on that revision. Run from `path` so jj resolves the correct
-// workspace context.
-func (c *Client) EditRevision(path, revision string) error {
+// NewOnRevision lands the working-copy commit of the workspace rooted
+// at `path` on a fresh empty commit whose parent is `revision` (a
+// bookmark name, change id, or any jj revset resolving to one commit).
+// Equivalent to `jj new <revision>` from the workspace dir. Used by
+// the workspace-preparation pipeline to anchor a workspace on a
+// bookmark without mutating it — works regardless of whether the
+// target is in jj's immutable set (which `jj edit` does not).
+func (c *Client) NewOnRevision(path, revision string) error {
 	revision = strings.TrimSpace(revision)
 	if revision == "" {
 		return fmt.Errorf("empty revision")
 	}
-	out, err := c.runner.Run(context.Background(), path, "jj", "edit", revision)
+	out, err := c.runner.Run(context.Background(), path, "jj", "new", revision)
 	if err != nil {
-		return formatCommandError(fmt.Sprintf("edit revision %q", revision), err, out)
+		return formatCommandError(fmt.Sprintf("new on revision %q", revision), err, out)
 	}
 	return nil
 }
