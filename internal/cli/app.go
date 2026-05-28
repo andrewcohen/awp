@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/andrewcohen/awp/internal/config"
+	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -26,7 +27,7 @@ type doctorService interface {
 }
 
 type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
-type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error
+type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope) error
 type miniDeckWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
 type newFlowWorkflow func(runner Runner, in io.Reader, out io.Writer) (newFlowResult, error)
@@ -691,21 +692,34 @@ func (a *App) runDiff(args []string) error {
 
 func (a *App) runDeck(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp deck")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp deck [--scope=all|attention|open-pr]")
 		_, _ = fmt.Fprintln(a.out, "")
 		_, _ = fmt.Fprintln(a.out, "Intended invocation: tmux popup overlay. Add this to ~/.tmux.conf:")
 		_, _ = fmt.Fprintln(a.out, "  bind a display-popup -E -w 90% -h 90% awp deck \\; run-shell \"awp deck-cleanup\"")
 		_, _ = fmt.Fprintln(a.out, "")
 		_, _ = fmt.Fprintln(a.out, "Selecting a workspace summons or focuses session [awp]<repo>__<workspace>.")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Flags:")
+		_, _ = fmt.Fprintln(a.out, "  --scope <all|attention|open-pr>  initial scope (default: all). `P` still")
+		_, _ = fmt.Fprintln(a.out, "                                    cycles through all scopes in the deck.")
 		return nil
 	}
-	if len(args) != 0 {
-		return errors.New("deck takes no arguments")
+	scope := deckui.ScopeAll
+	for _, arg := range args {
+		raw, ok := strings.CutPrefix(arg, "--scope=")
+		if !ok {
+			return fmt.Errorf("deck: unexpected argument %q (try --scope=all|attention|open-pr)", arg)
+		}
+		s, ok := deckui.ParseScope(raw)
+		if !ok {
+			return fmt.Errorf("deck: invalid --scope value %q (want all, attention, or open-pr)", raw)
+		}
+		scope = s
 	}
 	if a.deck == nil {
 		return errors.New("deck is not configured")
 	}
-	return a.deck(a.runner, a.svc, a.in, a.out)
+	return a.deck(a.runner, a.svc, a.in, a.out, scope)
 }
 
 func (a *App) runMiniDeck(args []string) error {
