@@ -151,9 +151,14 @@ const (
 )
 
 // PRStatus is the per-PR projection the deck consumes to render a glyph.
+// HeadRefOid carries the head commit SHA so callers can detect whether
+// what they're looking at locally matches what's actually on the PR right
+// now — important for collaborator PRs where the head is on a branch the
+// local jj repo doesn't track.
 type PRStatus struct {
 	Number           int
 	HeadRefName      string
+	HeadRefOid       string
 	Title            string
 	Author           string
 	URL              string
@@ -178,6 +183,7 @@ type rawCheck struct {
 type rawPRStatus struct {
 	Number            int              `json:"number"`
 	HeadRefName       string           `json:"headRefName"`
+	HeadRefOid        string           `json:"headRefOid"`
 	Title             string           `json:"title"`
 	URL               string           `json:"url"`
 	Author            struct {
@@ -199,7 +205,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -213,6 +219,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		statuses[i] = PRStatus{
 			Number:           r.Number,
 			HeadRefName:      r.HeadRefName,
+			HeadRefOid:       r.HeadRefOid,
 			Title:            r.Title,
 			Author:           r.Author.Login,
 			URL:              r.URL,
@@ -234,6 +241,7 @@ func PRStatusFromInfo(p PRInfo) PRStatus {
 	return PRStatus{
 		Number:           p.Number,
 		HeadRefName:      p.HeadRef,
+		HeadRefOid:       p.HeadSHA,
 		Title:            p.Title,
 		Author:           p.Author,
 		URL:              p.URL,
@@ -257,7 +265,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
-		"--json", "number,headRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
 	)
 	if err != nil {
 		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
@@ -269,6 +277,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	return PRStatus{
 		Number:           r.Number,
 		HeadRefName:      r.HeadRefName,
+		HeadRefOid:       r.HeadRefOid,
 		Title:            r.Title,
 		Author:           r.Author.Login,
 		URL:              r.URL,

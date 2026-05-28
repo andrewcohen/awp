@@ -11,6 +11,7 @@ func TestPrStatusFromGithubPreservesFields(t *testing.T) {
 	src := github.PRStatus{
 		Number:           42,
 		HeadRefName:      "andrew/foo",
+		HeadRefOid:       "feedface",
 		Title:            "feat: foo",
 		URL:              "https://github.com/o/r/pull/42",
 		State:            github.PRStateOpen,
@@ -23,6 +24,7 @@ func TestPrStatusFromGithubPreservesFields(t *testing.T) {
 	want := deckui.PRStatus{
 		Number:           42,
 		HeadRefName:      "andrew/foo",
+		HeadRefOid:       "feedface",
 		Title:            "feat: foo",
 		URL:              "https://github.com/o/r/pull/42",
 		State:            deckui.PRStateOpen,
