@@ -54,8 +54,9 @@ type Item struct {
 	Status        string
 	Unread        bool
 	PromptPreview string
-	HeadDesc      string
-	HeadChangeID  string // jj short change-id of the working-copy commit
+	HeadDesc          string
+	HeadChangeID      string // jj short change-id of the working-copy commit
+	BookmarkCommitID  string // full hex commit-id of the workspace's local bookmark; compared to PR head SHA on GitHub to detect "behind remote" / re-review
 	TmuxWindow    string
 	SessionName   string
 	Active        bool
@@ -597,9 +598,13 @@ const (
 )
 
 // PRStatus is the per-PR projection consumed by the row glyph.
+// HeadRefOid is the head commit SHA at the time the PR sync ran; callers
+// compare it against a local commit-id to detect "PR has moved since I
+// last looked," which feeds the re-review signal.
 type PRStatus struct {
 	Number           int
 	HeadRefName      string
+	HeadRefOid       string
 	Title            string
 	Author           string
 	URL              string
@@ -1173,7 +1178,8 @@ const (
 // when none of the slots resolve.
 func (m Model) metaLine(it Item) string {
 	var parts []string
-	if pr, ok := m.resolvePRStatus(it); ok {
+	pr, hasPR := m.resolvePRStatus(it)
+	if hasPR {
 		if author := strings.TrimSpace(pr.Author); author != "" {
 			parts = append(parts, "@"+author)
 		}
@@ -1191,6 +1197,11 @@ func (m Model) metaLine(it Item) string {
 	}
 	if port := devURLPort(m.devURLs[it.SessionName]); port != "" {
 		parts = append(parts, ":"+port)
+	}
+	if hasPR {
+		if stale := prStaleSuffix(pr, it.BookmarkCommitID); stale != "" {
+			parts = append(parts, stale)
+		}
 	}
 	if prompt := promptPreviewSnippet(it.PromptPreview, 40); prompt != "" {
 		parts = append(parts, glyphKeyboard+` "`+prompt+`"`)
@@ -1283,6 +1294,14 @@ func (m Model) Init() tea.Cmd {
 	// initKickMsg so the matching activities can be registered on the
 	// model (Init has no way to mutate the model).
 	cmds = append(cmds, func() tea.Msg { return initKickMsg{} })
+	// Start the spinner tick loop once at boot. The tick handler keeps
+	// the loop alive even when nothing is spinning (ticks return early
+	// without advancing the frame), so new activities arriving mid-
+	// session never need to re-bootstrap. Without this kickoff (and
+	// the always-perpetuate handler), the spinner can freeze for a
+	// window between "last activity expired" and "a foreground action
+	// or jobsListMsg batched a fresh Tick."
+	cmds = append(cmds, m.spinner.Tick)
 	return tea.Batch(cmds...)
 }
 
@@ -1291,9 +1310,22 @@ func (m Model) Init() tea.Cmd {
 // prStatusMinInterval of now, and updates the model to reflect a started
 // pr-status activity. Returns the original model and a nil cmd if no repos
 // are due (or no fetcher is configured).
+//
+// Skipped when a pr-status activity is already in flight: re-issuing the
+// fetch while the previous batch is still running would refetch the same
+// repos and (with startActivity's accumulate behavior) inflate Total in
+// the activity bar — the user-visible symptom was "11/12 with 6
+// projects." Force-refreshes via forcePRStatusRefresh bypass this guard
+// because they're explicit user signals tied to a freshly-changed
+// PR↔workspace mapping.
 func (m Model) prStatusRefreshCmd(now time.Time) (Model, tea.Cmd) {
 	if m.prStatusFetcher == nil {
 		return m, nil
+	}
+	for _, a := range m.activities {
+		if a.ID == "pr-status" && a.FinishedAt.IsZero() {
+			return m, nil
+		}
 	}
 	repos := m.prStatusRepos(now)
 	if len(repos) == 0 {
@@ -1431,13 +1463,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 		return m, batchCmds(cmds...)
 	case spinner.TickMsg:
-		// Keep spinning while there's anything in flight: m.busy
-		// (foreground action like dispatch/load) OR any activity in
-		// the bottom bar (background work — pr-status, enrich, jobs).
-		// Without the activities check the spinner glyph in the
-		// activity bar looks frozen.
+		// Keep the tick loop alive even when idle. When there's nothing
+		// to spin for we don't advance the spinner frame (skipping the
+		// .Update call), but we do schedule the next tick so a new
+		// activity arriving mid-session animates immediately. Without
+		// this, the loop dies the moment the last activity expires and
+		// the next pr-status fetch (or any background work) renders a
+		// frozen glyph until a foreground action / jobsListMsg
+		// bootstraps a new Tick.
 		if !m.busy && len(m.activities) == 0 {
-			return m, nil
+			return m, m.spinner.Tick
 		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -1994,7 +2029,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = "pr: no PR for this workspace"
 					return m, nil
 				}
-				prompt := prRepairPrompt(status)
+				prompt := prRepairPrompt(status, item.BookmarkCommitID)
 				if prompt == "" {
 					m.status = "pr: nothing to repair (" + label + ")"
 					return m, nil
@@ -4735,7 +4770,7 @@ func prGlyphColor(s PRStatus) string {
 // always agree with the glyph drawn in the row.
 func prStatusLabel(s PRStatus) string {
 	base := prStatusBaseLabel(s)
-	suffix := prStaleLabelSuffix(s)
+	suffix := prMergeStateSuffix(s)
 	if base == "" {
 		return ""
 	}
@@ -4782,11 +4817,11 @@ func prStatusBaseLabel(s PRStatus) string {
 	return ""
 }
 
-// prStaleLabelSuffix returns a short phrase for the merge-state-status signal
-// (behind base or merge conflicts), or "" if the PR is up-to-date or the
-// state isn't a stale variant. Merged/closed PRs never report stale — there's
+// prMergeStateSuffix returns a short phrase for the merge-state-status signal
+// (behind base or merge conflicts), or "" if the PR is mergeable as-is or in
+// a terminal state. Merged/closed PRs never report merge state — there's
 // nothing to update.
-func prStaleLabelSuffix(s PRStatus) string {
+func prMergeStateSuffix(s PRStatus) string {
 	if s.State != PRStateOpen {
 		return ""
 	}
@@ -4799,12 +4834,35 @@ func prStaleLabelSuffix(s PRStatus) string {
 	return ""
 }
 
+// prStaleSuffix returns "stale" when the workspace's local commit-id
+// differs from the PR's head SHA — the signal that the user's view (or
+// their last approval / changes-requested decision) is out of date and a
+// fresh re-review pass is warranted. Returns "" when either id is
+// unavailable (can't compare) or the PR is no longer open.
+func prStaleSuffix(s PRStatus, localCommitID string) string {
+	if s.State != PRStateOpen {
+		return ""
+	}
+	if s.HeadRefOid == "" || localCommitID == "" {
+		return ""
+	}
+	if s.HeadRefOid == localCommitID {
+		return ""
+	}
+	return "stale"
+}
+
 // prRepairPrompt builds an agent prompt asking the workspace's agent to
-// address the PR's actionable problems — merge conflicts, failing CI, or
-// an out-of-date base branch. Returns "" when the PR is healthy or in a
-// terminal (merged/closed) state. When multiple issues apply, every one
-// is listed in a single prompt so the agent can fix them together.
-func prRepairPrompt(s PRStatus) string {
+// address the PR's actionable problems — merge conflicts, failing CI,
+// an out-of-date base branch, or a local copy that's behind origin
+// (stale). Returns "" when the PR is healthy or in a terminal
+// (merged/closed) state. When multiple issues apply, every one is
+// listed in a single prompt so the agent can fix them together.
+//
+// localCommitID is the workspace's local bookmark tip; when non-empty
+// and different from s.HeadRefOid (and the PR is open), a "stale" issue
+// is added asking the agent to fetch and align.
+func prRepairPrompt(s PRStatus, localCommitID string) string {
 	if s.State != PRStateOpen {
 		return ""
 	}
@@ -4826,6 +4884,12 @@ func prRepairPrompt(s PRStatus) string {
 		issues = append(issues, issue{
 			label: "an out-of-date base branch",
 			ask:   "update this branch with the latest base",
+		})
+	}
+	if prStaleSuffix(s, localCommitID) != "" {
+		issues = append(issues, issue{
+			label: "new commits on origin that aren't in your local copy of this branch",
+			ask:   "run `jj git fetch` to pick them up, then align this workspace's working copy to the new origin tip (e.g. `jj new " + s.HeadRefName + "@origin`) so subsequent work builds on the latest",
 		})
 	}
 	if len(issues) == 0 {
@@ -4910,7 +4974,9 @@ func (m Model) resolvePRStatus(item Item) (PRStatus, bool) {
 }
 
 // prStatusLabelForItem resolves the workspace's PR and returns the
-// matched status plus a human-readable label.
+// matched status plus a human-readable label. The label appends a
+// "stale" suffix when the workspace's BookmarkCommitID (local bookmark
+// tip) differs from the PR head SHA — the re-review hint for the row.
 func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
 	status, ok := m.resolvePRStatus(item)
 	if !ok {
@@ -4919,6 +4985,9 @@ func (m Model) prStatusLabelForItem(item Item) (PRStatus, string, bool) {
 	label := prStatusLabel(status)
 	if label == "" {
 		return PRStatus{}, "", false
+	}
+	if extra := prStaleSuffix(status, item.BookmarkCommitID); extra != "" {
+		label += " · " + extra
 	}
 	return status, label, true
 }

@@ -273,6 +273,31 @@ func (c *Client) HeadDescription(dir string) (changeID, description string, err 
 	return strings.TrimSpace(line), "", nil
 }
 
+// BookmarkCommitID returns the full hex commit-id of the remote-tracking
+// ref `name@origin` at dir — i.e. the commit origin pointed at the last
+// time this repo fetched. Used to detect "behind remote": comparing this
+// against the PR head SHA from GitHub answers whether the last-fetched
+// state of this branch matches what's actually on the PR right now.
+//
+// Resolves remote_bookmarks instead of local_bookmarks because the
+// typical re-review case is a collaborator's PR: the branch only exists
+// as a remote-tracking ref on the user's machine, with no true local
+// bookmark of the same name. Returns "" with no error when the bookmark
+// has never been pushed/fetched (revset matches nothing); errors from
+// jj invocation are returned.
+func (c *Client) BookmarkCommitID(dir, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	out, runErr := c.runner.Run(context.Background(), dir, "jj", "--ignore-working-copy", "log",
+		"-r", `remote_bookmarks(exact:"`+name+`", exact:"origin")`, "--no-graph", "-T", "commit_id")
+	if runErr != nil {
+		return "", formatCommandError("resolve bookmark commit-id", runErr, out)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // AllBookmarksByRecency lists every bookmark deduped to a logical name, sorted
 // by the committer timestamp of the bookmark's target commit (most-recent
 // first). Bookmarks whose target cannot be resolved (e.g. conflicted, or a

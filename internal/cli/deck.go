@@ -1051,16 +1051,20 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		return repos[i].repo < repos[k].repo
 	})
 
-	// Fan out jj HeadDescription per workspace path in parallel. Each
-	// call spawns a `jj log` subprocess (~10–30ms with
-	// --ignore-working-copy); serialized across N workspaces this used
-	// to dominate the enrichment pass. Running concurrently drops wall
-	// time to roughly the slowest single call. Skipped on the fast
-	// first paint where j == nil.
-	type headInfo struct{ changeID, desc string }
+	// Fan out jj HeadDescription + BookmarkCommitID per workspace path
+	// in parallel. Each goroutine spawns one or two `jj log` subprocesses
+	// (~10–30ms with --ignore-working-copy); serialized across N
+	// workspaces this used to dominate the enrichment pass. Running
+	// concurrently drops wall time to roughly the slowest single
+	// workspace. Skipped on the fast first paint where j == nil.
+	// The bookmark commit-id powers the "behind remote" / stale signal:
+	// comparing the local bookmark tip against the PR head SHA tells us
+	// whether what we have locally still matches what's on the PR.
+	type headInfo struct{ changeID, bookmarkCommitID, desc string }
+	type pathSpec struct{ path, bookmark string }
 	var headByPath map[string]headInfo
 	if j != nil {
-		var paths []string
+		var specs []pathSpec
 		seen := map[string]bool{}
 		for _, r := range repos {
 			for _, e := range repoMap[r.repo] {
@@ -1069,21 +1073,25 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					continue
 				}
 				seen[p] = true
-				paths = append(paths, p)
+				specs = append(specs, pathSpec{path: p, bookmark: strings.TrimSpace(e.Bookmark)})
 			}
 		}
-		headByPath = make(map[string]headInfo, len(paths))
+		headByPath = make(map[string]headInfo, len(specs))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
-		for _, p := range paths {
+		for _, s := range specs {
 			wg.Add(1)
-			go func(p string) {
+			go func(s pathSpec) {
 				defer wg.Done()
-				id, desc, _ := j.HeadDescription(p)
+				id, desc, _ := j.HeadDescription(s.path)
+				var bookmarkCommit string
+				if s.bookmark != "" {
+					bookmarkCommit, _ = j.BookmarkCommitID(s.path, s.bookmark)
+				}
 				mu.Lock()
-				headByPath[p] = headInfo{changeID: id, desc: desc}
+				headByPath[s.path] = headInfo{changeID: id, bookmarkCommitID: bookmarkCommit, desc: desc}
 				mu.Unlock()
-			}(p)
+			}(s)
 		}
 		wg.Wait()
 	}
@@ -1157,7 +1165,6 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			// leaves both fields blank — the enrichment pass ~50 ms
 			// later fills them in.
 			head := headByPath[strings.TrimSpace(e.Path)]
-			headDesc, headChangeID := head.desc, head.changeID
 			item := deckui.Item{
 				ProjectName:   r.project,
 				WorkspaceName: e.Name,
@@ -1168,8 +1175,9 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				Status:        status,
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,
-				HeadDesc:      headDesc,
-				HeadChangeID:  headChangeID,
+				HeadDesc:         head.desc,
+				HeadChangeID:     head.changeID,
+				BookmarkCommitID: head.bookmarkCommitID,
 				TmuxWindow:    sessionName,
 				SessionName:   sessionName,
 				Active:        active,
