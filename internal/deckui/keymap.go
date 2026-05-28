@@ -19,6 +19,8 @@ type deckKeyMap struct {
 	Find          key.Binding
 	Down          key.Binding
 	Up            key.Binding
+	HalfPageDown  key.Binding
+	HalfPageUp    key.Binding
 	ScopeCycle    key.Binding
 	Enter         key.Binding
 	AgentWindow   key.Binding
@@ -50,6 +52,8 @@ func newDeckKeyMap() deckKeyMap {
 		Find:          key.NewBinding(key.WithKeys("f", "F"), key.WithHelp("f", "find: project → workspace easymotion jump")),
 		Down:          key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("↓/j", "move cursor")),
 		Up:            key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "move cursor")),
+		HalfPageDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "jump ½ page down")),
+		HalfPageUp:    key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "jump ½ page up")),
 		ScopeCycle:    key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "cycle scope (all → attention → open PR)")),
 		Enter:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "summon (create or focus the workspace tmux session)")),
 		AgentWindow:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),

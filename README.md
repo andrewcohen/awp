@@ -173,6 +173,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `f` | Find: easymotion-style project → workspace jump |
 | `/` | Filter rows · `esc` clears |
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → open PR (bookmark maps to a non-draft open PR). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
+| `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
 | `L` | Switch to last tmux session |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
