@@ -17,7 +17,7 @@ import (
 
 // StaleWorkspaceError marks a PrepareWorkspace failure where the jj
 // workspace was already registered but couldn't be reconciled to the
-// caller's intent (e.g. EditRevision rejected the bookmark, or the
+// caller's intent (e.g. NewOnRevision rejected the bookmark, or the
 // `already exists` retry path couldn't recover). The deck recognizes
 // this via IsStaleWorkspaceError and offers a "delete the workspace
 // and retry the job" affordance on the failed job in the jobs overlay.
@@ -70,7 +70,7 @@ type JJClient interface {
 	WorkspaceExists(name string) (bool, error)
 	ListWorkspaceNames() ([]string, error)
 	AddWorkspace(name string, path string, revision string) error
-	EditRevision(path, revision string) error
+	NewOnRevision(path, revision string) error
 	TrackBookmark(bookmarkName string) error
 	RenameWorkspace(path string, newName string) error
 	ForgetWorkspace(name string) error
@@ -399,7 +399,7 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 	}
 
 	// Step 1: ensure the bookmark is tracked locally before any
-	// operation that names it as a revision (AddWorkspace -r, EditRevision).
+	// operation that names it as a revision (AddWorkspace -r, NewOnRevision).
 	if trimmedBookmark != "" {
 		if err := s.trackBookmark(trimmedBookmark); err != nil {
 			return "", "", false, err
@@ -435,17 +435,25 @@ func (s *service) prepareWorkspaceInternal(name string, bookmark string, runHook
 		}
 	}
 
-	// Step 3: align the working copy to the requested bookmark. Always
-	// run when a bookmark is given — even if the workspace already
-	// existed at the wrong revision (the bug we just hit), or if jj
-	// add already placed @ there on fresh create (no-op cost is one jj
-	// command, worth the simpler invariant).
+	// Step 3: anchor the working copy on the requested bookmark. We
+	// always run `jj new <bookmark>` from the workspace dir — a fresh
+	// empty commit on top of the bookmark — instead of `jj edit
+	// <bookmark>`, which moves @ ONTO the bookmark and so refuses
+	// whenever the bookmark sits on an immutable commit (PR review of
+	// someone else's branch is the canonical case). The cost is that
+	// awp no longer auto-advances the bookmark as the user edits; if
+	// they want the bookmark to track their work they run
+	// `jj bookmark set <bm> -r @` themselves.
+	//
+	// Idempotency note: `jj new` always creates a fresh empty commit,
+	// so reconciliation on an existing workspace abandons the prior @
+	// rather than no-op'ing. That's the intended behavior for the
+	// drift-recovery case (e.g. an aborted review left @ somewhere
+	// weird). The abandoned commit is still reachable via
+	// `jj op log` / `jj op restore` if it had real work in it.
 	if trimmedBookmark != "" {
-		if err := s.jj.EditRevision(workspacePath, trimmedBookmark); err != nil {
-			wrapped := fmt.Errorf("align workspace %q to bookmark %q: %w", normalized, trimmedBookmark, err)
-			// If the workspace was already on disk when we arrived, the
-			// failure is recoverable by deleting + retrying. Surface that
-			// to callers (deck jobs overlay) via the typed sentinel.
+		if err := s.jj.NewOnRevision(workspacePath, trimmedBookmark); err != nil {
+			wrapped := fmt.Errorf("anchor workspace %q on bookmark %q: %w", normalized, trimmedBookmark, err)
 			if existedBefore {
 				return "", "", true, &StaleWorkspaceError{Name: normalized, Cause: wrapped}
 			}
