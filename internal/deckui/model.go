@@ -2426,6 +2426,21 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.cursor--
 			}
 			return m, nil
+		case key.Matches(msg, km.HalfPageDown):
+			m.cursor += m.deckHalfPageStep()
+			if m.cursor > len(m.items())-1 {
+				m.cursor = len(m.items()) - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			return m, nil
+		case key.Matches(msg, km.HalfPageUp):
+			m.cursor -= m.deckHalfPageStep()
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			return m, nil
 		case key.Matches(msg, km.Enter):
 			return m.trigger(ActionSummon, "")
 		case key.Matches(msg, km.AgentWindow):
@@ -3905,6 +3920,22 @@ func (m Model) deckBodyCapacity() int {
 	return rows
 }
 
+// deckHalfPageStep is how many workspace rows ctrl+d / ctrl+u move the
+// cursor — roughly half a visible screen, mirroring vim's half-page
+// scroll. Body capacity is measured in rendered rows and each workspace
+// item occupies itemBodyHeight rows, so the visible item count is
+// capacity/itemBodyHeight; half of that is the step. clampDeckViewport
+// then follows the cursor to bring the new position into view. Always
+// at least 1 so the keys never become a no-op on short terminals.
+func (m Model) deckHalfPageStep() int {
+	visibleItems := m.deckBodyCapacity() / itemBodyHeight
+	step := visibleItems / 2
+	if step < 1 {
+		step = 1
+	}
+	return step
+}
+
 // deckScrollOff is the number of rows kept visible above and below the
 // cursor before the viewport starts scrolling — vim's `scrolloff`. The
 // effect is a soft "deadzone" near the top and bottom edges: rather
@@ -4074,6 +4105,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Navigate",
 			Keys: [][2]string{
 				{"↑/↓ j/k", "move cursor"},
+				{"ctrl+u / ctrl+d", "jump ½ page up / down"},
 				{"/", "filter rows · esc clears"},
 				{"f", "find: project → workspace easymotion jump"},
 				{"P", "cycle scope (all → attention → open PR)"},
