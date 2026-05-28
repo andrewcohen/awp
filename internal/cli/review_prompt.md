@@ -45,6 +45,13 @@ Always pass `--username "awp-agent"` so the user can tell your comments
 apart from their own and from PR-author comments inline in the tuicr
 pane.
 
+**Prefix every comment body with `:robot: `** (the literal six-character
+token plus a space). This applies to every `tuicr review add` you make —
+line comments, file-scoped comments, and the closing review summary. It
+gives the user a visible marker in the tuicr pane that the comment came
+from you, distinct from anything they might type by hand even under the
+same `--username`.
+
 ### Comment types
 
 - `issue` — a concrete failure mode you can name (bug, security, broken
@@ -68,7 +75,7 @@ is fine; pad noise is worse than a short review.
     tuicr review add --session "{{session_path}}" \
       --target-file internal/foo/bar.go --line 42 --side new \
       --type issue --username "awp-agent" \
-      "Nil deref when baz is empty — line 39 returns nil and 42 calls .Field on it."
+      ":robot: Nil deref when baz is empty — line 39 returns nil and 42 calls .Field on it."
 
 ### Closing summary
 
@@ -78,7 +85,7 @@ and confidence level. Example:
 
     tuicr review add --session "{{session_path}}" \
       --type note --username "awp-agent" \
-      "Reviewed internal/cli and internal/github. Skipped UI changes in
+      ":robot: Reviewed internal/cli and internal/github. Skipped UI changes in
        internal/deckui (out of my depth on lipgloss conventions). Read
        the diff against {{diff_range}}."
 
