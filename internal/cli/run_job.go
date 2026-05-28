@@ -207,11 +207,12 @@ func runCreateWorkspaceJob(runner Runner, svc workspace.Service, job jobs.Job, r
 	dir := job.Spec.RepoRoot
 	fr := fixedDirRunner{base: runner, dir: dir}
 	return openWorkspaceWithReporter(fr, svc, openRequest{
-		Name:     job.Spec.Name,
-		Bookmark: job.Spec.Bookmark,
-		Prompt:   job.Spec.Prompt,
-		Yes:      true,
-		NoSwitch: true,
+		Name:             job.Spec.Name,
+		Bookmark:         job.Spec.Bookmark,
+		BookmarkToCreate: job.Spec.BookmarkToCreate,
+		Prompt:           job.Spec.Prompt,
+		Yes:              true,
+		NoSwitch:         true,
 	}, reporter)
 }
 

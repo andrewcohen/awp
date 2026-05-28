@@ -465,10 +465,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 				reporter = noopReporter{}
 			}
 			return openWorkspaceWithReporter(fr, actionSvc, openRequest{
-				Name:     req.Workspace.Name,
-				Bookmark: req.Workspace.Bookmark,
-				Prompt:   req.Workspace.Prompt,
-				Yes:      true,
+				Name:             req.Workspace.Name,
+				Bookmark:         req.Workspace.Bookmark,
+				BookmarkToCreate: req.Workspace.BookmarkToCreate,
+				Prompt:           req.Workspace.Prompt,
+				Yes:              true,
 			}, reporter)
 		}
 		if req.Action == deckui.ActionReview {
@@ -743,6 +744,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
+		WithTrunkResolver(func(repo string) string {
+			fr := fixedDirRunner{base: runner, dir: repo}
+			name, _ := jj.New(fr).Trunk()
+			return name
+		}).
 		WithBookmarkLinkHandler(bookmarkLinkHandler).
 		WithPRNumberLinkHandler(prNumberLinkHandler).
 		WithBookmarkPrefix(cfg.Deck.BookmarkPrefix).
@@ -783,14 +789,15 @@ func buildAsyncJobs(repoRoot string, runner Runner) (deckui.AsyncJobLauncher, de
 			root = repoRoot
 		}
 		jspec := jobs.Spec{
-			Action:        jobs.JobAction(spec.Action),
-			RepoRoot:      root,
-			Name:          spec.Name,
-			Bookmark:      spec.Bookmark,
-			Prompt:        spec.Prompt,
-			Arg:           spec.Arg,
-			WorkspaceName: spec.WorkspaceName,
-			WorkspacePath: spec.WorkspacePath,
+			Action:           jobs.JobAction(spec.Action),
+			RepoRoot:         root,
+			Name:             spec.Name,
+			Bookmark:         spec.Bookmark,
+			BookmarkToCreate: spec.BookmarkToCreate,
+			Prompt:           spec.Prompt,
+			Arg:              spec.Arg,
+			WorkspaceName:    spec.WorkspaceName,
+			WorkspacePath:    spec.WorkspacePath,
 		}
 		_, err := store.Spawn(jspec, spec.Title, jobs.SpawnOptions{})
 		return err

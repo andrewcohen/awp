@@ -168,7 +168,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `i` | CI window (`gh run watch`) |
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config) |
-| `n` | New workspace (inline form: workspace name / bookmark / agent prompt) |
+| `n` | New workspace (inline form: workspace name / start-from / agent prompt). `start-from` is a select with `main` (default) and `pick a bookmark…` (opens the bookmark picker). The form also surfaces a `Will create bookmark:` hint when `deck.bookmark_prefix` is configured. |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style project → workspace jump |
 | `/` | Filter rows · `esc` clears |
@@ -193,7 +193,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 |---|---|
 | `awp deck [--scope=all\|attention\|open-pr]` | Open the workspace dashboard. `--scope` sets the initial filter (default `all`); `P` still cycles through every scope inside the deck. |
 | `awp mini-deck` | Quick-jump list of workspaces with an active agent or unread notification |
-| `awp w open [name]` | Create or attach to a workspace (interactive form when run alone) |
+| `awp w open [name]` | Create or attach to a workspace. Run with no name to drop into the same unified form the deck's `n` key shows: workspace name, `Start from` (`main` by default, or `pick a bookmark…`), and an optional agent prompt. To review a PR instead, use `awp review`. |
 | `awp w list` | List workspaces in the current repo |
 | `awp w info <name>` | Show details for a workspace |
 | `awp w rename <old> <new>` | Rename |

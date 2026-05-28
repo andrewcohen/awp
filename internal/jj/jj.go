@@ -386,6 +386,30 @@ func (c *Client) AllBookmarks() ([]string, error) {
 	return names, nil
 }
 
+// Trunk returns the name of the bookmark at jj's `trunk()` revset (the
+// repo's integration branch — defaults to main/master/trunk, overridable
+// per-repo via revset-aliases). When multiple bookmarks sit at the trunk
+// revision, the first one is returned. Empty string + nil error signals
+// "no bookmark resolved" so callers can fall back to a literal default
+// without aborting the form open.
+func (c *Client) Trunk() (string, error) {
+	out, err := c.runner.Run(context.Background(), "", "jj", "log", "--no-graph", "-r", "trunk()", "-T", `bookmarks.map(|b| b.name()).join("\n")`)
+	if err != nil {
+		return "", formatCommandError("resolve trunk", err, out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if idx := strings.Index(name, "@"); idx > 0 {
+			name = name[:idx]
+		}
+		return name, nil
+	}
+	return "", nil
+}
+
 func (c *Client) BookmarksAtRevision(revision string) ([]string, error) {
 	out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "list", "-r", revision, "-T", "name ++ \"\\n\"")
 	if err != nil {

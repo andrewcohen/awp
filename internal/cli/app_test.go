@@ -275,12 +275,9 @@ func TestRunOpenInteractivePrefillsFlags(t *testing.T) {
 	app.in = bytes.NewBuffer(nil)
 	app.isPiped = func(io.Reader) bool { return false }
 	app.isInteractive = func(io.Reader) bool { return true }
-	app.openForm = func(initial openRequest, workspaces []string, _ io.Reader, _ io.Writer) (openRequest, error) {
+	app.openForm = func(initial openRequest, _ Runner, _ io.Reader, _ io.Writer) (openRequest, error) {
 		if initial.Bookmark != "team/feature" || initial.Prompt != "fix tests" || !initial.Yes {
 			t.Fatalf("unexpected initial request: %+v", initial)
-		}
-		if len(workspaces) != 1 || workspaces[0] != "qa" {
-			t.Fatalf("unexpected workspace list: %#v", workspaces)
 		}
 		initial.Name = "qa"
 		return initial, nil
@@ -300,10 +297,7 @@ func TestRunOpenInteractiveSubmitImpliesYes(t *testing.T) {
 	app.in = bytes.NewBuffer(nil)
 	app.isPiped = func(io.Reader) bool { return false }
 	app.isInteractive = func(io.Reader) bool { return true }
-	app.newFlow = func(Runner, io.Reader, io.Writer) (newFlowResult, error) {
-		return newFlowResult{kind: newFlowDefault}, nil
-	}
-	app.openForm = func(initial openRequest, workspaces []string, _ io.Reader, _ io.Writer) (openRequest, error) {
+	app.openForm = func(initial openRequest, _ Runner, _ io.Reader, _ io.Writer) (openRequest, error) {
 		initial.Name = "new-workspace"
 		initial.Yes = false
 		return initial, nil

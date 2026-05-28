@@ -93,12 +93,17 @@ func HuhTheme() *huh.Theme {
 	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(colorAccent)
 
 	// Blurred styles mirror Focused but drop the left bar so unselected
-	// groups don't compete visually with the active one.
+	// groups don't compete visually with the active one. Confirm-style
+	// buttons also lose their warning highlight while blurred — the
+	// Affirmative button is "selected" by binding but we don't want it
+	// reading as the focused action until the user actually tabs there.
 	t.Blurred = t.Focused
 	t.Blurred.Base = t.Focused.Base.BorderStyle(lipgloss.HiddenBorder())
 	t.Blurred.Card = t.Blurred.Base
 	t.Blurred.NextIndicator = lipgloss.NewStyle()
 	t.Blurred.PrevIndicator = lipgloss.NewStyle()
+	t.Blurred.FocusedButton = t.Focused.BlurredButton
+	t.Blurred.Next = t.Focused.BlurredButton
 
 	t.Group.Title = t.Focused.Title
 	t.Group.Description = t.Focused.Description

@@ -72,9 +72,10 @@ type Spec struct {
 	RepoRoot string    `json:"repo_root,omitempty"`
 
 	// Create-workspace fields.
-	Name     string `json:"name,omitempty"`
-	Bookmark string `json:"bookmark,omitempty"`
-	Prompt   string `json:"prompt,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Bookmark         string `json:"bookmark,omitempty"`
+	BookmarkToCreate string `json:"bookmark_to_create,omitempty"`
+	Prompt           string `json:"prompt,omitempty"`
 
 	// Generic action arg (PR number for review, action name for custom).
 	Arg string `json:"arg,omitempty"`
