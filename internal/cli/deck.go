@@ -17,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/andrewcohen/awp/internal/agenthooks"
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
@@ -696,6 +697,24 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.StateEditDoneMsg{Err: err}
 		})
 	}
+	// hookInstaller re-syncs the global agent integrations (Claude hooks,
+	// pi.dev extension) on deck open. Both installers are idempotent and
+	// only write when the on-disk config has drifted, so this is a no-op
+	// on most opens — it exists to self-heal after an awp upgrade bumps
+	// HookMarkerVersion or after settings.json is hand-edited, without the
+	// user having to remember to run `awp init hooks`.
+	hookInstaller := func() tea.Cmd {
+		return func() tea.Msg {
+			claudeChanged, cerr := agenthooks.InstallClaude()
+			piChanged, perr := agenthooks.InstallPi()
+			return deckui.HookInstallDoneMsg{
+				ClaudeChanged: claudeChanged,
+				PiChanged:     piChanged,
+				Err:           errors.Join(cerr, perr),
+			}
+		}
+	}
+
 	asyncLauncher, asyncList, asyncCancel, asyncDismiss, asyncLog, asyncRetry, asyncDeleteRetry := buildAsyncJobs(repoRoot, runner)
 	if asyncLauncher != nil {
 		go runJobsStartupCleanup()
@@ -730,6 +749,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithUserActionsResolver(userActionsForRepo).
 		WithStateChangeWatcher(newDeckStateChangeWatcher()).
+		WithHookInstaller(hookInstaller).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
 		WithProjectOpener(openProjectViaTmux(runner)).
 		WithAsyncJobLauncher(asyncLauncher).

@@ -17,7 +17,7 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 5
+const HookMarkerVersion = 6
 
 // BlockingTools lists tool names that block on user input. When a
 // PreToolUse hook fires for one of these, awp reports "waiting" instead of
@@ -62,14 +62,36 @@ func HookCommand(event, state string) string {
 // PostToolUse → working flips the row back to "working" once a blocking
 // tool (e.g. AskUserQuestion) returns, so the deck doesn't linger in
 // "waiting" while the agent is generating its follow-up response.
+//
+// The three "waiting" events cover every way Claude blocks on the user:
+//   - PreToolUse with AskUserQuestion (via --waiting-when-tool below) —
+//     Claude's own multiple-choice question.
+//   - PermissionRequest — a permission dialog is up (e.g. approve a Bash
+//     command or file write in default permission mode). This is the
+//     dedicated event; it fires regardless of whether the user has
+//     desktop Notifications configured, so it's more reliable than
+//     leaning on the Notification event alone.
+//   - Elicitation — an MCP server is requesting form input.
+//   - Notification — the catch-all (permission_prompt / idle_prompt /
+//     elicitation_dialog). Kept as a backstop for older clients and the
+//     60s-idle ping.
+//
+// Each of these resolves back to "working" on the next PreToolUse /
+// PostToolUse, or to "idle" on Stop, so the row never sticks in waiting.
+//
+// Unknown events are ignored by older Claude Code versions, so listing
+// PermissionRequest / Elicitation here is safe even if the installed
+// client predates them.
 func DesiredClaudeHooks() map[string]string {
 	return map[string]string{
-		"SessionStart":     "idle",
-		"UserPromptSubmit": "working",
-		"PreToolUse":       "working",
-		"PostToolUse":      "working",
-		"Stop":             "idle",
-		"Notification":     "waiting",
+		"SessionStart":      "idle",
+		"UserPromptSubmit":  "working",
+		"PreToolUse":        "working",
+		"PostToolUse":       "working",
+		"Stop":              "idle",
+		"Notification":      "waiting",
+		"PermissionRequest": "waiting",
+		"Elicitation":       "waiting",
 	}
 }
 
