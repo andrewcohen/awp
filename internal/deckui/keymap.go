@@ -35,6 +35,7 @@ type deckKeyMap struct {
 	Rename        key.Binding
 	LinkBookmark  key.Binding
 	NewMenu       key.Binding
+	ReviewPick    key.Binding
 	Open          key.Binding
 	UserActions   key.Binding
 	EditState     key.Binding
@@ -68,6 +69,7 @@ func newDeckKeyMap() deckKeyMap {
 		Rename:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename workspace")),
 		LinkBookmark:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "link a bookmark to the selected workspace")),
 		NewMenu:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new workspace")),
+		ReviewPick:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "pick a PR to review")),
 		Open:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open: fuzzy-pick a project from configured roots")),
 		UserActions:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "user actions menu")),
 		EditState:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "edit raw state JSON in $EDITOR")),

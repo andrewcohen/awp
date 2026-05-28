@@ -13,7 +13,7 @@
 // Concretely, each modal contributes:
 //
 //   - A flag (or enum) on `Model`: `jobsOverlay`, `confirmDelete`,
-//     `newMenuMode`, `bookmarkMode`, `reviewMode`, `findMode`,
+//     `bookmarkMode`, `reviewMode`, `findMode`,
 //     `openMode`, `actionMode`, `newWorkspaceMode`, etc.
 //   - Any sub-component state alongside the flag: cursor, filter input,
 //     loaded data slice, sub-form fields. These are plain structs; they

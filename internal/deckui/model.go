@@ -96,9 +96,10 @@ type UserAction struct {
 // the user submits the new-workspace form. It is consumed by the deck handler
 // for ActionCreateWorkspace.
 type NewWorkspaceRequest struct {
-	Name     string
-	Bookmark string
-	Prompt   string
+	Name             string
+	Bookmark         string // anchor revision for the new workspace's @
+	BookmarkToCreate string // new bookmark to create on @ (blank = skip)
+	Prompt           string
 }
 
 type ActionRequest struct {
@@ -183,6 +184,11 @@ type NewWorkspaceInitial struct {
 // BookmarksDoneMsg.
 type BookmarkFetcher func(repoRoot string) tea.Cmd
 
+// TrunkResolver returns the repo's `trunk()` revset bookmark name (e.g.
+// "main", "master", "trunk"). Used by the new-workspace form's
+// Start-from default. Return "" to let the form fall back to "main".
+type TrunkResolver func(repoRoot string) string
+
 // StateEditorLauncher returns a tea.Cmd that suspends the deck and opens the
 // global workspace-state.json in $EDITOR.
 type StateEditorLauncher func() tea.Cmd
@@ -216,6 +222,11 @@ type bookmarkPurpose int
 const (
 	bookmarkPurposeNewWorkspace bookmarkPurpose = iota
 	bookmarkPurposeLinkExisting
+	// bookmarkPurposeNewWorkspaceStartFrom is the picker round-trip from
+	// within the open workspace form: the form stays alive in the
+	// background, the picker resolves a bookmark, then acceptBookmarkSelection
+	// feeds the result back via SetPickedBookmark and re-shows the form.
+	bookmarkPurposeNewWorkspaceStartFrom
 )
 
 // bookmarkItem is the list.Item shape for the bookmark picker. Only Title
@@ -266,8 +277,11 @@ func resetBookmarkList(l *list.Model) {
 }
 
 func bookmarkPickerTitle(p bookmarkPurpose, target Item) string {
-	if p == bookmarkPurposeLinkExisting {
+	switch p {
+	case bookmarkPurposeLinkExisting:
 		return "link bookmark → " + target.WorkspaceName
+	case bookmarkPurposeNewWorkspaceStartFrom:
+		return "start from: pick a bookmark"
 	}
 	return "bookmark: pick one"
 }
@@ -727,15 +741,13 @@ type Model struct {
 	prStatusByRepo     map[string]map[string]PRStatus // repoRoot → headRefName → status
 	prStatusFetchedAt  map[string]time.Time           // repoRoot → wall clock of last successful fetch
 	bookmarkFetcher    BookmarkFetcher
+	trunkResolver      TrunkResolver
 	stateEditor        StateEditorLauncher
 	reviewMode         bool
 	reviewLoading      bool
 	reviewList         list.Model
 	reviewDelegate     *reviewItemDelegate
-	newMenuMode        bool
-	newMenuCursor      int
-	newMenuRepo        string
-	prMenuMode         bool
+	prMenuMode bool
 	// prNumberSetMode is true while the `p s` chord's numeric input
 	// modal is open. prNumberInput / prNumberTarget back the modal.
 	prNumberSetMode     bool
@@ -958,6 +970,14 @@ func (m Model) WithPRStatusSeed(byRepo map[string]map[string]PRStatus, fetchedAt
 
 func (m Model) WithBookmarkFetcher(f BookmarkFetcher) Model {
 	m.bookmarkFetcher = f
+	return m
+}
+
+// WithTrunkResolver installs the per-repo trunk-bookmark lookup used by
+// the new-workspace form's Start-from default. Without it, the form
+// falls back to literal "main".
+func (m Model) WithTrunkResolver(r TrunkResolver) Model {
+	m.trunkResolver = r
 	return m
 }
 
@@ -1439,7 +1459,7 @@ func (m Model) canBackgroundRefresh() bool {
 	return m.refresher != nil && !m.busy && !m.progressMode &&
 		!m.confirmDelete && !m.filtering &&
 		!m.findMode && !m.actionMode &&
-		!m.newMenuMode && !m.bookmarkMode && !m.reviewMode &&
+		!m.bookmarkMode && !m.reviewMode &&
 		!m.openMode && !m.helpMode && !m.newWorkspaceMode &&
 		!m.prMenuMode && !m.prNumberSetMode
 }
@@ -2117,39 +2137,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.newMenuMode {
-			switch msg.String() {
-			case "esc", "q", "ctrl+c":
-				m.newMenuMode = false
-				m.status = ""
-				return m, tea.ClearScreen
-			case "j", "down":
-				if m.newMenuCursor < 2 {
-					m.newMenuCursor++
-				}
-				return m, nil
-			case "k", "up":
-				if m.newMenuCursor > 0 {
-					m.newMenuCursor--
-				}
-				return m, nil
-			case "b":
-				return m.startBookmarkPicker()
-			case "r":
-				return m.startReviewFromMenu()
-			case "enter":
-				switch m.newMenuCursor {
-				case 0:
-					return m.launchNewForm(NewWorkspaceInitial{})
-				case 1:
-					return m.startBookmarkPicker()
-				case 2:
-					return m.startReviewFromMenu()
-				}
-				return m, nil
-			}
-			return m, nil
-		}
 		if m.openMode {
 			if m.openLoading {
 				switch msg.String() {
@@ -2199,6 +2186,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.bookmarkMode = false
 					m.bookmarkLoading = false
 					m.status = ""
+					if m.bookmarkPurpose == bookmarkPurposeNewWorkspaceStartFrom {
+						m.bookmarkPurpose = bookmarkPurposeNewWorkspace
+						m.newWorkspaceMode = true
+						m.newWorkspaceForm.RevertStartFrom()
+						return m, tea.ClearScreen
+					}
 				}
 				return m, nil
 			}
@@ -2229,11 +2222,17 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				return m, nil
 			case "esc", "ctrl+c":
 				if !filtering && m.bookmarkList.FilterState() != list.FilterApplied {
+					fromForm := m.bookmarkPurpose == bookmarkPurposeNewWorkspaceStartFrom
 					m.bookmarkMode = false
 					resetBookmarkList(&m.bookmarkList)
 					m.bookmarkPurpose = bookmarkPurposeNewWorkspace
 					m.bookmarkLinkTarget = Item{}
 					m.status = ""
+					if fromForm {
+						m.newWorkspaceMode = true
+						m.newWorkspaceForm.RevertStartFrom()
+						return m, tea.ClearScreen
+					}
 					return m, nil
 				}
 			}
@@ -2558,18 +2557,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "new: select a row with a known repo"
 				return m, nil
 			}
-			m.newMenuMode = true
-			m.newMenuCursor = 0
-			m.newMenuRepo = item.RepoRoot
-			m.status = "new: choose start (↑/↓ enter · b bookmark · r review · esc cancel)"
-			// tea.ClearScreen forces Bubble Tea's renderer to drop its
-			// previous-frame buffer and rewrite every cell on the next
-			// View. Required when entering a modal whose layout is
-			// narrower than the row list — otherwise the renderer's
-			// per-line diff skips redrawing rows whose left columns are
-			// occupied by stale row-list content. See doc.go for the
-			// "modal-state, full repaint on entry" pattern.
-			return m, tea.ClearScreen
+			return m.launchNewForm(NewWorkspaceInitial{}, item.RepoRoot)
+		case key.Matches(msg, km.ReviewPick):
+			item, ok := m.selected()
+			if !ok || strings.TrimSpace(item.RepoRoot) == "" {
+				m.status = "review: select a row with a known repo"
+				return m, nil
+			}
+			return m.startReviewPicker(item.RepoRoot)
 		case key.Matches(msg, km.Open):
 			if m.projectFinder == nil {
 				m.status = "open: not configured (set deck.project_roots in config)"
@@ -2687,11 +2682,9 @@ func pickerShortHelp(l list.Model) []key.Binding {
 
 // launchNewForm enters inline new-workspace-form mode. The form is a
 // state of this Model (see doc.go); we do not nest a tea.Program. The
-// repo root collected from the row selection is stashed so submit can
-// dispatch a create job through the existing async-job path.
-func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) {
-	repo := m.newMenuRepo
-	m.newMenuMode = false
+// repo root is stashed so submit can dispatch a create job through the
+// existing async-job path.
+func (m *Model) launchNewForm(initial NewWorkspaceInitial, repo string) (tea.Model, tea.Cmd) {
 	m.bookmarkMode = false
 	resetBookmarkList(&m.bookmarkList)
 	if strings.TrimSpace(repo) == "" {
@@ -2701,7 +2694,11 @@ func (m *Model) launchNewForm(initial NewWorkspaceInitial) (tea.Model, tea.Cmd) 
 	m.newWorkspaceMode = true
 	m.newWorkspaceRepo = repo
 	var initCmd tea.Cmd
-	m.newWorkspaceForm, initCmd = newNewWorkspaceForm(initial)
+	trunk := ""
+	if m.trunkResolver != nil {
+		trunk = m.trunkResolver(repo)
+	}
+	m.newWorkspaceForm, initCmd = newNewWorkspaceForm(initial, m.bookmarkPrefix, trunk)
 	m.status = "new workspace..."
 	// tea.ClearScreen so the renderer drops its previous-frame buffer
 	// and the form's first paint overwrites every cell, including
@@ -2806,6 +2803,21 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.newWorkspaceForm = newWorkspaceForm{}
 		updated, dispatchCmd := m.startCreateAction(req, repo)
 		return updated, batchCmds(cmd, dispatchCmd, tea.ClearScreen)
+	case newFormActionOpenPicker:
+		if m.bookmarkFetcher == nil || strings.TrimSpace(m.newWorkspaceRepo) == "" {
+			m.newWorkspaceForm.RevertStartFrom()
+			m.status = "bookmark picker not configured"
+			return m, cmd
+		}
+		m.newWorkspaceMode = false
+		m.bookmarkMode = true
+		m.bookmarkPurpose = bookmarkPurposeNewWorkspaceStartFrom
+		m.bookmarkLoading = true
+		resetBookmarkList(&m.bookmarkList)
+		m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, Item{})
+		m.bookmarkList.SetShowStatusBar(false)
+		m.bookmarkList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading bookmarks..."}})
+		return m, batchCmds(cmd, m.spinner.Tick, m.bookmarkFetcher(m.newWorkspaceRepo), tea.ClearScreen)
 	}
 	return m, cmd
 }
@@ -2829,34 +2841,20 @@ func batchCmds(cmds ...tea.Cmd) tea.Cmd {
 	}
 }
 
-func (m *Model) startBookmarkPicker() (tea.Model, tea.Cmd) {
-	if m.bookmarkFetcher == nil {
-		m.status = "bookmark: not configured"
-		return *m, nil
-	}
-	if strings.TrimSpace(m.newMenuRepo) == "" {
-		m.status = "bookmark: no repo"
-		return *m, nil
-	}
-	m.newMenuMode = false
-	m.bookmarkMode = true
-	m.bookmarkPurpose = bookmarkPurposeNewWorkspace
-	m.bookmarkLoading = true
-	resetBookmarkList(&m.bookmarkList)
-	m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, m.bookmarkLinkTarget)
-	m.bookmarkList.SetShowStatusBar(false)
-	m.bookmarkList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading bookmarks..."}})
-	m.busy = true
-	m.status = ""
-	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(m.newMenuRepo))
-}
-
 // acceptBookmarkSelection branches on bookmarkPurpose to either feed the
-// chosen name to the new-workspace form or persist it via BookmarkLinkHandler.
-// Shared between filter-mode (enter selects directly) and nav-mode (enter
-// after committing a filter) so the two paths can't diverge.
+// chosen name back to the open new-workspace form or persist it via
+// BookmarkLinkHandler. Shared between filter-mode (enter selects
+// directly) and nav-mode (enter after committing a filter) so the two
+// paths can't diverge.
 func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
 	switch m.bookmarkPurpose {
+	case bookmarkPurposeNewWorkspaceStartFrom:
+		m.bookmarkMode = false
+		resetBookmarkList(&m.bookmarkList)
+		m.bookmarkPurpose = bookmarkPurposeNewWorkspace
+		m.newWorkspaceMode = true
+		m.newWorkspaceForm.SetPickedBookmark(name)
+		return *m, tea.ClearScreen
 	case bookmarkPurposeLinkExisting:
 		target := m.bookmarkLinkTarget
 		m.bookmarkMode = false
@@ -2902,18 +2900,7 @@ func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
 		}
 		return *m, tea.Batch(cmds...)
 	}
-	initial := NewWorkspaceInitial{Bookmark: name}
-	if prefix := strings.TrimSpace(m.bookmarkPrefix); prefix != "" {
-		// Propose a workspace name with the prefix stripped so picking
-		// "andrew/foo" defaults the workspace to "foo" rather than the
-		// fully-qualified bookmark. The user can still edit before
-		// submitting.
-		head := prefix + "/"
-		if strings.HasPrefix(name, head) {
-			initial.Name = strings.TrimPrefix(name, head)
-		}
-	}
-	return m.launchNewForm(initial)
+	return *m, nil
 }
 
 // startBookmarkLinker opens the same fuzzy picker but routes the selection to
@@ -2942,17 +2929,18 @@ func (m *Model) startBookmarkLinker(target Item) (tea.Model, tea.Cmd) {
 	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(target.RepoRoot))
 }
 
-func (m *Model) startReviewFromMenu() (tea.Model, tea.Cmd) {
+// startReviewPicker opens the PR picker so the user can pick a PR to
+// review. Reached from row-mode `r`; the picker itself is a separate
+// modal state, same shape as the bookmark picker.
+func (m *Model) startReviewPicker(repo string) (tea.Model, tea.Cmd) {
 	if m.prFetcher == nil {
 		m.status = "review: not configured"
 		return *m, nil
 	}
-	repo := m.newMenuRepo
 	if strings.TrimSpace(repo) == "" {
 		m.status = "review: no repo"
 		return *m, nil
 	}
-	m.newMenuMode = false
 	m.reviewMode = true
 	m.reviewLoading = true
 	resetReviewList(&m.reviewList)
@@ -3165,12 +3153,13 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		title = "create · " + b
 	}
 	spec := AsyncJobSpec{
-		Action:   "create-workspace",
-		RepoRoot: repoRoot,
-		Title:    title,
-		Name:     strings.TrimSpace(req.Name),
-		Bookmark: strings.TrimSpace(req.Bookmark),
-		Prompt:   strings.TrimSpace(req.Prompt),
+		Action:           "create-workspace",
+		RepoRoot:         repoRoot,
+		Title:            title,
+		Name:             strings.TrimSpace(req.Name),
+		Bookmark:         strings.TrimSpace(req.Bookmark),
+		BookmarkToCreate: strings.TrimSpace(req.BookmarkToCreate),
+		Prompt:           strings.TrimSpace(req.Prompt),
 	}
 	// Pre-arm pendingSelect with the new workspace's likely name so the
 	// cursor snaps to it as soon as the refresh after the subprocess
@@ -3307,12 +3296,6 @@ func (m Model) View() string {
 	// always single-column.
 	var left, right string
 	switch {
-	case m.newMenuMode:
-		leftW, rightW := pickerSplit(m.width, m.deckStacked())
-		left = m.renderNewMenu(leftW)
-		if rightW > 0 {
-			right = m.renderNewMenuDetails(rightW)
-		}
 	case m.openMode:
 		leftW, rightW := pickerSplit(m.width, m.deckStacked())
 		left = m.renderOpenList(leftW)
@@ -3386,7 +3369,7 @@ func (m Model) View() string {
 	// since the overlay doesn't apply there — those screens surface
 	// their own actionable hints in rightSeg.
 	hint := "? help"
-	if m.newMenuMode || m.bookmarkMode || m.reviewMode || m.openMode ||
+	if m.bookmarkMode || m.reviewMode || m.openMode ||
 		m.jobsOverlay || m.prMenuMode || m.findMode || m.actionMode {
 		hint = ""
 	}
@@ -4161,52 +4144,6 @@ func deckKeyGroups() []keyGroup {
 			},
 		},
 	}
-}
-
-func (m Model) renderNewMenu(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("new workspace: choose start")
-	options := []struct {
-		label string
-		hint  string
-	}{
-		{"empty", "empty workspace from current revision"},
-		{"bookmark", "pick a jj bookmark to base it on"},
-		{"review", "review an open PR"},
-	}
-	rows := []string{title, ""}
-	for i, opt := range options {
-		prefix := "  "
-		style := lipgloss.NewStyle().Width(width - 1)
-		if i == m.newMenuCursor {
-			prefix = "┃ "
-			style = style.Foreground(lipgloss.Color(colWarning)).Bold(true)
-		}
-		quick := ""
-		switch i {
-		case 1:
-			quick = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(" [b]")
-		case 2:
-			quick = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(" [r]")
-		}
-		rows = append(rows, style.Render(fmt.Sprintf("%s%s%s", prefix, opt.label, quick)))
-		rows = append(rows, lipgloss.NewStyle().Width(width).Foreground(lipgloss.Color(colMuted)).Render("   "+opt.hint))
-	}
-	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(rows, "\n"))
-}
-
-func (m Model) renderNewMenuDetails(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("new workspace")
-	lines := []string{
-		title, "",
-		"Repo: " + m.newMenuRepo, "",
-		"Keys:",
-		"↑/↓ j/k  navigate",
-		"enter    choose",
-		"b        bookmark (quick)",
-		"r        review   (quick)",
-		"esc      cancel",
-	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderOpenList(width int) string {
