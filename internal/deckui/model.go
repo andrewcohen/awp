@@ -190,6 +190,24 @@ type StateEditorLauncher func() tea.Cmd
 // StateEditDoneMsg is emitted when the state editor exits.
 type StateEditDoneMsg struct{ Err error }
 
+// HookInstaller returns a tea.Cmd that (re)installs the global agent
+// integrations (Claude Code hooks, pi.dev extension) and emits a
+// HookInstallDoneMsg. The install is idempotent — it only writes when the
+// on-disk hook block has drifted from what awp expects — so the deck can
+// fire it unconditionally on startup. Without it, deck open never touches
+// the hook config.
+type HookInstaller func() tea.Cmd
+
+// HookInstallDoneMsg reports the result of the startup hook install.
+// ClaudeChanged / PiChanged are true only when that integration's on-disk
+// config was actually rewritten (i.e. it had drifted); both false means
+// everything was already up to date.
+type HookInstallDoneMsg struct {
+	ClaudeChanged bool
+	PiChanged     bool
+	Err           error
+}
+
 // bookmarkPurpose disambiguates the two flows that share the picker: the
 // new-workspace form's bookmark seed vs. linking a bookmark to an existing
 // workspace (used by the B key in row mode).
@@ -702,6 +720,7 @@ type Model struct {
 	findPendingPrefix  rune
 	refresher          Refresher
 	refreshing         bool // true while a m.refresher() command is in flight
+	hookInstaller      HookInstaller
 	stateWatcher       StateChangeWatcher
 	prFetcher          PRFetcher
 	prStatusFetcher    PRStatusFetcher
@@ -890,6 +909,15 @@ func (m Model) WithDevURLDiscoverer(d DevURLDiscoverer) Model {
 
 func (m Model) WithStateChangeWatcher(w StateChangeWatcher) Model {
 	m.stateWatcher = w
+	return m
+}
+
+// WithHookInstaller installs the callback that (re)installs the global
+// agent integrations on deck open. When set, Init fires it asynchronously
+// so a first paint never blocks on filesystem writes; the result surfaces
+// via HookInstallDoneMsg.
+func (m Model) WithHookInstaller(h HookInstaller) Model {
+	m.hookInstaller = h
 	return m
 }
 
@@ -1284,6 +1312,13 @@ func (m Model) Init() tea.Cmd {
 	if m.stateWatcher != nil {
 		cmds = append(cmds, m.stateWatcher())
 	}
+	if m.hookInstaller != nil {
+		// Async, fire-and-forget: re-sync the global agent hooks in case
+		// they've drifted (awp upgraded, settings.json hand-edited). The
+		// install is idempotent and only writes on drift, so this is a
+		// no-op most opens.
+		cmds = append(cmds, m.hookInstaller())
+	}
 	if m.devURLDiscoverer != nil {
 		// Kick off the dev-URL fan-out immediately so users don't wait
 		// 2 s for the first paint when reopening a deck with running
@@ -1663,6 +1698,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.refreshing = true
 			m = m.startActivity("enrich", "enrich", 0)
 			return m, m.refresher()
+		}
+		return m, nil
+	case HookInstallDoneMsg:
+		// Stay quiet when nothing drifted — the common case. Only surface
+		// durable feedback when we actually rewrote config, or on error.
+		switch {
+		case msg.Err != nil:
+			m.status = "hooks: " + msg.Err.Error()
+		case msg.ClaudeChanged || msg.PiChanged:
+			m.status = "hooks: updated agent integrations"
 		}
 		return m, nil
 	case BookmarksDoneMsg:

@@ -52,6 +52,19 @@ func TestDesiredClaudeHooksIncludesPostToolUse(t *testing.T) {
 	}
 }
 
+func TestDesiredClaudeHooksWaitingEvents(t *testing.T) {
+	hooks := DesiredClaudeHooks()
+	// PermissionRequest and Elicitation are the dedicated "blocked on the
+	// user" events; both must flip the row to waiting so the deck shows
+	// yellow while a permission dialog / MCP form is up — not just when a
+	// desktop Notification happens to fire.
+	for _, event := range []string{"Notification", "PermissionRequest", "Elicitation"} {
+		if state, ok := hooks[event]; !ok || state != "waiting" {
+			t.Errorf("DesiredClaudeHooks[%q] = %q (ok=%v), want \"waiting\"", event, state, ok)
+		}
+	}
+}
+
 func TestHookMarkerVersionBumped(t *testing.T) {
 	// Guard: dropping the version below 5 would let stale installs from
 	// before the blocking-tool / PostToolUse rollout keep their older
