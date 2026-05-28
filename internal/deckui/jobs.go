@@ -26,15 +26,16 @@ import (
 // and calls the jobs store. Keeping deckui free of that dependency
 // preserves the package boundary.
 type AsyncJobSpec struct {
-	Action        string // "create-workspace", "review", "ci", "custom"
-	RepoRoot      string
-	Title         string
-	Name          string
-	Bookmark      string
-	Prompt        string
-	Arg           string
-	WorkspaceName string
-	WorkspacePath string
+	Action           string // "create-workspace", "review", "ci", "custom"
+	RepoRoot         string
+	Title            string
+	Name             string
+	Bookmark         string // the revision to anchor the new workspace on
+	BookmarkToCreate string // the new jj bookmark to create on @ (blank = skip)
+	Prompt           string
+	Arg              string
+	WorkspaceName    string
+	WorkspacePath    string
 }
 
 // AsyncJobLauncher dispatches an async job. Returns immediately after

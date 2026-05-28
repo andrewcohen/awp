@@ -18,7 +18,7 @@ import (
 )
 
 type workspacePicker func(title string, options []string) (string, error)
-type openWorkflow func(initial openRequest, workspaces []string, in io.Reader, out io.Writer) (openRequest, error)
+type openWorkflow func(initial openRequest, runner Runner, in io.Reader, out io.Writer) (openRequest, error)
 
 type doctorService interface {
 	Run() error
@@ -30,7 +30,6 @@ type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope) error
 type miniDeckWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
-type newFlowWorkflow func(runner Runner, in io.Reader, out io.Writer) (newFlowResult, error)
 
 type App struct {
 	svc           workspace.Service
@@ -40,7 +39,6 @@ type App struct {
 	runner        Runner
 	picker        workspacePicker
 	openForm      openWorkflow
-	newFlow       newFlowWorkflow
 	diff          diffWorkflow
 	deck          deckWorkflow
 	miniDeck      miniDeckWorkflow
@@ -57,7 +55,6 @@ func NewApp(svc workspace.Service, out io.Writer) *App {
 		runner:        NewExecRunner(),
 		picker:        pickWorkspaceWithCharm,
 		openForm:      runOpenWithCharm,
-		newFlow:       runNewFlowPreScreen,
 		diff:          runDiffWithCharm,
 		deck:          runDeckWithCharm,
 		miniDeck:      runMiniDeck,
@@ -366,35 +363,9 @@ func (a *App) runOpen(args []string) error {
 		return a.openInDeckMode(req)
 	}
 	if a.isInteractive != nil && a.isInteractive(a.in) && a.openForm != nil {
-		entries, err := a.svc.List()
+		updated, err := a.openForm(req, a.runner, a.in, a.out)
 		if err != nil {
-			return err
-		}
-		options := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			options = append(options, entry.Name)
-		}
-		if strings.TrimSpace(req.Bookmark) == "" && a.newFlow != nil {
-			result, err := a.newFlow(a.runner, a.in, a.out)
-			if err != nil {
-				if errors.Is(err, ErrOpenCancelled) {
-					return ErrOpenCancelled
-				}
-				return err
-			}
-			switch result.kind {
-			case newFlowReview:
-				if a.review == nil {
-					return errors.New("review is not configured")
-				}
-				return a.review(a.runner, a.svc, result.prNumber, a.in, a.out)
-			case newFlowBookmark:
-				req.Bookmark = result.bookmark
-			}
-		}
-		updated, err := a.openForm(req, options, a.in, a.out)
-		if err != nil {
-			if err.Error() == "open cancelled" {
+			if errors.Is(err, ErrOpenCancelled) || errors.Is(err, deckui.ErrWorkspaceFormCancelled) {
 				return ErrOpenCancelled
 			}
 			return err
@@ -439,42 +410,41 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err != nil {
 		return err
 	}
-	// Auto-create a bookmark for the new workspace if the user didn't pass
-	// one and config.Deck.BookmarkPrefix is set. Best-effort: any failure
-	// is logged but does not fail the workspace creation, since the
-	// workspace itself is already created and usable. The deck's PR glyph
-	// works against the persisted Entry.Bookmark, so on next refresh the
-	// matching PR (if any) lights up.
-	if strings.TrimSpace(req.Bookmark) == "" {
-		cfg, _ := config.Load(repoRoot)
-		prefix := strings.TrimSpace(cfg.Deck.BookmarkPrefix)
-		switch {
-		case prefix == "":
-			// No prefix configured — auto-bookmark is disabled, but the
-			// user opted out of a bookmark here too. Surface a one-shot
-			// hint so they know the feature exists and how to enable it.
-			if reporter != nil {
-				reporter.Log("no bookmark linked; set deck.bookmark_prefix in config to auto-create one")
-			}
-		default:
-			autoName := strings.TrimRight(prefix, "/") + "/" + normalized
-			if rev, revErr := j.WorkspaceRevision(normalized); revErr == nil && strings.TrimSpace(rev) != "" {
-				if createErr := j.CreateBookmark(autoName, rev); createErr != nil {
-					if reporter != nil {
-						reporter.Log(fmt.Sprintf("auto-bookmark %q: %v", autoName, createErr))
-					}
-				} else {
-					if recordErr := svc.RecordBookmark(normalized, autoName); recordErr != nil {
-						if reporter != nil {
-							reporter.Log(fmt.Sprintf("auto-bookmark %q created but state write failed: %v", autoName, recordErr))
-						}
-					} else if reporter != nil {
-						reporter.Log("auto-bookmark created: " + autoName)
-					}
+	// Bookmark to record on the workspace entry — drives the deck's PR
+	// glyph via Entry.Bookmark. Two cases:
+	//
+	//   1. BookmarkToCreate is set: create that bookmark on @ (best-effort)
+	//      and record it.
+	//   2. BookmarkToCreate is blank but Bookmark (the anchor) is itself an
+	//      existing bookmark the user picked: record the anchor.
+	//
+	// Best-effort throughout: any failure is logged but does not fail the
+	// workspace creation, since the workspace itself is already created and
+	// usable.
+	toCreate := strings.TrimSpace(req.BookmarkToCreate)
+	switch {
+	case toCreate != "":
+		if rev, revErr := j.WorkspaceRevision(normalized); revErr == nil && strings.TrimSpace(rev) != "" {
+			if createErr := j.CreateBookmark(toCreate, rev); createErr != nil {
+				if reporter != nil {
+					reporter.Log(fmt.Sprintf("create bookmark %q: %v", toCreate, createErr))
 				}
 			} else if reporter != nil {
-				reporter.Log(fmt.Sprintf("auto-bookmark skipped: cannot resolve workspace revision (%v)", revErr))
+				reporter.Log("bookmark created: " + toCreate)
 			}
+			if recordErr := svc.RecordBookmark(normalized, toCreate); recordErr != nil {
+				if reporter != nil {
+					reporter.Log(fmt.Sprintf("link bookmark %q to workspace: %v", toCreate, recordErr))
+				}
+			}
+		} else if reporter != nil {
+			reporter.Log(fmt.Sprintf("bookmark skipped: cannot resolve workspace revision (%v)", revErr))
+		}
+	case strings.TrimSpace(req.Bookmark) != "":
+		// The anchor is an existing bookmark the user picked. Record it
+		// so the deck's PR glyph matches without a manual `B` link step.
+		if recordErr := svc.RecordBookmark(normalized, strings.TrimSpace(req.Bookmark)); recordErr != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("link bookmark %q to workspace: %v", req.Bookmark, recordErr))
 		}
 	}
 	projectName := filepath.Base(repoRoot)

@@ -425,7 +425,7 @@ func TestInlineNewWorkspaceFormSubmitDispatches(t *testing.T) {
 	model := New(nil, nil).WithAsyncJobLauncher(launcher)
 	model.newWorkspaceMode = true
 	model.newWorkspaceRepo = "/repo"
-	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Bookmark: "main"})
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Bookmark: "main"}, "", "")
 	model.newWorkspaceForm = form
 	// Pre-fill the bound values directly so the test doesn't need to
 	// type into huh fields rune by rune. The pointers are shared with
@@ -472,7 +472,7 @@ func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
 	model := New(nil, nil)
 	model.newWorkspaceMode = true
 	model.newWorkspaceRepo = "/repo"
-	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{})
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{}, "", "")
 	model.newWorkspaceForm = form
 
 	updated, _ := model.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyEsc})
@@ -485,6 +485,120 @@ func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
 	}
 	if m.status != "" {
 		t.Fatalf("expected empty status, got %q", m.status)
+	}
+}
+
+// TestNewWorkspaceFormStartFromDefaultsToMain verifies that an empty
+// initial bookmark resolves to "main" via the Start-from select, not
+// the prior "current @" implicit default.
+func TestNewWorkspaceFormStartFromDefaultsToMain(t *testing.T) {
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Name: "feat/x"}, "", "")
+	*form.confirmSubmit = true
+	got := form.request()
+	if got.Bookmark != "main" {
+		t.Fatalf("expected bookmark 'main', got %q", got.Bookmark)
+	}
+	if got.Name != "feat/x" {
+		t.Fatalf("expected name 'feat/x', got %q", got.Name)
+	}
+}
+
+// TestNewWorkspaceFormStartFromPicked verifies that an initial bookmark
+// other than "main" lands as a picked bookmark on the Start-from select.
+func TestNewWorkspaceFormStartFromPicked(t *testing.T) {
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Name: "feat/x", Bookmark: "andrew/feat-x"}, "", "")
+	if got := form.request().Bookmark; got != "andrew/feat-x" {
+		t.Fatalf("expected picked bookmark 'andrew/feat-x', got %q", got)
+	}
+}
+
+// TestNewWorkspaceFormSetPickedBookmark records a picker result and the
+// next request() reflects it.
+func TestNewWorkspaceFormSetPickedBookmark(t *testing.T) {
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Name: "feat/x"}, "", "")
+	form.SetPickedBookmark("andrew/feat-y")
+	got := form.request()
+	if got.Bookmark != "andrew/feat-y" {
+		t.Fatalf("expected bookmark 'andrew/feat-y', got %q", got.Bookmark)
+	}
+}
+
+// TestNewWorkspaceFormRevertStartFrom clears a previous pick and returns
+// to the main default.
+func TestNewWorkspaceFormRevertStartFrom(t *testing.T) {
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Name: "feat/x", Bookmark: "andrew/feat-x"}, "", "")
+	form.RevertStartFrom()
+	if got := form.request().Bookmark; got != "main" {
+		t.Fatalf("expected revert to 'main', got %q", got)
+	}
+}
+
+// TestComputeAutoBookmark pins down the sanitized auto-bookmark name
+// that the form's Bookmark-name field auto-populates with as the user
+// types a workspace name. Empty result = field stays blank (feature off
+// or no name yet).
+func TestComputeAutoBookmark(t *testing.T) {
+	tests := []struct {
+		name      string
+		prefix    string
+		workspace string
+		want      string
+	}{
+		{"raw slash collapsed to dash", "andrew", "feat/x", "andrew/feat-x"},
+		{"underscore and space normalised", "andrew", "fix tests_now", "andrew/fix-tests-now"},
+		{"uppercase folded", "andrew", "Feat/Foo", "andrew/feat-foo"},
+		{"prefix trailing slash trimmed", "andrew/", "x", "andrew/x"},
+		{"blank prefix → blank", "", "feat-x", ""},
+		{"blank workspace → blank", "andrew", "  ", ""},
+		{"all-invalid workspace → blank", "andrew", "@@@", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeAutoBookmark(tt.prefix, tt.workspace)
+			if got != tt.want {
+				t.Fatalf("computeAutoBookmark(%q, %q) = %q, want %q",
+					tt.prefix, tt.workspace, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNewWorkspaceFormAutoBookmarkSync verifies that the Bookmark-name
+// field auto-populates as the workspace name changes, and stops syncing
+// once the user edits the bookmark field directly.
+func TestNewWorkspaceFormAutoBookmarkSync(t *testing.T) {
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Name: "feat-x"}, "andrew", "main")
+	if got := strings.TrimSpace(*form.bookmarkVal); got != "andrew/feat-x" {
+		t.Fatalf("initial auto-bookmark: got %q, want %q", got, "andrew/feat-x")
+	}
+
+	// Simulate workspace name change: writes through the bound pointer
+	// arrive between update ticks, so we mutate then call syncBookmarkAuto.
+	*form.workspaceVal = "feat-y"
+	form = form.syncBookmarkAuto()
+	if got := *form.bookmarkVal; got != "andrew/feat-y" {
+		t.Fatalf("after workspace change: got %q, want %q", got, "andrew/feat-y")
+	}
+
+	// User types a custom bookmark; future workspace changes should not
+	// overwrite it.
+	*form.bookmarkVal = "andrew/custom-name"
+	form = form.syncBookmarkAuto()
+	*form.workspaceVal = "feat-z"
+	form = form.syncBookmarkAuto()
+	if got := *form.bookmarkVal; got != "andrew/custom-name" {
+		t.Fatalf("after manual edit + workspace change: got %q, want %q",
+			got, "andrew/custom-name")
+	}
+}
+
+// TestNewWorkspaceFormUsesProvidedTrunk verifies the Start-from default
+// uses the trunk name passed at construction instead of the hardcoded
+// "main" fallback.
+func TestNewWorkspaceFormUsesProvidedTrunk(t *testing.T) {
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Name: "feat-x"}, "", "master")
+	if got := form.request().Bookmark; got != "master" {
+		t.Fatalf("expected anchor 'master', got %q", got)
 	}
 }
 
