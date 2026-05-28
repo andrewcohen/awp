@@ -297,6 +297,58 @@ func TestBookmarksAtRevisionUsesTemplate(t *testing.T) {
 	}
 }
 
+func TestBookmarkCommitIDReturnsCommitID(t *testing.T) {
+	r := &fakeRunner{out: "deadbeefcafef00d1234567890abcdef12345678\n"}
+	c := New(r)
+
+	commit, err := c.BookmarkCommitID("/repo", "andrew/foo")
+	if err != nil {
+		t.Fatalf("BookmarkCommitID returned error: %v", err)
+	}
+	if commit != "deadbeefcafef00d1234567890abcdef12345678" {
+		t.Errorf("commit-id: got %q", commit)
+	}
+	// Revset must scope to the origin remote-tracking ref (exact match on
+	// both name and remote) so we resolve "last-fetched origin tip" — the
+	// honest anchor for "behind remote" — even when the workspace has no
+	// true local bookmark of this name (typical for collaborator PRs).
+	var revset string
+	for i, a := range r.lastArgs {
+		if a == "-r" && i+1 < len(r.lastArgs) {
+			revset = r.lastArgs[i+1]
+		}
+	}
+	if !strings.Contains(revset, `remote_bookmarks(exact:"andrew/foo", exact:"origin")`) {
+		t.Errorf("revset: got %q want it to scope to remote_bookmarks(exact:NAME, exact:\"origin\")", revset)
+	}
+}
+
+func TestBookmarkCommitIDEmptyNameReturnsEmpty(t *testing.T) {
+	r := &fakeRunner{}
+	commit, err := New(r).BookmarkCommitID("/repo", "")
+	if err != nil {
+		t.Fatalf("BookmarkCommitID returned error: %v", err)
+	}
+	if commit != "" {
+		t.Errorf("expected empty result for empty name, got %q", commit)
+	}
+	if r.lastName != "" {
+		t.Errorf("expected no jj invocation, got name=%q args=%v", r.lastName, r.lastArgs)
+	}
+}
+
+func TestBookmarkCommitIDEmptyOutputForUnknownBookmark(t *testing.T) {
+	// jj prints nothing (and exits 0) when the revset matches no commits.
+	r := &fakeRunner{out: ""}
+	commit, err := New(r).BookmarkCommitID("/repo", "andrew/does-not-exist")
+	if err != nil {
+		t.Fatalf("BookmarkCommitID returned error: %v", err)
+	}
+	if commit != "" {
+		t.Errorf("expected empty result for missing bookmark, got %q", commit)
+	}
+}
+
 func TestForgetBookmarkIncludesRemotes(t *testing.T) {
 	r := &fakeRunner{}
 	c := New(r)

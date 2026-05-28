@@ -37,9 +37,15 @@ type Activity struct {
 // post-finish flash. Scheduled via tea.Tick from finishActivity.
 type activityExpireMsg struct{ id string }
 
-// startActivity adds (or refreshes) an activity by ID. Re-starting the
-// same ID resets Done and Total; this is how the singleton enrich /
-// pr-status entries handle repeat dispatches without piling up.
+// startActivity adds (or refreshes) an activity by ID. When an entry
+// with the same ID is still in-flight (FinishedAt zero), the new
+// batch's Total is *accumulated* into the existing one and Done is
+// left alone — so a force-refresh that lands mid-fetch grows the
+// denominator instead of stomping the in-progress counter. When the
+// existing entry has already finished (in the post-finish flash
+// window), Done and Total are reset for the new batch. The singleton
+// enrich / pr-status pattern still holds — repeat dispatches don't
+// pile up new chips — but the counter no longer regresses.
 func (m Model) startActivity(id, label string, total int) Model {
 	if strings.TrimSpace(id) == "" {
 		return m
@@ -47,6 +53,11 @@ func (m Model) startActivity(id, label string, total int) Model {
 	now := time.Now()
 	for i, a := range m.activities {
 		if a.ID == id {
+			if a.FinishedAt.IsZero() {
+				a.Total += total
+				m.activities[i] = a
+				return m
+			}
 			m.activities[i] = Activity{
 				ID:        id,
 				Label:     label,

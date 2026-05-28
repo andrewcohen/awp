@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 )
@@ -29,8 +30,43 @@ func TestStartActivityIsIdempotentByID(t *testing.T) {
 	if len(m.activities) != 1 {
 		t.Fatalf("expected dedup by ID, got %d entries", len(m.activities))
 	}
-	if m.activities[0].Done != 0 {
-		t.Fatalf("expected Done reset on restart, got %d", m.activities[0].Done)
+}
+
+func TestStartActivityInFlightAccumulatesTotalKeepsDone(t *testing.T) {
+	// Regression: a force-refresh dispatched while the periodic
+	// pr-status batch is still in flight used to reset Done=0 and
+	// shrink Total to the new batch's size, so the activity bar read
+	// "0/3 → 1/3 → 0/1". The fix accumulates: same ID + not finished
+	// → Total += newTotal, Done unchanged.
+	m := New(nil, nil)
+	m = m.startActivity("pr-status", "pr-status", 3) // periodic: 3 repos
+	m = m.tickActivity("pr-status", 1)               // one repo done
+	m = m.startActivity("pr-status", "pr-status", 1) // force-refresh joins
+	if got := m.activities[0].Total; got != 4 {
+		t.Errorf("Total: got %d want %d", got, 4)
+	}
+	if got := m.activities[0].Done; got != 1 {
+		t.Errorf("Done: got %d want %d (in-flight restart must not reset)", got, 1)
+	}
+}
+
+func TestStartActivityFinishedRestartsFresh(t *testing.T) {
+	// Restarting an activity that's already in its post-finish flash
+	// window (FinishedAt set) should reset Done/Total — that's a
+	// genuinely new dispatch, not a mid-flight join.
+	m := New(nil, nil)
+	m = m.startActivity("pr-status", "pr-status", 3)
+	m = m.tickActivity("pr-status", 2)
+	m, _ = m.finishActivity("pr-status")
+	m = m.startActivity("pr-status", "pr-status", 5)
+	if got := m.activities[0].Total; got != 5 {
+		t.Errorf("Total: got %d want %d (post-finish restart must reset)", got, 5)
+	}
+	if got := m.activities[0].Done; got != 0 {
+		t.Errorf("Done: got %d want %d (post-finish restart must reset)", got, 0)
+	}
+	if !m.activities[0].FinishedAt.IsZero() {
+		t.Errorf("FinishedAt should be cleared on fresh restart")
 	}
 }
 
@@ -295,6 +331,59 @@ func TestRefreshDoneTriggersPRStatusForBookmarkOnlyWorkspace(t *testing.T) {
 	if len(fetchedRepos) != 1 || fetchedRepos[0] != "/r" {
 		t.Fatalf("expected fetcher called for /r, got %v", fetchedRepos)
 	}
+}
+
+func TestRefreshDoneSkipsRedundantPRStatusWhileBatchInFlight(t *testing.T) {
+	// Regression: refreshTickMsg every 5s would call prStatusRefreshCmd,
+	// which used to unconditionally start a new fetch even if the
+	// previous batch hadn't finished. Combined with startActivity's
+	// accumulate behavior on in-flight restarts, this inflated Total
+	// (e.g. "11/12 with 6 projects" reported by the user). The fix
+	// skips when an in-flight pr-status activity is already present.
+	called := 0
+	model := New(nil, nil).WithPRStatusFetcher(func(repos []string) tea.Cmd {
+		called++
+		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
+	})
+	// First refreshDone: a fetch starts (called=1).
+	updated, _ := model.Update(refreshDoneMsg{items: []Item{
+		{ProjectName: "p", WorkspaceName: "ws", RepoRoot: "/r", PRNumber: 7},
+	}})
+	m := updated.(Model)
+	if called != 1 {
+		t.Fatalf("expected first refreshDone to fetch, got called=%d", called)
+	}
+	// Second refreshDone while pr-status activity is still in flight
+	// (no PRStatusDoneMsg has landed). Must NOT re-issue the fetch.
+	updated, _ = m.Update(refreshDoneMsg{items: []Item{
+		{ProjectName: "p", WorkspaceName: "ws", RepoRoot: "/r", PRNumber: 7},
+	}})
+	m = updated.(Model)
+	if called != 1 {
+		t.Fatalf("expected second refreshDone to skip while in-flight, got called=%d", called)
+	}
+	if m.activities[0].Total != 1 {
+		t.Fatalf("expected Total to stay at 1 (no accumulation), got %d", m.activities[0].Total)
+	}
+}
+
+func TestSpinnerTickPerpetuatesEvenWhenIdle(t *testing.T) {
+	// Regression: the spinner tick handler used to return (m, nil) when
+	// both m.busy and len(m.activities) were zero, killing the tick
+	// loop. New activities arriving later (e.g. the next pr-status
+	// fetch) wouldn't animate until something else batched a fresh
+	// Tick — visible as a "frozen spinner" between activity expiry
+	// and the next foreground action. Now the loop self-perpetuates.
+	m := New(nil, nil)
+	// Sanity: idle (no busy, no activities).
+	if m.busy || len(m.activities) != 0 {
+		t.Fatalf("preconditions: expected idle model")
+	}
+	updated, cmd := m.Update(spinner.TickMsg{})
+	if cmd == nil {
+		t.Fatal("expected idle spinner.TickMsg to schedule another tick (keep loop alive)")
+	}
+	_ = updated
 }
 
 func TestPRStatusRepoDoneTicksActivity(t *testing.T) {

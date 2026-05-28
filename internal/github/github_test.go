@@ -45,7 +45,7 @@ func TestFetchPRParses(t *testing.T) {
 }
 
 func TestFetchPRParsesStatusFields(t *testing.T) {
-	r := &fakeRunner{out: `{"number":42,"headRefName":"saltor/foo","baseRefName":"main","title":"t","body":"b","url":"https://github.com/o/r/pull/42","state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"}`}
+	r := &fakeRunner{out: `{"number":42,"headRefName":"saltor/foo","baseRefName":"main","headRefOid":"deadbeef","title":"t","body":"b","url":"https://github.com/o/r/pull/42","state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"}`}
 	pr, err := New(r).FetchPR(42)
 	if err != nil {
 		t.Fatalf("FetchPR err: %v", err)
@@ -53,6 +53,9 @@ func TestFetchPRParsesStatusFields(t *testing.T) {
 	if pr.State != PRStateOpen || !pr.IsDraft || pr.ReviewDecision != ReviewApproved ||
 		pr.CIState != CIFailing || pr.MergeStateStatus != MergeStateDirty {
 		t.Errorf("status fields not parsed: %+v", pr)
+	}
+	if pr.HeadSHA != "deadbeef" {
+		t.Errorf("HeadSHA: got %q want %q", pr.HeadSHA, "deadbeef")
 	}
 	// gh args must request the new fields.
 	joined := ""
@@ -68,13 +71,13 @@ func TestFetchPRParsesStatusFields(t *testing.T) {
 
 func TestPRStatusFromInfo(t *testing.T) {
 	info := PRInfo{
-		Number: 7, HeadRef: "feat/x", Title: "t", URL: "u",
+		Number: 7, HeadRef: "feat/x", HeadSHA: "abc123", Title: "t", URL: "u",
 		State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved,
 		CIState: CIPassing, MergeStateStatus: MergeStateClean,
 	}
 	got := PRStatusFromInfo(info)
 	want := PRStatus{
-		Number: 7, HeadRefName: "feat/x", Title: "t", URL: "u",
+		Number: 7, HeadRefName: "feat/x", HeadRefOid: "abc123", Title: "t", URL: "u",
 		State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved,
 		CIState: CIPassing, MergeStateStatus: MergeStateClean,
 	}
@@ -101,11 +104,11 @@ func TestFetchPRParseError(t *testing.T) {
 
 func TestListPRStatusParses(t *testing.T) {
 	r := &fakeRunner{out: `[
-		{"number":1,"headRefName":"andrew/a","title":"Fix the thing","url":"https://github.com/o/r/pull/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"},
-		{"number":2,"headRefName":"andrew/b","url":"https://github.com/o/r/pull/2","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeStateStatus":"CLEAN"},
-		{"number":3,"headRefName":"andrew/c","url":"https://github.com/o/r/pull/3","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[{"status":"IN_PROGRESS"},{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"},
-		{"number":4,"headRefName":"andrew/d","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"},
-		{"number":5,"headRefName":"andrew/e","url":"https://github.com/o/r/pull/5","state":"CLOSED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"PENDING"}],"mergeStateStatus":"UNKNOWN"}
+		{"number":1,"headRefName":"andrew/a","headRefOid":"sha1aaa","title":"Fix the thing","url":"https://github.com/o/r/pull/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"},
+		{"number":2,"headRefName":"andrew/b","headRefOid":"sha2bbb","url":"https://github.com/o/r/pull/2","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeStateStatus":"CLEAN"},
+		{"number":3,"headRefName":"andrew/c","headRefOid":"sha3ccc","url":"https://github.com/o/r/pull/3","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[{"status":"IN_PROGRESS"},{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"},
+		{"number":4,"headRefName":"andrew/d","headRefOid":"sha4ddd","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"},
+		{"number":5,"headRefName":"andrew/e","headRefOid":"sha5eee","url":"https://github.com/o/r/pull/5","state":"CLOSED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"PENDING"}],"mergeStateStatus":"UNKNOWN"}
 	]`}
 	c := New(r)
 	got, err := c.ListPRStatus("/tmp/repo")
@@ -116,11 +119,11 @@ func TestListPRStatusParses(t *testing.T) {
 		t.Fatalf("expected 5 PRs, got %d", len(got))
 	}
 	want := []PRStatus{
-		{Number: 1, HeadRefName: "andrew/a", Title: "Fix the thing", URL: "https://github.com/o/r/pull/1", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateClean},
-		{Number: 2, HeadRefName: "andrew/b", URL: "https://github.com/o/r/pull/2", State: PRStateMerged, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CINone, MergeStateStatus: MergeStateClean},
-		{Number: 3, HeadRefName: "andrew/c", URL: "https://github.com/o/r/pull/3", State: PRStateOpen, IsDraft: true, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateBehind},
-		{Number: 4, HeadRefName: "andrew/d", URL: "https://github.com/o/r/pull/4", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing, MergeStateStatus: MergeStateDirty},
-		{Number: 5, HeadRefName: "andrew/e", URL: "https://github.com/o/r/pull/5", State: PRStateClosed, IsDraft: false, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateUnknown},
+		{Number: 1, HeadRefName: "andrew/a", HeadRefOid: "sha1aaa", Title: "Fix the thing", URL: "https://github.com/o/r/pull/1", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateClean},
+		{Number: 2, HeadRefName: "andrew/b", HeadRefOid: "sha2bbb", URL: "https://github.com/o/r/pull/2", State: PRStateMerged, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CINone, MergeStateStatus: MergeStateClean},
+		{Number: 3, HeadRefName: "andrew/c", HeadRefOid: "sha3ccc", URL: "https://github.com/o/r/pull/3", State: PRStateOpen, IsDraft: true, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateBehind},
+		{Number: 4, HeadRefName: "andrew/d", HeadRefOid: "sha4ddd", URL: "https://github.com/o/r/pull/4", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing, MergeStateStatus: MergeStateDirty},
+		{Number: 5, HeadRefName: "andrew/e", HeadRefOid: "sha5eee", URL: "https://github.com/o/r/pull/5", State: PRStateClosed, IsDraft: false, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateUnknown},
 	}
 	for i, w := range want {
 		if got[i] != w {
@@ -135,7 +138,7 @@ func TestListPRStatusParses(t *testing.T) {
 	for _, a := range r.gotArgs {
 		joined += " " + a
 	}
-	for _, want := range []string{"--state", "all", "title", "url", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
+	for _, want := range []string{"--state", "all", "title", "url", "headRefOid", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
 		if !contains(joined, want) {
 			t.Errorf("expected %q in args, got %q", want, joined)
 		}
@@ -157,13 +160,13 @@ func TestListPRStatusParseError(t *testing.T) {
 }
 
 func TestGetPRStatusParses(t *testing.T) {
-	r := &fakeRunner{out: `{"number":1717,"headRefName":"old/branch","title":"Old PR","url":"https://github.com/o/r/pull/1717","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"}`}
+	r := &fakeRunner{out: `{"number":1717,"headRefName":"old/branch","headRefOid":"oldsha","title":"Old PR","url":"https://github.com/o/r/pull/1717","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"}`}
 	got, err := New(r).GetPRStatus("/tmp/repo", 1717)
 	if err != nil {
 		t.Fatalf("GetPRStatus err: %v", err)
 	}
 	want := PRStatus{
-		Number: 1717, HeadRefName: "old/branch", Title: "Old PR",
+		Number: 1717, HeadRefName: "old/branch", HeadRefOid: "oldsha", Title: "Old PR",
 		URL: "https://github.com/o/r/pull/1717", State: PRStateOpen,
 		ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateBehind,
 	}

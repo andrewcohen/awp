@@ -1517,6 +1517,38 @@ type fmtErr string
 
 func (e fmtErr) Error() string { return string(e) }
 
+func TestMetaLineSurfacesStaleWhenLocalDiffersFromPRHead(t *testing.T) {
+	const prSHA = "abc123"
+	item := Item{
+		ProjectName:   "proj",
+		WorkspaceName: "ws",
+		RepoRoot:      "/r",
+		Bookmark:      "feat",
+		BookmarkCommitID:  "def456",
+	}
+	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, Author: "bob", HeadRefOid: prSHA, State: PRStateOpen,
+			ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+		}},
+	}, nil)
+	if got := model.metaLine(item); !strings.Contains(got, "stale") {
+		t.Errorf("metaLine should include 'stale' when local SHA differs; got %q", got)
+	}
+
+	// SHAs aligned → no stale chip.
+	item.BookmarkCommitID = prSHA
+	model2 := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, Author: "bob", HeadRefOid: prSHA, State: PRStateOpen,
+			ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+		}},
+	}, nil)
+	if got := model2.metaLine(item); strings.Contains(got, "stale") {
+		t.Errorf("metaLine should not include 'stale' when SHAs match; got %q", got)
+	}
+}
+
 func TestDevURLsMsgPopulatesMetaLine(t *testing.T) {
 	item := Item{
 		ProjectName:   "awp",
@@ -1733,26 +1765,33 @@ func TestRowLabelRendersPRNumberAndTitle(t *testing.T) {
 
 func TestPRRepairPrompt(t *testing.T) {
 	cases := []struct {
-		name    string
-		status  PRStatus
-		want    string
-		wantSub []string
+		name      string
+		status    PRStatus
+		localSHA  string
+		want      string
+		wantSub   []string
 	}{
-		{"healthy", PRStatus{Number: 1, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "", nil},
-		{"merged", PRStatus{Number: 1, State: PRStateMerged, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", nil},
-		{"closed", PRStatus{Number: 1, State: PRStateClosed, CIState: PRCIFailing}, "", nil},
-		{"merge conflicts only", PRStatus{Number: 7, URL: "https://example/pr/7", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty},
+		{"healthy", PRStatus{Number: 1, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "", "", nil},
+		{"merged", PRStatus{Number: 1, State: PRStateMerged, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", "", nil},
+		{"closed", PRStatus{Number: 1, State: PRStateClosed, CIState: PRCIFailing}, "", "", nil},
+		{"merge conflicts only", PRStatus{Number: 7, URL: "https://example/pr/7", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty}, "",
 			"PR #7 (https://example/pr/7) has merge conflicts against its base branch. Please resolve the conflicts on this branch (rebase or merge the base in), then push the fix.", nil},
-		{"failing CI only", PRStatus{Number: 8, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean},
+		{"failing CI only", PRStatus{Number: 8, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "",
 			"PR #8 has failing CI checks. Please diagnose the failing checks (e.g. `gh run list`, `gh run view`) and fix the underlying issues, then push the fix.", nil},
-		{"behind base only", PRStatus{Number: 9, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind},
+		{"behind base only", PRStatus{Number: 9, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind}, "",
 			"PR #9 has an out-of-date base branch. Please update this branch with the latest base, then push the fix.", nil},
-		{"composite", PRStatus{Number: 11, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "",
+		{"composite", PRStatus{Number: 11, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", "",
 			[]string{"PR #11 has multiple issues to address:", "merge conflicts against its base branch", "failing CI checks", "Push the fixes when done."}},
+		{"stale only", PRStatus{Number: 12, HeadRefName: "andrew/foo", HeadRefOid: "abc123", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "def456", "",
+			[]string{"PR #12 has new commits on origin", "jj git fetch", "andrew/foo@origin"}},
+		{"stale with sha match — no repair", PRStatus{Number: 13, HeadRefName: "andrew/bar", HeadRefOid: "same", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "same",
+			"", nil},
+		{"composite with stale", PRStatus{Number: 14, HeadRefName: "andrew/baz", HeadRefOid: "abc", State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "def", "",
+			[]string{"PR #14 has multiple issues to address:", "failing CI checks", "new commits on origin"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := prRepairPrompt(tc.status)
+			got := prRepairPrompt(tc.status, tc.localSHA)
 			if tc.wantSub != nil {
 				for _, sub := range tc.wantSub {
 					if !strings.Contains(got, sub) {
@@ -1765,6 +1804,63 @@ func TestPRRepairPrompt(t *testing.T) {
 				t.Errorf("prRepairPrompt:\n got: %q\nwant: %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPRStaleSuffix(t *testing.T) {
+	const headSHA = "deadbeefcafef00d"
+	cases := []struct {
+		name  string
+		s     PRStatus
+		local string
+		want  string
+	}{
+		{"open + match", PRStatus{State: PRStateOpen, HeadRefOid: headSHA}, headSHA, ""},
+		{"open + differ", PRStatus{State: PRStateOpen, HeadRefOid: headSHA}, "1111111111111111", "stale"},
+		{"open + local empty", PRStatus{State: PRStateOpen, HeadRefOid: headSHA}, "", ""},
+		{"open + sha empty", PRStatus{State: PRStateOpen, HeadRefOid: ""}, headSHA, ""},
+		{"merged + differ", PRStatus{State: PRStateMerged, HeadRefOid: headSHA}, "1111", ""},
+		{"closed + differ", PRStatus{State: PRStateClosed, HeadRefOid: headSHA}, "1111", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := prStaleSuffix(tc.s, tc.local); got != tc.want {
+				t.Errorf("prStaleSuffix: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPRStatusLabelForItemAppendsStaleSuffix(t *testing.T) {
+	const prSHA = "abc123"
+	const localSHA = "def456"
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat", BookmarkCommitID: localSHA}
+	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, HeadRefOid: prSHA, State: PRStateOpen,
+			ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+		}},
+	}, nil)
+	_, label, ok := model.prStatusLabelForItem(item)
+	if !ok {
+		t.Fatalf("expected label, got none")
+	}
+	if !strings.Contains(label, "approved") || !strings.Contains(label, "stale") {
+		t.Errorf("label should chain 'approved' with 'stale'; got %q", label)
+	}
+
+	// When SHAs match, no stale suffix.
+	item2 := item
+	item2.BookmarkCommitID = prSHA
+	model2 := New([]Item{item2}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, HeadRefOid: prSHA, State: PRStateOpen,
+			ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+		}},
+	}, nil)
+	_, label2, _ := model2.prStatusLabelForItem(item2)
+	if strings.Contains(label2, "stale") {
+		t.Errorf("aligned SHAs should not produce 'stale'; got %q", label2)
 	}
 }
 
