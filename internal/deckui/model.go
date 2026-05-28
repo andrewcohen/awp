@@ -2029,7 +2029,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = "pr: no PR for this workspace"
 					return m, nil
 				}
-				prompt := prRepairPrompt(status, item.BookmarkCommitID)
+				prompt := prRepairPrompt(status, item.BookmarkCommitID, itemIsMyPR(item, m.bookmarkPrefix))
 				if prompt == "" {
 					m.status = "pr: nothing to repair (" + label + ")"
 					return m, nil
@@ -4857,39 +4857,57 @@ func prStaleSuffix(s PRStatus, localCommitID string) string {
 // an out-of-date base branch, or a local copy that's behind origin
 // (stale). Returns "" when the PR is healthy or in a terminal
 // (merged/closed) state. When multiple issues apply, every one is
-// listed in a single prompt so the agent can fix them together.
+// listed in a single prompt.
+//
+// `mine` toggles the tone: when true, the prompt asks the agent to
+// fix and push (the PR is yours; you intend to ship it). When false,
+// the prompt is review-mode — investigate the issue and report back
+// in chat, but DO NOT modify files, run jj/git mutations on the
+// branch, or push. Reviewing someone else's PR with `p r` shouldn't
+// trigger the agent to start rebasing or fixing their CI.
 //
 // localCommitID is the workspace's local bookmark tip; when non-empty
 // and different from s.HeadRefOid (and the PR is open), a "stale" issue
-// is added asking the agent to fetch and align.
-func prRepairPrompt(s PRStatus, localCommitID string) string {
+// is added.
+func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 	if s.State != PRStateOpen {
 		return ""
 	}
-	type issue struct{ label, ask string }
+	type issue struct {
+		label string
+		fix   string // owner action — used when mine == true
+		look  string // review action — used when mine == false
+	}
 	var issues []issue
 	if s.MergeStateStatus == PRMergeStateDirty {
 		issues = append(issues, issue{
 			label: "merge conflicts against its base branch",
-			ask:   "resolve the conflicts on this branch (rebase or merge the base in)",
+			fix:   "resolve the conflicts on this branch (rebase or merge the base in)",
+			look:  "identify which files conflict and a one-line summary of why (e.g. both sides changed the same function)",
 		})
 	}
 	if s.CIState == PRCIFailing {
 		issues = append(issues, issue{
 			label: "failing CI checks",
-			ask:   "diagnose the failing checks (e.g. `gh run list`, `gh run view`) and fix the underlying issues",
+			fix:   "diagnose the failing checks (e.g. `gh run list`, `gh run view`) and fix the underlying issues",
+			look:  "diagnose the failing checks via `gh run list` / `gh run view` and summarize the root cause",
 		})
 	}
 	if s.MergeStateStatus == PRMergeStateBehind {
 		issues = append(issues, issue{
 			label: "an out-of-date base branch",
-			ask:   "update this branch with the latest base",
+			fix:   "update this branch with the latest base",
+			look:  "note how far behind the base branch this PR is (e.g. `git log --oneline <base>..@`) so the user can flag it",
 		})
 	}
 	if prStaleSuffix(s, localCommitID) != "" {
+		// Stale is a property of the LOCAL working copy, not the PR
+		// itself — fetching + re-anchoring is safe regardless of
+		// ownership. Kept on both branches.
 		issues = append(issues, issue{
 			label: "new commits on origin that aren't in your local copy of this branch",
-			ask:   "run `jj git fetch` to pick them up, then align this workspace's working copy to the new origin tip (e.g. `jj new " + s.HeadRefName + "@origin`) so subsequent work builds on the latest",
+			fix:   "run `jj git fetch` to pick them up, then align this workspace's working copy to the new origin tip (e.g. `jj new " + s.HeadRefName + "@origin`) so subsequent work builds on the latest",
+			look:  "run `jj git fetch` to pick them up, then align this workspace's working copy to the new origin tip (e.g. `jj new " + s.HeadRefName + "@origin`) so you're reading the latest version",
 		})
 	}
 	if len(issues) == 0 {
@@ -4902,16 +4920,48 @@ func prRepairPrompt(s PRStatus, localCommitID string) string {
 	if u := strings.TrimSpace(s.URL); u != "" {
 		ref += " (" + u + ")"
 	}
+	if !mine {
+		// Review tone: investigate + summarize, do not mutate.
+		if len(issues) == 1 {
+			return fmt.Sprintf("%s has %s. You are reviewing this PR — the author is not you. Do NOT modify files, run jj/git mutations on the branch, or push. Please %s, and report back in chat.", ref, issues[0].label, issues[0].look)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s has multiple issues:\n", ref)
+		for _, it := range issues {
+			fmt.Fprintf(&b, "- %s — please %s.\n", it.label, it.look)
+		}
+		b.WriteString("You are reviewing this PR — the author is not you. Do NOT modify files, run jj/git mutations on the branch, or push. Report what you find in chat.")
+		return b.String()
+	}
 	if len(issues) == 1 {
-		return fmt.Sprintf("%s has %s. Please %s, then push the fix.", ref, issues[0].label, issues[0].ask)
+		return fmt.Sprintf("%s has %s. Please %s, then push the fix.", ref, issues[0].label, issues[0].fix)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s has multiple issues to address:\n", ref)
 	for _, it := range issues {
-		fmt.Fprintf(&b, "- %s — please %s.\n", it.label, it.ask)
+		fmt.Fprintf(&b, "- %s — please %s.\n", it.label, it.fix)
 	}
 	b.WriteString("Push the fixes when done.")
 	return b.String()
+}
+
+// itemIsMyPR reports whether the workspace's PR appears to be authored
+// by the current user, using the configured bookmark prefix as the
+// signal: bookmarks under `<prefix>/...` are the user's by convention,
+// bookmarks under any other namespace (e.g. `saltor/foo`,
+// `jordan/bar`) are someone else's. Returns true when the prefix is
+// unconfigured — preserving the historical "always treat as mine"
+// repair behavior for users who haven't opted in.
+func itemIsMyPR(item Item, bookmarkPrefix string) bool {
+	prefix := strings.TrimSpace(bookmarkPrefix)
+	if prefix == "" {
+		return true
+	}
+	bm := strings.TrimSpace(item.Bookmark)
+	if bm == "" {
+		return true
+	}
+	return strings.HasPrefix(bm, prefix+"/")
 }
 
 // prStaleGlyph returns the glyph to render alongside the primary PR glyph

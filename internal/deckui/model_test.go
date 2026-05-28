@@ -1765,33 +1765,45 @@ func TestRowLabelRendersPRNumberAndTitle(t *testing.T) {
 
 func TestPRRepairPrompt(t *testing.T) {
 	cases := []struct {
-		name      string
-		status    PRStatus
-		localSHA  string
-		want      string
-		wantSub   []string
+		name     string
+		status   PRStatus
+		localSHA string
+		mine     bool
+		want     string
+		wantSub  []string
 	}{
-		{"healthy", PRStatus{Number: 1, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "", "", nil},
-		{"merged", PRStatus{Number: 1, State: PRStateMerged, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", "", nil},
-		{"closed", PRStatus{Number: 1, State: PRStateClosed, CIState: PRCIFailing}, "", "", nil},
-		{"merge conflicts only", PRStatus{Number: 7, URL: "https://example/pr/7", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty}, "",
+		{"healthy", PRStatus{Number: 1, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "", true, "", nil},
+		{"merged", PRStatus{Number: 1, State: PRStateMerged, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", true, "", nil},
+		{"closed", PRStatus{Number: 1, State: PRStateClosed, CIState: PRCIFailing}, "", true, "", nil},
+		{"merge conflicts only", PRStatus{Number: 7, URL: "https://example/pr/7", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty}, "", true,
 			"PR #7 (https://example/pr/7) has merge conflicts against its base branch. Please resolve the conflicts on this branch (rebase or merge the base in), then push the fix.", nil},
-		{"failing CI only", PRStatus{Number: 8, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "",
+		{"failing CI only", PRStatus{Number: 8, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "", true,
 			"PR #8 has failing CI checks. Please diagnose the failing checks (e.g. `gh run list`, `gh run view`) and fix the underlying issues, then push the fix.", nil},
-		{"behind base only", PRStatus{Number: 9, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind}, "",
+		{"behind base only", PRStatus{Number: 9, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind}, "", true,
 			"PR #9 has an out-of-date base branch. Please update this branch with the latest base, then push the fix.", nil},
-		{"composite", PRStatus{Number: 11, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", "",
+		{"composite", PRStatus{Number: 11, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", true, "",
 			[]string{"PR #11 has multiple issues to address:", "merge conflicts against its base branch", "failing CI checks", "Push the fixes when done."}},
-		{"stale only", PRStatus{Number: 12, HeadRefName: "andrew/foo", HeadRefOid: "abc123", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "def456", "",
+		{"stale only", PRStatus{Number: 12, HeadRefName: "andrew/foo", HeadRefOid: "abc123", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "def456", true, "",
 			[]string{"PR #12 has new commits on origin", "jj git fetch", "andrew/foo@origin"}},
-		{"stale with sha match — no repair", PRStatus{Number: 13, HeadRefName: "andrew/bar", HeadRefOid: "same", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "same",
+		{"stale with sha match — no repair", PRStatus{Number: 13, HeadRefName: "andrew/bar", HeadRefOid: "same", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}, "same", true,
 			"", nil},
-		{"composite with stale", PRStatus{Number: 14, HeadRefName: "andrew/baz", HeadRefOid: "abc", State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "def", "",
+		{"composite with stale", PRStatus{Number: 14, HeadRefName: "andrew/baz", HeadRefOid: "abc", State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "def", true, "",
 			[]string{"PR #14 has multiple issues to address:", "failing CI checks", "new commits on origin"}},
+
+		// Review tone (mine=false): investigate + report, no mutations.
+		{"review · merge conflicts only",
+			PRStatus{Number: 22, URL: "https://example/pr/22", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty}, "", false, "",
+			[]string{"PR #22 (https://example/pr/22) has merge conflicts", "reviewing this PR", "Do NOT modify files", "report back in chat"}},
+		{"review · failing CI only",
+			PRStatus{Number: 23, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "", false, "",
+			[]string{"PR #23 has failing CI checks", "summarize the root cause", "Do NOT modify files"}},
+		{"review · composite",
+			PRStatus{Number: 24, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", false, "",
+			[]string{"PR #24 has multiple issues:", "merge conflicts against its base branch", "failing CI checks", "Do NOT modify files", "Report what you find in chat"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := prRepairPrompt(tc.status, tc.localSHA)
+			got := prRepairPrompt(tc.status, tc.localSHA, tc.mine)
 			if tc.wantSub != nil {
 				for _, sub := range tc.wantSub {
 					if !strings.Contains(got, sub) {
@@ -1802,6 +1814,35 @@ func TestPRRepairPrompt(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("prRepairPrompt:\n got: %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestItemIsMyPR(t *testing.T) {
+	cases := []struct {
+		name   string
+		item   Item
+		prefix string
+		want   bool
+	}{
+		{"prefix unconfigured → treat as mine (preserve legacy)",
+			Item{Bookmark: "saltor/foo"}, "", true},
+		{"bookmark missing → treat as mine (no signal to say otherwise)",
+			Item{}, "andrew", true},
+		{"bookmark under user prefix → mine",
+			Item{Bookmark: "andrew/foo"}, "andrew", true},
+		{"bookmark under another prefix → not mine",
+			Item{Bookmark: "saltor/foo"}, "andrew", false},
+		{"bookmark literally equals prefix (no slash) → not mine",
+			Item{Bookmark: "andrew"}, "andrew", false},
+		{"prefix with whitespace tolerated",
+			Item{Bookmark: "andrew/foo"}, "  andrew  ", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := itemIsMyPR(tc.item, tc.prefix); got != tc.want {
+				t.Errorf("itemIsMyPR: got %v want %v", got, tc.want)
 			}
 		})
 	}
