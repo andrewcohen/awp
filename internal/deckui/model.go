@@ -2099,21 +2099,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = "pr: nothing to repair (" + label + ")"
 					return m, nil
 				}
-				if m.handler == nil {
-					m.status = "pr: send-prompt handler not configured"
-					return m, nil
-				}
-				m.busy = true
-				m.status = fmt.Sprintf("repair PR #%d → %s/%s...", status.Number, item.ProjectName, item.WorkspaceName)
-				actID := "workspace:prompt:" + item.WorkspaceName
-				m = m.startActivity(actID, actID, 0)
-				handler := m.handler
-				target := item
-				dispatch := func() tea.Msg {
-					err := handler(ActionRequest{Item: target, Action: ActionSendPrompt, Arg: prompt, Reporter: noopActionReporter{}})
-					return actionResultMsg{action: ActionSendPrompt, arg: prompt, item: target, err: err}
-				}
-				return m, batchCmds(tea.ClearScreen, m.spinner.Tick, dispatch)
+				// Don't dispatch the repair prompt straight to the agent.
+				// Hand it to the send-prompt form prepopulated, so the user
+				// can review and edit it before sending. Same form/flow as
+				// the `A` "send a typed prompt" dialog.
+				m.promptMode = true
+				var initCmd tea.Cmd
+				m.promptForm, initCmd = newPromptForm(item, prompt)
+				m.status = "repair: review prompt · enter send · ctrl+g $EDITOR · esc cancel"
+				return m, batchCmds(initCmd, tea.ClearScreen)
 			case "s":
 				m.prMenuMode = false
 				item, ok := m.selected()
@@ -2456,7 +2450,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			m.promptMode = true
 			var initCmd tea.Cmd
-			m.promptForm, initCmd = newPromptForm(item)
+			m.promptForm, initCmd = newPromptForm(item, "")
 			m.status = "send prompt: type message · enter submit · ctrl+g $EDITOR · esc cancel"
 			// tea.ClearScreen on modal entry — same rationale as the
 			// other modals (see doc.go).
@@ -4125,7 +4119,7 @@ func deckKeyGroups() []keyGroup {
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{"d", "open dev URL in browser (auto-discovered)"},
 				{"p o", "open this workspace's PR in browser"},
-				{"p r", "repair this workspace's PR (sends a fix prompt to the agent for merge conflicts / failing CI / behind base)"},
+				{"p r", "repair this workspace's PR (opens the send-prompt form prepopulated with a fix prompt for merge conflicts / failing CI / behind base to review before sending)"},
 				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
 			},
