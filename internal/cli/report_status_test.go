@@ -189,8 +189,9 @@ func TestReportStatusExitedClearsPrompt(t *testing.T) {
 }
 
 func TestReportStatusWaitingKeepsPrompt(t *testing.T) {
-	// Notification ("waiting") fires while the agent is mid-task asking for
-	// the user's attention. The prompt is still active context for the deck.
+	// A "waiting" report (PermissionRequest / Elicitation / AskUserQuestion)
+	// fires while the agent is mid-task asking for the user's attention. The
+	// prompt is still active context for the deck.
 	const root = "/tmp/awp-test-repo"
 	fs := newFakeStore()
 	fs.byRepo[root] = map[string]workspace.Entry{
