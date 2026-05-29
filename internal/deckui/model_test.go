@@ -267,6 +267,72 @@ func TestStateChangedDoesNotRefreshDuringOverlay(t *testing.T) {
 	}
 }
 
+// TestStateChangedCoalescesDuringRefresh guards the lost-update race: a
+// StateChangedMsg arriving while a refresh is already in flight must not
+// be dropped (the in-flight refresh may have snapshotted state before the
+// write that triggered the signal). Instead it sets refreshPending, and
+// refreshDoneMsg re-fires the refresher so the final read happens strictly
+// after the signal.
+func TestStateChangedCoalescesDuringRefresh(t *testing.T) {
+	refreshed := 0
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil).
+		WithRefresher(func() tea.Cmd {
+			return func() tea.Msg {
+				refreshed++
+				return RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
+			}
+		}).
+		WithStateChangeWatcher(func() tea.Cmd {
+			return func() tea.Msg { return StateChangedMsg{} }
+		})
+
+	// Simulate a refresh already in flight.
+	model.refreshing = true
+
+	// drain runs a (possibly batched) cmd's leaf messages.
+	var drain func(c tea.Cmd)
+	drain = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		switch msg := c().(type) {
+		case tea.BatchMsg:
+			for _, inner := range msg {
+				drain(inner)
+			}
+		}
+	}
+
+	updated, cmd := model.Update(StateChangedMsg{})
+	m := updated.(Model)
+	if !m.refreshPending {
+		t.Fatal("expected refreshPending to be set when a change arrives mid-refresh")
+	}
+	// The batch should only re-arm the watcher, not start a second refresh.
+	drain(cmd)
+	if refreshed != 0 {
+		t.Fatalf("expected no concurrent refresh, got %d", refreshed)
+	}
+
+	// The in-flight refresh lands: refreshDoneMsg must clear the flag and
+	// fire exactly one follow-up refresh.
+	updated, cmd = m.Update(RefreshDoneMsg([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil))
+	m = updated.(Model)
+	if m.refreshPending {
+		t.Fatal("expected refreshPending cleared after re-fire")
+	}
+	if !m.refreshing {
+		t.Fatal("expected refreshing=true while the coalesced refresh runs")
+	}
+	if cmd == nil {
+		t.Fatal("expected a follow-up refresh command")
+	}
+	drain(cmd)
+	if refreshed != 1 {
+		t.Fatalf("expected exactly one coalesced refresh, got %d", refreshed)
+	}
+}
+
 func TestDeleteRequiresConfirmation(t *testing.T) {
 	called := false
 	refreshed := false

@@ -734,6 +734,7 @@ type Model struct {
 	findPendingPrefix  rune
 	refresher          Refresher
 	refreshing         bool // true while a m.refresher() command is in flight
+	refreshPending     bool // a change signal arrived mid-refresh; re-run on completion
 	hookInstaller      HookInstaller
 	stateWatcher       StateChangeWatcher
 	prFetcher          PRFetcher
@@ -1464,6 +1465,39 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.prMenuMode && !m.prNumberSetMode
 }
 
+// requestRefresh starts a row refresh, coalescing concurrent requests.
+//
+// loadDeckItems snapshots workspace-state.json at the moment the
+// refresher command *runs*, not when its result lands. If a change
+// signal (StateChangedMsg from a new/delete, an explicit post-action
+// refresh) arrived while an earlier refresh was still in flight, the
+// earlier refresh's snapshot may predate the write — so naively
+// dropping the new request (the old `if !m.refreshing` guard) left the
+// deck showing stale items until the next 5s poll. Letting both run
+// concurrently was no better: the two results land in nondeterministic
+// order and a stale snapshot can overwrite a fresh one.
+//
+// So: only one refresh runs at a time. If one is already in flight,
+// record that another is needed (refreshPending) and return a nil cmd;
+// the refreshDoneMsg handler re-fires once the in-flight one lands,
+// guaranteeing the final read happens strictly after the latest signal.
+// withActivity registers the "enrich" spinner activity (explicit
+// user-driven refreshes); background/coalesced refreshes pass false.
+func (m Model) requestRefresh(withActivity bool) (Model, tea.Cmd) {
+	if m.refresher == nil {
+		return m, nil
+	}
+	if m.refreshing {
+		m.refreshPending = true
+		return m, nil
+	}
+	m.refreshing = true
+	if withActivity {
+		m = m.startActivity("enrich", "enrich", 0)
+	}
+	return m, m.refresher()
+}
+
 func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// After every Update, re-clamp the deck-list scroll offset so the
 	// cursor stays in view if it moved (j/k/jump/etc.) and so the offset
@@ -1503,13 +1537,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case initKickMsg:
 		cmds := []tea.Cmd{}
-		if m.refresher != nil {
-			// enrich: register the activity for the cold-start
-			// refresh, then dispatch the fetch. The matching
-			// finishActivity runs on refreshDoneMsg.
-			m.refreshing = true
-			m = m.startActivity("enrich", "enrich", 0)
-			cmds = append(cmds, m.refresher())
+		// enrich: register the activity for the cold-start refresh, then
+		// dispatch the fetch. The matching finishActivity runs on
+		// refreshDoneMsg.
+		var refreshCmd tea.Cmd
+		m, refreshCmd = m.requestRefresh(true)
+		if refreshCmd != nil {
+			cmds = append(cmds, refreshCmd)
 		}
 		var prCmd tea.Cmd
 		m, prCmd = m.prStatusRefreshCmd(time.Now())
@@ -1589,9 +1623,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if m.stateWatcher != nil {
 			cmds = append(cmds, m.stateWatcher())
 		}
-		if m.canBackgroundRefresh() && !m.refreshing {
-			m.refreshing = true
-			cmds = append(cmds, m.refresher())
+		if m.canBackgroundRefresh() {
+			var refreshCmd tea.Cmd
+			m, refreshCmd = m.requestRefresh(false)
+			cmds = append(cmds, refreshCmd)
 		}
 		return m, tea.Batch(cmds...)
 	case jobsListMsg:
@@ -1696,12 +1731,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			// Move the cursor to the new name once the refresh lands so
 			// the row the user just renamed stays selected.
 			m.pendingSelect = Item{ProjectName: msg.item.ProjectName, WorkspaceName: msg.arg}
-			if m.refresher != nil {
-				m.refreshing = true
-				m = m.startActivity("enrich", "enrich", 0)
-				return m, batchCmds(renameExpireCmd, m.refresher())
-			}
-			return m, renameExpireCmd
+			var refreshCmd tea.Cmd
+			m, refreshCmd = m.requestRefresh(true)
+			return m, batchCmds(renameExpireCmd, refreshCmd)
 		}
 		if msg.action == ActionSendPrompt {
 			m.status = fmt.Sprintf("sent prompt → %s/%s", msg.item.ProjectName, msg.item.WorkspaceName)
@@ -1714,12 +1746,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		} else {
 			m.status = "edit state: done"
 		}
-		if m.refresher != nil {
-			m.refreshing = true
-			m = m.startActivity("enrich", "enrich", 0)
-			return m, m.refresher()
-		}
-		return m, nil
+		var refreshCmd tea.Cmd
+		m, refreshCmd = m.requestRefresh(true)
+		return m, refreshCmd
 	case HookInstallDoneMsg:
 		// Stay quiet when nothing drifted — the common case. Only surface
 		// durable feedback when we actually rewrote config, or on error.
@@ -1839,9 +1868,17 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.refreshing = false
 		var enrichExpireCmd tea.Cmd
 		m, enrichExpireCmd = m.finishActivity("enrich")
+		// A change signal arrived while this refresh was in flight, so
+		// its snapshot may be stale. Re-run now that the slot is free;
+		// this read is guaranteed to start after that signal.
+		var rerunCmd tea.Cmd
+		if m.refreshPending {
+			m.refreshPending = false
+			m, rerunCmd = m.requestRefresh(false)
+		}
 		if msg.err != nil {
 			m.status = "refresh: " + msg.err.Error()
-			return m, enrichExpireCmd
+			return m, batchCmds(enrichExpireCmd, rerunCmd)
 		}
 		m.itemsAll = append([]Item(nil), msg.items...)
 		items := m.items()
@@ -1868,7 +1905,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// a newly-eligible repo.
 		var prCmd tea.Cmd
 		m, prCmd = m.prStatusRefreshCmd(time.Now())
-		cmds := []tea.Cmd{enrichExpireCmd}
+		cmds := []tea.Cmd{enrichExpireCmd, rerunCmd}
 		if prCmd != nil {
 			cmds = append(cmds, prCmd)
 		}
@@ -1900,9 +1937,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					if m.deleteTarget.Current {
 						m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
 					}
-					m.refreshing = true
-					m = m.startActivity("enrich", "enrich", 0)
-					return m, m.refresher()
+					var refreshCmd tea.Cmd
+					m, refreshCmd = m.requestRefresh(true)
+					return m, refreshCmd
 				}
 				return m, nil
 			}
@@ -2043,12 +2080,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				// of waiting up to a minute.
 				var prCmd tea.Cmd
 				m, prCmd = m.forcePRStatusRefresh(target.RepoRoot)
-				if m.refresher != nil {
-					m.refreshing = true
-					m = m.startActivity("enrich", "enrich", 0)
-					return m, batchCmds(tea.ClearScreen, m.refresher(), prCmd)
-				}
-				return m, batchCmds(tea.ClearScreen, prCmd)
+				var refreshCmd tea.Cmd
+				m, refreshCmd = m.requestRefresh(true)
+				return m, batchCmds(tea.ClearScreen, refreshCmd, prCmd)
 			}
 			var cmd tea.Cmd
 			m.prNumberInput, cmd = m.prNumberInput.Update(msg)
@@ -2879,10 +2913,10 @@ func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
 		if expireCmd != nil {
 			cmds = append(cmds, expireCmd)
 		}
-		if m.refresher != nil {
-			m.refreshing = true
-			*m = m.startActivity("enrich", "enrich", 0)
-			cmds = append(cmds, m.refresher())
+		var refreshCmd tea.Cmd
+		*m, refreshCmd = m.requestRefresh(true)
+		if refreshCmd != nil {
+			cmds = append(cmds, refreshCmd)
 		}
 		var prCmd tea.Cmd
 		*m, prCmd = m.prStatusRefreshCmd(time.Now())

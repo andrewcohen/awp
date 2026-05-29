@@ -44,6 +44,15 @@ func DeckSessionName(repo, workspace string) string {
 
 const deckSessionPrefix = "[awp]"
 
+// deckEnrichTimeout bounds the per-refresh jj HEAD enrichment fan-out in
+// loadDeckItems. jj log takes the repo operation-log lock, so a refresh
+// that overlaps a workspace-create/delete subprocess can block until that
+// op releases the lock; without a ceiling a stuck jj would wedge the
+// refresh (and thus the deck's whole background poll) forever. Rows still
+// render from state when enrichment times out; the next refresh fills in
+// the HEAD descriptions once the lock clears.
+const deckEnrichTimeout = 4 * time.Second
+
 type noopReporter struct{}
 
 func (noopReporter) Step(string) {}
@@ -1103,7 +1112,19 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				specs = append(specs, pathSpec{path: p, bookmark: strings.TrimSpace(e.Bookmark)})
 			}
 		}
-		headByPath = make(map[string]headInfo, len(specs))
+		// Enrichment is best-effort: the authoritative row list comes from
+		// the state file (repoMap) above, and headByPath only decorates rows
+		// with their jj HEAD description / bookmark tip. jj log commands take
+		// the repo's operation-log lock, so during heavy activity (a create
+		// subprocess running `jj workspace add`, etc.) a concurrent log can
+		// block until that op finishes — and a truly stuck jj would block
+		// forever. Since this runs inside the deck's refresher cmd, a blocked
+		// wg.Wait() would wedge m.refreshing=true permanently and kill the
+		// deck's background poll. So bound the wait: take whatever enrichment
+		// completed in time and proceed; stragglers keep writing to `live`
+		// under the lock (harmless — we read a snapshot), and the next refresh
+		// re-enriches the rows that timed out.
+		live := make(map[string]headInfo, len(specs))
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		for _, s := range specs {
@@ -1116,11 +1137,22 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					bookmarkCommit, _ = j.BookmarkCommitID(s.path, s.bookmark)
 				}
 				mu.Lock()
-				headByPath[s.path] = headInfo{changeID: id, bookmarkCommitID: bookmarkCommit, desc: desc}
+				live[s.path] = headInfo{changeID: id, bookmarkCommitID: bookmarkCommit, desc: desc}
 				mu.Unlock()
 			}(s)
 		}
-		wg.Wait()
+		done := make(chan struct{})
+		go func() { wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(deckEnrichTimeout):
+		}
+		mu.Lock()
+		headByPath = make(map[string]headInfo, len(live))
+		for k, v := range live {
+			headByPath[k] = v
+		}
+		mu.Unlock()
 	}
 
 	var items []deckui.Item
