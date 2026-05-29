@@ -76,6 +76,7 @@ type JJClient interface {
 	ForgetWorkspace(name string) error
 	WorkspaceRevision(name string) (string, error)
 	BookmarksAtRevision(revision string) ([]string, error)
+	Trunk() (string, error)
 	ForgetBookmark(name string) error
 	IsRevisionEmpty(revision string) (bool, error)
 	AbandonRevision(revision string) error
@@ -1477,6 +1478,16 @@ func (s *service) rollbackNewWorkspaceStart(repoRoot, name, path string) error {
 func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revision string) (int, error) {
 	forgotten := 0
 	seen := map[string]struct{}{}
+	// Resolve trunk so we never delete it as a side effect of cleaning up
+	// a workspace's bookmarks. Best-effort: if Trunk() fails (older jj, no
+	// trunk() revset configured, etc.) we still skip a literal "main"
+	// fallback to keep the historical default safe.
+	protected := map[string]struct{}{"main": {}, "master": {}, "trunk": {}}
+	if trunk, err := s.jj.Trunk(); err == nil {
+		if t := strings.TrimSpace(trunk); t != "" {
+			protected[t] = struct{}{}
+		}
+	}
 	forget := func(name string) error {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -1486,6 +1497,10 @@ func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revis
 			return nil
 		}
 		seen[name] = struct{}{}
+		if _, isProtected := protected[name]; isProtected {
+			s.logf("⏭️ Skipped bookmark %q (trunk — protected from cleanup)", name)
+			return nil
+		}
 		err := s.jj.ForgetBookmark(name)
 		if err != nil && isStaleWorkingCopyError(err) {
 			if updateErr := s.jj.UpdateStale(); updateErr != nil {

@@ -71,6 +71,7 @@ type fakeJJ struct {
 	forgetErr            error
 	renameErr            error
 	workspaceErr         error
+	trunk                string
 	listNames            []string
 	workspaceRevs        map[string]string
 	bookmarksByRev       map[string][]string
@@ -166,6 +167,10 @@ func (f *fakeJJ) BookmarksAtRevision(revision string) ([]string, error) {
 		return nil, nil
 	}
 	return append([]string(nil), f.bookmarksByRev[revision]...), nil
+}
+
+func (f *fakeJJ) Trunk() (string, error) {
+	return f.trunk, nil
 }
 
 func (f *fakeJJ) ForgetBookmark(name string) error {
@@ -703,6 +708,42 @@ func TestDeleteForgetsMatchingBookmarkIncludingRemotes(t *testing.T) {
 	}
 	if len(jj.forgottenBookmarks) != 1 || jj.forgottenBookmarks[0] != "team/example-branch" {
 		t.Fatalf("expected bookmark forget for tracked bookmark, got %+v", jj.forgottenBookmarks)
+	}
+}
+
+func TestDeleteProtectsTrunkBookmark(t *testing.T) {
+	// Regression: workspace delete must never forget the trunk bookmark,
+	// regardless of how it ended up referenced — Entry.Bookmark set to
+	// "main" (by a buggy link path, a hand-edited state file, …) or
+	// "main" sitting at the workspace's @ revision (workspace anchored on
+	// main with no further commits).
+	for _, name := range []string{"main", "master", "trunk", "custom-trunk"} {
+		t.Run("stored="+name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			jj := &fakeJJ{
+				repoRoot:      repoRoot,
+				existing:      map[string]bool{"feat-x": true},
+				workspaceRevs: map[string]string{"feat-x": "abc123"},
+				bookmarksByRev: map[string][]string{
+					"abc123": {name},
+				},
+				trunk: name,
+			}
+			tmux := &fakeTmux{windows: map[string]bool{"feat-x": true}}
+			store := &fakeStore{entries: map[string]Entry{
+				"feat-x": {Name: "feat-x", Bookmark: name, Path: filepath.Join(repoRoot, ".awp", "workspaces", "feat-x")},
+			}}
+
+			svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+			if err := svc.Delete("feat-x", true); err != nil {
+				t.Fatalf("Delete returned error: %v", err)
+			}
+			for _, b := range jj.forgottenBookmarks {
+				if b == name {
+					t.Fatalf("trunk bookmark %q was forgotten on workspace delete (forgotten: %+v)", name, jj.forgottenBookmarks)
+				}
+			}
+		})
 	}
 }
 
