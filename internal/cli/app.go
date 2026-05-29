@@ -410,20 +410,17 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err != nil {
 		return err
 	}
-	// Bookmark to record on the workspace entry — drives the deck's PR
-	// glyph via Entry.Bookmark. Two cases:
-	//
-	//   1. BookmarkToCreate is set: create that bookmark on @ (best-effort)
-	//      and record it.
-	//   2. BookmarkToCreate is blank but Bookmark (the anchor) is itself an
-	//      existing bookmark the user picked: record the anchor.
+	// Bookmark to create + record as Entry.Bookmark (drives the deck's PR
+	// glyph). Only runs when the caller (typically the new-workspace form)
+	// explicitly named a bookmark to create — we never auto-link the
+	// anchor revision as Entry.Bookmark, which would record trunk
+	// ("main", "master", …) for callers that pass --bookmark and would
+	// also expose trunk to the workspace-delete cleanup path.
 	//
 	// Best-effort throughout: any failure is logged but does not fail the
-	// workspace creation, since the workspace itself is already created and
-	// usable.
-	toCreate := strings.TrimSpace(req.BookmarkToCreate)
-	switch {
-	case toCreate != "":
+	// workspace creation, since the workspace itself is already created
+	// and usable.
+	if toCreate := strings.TrimSpace(req.BookmarkToCreate); toCreate != "" {
 		if rev, revErr := j.WorkspaceRevision(normalized); revErr == nil && strings.TrimSpace(rev) != "" {
 			if createErr := j.CreateBookmark(toCreate, rev); createErr != nil {
 				if reporter != nil {
@@ -439,12 +436,6 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 			}
 		} else if reporter != nil {
 			reporter.Log(fmt.Sprintf("bookmark skipped: cannot resolve workspace revision (%v)", revErr))
-		}
-	case strings.TrimSpace(req.Bookmark) != "":
-		// The anchor is an existing bookmark the user picked. Record it
-		// so the deck's PR glyph matches without a manual `B` link step.
-		if recordErr := svc.RecordBookmark(normalized, strings.TrimSpace(req.Bookmark)); recordErr != nil && reporter != nil {
-			reporter.Log(fmt.Sprintf("link bookmark %q to workspace: %v", req.Bookmark, recordErr))
 		}
 	}
 	projectName := filepath.Base(repoRoot)
