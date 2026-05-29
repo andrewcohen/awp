@@ -745,7 +745,7 @@ func TestSendPromptKeyOpensModalOnWorkspaceRow(t *testing.T) {
 }
 
 func TestSendPromptViewIncludesTarget(t *testing.T) {
-	form, _ := newPromptForm(Item{ProjectName: "agent-deck", WorkspaceName: "qa"})
+	form, _ := newPromptForm(Item{ProjectName: "agent-deck", WorkspaceName: "qa"}, "")
 	out := form.view(120, 30)
 	if !strings.Contains(out, "agent-deck") {
 		t.Fatalf("view should show project name: %q", out)
@@ -2035,15 +2035,10 @@ func TestPRStatusLabelHonorsPROverride(t *testing.T) {
 	}
 }
 
-func TestPRMenuRepairKeyDispatchesPrompt(t *testing.T) {
+func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
-	var gotAction Action
-	var gotArg string
-	handler := func(req ActionRequest) error {
-		gotAction = req.Action
-		gotArg = req.Arg
-		return nil
-	}
+	calls := 0
+	handler := func(ActionRequest) error { calls++; return nil }
 	model := New([]Item{item}, handler).WithPRStatusSeed(map[string]map[string]PRStatus{
 		"/r": {"feat": {
 			Number: 42, URL: "https://example/pr/42", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty,
@@ -2053,18 +2048,25 @@ func TestPRMenuRepairKeyDispatchesPrompt(t *testing.T) {
 	if !updated.(Model).prMenuMode {
 		t.Fatalf("expected prMenuMode after p")
 	}
-	updated, cmd := updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	if updated.(Model).prMenuMode {
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m := updated.(Model)
+	if m.prMenuMode {
 		t.Fatalf("expected prMenuMode false after r")
 	}
-	if cmd == nil {
-		t.Fatalf("expected dispatch cmd")
+	// Repair now routes through the send-prompt form prepopulated with
+	// the repair prompt, so the user can review/edit before sending —
+	// it must NOT dispatch straight to the agent.
+	if !m.promptMode {
+		t.Fatalf("expected promptMode after p r")
 	}
-	if msg := drainCmdForActionResult(t, cmd); msg.action != ActionSendPrompt {
-		t.Fatalf("expected ActionSendPrompt, got %v", msg.action)
+	if calls != 0 {
+		t.Fatalf("repair should not dispatch straight to the agent; got calls=%d", calls)
 	}
-	if gotAction != ActionSendPrompt || !strings.Contains(gotArg, "merge conflicts") {
-		t.Fatalf("handler not invoked correctly; action=%v arg=%q", gotAction, gotArg)
+	if got := m.promptForm.value(); !strings.Contains(got, "merge conflicts") {
+		t.Fatalf("expected prompt form prepopulated with repair prompt; got %q", got)
+	}
+	if got := m.promptForm.target.WorkspaceName; got != "ws" {
+		t.Fatalf("expected form target to be the selected row; got %q", got)
 	}
 }
 

@@ -35,9 +35,12 @@ const (
 )
 
 // newPromptForm constructs the form. The returned tea.Cmd MUST be
-// dispatched by the caller so huh activates the input.
-func newPromptForm(target Item) (promptForm, tea.Cmd) {
-	var promptVal string
+// dispatched by the caller so huh activates the input. initial
+// prepopulates the prompt field (empty for a blank "send a prompt"
+// dialog; non-empty when another flow — e.g. PR repair — hands the
+// user a draft to review and edit before sending).
+func newPromptForm(target Item, initial string) (promptForm, tea.Cmd) {
+	promptVal := initial
 
 	km := huh.NewDefaultKeyMap()
 	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"), key.WithHelp("esc", "cancel"))

@@ -179,7 +179,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
 | `d` | Open the selected workspace's auto-discovered dev URL in your default browser |
 | `p o` | Open the selected workspace's PR in your default browser (chord — press `p`, then `o`). `esc` cancels the chord. |
-| `p r` | Repair the selected workspace's PR. Detects actionable conditions (merge conflicts, failing CI, branch behind base) and sends a fix prompt to the workspace's agent via the same path as `A`. Reports "nothing to repair" if the PR is healthy. |
+| `p r` | Repair the selected workspace's PR. Detects actionable conditions (merge conflicts, failing CI, branch behind base) and opens the `A` send-prompt form prepopulated with a fix prompt, so you can review and edit it before sending to the workspace's agent. Reports "nothing to repair" if the PR is healthy. |
 | `p s` | Set (or clear, via blank/0) the PR # for the selected workspace. Pins the workspace to a specific PR so the deck resolves status by number rather than guessing from the bookmark. Persisted to `~/.awp/...` workspace state. |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
