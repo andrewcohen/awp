@@ -56,12 +56,50 @@ func TestDesiredClaudeHooksWaitingEvents(t *testing.T) {
 	hooks := DesiredClaudeHooks()
 	// PermissionRequest and Elicitation are the dedicated "blocked on the
 	// user" events; both must flip the row to waiting so the deck shows
-	// yellow while a permission dialog / MCP form is up — not just when a
-	// desktop Notification happens to fire.
-	for _, event := range []string{"Notification", "PermissionRequest", "Elicitation"} {
+	// yellow while a permission dialog / MCP form is up.
+	for _, event := range []string{"PermissionRequest", "Elicitation"} {
 		if state, ok := hooks[event]; !ok || state != "waiting" {
 			t.Errorf("DesiredClaudeHooks[%q] = %q (ok=%v), want \"waiting\"", event, state, ok)
 		}
+	}
+}
+
+func TestDesiredClaudeHooksOmitsNotification(t *testing.T) {
+	// Notification fires for Claude's ~60s idle ping, not just permission
+	// prompts, so mapping it to waiting flooded the unread summary with
+	// false ▲ triangles for already-finished agents. Permission prompts are
+	// covered by the dedicated PermissionRequest event instead.
+	if state, ok := DesiredClaudeHooks()["Notification"]; ok {
+		t.Errorf("DesiredClaudeHooks should not install Notification; got %q", state)
+	}
+	found := false
+	for _, e := range ObsoleteClaudeHooks() {
+		if e == "Notification" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ObsoleteClaudeHooks should list Notification so stale installs get cleaned up")
+	}
+}
+
+func TestRemoveAwpEntryDropsOnlyAwpEntries(t *testing.T) {
+	userEntry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "echo hi"}}}
+	awpEntry := map[string]any{"x-awp": map[string]any{"version": float64(HookMarkerVersion), "state": "waiting"}}
+
+	out, removed := removeAwpEntry([]any{userEntry, awpEntry})
+	if !removed {
+		t.Fatal("expected removeAwpEntry to report a removal")
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 surviving entry, got %d", len(out))
+	}
+	if _, isAwp := out[0].(map[string]any)["x-awp"]; isAwp {
+		t.Error("the surviving entry should be the user's, not awp's")
+	}
+
+	if _, removed := removeAwpEntry([]any{userEntry}); removed {
+		t.Error("removeAwpEntry should not report a removal when no awp entry is present")
 	}
 }
 

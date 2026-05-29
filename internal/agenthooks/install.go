@@ -63,20 +63,25 @@ func HookCommand(event, state string) string {
 // tool (e.g. AskUserQuestion) returns, so the deck doesn't linger in
 // "waiting" while the agent is generating its follow-up response.
 //
-// The three "waiting" events cover every way Claude blocks on the user:
+// The "waiting" events cover every way Claude genuinely blocks on the user:
 //   - PreToolUse with AskUserQuestion (via --waiting-when-tool below) —
 //     Claude's own multiple-choice question.
 //   - PermissionRequest — a permission dialog is up (e.g. approve a Bash
 //     command or file write in default permission mode). This is the
 //     dedicated event; it fires regardless of whether the user has
-//     desktop Notifications configured, so it's more reliable than
-//     leaning on the Notification event alone.
+//     desktop Notifications configured.
 //   - Elicitation — an MCP server is requesting form input.
-//   - Notification — the catch-all (permission_prompt / idle_prompt /
-//     elicitation_dialog). Kept as a backstop for older clients and the
-//     60s-idle ping.
 //
-// Each of these resolves back to "working" on the next PreToolUse /
+// We deliberately do NOT map the Notification event to "waiting". Claude
+// fires Notification both for permission prompts (already covered by the
+// dedicated PermissionRequest event) and for its ~60s idle ping — and the
+// idle ping fires for an agent that already finished its turn (Stop →
+// idle) and is just sitting there. Mapping it to "waiting" flooded the
+// tmux unread summary with ▲ triangles for agents that weren't actually
+// blocked on anything. ObsoleteClaudeHooks removes any stale awp-managed
+// Notification entry left over from when we did install it.
+//
+// Each "waiting" event resolves back to "working" on the next PreToolUse /
 // PostToolUse, or to "idle" on Stop, so the row never sticks in waiting.
 //
 // Unknown events are ignored by older Claude Code versions, so listing
@@ -89,10 +94,17 @@ func DesiredClaudeHooks() map[string]string {
 		"PreToolUse":        "working",
 		"PostToolUse":       "working",
 		"Stop":              "idle",
-		"Notification":      "waiting",
 		"PermissionRequest": "waiting",
 		"Elicitation":       "waiting",
 	}
+}
+
+// ObsoleteClaudeHooks lists events awp installed in the past but no longer
+// wants. InstallClaude strips the awp-managed entry for each on the next
+// sync so upgrades clean up after themselves; non-awp entries for the same
+// event are left untouched.
+func ObsoleteClaudeHooks() []string {
+	return []string{"Notification"}
 }
 
 // InstallClaude merges (or refreshes) awp-managed hook entries into
@@ -136,6 +148,26 @@ func InstallClaude() (bool, error) {
 			changed = true
 		}
 		hooks[event] = entries
+	}
+	// Strip awp-managed entries for events we no longer install (e.g. the
+	// old Notification → waiting hook). Leave any user-defined entries for
+	// the same event in place, and drop the event key entirely once only
+	// awp's entry was there.
+	for _, event := range ObsoleteClaudeHooks() {
+		entries, ok := hooks[event].([]any)
+		if !ok {
+			continue
+		}
+		entries, evtChanged := removeAwpEntry(entries)
+		if !evtChanged {
+			continue
+		}
+		changed = true
+		if len(entries) == 0 {
+			delete(hooks, event)
+		} else {
+			hooks[event] = entries
+		}
 	}
 	if !changed {
 		return false, nil
@@ -262,6 +294,24 @@ func upsertAwpEntry(entries []any, event, state string) ([]any, bool) {
 		return entries, true
 	}
 	return append(entries, desired), true
+}
+
+// removeAwpEntry drops every entry tagged with x-awp, preserving the order
+// and any non-awp entries. Returns the filtered slice and whether anything
+// was removed.
+func removeAwpEntry(entries []any) ([]any, bool) {
+	out := entries[:0:0]
+	removed := false
+	for _, raw := range entries {
+		if entry, ok := raw.(map[string]any); ok {
+			if _, isAwp := entry["x-awp"]; isAwp {
+				removed = true
+				continue
+			}
+		}
+		out = append(out, raw)
+	}
+	return out, removed
 }
 
 func awpEntryMatches(entries []any, event, state string) bool {
