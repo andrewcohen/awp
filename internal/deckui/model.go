@@ -3759,95 +3759,158 @@ func (m Model) renderList(width int) string {
 	// with the status glyph that follows.
 	const prefixWidth = 4
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
-	// Build the scrollable region (project headers + workspace rows) and
-	// in parallel record which scrollable index belongs to each project
-	// header. We use this below to scroll cursor-into-view without
-	// stripping the project header off a row that needs it for context.
-	var body []string
-	// projectHeaderForRow[i] = scrollable index of the most recent
-	// project header at or before row i. -1 means "no header" (only true
-	// before any project header is emitted — shouldn't happen in practice
-	// since each project emits one before its first row).
-	projectHeaderForRow := make([]int, 0, len(items)*2)
+	// Build the scrollable region (project headers + workspace rows) from
+	// the shared structural layout (deckBodyRows) so the renderer and the
+	// scroll math (deckBodyTotalRows / deckBodyCursorRow /
+	// deckBodyHeaderRowForCursor) never disagree on row positions —
+	// important now that default-only projects collapse to a single row.
+	// In parallel we record which body index belongs to each project
+	// header, used below to scroll cursor-into-view without stripping the
+	// project header off a row that needs it for context.
+	rows := deckBodyRows(items, collapsedProjects(items))
+	body := make([]string, 0, len(rows))
+	// projectHeaderForRow[i] = body index of the project header governing
+	// row i. For a collapsed default-only row it points at the row itself
+	// (the row IS its own header), so the sticky-header logic never
+	// duplicates it.
+	projectHeaderForRow := make([]int, 0, len(rows))
 	cursorRow := -1
-	lastProject := ""
-	lastProjectHeaderIdx := -1
 	s := m.styles
-	for i, item := range items {
-		dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
-		if item.ProjectName != lastProject {
-			// Visually space projects with an explicit blank row entry
-			// (one slice element = one rendered line) rather than
-			// MarginTop on the header. MarginTop would make this entry
-			// a 2-line string, breaking the row-count-based scroll
-			// capacity math.
-			if lastProject != "" {
-				body = append(body, "")
-				projectHeaderForRow = append(projectHeaderForRow, lastProjectHeaderIdx)
-			}
+	for _, r := range rows {
+		switch r.kind {
+		case deckRowSpacer:
+			// One slice element = one rendered line; an empty string keeps
+			// the row-count-based scroll capacity math exact.
+			body = append(body, "")
+		case deckRowHeader:
 			headerStyle := s.Muted
-			if m.findMode && m.findStage == findStageWorkspace && item.ProjectName == m.findProject {
+			if m.findMode && m.findStage == findStageWorkspace && r.project == m.findProject {
 				headerStyle = s.Accent
 			}
 			hintStr := ""
-			if hint, ok := projectHints[item.ProjectName]; ok {
+			if hint, ok := projectHints[r.project]; ok {
 				hintStr = renderFindHint(hint)
 			}
-			headerLine := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), item.ProjectName)
+			headerLine := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), r.project)
 			body = append(body, headerStyle.Render(headerLine))
-			projectHeaderForRow = append(projectHeaderForRow, len(body)-1)
-			lastProjectHeaderIdx = len(body) - 1
-			lastProject = item.ProjectName
+		case deckRowPrimary:
+			item := items[r.itemIndex]
+			dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
+			prefix := "  "
+			if hint, ok := rowHints[r.itemIndex]; ok {
+				prefix = renderFindHint(hint)
+			}
+			// Style the label segment directly. The dot is rendered with
+			// its own ANSI color sequence ending in a reset, which would
+			// otherwise truncate any outer Foreground/Bold applied to the
+			// whole row — that's why selected rows containing a status dot
+			// weren't highlighting past the dot.
+			labelStyle := s.Label
+			if r.itemIndex == m.cursor {
+				prefix = s.Bar.Render("┃") + " "
+				labelStyle = s.Selected
+			} else if dim {
+				labelStyle = s.Muted
+			}
+			label := truncate(m.displayLabel(item), max(10, width-21))
+			// Status is canonical in JSON, so render the stored glyph
+			// immediately on the fast first paint. The only tmux-derived
+			// override is `working` → `exited` (agent shell death — Claude
+			// has no exit hook), which arrives a frame later from the
+			// enrichment pass and is rare enough that a brief flash is
+			// preferable to a blank glyph slot.
+			glyph := statusGlyph(item.Status, dim, item.Unread)
+			line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
+			if prGlyph := m.prGlyphForItem(item); prGlyph != "" {
+				line += " " + prGlyph
+			}
+			if staleGlyph := m.prStaleGlyphForItem(item); staleGlyph != "" {
+				line += " " + staleGlyph
+			}
+			body = append(body, fitRow(line, width-2))
+			if r.itemIndex == m.cursor {
+				cursorRow = len(body) - 1
+			}
+		case deckRowMeta:
+			item := items[r.itemIndex]
+			// Secondary line: muted @author · head · dev. Indented past
+			// where the label starts so it visually sits *under* the row
+			// rather than next to it — gives the eye a clear "this belongs
+			// to the row above" cue without adding row height.
+			// Truncated to fit; lipgloss.Width pads but doesn't clip.
+			const metaIndentW = prefixWidth + 1 + 1 + 1 + 4 // prefix + space + glyph + space + extra subordinate indent
+			metaIndent := strings.Repeat(" ", metaIndentW)
+			metaRoom := max(10, width-2-metaIndentW)
+			metaText := truncate(m.metaLine(item), metaRoom)
+			body = append(body, fitRow(metaIndent+s.Muted.Render(metaText), width-2))
+		case deckRowCollapsed:
+			// Default-only project: fold the project header, the lone
+			// "default" workspace row, and its meta line into one row.
+			// The project name stands in for the workspace label (the
+			// "default" name carries no information), with the status +
+			// PR glyphs and the meta text inline after it.
+			item := items[r.itemIndex]
+			dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
+			// The project name is colored like a project header (muted, or
+			// accent when it's the active find target) so the row reads as
+			// project-level rather than a workspace label — otherwise a
+			// collapsed row blends into the workspace rows above it.
+			nameStyle := s.Muted
+			// A collapsed row has no separate header line, so it must read
+			// as a top-level project: the project NAME lines up with the
+			// project-header name column, with the status glyph immediately
+			// to its left. (Landing the glyph in the workspace-glyph column
+			// instead made the row look like a workspace of the project
+			// above it.) The find hint / cursor bar live in the same fixed
+			// 4-col prefixSlot that project headers use, so the row doesn't
+			// shift when find mode toggles a hint in or out.
+			prefix := "  "
+			hinted := false
+			if hint, ok := rowHints[r.itemIndex]; ok {
+				prefix, hinted = renderFindHint(hint), true
+			} else if hint, ok := projectHints[item.ProjectName]; ok {
+				prefix, hinted = renderFindHint(hint), true
+			}
+			// A hint on the row means find mode has it as a live target —
+			// one keystroke lands the cursor straight on the workspace
+			// (collapsed projects skip the workspace stage), so light the
+			// name up to make it pop while find mode is up. Use the same
+			// plain default-fg style as a normal/active row label so the
+			// highlight matches the other lit rows exactly (not bold, not a
+			// second accent color).
+			if hinted {
+				nameStyle = s.Label
+			}
+			if r.itemIndex == m.cursor {
+				prefix = s.Bar.Render("┃") + " "
+				nameStyle = s.Selected
+			}
+			glyph := statusGlyph(item.Status, dim, item.Unread)
+			name := truncate(item.ProjectName, max(10, width-21))
+			// prefixSlot + glyph + name (no gap before the name) lands the
+			// project name in the project-header column; the glyph sits in
+			// the column just left of it.
+			line := fmt.Sprintf("%s%s%s", prefixSlot.Render(prefix), glyph, nameStyle.Render(name))
+			if prGlyph := m.prGlyphForItem(item); prGlyph != "" {
+				line += " " + prGlyph
+			}
+			if staleGlyph := m.prStaleGlyphForItem(item); staleGlyph != "" {
+				line += " " + staleGlyph
+			}
+			// Append the meta text inline (muted) when there's room left
+			// on the line after the name and glyphs.
+			if meta := strings.TrimSpace(m.metaLine(item)); meta != "" {
+				metaRoom := width - 2 - lipgloss.Width(line) - 3
+				if metaRoom >= 6 {
+					line += "   " + s.Muted.Render(truncate(meta, metaRoom))
+				}
+			}
+			body = append(body, fitRow(line, width-2))
+			if r.itemIndex == m.cursor {
+				cursorRow = len(body) - 1
+			}
 		}
-		prefix := "  "
-		if hint, ok := rowHints[i]; ok {
-			prefix = renderFindHint(hint)
-		}
-		// Style the label segment directly. The dot is rendered with its
-		// own ANSI color sequence ending in a reset, which would otherwise
-		// truncate any outer Foreground/Bold applied to the whole row —
-		// that's why selected rows containing a status dot weren't
-		// highlighting past the dot.
-		labelStyle := lipgloss.NewStyle()
-		if i == m.cursor {
-			prefix = s.Bar.Render("┃") + " "
-			labelStyle = s.Selected
-		} else if dim {
-			labelStyle = s.Muted
-		}
-		label := truncate(m.displayLabel(item), max(10, width-21))
-		// Status is canonical in JSON, so render the stored glyph
-		// immediately on the fast first paint. The only tmux-derived
-		// override is `working` → `exited` (agent shell death — Claude
-		// has no exit hook), which arrives a frame later from the
-		// enrichment pass and is rare enough that a brief flash is
-		// preferable to a blank glyph slot.
-		glyph := statusGlyph(item.Status, dim, item.Unread)
-		prGlyph := m.prGlyphForItem(item)
-		staleGlyph := m.prStaleGlyphForItem(item)
-		line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
-		if prGlyph != "" {
-			line += " " + prGlyph
-		}
-		if staleGlyph != "" {
-			line += " " + staleGlyph
-		}
-		body = append(body, lipgloss.NewStyle().Width(width-2).Render(line))
-		projectHeaderForRow = append(projectHeaderForRow, lastProjectHeaderIdx)
-		if i == m.cursor {
-			cursorRow = len(body) - 1
-		}
-		// Secondary line: muted @author · head · dev. Indented past
-		// where the label starts so it visually sits *under* the row
-		// rather than next to it — gives the eye a clear "this belongs
-		// to the row above" cue without adding row height.
-		// Truncated to fit; lipgloss.Width pads but doesn't clip.
-		const metaIndentW = prefixWidth + 1 + 1 + 1 + 4 // prefix + space + glyph + space + extra subordinate indent
-		metaIndent := strings.Repeat(" ", metaIndentW)
-		metaRoom := max(10, width-2-metaIndentW)
-		metaText := truncate(m.metaLine(item), metaRoom)
-		body = append(body, metaIndent+s.Muted.Render(metaText))
-		projectHeaderForRow = append(projectHeaderForRow, lastProjectHeaderIdx)
+		projectHeaderForRow = append(projectHeaderForRow, r.headerRow)
 	}
 
 	capacity := m.deckBodyCapacity()
@@ -4030,76 +4093,134 @@ func (m *Model) clampDeckViewport() {
 	m.deckYOffset = yoff
 }
 
-// itemBodyHeight is the number of body lines each workspace item
-// occupies: a primary row (status + label + PR glyph) and a secondary
-// muted metadata line (@author · head · dev). Project headers and
-// inter-project spacers remain 1 line each.
+// itemBodyHeight is the number of body lines a non-collapsed workspace
+// item occupies: a primary row (status + label + PR glyph) and a
+// secondary muted metadata line (@author · head · dev). It's only used
+// as a heuristic for deckHalfPageStep's "visible items" estimate now;
+// exact row positions come from deckBodyRows. Default-only projects
+// collapse to a single line and so don't follow this height.
 const itemBodyHeight = 2
 
-// deckBodyCursorRow returns the body-row index of the PRIMARY line of
-// the workspace row corresponding to items[cursor]. Mirrors
-// renderList's body layout: each project starts with a 1-line header,
-// every project after the first is preceded by a 1-line blank spacer,
-// and each item contributes itemBodyHeight lines.
+// deckRowKind classifies one rendered line of the deck body. Each kind
+// is exactly one terminal row, which keeps the scroll capacity math
+// (measured in rows) exact.
+type deckRowKind int
+
+const (
+	deckRowHeader    deckRowKind = iota // project name on its own line
+	deckRowSpacer                       // blank line between projects
+	deckRowPrimary                      // item: status glyph + label
+	deckRowMeta                         // item: muted @author · branch · …
+	deckRowCollapsed                    // default-only project folded into one line
+)
+
+// deckBodyRow is one structural line of the deck body. It carries enough
+// context for both the renderer (renderList) and the scroll math to act
+// on it without re-deriving layout — there's a single source of truth
+// for where every project header, workspace row, and spacer lands.
+type deckBodyRow struct {
+	kind      deckRowKind
+	itemIndex int    // index into items for primary/meta/collapsed; -1 otherwise
+	project   string // project name for header/primary/collapsed; "" for spacer
+	headerRow int    // body index of the governing project header (== self for collapsed)
+}
+
+// collapsedProjects returns the set of project names that render as a
+// single collapsed line: a project whose only workspace is the default
+// one. Matches the "default" naming convention the deck already keys off
+// for delete/rename. Such a project's header, sole row, and meta line
+// carry no information the project name doesn't, so they fold to one row.
+func collapsedProjects(items []Item) map[string]bool {
+	counts := map[string]int{}
+	for _, it := range items {
+		counts[it.ProjectName]++
+	}
+	out := map[string]bool{}
+	for _, it := range items {
+		if counts[it.ProjectName] == 1 && strings.TrimSpace(it.WorkspaceName) == "default" {
+			out[it.ProjectName] = true
+		}
+	}
+	return out
+}
+
+// deckBodyRows produces the structural layout of the deck body for the
+// given items: one element per rendered line, in render order. Both
+// renderList and the scroll math (deckBodyTotalRows / deckBodyCursorRow /
+// deckBodyHeaderRowForCursor) consume this slice so they can never
+// disagree about row positions — necessary because collapsed default-only
+// projects make per-project height variable. Each project emits a header
+// (or a single collapsed row), every project after the first is preceded
+// by a blank spacer, and each non-collapsed item contributes a primary +
+// meta row.
+func deckBodyRows(items []Item, collapsed map[string]bool) []deckBodyRow {
+	rows := make([]deckBodyRow, 0, len(items)*2)
+	lastProject := ""
+	headerIdx := -1
+	for i, it := range items {
+		if it.ProjectName != lastProject {
+			if lastProject != "" {
+				rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: headerIdx})
+			}
+			if collapsed[it.ProjectName] {
+				// The collapsed row is its own header — folding the
+				// header, row, and meta line into one. headerRow points
+				// at itself so the sticky-header logic never re-pins it.
+				idx := len(rows)
+				rows = append(rows, deckBodyRow{kind: deckRowCollapsed, itemIndex: i, project: it.ProjectName, headerRow: idx})
+				headerIdx = idx
+				lastProject = it.ProjectName
+				continue
+			}
+			headerIdx = len(rows)
+			rows = append(rows, deckBodyRow{kind: deckRowHeader, itemIndex: -1, project: it.ProjectName, headerRow: headerIdx})
+			lastProject = it.ProjectName
+		}
+		rows = append(rows, deckBodyRow{kind: deckRowPrimary, itemIndex: i, project: it.ProjectName, headerRow: headerIdx})
+		rows = append(rows, deckBodyRow{kind: deckRowMeta, itemIndex: i, project: it.ProjectName, headerRow: headerIdx})
+	}
+	return rows
+}
+
+// deckBodyCursorRow returns the body-row index of the PRIMARY (or
+// collapsed) line of the workspace row corresponding to items[cursor].
 func deckBodyCursorRow(items []Item, cursor int) int {
 	if cursor < 0 || cursor >= len(items) {
 		return 0
 	}
-	seen := map[string]bool{}
-	projects := 0
-	for i := 0; i <= cursor; i++ {
-		if !seen[items[i].ProjectName] {
-			seen[items[i].ProjectName] = true
-			projects++
+	rows := deckBodyRows(items, collapsedProjects(items))
+	for idx, r := range rows {
+		if r.itemIndex == cursor && (r.kind == deckRowPrimary || r.kind == deckRowCollapsed) {
+			return idx
 		}
 	}
-	return cursor*itemBodyHeight + 2*projects - 1
+	return 0
 }
 
 // deckBodyHeaderRowForCursor returns the body-row index of the project
-// header for items[cursor], mirroring renderList's body layout. Returns
-// -1 when cursor is out of range. clampDeckViewport uses this to detect
-// when the cursor's project header has scrolled above the viewport so
-// renderList can pin it as a sticky line above the viewport.
+// header for items[cursor]. Returns -1 when cursor is out of range.
+// clampDeckViewport uses this to detect when the cursor's project header
+// has scrolled above the viewport so renderList can pin it as a sticky
+// line. For a collapsed project the row is its own header, so this
+// returns the row's own index and the sticky check never fires for it.
 func deckBodyHeaderRowForCursor(items []Item, cursor int) int {
 	if cursor < 0 || cursor >= len(items) {
 		return -1
 	}
-	cursorProj := items[cursor].ProjectName
-	seen := map[string]bool{}
-	bodyRow := 0
-	for i := 0; i < len(items); i++ {
-		if !seen[items[i].ProjectName] {
-			seen[items[i].ProjectName] = true
-			if len(seen) > 1 {
-				bodyRow++ // spacer between projects
-			}
-			if items[i].ProjectName == cursorProj {
-				return bodyRow // header row for cursor's project
-			}
-			bodyRow++ // advance past header line
+	rows := deckBodyRows(items, collapsedProjects(items))
+	for _, r := range rows {
+		if r.itemIndex == cursor && (r.kind == deckRowPrimary || r.kind == deckRowCollapsed) {
+			return r.headerRow
 		}
-		bodyRow += itemBodyHeight // advance past item (primary + meta lines)
 	}
 	return -1
 }
 
 // deckBodyTotalRows returns the total number of body rows renderList
 // will produce for the given items slice (workspace rows + project
-// headers + inter-project spacers).
+// headers + inter-project spacers + collapsed rows).
 func deckBodyTotalRows(items []Item) int {
-	if len(items) == 0 {
-		return 0
-	}
-	seen := map[string]bool{}
-	projects := 0
-	for _, it := range items {
-		if !seen[it.ProjectName] {
-			seen[it.ProjectName] = true
-			projects++
-		}
-	}
-	return len(items)*itemBodyHeight + 2*projects - 1
+	return len(deckBodyRows(items, collapsedProjects(items)))
 }
 
 // keyGroup is a labeled group of (key, description) rows shown in both the
@@ -5198,4 +5319,19 @@ func truncate(value string, width int) string {
 		return value[:width]
 	}
 	return value[:width-3] + "..."
+}
+
+// fitRow clamps a composed deck body line to exactly one terminal row of
+// width w. The deck list is a single full-width column with plenty of
+// horizontal room, so a long title must truncate, never wrap: lipgloss
+// .Width wraps content wider than w onto extra rows (which also breaks
+// the deck's one-body-element-per-rendered-row scroll math), so
+// .MaxHeight(1) clips any wrap back to a single row. Embedded newlines
+// are collapsed to spaces first since they'd force a wrap regardless of
+// width. Padding to w is preserved so the viewport repaints the full row.
+func fitRow(s string, w int) string {
+	if strings.ContainsAny(s, "\r\n") {
+		s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
+	}
+	return lipgloss.NewStyle().Width(w).MaxHeight(1).Render(s)
 }
