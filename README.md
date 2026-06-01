@@ -208,7 +208,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `awp config init` | Bootstrap `<repo>/.awp/config.json` (must run from repo root) |
 | `awp config edit [--global]` | Open the project (or `--global`) config in `$EDITOR` |
 | `awp internal report-status --state <…> [--prompt <text>\|--prompt-stdin] [--waiting-when-tool <list>]` | Hidden — used by hooks to write status. `--prompt` stores the active prompt text on the workspace; `--prompt-stdin` reads it from a Claude-style hook JSON payload on stdin. `--waiting-when-tool` takes a comma-separated list of tool names; when a `PreToolUse` payload's `tool_name` matches, the recorded state is overridden to `waiting` so blocking tools (e.g. `AskUserQuestion`) badge the row instead of staying in `working`. |
-| `awp internal unread-summary` | Print a tmux-status-bar badge of workspaces needing attention (waiting + notified counts). Empty when nothing's unread. |
+| `awp internal unread-summary` | Print a tmux-status-bar badge of workspace activity (working + waiting + notified counts). Empty when nothing's working and nothing's unread. |
 | `awp internal mark-read [--workspace <name>]` | Clear the unread badge for one workspace. Resolves from `$AWP_WORKSPACE` when no flag given. |
 
 `awp doctor` checks environment tooling, the agent hook installs, and (when run inside a repo) per-repo configuration. `--global` skips repo-scoped checks and scans every live `[awp]*` tmux session across all projects. `--fix` reinstalls missing hooks and re-injects `AWP_WORKSPACE` / `AWP_REPO` into any session that's missing them.
@@ -280,7 +280,7 @@ set -g status-interval 5
 set -g status-right '#(awp internal unread-summary) | %H:%M'
 ```
 
-`awp internal unread-summary` prints `▲ N` (waiting, yellow) and/or `● N` (notified) — empty output when nothing is pending, so the divider/clock collapses cleanly.
+`awp internal unread-summary` prints `● N` (working, green), `▲ N` (waiting, yellow), and/or `● N` (notified, grey) — empty output when nothing is working and nothing is pending, so the divider/clock collapses cleanly. Working is counted live regardless of the unread flag (mirroring the deck's always-on green dot), so the badge stays lit while agents are running, not just when something needs you.
 
 ## Async deck jobs
 
