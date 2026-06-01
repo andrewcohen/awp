@@ -235,7 +235,19 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		reporter.Log(fmt.Sprintf("tuicr session not yet registered for %s; agent will resolve at use time", slug))
 	}
 	diffRange := resolveDiffRange(runner, wsPath, base, pr.HeadSHA)
-	prompt := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir)
+	// Pull existing PR comments so the agent doesn't re-raise points
+	// reviewers (or bots) already made. Non-fatal: a review with no prior
+	// comments is the common case, and a fetch error shouldn't block the
+	// review — fall back to the empty list.
+	reporter.Step(fmt.Sprintf("Fetch existing comments for PR #%d", prNumber))
+	comments, cerr := gh.FetchPRComments(prNumber)
+	if cerr != nil {
+		reporter.Log(fmt.Sprintf("could not fetch existing comments: %v", cerr))
+		comments = nil
+	} else {
+		reporter.Log(fmt.Sprintf("found %d existing comment(s)", len(comments)))
+	}
+	prompt := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments)
 
 	if !have["agent"] {
 		reporter.Step("Open agent window")
@@ -355,7 +367,7 @@ func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 	return n, nil
 }
 
-func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dataDir string) string {
+func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dataDir string, comments []github.PRComment) string {
 	body := strings.TrimSpace(pr.Body)
 	if body == "" {
 		body = "(no description)"
@@ -382,7 +394,48 @@ func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dat
 		"{{slug}}", slug,
 		"{{session_path}}", pathField,
 		"{{data_dir}}", dataDir,
+		"{{comments}}", formatExistingComments(comments),
 	).Replace(reviewPromptTemplate)
+}
+
+// formatExistingComments renders the PR's existing comments as a compact
+// markdown list for the {{comments}} slot, so the reviewing agent can see
+// what's already been raised and avoid restating it. Returns a sentinel
+// line when there are none.
+func formatExistingComments(comments []github.PRComment) string {
+	if len(comments) == 0 {
+		return "(none — no prior comments on this PR)"
+	}
+	var b strings.Builder
+	for _, c := range comments {
+		author := c.Author
+		if author == "" {
+			author = "unknown"
+		}
+		switch c.Kind {
+		case "inline":
+			loc := c.Path
+			if c.Line > 0 {
+				loc = fmt.Sprintf("%s:%d", c.Path, c.Line)
+			}
+			fmt.Fprintf(&b, "- inline @%s [%s]: %s\n", author, loc, oneLine(c.Body))
+		case "review":
+			fmt.Fprintf(&b, "- review @%s: %s\n", author, oneLine(c.Body))
+		default:
+			fmt.Fprintf(&b, "- comment @%s: %s\n", author, oneLine(c.Body))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// oneLine collapses a comment body to a single line so the comment list
+// stays scannable. Internal newlines become " / ".
+func oneLine(s string) string {
+	fields := strings.FieldsFunc(s, func(r rune) bool { return r == '\n' || r == '\r' })
+	for i, f := range fields {
+		fields[i] = strings.TrimSpace(f)
+	}
+	return strings.Join(fields, " / ")
 }
 
 // resolveDiffRange returns the commit-SHA range that mirrors what tuicr

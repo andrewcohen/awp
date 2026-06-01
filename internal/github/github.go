@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 type Runner interface {
@@ -428,4 +429,90 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 		info.HeadRepoURL = fmt.Sprintf("https://github.com/%s/%s", info.HeadRepoOwner, info.HeadRepoName)
 	}
 	return info, nil
+}
+
+// PRComment is an existing comment on a PR — either a line-anchored
+// inline review comment (Path/Line set), a review summary, or a
+// top-level conversation comment.
+type PRComment struct {
+	Author string
+	Kind   string // "inline", "review", or "comment"
+	Path   string // "" unless line-anchored
+	Line   int    // 0 unless line-anchored
+	Body   string
+}
+
+// FetchPRComments returns the existing human/bot comments on a PR so a
+// reviewer can avoid restating points already raised. It makes two gh
+// calls: `gh pr view` for top-level conversation comments and review
+// summaries, and `gh api .../comments` for the line-anchored inline
+// review comments (which `gh pr view` omits). Both rely on gh resolving
+// the repo from the cwd, exactly as FetchPR does.
+//
+// Empty (or whitespace-only) comment bodies are dropped — review
+// submissions with no summary text produce these and carry no signal.
+func (c *Client) FetchPRComments(num int) ([]PRComment, error) {
+	var out []PRComment
+
+	viewRaw, err := c.runner.Run(
+		context.Background(), "",
+		"gh", "pr", "view", strconv.Itoa(num),
+		"--json", "comments,reviews",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh pr view %d comments: %w: %s", num, err, viewRaw)
+	}
+	var conv struct {
+		Comments []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body string `json:"body"`
+		} `json:"comments"`
+		Reviews []struct {
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Body string `json:"body"`
+		} `json:"reviews"`
+	}
+	if err := json.Unmarshal([]byte(viewRaw), &conv); err != nil {
+		return nil, fmt.Errorf("parse gh pr view comments: %w", err)
+	}
+	for _, r := range conv.Reviews {
+		if b := strings.TrimSpace(r.Body); b != "" {
+			out = append(out, PRComment{Author: r.Author.Login, Kind: "review", Body: b})
+		}
+	}
+	for _, cm := range conv.Comments {
+		if b := strings.TrimSpace(cm.Body); b != "" {
+			out = append(out, PRComment{Author: cm.Author.Login, Kind: "comment", Body: b})
+		}
+	}
+
+	inlineRaw, err := c.runner.Run(
+		context.Background(), "",
+		"gh", "api", "--paginate",
+		fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/comments", num),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh api pulls/%d/comments: %w: %s", num, err, inlineRaw)
+	}
+	var inline []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Path string `json:"path"`
+		Line int    `json:"line"`
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(inlineRaw), &inline); err != nil {
+		return nil, fmt.Errorf("parse inline pr comments: %w", err)
+	}
+	for _, ic := range inline {
+		if b := strings.TrimSpace(ic.Body); b != "" {
+			out = append(out, PRComment{Author: ic.User.Login, Kind: "inline", Path: ic.Path, Line: ic.Line, Body: b})
+		}
+	}
+	return out, nil
 }
