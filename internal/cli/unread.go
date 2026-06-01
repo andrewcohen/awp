@@ -9,10 +9,11 @@ import (
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
-// runUnreadSummary prints a tmux-status-bar friendly summary of workspaces
-// that need attention. Empty output (no newline) when nothing's unread, so
+// runUnreadSummary prints a tmux-status-bar friendly summary of workspace
+// activity. Empty output (no newline) when there's nothing to show, so
 // `status-right` strings collapse cleanly. Counts:
 //
+//	● N — working (green; live, shown regardless of the unread flag)
 //	▲ N — waiting on user (yellow)
 //	● N — notified (idle/exited after a turn, grey)
 func runUnreadSummary(out io.Writer) error {
@@ -21,31 +22,57 @@ func runUnreadSummary(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var waiting, notified int
+	_, err = fmt.Fprint(out, formatUnreadSummary(all))
+	return err
+}
+
+// formatUnreadSummary renders the tmux badge string from the full entry set.
+// Buckets are mutually exclusive and working wins first: a workspace that
+// resumed work but still carries a stale unread flag from a prior waiting
+// turn counts as working, not double-counted as notified. Working mirrors
+// the deck's always-on green dot — counted by status, not gated on unread.
+func formatUnreadSummary(all map[string]map[string]workspace.Entry) string {
+	var working, waiting, notified int
 	for _, entries := range all {
 		for _, e := range entries {
-			if !e.Unread {
+			switch {
+			case isWorkingStatus(e.Status):
+				working++
+			case !e.Unread:
 				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(e.Status), "waiting") {
+			case strings.EqualFold(strings.TrimSpace(e.Status), "waiting"):
 				waiting++
-			} else {
+			default:
 				notified++
 			}
 		}
 	}
-	if waiting == 0 && notified == 0 {
-		return nil
+	if working == 0 && waiting == 0 && notified == 0 {
+		return ""
 	}
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
+	if working > 0 {
+		parts = append(parts, fmt.Sprintf("#[fg=green]● %d#[default]", working))
+	}
 	if waiting > 0 {
 		parts = append(parts, fmt.Sprintf("#[fg=yellow]▲ %d#[default]", waiting))
 	}
 	if notified > 0 {
 		parts = append(parts, fmt.Sprintf("● %d", notified))
 	}
-	_, err = fmt.Fprint(out, strings.Join(parts, "  "))
-	return err
+	return strings.Join(parts, "  ")
+}
+
+// isWorkingStatus reports whether a status is an active "agent is doing
+// work" state. Mirrors deckui.alwaysShownStatus so the badge's green count
+// matches the deck's always-on green dot.
+func isWorkingStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "working", "in progress", "in_progress", "running":
+		return true
+	default:
+		return false
+	}
 }
 
 // runMarkRead clears the Unread flag for a single workspace. Resolves the
