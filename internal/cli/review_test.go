@@ -54,6 +54,11 @@ func TestBuildReviewPrompt(t *testing.T) {
 		"gh:acme/widget/pr/42",
 		"/Users/x/Library/Application Support/tuicr/reviews/sessions/abcd.json",
 		"/Users/x/Library/Application Support/tuicr",
+		[]github.PRComment{
+			{Author: "octocat", Kind: "inline", Path: "internal/foo/bar.go", Line: 42, Body: "nil deref here\nsecond line"},
+			{Author: "hubot", Kind: "review", Body: "LGTM overall"},
+			{Author: "carol", Kind: "comment", Body: "needs a test"},
+		},
 	)
 	if !strings.Contains(got, "PR #42") || !strings.Contains(got, "add thing") ||
 		!strings.Contains(got, "does X") || !strings.Contains(got, "abc123..def456") {
@@ -73,6 +78,12 @@ func TestBuildReviewPrompt(t *testing.T) {
 		"Closing summary",
 		"Report back in chat",
 		"a concrete failure mode you can name",
+		// Existing-comments section: each comment rendered, multi-line
+		// body collapsed to one line, and the non-redundancy guidance.
+		"inline @octocat [internal/foo/bar.go:42]: nil deref here / second line",
+		"review @hubot: LGTM overall",
+		"comment @carol: needs a test",
+		"Do not restate",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {
@@ -81,7 +92,7 @@ func TestBuildReviewPrompt(t *testing.T) {
 	}
 
 	empty := github.PRInfo{Number: 1, Title: "t", Body: "  "}
-	got = buildReviewPrompt(empty, "develop", "develop..@", "", "", "")
+	got = buildReviewPrompt(empty, "develop", "develop..@", "", "", "", nil)
 	if !strings.Contains(got, "(no description)") {
 		t.Fatalf("expected placeholder for empty body, got %q", got)
 	}
@@ -89,6 +100,10 @@ func TestBuildReviewPrompt(t *testing.T) {
 	// empty string in the template.
 	if !strings.Contains(got, "not yet registered") {
 		t.Fatalf("expected recovery prose for empty session path, got %q", got)
+	}
+	// No comments → sentinel line, not an empty section.
+	if !strings.Contains(got, "(none — no prior comments on this PR)") {
+		t.Fatalf("expected sentinel for empty comments, got %q", got)
 	}
 }
 
