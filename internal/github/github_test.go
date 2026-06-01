@@ -298,3 +298,44 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// routingRunner returns different output per gh subcommand so a single
+// test can exercise FetchPRComments' two calls (pr view + api).
+type routingRunner struct {
+	viewOut, apiOut string
+}
+
+func (r *routingRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
+	for _, a := range args {
+		if a == "api" {
+			return r.apiOut, nil
+		}
+	}
+	return r.viewOut, nil
+}
+
+func TestFetchPRComments(t *testing.T) {
+	r := &routingRunner{
+		viewOut: `{"comments":[{"author":{"login":"carol"},"body":"needs a test"},{"author":{"login":"x"},"body":"   "}],"reviews":[{"author":{"login":"hubot"},"body":"LGTM"},{"author":{"login":"y"},"body":""}]}`,
+		apiOut:  `[{"user":{"login":"octocat"},"path":"a/b.go","line":42,"body":"nil deref"},{"user":{"login":"z"},"path":"c.go","line":0,"body":"  "}]`,
+	}
+	got, err := New(r).FetchPRComments(7)
+	if err != nil {
+		t.Fatalf("FetchPRComments err: %v", err)
+	}
+	// Blank-body comments (the "   ", "", and "  " entries) are dropped;
+	// reviews come before conversation comments, inline last.
+	want := []PRComment{
+		{Author: "hubot", Kind: "review", Body: "LGTM"},
+		{Author: "carol", Kind: "comment", Body: "needs a test"},
+		{Author: "octocat", Kind: "inline", Path: "a/b.go", Line: 42, Body: "nil deref"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d comments, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("comment %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

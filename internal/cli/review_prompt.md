@@ -5,6 +5,22 @@ Please review PR #{{number}}: {{title}}
 Diff range: {{diff_range}}
 Base ref: {{base}}
 
+## Existing comments on this PR
+
+These comments are already on the PR. Read them before reviewing.
+
+{{comments}}
+
+Use them to stay non-redundant:
+
+- **Do not restate** a point an existing comment already makes — repeating
+  it is noise in the pane.
+- You may **agree or disagree** with any of them. If you think one is wrong,
+  say so in a `note` (cite the point you're pushing back on); the user wants
+  your independent read, not deference.
+- If a comment is partially right but misses something, add only the
+  incremental insight.
+
 ## How to review
 
 Your job is to read the diff and push findings into the tuicr review pane
