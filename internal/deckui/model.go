@@ -3759,6 +3759,12 @@ func (m Model) renderList(width int) string {
 	// with the status glyph that follows.
 	const prefixWidth = 4
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	// Collapsed rows render the glyph at the end of a slot one column
+	// narrower than the prefix slot, then a single space before the name.
+	// That keeps the name aligned with the project-header column (prefix
+	// slot + 1 space) while giving the status glyph a column of breathing
+	// room instead of hugging the name.
+	collapsedGlyphSlot := lipgloss.NewStyle().Width(prefixWidth - 1)
 	// Build the scrollable region (project headers + workspace rows) from
 	// the shared structural layout (deckBodyRows) so the renderer and the
 	// scroll math (deckBodyTotalRows / deckBodyCursorRow /
@@ -3887,10 +3893,11 @@ func (m Model) renderList(width int) string {
 			}
 			glyph := statusGlyph(item.Status, dim, item.Unread)
 			name := truncate(item.ProjectName, max(10, width-21))
-			// prefixSlot + glyph + name (no gap before the name) lands the
-			// project name in the project-header column; the glyph sits in
-			// the column just left of it.
-			line := fmt.Sprintf("%s%s%s", prefixSlot.Render(prefix), glyph, nameStyle.Render(name))
+			// collapsedGlyphSlot (prefixWidth-1) + glyph + " " + name lands
+			// the project name in the project-header column (prefixSlot + 1
+			// space) while leaving a single-column gap between the status
+			// glyph and the name so the glyph doesn't hug it.
+			line := fmt.Sprintf("%s%s %s", collapsedGlyphSlot.Render(prefix), glyph, nameStyle.Render(name))
 			if prGlyph := m.prGlyphForItem(item); prGlyph != "" {
 				line += " " + prGlyph
 			}
