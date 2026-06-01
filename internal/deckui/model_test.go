@@ -10,6 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func execCmd(t *testing.T, cmd tea.Cmd) tea.Msg {
@@ -2354,5 +2356,217 @@ func TestClampDeckViewportStickyHeaderShrinksWindow(t *testing.T) {
 	if cursorRow < yoff || cursorRow >= yoff+effectiveCap {
 		t.Errorf("cursor row %d not inside sticky-aware window [%d, %d); body=%d",
 			cursorRow, yoff, yoff+effectiveCap, deckBodyTotalRows(m.items()))
+	}
+}
+
+func TestCollapsedProjectsDetectsDefaultOnly(t *testing.T) {
+	items := []Item{
+		{ProjectName: "alpha", WorkspaceName: "default"},          // collapses
+		{ProjectName: "beta", WorkspaceName: "default"},           // does NOT — has a sibling
+		{ProjectName: "beta", WorkspaceName: "feat"},              //
+		{ProjectName: "gamma", WorkspaceName: "feat"},             // single, but not "default"
+		{ProjectName: "delta", WorkspaceName: "  default  "},      // trimmed match → collapses
+	}
+	got := collapsedProjects(items)
+	want := map[string]bool{"alpha": true, "delta": true}
+	if len(got) != len(want) {
+		t.Fatalf("collapsedProjects = %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("expected project %q to collapse", k)
+		}
+	}
+}
+
+func TestDeckBodyRowsCollapseLayout(t *testing.T) {
+	// items() sorts by (project, displayLabel); with no PR cache the
+	// label is the workspace name. So the order is:
+	//   alpha/default   (collapses → 1 row)
+	//   beta/default, beta/feat   (header + 2×2 rows)
+	items := []Item{
+		{ProjectName: "alpha", WorkspaceName: "default", Bookmark: "main"},
+		{ProjectName: "beta", WorkspaceName: "default"},
+		{ProjectName: "beta", WorkspaceName: "feat"},
+	}
+	m := New(items, nil)
+	got := m.items()
+
+	rows := deckBodyRows(got, collapsedProjects(got))
+	wantKinds := []deckRowKind{
+		deckRowCollapsed, // alpha/default
+		deckRowSpacer,    // between projects
+		deckRowHeader,    // beta
+		deckRowPrimary,   // beta/default
+		deckRowMeta,      //
+		deckRowPrimary,   // beta/feat
+		deckRowMeta,      //
+	}
+	if len(rows) != len(wantKinds) {
+		t.Fatalf("deckBodyRows length = %d, want %d (%v)", len(rows), len(wantKinds), rows)
+	}
+	for i, want := range wantKinds {
+		if rows[i].kind != want {
+			t.Errorf("row %d kind = %d, want %d", i, rows[i].kind, want)
+		}
+	}
+	if total := deckBodyTotalRows(got); total != 7 {
+		t.Errorf("deckBodyTotalRows = %d, want 7", total)
+	}
+
+	// Cursor → primary/collapsed row index.
+	cases := []struct{ cursor, row, header int }{
+		{0, 0, 0}, // alpha collapsed: row is its own header
+		{1, 3, 2}, // beta/default: primary at body[3], header at body[2]
+		{2, 5, 2}, // beta/feat
+	}
+	for _, c := range cases {
+		if r := deckBodyCursorRow(got, c.cursor); r != c.row {
+			t.Errorf("deckBodyCursorRow(cursor=%d) = %d, want %d", c.cursor, r, c.row)
+		}
+		if h := deckBodyHeaderRowForCursor(got, c.cursor); h != c.header {
+			t.Errorf("deckBodyHeaderRowForCursor(cursor=%d) = %d, want %d", c.cursor, h, c.header)
+		}
+	}
+}
+
+func TestFitRowClampsToOneLine(t *testing.T) {
+	long := strings.Repeat("x", 200) + " trailing words that would otherwise wrap"
+	got := fitRow(long, 40)
+	if strings.Contains(got, "\n") {
+		t.Errorf("fitRow must not wrap; got %d lines", strings.Count(got, "\n")+1)
+	}
+	if w := lipgloss.Width(got); w != 40 {
+		t.Errorf("fitRow width = %d, want 40 (padded + clamped)", w)
+	}
+	// Embedded newlines collapse to spaces rather than splitting the row.
+	if multi := fitRow("alpha\nbeta", 40); strings.Contains(multi, "\n") {
+		t.Errorf("fitRow should collapse embedded newlines; got %q", multi)
+	}
+}
+
+func TestRenderListNeverWrapsRows(t *testing.T) {
+	items := []Item{
+		{ProjectName: "web", WorkspaceName: strings.Repeat("long-", 40), Status: "idle"},
+		{ProjectName: "alpha", WorkspaceName: "default", Status: "working", Bookmark: strings.Repeat("br/", 40)},
+	}
+	m := New(items, nil)
+	for _, w := range []int{24, 60, 120} {
+		m.width = w
+		m.height = 40
+		(&m).clampDeckViewport()
+		out := m.renderList(m.width)
+		for i, line := range strings.Split(out, "\n") {
+			if lw := lipgloss.Width(line); lw > w {
+				t.Errorf("width=%d: rendered line %d is %d cols wide (wrap/overflow): %q", w, i, lw, line)
+			}
+		}
+	}
+}
+
+func TestRenderListCollapsedAlignsWithProjectHeader(t *testing.T) {
+	// A collapsed default-only project has no header line, so its project
+	// name must line up with the project-header column — otherwise it
+	// reads as a workspace of the project above it.
+	items := []Item{
+		{ProjectName: "frontend", WorkspaceName: "dashboard", Status: "idle"},
+		{ProjectName: "frontend", WorkspaceName: "feat", Status: "idle"},
+		{ProjectName: "zapi", WorkspaceName: "default", Status: "idle"},
+	}
+	m := New(items, nil)
+	m.width = 80
+	m.height = 40
+	(&m).clampDeckViewport()
+	out := m.renderList(m.width)
+
+	headerCol, collapsedCol := -1, -1
+	for _, line := range strings.Split(out, "\n") {
+		plain := ansi.Strip(line)
+		if i := strings.Index(plain, "frontend"); i >= 0 && headerCol < 0 {
+			headerCol = i
+		}
+		if i := strings.Index(plain, "zapi"); i >= 0 {
+			collapsedCol = i
+		}
+	}
+	if headerCol < 0 || collapsedCol < 0 {
+		t.Fatalf("expected both a 'frontend' header and a collapsed 'zapi' row; header=%d collapsed=%d", headerCol, collapsedCol)
+	}
+	if headerCol != collapsedCol {
+		t.Errorf("collapsed project name starts at col %d; project header name at col %d — must align", collapsedCol, headerCol)
+	}
+}
+
+func TestRenderListCollapsedDoesNotShiftInFindMode(t *testing.T) {
+	// Entering find mode adds a hint to the prefix; the collapsed project
+	// name must stay in the same column (the hint lives inside the fixed
+	// prefix slot, like project headers).
+	items := []Item{
+		{ProjectName: "zapi", WorkspaceName: "default", Status: "idle", Bookmark: "main"},
+	}
+	nameCol := func(m Model) int {
+		(&m).clampDeckViewport()
+		for _, line := range strings.Split(m.renderList(m.width), "\n") {
+			if i := strings.Index(ansi.Strip(line), "zapi"); i >= 0 {
+				return i
+			}
+		}
+		return -1
+	}
+
+	normal := New(items, nil)
+	normal.width, normal.height = 80, 40
+
+	find := New(items, nil)
+	find.width, find.height = 80, 40
+	find.findMode = true
+	find.findStage = findStageProject
+	find.findProjectHints = map[string]string{"zapi": "ab"} // 2-char hint → widest "[ab]"
+
+	normalCol, findCol := nameCol(normal), nameCol(find)
+	if normalCol < 0 || findCol < 0 {
+		t.Fatalf("collapsed name not found; normal=%d find=%d", normalCol, findCol)
+	}
+	if normalCol != findCol {
+		t.Errorf("collapsed name shifted entering find mode: normal col %d, find col %d", normalCol, findCol)
+	}
+}
+
+func TestRenderListCollapsesDefaultOnlyProject(t *testing.T) {
+	items := []Item{
+		{ProjectName: "alpha", WorkspaceName: "default", Status: "idle", Bookmark: "main"},
+		{ProjectName: "beta", WorkspaceName: "default", Status: "idle"},
+		{ProjectName: "beta", WorkspaceName: "feat", Status: "idle"},
+	}
+	m := New(items, nil)
+	m.width = 120
+	m.height = 40
+	(&m).clampDeckViewport()
+	out := m.renderList(m.width)
+
+	// The collapsed alpha row carries the project name, status glyph, and
+	// meta (branch) all on ONE line. ANSI color codes don't span the
+	// substrings, so a per-line Contains check is sound.
+	var alphaLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "alpha") {
+			alphaLine = line
+			break
+		}
+	}
+	if alphaLine == "" {
+		t.Fatal("no line containing project name 'alpha' rendered")
+	}
+	if !strings.Contains(alphaLine, "main") {
+		t.Errorf("collapsed alpha row should carry its meta (branch 'main') inline; got %q", alphaLine)
+	}
+
+	// The non-collapsed project still renders its own header line plus a
+	// separate workspace row — i.e. 'feat' must not share beta's header
+	// line.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "feat") && strings.Contains(line, "beta") {
+			t.Errorf("beta header and 'feat' workspace should be on separate lines; got %q", line)
+		}
 	}
 }

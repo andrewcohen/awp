@@ -23,6 +23,7 @@ type deckStyles struct {
 	Spinner  lipgloss.Style
 	Strong   lipgloss.Style
 	Bar      lipgloss.Style // the ┃ selection bar prefix
+	Label    lipgloss.Style // plain terminal-default fg — a normal/active (un-muted) row label
 }
 
 func newDeckStyles() deckStyles {
@@ -37,5 +38,6 @@ func newDeckStyles() deckStyles {
 		Spinner:  lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner)),
 		Strong:   lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong)).Bold(true),
 		Bar:      lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
+		Label:    lipgloss.NewStyle(),
 	}
 }
