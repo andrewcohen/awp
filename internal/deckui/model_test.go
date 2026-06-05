@@ -2408,6 +2408,29 @@ func TestCollapsedProjectsDetectsDefaultOnly(t *testing.T) {
 	}
 }
 
+func TestCollapsedProjectsOnlyWhenQuiet(t *testing.T) {
+	// A default-only project collapses only while its status dot would
+	// be blank. A visible dot (working, or unread waiting/idle) keeps
+	// the full header + workspace + meta layout.
+	items := []Item{
+		{ProjectName: "quiet", WorkspaceName: "default", Status: "idle"},                  // collapses
+		{ProjectName: "busy", WorkspaceName: "default", Status: "working"},                // dot → uncollapsed
+		{ProjectName: "pinged", WorkspaceName: "default", Status: "waiting", Unread: true}, // dot → uncollapsed
+		{ProjectName: "done", WorkspaceName: "default", Status: "idle", Unread: true},      // dot → uncollapsed
+		{ProjectName: "gone", WorkspaceName: "default", Status: "exited", Unread: true},    // exited never dots → collapses
+	}
+	got := collapsedProjects(items)
+	want := map[string]bool{"quiet": true, "gone": true}
+	if len(got) != len(want) {
+		t.Fatalf("collapsedProjects = %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("expected project %q to collapse", k)
+		}
+	}
+}
+
 func TestDeckBodyRowsCollapseLayout(t *testing.T) {
 	// items() sorts by (project, displayLabel); with no PR cache the
 	// label is the workspace name. So the order is:

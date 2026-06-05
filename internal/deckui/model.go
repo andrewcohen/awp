@@ -3775,17 +3775,13 @@ func (m Model) renderList(width int) string {
 	projectHints, rowHints := m.findHints()
 	// Reserve a fixed-width prefix slot at all times so workspace rows
 	// and project headers don't shift horizontally between modes (no
-	// find / 1-char hint / 2-char hint). 4 cols also leaves 1 col of
-	// breathing room after a 3-char "[a]" hint so it doesn't collide
-	// with the status glyph that follows.
-	const prefixWidth = 4
+	// find / 1-char hint / 2-char hint). 2 cols is exactly a two-char
+	// easymotion hint (rendered bare via renderDeckHint — no brackets)
+	// or the ┃-plus-space cursor bar, which keeps the whole body
+	// hugging the left edge; the status glyph sits one space after the
+	// slot, in the same column as the project-header names.
+	const prefixWidth = 2
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
-	// Collapsed rows render the glyph at the end of a slot one column
-	// narrower than the prefix slot, then a single space before the name.
-	// That keeps the name aligned with the project-header column (prefix
-	// slot + 1 space) while giving the status glyph a column of breathing
-	// room instead of hugging the name.
-	collapsedGlyphSlot := lipgloss.NewStyle().Width(prefixWidth - 1)
 	// Build the scrollable region (project headers + workspace rows) from
 	// the shared structural layout (deckBodyRows) so the renderer and the
 	// scroll math (deckBodyTotalRows / deckBodyCursorRow /
@@ -3816,7 +3812,7 @@ func (m Model) renderList(width int) string {
 			}
 			hintStr := ""
 			if hint, ok := projectHints[r.project]; ok {
-				hintStr = renderFindHint(hint)
+				hintStr = renderDeckHint(hint)
 			}
 			headerLine := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), r.project)
 			body = append(body, headerStyle.Render(headerLine))
@@ -3825,7 +3821,7 @@ func (m Model) renderList(width int) string {
 			dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
 			prefix := "  "
 			if hint, ok := rowHints[r.itemIndex]; ok {
-				prefix = renderFindHint(hint)
+				prefix = renderDeckHint(hint)
 			}
 			// Style the label segment directly. The dot is rendered with
 			// its own ANSI color sequence ending in a reset, which would
@@ -3839,7 +3835,7 @@ func (m Model) renderList(width int) string {
 			} else if dim {
 				labelStyle = s.Muted
 			}
-			label := truncate(m.displayLabel(item), max(10, width-21))
+			label := truncate(m.displayLabel(item), max(10, width-19))
 			// Status is canonical in JSON, so render the stored glyph
 			// immediately on the fast first paint. The only tmux-derived
 			// override is `working` → `exited` (agent shell death — Claude
@@ -3874,40 +3870,39 @@ func (m Model) renderList(width int) string {
 			metaText := truncate(m.metaLine(item), metaRoom)
 			body = append(body, fitRow(metaIndent+s.Muted.Render(metaText), width-2))
 		case deckRowCollapsed:
-			// Default-only project: fold the project header, the lone
-			// "default" workspace row, and its meta line into one row.
-			// The project name stands in for the workspace label (the
-			// "default" name carries no information), with the status +
-			// PR glyphs and the meta text inline after it.
+			// Quiet default-only project: fold the project header, the
+			// lone "default" workspace row, and its meta line into one
+			// row. The project name stands in for the workspace label
+			// (the "default" name carries no information), with the PR
+			// glyphs and the meta text inline after it. Projects whose
+			// default workspace has a visible status dot never collapse
+			// (see collapsedProjects), so this row carries no dot.
 			item := items[r.itemIndex]
-			dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
-			// The project name is colored like a project header (muted, or
-			// accent when it's the active find target) so the row reads as
-			// project-level rather than a workspace label — otherwise a
-			// collapsed row blends into the workspace rows above it.
+			// The project name is colored like a project header (muted) by
+			// default so the row reads as project-level rather than a
+			// workspace label — otherwise a collapsed row blends into the
+			// workspace rows above it.
 			nameStyle := s.Muted
-			// A collapsed row has no separate header line, so it must read
-			// as a top-level project: the project NAME lines up with the
-			// project-header name column, with the status glyph immediately
-			// to its left. (Landing the glyph in the workspace-glyph column
-			// instead made the row look like a workspace of the project
-			// above it.) The find hint / cursor bar live in the same fixed
-			// 4-col prefixSlot that project headers use, so the row doesn't
-			// shift when find mode toggles a hint in or out.
+			// The find hint / cursor bar live in the same fixed prefix
+			// slot that project headers use, so the row doesn't shift
+			// when find mode toggles a hint in or out. No status glyph:
+			// only quiet projects collapse (collapsedProjects gates on
+			// statusGlyphVisible), so the dot would always be blank —
+			// dropping it lands the project name exactly in the
+			// project-header name column.
 			prefix := "  "
 			hinted := false
 			if hint, ok := rowHints[r.itemIndex]; ok {
-				prefix, hinted = renderFindHint(hint), true
+				prefix, hinted = renderDeckHint(hint), true
 			} else if hint, ok := projectHints[item.ProjectName]; ok {
-				prefix, hinted = renderFindHint(hint), true
+				prefix, hinted = renderDeckHint(hint), true
 			}
 			// A hint on the row means find mode has it as a live target —
 			// one keystroke lands the cursor straight on the workspace
 			// (collapsed projects skip the workspace stage), so light the
 			// name up to make it pop while find mode is up. Use the same
 			// plain default-fg style as a normal/active row label so the
-			// highlight matches the other lit rows exactly (not bold, not a
-			// second accent color).
+			// highlight matches the other lit rows exactly.
 			if hinted {
 				nameStyle = s.Label
 			}
@@ -3915,13 +3910,8 @@ func (m Model) renderList(width int) string {
 				prefix = s.Bar.Render("┃") + " "
 				nameStyle = s.Selected
 			}
-			glyph := statusGlyph(item.Status, dim, item.Unread)
-			name := truncate(item.ProjectName, max(10, width-21))
-			// collapsedGlyphSlot (prefixWidth-1) + glyph + " " + name lands
-			// the project name in the project-header column (prefixSlot + 1
-			// space) while leaving a single-column gap between the status
-			// glyph and the name so the glyph doesn't hug it.
-			line := fmt.Sprintf("%s%s %s", collapsedGlyphSlot.Render(prefix), glyph, nameStyle.Render(name))
+			name := truncate(item.ProjectName, max(10, width-19))
+			line := fmt.Sprintf("%s %s", prefixSlot.Render(prefix), nameStyle.Render(name))
 			if prGlyph := m.prGlyphForItem(item); prGlyph != "" {
 				line += " " + prGlyph
 			}
@@ -4143,7 +4133,7 @@ type deckRowKind int
 const (
 	deckRowHeader    deckRowKind = iota // project name on its own line
 	deckRowSpacer                       // blank line between projects
-	deckRowPrimary                      // item: status glyph + label
+	deckRowPrimary                      // item: status-tinted label
 	deckRowMeta                         // item: muted @author · branch · …
 	deckRowCollapsed                    // default-only project folded into one line
 )
@@ -4171,9 +4161,18 @@ func collapsedProjects(items []Item) map[string]bool {
 	}
 	out := map[string]bool{}
 	for _, it := range items {
-		if counts[it.ProjectName] == 1 && strings.TrimSpace(it.WorkspaceName) == "default" {
-			out[it.ProjectName] = true
+		if counts[it.ProjectName] != 1 || strings.TrimSpace(it.WorkspaceName) != "default" {
+			continue
 		}
+		// Only quiet rows collapse: a default workspace whose agent has
+		// a visible status dot (working, or unread waiting/idle) renders
+		// in the full header + workspace + meta layout so the dot sits
+		// in its usual column and the row reads like any other active
+		// workspace. Collapsed rows therefore never carry a dot.
+		if statusGlyphVisible(it.Status, it.Unread) {
+			continue
+		}
+		out[it.ProjectName] = true
 	}
 	return out
 }
@@ -5307,14 +5306,21 @@ func (m Model) prLocalStaleGlyphForItem(item Item) string {
 // stale unread flag from an old state file — the agent is gone, so there's
 // nothing for the user to act on.
 func statusGlyph(status string, dim bool, unread bool) string {
-	if strings.EqualFold(strings.TrimSpace(status), "exited") {
-		return " "
-	}
-	if !alwaysShownStatus(status) && !unread {
+	if !statusGlyphVisible(status, unread) {
 		return " "
 	}
 	color := statusColor(status, dim, unread)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("●")
+}
+
+// statusGlyphVisible reports whether statusGlyph renders a dot for this
+// status/unread combination. Shared with collapsedProjects so "has a
+// dot" and "stays uncollapsed" can never disagree.
+func statusGlyphVisible(status string, unread bool) bool {
+	if strings.EqualFold(strings.TrimSpace(status), "exited") {
+		return false
+	}
+	return alwaysShownStatus(status) || unread
 }
 
 func alwaysShownStatus(status string) bool {
@@ -5349,6 +5355,17 @@ func renderFindHint(hint string) string {
 		Bold(true).
 		Foreground(lipgloss.Color(colWarning)).
 		Render("[" + hint + "]")
+}
+
+// renderDeckHint renders an easymotion hint for the deck body's slim
+// 2-col prefix slot: the hint characters alone, bold warning, no
+// brackets (a two-char hint fills the slot exactly). The mini-deck
+// keeps the bracketed renderFindHint form in its wider 4-col slot.
+func renderDeckHint(hint string) string {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color(colWarning)).
+		Render(hint)
 }
 
 // findHintStep advances one keystroke through an easymotion lookup
