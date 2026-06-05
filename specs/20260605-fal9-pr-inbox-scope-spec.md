@@ -4,7 +4,7 @@
 - **Spec ID**: `20260605-fal9`
 - **Feature name**: PR inbox scope (replaces the open-PR deck scope)
 - **Owner**: andrewcohen
-- **Status**: Planned
+- **Status**: In Progress (implementation landed; human QA pending)
 - **Last updated**: 2026-06-05
 
 ## Goal
@@ -57,9 +57,14 @@ needed to do the same.
   → inbox)`).
 
 ### Out of scope (v1)
-- Showing cached PRs that have no local workspace (with a "create
-  review workspace" enter-action). Natural v2 — the status cache
-  already holds them.
+- **Workspace-less PRs in "Needs your review" (planned v2).** The
+  bucket should eventually list review-requested PRs you haven't
+  pulled down yet — the status cache already holds them. Those rows
+  need a distinct "no workspace yet" rendering, and `enter` on one
+  should trigger the review flow (`awp review <n>`: create the review
+  workspace, prime the agent) instead of summoning a session. Decided
+  2026-06-05 to land the workspaces-only pass first and layer this on
+  once the bucketed layout is right.
 - "Needs your team's review" (requires team-membership data we don't
   fetch).
 - Re-bucketing the review picker (`R`) — it stays a flat recency list.
@@ -90,8 +95,12 @@ needed to do the same.
     …
   ```
 
-- Cursor movement, easymotion hints, meta lines, and per-row PR glyph
-  clusters are unchanged — only grouping/headers/sorting differ.
+- Cursor movement, meta lines, and per-row PR glyph clusters are
+  unchanged — only grouping/headers/sorting differ.
+- Find mode (`f`) skips the project stage in this scope — there are no
+  project headers to hint, so every row is hinted directly (mini-deck
+  style, hint names project-qualified to avoid collisions). Backspace
+  cancels rather than returning to a project stage that never ran.
 - The collapsed default-only-project row treatment does not apply in
   inbox scope (collapse is a project-grouping concept).
 
@@ -117,6 +126,17 @@ needed to do the same.
 - 2026-06-05: Initial draft. Decisions: workspaces-only row source;
   action-first bucket order; hide empty buckets; include drafts;
   `[project]` chips replace project headers in this scope.
+- 2026-06-05: Marked workspace-less "Needs your review" rows as planned
+  v2 with enter-triggers-review semantics (user decision: get the
+  workspaces-only pass right first).
+- 2026-06-05: Implementation notes. `--scope` keeps `pr` / `open-pr`
+  as parse aliases for `inbox` (docs advertise `inbox` only). The
+  inbox filter resolves PRs via `resolvePRStatus`, so a pinned
+  `PRNumber` (from `awp review`) qualifies even with no bookmark on
+  file — a superset of the old bookmark-only filter. Find mode is
+  single-stage in this scope (see UX). Scroll-math helpers now take
+  precomputed `deckBodyRows` so renderer and scroll math share one
+  layout call.
 
 ## Implementation Plan
 1. **Bucket classifier** — `prInboxBucket(s PRStatus) inboxBucket`
@@ -143,21 +163,22 @@ needed to do the same.
    `deckKeyGroups`.
 
 ## Acceptance Criteria
-- [ ] `P` cycles `all → attention → inbox`; the old `open PR` label is
+- [x] `P` cycles `all → attention → inbox`; the old `open PR` label is
       gone everywhere (status line, help, README).
-- [ ] Inbox scope groups rows under bucket headers with counts, in
+- [x] Inbox scope groups rows under bucket headers with counts, in
       action-first order; empty buckets don't render.
-- [ ] Draft PR workspaces appear under "Your drafts" (they were
+- [x] Draft PR workspaces appear under "Your drafts" (they were
       invisible in the old open-PR scope).
-- [ ] Every workspace visible in the old open-PR scope is still visible
+- [x] Every workspace visible in the old open-PR scope is still visible
       in inbox scope (catch-all bucket holds non-mine,
       non-review-requested open PRs).
-- [ ] Rows show a `[project]` chip; meta lines and glyph clusters are
+- [x] Rows show a `[project]` chip; meta lines and glyph clusters are
       unchanged.
-- [ ] Bucket classification has table-driven unit tests; row assembly
+- [x] Bucket classification has table-driven unit tests; row assembly
       has a grouping test.
-- [ ] Cursor/easymotion/find work across bucket sections exactly as
-      they do across project sections.
+- [x] Cursor/easymotion/find work across bucket sections (find is
+      single-stage in this scope by design — see UX). Manual pass
+      still owed in QA.
 
 ## QA / Human Review Test Plan
 ### Setup
@@ -193,6 +214,6 @@ needed to do the same.
   the same account/day.
 
 ## Validation
-- [ ] `go test ./...`
-- [ ] `go vet ./...`
-- [ ] `go build ./...`
+- [x] `go test ./...`
+- [x] `go vet ./...`
+- [x] `go build ./...`
