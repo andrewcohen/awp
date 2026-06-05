@@ -55,7 +55,7 @@ func newDeckKeyMap() deckKeyMap {
 		Up:            key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "move cursor")),
 		HalfPageDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "jump ½ page down")),
 		HalfPageUp:    key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "jump ½ page up")),
-		ScopeCycle:    key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "cycle scope (all → attention → open PR)")),
+		ScopeCycle:    key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "cycle scope (all → attention → inbox)")),
 		Enter:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "summon (create or focus the workspace tmux session)")),
 		AgentWindow:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),
 		EditorWindow:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "editor window ($EDITOR)")),

@@ -46,22 +46,22 @@ func scheduleDevURLTick() tea.Cmd {
 }
 
 type Item struct {
-	ProjectName   string
-	WorkspaceName string
-	Path          string
-	RepoRoot      string
-	Bookmark      string // jj bookmark associated with this workspace (still used for the new-workspace form, not for PR lookup)
-	PRNumber      int    // PR this workspace is associated with; when > 0, used to resolve PR status
-	Status        string
-	Unread        bool
-	PromptPreview string
-	HeadDesc          string
-	HeadChangeID      string // jj short change-id of the working-copy commit
-	BookmarkCommitID  string // full hex commit-id of the workspace's local bookmark; compared to PR head SHA on GitHub to detect "behind remote" / re-review
-	TmuxWindow    string
-	SessionName   string
-	Active        bool
-	Current       bool
+	ProjectName      string
+	WorkspaceName    string
+	Path             string
+	RepoRoot         string
+	Bookmark         string // jj bookmark associated with this workspace (still used for the new-workspace form, not for PR lookup)
+	PRNumber         int    // PR this workspace is associated with; when > 0, used to resolve PR status
+	Status           string
+	Unread           bool
+	PromptPreview    string
+	HeadDesc         string
+	HeadChangeID     string // jj short change-id of the working-copy commit
+	BookmarkCommitID string // full hex commit-id of the workspace's local bookmark; compared to PR head SHA on GitHub to detect "behind remote" / re-review
+	TmuxWindow       string
+	SessionName      string
+	Active           bool
+	Current          bool
 }
 
 type Action int
@@ -442,7 +442,6 @@ func newDeckViewport() viewport.Model {
 	return v
 }
 
-
 // newProgressViewport returns the viewport for the progress modal's
 // streaming log. pgup/pgdn and ctrl+u/ctrl+d scroll back through
 // history while syncProgressViewport auto-follows the tail when the
@@ -520,28 +519,29 @@ type StateChangedMsg struct{}
 
 // Scope controls which items are shown in the deck list. Cycled with `P`;
 // not persisted unless an initial scope is supplied via `awp deck --scope`.
-// Declaration order is the cycle order (all → attention → open PR → all).
+// Declaration order is the cycle order (all → attention → inbox → all).
 type Scope int
 
 const (
 	ScopeAll       Scope = iota // every known workspace across all projects
 	ScopeAttention              // matches the mini-deck filter: active agent or unread notification
-	ScopeOpenPR                 // workspaces whose bookmark maps to a non-draft open PR
+	ScopeInbox                  // open-PR workspaces sectioned by next-move bucket (GitHub-inbox style)
 )
 
 const scopeCount = 3
 
 // ParseScope maps the user-facing names accepted by `awp deck --scope`
 // onto Scope values. Names are matched case-insensitively; hyphens and
-// spaces are interchangeable so both `open-pr` and `open pr` work.
+// spaces are interchangeable. `pr` and the legacy `open-pr` are accepted
+// as aliases for `inbox`.
 func ParseScope(s string) (Scope, bool) {
 	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(s, " ", "-"))) {
 	case "all":
 		return ScopeAll, true
 	case "attention":
 		return ScopeAttention, true
-	case "open-pr", "pr":
-		return ScopeOpenPR, true
+	case "inbox", "pr", "open-pr":
+		return ScopeInbox, true
 	}
 	return ScopeAll, false
 }
@@ -658,6 +658,70 @@ type PRStatus struct {
 	Mine              bool
 }
 
+// inboxBucket sections the inbox scope the way GitHub's pull-request
+// inbox does: by what the deck owner's next move is. Declaration order
+// is render order — most urgent next-move first.
+type inboxBucket int
+
+const (
+	inboxNeedsYourReview  inboxBucket = iota // someone else's PR, your review is the blocker
+	inboxNeedsAction                         // your PR, something to fix (feedback, CI, conflicts)
+	inboxReadyToMerge                        // your PR, approved + green — go press the button
+	inboxWaitingForReview                    // your PR, ball in the reviewers' court
+	inboxYourDrafts                          // your PR, still being drawn up
+	inboxOtherOpen                           // open PR that's neither yours nor awaiting you
+	inboxBucketCount
+)
+
+func inboxBucketLabel(b inboxBucket) string {
+	switch b {
+	case inboxNeedsYourReview:
+		return "Needs your review"
+	case inboxNeedsAction:
+		return "Needs action"
+	case inboxReadyToMerge:
+		return "Ready to merge"
+	case inboxWaitingForReview:
+		return "Waiting for review"
+	case inboxYourDrafts:
+		return "Your drafts"
+	default:
+		return "Other open PRs"
+	}
+}
+
+// prInboxBucket classifies an OPEN PR into its inbox section. Callers
+// filter merged/closed PRs out of the inbox scope before classifying.
+//
+// Precedence, locked by tests: a review request always wins (it names
+// you regardless of the PR's own state); within your own PRs the draft
+// check precedes CI/decision checks — a draft isn't submitted for
+// review yet, so its CI state is informational, not actionable.
+func prInboxBucket(s PRStatus) inboxBucket {
+	if s.ReviewRequested || s.ReviewRerequested {
+		return inboxNeedsYourReview
+	}
+	if !s.Mine {
+		return inboxOtherOpen
+	}
+	if s.IsDraft {
+		return inboxYourDrafts
+	}
+	if s.ReviewDecision == PRReviewChangesRequested ||
+		s.CIState == PRCIFailing ||
+		s.MergeStateStatus == PRMergeStateDirty ||
+		s.MergeStateStatus == PRMergeStateBehind {
+		return inboxNeedsAction
+	}
+	if s.IsInMergeQueue ||
+		(s.ReviewDecision == PRReviewApproved &&
+			(s.CIState == PRCIPassing || s.CIState == PRCINone) &&
+			s.MergeStateStatus == PRMergeStateClean) {
+		return inboxReadyToMerge
+	}
+	return inboxWaitingForReview
+}
+
 // PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more
 // repos (one gh call per repo, parallel). The fetcher streams one
 // PRStatusRepoDoneMsg per repo as it completes (so the per-repo glyphs
@@ -698,9 +762,9 @@ const (
 const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
 type Model struct {
-	itemsAll           []Item
-	scope              Scope
-	cursor             int
+	itemsAll []Item
+	scope    Scope
+	cursor   int
 	// keymap is the single source of truth for the deck's row-mode key
 	// bindings. Update routes through key.Matches against these
 	// fields; renderHelp / deckKeyGroups derive their visible labels
@@ -716,49 +780,49 @@ type Model struct {
 	// renderList syncs it into deckViewport.YOffset after content is
 	// loaded so viewport's internal clamp doesn't reset it to zero
 	// against an empty content buffer.
-	deckViewport viewport.Model
-	deckYOffset  int
-	width              int
-	height             int
-	status             string
-	handler            Handler
-	filterInput        textinput.Model
-	filtering          bool
-	filter             string
-	confirmDelete      bool
-	deleteIsProject    bool // confirmDelete branch: project-level delete (typed confirmation)
-	deleteInput        textinput.Model
-	deleteErr          string
-	helpMode           bool
-	deleteTarget       Item
-	pendingSelect      Item // after next refresh, cursor jumps to this (project, workspace) if present
-	findMode           bool
-	findStage          findStage
-	findProject        string
-	findProjectHints   map[string]string
-	findProjectLookup  map[string]string
-	findProjectPrefix  map[rune]bool
-	findRowHints       map[int]string
-	findRowLookup      map[string]int
-	findRowPrefix      map[rune]bool
-	findPendingPrefix  rune
-	refresher          Refresher
-	refreshing         bool // true while a m.refresher() command is in flight
-	refreshPending     bool // a change signal arrived mid-refresh; re-run on completion
-	hookInstaller      HookInstaller
-	stateWatcher       StateChangeWatcher
-	prFetcher          PRFetcher
-	prStatusFetcher    PRStatusFetcher
-	prStatusByRepo     map[string]map[string]PRStatus // repoRoot → headRefName → status
-	prStatusFetchedAt  map[string]time.Time           // repoRoot → wall clock of last successful fetch
-	bookmarkFetcher    BookmarkFetcher
-	trunkResolver      TrunkResolver
-	stateEditor        StateEditorLauncher
-	reviewMode         bool
-	reviewLoading      bool
-	reviewList         list.Model
-	reviewDelegate     *reviewItemDelegate
-	prMenuMode bool
+	deckViewport      viewport.Model
+	deckYOffset       int
+	width             int
+	height            int
+	status            string
+	handler           Handler
+	filterInput       textinput.Model
+	filtering         bool
+	filter            string
+	confirmDelete     bool
+	deleteIsProject   bool // confirmDelete branch: project-level delete (typed confirmation)
+	deleteInput       textinput.Model
+	deleteErr         string
+	helpMode          bool
+	deleteTarget      Item
+	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
+	findMode          bool
+	findStage         findStage
+	findProject       string
+	findProjectHints  map[string]string
+	findProjectLookup map[string]string
+	findProjectPrefix map[rune]bool
+	findRowHints      map[int]string
+	findRowLookup     map[string]int
+	findRowPrefix     map[rune]bool
+	findPendingPrefix rune
+	refresher         Refresher
+	refreshing        bool // true while a m.refresher() command is in flight
+	refreshPending    bool // a change signal arrived mid-refresh; re-run on completion
+	hookInstaller     HookInstaller
+	stateWatcher      StateChangeWatcher
+	prFetcher         PRFetcher
+	prStatusFetcher   PRStatusFetcher
+	prStatusByRepo    map[string]map[string]PRStatus // repoRoot → headRefName → status
+	prStatusFetchedAt map[string]time.Time           // repoRoot → wall clock of last successful fetch
+	bookmarkFetcher   BookmarkFetcher
+	trunkResolver     TrunkResolver
+	stateEditor       StateEditorLauncher
+	reviewMode        bool
+	reviewLoading     bool
+	reviewList        list.Model
+	reviewDelegate    *reviewItemDelegate
+	prMenuMode        bool
 	// prNumberSetMode is true while the `p s` chord's numeric input
 	// modal is open. prNumberInput / prNumberTarget back the modal.
 	prNumberSetMode     bool
@@ -766,40 +830,40 @@ type Model struct {
 	prNumberTarget      Item
 	prNumberErr         string
 	prNumberLinkHandler PRNumberLinkHandler
-	bookmarkMode       bool
-	bookmarkLoading    bool
-	bookmarkList       list.Model
-	bookmarkPurpose    bookmarkPurpose
-	bookmarkLinkTarget Item
+	bookmarkMode        bool
+	bookmarkLoading     bool
+	bookmarkList        list.Model
+	bookmarkPurpose     bookmarkPurpose
+	bookmarkLinkTarget  Item
 	bookmarkLinkHandler BookmarkLinkHandler
 	// bookmarkPrefix mirrors config.Deck.BookmarkPrefix. When non-empty
 	// and a bookmark picked for the new-workspace flow begins with
 	// "<prefix>/", the form's workspace-name field is pre-filled with the
 	// stripped tail so the user gets a clean default ("andrew/foo" → "foo").
-	bookmarkPrefix string
-	userActions         []UserAction
-	userActionsResolver UserActionsResolver
-	actionMode          bool
-	actionMenuActions   []UserAction
-	actionAliasLookup   map[string]UserAction
-	spinner            spinner.Model
-	busy               bool
-	progressViewport   viewport.Model
-	progressMode       bool
-	progressTitle      string
-	progressSteps      []ProgressStep
-	progressLog        []string
-	progressErr        error
-	progressDone       bool
-	progressDoneAction Action
-	progressChan       chan progressEvent
-	openMode           bool
-	openLoading        bool
-	openList           list.Model
-	projectFinder      ProjectFinder
-	projectOpener      ProjectOpener
-	asyncJobLauncher   AsyncJobLauncher
-	jobsListRefresher  JobsListRefresher
+	bookmarkPrefix          string
+	userActions             []UserAction
+	userActionsResolver     UserActionsResolver
+	actionMode              bool
+	actionMenuActions       []UserAction
+	actionAliasLookup       map[string]UserAction
+	spinner                 spinner.Model
+	busy                    bool
+	progressViewport        viewport.Model
+	progressMode            bool
+	progressTitle           string
+	progressSteps           []ProgressStep
+	progressLog             []string
+	progressErr             error
+	progressDone            bool
+	progressDoneAction      Action
+	progressChan            chan progressEvent
+	openMode                bool
+	openLoading             bool
+	openList                list.Model
+	projectFinder           ProjectFinder
+	projectOpener           ProjectOpener
+	asyncJobLauncher        AsyncJobLauncher
+	jobsListRefresher       JobsListRefresher
 	jobCancelHandler        JobCancelHandler
 	jobDismissHandler       JobDismissHandler
 	jobLogOpener            JobLogOpener
@@ -840,7 +904,6 @@ type Model struct {
 	devURLs          map[string]string
 	devURLDiscoverer DevURLDiscoverer
 }
-
 
 type NewWorkspaceDoneMsg struct {
 	Err       error
@@ -1100,8 +1163,8 @@ func (m Model) WithInitialScope(s Scope) Model {
 
 func scopeLabel(scope Scope) string {
 	switch scope {
-	case ScopeOpenPR:
-		return "open PR"
+	case ScopeInbox:
+		return "inbox"
 	case ScopeAttention:
 		return "attention"
 	default:
@@ -1165,10 +1228,10 @@ func aliasLookup(actions []UserAction) map[string]UserAction {
 func (m Model) items() []Item {
 	src := m.itemsAll
 	switch m.scope {
-	case ScopeOpenPR:
+	case ScopeInbox:
 		filtered := make([]Item, 0, len(src))
 		for _, it := range src {
-			if m.itemHasOpenPR(it) {
+			if _, ok := m.itemOpenPRStatus(it); ok {
 				filtered = append(filtered, it)
 			}
 		}
@@ -1197,15 +1260,38 @@ func (m Model) items() []Item {
 	// Sort by (project, displayed label) so rows alphabetize by what the
 	// user actually sees — PR title when one is resolved from the cache,
 	// workspace name otherwise. Stable sort preserves the upstream
-	// ordering for ties.
+	// ordering for ties. The inbox scope sorts by bucket first so rows
+	// section under the bucket headers in next-move order.
 	sorted := append([]Item(nil), src...)
-	sort.SliceStable(sorted, func(i, j int) bool {
+	byProjectLabel := func(i, j int) bool {
 		if sorted[i].ProjectName != sorted[j].ProjectName {
 			return sorted[i].ProjectName < sorted[j].ProjectName
 		}
 		return strings.ToLower(m.displayLabel(sorted[i])) < strings.ToLower(m.displayLabel(sorted[j]))
-	})
+	}
+	if m.scope == ScopeInbox {
+		sort.SliceStable(sorted, func(i, j int) bool {
+			bi, bj := m.itemInboxBucket(sorted[i]), m.itemInboxBucket(sorted[j])
+			if bi != bj {
+				return bi < bj
+			}
+			return byProjectLabel(i, j)
+		})
+	} else {
+		sort.SliceStable(sorted, byProjectLabel)
+	}
 	return sorted
+}
+
+// itemInboxBucket classifies a workspace for the inbox scope. Items the
+// scope filter would exclude (no open PR resolvable) land in the
+// catch-all bucket; the filter runs first, so that's defensive only.
+func (m Model) itemInboxBucket(it Item) inboxBucket {
+	st, ok := m.itemOpenPRStatus(it)
+	if !ok {
+		return inboxOtherOpen
+	}
+	return prInboxBucket(st)
 }
 
 // displayLabel returns the text that renders on a row: "#N title" when a
@@ -1229,10 +1315,12 @@ const (
 // metaLine returns the secondary text for a workspace row in a dense
 // glyph-prefixed format: "@author · <branch> · :port · <kbd> \"prompt\"".
 // Glyphs disambiguate segments so labels can stay out:
-//   @                 author (PR author)
-//   nf-oct-git_branch branch (jj bookmark; HeadDesc fallback)
-//   :                 port   (dev URL's port)
-//   nf-md-keyboard    prompt (truncated PromptPreview, quoted)
+//
+//	@                 author (PR author)
+//	nf-oct-git_branch branch (jj bookmark; HeadDesc fallback)
+//	:                 port   (dev URL's port)
+//	nf-md-keyboard    prompt (truncated PromptPreview, quoted)
+//
 // Each slot drops out when empty; falls back to the workspace name
 // when none of the slots resolve.
 func (m Model) metaLine(it Item) string {
@@ -1309,26 +1397,16 @@ func promptPreviewSnippet(p string, n int) string {
 	return truncate(p, n)
 }
 
-// itemHasOpenPR returns true when the workspace's bookmark maps to a PR in
-// the cache that is OPEN and not a draft. Used by ScopeOpenPR.
-func (m Model) itemHasOpenPR(it Item) bool {
-	bm := strings.TrimSpace(it.Bookmark)
-	if bm == "" {
-		return false
+// itemOpenPRStatus returns the cached status of the workspace's OPEN PR.
+// Drafts count — the inbox scope sections them into "Your drafts" rather
+// than hiding them. Resolution goes through resolvePRStatus, so a pinned
+// PRNumber works even when no bookmark is on file. Used by ScopeInbox.
+func (m Model) itemOpenPRStatus(it Item) (PRStatus, bool) {
+	st, ok := m.resolvePRStatus(it)
+	if !ok || st.State != PRStateOpen {
+		return PRStatus{}, false
 	}
-	repo := strings.TrimSpace(it.RepoRoot)
-	if repo == "" {
-		return false
-	}
-	byHead, ok := m.prStatusByRepo[repo]
-	if !ok {
-		return false
-	}
-	st, ok := byHead[bm]
-	if !ok {
-		return false
-	}
-	return st.State == PRStateOpen && !st.IsDraft
+	return st, true
 }
 
 // initKickMsg drives the first-paint side effects (initial enrich
@@ -2373,7 +2451,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = stageStatus(m.findStage)
 					return m, nil
 				}
-				if m.findStage == findStageWorkspace {
+				// Inbox-scope find has no project stage to back out
+				// to — backspace cancels like esc.
+				if m.findStage == findStageWorkspace && m.scope != ScopeInbox {
 					m.findStage = findStageProject
 					m.findProject = ""
 					m.findRowHints = map[int]string{}
@@ -3807,13 +3887,13 @@ func (m Model) renderList(width int) string {
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
 	// Build the scrollable region (project headers + workspace rows) from
 	// the shared structural layout (deckBodyRows) so the renderer and the
-	// scroll math (deckBodyTotalRows / deckBodyCursorRow /
-	// deckBodyHeaderRowForCursor) never disagree on row positions —
-	// important now that default-only projects collapse to a single row.
-	// In parallel we record which body index belongs to each project
-	// header, used below to scroll cursor-into-view without stripping the
-	// project header off a row that needs it for context.
-	rows := deckBodyRows(items, collapsedProjects(items))
+	// scroll math (deckBodyCursorRow / deckBodyHeaderRowForCursor) never
+	// disagree on row positions — important now that default-only
+	// projects collapse to a single row. In parallel we record which body
+	// index belongs to each group header, used below to scroll
+	// cursor-into-view without stripping the header off a row that needs
+	// it for context.
+	rows := m.bodyRows(items)
 	body := make([]string, 0, len(rows))
 	// projectHeaderForRow[i] = body index of the project header governing
 	// row i. For a collapsed default-only row it points at the row itself
@@ -3841,7 +3921,10 @@ func (m Model) renderList(width int) string {
 			body = append(body, headerStyle.Render(headerLine))
 		case deckRowPrimary:
 			item := items[r.itemIndex]
-			dim := m.findMode && m.findStage == findStageWorkspace && item.ProjectName != m.findProject
+			// findProject is "" in the inbox scope's single-stage find
+			// (no project stage), so nothing dims there.
+			dim := m.findMode && m.findStage == findStageWorkspace &&
+				m.findProject != "" && item.ProjectName != m.findProject
 			prefix := "  "
 			if hint, ok := rowHints[r.itemIndex]; ok {
 				prefix = renderDeckHint(hint)
@@ -3858,7 +3941,13 @@ func (m Model) renderList(width int) string {
 			} else if dim {
 				labelStyle = s.Muted
 			}
-			label := truncate(m.displayLabel(item), max(10, width-19))
+			// Inbox scope sections by bucket, so the project context moves
+			// onto the row as a muted chip (mini-deck pattern).
+			chip := ""
+			if m.scope == ScopeInbox {
+				chip = s.Muted.Render("["+item.ProjectName+"]") + " "
+			}
+			label := truncate(m.displayLabel(item), max(10, width-19-lipgloss.Width(chip)))
 			// Status is canonical in JSON, so render the stored glyph
 			// immediately on the fast first paint. The only tmux-derived
 			// override is `working` → `exited` (agent shell death — Claude
@@ -3866,7 +3955,7 @@ func (m Model) renderList(width int) string {
 			// enrichment pass and is rare enough that a brief flash is
 			// preferable to a blank glyph slot.
 			glyph := statusGlyph(item.Status, dim, item.Unread)
-			line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
+			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyph, chip, labelStyle.Render(label))
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
@@ -4101,7 +4190,8 @@ func (m *Model) clampDeckViewport() {
 		return
 	}
 	capacity := m.deckBodyCapacity()
-	total := deckBodyTotalRows(items)
+	rows := m.bodyRows(items)
+	total := len(rows)
 	if total <= capacity {
 		m.deckYOffset = 0
 		return
@@ -4116,8 +4206,8 @@ func (m *Model) clampDeckViewport() {
 	if scrolloff < 0 {
 		scrolloff = 0
 	}
-	cursorRow := deckBodyCursorRow(items, m.cursor)
-	cursorHdr := deckBodyHeaderRowForCursor(items, m.cursor)
+	cursorRow := deckBodyCursorRow(rows, m.cursor)
+	cursorHdr := deckBodyHeaderRowForCursor(rows, m.cursor)
 	yoff := m.deckYOffset
 	// Top margin: scroll up so the cursor sits at least scrolloff rows
 	// below the top edge of the viewport.
@@ -4219,49 +4309,88 @@ func collapsedProjects(items []Item) map[string]bool {
 
 // deckBodyRows produces the structural layout of the deck body for the
 // given items: one element per rendered line, in render order. Both
-// renderList and the scroll math (deckBodyTotalRows / deckBodyCursorRow /
+// renderList and the scroll math (deckBodyCursorRow /
 // deckBodyHeaderRowForCursor) consume this slice so they can never
 // disagree about row positions — necessary because collapsed default-only
-// projects make per-project height variable. Each project emits a header
-// (or a single collapsed row), every project after the first is preceded
+// projects make per-project height variable. Each group emits a header
+// (or a single collapsed row), every group after the first is preceded
 // by a blank spacer, and each non-collapsed item contributes a primary +
 // meta row.
-func deckBodyRows(items []Item, collapsed map[string]bool) []deckBodyRow {
+//
+// groups, when non-nil, is a parallel slice giving each item's header
+// label — the inbox scope passes bucket labels here so rows section by
+// bucket instead of by project. nil falls back to ProjectName grouping.
+// Collapse only applies to project grouping (collapsed keys are project
+// names), so group-label callers pass collapsed == nil.
+func deckBodyRows(items []Item, collapsed map[string]bool, groups []string) []deckBodyRow {
+	groupOf := func(i int) string {
+		if groups != nil {
+			return groups[i]
+		}
+		return items[i].ProjectName
+	}
 	rows := make([]deckBodyRow, 0, len(items)*2)
-	lastProject := ""
+	lastGroup := ""
 	headerIdx := -1
 	for i, it := range items {
-		if it.ProjectName != lastProject {
-			if lastProject != "" {
+		g := groupOf(i)
+		if g != lastGroup {
+			if lastGroup != "" {
 				rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: headerIdx})
 			}
-			if collapsed[it.ProjectName] {
+			if groups == nil && collapsed[it.ProjectName] {
 				// The collapsed row is its own header — folding the
 				// header, row, and meta line into one. headerRow points
 				// at itself so the sticky-header logic never re-pins it.
 				idx := len(rows)
 				rows = append(rows, deckBodyRow{kind: deckRowCollapsed, itemIndex: i, project: it.ProjectName, headerRow: idx})
 				headerIdx = idx
-				lastProject = it.ProjectName
+				lastGroup = g
 				continue
 			}
 			headerIdx = len(rows)
-			rows = append(rows, deckBodyRow{kind: deckRowHeader, itemIndex: -1, project: it.ProjectName, headerRow: headerIdx})
-			lastProject = it.ProjectName
+			rows = append(rows, deckBodyRow{kind: deckRowHeader, itemIndex: -1, project: g, headerRow: headerIdx})
+			lastGroup = g
 		}
-		rows = append(rows, deckBodyRow{kind: deckRowPrimary, itemIndex: i, project: it.ProjectName, headerRow: headerIdx})
-		rows = append(rows, deckBodyRow{kind: deckRowMeta, itemIndex: i, project: it.ProjectName, headerRow: headerIdx})
+		rows = append(rows, deckBodyRow{kind: deckRowPrimary, itemIndex: i, project: g, headerRow: headerIdx})
+		rows = append(rows, deckBodyRow{kind: deckRowMeta, itemIndex: i, project: g, headerRow: headerIdx})
 	}
 	return rows
 }
 
+// bodyRows returns the structural layout for the current scope: project
+// grouping (with default-only collapse) everywhere except the inbox
+// scope, which sections by bucket header (with counts) and never
+// collapses.
+func (m Model) bodyRows(items []Item) []deckBodyRow {
+	if m.scope == ScopeInbox {
+		return deckBodyRows(items, nil, m.inboxGroupLabels(items))
+	}
+	return deckBodyRows(items, collapsedProjects(items), nil)
+}
+
+// inboxGroupLabels returns each item's bucket header label — "Needs your
+// review (2)" — parallel to items. items must already be sorted by
+// bucket (items() does this in the inbox scope) so equal labels are
+// adjacent and deckBodyRows emits one header per bucket.
+func (m Model) inboxGroupLabels(items []Item) []string {
+	buckets := make([]inboxBucket, len(items))
+	counts := make(map[inboxBucket]int, inboxBucketCount)
+	for i, it := range items {
+		buckets[i] = m.itemInboxBucket(it)
+		counts[buckets[i]]++
+	}
+	labels := make([]string, len(items))
+	for i, b := range buckets {
+		labels[i] = fmt.Sprintf("%s (%d)", inboxBucketLabel(b), counts[b])
+	}
+	return labels
+}
+
 // deckBodyCursorRow returns the body-row index of the PRIMARY (or
 // collapsed) line of the workspace row corresponding to items[cursor].
-func deckBodyCursorRow(items []Item, cursor int) int {
-	if cursor < 0 || cursor >= len(items) {
-		return 0
-	}
-	rows := deckBodyRows(items, collapsedProjects(items))
+// rows must come from the same bodyRows call the renderer consumes.
+func deckBodyCursorRow(rows []deckBodyRow, cursor int) int {
 	for idx, r := range rows {
 		if r.itemIndex == cursor && (r.kind == deckRowPrimary || r.kind == deckRowCollapsed) {
 			return idx
@@ -4270,30 +4399,19 @@ func deckBodyCursorRow(items []Item, cursor int) int {
 	return 0
 }
 
-// deckBodyHeaderRowForCursor returns the body-row index of the project
+// deckBodyHeaderRowForCursor returns the body-row index of the group
 // header for items[cursor]. Returns -1 when cursor is out of range.
-// clampDeckViewport uses this to detect when the cursor's project header
+// clampDeckViewport uses this to detect when the cursor's group header
 // has scrolled above the viewport so renderList can pin it as a sticky
 // line. For a collapsed project the row is its own header, so this
 // returns the row's own index and the sticky check never fires for it.
-func deckBodyHeaderRowForCursor(items []Item, cursor int) int {
-	if cursor < 0 || cursor >= len(items) {
-		return -1
-	}
-	rows := deckBodyRows(items, collapsedProjects(items))
+func deckBodyHeaderRowForCursor(rows []deckBodyRow, cursor int) int {
 	for _, r := range rows {
 		if r.itemIndex == cursor && (r.kind == deckRowPrimary || r.kind == deckRowCollapsed) {
 			return r.headerRow
 		}
 	}
 	return -1
-}
-
-// deckBodyTotalRows returns the total number of body rows renderList
-// will produce for the given items slice (workspace rows + project
-// headers + inter-project spacers + collapsed rows).
-func deckBodyTotalRows(items []Item) int {
-	return len(deckBodyRows(items, collapsedProjects(items)))
 }
 
 // keyGroup is a labeled group of (key, description) rows shown in both the
@@ -4313,7 +4431,7 @@ func deckKeyGroups() []keyGroup {
 				{"ctrl+u / ctrl+d", "jump ½ page up / down"},
 				{"/", "filter rows · esc clears"},
 				{"f", "find: project → workspace easymotion jump"},
-				{"P", "cycle scope (all → attention → open PR)"},
+				{"P", "cycle scope (all → attention → inbox)"},
 				{"L", "switch to last tmux session"},
 			},
 		},
@@ -4584,9 +4702,24 @@ func (m Model) renderPRNumberSet() string {
 
 func (m *Model) startFind() {
 	m.findMode = true
-	m.findStage = findStageProject
-	m.findProject = ""
 	m.findPendingPrefix = 0
+	m.findProject = ""
+	if m.scope == ScopeInbox {
+		// The inbox scope has no project headers (rows section by
+		// bucket), so find skips the project stage and hints every
+		// row directly, like the mini-deck.
+		m.findStage = findStageWorkspace
+		m.findProjectHints = map[string]string{}
+		m.findProjectLookup = map[string]string{}
+		m.findProjectPrefix = map[rune]bool{}
+		m.findRowHints, m.findRowLookup, m.findRowPrefix = m.buildRowHints("")
+		m.status = "find: workspace"
+		if len(m.findRowLookup) == 0 {
+			m.cancelFind("")
+		}
+		return
+	}
+	m.findStage = findStageProject
 	m.findProjectHints, m.findProjectLookup, m.findProjectPrefix = m.buildProjectHints()
 	m.findRowHints = map[int]string{}
 	m.findRowLookup = map[string]int{}
@@ -4702,16 +4835,24 @@ func (m Model) buildProjectHints() (map[string]string, map[string]string, map[ru
 	return forward, lookup, prefix
 }
 
+// buildRowHints assigns easymotion hints to the rows of the given
+// project. project == "" hints every row (the inbox scope's
+// single-stage find); names are project-qualified there so duplicate
+// workspace names across projects can't collide on one hint.
 func (m Model) buildRowHints(project string) (map[int]string, map[string]int, map[rune]bool) {
 	items := m.items()
 	rowIdx := []int{}
 	names := []string{}
 	for i, item := range items {
-		if item.ProjectName != project {
+		if project != "" && item.ProjectName != project {
 			continue
 		}
+		name := item.WorkspaceName
+		if project == "" {
+			name = item.ProjectName + "/" + name
+		}
 		rowIdx = append(rowIdx, i)
-		names = append(names, item.WorkspaceName)
+		names = append(names, name)
 	}
 	hintByName := assignHints(names)
 	forward := map[int]string{}
@@ -4932,15 +5073,15 @@ func assignHints(names []string) map[string]string {
 // pipeline behavior. Plain "open" has no glyph on purpose — see prGlyphFor.
 const (
 	prGlyphDraft    = "\U000F1353" // nf-md-pencil_ruler — still being drawn up
-	prGlyphClosed   = "" // nf-oct-git_pull_request_closed
-	prGlyphMerged   = "" // nf-oct-git_merge
-	prGlyphApproved = "" // nf-oct-check
-	prGlyphInQueue  = "" // nf-oct-rocket — PR is in the merge queue
-	prGlyphCIFail   = "" // nf-oct-x
-	prGlyphCIPend   = "" // nf-oct-hourglass
-	prGlyphBehind   = "" // nf-oct-arrow_down — PR is behind the base branch
-	prGlyphDirty    = "" // nf-oct-alert — merge conflicts with the base branch
-	prGlyphStale    = "" // nf-oct-sync — local bookmark tip differs from the PR head (re-review hint)
+	prGlyphClosed   = ""          // nf-oct-git_pull_request_closed
+	prGlyphMerged   = ""          // nf-oct-git_merge
+	prGlyphApproved = ""          // nf-oct-check
+	prGlyphInQueue  = ""          // nf-oct-rocket — PR is in the merge queue
+	prGlyphCIFail   = ""          // nf-oct-x
+	prGlyphCIPend   = ""          // nf-oct-hourglass
+	prGlyphBehind   = ""          // nf-oct-arrow_down — PR is behind the base branch
+	prGlyphDirty    = ""          // nf-oct-alert — merge conflicts with the base branch
+	prGlyphStale    = ""          // nf-oct-sync — local bookmark tip differs from the PR head (re-review hint)
 	// Review-conversation glyphs come from the Material Design set
 	// (nf-md-*), not Octicons — chat bubbles read better as "someone
 	// wants to hear from you" than any octicon does. Outline = a review

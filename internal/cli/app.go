@@ -653,7 +653,7 @@ func (a *App) runDiff(args []string) error {
 
 func (a *App) runDeck(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp deck [--scope=all|attention|open-pr]")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp deck [--scope=all|attention|inbox]")
 		_, _ = fmt.Fprintln(a.out, "")
 		_, _ = fmt.Fprintln(a.out, "Intended invocation: tmux popup overlay. Add this to ~/.tmux.conf:")
 		_, _ = fmt.Fprintln(a.out, "  bind a display-popup -E -w 90% -h 90% awp deck \\; run-shell \"awp deck-cleanup\"")
@@ -661,7 +661,7 @@ func (a *App) runDeck(args []string) error {
 		_, _ = fmt.Fprintln(a.out, "Selecting a workspace summons or focuses session [awp]<repo>__<workspace>.")
 		_, _ = fmt.Fprintln(a.out, "")
 		_, _ = fmt.Fprintln(a.out, "Flags:")
-		_, _ = fmt.Fprintln(a.out, "  --scope <all|attention|open-pr>  initial scope (default: all). `P` still")
+		_, _ = fmt.Fprintln(a.out, "  --scope <all|attention|inbox>    initial scope (default: all). `P` still")
 		_, _ = fmt.Fprintln(a.out, "                                    cycles through all scopes in the deck.")
 		return nil
 	}
@@ -669,11 +669,11 @@ func (a *App) runDeck(args []string) error {
 	for _, arg := range args {
 		raw, ok := strings.CutPrefix(arg, "--scope=")
 		if !ok {
-			return fmt.Errorf("deck: unexpected argument %q (try --scope=all|attention|open-pr)", arg)
+			return fmt.Errorf("deck: unexpected argument %q (try --scope=all|attention|inbox)", arg)
 		}
 		s, ok := deckui.ParseScope(raw)
 		if !ok {
-			return fmt.Errorf("deck: invalid --scope value %q (want all, attention, or open-pr)", raw)
+			return fmt.Errorf("deck: invalid --scope value %q (want all, attention, or inbox)", raw)
 		}
 		scope = s
 	}
@@ -768,4 +768,3 @@ func isInteractiveInput(in io.Reader) bool {
 func isHelpArgSlice(args []string) bool {
 	return len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")
 }
-
