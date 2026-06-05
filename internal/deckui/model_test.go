@@ -1715,11 +1715,11 @@ func (e fmtErr) Error() string { return string(e) }
 func TestMetaLineSurfacesStaleWhenLocalDiffersFromPRHead(t *testing.T) {
 	const prSHA = "abc123"
 	item := Item{
-		ProjectName:   "proj",
-		WorkspaceName: "ws",
-		RepoRoot:      "/r",
-		Bookmark:      "feat",
-		BookmarkCommitID:  "def456",
+		ProjectName:      "proj",
+		WorkspaceName:    "ws",
+		RepoRoot:         "/r",
+		Bookmark:         "feat",
+		BookmarkCommitID: "def456",
 	}
 	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
 		"/r": {"feat": {
@@ -2438,11 +2438,11 @@ func TestClampDeckViewportStickyHeaderShrinksWindow(t *testing.T) {
 
 func TestCollapsedProjectsDetectsDefaultOnly(t *testing.T) {
 	items := []Item{
-		{ProjectName: "alpha", WorkspaceName: "default"},          // collapses
-		{ProjectName: "beta", WorkspaceName: "default"},           // does NOT — has a sibling
-		{ProjectName: "beta", WorkspaceName: "feat"},              //
-		{ProjectName: "gamma", WorkspaceName: "feat"},             // single, but not "default"
-		{ProjectName: "delta", WorkspaceName: "  default  "},      // trimmed match → collapses
+		{ProjectName: "alpha", WorkspaceName: "default"},     // collapses
+		{ProjectName: "beta", WorkspaceName: "default"},      // does NOT — has a sibling
+		{ProjectName: "beta", WorkspaceName: "feat"},         //
+		{ProjectName: "gamma", WorkspaceName: "feat"},        // single, but not "default"
+		{ProjectName: "delta", WorkspaceName: "  default  "}, // trimmed match → collapses
 	}
 	got := collapsedProjects(items)
 	want := map[string]bool{"alpha": true, "delta": true}
@@ -2461,8 +2461,8 @@ func TestCollapsedProjectsOnlyWhenQuiet(t *testing.T) {
 	// be blank. A visible dot (working, or unread waiting/idle) keeps
 	// the full header + workspace + meta layout.
 	items := []Item{
-		{ProjectName: "quiet", WorkspaceName: "default", Status: "idle"},                  // collapses
-		{ProjectName: "busy", WorkspaceName: "default", Status: "working"},                // dot → uncollapsed
+		{ProjectName: "quiet", WorkspaceName: "default", Status: "idle"},                   // collapses
+		{ProjectName: "busy", WorkspaceName: "default", Status: "working"},                 // dot → uncollapsed
 		{ProjectName: "pinged", WorkspaceName: "default", Status: "waiting", Unread: true}, // dot → uncollapsed
 		{ProjectName: "done", WorkspaceName: "default", Status: "idle", Unread: true},      // dot → uncollapsed
 		{ProjectName: "gone", WorkspaceName: "default", Status: "exited", Unread: true},    // exited never dots → collapses
@@ -2698,5 +2698,25 @@ func TestRenderHelpTruncatesInsteadOfWrapping(t *testing.T) {
 		if w := ansi.StringWidth(line); w > 84 {
 			t.Errorf("help line exceeds box width 84 (got %d): %q", w, line)
 		}
+	}
+}
+
+// Plain open is deliberately glyph-less (open is the baseline state —
+// only deviations earn ink), while a draft renders the pencil-ruler
+// glyph. The details panel keeps the "open" wording.
+func TestPRGlyphOpenIsBlankDraftIsPencilRuler(t *testing.T) {
+	open := PRStatus{State: PRStateOpen, CIState: PRCIPassing}
+	if g := prGlyphFor(open); g != "" {
+		t.Errorf("plain open PR should render no glyph, got %q", g)
+	}
+	if l := prStatusLabel(open); l != "open" {
+		t.Errorf("plain open PR label: got %q want %q", l, "open")
+	}
+	draft := PRStatus{State: PRStateOpen, IsDraft: true}
+	if g := prGlyphFor(draft); g != prGlyphDraft {
+		t.Errorf("draft PR glyph: got %q want prGlyphDraft", g)
+	}
+	if prGlyphDraft != "\U000F1353" {
+		t.Errorf("draft glyph should be nf-md-pencil_ruler (U+F1353), got %q", prGlyphDraft)
 	}
 }
