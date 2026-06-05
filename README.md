@@ -121,14 +121,15 @@ Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a ma
 
 Priority (highest wins): merged → closed → CI failed → CI pending → in merge queue → approved → draft → open. So a merged PR always shows the merge icon (even if its last CI was failing); an open PR with failing CI shows the alert icon rather than the open-PR icon; once a PR enters GitHub's merge queue (and CI is still green) it reads as queued rather than approved.
 
-When an open PR is out of date with its base branch, a second glyph renders to the right of the primary PR glyph:
+When the PR needs attention beyond its primary state, a second glyph renders to the right of the primary PR glyph:
 
 | Glyph | Meaning |
 |---|---|
 |  | Behind base — the base branch has moved past this PR. Only signaled when the repo's branch protection requires up-to-date branches before merging; otherwise GitHub reports the PR as clean even when behind. |
 |  | Merge conflicts — the PR can't merge cleanly until the conflicts are resolved. |
+|  | Stale — your local bookmark tip differs from the PR head on GitHub; what you have locally (or last reviewed) is out of date. |
 
-When the workspace's local bookmark tip doesn't match the PR head commit on GitHub, the row's meta line gains a `· stale` chip — the signal that what you have locally is behind (or otherwise diverged from) what's actually on the PR, so any previous review pass or in-progress work is out of date and a fresh re-review is warranted. Most useful for PRs on a collaborator's branch: the PR head on GitHub is the truth, and a difference means the author has pushed since you last fetched. Independent of `behind base` — that signals the PR is behind its target branch, while `stale` signals your local bookmark is behind (or diverged from) the PR's remote head. Only renders on open PRs.
+When the workspace's local bookmark tip doesn't match the PR head commit on GitHub, the row gains a  glyph (yellow) and its meta line a `· stale` chip — the signal that what you have locally is behind (or otherwise diverged from) what's actually on the PR, so any previous review pass or in-progress work is out of date and a fresh re-review is warranted. Most useful for PRs on a collaborator's branch: the PR head on GitHub is the truth, and a difference means the author has pushed since you last fetched. Independent of `behind base` — that signals the PR is behind its target branch, while `stale` signals your local bookmark is behind (or diverged from) the PR's remote head. Only renders on open PRs.
 
 The status is fetched once when the deck opens, with a single `gh pr list --state all` call per distinct repo that has at least one non-default workspace. The fetch is throttled so the same repo is never re-queried within a minute. The throttle is bypassed for actions that materially change the PR↔workspace mapping: linking a bookmark to an existing workspace, creating a new workspace from a bookmark, and opening a PR review — those refresh the affected repo immediately.
 
