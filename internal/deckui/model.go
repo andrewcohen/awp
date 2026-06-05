@@ -3641,7 +3641,6 @@ func (m Model) renderHelp(width int) string {
 		dot("working", false, "working"),
 		dot("waiting", true, "waiting"),
 		dot("idle", true, "notified"),
-		dot("exited", true, "exited"),
 	}
 
 	prDot := func(g, color, label string) string {
@@ -5247,8 +5246,13 @@ func (m Model) prStaleGlyphForItem(item Item) string {
 // signal: when the user is viewing the session (or has summoned it since
 // the last transition) report-status / the deck refresh clear Unread, and
 // the row goes quiet regardless of whether the last hook to write was
-// "waiting", "idle", or "exited" with stale data.
+// "waiting" or "idle" with stale data. "exited" never renders, even with a
+// stale unread flag from an old state file — the agent is gone, so there's
+// nothing for the user to act on.
 func statusGlyph(status string, dim bool, unread bool) string {
+	if strings.EqualFold(strings.TrimSpace(status), "exited") {
+		return " "
+	}
 	if !alwaysShownStatus(status) && !unread {
 		return " "
 	}
@@ -5274,7 +5278,7 @@ func statusColor(status string, dim bool, unread bool) string {
 		return colSuccess
 	case "waiting":
 		return colWarning
-	case "exited", "error":
+	case "error":
 		return colDanger
 	case "starting":
 		return colAccent
