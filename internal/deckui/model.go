@@ -2117,6 +2117,27 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = "pr: opened " + url
 				}
 				return m, nil
+			case "d":
+				m.prMenuMode = false
+				item, ok := m.selected()
+				if !ok {
+					return m, nil
+				}
+				status, _, ok := m.prStatusLabelForItem(item)
+				if !ok {
+					m.status = "pr: no PR for this workspace"
+					return m, nil
+				}
+				if status.Number <= 0 {
+					m.status = "pr: description unavailable (no PR number cached — try p s)"
+					return m, nil
+				}
+				// Open the description the way a review opens: a dedicated
+				// tmux window in the workspace's session. gh renders the
+				// body with TTY formatting; less keeps it scrollable and
+				// searchable, and q drops back to a shell in the window.
+				winCmd := fmt.Sprintf("env GH_FORCE_TTY=100%% gh pr view %d | less -R", status.Number)
+				return m.trigger(ActionOpenWindow, "pr:"+winCmd)
 			case "r":
 				m.prMenuMode = false
 				item, ok := m.selected()
@@ -2650,7 +2671,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				return m, nil
 			}
 			m.prMenuMode = true
-			m.status = "pr: o open in browser · r repair · s set PR # · esc cancel"
+			m.status = "pr: o open in browser · d description · r repair · s set PR # · esc cancel"
 			return m, nil
 		}
 	}
@@ -4287,6 +4308,7 @@ func deckKeyGroups() []keyGroup {
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{"d", "open dev URL in browser (auto-discovered)"},
 				{"p o", "open this workspace's PR in browser"},
+				{"p d", "open this workspace's PR description in a pr tmux window (gh pr view | less)"},
 				{"p r", "repair this workspace's PR (opens the send-prompt form prepopulated with a fix prompt for merge conflicts / failing CI / behind base to review before sending)"},
 				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
