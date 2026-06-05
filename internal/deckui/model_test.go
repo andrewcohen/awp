@@ -1879,6 +1879,22 @@ func TestPRStaleGlyphAndLabel(t *testing.T) {
 	}
 }
 
+func TestPRLocalStaleGlyph(t *testing.T) {
+	open := PRStatus{State: PRStateOpen, HeadRefOid: "abc"}
+	if g := prLocalStaleGlyph(open, "def"); g != prGlyphStale {
+		t.Errorf("diverged tip: got %q want prGlyphStale", g)
+	}
+	if g := prLocalStaleGlyph(open, "abc"); g != "" {
+		t.Errorf("matching tip: got %q want empty", g)
+	}
+	if g := prLocalStaleGlyph(open, ""); g != "" {
+		t.Errorf("unknown local tip: got %q want empty", g)
+	}
+	if g := prLocalStaleGlyph(PRStatus{State: PRStateMerged, HeadRefOid: "abc"}, "def"); g != "" {
+		t.Errorf("merged PR: got %q want empty", g)
+	}
+}
+
 func TestPRInMergeQueueGlyphAndLabel(t *testing.T) {
 	cases := []struct {
 		name      string

@@ -3658,6 +3658,7 @@ func (m Model) renderHelp(width int) string {
 		prDot(prGlyphClosed, colMuted, "closed"),
 		prDot(prGlyphBehind, colWarning, "behind base"),
 		prDot(prGlyphDirty, colDanger, "merge conflicts"),
+		prDot(prGlyphStale, colWarning, "local copy stale"),
 	}
 	activityLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
@@ -3832,6 +3833,9 @@ func (m Model) renderList(width int) string {
 			if staleGlyph := m.prStaleGlyphForItem(item); staleGlyph != "" {
 				line += " " + staleGlyph
 			}
+			if localStale := m.prLocalStaleGlyphForItem(item); localStale != "" {
+				line += " " + localStale
+			}
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
@@ -3902,6 +3906,9 @@ func (m Model) renderList(width int) string {
 			}
 			if staleGlyph := m.prStaleGlyphForItem(item); staleGlyph != "" {
 				line += " " + staleGlyph
+			}
+			if localStale := m.prLocalStaleGlyphForItem(item); localStale != "" {
+				line += " " + localStale
 			}
 			// Append the meta text inline (muted) when there's room left
 			// on the line after the name and glyphs.
@@ -4872,6 +4879,7 @@ const (
 	prGlyphCIPend   = "" // nf-oct-hourglass
 	prGlyphBehind   = "" // nf-oct-arrow_down — PR is behind the base branch
 	prGlyphDirty    = "" // nf-oct-alert — merge conflicts with the base branch
+	prGlyphStale    = "" // nf-oct-sync — local bookmark tip differs from the PR head (re-review hint)
 )
 
 // prGlyphFor returns the single glyph for the given PR status per the locked
@@ -5159,6 +5167,18 @@ func prStaleGlyphColor(s PRStatus) string {
 	return "214"
 }
 
+// prLocalStaleGlyph is the glyph form of prStaleSuffix: the workspace's
+// local bookmark tip differs from the PR's head SHA, so the local copy
+// (or the user's last review decision) is out of date and a fresh look
+// is warranted. Empty when the ids match, either id is unavailable, or
+// the PR is no longer open.
+func prLocalStaleGlyph(s PRStatus, localCommitID string) string {
+	if prStaleSuffix(s, localCommitID) == "" {
+		return ""
+	}
+	return prGlyphStale
+}
+
 // resolvePRStatus is the one PR-lookup entry point. Returns the cached
 // PR for this workspace via item.PRNumber. Falls back to a bookmark →
 // headRefName lookup ONLY when PRNumber is unset and a bookmark is
@@ -5238,6 +5258,21 @@ func (m Model) prStaleGlyphForItem(item Item) string {
 		return ""
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(prStaleGlyphColor(status))).Render(g)
+}
+
+// prLocalStaleGlyphForItem mirrors prStaleGlyphForItem for the "local
+// copy is stale" signal — the row-level glyph twin of the meta line's
+// "stale" word, which is easy to miss in the muted text.
+func (m Model) prLocalStaleGlyphForItem(item Item) string {
+	status, ok := m.resolvePRStatus(item)
+	if !ok {
+		return ""
+	}
+	g := prLocalStaleGlyph(status, item.BookmarkCommitID)
+	if g == "" {
+		return ""
+	}
+	return m.styles.Warning.Render(g)
 }
 
 // statusGlyph renders a colored ● for an agent status. Only "loud" states
