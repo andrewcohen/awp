@@ -80,11 +80,41 @@ same `--username`.
 - `praise` — explicit positive callout. Use sparingly; one or two per
   review at most.
 
+### Writing the comment
+
+Write for the triager, not an evaluator. Each comment is read by
+someone deciding act or skip in one scan — not by a grader checking
+whether you were thorough. Optimize for that reader.
+
+- **Lead with the ask or the finding.** First sentence = what to do or
+  what's wrong. Justification comes after, and only if it changes the
+  decision. If your first sentence is setup ("X is carried through,
+  skipping Y…"), you've buried the lead — cut to the conclusion.
+- **Prefer bullets.** Any comment with more than one point is a list —
+  default to bullets, not prose. If you catch yourself joining clauses
+  with semicolons or "and also," stop and break them out. A
+  verification rundown or a set of checks is always a list, never a
+  paragraph. Reserve flat prose for genuinely single-point comments.
+- **One sentence, one job.** No stacked parentheticals or em-dash
+  asides. If a sentence carries a claim and a qualifier and a
+  counterexample, split it.
+- **Cut re-explanation.** Don't re-derive code the author wrote or
+  restate the mechanism to prove you understood it. Cite the line;
+  trust them to read it.
+- **Length tracks payload.** A one-line ask gets one line. Don't pad a
+  small point to look rigorous — padding reads as noise, not diligence.
+
+Smell test before posting: can the reader get the point from sentence
+one and skim the rest? If not, it's not done.
+
 ### Volume
 
 Target **3-8 comments for a typical PR**, fewer when findings don't
 clear the bar. Quality over quantity. Silence is acceptable if the code
 is fine; pad noise is worse than a short review.
+
+A comment longer than ~3 sentences with no line break is almost always
+a buried lead or a prose-formatted list; restructure before posting.
 
 ### Example
 
