@@ -83,7 +83,7 @@ A row qualifies for the mini-deck when **all of** (the same rules the full deck'
 
 The `default` workspace per project is no longer filtered out by name — if an agent really is running in it (or it has an unread turn waiting on you), it surfaces just like any other row.
 
-When a project's **only** workspace is `default`, the deck collapses it to a single row: the project name stands in for the (uninformative) `default` label, with the status glyph, PR glyph, and meta (branch · author · prompt) all inline on one line, instead of the usual project header + workspace row + meta line. A project that has `default` plus other workspaces renders normally.
+When a project's **only** workspace is `default` **and its agent is quiet** (no status dot would render), the deck collapses it to a single row: the project name stands in for the (uninformative) `default` label, with the PR glyph and meta (branch · author · prompt) inline on one line, instead of the usual project header + workspace row + meta line. The moment the agent has something to show — working, or an unread waiting/idle turn — the project uncollapses into the full layout so the status dot sits in its usual column. A project that has `default` plus other workspaces always renders normally.
 
 Suggested tmux binding under capital `A` (lowercase `a` already opens the full deck):
 
