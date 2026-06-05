@@ -195,7 +195,7 @@ func TestStatusGlyphExitedNeverRenders(t *testing.T) {
 	}
 }
 
-func TestScopeOpenPRFiltersToNonDraftOpenPRs(t *testing.T) {
+func TestScopeInboxFiltersToOpenPRsIncludingDrafts(t *testing.T) {
 	items := []Item{
 		{ProjectName: "repo-a", WorkspaceName: "no-bookmark"},
 		{ProjectName: "repo-a", WorkspaceName: "open", RepoRoot: "/repo-a", Bookmark: "feat/open"},
@@ -205,15 +205,59 @@ func TestScopeOpenPRFiltersToNonDraftOpenPRs(t *testing.T) {
 	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
 		"/repo-a": {
 			"feat/open":   {State: PRStateOpen, IsDraft: false},
-			"feat/draft":  {State: PRStateOpen, IsDraft: true},
+			"feat/draft":  {State: PRStateOpen, IsDraft: true, Mine: true},
 			"feat/merged": {State: PRStateMerged},
 		},
 	}, nil)
-	model.scope = ScopeOpenPR
+	model.scope = ScopeInbox
 	got := model.items()
-	if len(got) != 1 || got[0].WorkspaceName != "open" {
-		t.Fatalf("expected only the non-draft open workspace, got %#v", got)
+	if len(got) != 2 {
+		t.Fatalf("expected the open + draft workspaces, got %#v", got)
 	}
+	// "Your drafts" precedes the catch-all "Other open PRs" bucket, so
+	// the draft sorts first.
+	if got[0].WorkspaceName != "draft" || got[1].WorkspaceName != "open" {
+		t.Fatalf("expected bucket order [draft open], got [%s %s]", got[0].WorkspaceName, got[1].WorkspaceName)
+	}
+}
+
+// Inbox scope sorts by bucket (action-first), then project, then label.
+func TestScopeInboxSortsByBucketThenProject(t *testing.T) {
+	items := []Item{
+		{ProjectName: "zeta", WorkspaceName: "waiting", RepoRoot: "/z", Bookmark: "b/waiting"},
+		{ProjectName: "alpha", WorkspaceName: "needs-fix", RepoRoot: "/a", Bookmark: "b/fix"},
+		{ProjectName: "alpha", WorkspaceName: "review-me", RepoRoot: "/a", Bookmark: "b/review"},
+		{ProjectName: "zeta", WorkspaceName: "ready", RepoRoot: "/z", Bookmark: "b/ready"},
+	}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/a": {
+			"b/fix":    {State: PRStateOpen, Mine: true, CIState: PRCIFailing},
+			"b/review": {State: PRStateOpen, ReviewRequested: true},
+		},
+		"/z": {
+			"b/waiting": {State: PRStateOpen, Mine: true},
+			"b/ready":   {State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean},
+		},
+	}, nil)
+	model.scope = ScopeInbox
+	got := model.items()
+	want := []string{"review-me", "needs-fix", "ready", "waiting"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d items, got %#v", len(want), got)
+	}
+	for i, w := range want {
+		if got[i].WorkspaceName != w {
+			t.Errorf("items()[%d] = %s, want %s (full order %v)", i, got[i].WorkspaceName, w, itemNames(got))
+		}
+	}
+}
+
+func itemNames(items []Item) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.WorkspaceName
+	}
+	return out
 }
 
 func TestStateChangedRefreshesAndResubscribes(t *testing.T) {
@@ -2427,12 +2471,13 @@ func TestClampDeckViewportStickyHeaderShrinksWindow(t *testing.T) {
 	// row inside the sticky-aware window.
 	m.cursor = 29
 	(&m).clampDeckViewport()
-	cursorRow := deckBodyCursorRow(m.items(), m.cursor)
+	bodyRows := m.bodyRows(m.items())
+	cursorRow := deckBodyCursorRow(bodyRows, m.cursor)
 	yoff := m.deckYOffset
 	effectiveCap := m.deckBodyCapacity() - 1
 	if cursorRow < yoff || cursorRow >= yoff+effectiveCap {
 		t.Errorf("cursor row %d not inside sticky-aware window [%d, %d); body=%d",
-			cursorRow, yoff, yoff+effectiveCap, deckBodyTotalRows(m.items()))
+			cursorRow, yoff, yoff+effectiveCap, len(bodyRows))
 	}
 }
 
@@ -2492,7 +2537,7 @@ func TestDeckBodyRowsCollapseLayout(t *testing.T) {
 	m := New(items, nil)
 	got := m.items()
 
-	rows := deckBodyRows(got, collapsedProjects(got))
+	rows := deckBodyRows(got, collapsedProjects(got), nil)
 	wantKinds := []deckRowKind{
 		deckRowCollapsed, // alpha/default
 		deckRowSpacer,    // between projects
@@ -2510,10 +2555,6 @@ func TestDeckBodyRowsCollapseLayout(t *testing.T) {
 			t.Errorf("row %d kind = %d, want %d", i, rows[i].kind, want)
 		}
 	}
-	if total := deckBodyTotalRows(got); total != 7 {
-		t.Errorf("deckBodyTotalRows = %d, want 7", total)
-	}
-
 	// Cursor → primary/collapsed row index.
 	cases := []struct{ cursor, row, header int }{
 		{0, 0, 0}, // alpha collapsed: row is its own header
@@ -2521,10 +2562,10 @@ func TestDeckBodyRowsCollapseLayout(t *testing.T) {
 		{2, 5, 2}, // beta/feat
 	}
 	for _, c := range cases {
-		if r := deckBodyCursorRow(got, c.cursor); r != c.row {
+		if r := deckBodyCursorRow(rows, c.cursor); r != c.row {
 			t.Errorf("deckBodyCursorRow(cursor=%d) = %d, want %d", c.cursor, r, c.row)
 		}
-		if h := deckBodyHeaderRowForCursor(got, c.cursor); h != c.header {
+		if h := deckBodyHeaderRowForCursor(rows, c.cursor); h != c.header {
 			t.Errorf("deckBodyHeaderRowForCursor(cursor=%d) = %d, want %d", c.cursor, h, c.header)
 		}
 	}
@@ -2718,5 +2759,146 @@ func TestPRGlyphOpenIsBlankDraftIsPencilRuler(t *testing.T) {
 	}
 	if prGlyphDraft != "\U000F1353" {
 		t.Errorf("draft glyph should be nf-md-pencil_ruler (U+F1353), got %q", prGlyphDraft)
+	}
+}
+
+func TestPRInboxBucket(t *testing.T) {
+	cases := []struct {
+		name   string
+		status PRStatus
+		want   inboxBucket
+	}{
+		{
+			name:   "review requested on someone else's PR",
+			status: PRStatus{State: PRStateOpen, ReviewRequested: true},
+			want:   inboxNeedsYourReview,
+		},
+		{
+			name:   "re-requested review",
+			status: PRStatus{State: PRStateOpen, ReviewRequested: true, ReviewRerequested: true},
+			want:   inboxNeedsYourReview,
+		},
+		{
+			// A review request names you regardless of the PR's own
+			// state — even a failing-CI PR sits in "needs your review".
+			name:   "review requested wins over CI failing",
+			status: PRStatus{State: PRStateOpen, ReviewRequested: true, CIState: PRCIFailing},
+			want:   inboxNeedsYourReview,
+		},
+		{
+			name:   "mine + changes requested",
+			status: PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewChangesRequested},
+			want:   inboxNeedsAction,
+		},
+		{
+			name:   "mine + CI failing",
+			status: PRStatus{State: PRStateOpen, Mine: true, CIState: PRCIFailing},
+			want:   inboxNeedsAction,
+		},
+		{
+			name:   "mine + merge conflicts",
+			status: PRStatus{State: PRStateOpen, Mine: true, MergeStateStatus: PRMergeStateDirty},
+			want:   inboxNeedsAction,
+		},
+		{
+			name:   "mine + approved but behind base",
+			status: PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind},
+			want:   inboxNeedsAction,
+		},
+		{
+			name:   "mine + approved + green + clean",
+			status: PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean},
+			want:   inboxReadyToMerge,
+		},
+		{
+			name:   "mine + approved + no checks + clean",
+			status: PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, CIState: PRCINone, MergeStateStatus: PRMergeStateClean},
+			want:   inboxReadyToMerge,
+		},
+		{
+			name:   "mine + in merge queue",
+			status: PRStatus{State: PRStateOpen, Mine: true, IsInMergeQueue: true, CIState: PRCIPassing},
+			want:   inboxReadyToMerge,
+		},
+		{
+			name:   "mine + no review yet",
+			status: PRStatus{State: PRStateOpen, Mine: true, CIState: PRCIPassing},
+			want:   inboxWaitingForReview,
+		},
+		{
+			// CI pending is not yet actionable — it parks in waiting.
+			name:   "mine + CI pending",
+			status: PRStatus{State: PRStateOpen, Mine: true, CIState: PRCIPending},
+			want:   inboxWaitingForReview,
+		},
+		{
+			// Approved but merge state unknown/blocked: not provably
+			// ready, nothing for the author to fix → waiting.
+			name:   "mine + approved + merge state unknown",
+			status: PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateUnknown},
+			want:   inboxWaitingForReview,
+		},
+		{
+			name:   "mine + draft",
+			status: PRStatus{State: PRStateOpen, Mine: true, IsDraft: true},
+			want:   inboxYourDrafts,
+		},
+		{
+			// Draft precedes CI/decision: a draft isn't submitted for
+			// review, so failing CI on it is informational.
+			name:   "mine + draft + CI failing stays a draft",
+			status: PRStatus{State: PRStateOpen, Mine: true, IsDraft: true, CIState: PRCIFailing},
+			want:   inboxYourDrafts,
+		},
+		{
+			name:   "someone else's PR, no review requested",
+			status: PRStatus{State: PRStateOpen},
+			want:   inboxOtherOpen,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := prInboxBucket(tc.status); got != tc.want {
+				t.Errorf("prInboxBucket = %v (%s), want %v (%s)", got, inboxBucketLabel(got), tc.want, inboxBucketLabel(tc.want))
+			}
+		})
+	}
+}
+
+// Inbox scope sections rows under bucket headers carrying counts, never
+// collapses, and hides empty buckets (no header is emitted for a bucket
+// with no rows).
+func TestBodyRowsInboxBucketHeaders(t *testing.T) {
+	items := []Item{
+		{ProjectName: "alpha", WorkspaceName: "default", RepoRoot: "/a", Bookmark: "b/review"},
+		{ProjectName: "beta", WorkspaceName: "fix", RepoRoot: "/b", Bookmark: "b/fix"},
+		{ProjectName: "gamma", WorkspaceName: "fix2", RepoRoot: "/g", Bookmark: "b/fix2"},
+	}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/a": {"b/review": {State: PRStateOpen, ReviewRequested: true}},
+		"/b": {"b/fix": {State: PRStateOpen, Mine: true, CIState: PRCIFailing}},
+		"/g": {"b/fix2": {State: PRStateOpen, Mine: true, MergeStateStatus: PRMergeStateDirty}},
+	}, nil)
+	model.scope = ScopeInbox
+	sorted := model.items()
+	rows := model.bodyRows(sorted)
+
+	var headers []string
+	for _, r := range rows {
+		switch r.kind {
+		case deckRowHeader:
+			headers = append(headers, r.project)
+		case deckRowCollapsed:
+			t.Errorf("inbox scope must not collapse rows, got collapsed row for %q", r.project)
+		}
+	}
+	want := []string{"Needs your review (1)", "Needs action (2)"}
+	if len(headers) != len(want) {
+		t.Fatalf("headers = %v, want %v", headers, want)
+	}
+	for i := range want {
+		if headers[i] != want[i] {
+			t.Errorf("header[%d] = %q, want %q", i, headers[i], want[i])
+		}
 	}
 }

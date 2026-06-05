@@ -138,6 +138,21 @@ The fan-out runs as a **detached job** in the same jobs subsystem that powers wo
 
 **Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
 
+### Inbox scope (`P`)
+
+The third `P` scope sections open-PR workspaces by *what your next move is*, like GitHub's pull request inbox, instead of by project. Buckets render as headers with counts, most urgent first; empty buckets are hidden:
+
+| Bucket | Membership |
+|---|---|
+| Needs your review | Someone else's PR with your review requested (or re-requested) |
+| Needs action | Your PR with changes requested, CI failing, merge conflicts, or behind base |
+| Ready to merge | Your PR, approved + CI green + clean (or already in the merge queue) |
+| Waiting for review | Your open PR with none of the above — ball is in the reviewers' court |
+| Your drafts | Your draft PRs (these were invisible in the old open-PR scope) |
+| Other open PRs | Open PRs that are neither yours nor awaiting your review (e.g. a collaborator's branch you checked out) |
+
+Since bucket headers replace project headers in this scope, each row carries a muted `[project]` chip before its label. Buckets are classified from the same cached PR status that drives the row glyphs — no extra fetches. Only workspaces with a resolvable open PR appear; merged and closed PRs stay out, as before.
+
 ### Activity bar (bottom of the deck)
 
 The bottom status line shows in-flight background work as a single segment between the row body and the right-aligned status / `? help`. It surfaces:
@@ -173,9 +188,9 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `x` | User actions menu (configurable via `actions` in config) |
 | `n` | New workspace (inline form: workspace name / start-from / agent prompt). `start-from` is a select with `main` (default) and `pick a bookmark…` (opens the bookmark picker). The form also surfaces a `Will create bookmark:` hint when `deck.bookmark_prefix` is configured. |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
-| `f` | Find: easymotion-style project → workspace jump |
+| `f` | Find: easymotion-style project → workspace jump (in the inbox scope there are no project headers, so `f` hints every row directly) |
 | `/` | Filter rows · `esc` clears |
-| `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → open PR (bookmark maps to a non-draft open PR). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
+| `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
 | `L` | Switch to last tmux session |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
@@ -195,7 +210,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 
 | Command | Purpose |
 |---|---|
-| `awp deck [--scope=all\|attention\|open-pr]` | Open the workspace dashboard. `--scope` sets the initial filter (default `all`); `P` still cycles through every scope inside the deck. |
+| `awp deck [--scope=all\|attention\|inbox]` | Open the workspace dashboard. `--scope` sets the initial filter (default `all`); `P` still cycles through every scope inside the deck. `pr` and the legacy `open-pr` are accepted as aliases for `inbox`. |
 | `awp mini-deck` | Quick-jump list of workspaces with an active agent or unread notification |
 | `awp w open [name]` | Create or attach to a workspace. Run with no name to drop into the same unified form the deck's `n` key shows: workspace name, `Start from` (`main` by default, or `pick a bookmark…`), and an optional agent prompt. To review a PR instead, use `awp review`. |
 | `awp w list` | List workspaces in the current repo |

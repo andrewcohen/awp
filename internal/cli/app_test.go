@@ -402,8 +402,8 @@ func TestRunDeckPassesScopeFlag(t *testing.T) {
 	if err := app.Run([]string{"deck", "--scope=open-pr"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if gotScope != deckui.ScopeOpenPR {
-		t.Fatalf("expected ScopeOpenPR, got %v", gotScope)
+	if gotScope != deckui.ScopeInbox {
+		t.Fatalf("expected ScopeInbox, got %v", gotScope)
 	}
 }
 
