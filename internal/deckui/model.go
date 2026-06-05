@@ -3679,7 +3679,6 @@ func (m Model) renderHelp(width int) string {
 	}
 	prLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("PR status (right glyph)"),
-		prDot(prGlyphOpen, colAccent, "open"),
 		prDot(prGlyphDraft, colMuted, "draft"),
 		prDot(prGlyphApproved, colSuccess, "approved"),
 		prDot(prGlyphInQueue, colSuccess, "in merge queue"),
@@ -4926,13 +4925,13 @@ func assignHints(names []string) map[string]string {
 	return out
 }
 
-// Nerd Font Octicon codepoints used for the per-row PR status glyph. The
-// deck assumes a patched font is available. Codepoints live in the Private
-// Use Area, so they encode here as \u escapes that the Go compiler turns into
-// the same UTF-8 bytes regardless of editor/rendering pipeline behavior.
+// Nerd Font codepoints (Octicons + Material Design) used for the per-row PR
+// status glyph. The deck assumes a patched font is available. Codepoints live
+// in the Private Use Area, so they encode here as \u escapes that the Go
+// compiler turns into the same UTF-8 bytes regardless of editor/rendering
+// pipeline behavior. Plain "open" has no glyph on purpose — see prGlyphFor.
 const (
-	prGlyphOpen     = "" // nf-oct-git_pull_request
-	prGlyphDraft    = "" // nf-oct-git_pull_request_draft
+	prGlyphDraft    = "\U000F1353" // nf-md-pencil_ruler — still being drawn up
 	prGlyphClosed   = "" // nf-oct-git_pull_request_closed
 	prGlyphMerged   = "" // nf-oct-git_merge
 	prGlyphApproved = "" // nf-oct-check
@@ -4953,8 +4952,11 @@ const (
 
 // prGlyphFor returns the single glyph for the given PR status per the locked
 // priority order: merged → closed → CI failed → CI pending → in merge queue →
-// approved → draft → open. Returns "" when no glyph should render (caller
-// passes a zero/empty status when the workspace has no matching PR).
+// approved → draft. Returns "" when no glyph should render (caller passes a
+// zero/empty status when the workspace has no matching PR). Plain "open" is
+// deliberately glyph-less: it's the baseline state, so painting it taught the
+// eye to skim past the glyph column — only states that deviate from baseline
+// earn ink. The details panel still says "open" via prStatusLabel.
 func prGlyphFor(s PRStatus) string {
 	if s.State == PRStateMerged {
 		return prGlyphMerged
@@ -4976,9 +4978,6 @@ func prGlyphFor(s PRStatus) string {
 	}
 	if s.IsDraft {
 		return prGlyphDraft
-	}
-	if s.State == PRStateOpen {
-		return prGlyphOpen
 	}
 	return ""
 }
