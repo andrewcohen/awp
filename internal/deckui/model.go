@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
 )
@@ -3754,16 +3755,27 @@ func (m Model) renderHelp(width int) string {
 	}
 	innerWidth := boxWidth - boxOverhead
 
+	// Clamp every legend / key line to its column width: truncate with an
+	// ellipsis rather than letting lipgloss .Width wrap long lines onto
+	// extra rows, which made the overlay much taller than its line count.
+	clipBlock := func(block string, w int) string {
+		lines := strings.Split(block, "\n")
+		for i, ln := range lines {
+			lines[i] = ansi.Truncate(ln, w, "…")
+		}
+		return lipgloss.NewStyle().Width(w).Render(strings.Join(lines, "\n"))
+	}
+
 	var cols string
 	if innerWidth >= 70 {
 		leftWidth := (innerWidth - gutter) * 9 / 20
 		rightWidth := innerWidth - gutter - leftWidth
-		left := lipgloss.NewStyle().Width(leftWidth).Render(leftBlock)
-		right := lipgloss.NewStyle().Width(rightWidth).Render(rightBlock)
+		left := clipBlock(leftBlock, leftWidth)
+		right := clipBlock(rightBlock, rightWidth)
 		cols = lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gutter), right)
 	} else {
 		// Narrow terminal — stack vertically like the old layout.
-		cols = leftBlock + "\n\n" + rightBlock
+		cols = clipBlock(leftBlock, innerWidth) + "\n\n" + clipBlock(rightBlock, innerWidth)
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, title, "", cols)
