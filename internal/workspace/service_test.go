@@ -1145,3 +1145,51 @@ func TestListPrunesStaleStateEntriesNotInJJ(t *testing.T) {
 		t.Fatalf("expected stale qa entry to be pruned, got %+v", store.entries)
 	}
 }
+
+func TestWantsAttention(t *testing.T) {
+	for _, s := range []string{"waiting", "idle", " Idle "} {
+		if !WantsAttention(s) {
+			t.Errorf("WantsAttention(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"working", "exited", "", "done"} {
+		if WantsAttention(s) {
+			t.Errorf("WantsAttention(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestUpdateStatusUnreadLifecycle(t *testing.T) {
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{"qa": true}}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{"qa": {Name: "qa", Path: repoRoot + "/qa"}}}
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+
+	if err := svc.UpdateStatus("qa", "waiting"); err != nil {
+		t.Fatalf("UpdateStatus(waiting): %v", err)
+	}
+	if !store.entries["qa"].Unread {
+		t.Error("waiting should set Unread")
+	}
+
+	// Exited clears the stale badge — the agent is gone, so there is
+	// nothing for the user to act on.
+	if err := svc.UpdateStatus("qa", "exited"); err != nil {
+		t.Fatalf("UpdateStatus(exited): %v", err)
+	}
+	if got := store.entries["qa"]; got.Status != "exited" || got.Unread {
+		t.Errorf("after exited: Status=%q Unread=%v, want exited/false", got.Status, got.Unread)
+	}
+
+	// Working leaves an existing unread flag alone (deck refresh clears it).
+	if err := svc.UpdateStatus("qa", "idle"); err != nil {
+		t.Fatalf("UpdateStatus(idle): %v", err)
+	}
+	if err := svc.UpdateStatus("qa", "working"); err != nil {
+		t.Fatalf("UpdateStatus(working): %v", err)
+	}
+	if got := store.entries["qa"]; !got.Unread {
+		t.Errorf("working should not clear Unread, got %+v", got)
+	}
+}

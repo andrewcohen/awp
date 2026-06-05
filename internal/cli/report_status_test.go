@@ -170,11 +170,11 @@ func TestReportStatusIdleClearsPrompt(t *testing.T) {
 	}
 }
 
-func TestReportStatusExitedClearsPrompt(t *testing.T) {
+func TestReportStatusExitedClearsPromptAndUnread(t *testing.T) {
 	const root = "/tmp/awp-test-repo"
 	fs := newFakeStore()
 	fs.byRepo[root] = map[string]workspace.Entry{
-		"feat-x": {Name: "feat-x", Path: root + "/.jj/awp/feat-x", ActivePrompt: "prior prompt"},
+		"feat-x": {Name: "feat-x", Path: root + "/.jj/awp/feat-x", ActivePrompt: "prior prompt", Unread: true},
 	}
 	withFakeStore(t, fs)
 	withWorkspaceEnv(t, "feat-x", "awp-test-repo", root)
@@ -183,8 +183,12 @@ func TestReportStatusExitedClearsPrompt(t *testing.T) {
 		t.Fatalf("runReportStatus: %v", err)
 	}
 
-	if got := fs.byRepo[root]["feat-x"]; got.ActivePrompt != "" {
+	got := fs.byRepo[root]["feat-x"]
+	if got.ActivePrompt != "" {
 		t.Errorf("ActivePrompt = %q, want cleared on exited", got.ActivePrompt)
+	}
+	if got.Unread {
+		t.Error("Unread = true, want cleared on exited (agent gone, nothing to act on)")
 	}
 }
 

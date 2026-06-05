@@ -1208,14 +1208,16 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			}
 			if snap.known && nameMatch && snap.agentShell[sessionName] {
 				status = "exited"
+				// An exited agent has nothing for the user to act on, so the
+				// transition drops any stale unread badge instead of setting
+				// one.
+				unread = false
 				// Persist the override (only on the deck's own repo) so
 				// downstream consumers — doctor, the cross-repo pane on
 				// another deck — see the same thing. Claude has no exit
-				// hook of its own.
+				// hook of its own. UpdateStatus clears the stored Unread.
 				if isCurrentRepo && e.Status != "exited" {
-					if err := svc.UpdateStatus(e.Name, "exited"); err == nil && !unread {
-						unread = true
-					}
+					_ = svc.UpdateStatus(e.Name, "exited")
 				}
 			}
 

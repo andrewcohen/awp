@@ -99,11 +99,10 @@ The same PATH caveats as `awp deck` apply (see above) — use absolute paths or 
 |---|---|---|
 | 🟢 Green | `working` | Agent is actively producing output or running a tool |
 | 🟡 Yellow | `waiting` | Blocked on you — permission prompt, `AskUserQuestion`, or MCP form |
-| ⚪ Grey | `notified` | Agent finished a turn (or exited) and you haven't summoned the workspace since |
-| 🔴 Red | `exited` | Process gone, pane back at a shell (rendered when notified) |
-| _(blank)_ | `idle` / `starting` | Quiet — no badge until the agent actually surfaces something |
+| ⚪ Grey | `notified` | Agent finished a turn and you haven't summoned the workspace since |
+| _(blank)_ | `idle` / `starting` / `exited` | Quiet — no badge until the agent actually surfaces something. An exited agent never badges: the process is gone, so there's nothing to act on |
 
-The grey "notified" dot is a per-workspace unread badge: it lights up when the agent transitions into `waiting`, `idle`, or `exited`, and clears the next time you summon that workspace (any of `enter`, `a`, `e`, `c`, `v`, `s`, `i`, `x`).
+The grey "notified" dot is a per-workspace unread badge: it lights up when the agent transitions into `waiting` or `idle`, and clears the next time you summon that workspace (any of `enter`, `a`, `e`, `c`, `v`, `s`, `i`, `x`) — or when the agent exits.
 
 ### PR status (the Octicon glyph after each workspace name)
 

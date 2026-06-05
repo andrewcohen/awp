@@ -256,7 +256,8 @@ func tmuxLocalEnv(key string) string {
 // matching entry. It prefers repoRoot (absolute path) for an exact match;
 // falls back to repoName (basename of each known repo root) when the root
 // is unknown. It also flips Unread=true on transitions into "attention"
-// states so the tmux badge surfaces the change.
+// states so the tmux badge surfaces the change, and clears Unread on
+// "exited" — a gone agent has nothing for the user to act on.
 //
 // ActivePrompt lifecycle: a non-empty prompt argument overwrites the field
 // (UserPromptSubmit / before_agent_start path). When the new status is
@@ -292,12 +293,13 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status, prompt stri
 		case status == "idle" || status == "exited":
 			entry.ActivePrompt = ""
 		}
-		if workspace.WantsAttention(status) {
-			if viewing {
-				entry.Unread = false
-			} else {
-				entry.Unread = true
-			}
+		switch {
+		case workspace.IsExited(status):
+			// Agent gone — nothing to respond to; drop any stale badge so
+			// the workspace doesn't keep surfacing in the tmux summary.
+			entry.Unread = false
+		case workspace.WantsAttention(status):
+			entry.Unread = !viewing
 		}
 		entries[name] = entry
 		return entries
