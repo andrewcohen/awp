@@ -174,11 +174,17 @@ type PRStatus struct {
 // rawCheck is the (partial) shape of an entry in statusCheckRollup. gh returns
 // a heterogeneous list of CheckRun and StatusContext rows. Both expose a
 // Conclusion (CheckRun) or State (StatusContext) field plus a Status field; we
-// reduce them to a single CIState via rollupCIState.
+// reduce them to a single CIState via rollupCIState. Name (CheckRun) /
+// Context (StatusContext) and the timestamps let the rollup keep only the
+// latest run per check when superseded runs linger in the list.
 type rawCheck struct {
-	Conclusion string `json:"conclusion"`
-	Status     string `json:"status"`
-	State      string `json:"state"`
+	Name        string `json:"name"`
+	Context     string `json:"context"`
+	Conclusion  string `json:"conclusion"`
+	Status      string `json:"status"`
+	State       string `json:"state"`
+	StartedAt   string `json:"startedAt"`
+	CompletedAt string `json:"completedAt"`
 }
 
 type rawPRStatus struct {
@@ -298,7 +304,7 @@ func rollupCIState(checks []rawCheck) CIState {
 		return CINone
 	}
 	pending := false
-	for _, c := range checks {
+	for _, c := range latestCheckPerName(checks) {
 		// CheckRun: completed checks set Conclusion (SUCCESS, FAILURE,
 		// CANCELLED, TIMED_OUT, ACTION_REQUIRED, NEUTRAL, SKIPPED, STALE).
 		// In-flight checks have Status in (QUEUED, IN_PROGRESS, WAITING,
@@ -326,6 +332,48 @@ func rollupCIState(checks []rawCheck) CIState {
 		return CIPending
 	}
 	return CIPassing
+}
+
+// latestCheckPerName collapses superseded runs out of a statusCheckRollup
+// list. When a newer push (or a concurrency group) cancels an in-flight
+// workflow run and a re-run completes, GitHub's rollup contains BOTH the
+// CANCELLED first run and its replacement under the same check name —
+// while the PR page shows only the latest. Without this reduction the
+// stale CANCELLED entry marks the PR CI-failing forever. Keyed by CheckRun
+// name (or StatusContext context); the entry with the latest
+// completedAt/startedAt wins, with later list position breaking ties.
+// Unnamed entries are kept as-is.
+func latestCheckPerName(checks []rawCheck) []rawCheck {
+	at := func(c rawCheck) string {
+		// RFC3339 timestamps compare correctly as strings; CompletedAt
+		// is empty for in-flight runs, so fall back to StartedAt.
+		if c.CompletedAt != "" {
+			return c.CompletedAt
+		}
+		return c.StartedAt
+	}
+	out := make([]rawCheck, 0, len(checks))
+	idxByName := map[string]int{}
+	for _, c := range checks {
+		name := c.Name
+		if name == "" {
+			name = c.Context
+		}
+		if name == "" {
+			out = append(out, c)
+			continue
+		}
+		i, ok := idxByName[name]
+		if !ok {
+			idxByName[name] = len(out)
+			out = append(out, c)
+			continue
+		}
+		if at(c) >= at(out[i]) {
+			out[i] = c
+		}
+	}
+	return out
 }
 
 // ListMergeQueuedHeads returns the set of OPEN PR headRefNames that GitHub

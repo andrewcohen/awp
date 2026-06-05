@@ -339,3 +339,47 @@ func TestFetchPRComments(t *testing.T) {
 		}
 	}
 }
+
+func TestRollupCIStateSupersededCancelledRuns(t *testing.T) {
+	// Mirrors redwood#2170: a concurrency group cancelled the first
+	// workflow run and the re-run succeeded (or was skipped) — BOTH
+	// appear in the rollup under the same check name. Only the latest
+	// run per name counts, so the PR reads as passing.
+	checks := []rawCheck{
+		{Name: "ci / Build", Conclusion: "CANCELLED", CompletedAt: "2026-06-04T17:26:57Z"},
+		{Name: "ci / Build", Conclusion: "SUCCESS", CompletedAt: "2026-06-04T17:28:03Z"},
+		{Name: "Show preview deploys", Conclusion: "CANCELLED", CompletedAt: "2026-06-04T17:27:02Z"},
+		{Name: "Show preview deploys", Conclusion: "SKIPPED", CompletedAt: "2026-06-04T17:28:49Z"},
+		{Context: "Aikido Security: check code", State: "SUCCESS"},
+	}
+	if got := rollupCIState(checks); got != CIPassing {
+		t.Errorf("rollupCIState = %v, want CIPassing", got)
+	}
+
+	// Order independence: the stale cancelled run may follow the re-run.
+	reversed := []rawCheck{
+		{Name: "ci / Build", Conclusion: "SUCCESS", CompletedAt: "2026-06-04T17:28:03Z"},
+		{Name: "ci / Build", Conclusion: "CANCELLED", CompletedAt: "2026-06-04T17:26:57Z"},
+	}
+	if got := rollupCIState(reversed); got != CIPassing {
+		t.Errorf("rollupCIState (reversed) = %v, want CIPassing", got)
+	}
+
+	// A cancelled run with no replacement still reads as failing.
+	solo := []rawCheck{
+		{Name: "ci / Build", Conclusion: "CANCELLED", CompletedAt: "2026-06-04T17:26:57Z"},
+	}
+	if got := rollupCIState(solo); got != CIFailing {
+		t.Errorf("rollupCIState (solo cancelled) = %v, want CIFailing", got)
+	}
+
+	// An in-flight re-run (empty conclusion, no completedAt yet) beats a
+	// completed older run only by startedAt — and reads as pending.
+	rerunning := []rawCheck{
+		{Name: "ci / Test", Conclusion: "FAILURE", StartedAt: "2026-06-04T17:20:00Z", CompletedAt: "2026-06-04T17:26:00Z"},
+		{Name: "ci / Test", Conclusion: "", Status: "IN_PROGRESS", StartedAt: "2026-06-04T17:30:00Z"},
+	}
+	if got := rollupCIState(rerunning); got != CIPending {
+		t.Errorf("rollupCIState (re-running) = %v, want CIPending", got)
+	}
+}
