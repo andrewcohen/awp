@@ -60,6 +60,13 @@ func TestFormatUnreadSummary(t *testing.T) {
 			},
 			want: "#[fg=green]● 1#[default]",
 		},
+		{
+			name: "exited stays silent even with a stale unread flag",
+			all: map[string]map[string]workspace.Entry{
+				"/r": {"a": {Status: "exited", Unread: true}},
+			},
+			wantEmpty: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 //
 //	● N — working (green; live, shown regardless of the unread flag)
 //	▲ N — waiting on user (yellow)
-//	● N — notified (idle/exited after a turn, grey)
+//	● N — notified (idle after a turn, grey)
 func runUnreadSummary(out io.Writer) error {
 	store := state.NewJSONStore()
 	all, err := store.LoadAll()
@@ -31,6 +31,8 @@ func runUnreadSummary(out io.Writer) error {
 // resumed work but still carries a stale unread flag from a prior waiting
 // turn counts as working, not double-counted as notified. Working mirrors
 // the deck's always-on green dot — counted by status, not gated on unread.
+// Exited workspaces never count: the agent is gone, so there's nothing to
+// act on (and old state files may still carry a stale unread flag).
 func formatUnreadSummary(all map[string]map[string]workspace.Entry) string {
 	var working, waiting, notified int
 	for _, entries := range all {
@@ -38,6 +40,8 @@ func formatUnreadSummary(all map[string]map[string]workspace.Entry) string {
 			switch {
 			case isWorkingStatus(e.Status):
 				working++
+			case workspace.IsExited(e.Status):
+				continue
 			case !e.Unread:
 				continue
 			case strings.EqualFold(strings.TrimSpace(e.Status), "waiting"):

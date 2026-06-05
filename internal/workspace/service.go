@@ -140,9 +140,9 @@ type Entry struct {
 	ActivePrompt  string `json:",omitempty"`
 	Status        string `json:",omitempty"`
 	// Unread is set when the agent transitions to a state that wants the
-	// user's attention (waiting/idle/exited) and cleared when the user
-	// summons the workspace. Surfaces as a tmux status badge and the
-	// "notified" dot in the deck.
+	// user's attention (waiting/idle) and cleared when the user summons
+	// the workspace or the agent exits. Surfaces as a tmux status badge
+	// and the "notified" dot in the deck.
 	Unread bool `json:",omitempty"`
 }
 
@@ -849,8 +849,14 @@ func (s *service) UpdatePrompt(workspaceName, prompt string) error {
 func (s *service) UpdateStatus(workspaceName, status string) error {
 	return s.mutateEntry(workspaceName, func(e *Entry) {
 		e.Status = status
-		if WantsAttention(status) {
+		switch {
+		case WantsAttention(status):
 			e.Unread = true
+		case IsExited(status):
+			// The agent process is gone — there is nothing to respond to, so
+			// a stale unread flag from a prior waiting/idle turn shouldn't
+			// keep badging the row.
+			e.Unread = false
 		}
 	})
 }
@@ -861,14 +867,22 @@ func (s *service) MarkRead(workspaceName string) error {
 
 // WantsAttention reports whether a status transition into `status` should mark
 // the workspace unread (badge it for the user). `working` does not — the agent
-// is busy and the user has nothing to act on yet.
+// is busy and the user has nothing to act on yet. `exited` does not either —
+// the agent is gone, so there is no one to respond to and nothing actionable.
 func WantsAttention(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "waiting", "idle", "exited":
+	case "waiting", "idle":
 		return true
 	default:
 		return false
 	}
+}
+
+// IsExited reports whether a status means the agent process is gone. Exited
+// workspaces never surface to the user (no unread badge, no status glyph) —
+// there is nothing to act on.
+func IsExited(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "exited")
 }
 
 func (s *service) ClearSession(workspaceName string) error {
@@ -1761,17 +1775,14 @@ func (s *service) canonicalizeEntries(repoRoot string, entries map[string]Entry)
 			path = repoRoot
 			changed = true
 		}
-		canonical[normalizedName] = Entry{
-			Name:          normalizedName,
-			Path:          path,
-			Bookmark:      entry.Bookmark,
-			SessionID:     entry.SessionID,
-			SessionName:   entry.SessionName,
-			AgentWindowID: entry.AgentWindowID,
-			AgentPaneID:   entry.AgentPaneID,
-			ActivePrompt:  entry.ActivePrompt,
-			Status:        entry.Status,
-		}
+		// Canonicalization only normalizes the key/name/path — every other
+		// field carries over verbatim. Copy the full entry and overwrite the
+		// normalized fields so newly added Entry fields can't be silently
+		// dropped here (Unread and PRNumber once were).
+		canonicalEntry := entry
+		canonicalEntry.Name = normalizedName
+		canonicalEntry.Path = path
+		canonical[normalizedName] = canonicalEntry
 		if key != normalizedName || entry.Name != normalizedName || entry.Path != path {
 			changed = true
 		}

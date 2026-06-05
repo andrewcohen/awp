@@ -182,6 +182,19 @@ func TestScopeAttentionMatchesMiniDeckCriteria(t *testing.T) {
 	}
 }
 
+func TestStatusGlyphExitedNeverRenders(t *testing.T) {
+	// Exited never renders a dot, even with a stale unread flag from an
+	// old state file — the agent is gone, so there's nothing to act on.
+	for _, unread := range []bool{true, false} {
+		if got := statusGlyph("exited", false, unread); got != " " {
+			t.Errorf("statusGlyph(exited, unread=%v) = %q, want blank", unread, got)
+		}
+	}
+	if got := statusGlyph("waiting", false, true); got == " " {
+		t.Error("statusGlyph(waiting, unread) should render a dot")
+	}
+}
+
 func TestScopeOpenPRFiltersToNonDraftOpenPRs(t *testing.T) {
 	items := []Item{
 		{ProjectName: "repo-a", WorkspaceName: "no-bookmark"},
