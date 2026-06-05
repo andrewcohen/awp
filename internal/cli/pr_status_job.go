@@ -45,6 +45,16 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 		return errors.New("pr-status: spec carries no repos")
 	}
 	store := state.NewJSONStore()
+	// One viewer-login lookup per job run — the login is account-global
+	// and feeds the viewer-relative review-requested signals. Failure
+	// just disables those signals for this fetch; it must not fail the
+	// job.
+	viewer := ""
+	if login, err := github.New(fixedDirRunner{base: runner, dir: repos[0]}).ViewerLogin(repos[0]); err == nil {
+		viewer = login
+	} else {
+		deckDebugLogf("prStatus viewer-login err: %v", err)
+	}
 	for _, repo := range repos {
 		started := time.Now()
 		gh := github.New(fixedDirRunner{base: runner, dir: repo})
@@ -61,9 +71,9 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 		if qErr != nil {
 			reporter.Step(fmt.Sprintf("%s — merge-queue lookup failed: %v", repo, qErr))
 		}
-		byHead := prStatusMapFromGithub(statuses, queued)
+		byHead := prStatusMapFromGithub(statuses, queued, viewer)
 		pinned := pinnedPRNumbersForRepo(store, repo)
-		topUps := topUpMissingOverrides(gh, repo, byHead, pinned)
+		topUps := topUpMissingOverrides(gh, repo, byHead, pinned, viewer)
 		for head, status := range topUps {
 			byHead[head] = status
 		}
@@ -118,7 +128,7 @@ func pinnedPRNumbersForRepo(store *state.JSONStore, repo string) map[int]bool {
 // repo can have hundreds of PRs more recent than the one a user is
 // trying to surface, and `gh pr list --limit 100` cuts them off. This
 // helper closes that gap.
-func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]deckui.PRStatus, pinned map[int]bool) map[string]deckui.PRStatus {
+func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]deckui.PRStatus, pinned map[int]bool, viewer string) map[string]deckui.PRStatus {
 	if len(pinned) == 0 {
 		return nil
 	}
@@ -145,7 +155,7 @@ func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]dec
 		if key == "" {
 			key = fmt.Sprintf("__pin_%d", n)
 		}
-		out[key] = prStatusFromGithub(s, false)
+		out[key] = prStatusFromGithub(s, false, viewer)
 		deckDebugLogf("prStatus topUp ok repo=%s pr=%d head=%s state=%s", repo, n, s.HeadRefName, s.State)
 	}
 	return out

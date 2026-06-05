@@ -169,6 +169,16 @@ type PRStatus struct {
 	ReviewDecision   ReviewDecision
 	CIState          CIState
 	MergeStateStatus MergeStateStatus
+	// ReviewRequests is the logins whose review is currently requested
+	// (team requests are skipped — they can't match a viewer login).
+	// GitHub puts a reviewer back in this set when the author
+	// re-requests their review, so "viewer ∈ ReviewRequests" covers both
+	// first requests and re-requests.
+	ReviewRequests []string
+	// Reviewers is the logins with a latest review on record. A login in
+	// both Reviewers and ReviewRequests has been asked to review AGAIN —
+	// the re-request signal.
+	Reviewers []string
 }
 
 // rawCheck is the (partial) shape of an entry in statusCheckRollup. gh returns
@@ -201,6 +211,38 @@ type rawPRStatus struct {
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
 	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
 	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
+	// reviewRequests mixes Users (login) and Teams (name/slug only).
+	ReviewRequests []struct {
+		Login string `json:"login"`
+	} `json:"reviewRequests"`
+	LatestReviews []struct {
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
+	} `json:"latestReviews"`
+}
+
+// requestedLogins extracts the user logins whose review is requested,
+// dropping empties (team review requests carry no login).
+func (r rawPRStatus) requestedLogins() []string {
+	var out []string
+	for _, rr := range r.ReviewRequests {
+		if l := strings.TrimSpace(rr.Login); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// reviewerLogins extracts the authors of the PR's latest reviews.
+func (r rawPRStatus) reviewerLogins() []string {
+	var out []string
+	for _, rv := range r.LatestReviews {
+		if l := strings.TrimSpace(rv.Author.Login); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // ListPRStatus fetches PRs (any state) for the repo at repoDir via gh and
@@ -212,7 +254,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "all",
 		"--limit", "100",
-		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -235,6 +277,8 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 			ReviewDecision:   r.ReviewDecision,
 			CIState:          rollupCIState(r.StatusCheckRollup),
 			MergeStateStatus: r.MergeStateStatus,
+			ReviewRequests:   r.requestedLogins(),
+			Reviewers:        r.reviewerLogins(),
 		}
 	}
 	return statuses, nil
@@ -272,7 +316,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
-		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews",
 	)
 	if err != nil {
 		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
@@ -293,7 +337,25 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 		ReviewDecision:   r.ReviewDecision,
 		CIState:          rollupCIState(r.StatusCheckRollup),
 		MergeStateStatus: r.MergeStateStatus,
+		ReviewRequests:   r.requestedLogins(),
+		Reviewers:        r.reviewerLogins(),
 	}, nil
+}
+
+// ViewerLogin returns the authenticated gh user's login. repoDir scopes
+// the runner like every other call so gh resolves the right auth host
+// from the repo's remote. Callers treat an error as "viewer unknown"
+// and skip viewer-relative signals (review-requested) rather than
+// failing the fetch.
+func (c *Client) ViewerLogin(repoDir string) (string, error) {
+	out, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "api", "user", "--jq", ".login",
+	)
+	if err != nil {
+		return "", fmt.Errorf("gh api user: %w: %s", err, out)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // rollupCIState reduces gh's heterogeneous statusCheckRollup list to a single

@@ -117,6 +117,11 @@ func (r *sequencedRunner) Run(_ context.Context, _ string, name string, args ...
 	if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
 		return `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`, nil
 	}
+	// Viewer-login lookup (once per job run) — must not consume the
+	// per-repo bulk-status sequence.
+	if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "user" {
+		return "testuser", nil
+	}
 	i := *r.counter
 	if i >= len(r.seq) {
 		return "", nil
