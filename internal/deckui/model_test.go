@@ -2670,3 +2670,33 @@ func TestRenderListCollapsesDefaultOnlyProject(t *testing.T) {
 		}
 	}
 }
+
+// renderHelp must truncate long legend / key lines to their column
+// width instead of letting lipgloss wrap them onto extra rows — wrap
+// made the overlay grow taller as the terminal narrowed. With
+// truncation, every two-column rendering has the same height
+// regardless of viewport width.
+func TestRenderHelpTruncatesInsteadOfWrapping(t *testing.T) {
+	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
+
+	height := func(width int) int {
+		return strings.Count(model.renderHelp(width), "\n") + 1
+	}
+
+	wide := height(200)
+	// width 90 → boxWidth 82 → innerWidth 76: still the two-column
+	// layout, but narrow enough that long binding descriptions used to
+	// wrap before truncation was added.
+	if narrow := height(90); narrow != wide {
+		t.Errorf("help overlay height should not depend on width in two-column mode: width 200 → %d lines, width 90 → %d lines", wide, narrow)
+	}
+
+	// No rendered line may exceed the box width at the narrow size.
+	// boxWidth 82 plus 2 cols of border = 84 total.
+	out := model.renderHelp(90)
+	for _, line := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(line); w > 84 {
+			t.Errorf("help line exceeds box width 84 (got %d): %q", w, line)
+		}
+	}
+}
