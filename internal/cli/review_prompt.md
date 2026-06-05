@@ -144,11 +144,20 @@ After posting, list each comment in chat as a numbered bullet:
 in the same order they appear in tuicr. The user will reply with which
 numbers to publish.
 
+### Fixing a posted comment
+
+tuicr has no edit/remove commands yet, but the session is just a JSON
+file — the one `--session` points at. If a posted comment needs fixing
+(typo, wrong line, duplicate), edit `{{session_path}}` directly: find
+your comment in it and modify or delete that entry. Prefer getting the
+comment right the first time; this is the repair path, not the workflow.
+
 ### Out of scope
 
-- Do not send a test ping. There's no `tuicr review remove`; the first
-  real comment is your smoke test. If `tuicr review add` errors, fix
-  the invocation and retry — don't leave a placeholder behind.
+- Do not send a test ping. The first real comment is your smoke test.
+  If `tuicr review add` errors, fix the invocation and retry — don't
+  leave a placeholder behind (and if one slips through, remove it from
+  the session JSON as described above).
 - Do not impersonate the user's voice or omit `--username`.
 - Do not fix the issues you find. Comment only.
 - Do not run git/jj mutations or open new tmux windows. Running tests
