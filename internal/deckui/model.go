@@ -646,6 +646,15 @@ type PRStatus struct {
 	ReviewDecision   PRReviewDecision
 	CIState          PRCIState
 	MergeStateStatus PRMergeStateStatus
+	// ReviewRequested: the deck owner's review is currently requested on
+	// this PR. ReviewRerequested narrows it: they already reviewed and
+	// the author asked again. Mine: the deck owner authored this PR.
+	// All three are computed against the gh viewer login at fetch time
+	// (cli/pr_status_projection.go), so the cache stays viewer-agnostic
+	// at render time.
+	ReviewRequested   bool
+	ReviewRerequested bool
+	Mine              bool
 }
 
 // PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more
@@ -3680,6 +3689,9 @@ func (m Model) renderHelp(width int) string {
 		prDot(prGlyphBehind, colWarning, "behind base"),
 		prDot(prGlyphDirty, colDanger, "merge conflicts"),
 		prDot(prGlyphStale, colWarning, "local copy stale"),
+		prDot(prGlyphReviewReq, colInfo, "your review requested"),
+		prDot(prGlyphReviewReq, colWarning, "review re-requested"),
+		prDot(prGlyphChangesReq, colWarning, "changes requested on your PR"),
 	}
 	activityLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
@@ -3844,31 +3856,45 @@ func (m Model) renderList(width int) string {
 			// preferable to a blank glyph slot.
 			glyph := statusGlyph(item.Status, dim, item.Unread)
 			line := fmt.Sprintf("%s %s %s", prefixSlot.Render(prefix), glyph, labelStyle.Render(label))
-			if prGlyph := m.prGlyphForItem(item); prGlyph != "" {
-				line += " " + prGlyph
-			}
-			if staleGlyph := m.prStaleGlyphForItem(item); staleGlyph != "" {
-				line += " " + staleGlyph
-			}
-			if localStale := m.prLocalStaleGlyphForItem(item); localStale != "" {
-				line += " " + localStale
-			}
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
 			}
 		case deckRowMeta:
 			item := items[r.itemIndex]
-			// Secondary line: muted @author · head · dev. Indented past
-			// where the label starts so it visually sits *under* the row
-			// rather than next to it — gives the eye a clear "this belongs
-			// to the row above" cue without adding row height.
+			// Secondary line: PR glyphs then muted @author · head · dev.
+			// Indented past where the label starts so it visually sits
+			// *under* the row rather than next to it — gives the eye a
+			// clear "this belongs to the row above" cue without adding
+			// row height. The PR glyphs lead this line (instead of
+			// trailing the label above) so the primary row stays
+			// name-only and the glyph cluster lines up in a column.
 			// Truncated to fit; lipgloss.Width pads but doesn't clip.
 			const metaIndentW = prefixWidth + 1 + 1 + 1 + 4 // prefix + space + glyph + space + extra subordinate indent
 			metaIndent := strings.Repeat(" ", metaIndentW)
+			glyphs := ""
+			for _, g := range []string{
+				m.prGlyphForItem(item),
+				m.prStaleGlyphForItem(item),
+				m.prLocalStaleGlyphForItem(item),
+				m.prReviewReqGlyphForItem(item),
+			} {
+				if g == "" {
+					continue
+				}
+				if glyphs != "" {
+					glyphs += " "
+				}
+				glyphs += g
+			}
 			metaRoom := max(10, width-2-metaIndentW)
+			line := metaIndent
+			if glyphs != "" {
+				line += glyphs + "  "
+				metaRoom = max(10, metaRoom-lipgloss.Width(glyphs)-2)
+			}
 			metaText := truncate(m.metaLine(item), metaRoom)
-			body = append(body, fitRow(metaIndent+s.Muted.Render(metaText), width-2))
+			body = append(body, fitRow(line+s.Muted.Render(metaText), width-2))
 		case deckRowCollapsed:
 			// Quiet default-only project: fold the project header, the
 			// lone "default" workspace row, and its meta line into one
@@ -3920,6 +3946,9 @@ func (m Model) renderList(width int) string {
 			}
 			if localStale := m.prLocalStaleGlyphForItem(item); localStale != "" {
 				line += " " + localStale
+			}
+			if reviewReq := m.prReviewReqGlyphForItem(item); reviewReq != "" {
+				line += " " + reviewReq
 			}
 			// Append the meta text inline (muted) when there's room left
 			// on the line after the name and glyphs.
@@ -4308,7 +4337,7 @@ func deckKeyGroups() []keyGroup {
 				{"d", "open dev URL in browser (auto-discovered)"},
 				{"p o", "open this workspace's PR in browser"},
 				{"p d", "open this workspace's PR description in a pr tmux window (gh pr view | less)"},
-				{"p r", "repair this workspace's PR (opens the send-prompt form prepopulated with a fix prompt for merge conflicts / failing CI / behind base to review before sending)"},
+				{"p r", "repair this workspace's PR (prepopulates a fix prompt)"},
 				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
 			},
@@ -4901,6 +4930,13 @@ const (
 	prGlyphBehind   = "" // nf-oct-arrow_down — PR is behind the base branch
 	prGlyphDirty    = "" // nf-oct-alert — merge conflicts with the base branch
 	prGlyphStale    = "" // nf-oct-sync — local bookmark tip differs from the PR head (re-review hint)
+	// Review-conversation glyphs come from the Material Design set
+	// (nf-md-*), not Octicons — chat bubbles read better as "someone
+	// wants to hear from you" than any octicon does. Outline = a review
+	// is being asked of you; filled = feedback already exists on your
+	// PR and is waiting on you.
+	prGlyphReviewReq  = "\U000F0EDE" // nf-md-chat_outline — your review is requested on someone else's PR
+	prGlyphChangesReq = "\U000F0B79" // nf-md-chat — a reviewer requested changes on YOUR PR
 )
 
 // prGlyphFor returns the single glyph for the given PR status per the locked
@@ -5052,10 +5088,11 @@ func prStaleSuffix(s PRStatus, localCommitID string) string {
 
 // prRepairPrompt builds an agent prompt asking the workspace's agent to
 // address the PR's actionable problems — merge conflicts, failing CI,
-// an out-of-date base branch, or a local copy that's behind origin
-// (stale). Returns "" when the PR is healthy or in a terminal
-// (merged/closed) state. When multiple issues apply, every one is
-// listed in a single prompt.
+// an out-of-date base branch, a reviewer's changes-requested feedback,
+// a pending request for the user's review (someone else's PR), or a
+// local copy that's behind origin (stale). Returns "" when the PR is
+// healthy or in a terminal (merged/closed) state. When multiple issues
+// apply, every one is listed in a single prompt.
 //
 // `mine` toggles the tone: when true, the prompt asks the agent to
 // fix and push (the PR is yours; you intend to ship it). When false,
@@ -5097,6 +5134,39 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 			fix:   "update this branch with the latest base",
 			look:  "note how far behind the base branch this PR is (e.g. `git log --oneline <base>..@`) so the user can flag it",
 		})
+	}
+	if s.ReviewDecision == PRReviewChangesRequested {
+		issues = append(issues, issue{
+			label: "changes requested by a reviewer",
+			fix:   "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads), address each point, push, and re-request review from the reviewer who left it",
+			look:  "summarize what the reviewers asked for and which points look unaddressed at the current head",
+		})
+	}
+	if !mine && s.ReviewRequested {
+		// The author wants this user's review. Review-tone only: a
+		// request for YOUR review can't sit on your own PR, so when the
+		// bookmark heuristic says mine the signal is noise. Re-requests
+		// (you reviewed, they pushed and asked again) get delta-focused
+		// instructions instead of a from-scratch pass.
+		// Prefer a local read over `gh pr diff`: `jj git fetch` + parking
+		// the working copy on the PR head lets the agent open files at
+		// the right revision, chase context, and run tests — a raw patch
+		// allows none of that. `gh pr diff` stays as the fallback for
+		// heads that aren't fetchable locally (fork PRs).
+		localRead := "prefer a local read: `jj git fetch`, then `jj new " + s.HeadRefName + "@origin` to park the working copy on the PR head (this doesn't touch the branch itself); fall back to `gh pr diff` if the head isn't fetchable locally"
+		if s.ReviewRerequested {
+			issues = append(issues, issue{
+				label: "a RE-request for your review — you reviewed before and the author asked again",
+				fix:   "re-review the changes since your last pass and report your findings",
+				look:  "re-read your earlier feedback (`gh pr view --comments`), check whether each point was addressed at the current head, review what changed since your last pass, and report findings in chat — " + localRead,
+			})
+		} else {
+			issues = append(issues, issue{
+				label: "a pending request for your review",
+				fix:   "review the changes and report your findings",
+				look:  "review the changes and report findings in chat — " + localRead,
+			})
+		}
 	}
 	if prStaleSuffix(s, localCommitID) != "" {
 		// Stale is a property of the LOCAL working copy, not the PR
@@ -5146,8 +5216,8 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 // itemIsMyPR reports whether the workspace's PR appears to be authored
 // by the current user, using the configured bookmark prefix as the
 // signal: bookmarks under `<prefix>/...` are the user's by convention,
-// bookmarks under any other namespace (e.g. `saltor/foo`,
-// `jordan/bar`) are someone else's. Returns true when the prefix is
+// bookmarks under any other namespace (e.g. `coworker/foo`,
+// `teammate/bar`) are someone else's. Returns true when the prefix is
 // unconfigured — preserving the historical "always treat as mine"
 // repair behavior for users who haven't opted in.
 func itemIsMyPR(item Item, bookmarkPrefix string) bool {
@@ -5198,6 +5268,40 @@ func prLocalStaleGlyph(s PRStatus, localCommitID string) string {
 		return ""
 	}
 	return prGlyphStale
+}
+
+// prReviewReqGlyph returns the review-conversation glyph, split by
+// whose move it is:
+//   - YOUR PR + a reviewer requested changes → filled chat bubble
+//     (feedback exists; the ball is in your court).
+//   - Someone else's PR + your review is requested (or re-requested —
+//     GitHub re-adds you to reviewRequests either way) → outline chat
+//     bubble (they want your eyes).
+//
+// Empty when neither applies, the PR is no longer open, or the viewer
+// login was unknown at fetch time (both Mine and ReviewRequested stay
+// false).
+func prReviewReqGlyph(s PRStatus) string {
+	if s.State != PRStateOpen {
+		return ""
+	}
+	if s.Mine && s.ReviewDecision == PRReviewChangesRequested {
+		return prGlyphChangesReq
+	}
+	if !s.Mine && s.ReviewRequested {
+		return prGlyphReviewReq
+	}
+	return ""
+}
+
+// prReviewReqGlyphColor: changes requested on your PR → yellow (act);
+// review RE-requested on theirs → yellow too (the ball came back to
+// you); a first review request → blue (informational).
+func prReviewReqGlyphColor(s PRStatus) string {
+	if s.Mine || s.ReviewRerequested {
+		return colWarning
+	}
+	return colInfo
 }
 
 // resolvePRStatus is the one PR-lookup entry point. Returns the cached
@@ -5294,6 +5398,23 @@ func (m Model) prLocalStaleGlyphForItem(item Item) string {
 		return ""
 	}
 	return m.styles.Warning.Render(g)
+}
+
+// prReviewReqGlyphForItem mirrors the other per-item glyph helpers for
+// the review-requested chat bubble.
+func (m Model) prReviewReqGlyphForItem(item Item) string {
+	status, ok := m.resolvePRStatus(item)
+	if !ok {
+		return ""
+	}
+	g := prReviewReqGlyph(status)
+	if g == "" {
+		return ""
+	}
+	if prReviewReqGlyphColor(status) == colWarning {
+		return m.styles.Warning.Render(g)
+	}
+	return m.styles.Info.Render(g)
 }
 
 // statusGlyph renders a colored ● for an agent status. Only "loud" states

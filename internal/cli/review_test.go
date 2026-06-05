@@ -285,7 +285,7 @@ func TestShellSingleQuote(t *testing.T) {
 }
 
 func TestRewriteFetchURL(t *testing.T) {
-	const fallback = "https://github.com/SalTor/awp.git"
+	const fallback = "https://github.com/ForkOwner/awp.git"
 	cases := []struct {
 		name   string
 		origin string
@@ -297,17 +297,17 @@ func TestRewriteFetchURL(t *testing.T) {
 		{
 			name:   "ssh URL form",
 			origin: "ssh://git@github.com/andrewcohen/awp",
-			want:   "ssh://git@github.com/SalTor/awp.git",
+			want:   "ssh://git@github.com/ForkOwner/awp.git",
 		},
 		{
 			name:   "ssh URL form with .git suffix",
 			origin: "ssh://git@github.com/andrewcohen/awp.git",
-			want:   "ssh://git@github.com/SalTor/awp.git",
+			want:   "ssh://git@github.com/ForkOwner/awp.git",
 		},
 		{
 			name:   "https URL form",
 			origin: "https://github.com/andrewcohen/awp.git",
-			want:   "https://github.com/SalTor/awp.git",
+			want:   "https://github.com/ForkOwner/awp.git",
 		},
 		// SCP form: the most common shape (`git clone git@host:owner/repo`).
 		// net/url can't parse this, so we detect it by the `<user>@<host>:`
@@ -315,13 +315,13 @@ func TestRewriteFetchURL(t *testing.T) {
 		{
 			name:   "scp form",
 			origin: "git@github.com:andrewcohen/awp.git",
-			want:   "git@github.com:SalTor/awp.git",
+			want:   "git@github.com:ForkOwner/awp.git",
 		},
 		// Enterprise host stays preserved.
 		{
 			name:   "ssh URL on enterprise host",
 			origin: "ssh://git@ghe.example.com/team/repo",
-			want:   "ssh://git@ghe.example.com/SalTor/awp.git",
+			want:   "ssh://git@ghe.example.com/ForkOwner/awp.git",
 		},
 		// Malformed input falls back to the safe default.
 		{
@@ -337,9 +337,9 @@ func TestRewriteFetchURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := rewriteFetchURL(c.origin, "SalTor", "awp", fallback)
+			got := rewriteFetchURL(c.origin, "ForkOwner", "awp", fallback)
 			if got != c.want {
-				t.Errorf("rewriteFetchURL(%q, SalTor, awp) = %q, want %q", c.origin, got, c.want)
+				t.Errorf("rewriteFetchURL(%q, ForkOwner, awp) = %q, want %q", c.origin, got, c.want)
 			}
 		})
 	}

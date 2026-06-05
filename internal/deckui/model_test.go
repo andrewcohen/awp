@@ -1879,6 +1879,37 @@ func TestPRStaleGlyphAndLabel(t *testing.T) {
 	}
 }
 
+func TestPRReviewReqGlyph(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    PRStatus
+		wantGlyph string
+		wantColor string
+	}{
+		{"their PR, my review requested", PRStatus{State: PRStateOpen, ReviewRequested: true}, prGlyphReviewReq, colInfo},
+		{"their PR, my review RE-requested", PRStatus{State: PRStateOpen, ReviewRequested: true, ReviewRerequested: true}, prGlyphReviewReq, colWarning},
+		{"my PR, changes requested", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewChangesRequested}, prGlyphChangesReq, colWarning},
+		{"my PR, approved — no glyph", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved}, "", ""},
+		{"their PR, changes requested by someone else — not my move", PRStatus{State: PRStateOpen, ReviewDecision: PRReviewChangesRequested}, "", ""},
+		{"nothing requested", PRStatus{State: PRStateOpen}, "", ""},
+		{"closed PR never renders", PRStatus{State: PRStateClosed, ReviewRequested: true}, "", ""},
+		{"merged PR never renders", PRStatus{State: PRStateMerged, Mine: true, ReviewDecision: PRReviewChangesRequested}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if g := prReviewReqGlyph(tc.status); g != tc.wantGlyph {
+				t.Errorf("prReviewReqGlyph: got %q want %q", g, tc.wantGlyph)
+			}
+			if tc.wantGlyph == "" {
+				return
+			}
+			if c := prReviewReqGlyphColor(tc.status); c != tc.wantColor {
+				t.Errorf("prReviewReqGlyphColor: got %q want %q", c, tc.wantColor)
+			}
+		})
+	}
+}
+
 func TestPRLocalStaleGlyph(t *testing.T) {
 	open := PRStatus{State: PRStateOpen, HeadRefOid: "abc"}
 	if g := prLocalStaleGlyph(open, "def"); g != prGlyphStale {
@@ -2001,6 +2032,12 @@ func TestPRRepairPrompt(t *testing.T) {
 		{"composite with stale", PRStatus{Number: 14, HeadRefName: "andrew/baz", HeadRefOid: "abc", State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "def", true, "",
 			[]string{"PR #14 has multiple issues to address:", "failing CI checks", "new commits on origin"}},
 
+		{"changes requested only", PRStatus{Number: 15, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true, "",
+			[]string{"PR #15 has changes requested by a reviewer", "gh pr view --comments", "re-request review", "push"}},
+		{"composite with changes requested", PRStatus{Number: 16, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true, "",
+			[]string{"PR #16 has multiple issues to address:", "failing CI checks", "changes requested by a reviewer"}},
+		{"approved — no review repair", PRStatus{Number: 17, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved}, "", true, "", nil},
+
 		// Review tone (mine=false): investigate + report, no mutations.
 		{"review · merge conflicts only",
 			PRStatus{Number: 22, URL: "https://example/pr/22", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty}, "", false, "",
@@ -2011,6 +2048,17 @@ func TestPRRepairPrompt(t *testing.T) {
 		{"review · composite",
 			PRStatus{Number: 24, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", false, "",
 			[]string{"PR #24 has multiple issues:", "merge conflicts against its base branch", "failing CI checks", "Do NOT modify files", "Report what you find in chat"}},
+		{"review · changes requested",
+			PRStatus{Number: 25, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", false, "",
+			[]string{"PR #25 has changes requested by a reviewer", "summarize what the reviewers asked for", "Do NOT modify files"}},
+		{"review · my review requested",
+			PRStatus{Number: 26, HeadRefName: "coworker/feat", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewRequested: true}, "", false, "",
+			[]string{"PR #26 has a pending request for your review", "jj git fetch", "coworker/feat@origin", "fall back to `gh pr diff`", "Do NOT modify files"}},
+		{"review requested but mine tone — suppressed",
+			PRStatus{Number: 27, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewRequested: true}, "", true, "", nil},
+		{"review · my review RE-requested",
+			PRStatus{Number: 28, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewRequested: true, ReviewRerequested: true}, "", false, "",
+			[]string{"PR #28 has a RE-request for your review", "whether each point was addressed", "what changed since your last pass", "Do NOT modify files"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2038,13 +2086,13 @@ func TestItemIsMyPR(t *testing.T) {
 		want   bool
 	}{
 		{"prefix unconfigured → treat as mine (preserve legacy)",
-			Item{Bookmark: "saltor/foo"}, "", true},
+			Item{Bookmark: "coworker/foo"}, "", true},
 		{"bookmark missing → treat as mine (no signal to say otherwise)",
 			Item{}, "andrew", true},
 		{"bookmark under user prefix → mine",
 			Item{Bookmark: "andrew/foo"}, "andrew", true},
 		{"bookmark under another prefix → not mine",
-			Item{Bookmark: "saltor/foo"}, "andrew", false},
+			Item{Bookmark: "coworker/foo"}, "andrew", false},
 		{"bookmark literally equals prefix (no slash) → not mine",
 			Item{Bookmark: "andrew"}, "andrew", false},
 		{"prefix with whitespace tolerated",

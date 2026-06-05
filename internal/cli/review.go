@@ -148,7 +148,9 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	// completing — during which prStatusLabelForItem returns "no PR".
 	// The cache merge is the same writer the periodic job uses.
 	if pr.URL != "" {
-		status := prStatusFromGithub(github.PRStatusFromInfo(pr), false)
+		// Viewer "" → review-requested signals false, which is accurate
+		// here: the user is opening a review on this PR right now.
+		status := prStatusFromGithub(github.PRStatusFromInfo(pr), false, "")
 		persistPRStatusMerge(map[string]map[string]deckui.PRStatus{
 			repoRoot: {pr.HeadRef: status},
 		}, time.Now())

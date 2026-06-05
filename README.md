@@ -104,9 +104,9 @@ The same PATH caveats as `awp deck` apply (see above) — use absolute paths or 
 
 The grey "notified" dot is a per-workspace unread badge: it lights up when the agent transitions into `waiting` or `idle`, and clears the next time you summon that workspace (any of `enter`, `a`, `e`, `c`, `v`, `s`, `i`, `x`) — or when the agent exits.
 
-### PR status (the Octicon glyph after each workspace name)
+### PR status (the glyphs leading each row's meta line)
 
-Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a match is found, a single glyph rendered from the Nerd Font Octicon set sits to the right of the workspace name. Workspaces with no bookmark on file, or no matching PR, show no glyph.
+Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a match is found, a glyph cluster (Nerd Font Octicons + Material icons) leads the muted meta line under the workspace row — primary PR state first, then any condition glyphs from the tables below. On a collapsed default-only project row the glyphs render inline after the project name instead (there's no second line). Workspaces with no bookmark on file, or no matching PR, show no glyphs.
 
 | Glyph | Meaning |
 |---|---|
@@ -128,6 +128,8 @@ When the PR needs attention beyond its primary state, a second glyph renders to 
 |  | Behind base — the base branch has moved past this PR. Only signaled when the repo's branch protection requires up-to-date branches before merging; otherwise GitHub reports the PR as clean even when behind. |
 |  | Merge conflicts — the PR can't merge cleanly until the conflicts are resolved. |
 |  | Stale — your local bookmark tip differs from the PR head on GitHub; what you have locally (or last reviewed) is out of date. |
+| 󰻞 | Your review is requested on someone else's PR — blue for a first request, yellow when it's a re-request (you reviewed, the author pushed and asked again). |
+| 󰭹 | Changes requested on **your** PR (yellow) — reviewer feedback is waiting on you (pairs with `p r`, which preloads a fix prompt for it). |
 
 When the workspace's local bookmark tip doesn't match the PR head commit on GitHub, the row gains a  glyph (yellow) and its meta line a `· stale` chip — the signal that what you have locally is behind (or otherwise diverged from) what's actually on the PR, so any previous review pass or in-progress work is out of date and a fresh re-review is warranted. Most useful for PRs on a collaborator's branch: the PR head on GitHub is the truth, and a difference means the author has pushed since you last fetched. Independent of `behind base` — that signals the PR is behind its target branch, while `stale` signals your local bookmark is behind (or diverged from) the PR's remote head. Only renders on open PRs.
 
@@ -182,7 +184,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `d` | Open the selected workspace's auto-discovered dev URL in your default browser |
 | `p o` | Open the selected workspace's PR in your default browser (chord — press `p`, then `o`). `esc` cancels the chord. |
 | `p d` | Open the selected workspace's PR description in a `pr` window of its tmux session (the same way `r` opens a `review` window), running `gh pr view <n> \| less -R` with TTY formatting forced. `q` in less drops back to a shell in the window; re-running `p d` reuses the window. |
-| `p r` | Repair the selected workspace's PR. Detects actionable conditions (merge conflicts, failing CI, branch behind base) and opens the `A` send-prompt form prepopulated with a fix prompt, so you can review and edit it before sending to the workspace's agent. Reports "nothing to repair" if the PR is healthy. |
+| `p r` | Repair the selected workspace's PR. Detects actionable conditions (merge conflicts, failing CI, branch behind base, changes requested by a reviewer, a pending request for **your** review on someone else's PR) and opens the `A` send-prompt form prepopulated with a fix prompt, so you can review and edit it before sending to the workspace's agent. Reports "nothing to repair" if the PR is healthy. |
 | `p s` | Set (or clear, via blank/0) the PR # for the selected workspace. Pins the workspace to a specific PR so the deck resolves status by number rather than guessing from the bookmark. Persisted to `~/.awp/...` workspace state. |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |

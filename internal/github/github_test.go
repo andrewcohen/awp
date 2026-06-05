@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestFetchPRParses(t *testing.T) {
 }
 
 func TestFetchPRParsesStatusFields(t *testing.T) {
-	r := &fakeRunner{out: `{"number":42,"headRefName":"saltor/foo","baseRefName":"main","headRefOid":"deadbeef","title":"t","body":"b","url":"https://github.com/o/r/pull/42","state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"}`}
+	r := &fakeRunner{out: `{"number":42,"headRefName":"coworker/foo","baseRefName":"main","headRefOid":"deadbeef","title":"t","body":"b","url":"https://github.com/o/r/pull/42","state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"}`}
 	pr, err := New(r).FetchPR(42)
 	if err != nil {
 		t.Fatalf("FetchPR err: %v", err)
@@ -81,7 +82,7 @@ func TestPRStatusFromInfo(t *testing.T) {
 		State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved,
 		CIState: CIPassing, MergeStateStatus: MergeStateClean,
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("PRStatusFromInfo: got %+v want %+v", got, want)
 	}
 }
@@ -126,7 +127,7 @@ func TestListPRStatusParses(t *testing.T) {
 		{Number: 5, HeadRefName: "andrew/e", HeadRefOid: "sha5eee", URL: "https://github.com/o/r/pull/5", State: PRStateClosed, IsDraft: false, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateUnknown},
 	}
 	for i, w := range want {
-		if got[i] != w {
+		if !reflect.DeepEqual(got[i], w) {
 			t.Errorf("row %d: got %+v want %+v", i, got[i], w)
 		}
 	}
@@ -160,7 +161,7 @@ func TestListPRStatusParseError(t *testing.T) {
 }
 
 func TestGetPRStatusParses(t *testing.T) {
-	r := &fakeRunner{out: `{"number":1717,"headRefName":"old/branch","headRefOid":"oldsha","title":"Old PR","url":"https://github.com/o/r/pull/1717","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"}`}
+	r := &fakeRunner{out: `{"number":1717,"headRefName":"old/branch","headRefOid":"oldsha","title":"Old PR","url":"https://github.com/o/r/pull/1717","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND","reviewRequests":[{"login":"andrewcohen"},{"name":"platform-team","slug":"platform-team"}],"latestReviews":[{"author":{"login":"andrewcohen"}}]}`}
 	got, err := New(r).GetPRStatus("/tmp/repo", 1717)
 	if err != nil {
 		t.Fatalf("GetPRStatus err: %v", err)
@@ -169,8 +170,11 @@ func TestGetPRStatusParses(t *testing.T) {
 		Number: 1717, HeadRefName: "old/branch", HeadRefOid: "oldsha", Title: "Old PR",
 		URL: "https://github.com/o/r/pull/1717", State: PRStateOpen,
 		ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateBehind,
+		// The team request carries no login and is dropped.
+		ReviewRequests: []string{"andrewcohen"},
+		Reviewers:      []string{"andrewcohen"},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("GetPRStatus: got %+v want %+v", got, want)
 	}
 	// gh invocation: gh pr view 1717 --json ...

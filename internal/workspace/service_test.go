@@ -882,8 +882,8 @@ func TestPrepareWorkspaceAnchorsExistingWorkspaceOnBookmark(t *testing.T) {
 	// code wasn't actually checked out at the PR branch. The reconcile
 	// shape always calls jj.NewOnRevision when a bookmark is given.
 	repoRoot := t.TempDir()
-	name := "pr-1-saltor-default-new-workspace-to-main"
-	bookmark := "saltor/default-new-workspace-to-main"
+	name := "pr-1-coworker-default-new-workspace-to-main"
+	bookmark := "coworker/default-new-workspace-to-main"
 	jj := &fakeJJ{repoRoot: repoRoot, existing: map[string]bool{name: true}}
 	tmux := &fakeTmux{windows: map[string]bool{}}
 	store := &fakeStore{entries: map[string]Entry{
