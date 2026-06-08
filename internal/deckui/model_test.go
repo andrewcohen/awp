@@ -214,10 +214,10 @@ func TestScopeInboxFiltersToOpenPRsIncludingDrafts(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected the open + draft workspaces, got %#v", got)
 	}
-	// "Your drafts" precedes the catch-all "Other open PRs" bucket, so
-	// the draft sorts first.
-	if got[0].WorkspaceName != "draft" || got[1].WorkspaceName != "open" {
-		t.Fatalf("expected bucket order [draft open], got [%s %s]", got[0].WorkspaceName, got[1].WorkspaceName)
+	// "Other open PRs" (not mine) precedes the bottom "Mine" bucket
+	// (drafts live there now), so the open PR sorts before the draft.
+	if got[0].WorkspaceName != "open" || got[1].WorkspaceName != "draft" {
+		t.Fatalf("expected bucket order [open draft], got [%s %s]", got[0].WorkspaceName, got[1].WorkspaceName)
 	}
 }
 
@@ -2821,34 +2821,36 @@ func TestPRInboxBucket(t *testing.T) {
 			want:   inboxReadyToMerge,
 		},
 		{
+			// Waiting on reviewers → the bottom "Mine" pile.
 			name:   "mine + no review yet",
 			status: PRStatus{State: PRStateOpen, Mine: true, CIState: PRCIPassing},
-			want:   inboxWaitingForReview,
+			want:   inboxMine,
 		},
 		{
-			// CI pending is not yet actionable — it parks in waiting.
+			// CI pending is not yet actionable — it parks in Mine.
 			name:   "mine + CI pending",
 			status: PRStatus{State: PRStateOpen, Mine: true, CIState: PRCIPending},
-			want:   inboxWaitingForReview,
+			want:   inboxMine,
 		},
 		{
 			// Approved but merge state unknown/blocked: not provably
-			// ready, nothing for the author to fix → waiting.
+			// ready, nothing for the author to fix → Mine.
 			name:   "mine + approved + merge state unknown",
 			status: PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateUnknown},
-			want:   inboxWaitingForReview,
+			want:   inboxMine,
 		},
 		{
+			// Drafts live in Mine, not their own bucket anymore.
 			name:   "mine + draft",
 			status: PRStatus{State: PRStateOpen, Mine: true, IsDraft: true},
-			want:   inboxYourDrafts,
+			want:   inboxMine,
 		},
 		{
 			// Draft precedes CI/decision: a draft isn't submitted for
-			// review, so failing CI on it is informational.
-			name:   "mine + draft + CI failing stays a draft",
+			// review, so failing CI on it is informational → still Mine.
+			name:   "mine + draft + CI failing stays in Mine",
 			status: PRStatus{State: PRStateOpen, Mine: true, IsDraft: true, CIState: PRCIFailing},
-			want:   inboxYourDrafts,
+			want:   inboxMine,
 		},
 		{
 			name:   "someone else's PR, no review requested",
@@ -2942,9 +2944,8 @@ func TestInboxBucketColor(t *testing.T) {
 		{inboxNeedsYourReview, colAccent},
 		{inboxNeedsAction, colDanger},
 		{inboxReadyToMerge, colSuccess},
-		{inboxWaitingForReview, colWarning},
-		{inboxYourDrafts, colMuted},
 		{inboxOtherOpen, colMuted},
+		{inboxMine, colMuted},
 	}
 	for _, c := range cases {
 		if got := inboxBucketColor(c.bucket); got != c.want {

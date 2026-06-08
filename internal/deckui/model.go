@@ -670,12 +670,11 @@ type PRStatus struct {
 type inboxBucket int
 
 const (
-	inboxNeedsYourReview  inboxBucket = iota // someone else's PR, your review is the blocker
-	inboxNeedsAction                         // your PR, something to fix (feedback, CI, conflicts)
-	inboxReadyToMerge                        // your PR, approved + green — go press the button
-	inboxWaitingForReview                    // your PR, ball in the reviewers' court
-	inboxYourDrafts                          // your PR, still being drawn up
-	inboxOtherOpen                           // open PR that's neither yours nor awaiting you
+	inboxNeedsYourReview inboxBucket = iota // someone else's PR, your review is the blocker
+	inboxNeedsAction                        // your PR, something to fix (feedback, CI, conflicts)
+	inboxReadyToMerge                       // your PR, approved + green — go press the button
+	inboxOtherOpen                          // open PR that's neither yours nor awaiting you
+	inboxMine                               // your PR, ball in someone else's court — waiting for review or still a draft
 	inboxBucketCount
 )
 
@@ -687,19 +686,18 @@ func inboxBucketLabel(b inboxBucket) string {
 		return "Needs action"
 	case inboxReadyToMerge:
 		return "Ready to merge"
-	case inboxWaitingForReview:
-		return "Waiting for review"
-	case inboxYourDrafts:
-		return "Your drafts"
-	default:
+	case inboxOtherOpen:
 		return "Other open PRs"
+	default:
+		return "Mine"
 	}
 }
 
 // inboxBucketColor maps a bucket to a palette token so its header reads
 // by urgency at a glance: teal = your move (review), red = something to
-// fix, green = ready, yellow = waiting on others, muted = no action
-// (drafts / other).
+// fix, green = ready. The bottom two — other people's PRs and your own
+// in-flight ones (waiting / drafts) — are muted; nothing's blocked on
+// you there.
 func inboxBucketColor(b inboxBucket) string {
 	switch b {
 	case inboxNeedsYourReview:
@@ -708,8 +706,6 @@ func inboxBucketColor(b inboxBucket) string {
 		return colDanger
 	case inboxReadyToMerge:
 		return colSuccess
-	case inboxWaitingForReview:
-		return colWarning
 	default:
 		return colMuted
 	}
@@ -751,7 +747,10 @@ func (m Model) headerStyle(label string) lipgloss.Style {
 // Precedence, locked by tests: a review request always wins (it names
 // you regardless of the PR's own state); within your own PRs the draft
 // check precedes CI/decision checks — a draft isn't submitted for
-// review yet, so its CI state is informational, not actionable.
+// review yet, so its CI state is informational, not actionable, and it
+// belongs in the bottom "Mine" pile rather than "Needs action".
+// Anything of yours that isn't broken, ready, or a draft (i.e. waiting
+// on reviewers) also lands in "Mine".
 func prInboxBucket(s PRStatus) inboxBucket {
 	if s.ReviewRequested || s.ReviewRerequested {
 		return inboxNeedsYourReview
@@ -760,7 +759,7 @@ func prInboxBucket(s PRStatus) inboxBucket {
 		return inboxOtherOpen
 	}
 	if s.IsDraft {
-		return inboxYourDrafts
+		return inboxMine
 	}
 	if s.ReviewDecision == PRReviewChangesRequested ||
 		s.CIState == PRCIFailing ||
@@ -774,7 +773,7 @@ func prInboxBucket(s PRStatus) inboxBucket {
 			s.MergeStateStatus == PRMergeStateClean) {
 		return inboxReadyToMerge
 	}
-	return inboxWaitingForReview
+	return inboxMine
 }
 
 // PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more

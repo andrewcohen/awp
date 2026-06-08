@@ -147,9 +147,8 @@ The third `P` scope sections open-PR workspaces by *what your next move is*, lik
 | Needs your review | teal | Someone else's PR with your review requested (or re-requested). Re-reviews — ones you already reviewed that the author pushed to and re-requested — sort to the top of the bucket. |
 | Needs action | red | Your PR with changes requested, CI failing, merge conflicts, or behind base |
 | Ready to merge | green | Your PR, approved + CI green + clean (or already in the merge queue) |
-| Waiting for review | yellow | Your open PR with none of the above — ball is in the reviewers' court |
-| Your drafts | gray | Your draft PRs (these were invisible in the old open-PR scope) |
 | Other open PRs | gray | Open PRs that are neither yours nor awaiting your review (e.g. a collaborator's branch you checked out) |
+| Mine | gray | Your own in-flight PRs that aren't blocked on you — waiting for review, or still a draft. The bottom pile: nothing here needs your action right now. |
 
 Bucket headers are colored by urgency (the table above) so the section you need to act on stands out. Since they replace project headers in this scope, each row carries a muted `[project]` chip before its label. Buckets are classified from the same cached PR status that drives the row glyphs — no extra fetches. Merged and closed PRs stay out, as before.
 
