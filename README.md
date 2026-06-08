@@ -144,7 +144,7 @@ The third `P` scope sections open-PR workspaces by *what your next move is*, lik
 
 | Bucket | Header color | Membership |
 |---|---|---|
-| Needs your review | teal | Someone else's PR with your review requested (or re-requested) |
+| Needs your review | teal | Someone else's PR with your review requested (or re-requested). Re-reviews — ones you already reviewed that the author pushed to and re-requested — sort to the top of the bucket. |
 | Needs action | red | Your PR with changes requested, CI failing, merge conflicts, or behind base |
 | Ready to merge | green | Your PR, approved + CI green + clean (or already in the merge queue) |
 | Waiting for review | yellow | Your open PR with none of the above — ball is in the reviewers' court |
