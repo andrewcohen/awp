@@ -62,6 +62,12 @@ type Item struct {
 	SessionName      string
 	Active           bool
 	Current          bool
+	// Virtual marks a synthetic inbox row that has no local workspace —
+	// a review-requested PR you haven't pulled down yet (see
+	// inboxVirtualReviewItems). It resolves PR status via PRNumber and
+	// renders read-only: enter starts the review flow (which creates the
+	// real workspace); other workspace actions are no-ops.
+	Virtual bool
 }
 
 type Action int
@@ -1284,6 +1290,10 @@ func (m Model) items() []Item {
 				filtered = append(filtered, it)
 			}
 		}
+		// Surface review-requested PRs you haven't checked out yet as
+		// synthetic read-only rows, so "Needs your review" isn't limited
+		// to PRs that already have a local workspace.
+		filtered = append(filtered, m.inboxVirtualReviewItems(filtered)...)
 		src = filtered
 	case ScopeAttention:
 		filtered := make([]Item, 0, len(src))
@@ -1343,6 +1353,74 @@ func (m Model) itemInboxBucket(it Item) inboxBucket {
 	return prInboxBucket(st)
 }
 
+// inboxVirtualReviewItems synthesizes read-only inbox rows for
+// review-requested PRs that have no local workspace, so "Needs your
+// review" surfaces PRs you haven't pulled down yet. The PR status cache
+// only holds repos where you already have at least one workspace, so a
+// virtual row is always a not-yet-checked-out PR in a repo you work in;
+// its project name is borrowed from a sibling workspace in that repo.
+//
+// real is the inbox scope's already-filtered workspace rows; PRs they
+// resolve to are skipped so a checked-out PR never doubles up. Each
+// virtual Item resolves its status via PRNumber (no bookmark on file)
+// and carries the PR head ref so the meta line can show the branch.
+func (m Model) inboxVirtualReviewItems(real []Item) []Item {
+	// PRs already represented by a real workspace row, by repo → PR#.
+	seen := map[string]map[int]bool{}
+	for _, it := range real {
+		if st, ok := m.resolvePRStatus(it); ok {
+			if seen[it.RepoRoot] == nil {
+				seen[it.RepoRoot] = map[int]bool{}
+			}
+			seen[it.RepoRoot][st.Number] = true
+		}
+	}
+	projectByRepo := map[string]string{}
+	for _, it := range m.itemsAll {
+		if it.RepoRoot != "" && projectByRepo[it.RepoRoot] == "" {
+			projectByRepo[it.RepoRoot] = it.ProjectName
+		}
+	}
+	var out []Item
+	for repo, byHead := range m.prStatusByRepo {
+		for _, st := range byHead {
+			if st.State != PRStateOpen {
+				continue
+			}
+			if !st.ReviewRequested && !st.ReviewRerequested {
+				continue
+			}
+			if seen[repo][st.Number] {
+				continue
+			}
+			project := projectByRepo[repo]
+			if project == "" {
+				project = repoBaseName(repo)
+			}
+			out = append(out, Item{
+				ProjectName:   project,
+				WorkspaceName: fmt.Sprintf("#%d", st.Number),
+				RepoRoot:      repo,
+				PRNumber:      st.Number,
+				Bookmark:      st.HeadRefName, // drives the branch token on the meta line
+				Virtual:       true,
+			})
+		}
+	}
+	return out
+}
+
+// repoBaseName returns the last path segment of a repo root, used as a
+// fallback project label for a virtual row when no sibling workspace
+// supplies one.
+func repoBaseName(repo string) string {
+	repo = strings.TrimRight(repo, "/")
+	if i := strings.LastIndexByte(repo, '/'); i >= 0 {
+		return repo[i+1:]
+	}
+	return repo
+}
+
 // displayLabel returns the text that renders on a row: "#N title" when a
 // PR is resolvable from the cache, falling back to the workspace name.
 func (m Model) displayLabel(it Item) string {
@@ -1359,6 +1437,7 @@ func (m Model) displayLabel(it Item) string {
 const (
 	glyphBranch   = "\uf418"     // nf-oct-git_branch
 	glyphKeyboard = "\U000F030C" // nf-md-keyboard
+	glyphReturn   = "\u21b5"     // \u21b5 \u2014 leads the "enter to review" hint on virtual rows
 )
 
 // metaLine returns the secondary text for a workspace row in a dense
@@ -1402,6 +1481,10 @@ func (m Model) metaLine(it Item) string {
 	if prompt := promptPreviewSnippet(it.PromptPreview, 40); prompt != "" {
 		parts = append(parts, glyphKeyboard+` "`+prompt+`"`)
 	}
+	if it.Virtual {
+		// No local workspace — call out the one action that exists.
+		parts = append(parts, glyphReturn+" review to check out")
+	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " · ")
 	}
@@ -1419,25 +1502,31 @@ func (m Model) metaLine(it Item) string {
 }
 
 // renderMetaText colors the semantic tokens of an already-truncated
-// meta line — @author green, :port blue (per the palette table) — with
-// everything else (branch, prompt, stale chip, separators) muted.
-// Operating on the truncated plain string keeps the width math in
-// metaLine/truncate ANSI-free; coloring a token the truncation clipped
-// is harmless since the prefix that selects its color survives.
+// meta line — :port blue, the virtual-row "↵ review" hint teal — with
+// everything else (author, branch, prompt, stale chip, separators)
+// muted. Operating on the truncated plain string keeps the width math
+// in metaLine/truncate ANSI-free; coloring a token the truncation
+// clipped is harmless since the prefix that selects its color survives.
 func (m Model) renderMetaText(text string) string {
-	s := m.styles
 	segs := strings.Split(text, " · ")
 	for i, seg := range segs {
-		switch {
-		case strings.HasPrefix(seg, "@"):
-			segs[i] = s.Author.Render(seg)
-		case strings.HasPrefix(seg, ":"):
-			segs[i] = s.Port.Render(seg)
-		default:
-			segs[i] = s.Muted.Render(seg)
-		}
+		segs[i] = m.metaSegStyle(seg).Render(seg)
 	}
-	return strings.Join(segs, s.Muted.Render(" · "))
+	return strings.Join(segs, m.styles.Muted.Render(" · "))
+}
+
+// metaSegStyle picks the style for one meta-line segment: :port blue,
+// the "↵ review" virtual-row hint teal, everything else (author,
+// branch, prompt) muted.
+func (m Model) metaSegStyle(seg string) lipgloss.Style {
+	switch {
+	case strings.HasPrefix(seg, ":"):
+		return m.styles.Port
+	case strings.HasPrefix(seg, glyphReturn):
+		return m.styles.Accent
+	default:
+		return m.styles.Muted
+	}
 }
 
 // devURLPort extracts the port from a dev URL like
@@ -2660,6 +2749,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "send prompt: select a workspace row"
 				return m, nil
 			}
+			if item.Virtual {
+				m.status = "no workspace yet — press enter to start a review"
+				return m, nil
+			}
 			if strings.TrimSpace(item.WorkspaceName) == "" {
 				m.status = "send prompt: select a workspace row"
 				return m, nil
@@ -2693,6 +2786,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
+			if item.Virtual {
+				m.status = "no workspace yet — press enter to start a review"
+				return m, nil
+			}
 			m.confirmDelete = true
 			m.deleteTarget = item
 			m.deleteErr = ""
@@ -2722,6 +2819,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "rename: select a workspace row"
 				return m, nil
 			}
+			if item.Virtual {
+				m.status = "no workspace yet — press enter to start a review"
+				return m, nil
+			}
 			if strings.TrimSpace(item.WorkspaceName) == "default" {
 				m.status = "rename: cannot rename the default workspace"
 				return m, nil
@@ -2735,6 +2836,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			item, ok := m.selected()
 			if !ok {
 				m.status = "link: select a workspace row"
+				return m, nil
+			}
+			if item.Virtual {
+				m.status = "no workspace yet — press enter to start a review"
 				return m, nil
 			}
 			return m.startBookmarkLinker(item)
@@ -3197,6 +3302,16 @@ func utf8DecodeRune(s string) (rune, int) {
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	item, ok := m.selected()
 	if !ok || m.handler == nil {
+		return m, nil
+	}
+	if item.Virtual {
+		// A virtual inbox row has no local workspace to act on. Enter
+		// (the default Summon) starts the review flow, which creates the
+		// workspace; every other workspace action is a no-op with a hint.
+		if a == ActionSummon || a == ActionReview {
+			return m.startAction(ActionReview, item, strconv.Itoa(item.PRNumber))
+		}
+		m.status = "no workspace yet — press enter to start a review"
 		return m, nil
 	}
 	if isProgressAction(a) {
