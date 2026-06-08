@@ -106,7 +106,7 @@ The grey "notified" dot is a per-workspace unread badge: it lights up when the a
 
 ### PR status (the glyphs leading each row's meta line)
 
-Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a match is found, a glyph cluster (Nerd Font Octicons + Material icons) leads the meta line under the workspace row — primary PR state first, then any condition glyphs from the tables below. The meta line itself is mostly muted; only the `:port` token is tinted (blue) for a touch of contrast — everything else, including the workspace-less inbox row's keyboard-return `to review` hint, stays muted. On a collapsed default-only project row the glyphs render inline after the project name instead (there's no second line). Workspaces with no bookmark on file, or no matching PR, show no glyphs.
+Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a match is found, a glyph cluster (Nerd Font Octicons + Material icons) leads the meta line under the workspace row — primary PR state first, then any condition glyphs from the tables below. The meta line itself is mostly muted; only the `:port` token is tinted (blue) for a touch of contrast — everything else, including the workspace-less inbox row's keyboard-return `to review` / `to check out` hint, stays muted. On a collapsed default-only project row the glyphs render inline after the project name instead (there's no second line). Workspaces with no bookmark on file, or no matching PR, show no glyphs.
 
 | Glyph | Meaning |
 |---|---|
@@ -152,7 +152,14 @@ The third `P` scope sections open-PR workspaces by *what your next move is*, lik
 
 Bucket headers are colored by urgency (the table above) so the section you need to act on stands out. Since they replace project headers in this scope, each row carries a muted `[project]` chip before its label. Buckets are classified from the same cached PR status that drives the row glyphs — no extra fetches. Merged and closed PRs stay out, as before.
 
-**Review-requested PRs you haven't checked out** also show up under *Needs your review*, even without a local workspace — the status cache already knows about every open PR in the repos you work in. These rows are read-only (no agent dot, a muted keyboard-return `to review` hint on the meta line); pressing `enter` on one starts the review flow (`awp review <n>`), which creates the workspace and primes the agent. Other workspace keys (delete, rename, send-prompt, link) are no-ops on a workspace-less row until you've checked it out. Workspaces you *do* have are shown as normal rows and never duplicated.
+**Open PRs you haven't checked out** also show up, even without a local workspace — the status cache already knows about every open PR in the repos you work in, so the inbox isn't limited to PRs that happen to have a workspace. Two cases are surfaced: someone else's PR **awaiting your review** (lands in *Needs your review*, keyboard-return `to review` hint) and **your own** open PRs (sorted into *Mine* / *Needs action* / *Ready to merge* by state, keyboard-return `to check out` hint) — so a PR you opened from another machine, or whose workspace you deleted, no longer silently disappears from your inbox. These rows are read-only (no agent dot). Pressing `enter` depends on whose PR it is:
+
+- **Awaiting your review** → starts the review flow (`awp review <n>`), which creates the workspace and primes the reviewer.
+- **Your own** → opens the new-workspace form prefilled with the PR branch (anchor + derived name), so you land in a normal working workspace rather than the review tooling. Confirm to create, or tweak the name / add an agent prompt first. The created workspace is pinned to the PR (same link the `B` key applies), so it shows up linked — PR glyph and status — as soon as the row list refreshes, without reopening the deck.
+
+Other workspace keys (delete, rename, send-prompt, link) are no-ops on a workspace-less row until it exists. Workspaces you *do* have are shown as normal rows and never duplicated.
+
+Note: this still only covers repos where you have at least one workspace — the PR-status cache is fetched per repo and a repo only enters that set once it has a tracked workspace. A PR in a repo you've never opened a workspace in won't appear.
 
 ### Activity bar (bottom of the deck)
 

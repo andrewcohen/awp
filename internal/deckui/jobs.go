@@ -33,6 +33,7 @@ type AsyncJobSpec struct {
 	Bookmark         string // the revision to anchor the new workspace on
 	BookmarkToCreate string // the new jj bookmark to create on @ (blank = skip)
 	Prompt           string
+	PRNumber         int // pin the created workspace to this PR (0 = none)
 	Arg              string
 	WorkspaceName    string
 	WorkspacePath    string
