@@ -190,15 +190,19 @@ so the user's terminal palette remaps them automatically:
 
 | Token | ANSI | Semantic role |
 |-------|------|---------------|
-| `Accent` | 6 (teal) | Titles, headers, "starting" status, open PR, focus |
-| `Info` | 4 (blue) | PR numbers, job-running glyph |
-| `Success` | 2 (green) | Working / approved / done / author |
-| `Warning` | 3 (yellow) | Waiting / pending / draft / **row selection** / orphaned |
-| `Danger` | 1 (red) | Errors, CI failing |
+| `Accent` | 6 (teal) | Titles, headers, "starting" status, open PR, focus, find-target header, inbox "needs your review" bucket |
+| `Info` | 4 (blue) | PR numbers, job-running glyph, meta-line `:port` |
+| `Success` | 2 (green) | Working / approved / done / author (meta-line `@author`), inbox "ready to merge" bucket |
+| `Warning` | 3 (yellow) | Waiting / pending / draft / **row selection** / orphaned / inbox "waiting for review" bucket |
+| `Danger` | 1 (red) | Errors, CI failing, inbox "needs action" bucket |
 | `Spinner` | 5 (magenta) | Spinner only |
-| `Strong` | 15 (bright white) | Emphasized text |
-| `Muted` | 8 (bright black) | Hints, footer, dim labels |
+| `Strong` | 15 (bright white) | Emphasized text, project headers (all / attention scopes) |
+| `Muted` | 8 (bright black) | Hints, footer, dim labels, meta-line branch/prompt, inbox drafts/other buckets |
 | `BgPanel` | 0 (surface) | Reserved — currently unused |
+
+**Header colors.** Project headers (all / attention scopes) use `Strong` (bright white, bold), kept distinct from the find-mode target header which uses `Accent` (teal). Inbox bucket headers are urgency-colored per `inboxBucketColor` — see the bucket table in the README. The deck caches these as `deckStyles.ProjectHeader` and `deckStyles.BucketHeader[bucket]`; resolve a header's style via `Model.headerStyle(label)`.
+
+**Meta line.** The per-workspace meta line is mostly `Muted`, but `renderMetaText` colors its semantic tokens — `@author` green, `:port` blue — after truncation (so width math stays ANSI-free). Branch, prompt, and stale chips stay muted.
 
 - **Never** call `lipgloss.Color("123")` with a raw 256-color code. Add a
   semantic token to `internal/charm/palette.go` first if you need a new
