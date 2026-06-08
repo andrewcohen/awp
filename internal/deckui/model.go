@@ -1542,6 +1542,9 @@ func (m Model) renderMetaText(text string) string {
 
 // metaSegStyle picks the style for one meta-line segment: :port blue,
 // everything else (author, branch, prompt, the "to review" hint) muted.
+// Author (teal) and branch (green) tints were tried and read as too much
+// color repeated on every row, so the meta line stays mostly muted with
+// only the port token tinted for a touch of contrast.
 func (m Model) metaSegStyle(seg string) lipgloss.Style {
 	if strings.HasPrefix(seg, ":") {
 		return m.styles.Port
@@ -4137,9 +4140,18 @@ func (m Model) renderHelp(width int) string {
 }
 
 func (m Model) renderList(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("awp deck")
-	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("scope: " + scopeLabel(m.scope) + "  (P to cycle)")
-	header := []string{title, subtitle, ""}
+	title := m.styles.Title.Render("awp deck")
+	// Scope label is pinned to the top-right corner on the title row
+	// (rather than as a subtitle beneath it). Right edge sits at the
+	// panel's inner width — width minus the 1-col horizontal padding on
+	// each side.
+	scope := m.styles.Muted.Render("scope: " + scopeLabel(m.scope))
+	gap := (width - 2) - lipgloss.Width(title) - lipgloss.Width(scope)
+	if gap < 1 {
+		gap = 1
+	}
+	titleRow := title + strings.Repeat(" ", gap) + scope
+	header := []string{titleRow, ""}
 	items := m.items()
 	if len(items) == 0 {
 		rows := append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
@@ -4181,7 +4193,7 @@ func (m Model) renderList(width int) string {
 		case deckRowHeader:
 			headerStyle := m.headerStyle(r.project)
 			if m.findMode && m.findStage == findStageWorkspace && r.project == m.findProject {
-				headerStyle = s.Accent
+				headerStyle = s.FindHeader
 			}
 			hintStr := ""
 			if hint, ok := projectHints[r.project]; ok {
@@ -4204,6 +4216,11 @@ func (m Model) renderList(width int) string {
 			// otherwise truncate any outer Foreground/Bold applied to the
 			// whole row — that's why selected rows containing a status dot
 			// weren't highlighting past the dot.
+			// Labels stay at the terminal default fg — the colored status
+			// dot already carries the agent state, and tinting every label
+			// flooded the list (especially yellow "waiting" rows, which
+			// collided with the yellow selection bar). Selection and
+			// find-dim are the only label recolors.
 			labelStyle := s.Label
 			if r.itemIndex == m.cursor {
 				prefix = s.Bar.Render("┃") + " "
@@ -4400,8 +4417,8 @@ func pickerSplit(total int, stacked bool) (int, int) {
 
 // deckBodyCapacity returns the number of scrollable body rows the left
 // column can show given the terminal height. Subtracts the chrome the
-// caller renders around the body: title + subtitle + blank header
-// (3 lines), the panel's own Padding(2, 1, 1, 1) (3 lines = 2 top + 1
+// caller renders around the body: the title row + blank header (2
+// lines), the panel's own Padding(2, 1, 1, 1) (3 lines = 2 top + 1
 // bottom), and the footer row + its Padding (3 lines). Each entry in
 // `body` is exactly 1 rendered line, so the math is precise without
 // slack. Falls back to a generous capacity when height is unknown so
@@ -4410,7 +4427,7 @@ func (m Model) deckBodyCapacity() int {
 	if m.height <= 0 {
 		return len(m.items()) * 2
 	}
-	const chrome = 3 + 3 + 3
+	const chrome = 2 + 3 + 3
 	rows := m.height - chrome
 	if rows < 1 {
 		rows = 1
