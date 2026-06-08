@@ -2918,7 +2918,7 @@ func TestMetaSegStyle(t *testing.T) {
 		{glyphBranch + " andrew/fix", colMuted},
 		{glyphKeyboard + ` "do the thing"`, colMuted},
 		{":5173", colInfo},
-		{glyphReturn + " review to check out", colAccent},
+		{glyphReturn + "  to review", colAccent},
 	}
 	for _, c := range cases {
 		if got := m.metaSegStyle(c.seg).GetForeground(); got != lipgloss.Color(c.want) {
@@ -2926,7 +2926,7 @@ func TestMetaSegStyle(t *testing.T) {
 		}
 	}
 	// renderMetaText must not alter the visible text.
-	text := "@andrewcohen · :5173 · " + glyphReturn + " review to check out"
+	text := "@andrewcohen · :5173 · " + glyphReturn + "  to review"
 	if got := ansi.Strip(m.renderMetaText(text)); got != text {
 		t.Errorf("renderMetaText changed visible text: got %q want %q", got, text)
 	}

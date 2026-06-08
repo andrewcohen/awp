@@ -204,7 +204,7 @@ needed to do the same.
       still owed in QA.
 - [x] (v2) Review-requested PRs with no workspace appear under "Needs
       your review", deduped against checked-out PRs, with a read-only
-      "↵ review to check out" treatment.
+      "↵ to review" treatment.
 - [x] (v2) Enter on a virtual row starts `awp review <n>`; other
       workspace actions are guarded no-ops. Covered by
       `TestEnterOnVirtualRowStartsReview` and the synthesis tests.
@@ -241,8 +241,8 @@ needed to do the same.
 ### v2 — workspace-less review rows
 - [ ] A coworker's PR with your review requested, in a repo you have a
       workspace in but where you have NOT checked out that PR, appears
-      under "Needs your review" with no agent dot and a teal "↵ review
-      to check out" hint.
+      under "Needs your review" with no agent dot and a teal "↵ to
+      review" hint.
 - [ ] Pressing `enter` on it runs `awp review <n>` (creates the review
       workspace, primes the agent); the row becomes a normal workspace
       row on the next refresh, not a duplicate.
