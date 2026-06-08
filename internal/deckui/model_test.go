@@ -2273,6 +2273,40 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	}
 }
 
+// A successful merge force-refetches the merged PR's repo so its status
+// updates immediately (the merged PR drops out of the open-PR cache),
+// bypassing the prStatusMinInterval throttle.
+func TestMergeSuccessRefetchesPRStatus(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat", PRNumber: 99}
+	var fetchedRepos []string
+	model := New([]Item{item}, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/r": {"feat": {Number: 99, State: PRStateOpen}},
+		}, nil).
+		WithPRStatusFetcher(func(repos []string) tea.Cmd {
+			fetchedRepos = append([]string(nil), repos...)
+			return nil
+		})
+	// Simulate a recent fetch so a non-forced refresh would be throttled.
+	model.prStatusFetchedAt = map[string]time.Time{"/r": time.Now()}
+
+	updated, _ := model.Update(actionResultMsg{
+		action: ActionMergePR,
+		arg:    "99",
+		item:   item,
+	})
+	m := updated.(Model)
+
+	if len(fetchedRepos) != 1 || fetchedRepos[0] != "/r" {
+		t.Fatalf("expected forced PR-status fetch for /r, got %v", fetchedRepos)
+	}
+	// Throttle timestamp for the repo must be cleared so the fetch isn't
+	// suppressed.
+	if _, ok := m.prStatusFetchedAt["/r"]; ok {
+		t.Errorf("expected /r fetch timestamp cleared by forcePRStatusRefresh")
+	}
+}
+
 func TestPRMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	calls := 0
@@ -3115,6 +3149,56 @@ func TestInboxVirtualReviewRows(t *testing.T) {
 	}
 }
 
+// Your own open PRs with no local workspace surface as virtual rows in
+// the inbox, sorted into their state bucket — they don't silently vanish
+// just because you haven't checked them out (e.g. opened from another
+// machine, or workspace deleted).
+func TestInboxVirtualMineRows(t *testing.T) {
+	items := []Item{
+		// A real workspace in repo /a so /a is in the pr-status fetch set
+		// and has a project name to lend the virtual rows.
+		{ProjectName: "alpha", WorkspaceName: "pulled", RepoRoot: "/a", PRNumber: 1},
+	}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/a": {
+			// #1 has the "pulled" workspace → no virtual row.
+			"feat/one": {Number: 1, State: PRStateOpen, HeadRefName: "feat/one", Mine: true},
+			// #2 is yours, draft, no workspace → virtual row in "Mine".
+			"feat/two": {Number: 2, State: PRStateOpen, HeadRefName: "feat/two", Mine: true, IsDraft: true},
+			// #3 is yours, approved + green, no workspace → "Ready to merge".
+			"feat/three": {Number: 3, State: PRStateOpen, HeadRefName: "feat/three", Mine: true,
+				ReviewDecision: PRReviewApproved, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean},
+			// #4 is someone else's, not awaiting you → NOT surfaced.
+			"feat/four": {Number: 4, State: PRStateOpen, HeadRefName: "feat/four", Author: "teammate"},
+		},
+	}, nil)
+	model.scope = ScopeInbox
+	got := model.items()
+
+	byNum := map[int]Item{}
+	for _, it := range got {
+		if it.Virtual {
+			byNum[it.PRNumber] = it
+		}
+	}
+	if len(byNum) != 2 {
+		t.Fatalf("expected virtual rows for #2 and #3 only, got %d: %v", len(byNum), itemNames(got))
+	}
+	if _, ok := byNum[4]; ok {
+		t.Errorf("someone else's PR #4 should not be surfaced as a virtual mine row")
+	}
+	if v, ok := byNum[2]; !ok {
+		t.Errorf("draft PR #2 missing a virtual row")
+	} else if b := model.itemInboxBucket(v); b != inboxMine {
+		t.Errorf("draft PR #2 bucket = %s, want Mine", inboxBucketLabel(b))
+	}
+	if v, ok := byNum[3]; !ok {
+		t.Errorf("approved PR #3 missing a virtual row")
+	} else if b := model.itemInboxBucket(v); b != inboxReadyToMerge {
+		t.Errorf("approved PR #3 bucket = %s, want Ready to merge", inboxBucketLabel(b))
+	}
+}
+
 // Outside the inbox scope, no virtual rows are synthesized.
 func TestVirtualRowsOnlyInInboxScope(t *testing.T) {
 	items := []Item{{ProjectName: "alpha", WorkspaceName: "w", RepoRoot: "/a", Bookmark: "b/w"}}
@@ -3178,6 +3262,132 @@ func TestEnterOnVirtualRowStartsReview(t *testing.T) {
 	}
 	if gotSpec.Arg != "2" {
 		t.Errorf("review job PR arg = %q, want 2", gotSpec.Arg)
+	}
+}
+
+// Enter on a virtual row for YOUR OWN PR opens the prefilled
+// new-workspace form (anchored on the PR branch) instead of the review
+// flow — you want to keep working on it, not review it.
+func TestEnterOnMineVirtualRowOpensCreateForm(t *testing.T) {
+	launched := false
+	items := []Item{{ProjectName: "alpha", WorkspaceName: "pulled", RepoRoot: "/a", PRNumber: 1}}
+	model := New(items, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/a": {
+				"feat/one":    {Number: 1, State: PRStateOpen, HeadRefName: "feat/one", Mine: true},
+				"andrew/feat": {Number: 2, State: PRStateOpen, HeadRefName: "andrew/feat", Mine: true, IsDraft: true},
+			},
+		}, nil).
+		WithAsyncJobLauncher(func(AsyncJobSpec) error { launched = true; return nil })
+	model.bookmarkPrefix = "andrew"
+	model.scope = ScopeInbox
+
+	virtualIdx := -1
+	for i, it := range model.items() {
+		if it.Virtual {
+			virtualIdx = i
+			break
+		}
+	}
+	if virtualIdx < 0 {
+		t.Fatal("no virtual row present to select")
+	}
+	model.cursor = virtualIdx
+
+	updated, _ := model.trigger(ActionSummon, "")
+	m2 := updated.(Model)
+	if launched {
+		t.Error("enter on a mine virtual row should not launch the review job")
+	}
+	if !m2.newWorkspaceMode {
+		t.Fatal("enter on a mine virtual row should open the new-workspace form")
+	}
+	if m2.newWorkspaceRepo != "/a" {
+		t.Errorf("new-workspace repo = %q, want /a", m2.newWorkspaceRepo)
+	}
+	req := m2.newWorkspaceForm.request()
+	if req.Bookmark != "andrew/feat" {
+		t.Errorf("form anchored on %q, want PR branch andrew/feat", req.Bookmark)
+	}
+	// Prefix-derived name round-trips: "andrew/feat" → name "feat" →
+	// auto-bookmark "andrew/feat" (the PR branch, not a fork).
+	if req.Name != "feat" {
+		t.Errorf("prefilled name = %q, want feat", req.Name)
+	}
+	if req.BookmarkToCreate != "andrew/feat" {
+		t.Errorf("auto-bookmark = %q, want andrew/feat (re-uses the PR branch)", req.BookmarkToCreate)
+	}
+	// The PR number is carried alongside the form so the created
+	// workspace links to the PR without reopening the deck.
+	if m2.newWorkspacePR != 2 {
+		t.Errorf("pending PR link = %d, want 2", m2.newWorkspacePR)
+	}
+}
+
+// Submitting the form opened from a mine virtual row threads the PR
+// number into the async create spec, so the create handler pins the
+// workspace to the PR (RecordPROverride) and it links without a reopen.
+func TestMineVirtualCreateThreadsPRNumber(t *testing.T) {
+	var gotSpec AsyncJobSpec
+	items := []Item{{ProjectName: "alpha", WorkspaceName: "pulled", RepoRoot: "/a", PRNumber: 1}}
+	model := New(items, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/a": {
+				"feat/one": {Number: 1, State: PRStateOpen, HeadRefName: "feat/one", Mine: true},
+				"feat/two": {Number: 2, State: PRStateOpen, HeadRefName: "feat/two", Mine: true, IsDraft: true},
+			},
+		}, nil).
+		WithAsyncJobLauncher(func(spec AsyncJobSpec) error { gotSpec = spec; return nil })
+	model.scope = ScopeInbox
+
+	virtualIdx := -1
+	for i, it := range model.items() {
+		if it.Virtual {
+			virtualIdx = i
+			break
+		}
+	}
+	if virtualIdx < 0 {
+		t.Fatal("no virtual row present to select")
+	}
+	model.cursor = virtualIdx
+
+	updated, _ := model.trigger(ActionSummon, "")
+	m2 := updated.(Model)
+	if !m2.newWorkspaceMode {
+		t.Fatal("expected the new-workspace form to open")
+	}
+	_, cmd := m2.startCreateAction(NewWorkspaceRequest{
+		Name:             "two",
+		Bookmark:         "feat/two",
+		BookmarkToCreate: "andrew/two",
+		PRNumber:         m2.newWorkspacePR,
+	}, m2.newWorkspaceRepo)
+	if cmd != nil {
+		execCmd(t, cmd)
+	}
+	if gotSpec.Action != "create-workspace" {
+		t.Fatalf("async spec action = %q, want create-workspace", gotSpec.Action)
+	}
+	if gotSpec.PRNumber != 2 {
+		t.Errorf("async spec PRNumber = %d, want 2", gotSpec.PRNumber)
+	}
+}
+
+// proposeWorkspaceName strips the configured prefix, else falls back to
+// the last path segment.
+func TestProposeWorkspaceName(t *testing.T) {
+	cases := []struct{ ref, prefix, want string }{
+		{"andrew/fix-login", "andrew", "fix-login"},
+		{"andrew/fix-login", "andrew/", "fix-login"},
+		{"feat/two", "andrew", "two"},
+		{"flat", "andrew", "flat"},
+		{"andrew/nested/deep", "andrew", "nested/deep"},
+	}
+	for _, c := range cases {
+		if got := proposeWorkspaceName(c.ref, c.prefix); got != c.want {
+			t.Errorf("proposeWorkspaceName(%q, %q) = %q, want %q", c.ref, c.prefix, got, c.want)
+		}
 	}
 }
 

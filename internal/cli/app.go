@@ -464,6 +464,19 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
 		return err
 	}
+	// Pin the workspace to its PR when the caller created it from a known
+	// PR (e.g. the deck's virtual "mine" inbox row). Mirrors the review
+	// flow's override so the row resolves its PR directly by number,
+	// regardless of bookmark drift — and links as soon as the deck
+	// reloads, without reopening. Best-effort: the workspace is already
+	// usable if this fails.
+	if req.PRNumber > 0 {
+		if err := svc.RecordPROverride(normalized, req.PRNumber); err != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("pin PR #%d: %v", req.PRNumber, err))
+		} else if reporter != nil {
+			reporter.Log(fmt.Sprintf("linked to PR #%d", req.PRNumber))
+		}
+	}
 	// Agent launch / prompt delivery splits on whether we own the
 	// freshly-created session:
 	//   • New session: pane is a shell — type "<invocation> '<prompt>'"

@@ -19,6 +19,7 @@ type openRequest struct {
 	Bookmark         string // anchor revision (jj new <bookmark>) for the new workspace's @
 	BookmarkToCreate string // new bookmark to create on @ (blank = skip)
 	Prompt           string
+	PRNumber         int // pin the created workspace to this PR (0 = none)
 	Yes              bool
 	// NoSwitch suppresses the final tmux switch-client step. Used by the
 	// async create-workspace job so the subprocess prepares the workspace
@@ -50,6 +51,7 @@ func runOpenWithCharm(initial openRequest, runner Runner, in io.Reader, out io.W
 		Bookmark:         req.Bookmark,
 		BookmarkToCreate: req.BookmarkToCreate,
 		Prompt:           req.Prompt,
+		PRNumber:         initial.PRNumber,
 		Yes:              initial.Yes,
 		NoSwitch:         initial.NoSwitch,
 	}, nil
