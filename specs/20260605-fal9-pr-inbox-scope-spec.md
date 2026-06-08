@@ -5,7 +5,7 @@
 - **Feature name**: PR inbox scope (replaces the open-PR deck scope)
 - **Owner**: andrewcohen
 - **Status**: In Progress (implementation landed; human QA pending)
-- **Last updated**: 2026-06-05
+- **Last updated**: 2026-06-08
 
 ## Goal
 When the deck is scoped to PRs, rows are grouped by *what your next move
@@ -50,21 +50,34 @@ needed to do the same.
 - Rows within a bucket sort by (project, display label). Each row gains
   a `[project]` prefix chip (mini-deck pattern) since project headers
   are gone in this scope.
-- Row source unchanged: **workspaces only**. A PR with no local
-  workspace does not appear.
-- Merged/closed PRs stay excluded from the scope, as today.
+- Row source is **workspaces, plus synthetic rows for review-requested
+  PRs with no local workspace** (see v2 below). Merged/closed PRs stay
+  excluded from the scope, as today.
 - README + `?` help/keymap text updates (`cycle scope (all → attention
   → inbox)`).
 
-### Out of scope (v1)
-- **Workspace-less PRs in "Needs your review" (planned v2).** The
-  bucket should eventually list review-requested PRs you haven't
-  pulled down yet — the status cache already holds them. Those rows
-  need a distinct "no workspace yet" rendering, and `enter` on one
-  should trigger the review flow (`awp review <n>`: create the review
-  workspace, prime the agent) instead of summoning a session. Decided
-  2026-06-05 to land the workspaces-only pass first and layer this on
-  once the bucketed layout is right.
+### v2 (implemented 2026-06-08) — workspace-less review rows
+- **Review-requested PRs with no local workspace** now appear under
+  *Needs your review* as synthetic "virtual" rows. The PR status cache
+  (`prStatusByRepo`) only holds repos where you already have a
+  workspace, so a virtual row is always a not-yet-checked-out PR in a
+  repo you work in; its `[project]` chip is borrowed from a sibling
+  workspace in that repo.
+- Synthesized in `Model.items()` (inbox scope only) via
+  `inboxVirtualReviewItems`: enumerate cached open PRs with
+  `ReviewRequested || ReviewRerequested`, skip any already resolved by
+  a real workspace row (dedup by repo→PR#), emit an `Item{Virtual:
+  true, PRNumber, RepoRoot, Bookmark: headRef}`.
+- **Read-only rendering**: no agent status dot, and a teal `↵ review to
+  check out` hint on the meta line (the one new meta-line color besides
+  `:port`). Label still resolves to `#N title` via the cache.
+- **Enter starts review**: `trigger` routes the default Summon on a
+  virtual row to `ActionReview` with the PR number, reusing the exact
+  dispatch the `R` picker uses (`awp review <n>` → create workspace +
+  prime agent). Delete / rename / send-prompt / link are no-ops with a
+  "no workspace yet — press enter to start a review" status.
+
+### Out of scope
 - "Needs your team's review" (requires team-membership data we don't
   fetch).
 - Re-bucketing the review picker (`R`) — it stays a flat recency list.
@@ -116,8 +129,9 @@ needed to do the same.
 5. **What is the smallest useful slice?** Re-sort + re-header the
    existing open-PR scope by bucket. Everything else (chips, drafts)
    layers on.
-6. **What are explicit non-goals?** Workspace-less PR rows; team review
-   requests; review picker changes.
+6. **What are explicit non-goals?** Team review requests; review picker
+   changes. (Workspace-less PR rows were a v1 non-goal, delivered in
+   v2.)
 7. **What does "done" look like?** `P` lands on `inbox` and the deck
    shows bucketed sections matching GitHub's inbox semantics for the
    same PRs.
@@ -137,6 +151,15 @@ needed to do the same.
   single-stage in this scope (see UX). Scroll-math helpers now take
   precomputed `deckBodyRows` so renderer and scroll math share one
   layout call.
+- 2026-06-08: Livened the deck (separate change): urgency-colored
+  bucket headers, brighter project headers, `:port` blue. A green
+  `@author` was added then reverted as too loud — the handle stays
+  muted; meta-line color is now just `:port` (blue) and the virtual
+  row hint (teal).
+- 2026-06-08: Built v2 (workspace-less review rows) — pulled forward
+  from "planned" at the user's request. New `Item.Virtual` flag,
+  `inboxVirtualReviewItems` synthesis, enter→`ActionReview` routing in
+  `trigger`, and per-action guards. Tests + README + this spec updated.
 
 ## Implementation Plan
 1. **Bucket classifier** — `prInboxBucket(s PRStatus) inboxBucket`
@@ -179,6 +202,12 @@ needed to do the same.
 - [x] Cursor/easymotion/find work across bucket sections (find is
       single-stage in this scope by design — see UX). Manual pass
       still owed in QA.
+- [x] (v2) Review-requested PRs with no workspace appear under "Needs
+      your review", deduped against checked-out PRs, with a read-only
+      "↵ review to check out" treatment.
+- [x] (v2) Enter on a virtual row starts `awp review <n>`; other
+      workspace actions are guarded no-ops. Covered by
+      `TestEnterOnVirtualRowStartsReview` and the synthesis tests.
 
 ## QA / Human Review Test Plan
 ### Setup
@@ -208,6 +237,19 @@ needed to do the same.
 - [ ] Mini-deck unaffected.
 - [ ] Sticky header pins the bucket header in inbox scope while
       scrolling.
+
+### v2 — workspace-less review rows
+- [ ] A coworker's PR with your review requested, in a repo you have a
+      workspace in but where you have NOT checked out that PR, appears
+      under "Needs your review" with no agent dot and a teal "↵ review
+      to check out" hint.
+- [ ] Pressing `enter` on it runs `awp review <n>` (creates the review
+      workspace, primes the agent); the row becomes a normal workspace
+      row on the next refresh, not a duplicate.
+- [ ] Once checked out, the PR shows as a single normal row (no
+      lingering virtual duplicate).
+- [ ] Delete / rename / send-prompt / link on a virtual row show "no
+      workspace yet — press enter to start a review" and do nothing.
 
 ### Reviewer Notes
 - Capture a screenshot of inbox scope next to github.com's inbox for

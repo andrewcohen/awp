@@ -29,11 +29,10 @@ type deckStyles struct {
 	// all / attention scopes (Strong + bold). Kept distinct from
 	// Accent so find-mode's teal header highlight still stands out.
 	ProjectHeader lipgloss.Style
-	// Author / Port color the meta-line tokens that carry a semantic
-	// role per the palette table (author = green, port = blue); the
-	// rest of the meta line stays Muted.
-	Author lipgloss.Style
-	Port   lipgloss.Style
+	// Port colors the meta-line :port token blue (the rest of the meta
+	// line stays Muted). Author was tried in green but read as too loud,
+	// so the handle stays muted.
+	Port lipgloss.Style
 	// BucketHeader holds the urgency-colored, bold header style for
 	// each inbox bucket, indexed by inboxBucket.
 	BucketHeader [inboxBucketCount]lipgloss.Style
@@ -54,7 +53,6 @@ func newDeckStyles() deckStyles {
 		Label:    lipgloss.NewStyle(),
 
 		ProjectHeader: lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong)).Bold(true),
-		Author:        lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)),
 		Port:          lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
 	}
 	for b := inboxBucket(0); b < inboxBucketCount; b++ {

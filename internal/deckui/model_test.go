@@ -2903,25 +2903,32 @@ func TestBodyRowsInboxBucketHeaders(t *testing.T) {
 	}
 }
 
-// renderMetaText colors @author green and :port blue while leaving the
-// rest muted. Verify the ANSI foreground codes land on the right tokens
-// and the visible text is unchanged after stripping ANSI.
-func TestRenderMetaTextColorsAuthorAndPort(t *testing.T) {
+// metaSegStyle drives meta-line token colors: :port blue, the "↵
+// review" virtual-row hint teal, everything else (author, branch,
+// prompt) muted. Asserting on GetForeground keeps this independent of
+// the test renderer's color profile (which strips ANSI). The green
+// author handle was tried and removed for reading too loud.
+func TestMetaSegStyle(t *testing.T) {
 	m := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
-	text := "@andrewcohen ·  andrew/fix · :5173 · note"
-	out := m.renderMetaText(text)
-
-	if got := ansi.Strip(out); got != text {
-		t.Errorf("visible text changed: got %q want %q", got, text)
+	cases := []struct {
+		seg  string
+		want string
+	}{
+		{"@andrewcohen", colMuted},
+		{glyphBranch + " andrew/fix", colMuted},
+		{glyphKeyboard + ` "do the thing"`, colMuted},
+		{":5173", colInfo},
+		{glyphReturn + " review to check out", colAccent},
 	}
-	// The green (author) and blue (port) codes must both appear.
-	green := lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)).Render("@andrewcohen")
-	blue := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)).Render(":5173")
-	if !strings.Contains(out, green) {
-		t.Errorf("author token not rendered in success color; out=%q", out)
+	for _, c := range cases {
+		if got := m.metaSegStyle(c.seg).GetForeground(); got != lipgloss.Color(c.want) {
+			t.Errorf("metaSegStyle(%q) fg = %v, want %v", c.seg, got, lipgloss.Color(c.want))
+		}
 	}
-	if !strings.Contains(out, blue) {
-		t.Errorf("port token not rendered in info color; out=%q", out)
+	// renderMetaText must not alter the visible text.
+	text := "@andrewcohen · :5173 · " + glyphReturn + " review to check out"
+	if got := ansi.Strip(m.renderMetaText(text)); got != text {
+		t.Errorf("renderMetaText changed visible text: got %q want %q", got, text)
 	}
 }
 
@@ -2962,5 +2969,127 @@ func TestHeaderStyleResolvesBucketColor(t *testing.T) {
 	m.scope = ScopeAll
 	if got := m.headerStyle("shop-api"); got.GetForeground() != lipgloss.Color(colStrong) {
 		t.Errorf("project header should use Strong, got %v", got.GetForeground())
+	}
+}
+
+// In the inbox scope, review-requested PRs with no local workspace
+// surface as synthetic virtual rows, deduped against any workspace that
+// already resolves to the same PR, and bucketed into "Needs your review".
+func TestInboxVirtualReviewRows(t *testing.T) {
+	items := []Item{
+		// A real workspace in repo /a, pinned to PR #1 (review requested).
+		{ProjectName: "alpha", WorkspaceName: "pulled", RepoRoot: "/a", PRNumber: 1},
+		// A real workspace in repo /b (its own PR), so /b has a project name.
+		{ProjectName: "beta", WorkspaceName: "mine", RepoRoot: "/b", Bookmark: "b/mine"},
+	}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/a": {
+			// #1 already has the "pulled" workspace → no virtual row.
+			"feat/one": {Number: 1, State: PRStateOpen, HeadRefName: "feat/one", ReviewRequested: true},
+			// #2 is review-requested but has no workspace → virtual row.
+			"feat/two": {Number: 2, State: PRStateOpen, HeadRefName: "feat/two", ReviewRequested: true, Author: "teammate"},
+		},
+		"/b": {
+			"b/mine": {Number: 9, State: PRStateOpen, HeadRefName: "b/mine", Mine: true},
+		},
+	}, nil)
+	model.scope = ScopeInbox
+	got := model.items()
+
+	var virtual []Item
+	for _, it := range got {
+		if it.Virtual {
+			virtual = append(virtual, it)
+		}
+	}
+	if len(virtual) != 1 {
+		t.Fatalf("expected exactly one virtual row (PR #2), got %d: %v", len(virtual), itemNames(got))
+	}
+	v := virtual[0]
+	if v.PRNumber != 2 {
+		t.Errorf("virtual row PRNumber = %d, want 2", v.PRNumber)
+	}
+	if v.RepoRoot != "/a" {
+		t.Errorf("virtual row RepoRoot = %q, want /a", v.RepoRoot)
+	}
+	if v.ProjectName != "alpha" {
+		t.Errorf("virtual row should borrow sibling project name 'alpha', got %q", v.ProjectName)
+	}
+	if v.Bookmark != "feat/two" {
+		t.Errorf("virtual row should carry PR head ref as bookmark, got %q", v.Bookmark)
+	}
+	if b := model.itemInboxBucket(v); b != inboxNeedsYourReview {
+		t.Errorf("virtual review row bucket = %s, want Needs your review", inboxBucketLabel(b))
+	}
+	// The label resolves to the PR title slot (#N) and the row sorts into
+	// the review bucket alongside the pulled-down #1.
+	if got := model.displayLabel(v); !strings.Contains(got, "#2") {
+		t.Errorf("virtual row label should reference #2, got %q", got)
+	}
+}
+
+// Outside the inbox scope, no virtual rows are synthesized.
+func TestVirtualRowsOnlyInInboxScope(t *testing.T) {
+	items := []Item{{ProjectName: "alpha", WorkspaceName: "w", RepoRoot: "/a", Bookmark: "b/w"}}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/a": {
+			"feat/x": {Number: 5, State: PRStateOpen, HeadRefName: "feat/x", ReviewRequested: true},
+		},
+	}, nil)
+	for _, sc := range []Scope{ScopeAll, ScopeAttention} {
+		model.scope = sc
+		for _, it := range model.items() {
+			if it.Virtual {
+				t.Errorf("scope %s synthesized a virtual row; should be inbox-only", scopeLabel(sc))
+			}
+		}
+	}
+}
+
+// Enter on a virtual row dispatches the review flow (ActionReview) with
+// the PR number, rather than summoning a non-existent workspace.
+func TestEnterOnVirtualRowStartsReview(t *testing.T) {
+	var gotSpec AsyncJobSpec
+	launched := false
+	items := []Item{{ProjectName: "alpha", WorkspaceName: "sib", RepoRoot: "/a", Bookmark: "b/sib"}}
+	model := New(items, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/a": {
+				"feat/two": {Number: 2, State: PRStateOpen, HeadRefName: "feat/two", ReviewRequested: true},
+			},
+		}, nil).
+		WithAsyncJobLauncher(func(spec AsyncJobSpec) error {
+			gotSpec = spec
+			launched = true
+			return nil
+		})
+	model.scope = ScopeInbox
+
+	// Cursor onto the virtual row.
+	virtualIdx := -1
+	for i, it := range model.items() {
+		if it.Virtual {
+			virtualIdx = i
+			break
+		}
+	}
+	if virtualIdx < 0 {
+		t.Fatal("no virtual row present to select")
+	}
+	model.cursor = virtualIdx
+
+	_, cmd := model.trigger(ActionSummon, "")
+	if cmd == nil {
+		t.Fatal("trigger returned no command for enter on virtual row")
+	}
+	execCmd(t, cmd)
+	if !launched {
+		t.Fatal("enter on virtual row did not launch any async job")
+	}
+	if gotSpec.Action != "review" {
+		t.Errorf("async job action = %q, want review", gotSpec.Action)
+	}
+	if gotSpec.Arg != "2" {
+		t.Errorf("review job PR arg = %q, want 2", gotSpec.Arg)
 	}
 }
