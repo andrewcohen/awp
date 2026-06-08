@@ -1454,7 +1454,7 @@ func (m Model) displayLabel(it Item) string {
 const (
 	glyphBranch   = "\uf418"     // nf-oct-git_branch
 	glyphKeyboard = "\U000F030C" // nf-md-keyboard
-	glyphReturn   = "\u21b5"     // \u21b5 \u2014 leads the "enter to review" hint on virtual rows
+	glyphReturn   = "\U000F0311" // nf-md-keyboard_return \u2014 leads the "to review" hint on virtual rows
 )
 
 // metaLine returns the secondary text for a workspace row in a dense
@@ -1519,11 +1519,12 @@ func (m Model) metaLine(it Item) string {
 }
 
 // renderMetaText colors the semantic tokens of an already-truncated
-// meta line — :port blue, the virtual-row "↵ review" hint teal — with
-// everything else (author, branch, prompt, stale chip, separators)
-// muted. Operating on the truncated plain string keeps the width math
-// in metaLine/truncate ANSI-free; coloring a token the truncation
-// clipped is harmless since the prefix that selects its color survives.
+// meta line — only :port is tinted (blue); everything else (author,
+// branch, prompt, stale chip, the virtual-row "to review" hint,
+// separators) stays muted. Operating on the truncated plain string
+// keeps the width math in metaLine/truncate ANSI-free; coloring a token
+// the truncation clipped is harmless since the prefix that selects its
+// color survives.
 func (m Model) renderMetaText(text string) string {
 	segs := strings.Split(text, " · ")
 	for i, seg := range segs {
@@ -1533,17 +1534,12 @@ func (m Model) renderMetaText(text string) string {
 }
 
 // metaSegStyle picks the style for one meta-line segment: :port blue,
-// the "↵ review" virtual-row hint teal, everything else (author,
-// branch, prompt) muted.
+// everything else (author, branch, prompt, the "to review" hint) muted.
 func (m Model) metaSegStyle(seg string) lipgloss.Style {
-	switch {
-	case strings.HasPrefix(seg, ":"):
+	if strings.HasPrefix(seg, ":") {
 		return m.styles.Port
-	case strings.HasPrefix(seg, glyphReturn):
-		return m.styles.Accent
-	default:
-		return m.styles.Muted
 	}
+	return m.styles.Muted
 }
 
 // devURLPort extracts the port from a dev URL like
