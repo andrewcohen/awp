@@ -1483,7 +1483,7 @@ func (m Model) metaLine(it Item) string {
 	}
 	if it.Virtual {
 		// No local workspace — call out the one action that exists.
-		parts = append(parts, glyphReturn+" review to check out")
+		parts = append(parts, glyphReturn+"  to review")
 	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " · ")
