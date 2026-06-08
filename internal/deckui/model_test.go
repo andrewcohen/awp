@@ -2224,6 +2224,91 @@ func TestPRStatusLabelHonorsPROverride(t *testing.T) {
 	}
 }
 
+func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	var gotReq ActionRequest
+	calls := 0
+	handler := func(req ActionRequest) error { calls++; gotReq = req; return nil }
+	model := New([]Item{item}, handler).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {Number: 99, Title: "Add merge key", State: PRStateOpen}},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m := updated.(Model)
+	if m.prMenuMode {
+		t.Fatalf("expected prMenuMode false after p m")
+	}
+	if !m.confirmMergePR {
+		t.Fatalf("expected confirmMergePR after p m")
+	}
+	if m.mergeStatus.Number != 99 {
+		t.Fatalf("expected mergeStatus.Number 99, got %d", m.mergeStatus.Number)
+	}
+	if calls != 0 {
+		t.Fatalf("merge must not dispatch before confirmation; got calls=%d", calls)
+	}
+	// The confirm modal must surface the exact command for confidence.
+	if view := m.renderMergePRConfirm(); !strings.Contains(view, "gh pr merge 99 --squash") || !strings.Contains(view, "#99") {
+		t.Fatalf("expected merge confirm to show command and PR number; got %q", view)
+	}
+
+	// y confirms → enters the progress modal and dispatches ActionMergePR
+	// with the PR number as Arg. Draining the batch runs the handler (the
+	// dispatch cmd invokes it synchronously).
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	got := updated.(Model)
+	if got.confirmMergePR {
+		t.Fatalf("expected confirmMergePR cleared after y")
+	}
+	if !got.progressMode {
+		t.Fatalf("expected progress modal to open and stay until success/failure")
+	}
+	drainCmd(cmd)
+	if calls != 1 {
+		t.Fatalf("expected handler called once, got %d", calls)
+	}
+	if gotReq.Action != ActionMergePR || gotReq.Arg != "99" {
+		t.Fatalf("expected ActionMergePR arg=99; got action=%v arg=%q", gotReq.Action, gotReq.Arg)
+	}
+}
+
+func TestPRMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	calls := 0
+	model := New([]Item{item}, func(ActionRequest) error { calls++; return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/r": {"feat": {Number: 7, State: PRStateOpen}},
+		}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m := updated.(Model)
+	if m.confirmMergePR {
+		t.Fatalf("expected confirmMergePR cleared after n")
+	}
+	if calls != 0 {
+		t.Fatalf("cancel must not dispatch; got calls=%d", calls)
+	}
+}
+
+func TestPRMenuMergeKeyNoopsWhenPRNotOpen(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	model := New([]Item{item}, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/r": {"feat": {Number: 7, State: PRStateMerged}},
+		}, nil)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m := updated.(Model)
+	if m.confirmMergePR {
+		t.Fatalf("expected no merge confirm for a non-open PR")
+	}
+	if !strings.Contains(m.status, "nothing to merge") {
+		t.Fatalf("expected status to explain the PR isn't open; got %q", m.status)
+	}
+}
+
 func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	calls := 0

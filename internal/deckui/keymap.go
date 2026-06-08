@@ -73,7 +73,7 @@ func newDeckKeyMap() deckKeyMap {
 		Open:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open: fuzzy-pick a project from configured roots")),
 		UserActions:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "user actions menu")),
 		EditState:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "edit raw state JSON in $EDITOR")),
-		PRMenu:        key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "PR menu (o open · r repair · s set PR #)")),
+		PRMenu:        key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "PR menu (o open · m merge · r repair · s set PR #)")),
 		OpenURL:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "open captured dev-server URL")),
 		SendPrompt:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "send a typed prompt to the workspace's agent")),
 	}

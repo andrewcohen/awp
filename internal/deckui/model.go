@@ -89,6 +89,10 @@ const (
 	// the agent with the prompt; if it is, it should paste the prompt
 	// as a user message.
 	ActionSendPrompt
+	// ActionMergePR merges the workspace's PR via `gh pr merge`. It runs
+	// in the foreground progress modal (not the async jobs subsystem) so
+	// the modal stays open until gh reports success or failure.
+	ActionMergePR
 )
 
 type UserAction struct {
@@ -849,6 +853,9 @@ type Model struct {
 	deleteErr         string
 	helpMode          bool
 	deleteTarget      Item
+	confirmMergePR    bool      // merge-PR confirmation modal active
+	mergeTarget       Item      // workspace whose PR the modal will merge
+	mergeStatus       PRStatus  // cached PR status shown in the modal (number/title)
 	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
 	findStage         findStage
@@ -1500,7 +1507,7 @@ func (m Model) metaLine(it Item) string {
 	}
 	if it.Virtual {
 		// No local workspace — call out the one action that exists.
-		parts = append(parts, glyphReturn+"  to review")
+		parts = append(parts, glyphReturn+" to review")
 	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " · ")
@@ -1987,6 +1994,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if msg.action == ActionDelete {
 			return m, nil
 		}
+		if msg.action == ActionMergePR {
+			// Stay in the progress modal showing the success result; the
+			// user dismisses with esc/q/enter, which refreshes PR status.
+			// "submitted" rather than "merged" — on a merge-queue repo the
+			// PR is added to the queue, not merged on the spot. The log
+			// shows which one happened.
+			m.status = fmt.Sprintf("PR #%s: merge submitted", msg.arg)
+			return m, nil
+		}
 		if msg.action == ActionRename {
 			m.status = fmt.Sprintf("renamed %s → %s", msg.item.WorkspaceName, msg.arg)
 			// Move the cursor to the new name once the refresh lands so
@@ -2202,6 +2218,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m, refreshCmd = m.requestRefresh(true)
 					return m, refreshCmd
 				}
+				if m.progressDoneAction == ActionMergePR && m.refresher != nil {
+					// Pull fresh PR status so the merged PR's glyph updates.
+					var refreshCmd tea.Cmd
+					m, refreshCmd = m.requestRefresh(true)
+					return m, refreshCmd
+				}
 				return m, nil
 			}
 			return m, nil
@@ -2250,6 +2272,22 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				return m.startAction(ActionDelete, m.deleteTarget, "")
 			case "n", "esc", "q":
 				m.confirmDelete = false
+				m.status = ""
+				return m, nil
+			}
+			return m, nil
+		}
+		if m.confirmMergePR {
+			switch strings.ToLower(msg.String()) {
+			case "y", "enter":
+				m.confirmMergePR = false
+				if m.handler == nil {
+					m.status = "merge: handler not configured"
+					return m, nil
+				}
+				return m.startAction(ActionMergePR, m.mergeTarget, strconv.Itoa(m.mergeStatus.Number))
+			case "n", "esc", "q":
+				m.confirmMergePR = false
 				m.status = ""
 				return m, nil
 			}
@@ -2424,6 +2462,30 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.promptForm, initCmd = newPromptForm(item, prompt)
 				m.status = "repair: review prompt · enter send · ctrl+g $EDITOR · esc cancel"
 				return m, batchCmds(initCmd, tea.ClearScreen)
+			case "m":
+				m.prMenuMode = false
+				item, ok := m.selected()
+				if !ok {
+					return m, nil
+				}
+				status, _, ok := m.prStatusLabelForItem(item)
+				if !ok {
+					m.status = "pr: no PR for this workspace"
+					return m, nil
+				}
+				if status.Number <= 0 {
+					m.status = "pr: merge unavailable (no PR number cached — try p s)"
+					return m, nil
+				}
+				if status.State != PRStateOpen {
+					m.status = fmt.Sprintf("pr: #%d is %s — nothing to merge", status.Number, strings.ToLower(string(status.State)))
+					return m, nil
+				}
+				m.confirmMergePR = true
+				m.mergeTarget = item
+				m.mergeStatus = status
+				m.status = fmt.Sprintf("merge PR #%d? [y/N]", status.Number)
+				return m, tea.ClearScreen
 			case "s":
 				m.prMenuMode = false
 				item, ok := m.selected()
@@ -3335,7 +3397,7 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 
 func isProgressAction(a Action) bool {
 	switch a {
-	case ActionDelete, ActionDeleteProject, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom:
+	case ActionDelete, ActionDeleteProject, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom, ActionMergePR:
 		return true
 	}
 	return false
@@ -3583,6 +3645,11 @@ func actionLabel(a Action, arg string) string {
 		return "rename"
 	case ActionSendPrompt:
 		return "send prompt"
+	case ActionMergePR:
+		if arg != "" {
+			return "merge PR #" + arg
+		}
+		return "merge PR"
 	}
 	return "action"
 }
@@ -3739,6 +3806,10 @@ func (m Model) View() string {
 	if m.confirmDelete {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.renderDeleteConfirm())
+	}
+	if m.confirmMergePR {
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.renderMergePRConfirm())
 	}
 	if m.prNumberSetMode {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -4665,6 +4736,7 @@ func deckKeyGroups() []keyGroup {
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{"d", "open dev URL in browser (auto-discovered)"},
 				{"p o", "open this workspace's PR in browser"},
+				{"p m", "merge this workspace's PR (gh pr merge --squash, with confirmation)"},
 				{"p d", "open this workspace's PR description in a pr tmux window (gh pr view | less)"},
 				{"p r", "repair this workspace's PR (prepopulates a fix prompt)"},
 				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
@@ -4852,6 +4924,47 @@ func (m Model) renderDeleteConfirm() string {
 		"",
 		hintStyle.Render("y confirm · n / esc cancel"),
 	}
+	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+func (m Model) renderMergePRConfirm() string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colAccent)).
+		Padding(1, 2).
+		Width(64)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	prStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)).Bold(true)
+	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+
+	s := m.mergeStatus
+	cmd := fmt.Sprintf("gh pr merge %d --squash", s.Number)
+
+	lines := []string{
+		titleStyle.Render(fmt.Sprintf("Merge PR %s?", prStyle.Render("#"+strconv.Itoa(s.Number)))),
+		"",
+	}
+	if title := strings.TrimSpace(s.Title); title != "" {
+		lines = append(lines, truncate(title, 58))
+	}
+	lines = append(lines,
+		"",
+		labelStyle.Render("Runs:"),
+		cmdStyle.Render("  "+cmd),
+	)
+	if s.IsInMergeQueue {
+		// The rocket is showing for this row — the PR is already in the
+		// repo's merge queue.
+		lines = append(lines, labelStyle.Render(fmt.Sprintf("  %s already in the merge queue — re-adds it to the queue", prGlyphInQueue)))
+	} else {
+		lines = append(lines, labelStyle.Render("  squash by default; falls back to the merge queue if required"))
+	}
+	lines = append(lines,
+		"",
+		hintStyle.Render("y confirm · n / esc cancel"),
+	)
 	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
