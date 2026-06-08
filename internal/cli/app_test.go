@@ -614,3 +614,68 @@ func TestOpenWorkspaceExistingSessionPastesPromptInsteadOfReTypingInvocation(t *
 		}
 	}
 }
+
+// indexOfJJFetch returns the index of the first `jj git fetch` call in
+// the recorded runner calls, or -1 if it never ran.
+func indexOfJJFetch(calls [][]string) int {
+	for i, call := range calls {
+		if len(call) >= 3 && call[0] == "jj" && call[1] == "git" && call[2] == "fetch" {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestOpenWorkspaceFetchesBeforeAnchoringBookmark pins the create flow's
+// `jj git fetch`: when the workspace anchors on an existing bookmark we
+// must fetch first so the working copy lands on the current origin tip
+// (and so an origin-only branch is present locally to track). The fetch
+// has to precede the tmux session setup — by then PrepareWorkspace has
+// already resolved the bookmark revision.
+func TestOpenWorkspaceFetchesBeforeAnchoringBookmark(t *testing.T) {
+	svc := &fakeService{}
+	runner := &recordingRunner{}
+	err := openWorkspaceWithReporter(runner, svc, openRequest{
+		Bookmark: "andrew/feature",
+		Yes:      true,
+		NoSwitch: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("openWorkspaceWithReporter: %v", err)
+	}
+
+	fetchIdx := indexOfJJFetch(runner.calls)
+	if fetchIdx < 0 {
+		t.Fatalf("expected a `jj git fetch` call when anchoring on a bookmark; got %#v", runner.calls)
+	}
+	newSessionIdx := -1
+	for i, call := range runner.calls {
+		if len(call) >= 2 && call[0] == "tmux" && call[1] == "new-session" {
+			newSessionIdx = i
+			break
+		}
+	}
+	if newSessionIdx >= 0 && fetchIdx > newSessionIdx {
+		t.Errorf("jj git fetch must come before tmux new-session; fetch@%d new-session@%d", fetchIdx, newSessionIdx)
+	}
+}
+
+// TestOpenWorkspaceSkipsFetchWithoutBookmark guards the gate: a fresh
+// workspace with no bookmark to anchor on starts from the local working
+// copy, so a fetch wouldn't change where it lands — don't pay the
+// network round-trip (and don't block offline creation).
+func TestOpenWorkspaceSkipsFetchWithoutBookmark(t *testing.T) {
+	svc := &fakeService{}
+	runner := &recordingRunner{}
+	err := openWorkspaceWithReporter(runner, svc, openRequest{
+		Name:     "scratch",
+		Yes:      true,
+		NoSwitch: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("openWorkspaceWithReporter: %v", err)
+	}
+	if idx := indexOfJJFetch(runner.calls); idx >= 0 {
+		t.Errorf("did not expect a `jj git fetch` without a bookmark; found at %d in %#v", idx, runner.calls)
+	}
+}

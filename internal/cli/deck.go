@@ -159,6 +159,11 @@ func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedA
 	}
 }
 
+// prStatusCacheMu serializes the load→merge→save read-modify-write in
+// persistPRStatusBulkMerge so the concurrent per-repo fetches in the
+// pr-status job don't clobber each other's cache entries.
+var prStatusCacheMu sync.Mutex
+
 // persistPRStatusBulkMerge is the bulk-fetch persistence path. It
 // merges fresh per-repo PRs into the cache like persistPRStatusMerge,
 // then prunes cached entries that:
@@ -185,6 +190,13 @@ func persistPRStatusBulkMerge(byRepo map[string]map[string]deckui.PRStatus, pinn
 	if len(byRepo) == 0 {
 		return
 	}
+	// The pr-status job now fetches repos concurrently, so multiple
+	// goroutines call this with one repo each. The load→merge→save below
+	// is a read-modify-write on a single shared file; without this lock
+	// two concurrent writers would each load, merge their own repo, and
+	// save — the last one clobbering the other's entry. Serialize it.
+	prStatusCacheMu.Lock()
+	defer prStatusCacheMu.Unlock()
 	persistByRepo, persistFetchedAt, loadErr := loadPRStatusCache()
 	if loadErr != nil {
 		deckDebugLogf("prStatus cache reload err=%v", loadErr)
