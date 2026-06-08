@@ -26,8 +26,7 @@ func TestRunPRStatusFromSpecWritesCachePerRepo(t *testing.T) {
 
 	prJSONA := `[{"number":1,"headRefName":"andrew/a","url":"https://example/a/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"}]`
 	prJSONB := `[{"number":2,"headRefName":"andrew/b","url":"https://example/b/2","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[],"mergeStateStatus":"BEHIND"}]`
-	var counter int
-	wrapped := &sequencedRunner{seq: []string{prJSONA, prJSONB}, counter: &counter}
+	wrapped := &repoStubRunner{prListByDir: map[string]string{repoA: prJSONA, repoB: prJSONB}}
 
 	job := jobs.Job{
 		ID: "test-job",
@@ -67,9 +66,8 @@ func TestRunPRStatusFromSpecContinuesPastRepoFailure(t *testing.T) {
 	repoGood := t.TempDir()
 
 	prJSONGood := `[{"number":7,"headRefName":"andrew/x","url":"https://example/x/7","state":"OPEN","isDraft":false,"reviewDecision":"","statusCheckRollup":[],"mergeStateStatus":"CLEAN"}]`
-	var counter int
-	// First call returns junk so ListPRStatus fails; second returns valid JSON.
-	wrapped := &sequencedRunner{seq: []string{"not json", prJSONGood}, counter: &counter}
+	// repoBad returns junk so its ListPRStatus fails; repoGood returns valid JSON.
+	wrapped := &repoStubRunner{prListByDir: map[string]string{repoBad: "not json", repoGood: prJSONGood}}
 
 	job := jobs.Job{
 		ID: "test-job",
@@ -100,32 +98,27 @@ func TestRunPRStatusFromSpecContinuesPastRepoFailure(t *testing.T) {
 	}
 }
 
-// sequencedRunner returns each successive output from seq in order for
-// `gh pr list` calls (one per repo). The merge-queue lookup that the
-// pr-status job runs after each ListPRStatus (`gh repo view` then
-// `gh api graphql`) is answered with a benign "nothing queued" payload
-// so the test fixture only needs to declare the bulk-status outputs.
-type sequencedRunner struct {
-	seq     []string
-	counter *int
+// repoStubRunner answers `gh pr list` per repo dir via prListByDir. The
+// pr-status job fetches repos concurrently, so the fixture is keyed by
+// dir rather than call order — that keeps it both race-free (the map is
+// read-only during the run) and independent of the nondeterministic
+// order in which the concurrent fetches arrive. The merge-queue lookup
+// (`gh repo view` then `gh api graphql`) and the viewer-login lookup
+// (`gh api user`) get benign fixed payloads so a test only has to
+// declare each repo's bulk-status output.
+type repoStubRunner struct {
+	prListByDir map[string]string
 }
 
-func (r *sequencedRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+func (r *repoStubRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
 	if name == "gh" && len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
 		return `{"owner":{"login":"o"},"name":"r"}`, nil
 	}
 	if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
 		return `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`, nil
 	}
-	// Viewer-login lookup (once per job run) — must not consume the
-	// per-repo bulk-status sequence.
 	if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "user" {
 		return "testuser", nil
 	}
-	i := *r.counter
-	if i >= len(r.seq) {
-		return "", nil
-	}
-	*r.counter = i + 1
-	return r.seq[i], nil
+	return r.prListByDir[dir], nil
 }

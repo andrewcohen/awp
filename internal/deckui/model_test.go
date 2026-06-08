@@ -1933,6 +1933,11 @@ func TestPRReviewReqGlyph(t *testing.T) {
 		{"their PR, my review requested", PRStatus{State: PRStateOpen, ReviewRequested: true}, prGlyphReviewReq, colInfo},
 		{"their PR, my review RE-requested", PRStatus{State: PRStateOpen, ReviewRequested: true, ReviewRerequested: true}, prGlyphReviewReq, colWarning},
 		{"my PR, changes requested", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewChangesRequested}, prGlyphChangesReq, colWarning},
+		{"my PR, review comments but no formal verdict", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewRequired, HasReviewComments: true}, prGlyphChangesReq, colWarning},
+		{"my PR, review comments, empty decision", PRStatus{State: PRStateOpen, Mine: true, HasReviewComments: true}, prGlyphChangesReq, colWarning},
+		{"my PR, review comments but approved — feedback no longer the blocker", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved, HasReviewComments: true}, "", ""},
+		{"my PR, awaiting review, no comments yet", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewRequired}, "", ""},
+		{"their PR with review comments — not surfaced as my move", PRStatus{State: PRStateOpen, HasReviewComments: true}, "", ""},
 		{"my PR, approved — no glyph", PRStatus{State: PRStateOpen, Mine: true, ReviewDecision: PRReviewApproved}, "", ""},
 		{"their PR, changes requested by someone else — not my move", PRStatus{State: PRStateOpen, ReviewDecision: PRReviewChangesRequested}, "", ""},
 		{"nothing requested", PRStatus{State: PRStateOpen}, "", ""},
@@ -2081,6 +2086,9 @@ func TestPRRepairPrompt(t *testing.T) {
 		{"composite with changes requested", PRStatus{Number: 16, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true, "",
 			[]string{"PR #16 has multiple issues to address:", "failing CI checks", "changes requested by a reviewer"}},
 		{"approved — no review repair", PRStatus{Number: 17, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved}, "", true, "", nil},
+		{"review comments only (no formal verdict)", PRStatus{Number: 18, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewRequired, HasReviewComments: true}, "", true, "",
+			[]string{"PR #18 has review comments from a reviewer", "gh pr view --comments", "re-request review", "push"}},
+		{"review comments but approved — suppressed", PRStatus{Number: 19, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved, HasReviewComments: true}, "", true, "", nil},
 
 		// Review tone (mine=false): investigate + report, no mutations.
 		{"review · merge conflicts only",

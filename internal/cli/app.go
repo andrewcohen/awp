@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -398,6 +399,25 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	step := func(s string) {
 		if reporter != nil {
 			reporter.Step(s)
+		}
+	}
+	// Fetch before anchoring on an existing bookmark so the new workspace
+	// starts at the current origin tip — and so a branch that lives only
+	// on origin (your PR pushed from another machine, or a collaborator's
+	// branch) is present locally for PrepareWorkspace to track and check
+	// out. Mirrors the review flow (review.go) and the bookmark picker
+	// (deck.go), which both fetch before touching remote state.
+	//
+	// Best-effort: a fetch failure (offline, auth, etc.) is logged but
+	// doesn't block creation — the branch may already be local, and an
+	// origin-only branch will surface a clearer error at the track/anchor
+	// step below. Skipped when there's no bookmark to anchor on: a fresh
+	// or new-bookmark workspace starts from the local working copy, so a
+	// fetch wouldn't change where it lands.
+	if strings.TrimSpace(req.Bookmark) != "" {
+		step("jj git fetch")
+		if out, fErr := runner.Run(context.Background(), "", "jj", "git", "fetch"); fErr != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("jj git fetch (continuing): %v: %s", fErr, strings.TrimSpace(out)))
 		}
 	}
 	step("Prepare jj workspace")

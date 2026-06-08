@@ -179,6 +179,12 @@ type PRStatus struct {
 	// both Reviewers and ReviewRequests has been asked to review AGAIN —
 	// the re-request signal.
 	Reviewers []string
+	// HasReviewComments is true when a reviewer has left COMMENTED or
+	// CHANGES_REQUESTED feedback. Unlike ReviewDecision (the
+	// branch-protection verdict, which ignores plain comments), this
+	// catches review feedback the author should look at even when no
+	// formal "request changes" was submitted.
+	HasReviewComments bool
 }
 
 // rawCheck is the (partial) shape of an entry in statusCheckRollup. gh returns
@@ -198,12 +204,12 @@ type rawCheck struct {
 }
 
 type rawPRStatus struct {
-	Number            int              `json:"number"`
-	HeadRefName       string           `json:"headRefName"`
-	HeadRefOid        string           `json:"headRefOid"`
-	Title             string           `json:"title"`
-	URL               string           `json:"url"`
-	Author            struct {
+	Number      int    `json:"number"`
+	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	State             PRState          `json:"state"`
@@ -220,6 +226,29 @@ type rawPRStatus struct {
 			Login string `json:"login"`
 		} `json:"author"`
 	} `json:"latestReviews"`
+	// Reviews is the full review history (not just the latest per
+	// author). gh's reviewDecision only flips to CHANGES_REQUESTED on a
+	// formal "request changes" review — a reviewer who leaves COMMENTED
+	// feedback never moves it off REVIEW_REQUIRED. We read the review
+	// states directly so "a reviewer left feedback on your PR" can be
+	// surfaced even when the branch-protection verdict hasn't changed.
+	Reviews []struct {
+		State string `json:"state"`
+	} `json:"reviews"`
+}
+
+// hasReviewComments reports whether any review carries actionable
+// feedback — a COMMENTED or CHANGES_REQUESTED review. DISMISSED (the
+// review was superseded/dismissed), APPROVED, and PENDING are excluded:
+// none represents open feedback the author still has to look at.
+func (r rawPRStatus) hasReviewComments() bool {
+	for _, rv := range r.Reviews {
+		switch rv.State {
+		case "COMMENTED", "CHANGES_REQUESTED":
+			return true
+		}
+	}
+	return false
 }
 
 // requestedLogins extracts the user logins whose review is requested,
@@ -245,16 +274,26 @@ func (r rawPRStatus) reviewerLogins() []string {
 	return out
 }
 
-// ListPRStatus fetches PRs (any state) for the repo at repoDir via gh and
+// ListPRStatus fetches OPEN PRs for the repo at repoDir via gh and
 // returns a normalized status projection per PR. repoDir scopes the runner's
 // working directory; gh derives the owner/name from that repo's remote.
+//
+// Only open PRs are listed because the deck only ever displays bulk-list
+// PRs that are open: workspace rows show open PRs' status, the inbox's
+// virtual rows filter to open, and the review picker defaults to open.
+// Terminal (merged/closed) status for a workspace's PR is learned the
+// cheap way — the per-PR top-up (GetPRStatus on a pinned PR number) and
+// the post-merge write-through — never by listing every recently-closed
+// PR. Listing `--state all` forced GitHub to compute the expensive
+// statusCheckRollup for 100 PRs (mostly closed) that nothing rendered;
+// `--state open` cuts a busy repo's fetch from ~7s to ~2s.
 func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "list",
-		"--state", "all",
+		"--state", "open",
 		"--limit", "100",
-		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews",
+		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -266,19 +305,20 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 	statuses := make([]PRStatus, len(raws))
 	for i, r := range raws {
 		statuses[i] = PRStatus{
-			Number:           r.Number,
-			HeadRefName:      r.HeadRefName,
-			HeadRefOid:       r.HeadRefOid,
-			Title:            r.Title,
-			Author:           r.Author.Login,
-			URL:              r.URL,
-			State:            r.State,
-			IsDraft:          r.IsDraft,
-			ReviewDecision:   r.ReviewDecision,
-			CIState:          rollupCIState(r.StatusCheckRollup),
-			MergeStateStatus: r.MergeStateStatus,
-			ReviewRequests:   r.requestedLogins(),
-			Reviewers:        r.reviewerLogins(),
+			Number:            r.Number,
+			HeadRefName:       r.HeadRefName,
+			HeadRefOid:        r.HeadRefOid,
+			Title:             r.Title,
+			Author:            r.Author.Login,
+			URL:               r.URL,
+			State:             r.State,
+			IsDraft:           r.IsDraft,
+			ReviewDecision:    r.ReviewDecision,
+			CIState:           rollupCIState(r.StatusCheckRollup),
+			MergeStateStatus:  r.MergeStateStatus,
+			ReviewRequests:    r.requestedLogins(),
+			Reviewers:         r.reviewerLogins(),
+			HasReviewComments: r.hasReviewComments(),
 		}
 	}
 	return statuses, nil
@@ -456,7 +496,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
-		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews",
+		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
 	)
 	if err != nil {
 		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
@@ -466,19 +506,20 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 		return PRStatus{}, fmt.Errorf("parse gh pr view %d: %w", n, err)
 	}
 	return PRStatus{
-		Number:           r.Number,
-		HeadRefName:      r.HeadRefName,
-		HeadRefOid:       r.HeadRefOid,
-		Title:            r.Title,
-		Author:           r.Author.Login,
-		URL:              r.URL,
-		State:            r.State,
-		IsDraft:          r.IsDraft,
-		ReviewDecision:   r.ReviewDecision,
-		CIState:          rollupCIState(r.StatusCheckRollup),
-		MergeStateStatus: r.MergeStateStatus,
-		ReviewRequests:   r.requestedLogins(),
-		Reviewers:        r.reviewerLogins(),
+		Number:            r.Number,
+		HeadRefName:       r.HeadRefName,
+		HeadRefOid:        r.HeadRefOid,
+		Title:             r.Title,
+		Author:            r.Author.Login,
+		URL:               r.URL,
+		State:             r.State,
+		IsDraft:           r.IsDraft,
+		ReviewDecision:    r.ReviewDecision,
+		CIState:           rollupCIState(r.StatusCheckRollup),
+		MergeStateStatus:  r.MergeStateStatus,
+		ReviewRequests:    r.requestedLogins(),
+		Reviewers:         r.reviewerLogins(),
+		HasReviewComments: r.hasReviewComments(),
 	}, nil
 }
 
