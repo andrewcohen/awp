@@ -70,9 +70,9 @@ needed to do the same.
   `ReviewRequested || ReviewRerequested`, skip any already resolved by
   a real workspace row (dedup by repo→PR#), emit an `Item{Virtual:
   true, PRNumber, RepoRoot, Bookmark: headRef}`.
-- **Read-only rendering**: no agent status dot, and a teal `↵ review to
-  check out` hint on the meta line (the one new meta-line color besides
-  `:port`). Label still resolves to `#N title` via the cache.
+- **Read-only rendering**: no agent status dot, and a muted
+  keyboard-return (`nf-md-keyboard_return`) `to review` hint on the meta
+  line. Label still resolves to `#N title` via the cache.
 - **Enter starts review**: `trigger` routes the default Summon on a
   virtual row to `ActionReview` with the PR number, reusing the exact
   dispatch the `R` picker uses (`awp review <n>` → create workspace +
@@ -166,6 +166,10 @@ needed to do the same.
   (`ReviewRerequested`) now sort ahead of first-time requests — you
   already did a pass, so they're cheaper to action and easy to lose.
   Secondary sort stays project/label.
+- 2026-06-08: Virtual-row hint polish — swapped the oversized `↵`
+  (U+21B5) for `nf-md-keyboard_return` and dropped its color from teal
+  to muted (too bright next to the teal bucket header). Meta-line color
+  is now just `:port` (blue); everything else is muted.
 - 2026-06-08: Regrouped the six buckets into five. "Waiting for review"
   and "Your drafts" merged into one bottom **Mine** bucket (gray) —
   your own in-flight PRs that aren't blocked on you. "Needs action" and
@@ -217,7 +221,7 @@ needed to do the same.
       still owed in QA.
 - [x] (v2) Review-requested PRs with no workspace appear under "Needs
       your review", deduped against checked-out PRs, with a read-only
-      "↵ to review" treatment.
+      muted "to review" treatment.
 - [x] (v2) Enter on a virtual row starts `awp review <n>`; other
       workspace actions are guarded no-ops. Covered by
       `TestEnterOnVirtualRowStartsReview` and the synthesis tests.
@@ -254,8 +258,8 @@ needed to do the same.
 ### v2 — workspace-less review rows
 - [ ] A coworker's PR with your review requested, in a repo you have a
       workspace in but where you have NOT checked out that PR, appears
-      under "Needs your review" with no agent dot and a teal "↵ to
-      review" hint.
+      under "Needs your review" with no agent dot and a muted
+      keyboard-return "to review" hint.
 - [ ] Pressing `enter` on it runs `awp review <n>` (creates the review
       workspace, primes the agent); the row becomes a normal workspace
       row on the next refresh, not a duplicate.

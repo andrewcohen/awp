@@ -2905,11 +2905,12 @@ func TestBodyRowsInboxBucketHeaders(t *testing.T) {
 	}
 }
 
-// metaSegStyle drives meta-line token colors: :port blue, the "↵
-// review" virtual-row hint teal, everything else (author, branch,
-// prompt) muted. Asserting on GetForeground keeps this independent of
-// the test renderer's color profile (which strips ANSI). The green
-// author handle was tried and removed for reading too loud.
+// metaSegStyle drives meta-line token colors: only :port is tinted
+// (blue); everything else (author, branch, prompt, the "to review"
+// hint) stays muted. Asserting on GetForeground keeps this independent
+// of the test renderer's color profile (which strips ANSI). Both the
+// green author handle and the teal review hint were tried and toned
+// down for reading too loud.
 func TestMetaSegStyle(t *testing.T) {
 	m := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
 	cases := []struct {
@@ -2920,7 +2921,7 @@ func TestMetaSegStyle(t *testing.T) {
 		{glyphBranch + " andrew/fix", colMuted},
 		{glyphKeyboard + ` "do the thing"`, colMuted},
 		{":5173", colInfo},
-		{glyphReturn + "  to review", colAccent},
+		{glyphReturn + "  to review", colMuted},
 	}
 	for _, c := range cases {
 		if got := m.metaSegStyle(c.seg).GetForeground(); got != lipgloss.Color(c.want) {
