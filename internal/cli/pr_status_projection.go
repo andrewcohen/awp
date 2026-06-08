@@ -41,6 +41,7 @@ func prStatusFromGithub(s github.PRStatus, queued bool, viewer string) deckui.PR
 		// is back in reviewRequests AND has a latest review on record.
 		ReviewRerequested: viewer != "" && containsLoginFold(s.ReviewRequests, viewer) && containsLoginFold(s.Reviewers, viewer),
 		Mine:              viewer != "" && strings.EqualFold(s.Author, viewer),
+		HasReviewComments: s.HasReviewComments,
 	}
 }
 

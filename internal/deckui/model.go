@@ -675,6 +675,12 @@ type PRStatus struct {
 	ReviewRequested   bool
 	ReviewRerequested bool
 	Mine              bool
+	// HasReviewComments: a reviewer left COMMENTED or CHANGES_REQUESTED
+	// feedback on this PR. Distinct from ReviewDecision — plain review
+	// comments never flip GitHub's branch-protection verdict off
+	// REVIEW_REQUIRED, so this is the only signal that catches "someone
+	// gave you feedback to look at" on your own PR.
+	HasReviewComments bool
 }
 
 // inboxBucket sections the inbox scope the way GitHub's pull-request
@@ -4161,7 +4167,7 @@ func (m Model) renderHelp(width int) string {
 		prDot(prGlyphStale, colWarning, "local copy stale"),
 		prDot(prGlyphReviewReq, colInfo, "your review requested"),
 		prDot(prGlyphReviewReq, colWarning, "review re-requested"),
-		prDot(prGlyphChangesReq, colWarning, "changes requested on your PR"),
+		prDot(prGlyphChangesReq, colWarning, "review feedback on your PR"),
 	}
 	activityLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
@@ -5734,9 +5740,21 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 			look:  "note how far behind the base branch this PR is (e.g. `git log --oneline <base>..@`) so the user can flag it",
 		})
 	}
-	if s.ReviewDecision == PRReviewChangesRequested {
+	// Same gate as prReviewReqGlyph's owner branch so the chat glyph and
+	// the `p r` repair prompt never disagree: formal changes-requested OR
+	// plain review comments (which leave reviewDecision at REVIEW_REQUIRED),
+	// dropped once the PR is approved. The label adapts because "changes
+	// requested" misreads a COMMENTED review; the fix/look text is the
+	// same — read the feedback, address it, and (owner tone) re-request
+	// review once the comments are addressed.
+	if s.ReviewDecision != PRReviewApproved &&
+		(s.ReviewDecision == PRReviewChangesRequested || s.HasReviewComments) {
+		label := "review comments from a reviewer"
+		if s.ReviewDecision == PRReviewChangesRequested {
+			label = "changes requested by a reviewer"
+		}
 		issues = append(issues, issue{
-			label: "changes requested by a reviewer",
+			label: label,
 			fix:   "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads), address each point, push, and re-request review from the reviewer who left it",
 			look:  "summarize what the reviewers asked for and which points look unaddressed at the current head",
 		})
@@ -5871,8 +5889,12 @@ func prLocalStaleGlyph(s PRStatus, localCommitID string) string {
 
 // prReviewReqGlyph returns the review-conversation glyph, split by
 // whose move it is:
-//   - YOUR PR + a reviewer requested changes → filled chat bubble
-//     (feedback exists; the ball is in your court).
+//   - YOUR PR + a reviewer left feedback (formal "request changes" OR
+//     plain COMMENTED review) → filled chat bubble (feedback exists; the
+//     ball is in your court). gh's reviewDecision only catches the
+//     formal case, so HasReviewComments covers the comments that leave
+//     the verdict at REVIEW_REQUIRED. Suppressed once the PR is APPROVED
+//     — feedback on an approved PR is no longer the blocker.
 //   - Someone else's PR + your review is requested (or re-requested —
 //     GitHub re-adds you to reviewRequests either way) → outline chat
 //     bubble (they want your eyes).
@@ -5884,7 +5906,8 @@ func prReviewReqGlyph(s PRStatus) string {
 	if s.State != PRStateOpen {
 		return ""
 	}
-	if s.Mine && s.ReviewDecision == PRReviewChangesRequested {
+	if s.Mine && s.ReviewDecision != PRReviewApproved &&
+		(s.ReviewDecision == PRReviewChangesRequested || s.HasReviewComments) {
 		return prGlyphChangesReq
 	}
 	if !s.Mine && s.ReviewRequested {

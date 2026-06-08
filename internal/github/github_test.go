@@ -293,7 +293,7 @@ func TestListPRStatusParses(t *testing.T) {
 		{"number":1,"headRefName":"andrew/a","headRefOid":"sha1aaa","title":"Fix the thing","url":"https://github.com/o/r/pull/1","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"CLEAN"},
 		{"number":2,"headRefName":"andrew/b","headRefOid":"sha2bbb","url":"https://github.com/o/r/pull/2","state":"MERGED","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeStateStatus":"CLEAN"},
 		{"number":3,"headRefName":"andrew/c","headRefOid":"sha3ccc","url":"https://github.com/o/r/pull/3","state":"OPEN","isDraft":true,"reviewDecision":"","statusCheckRollup":[{"status":"IN_PROGRESS"},{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND"},
-		{"number":4,"headRefName":"andrew/d","headRefOid":"sha4ddd","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"},
+		{"number":4,"headRefName":"andrew/d","headRefOid":"sha4ddd","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY","reviews":[{"state":"DISMISSED"},{"state":"COMMENTED"}]},
 		{"number":5,"headRefName":"andrew/e","headRefOid":"sha5eee","url":"https://github.com/o/r/pull/5","state":"CLOSED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"PENDING"}],"mergeStateStatus":"UNKNOWN"}
 	]`}
 	c := New(r)
@@ -308,7 +308,7 @@ func TestListPRStatusParses(t *testing.T) {
 		{Number: 1, HeadRefName: "andrew/a", HeadRefOid: "sha1aaa", Title: "Fix the thing", URL: "https://github.com/o/r/pull/1", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateClean},
 		{Number: 2, HeadRefName: "andrew/b", HeadRefOid: "sha2bbb", URL: "https://github.com/o/r/pull/2", State: PRStateMerged, IsDraft: false, ReviewDecision: ReviewApproved, CIState: CINone, MergeStateStatus: MergeStateClean},
 		{Number: 3, HeadRefName: "andrew/c", HeadRefOid: "sha3ccc", URL: "https://github.com/o/r/pull/3", State: PRStateOpen, IsDraft: true, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateBehind},
-		{Number: 4, HeadRefName: "andrew/d", HeadRefOid: "sha4ddd", URL: "https://github.com/o/r/pull/4", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing, MergeStateStatus: MergeStateDirty},
+		{Number: 4, HeadRefName: "andrew/d", HeadRefOid: "sha4ddd", URL: "https://github.com/o/r/pull/4", State: PRStateOpen, IsDraft: false, ReviewDecision: ReviewRequired, CIState: CIFailing, MergeStateStatus: MergeStateDirty, HasReviewComments: true},
 		{Number: 5, HeadRefName: "andrew/e", HeadRefOid: "sha5eee", URL: "https://github.com/o/r/pull/5", State: PRStateClosed, IsDraft: false, ReviewDecision: "", CIState: CIPending, MergeStateStatus: MergeStateUnknown},
 	}
 	for i, w := range want {
@@ -316,7 +316,7 @@ func TestListPRStatusParses(t *testing.T) {
 			t.Errorf("row %d: got %+v want %+v", i, got[i], w)
 		}
 	}
-	// gh invocation: must include --state all and the rich --json field list.
+	// gh invocation: must include --state open and the rich --json field list.
 	if r.gotName != "gh" {
 		t.Fatalf("expected gh, got %q", r.gotName)
 	}
@@ -324,7 +324,7 @@ func TestListPRStatusParses(t *testing.T) {
 	for _, a := range r.gotArgs {
 		joined += " " + a
 	}
-	for _, want := range []string{"--state", "all", "title", "url", "headRefOid", "reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
+	for _, want := range []string{"--state", "open", "title", "url", "headRefOid", "reviewDecision", "statusCheckRollup", "mergeStateStatus", "reviews"} {
 		if !contains(joined, want) {
 			t.Errorf("expected %q in args, got %q", want, joined)
 		}
