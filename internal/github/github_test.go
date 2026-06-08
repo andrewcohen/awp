@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,6 +43,190 @@ func TestFetchPRParses(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected 12 in args, got %v", r.gotArgs)
+	}
+}
+
+func TestMergePRRunsSquash(t *testing.T) {
+	r := &fakeRunner{out: "✓ Squashed and merged pull request #42"}
+	out, err := New(r).MergePR("/repo", 42, nil)
+	if err != nil {
+		t.Fatalf("MergePR err: %v", err)
+	}
+	if r.gotName != "gh" {
+		t.Fatalf("expected gh, got %q", r.gotName)
+	}
+	want := []string{"pr", "merge", "42", "--squash"}
+	if !reflect.DeepEqual(r.gotArgs, want) {
+		t.Fatalf("args = %v, want %v", r.gotArgs, want)
+	}
+	if out == "" {
+		t.Fatalf("expected gh output returned")
+	}
+}
+
+func TestMergePRSurfacesGhFailure(t *testing.T) {
+	r := &fakeRunner{out: "Pull request #42 is not mergeable: the base branch policy prohibits the merge.", err: errors.New("exit status 1")}
+	out, err := New(r).MergePR("/repo", 42, nil)
+	if err == nil {
+		t.Fatalf("expected error when gh fails")
+	}
+	if out == "" {
+		t.Fatalf("expected gh output returned even on failure")
+	}
+}
+
+// seqRunner returns a scripted result per call and records every call's args.
+type seqRunner struct {
+	calls   [][]string
+	results []struct {
+		out string
+		err error
+	}
+}
+
+func (s *seqRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
+	s.calls = append(s.calls, args)
+	i := len(s.calls) - 1
+	if i < len(s.results) {
+		return s.results[i].out, s.results[i].err
+	}
+	return "", nil
+}
+
+func argsContain(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// enqueueOK is the three-step script for a successful merge-queue enqueue:
+// the --squash attempt fails with the given gh message, `gh pr view --json
+// id` resolves the node id, and the enqueuePullRequest mutation succeeds.
+func enqueueOK(squashFailOut string) *seqRunner {
+	return &seqRunner{results: []struct {
+		out string
+		err error
+	}{
+		{out: squashFailOut, err: errors.New("exit status 1")},
+		{out: `{"id":"PR_node_1"}`, err: nil},
+		{out: `{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"position":2,"state":"QUEUED"}}}}`, err: nil},
+	}}
+}
+
+func TestMergePREnqueuesWhenStrategyRejected(t *testing.T) {
+	// gh rejects the explicit --squash on a merge-queue branch.
+	r := enqueueOK("The merge strategy for main is set by the merge queue")
+	out, err := New(r).MergePR("/repo", 42, nil)
+	if err != nil {
+		t.Fatalf("expected enqueue to succeed, got %v", err)
+	}
+	if len(r.calls) != 3 {
+		t.Fatalf("expected squash → pr view id → graphql enqueue (3 calls), got %d: %v", len(r.calls), r.calls)
+	}
+	if !reflect.DeepEqual(r.calls[0], []string{"pr", "merge", "42", "--squash"}) {
+		t.Fatalf("first call args = %v", r.calls[0])
+	}
+	if !reflect.DeepEqual(r.calls[1], []string{"pr", "view", "42", "--json", "id"}) {
+		t.Fatalf("second call should resolve the node id, got %v", r.calls[1])
+	}
+	if r.calls[2][0] != "api" || r.calls[2][1] != "graphql" {
+		t.Fatalf("third call should be gh api graphql, got %v", r.calls[2])
+	}
+	joined := strings.Join(r.calls[2], " ")
+	if !strings.Contains(joined, "enqueuePullRequest") || !strings.Contains(joined, "id=PR_node_1") {
+		t.Fatalf("enqueue mutation must carry the resolved PR id, got %v", r.calls[2])
+	}
+	if !strings.Contains(out, "merge queue") || !strings.Contains(out, "QUEUED") {
+		t.Fatalf("expected a queue-state summary, got %q", out)
+	}
+}
+
+func TestMergePREnqueuesWhenAutoMergeBlocked(t *testing.T) {
+	// Real cli/cli#13398 output: gh tries enablePullRequestAutoMerge and the
+	// repo forbids it. awp must bypass gh and enqueue directly.
+	r := enqueueOK("! The merge strategy for main is set by the merge queue\nGraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)")
+	out, err := New(r).MergePR("/repo", 42, nil)
+	if err != nil {
+		t.Fatalf("expected enqueue to succeed, got %v", err)
+	}
+	if len(r.calls) != 3 {
+		t.Fatalf("expected enqueue fallback (3 calls), got %d: %v", len(r.calls), r.calls)
+	}
+	if out == "" {
+		t.Fatalf("expected a summary line")
+	}
+}
+
+type captureReporter struct {
+	steps []string
+	logs  []string
+}
+
+func (c *captureReporter) Step(s string) { c.steps = append(c.steps, s) }
+func (c *captureReporter) Log(s string)  { c.logs = append(c.logs, s) }
+
+func TestMergePRNarratesSquashThenQueue(t *testing.T) {
+	// The progress UI must show squash as the default, then the queue
+	// fallback — and the final step must name the path actually taken.
+	rep := &captureReporter{}
+	r := enqueueOK("The merge strategy for main is set by the merge queue")
+	if _, err := New(r).MergePR("/repo", 42, rep); err != nil {
+		t.Fatalf("enqueue path err: %v", err)
+	}
+	// The completed step names the queue, not --squash (the bug in the UI
+	// the user flagged): the screenshot showed "...--squash" for a queued PR.
+	if len(rep.steps) != 1 || !strings.Contains(rep.steps[0], "merge queue") {
+		t.Fatalf("expected a single queue step, got %v", rep.steps)
+	}
+	if strings.Contains(strings.Join(rep.steps, " "), "--squash") {
+		t.Fatalf("queued PR's step must not claim --squash, got %v", rep.steps)
+	}
+	joinedLogs := strings.Join(rep.logs, "\n")
+	if !strings.Contains(joinedLogs, "squash") || !strings.Contains(joinedLogs, "Merge queue detected") {
+		t.Fatalf("logs should narrate squash-attempt then detection, got %q", joinedLogs)
+	}
+}
+
+func TestMergePRNarratesSquashSuccess(t *testing.T) {
+	rep := &captureReporter{}
+	r := &fakeRunner{out: "✓ Squashed and merged pull request #42"}
+	if _, err := New(r).MergePR("/repo", 42, rep); err != nil {
+		t.Fatalf("squash path err: %v", err)
+	}
+	if len(rep.steps) != 1 || !strings.Contains(rep.steps[0], "Squash-merged") {
+		t.Fatalf("expected a single squash-merged step, got %v", rep.steps)
+	}
+}
+
+func TestMergePREnqueueErrorSurfaced(t *testing.T) {
+	// The enqueue mutation itself fails (e.g. PR not yet approved) — surface it.
+	r := &seqRunner{results: []struct {
+		out string
+		err error
+	}{
+		{out: "The merge strategy for main is set by the merge queue", err: errors.New("exit status 1")},
+		{out: `{"id":"PR_node_1"}`, err: nil},
+		{out: "GraphQL: Pull request is not in a mergeable state", err: errors.New("exit status 1")},
+	}}
+	_, err := New(r).MergePR("/repo", 42, nil)
+	if err == nil {
+		t.Fatalf("expected enqueue error to surface")
+	}
+	if !strings.Contains(err.Error(), "enqueue PR 42") {
+		t.Fatalf("expected enqueue error context, got %q", err.Error())
+	}
+}
+
+func TestMergePRRejectsInvalidNumber(t *testing.T) {
+	r := &fakeRunner{}
+	if _, err := New(r).MergePR("/repo", 0, nil); err == nil {
+		t.Fatalf("expected error for invalid PR number")
+	}
+	if r.gotName != "" {
+		t.Fatalf("expected no gh invocation for invalid number, ran %q", r.gotName)
 	}
 }
 

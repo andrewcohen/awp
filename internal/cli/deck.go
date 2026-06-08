@@ -1367,6 +1367,26 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		return nil
 	case deckui.ActionSendPrompt:
 		return sendPromptToAgent(tmuxClient, svc, item, req.Arg, reporter)
+	case deckui.ActionMergePR:
+		n, err := strconv.Atoi(strings.TrimSpace(req.Arg))
+		if err != nil || n <= 0 {
+			return fmt.Errorf("merge PR: invalid PR number %q", req.Arg)
+		}
+		repoDir := strings.TrimSpace(item.RepoRoot)
+		if repoDir == "" {
+			repoDir = item.Path
+		}
+		gh := github.New(fixedDirRunner{base: runner, dir: repoDir})
+		// MergePR narrates its own steps (squash by default; "merge queue
+		// detected" → enqueue) so the progress modal reflects the path it
+		// actually took. We just log its final summary line.
+		out, err := gh.MergePR(repoDir, n, reporter)
+		if s := strings.TrimSpace(out); s != "" {
+			for _, line := range strings.Split(s, "\n") {
+				reporter.Log(line)
+			}
+		}
+		return err
 	}
 	return fmt.Errorf("unknown action: %q session=%q", req.Action, sessionName)
 }

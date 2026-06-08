@@ -304,6 +304,146 @@ func PRStatusFromInfo(p PRInfo) PRStatus {
 	}
 }
 
+// ProgressReporter receives optional, human-readable progress updates
+// from long-running Client calls. Step marks a discrete action; Log
+// appends a narrative line. A nil reporter is fine — updates are
+// dropped. (deckui.Reporter satisfies this structurally.)
+type ProgressReporter interface {
+	Step(string)
+	Log(string)
+}
+
+func progStep(r ProgressReporter, s string) {
+	if r != nil {
+		r.Step(s)
+	}
+}
+
+func progLog(r ProgressReporter, s string) {
+	if r != nil {
+		r.Log(s)
+	}
+}
+
+// MergePR merges a PR by number via `gh pr merge`. gh has no
+// non-interactive "use the repo default" mode for ordinary branches —
+// it errors without an explicit method flag — so we squash, the common
+// feature-branch default. The merge is immediate (no --auto): gh fails
+// fast if the PR isn't mergeable (checks pending/failing, review not
+// approved, conflicts).
+//
+// Merge-queue branches are the exception: `gh pr merge` rejects an
+// explicit strategy (the queue dictates it) and tries to enqueue via the
+// `enablePullRequestAutoMerge` mutation — which fails outright when the
+// repo has auto-merge disabled (cli/cli#13398): gh has no code path that
+// calls the correct `enqueuePullRequest` mutation. So when we see the
+// merge-queue / auto-merge-blocked signature, we bypass gh's broken path
+// and enqueue the PR directly via the GraphQL mutation.
+//
+// rep (optional) narrates the path actually taken so the caller's
+// progress UI shows squash-vs-queue accurately. The combined output is
+// returned for both success and failure so the caller can surface gh's
+// own message.
+func (c *Client) MergePR(repoDir string, n int, rep ProgressReporter) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("MergePR: invalid PR number %d", n)
+	}
+	progLog(rep, fmt.Sprintf("Trying squash merge (gh pr merge %d --squash)", n))
+	out, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "pr", "merge", strconv.Itoa(n), "--squash",
+	)
+	if err == nil {
+		progStep(rep, fmt.Sprintf("Squash-merged PR #%d", n))
+		return out, nil
+	}
+	if mentionsMergeQueue(out) || mentionsAutoMergeBlocked(out) {
+		progLog(rep, "Merge queue detected — squash strategy rejected; enqueuing via the merge queue")
+		progStep(rep, fmt.Sprintf("Add PR #%d to the merge queue", n))
+		return c.enqueuePR(repoDir, n)
+	}
+	return out, fmt.Errorf("gh pr merge %d: %w: %s", n, err, strings.TrimSpace(out))
+}
+
+// enqueuePR adds a PR to the repo's merge queue via the GraphQL
+// `enqueuePullRequest` mutation — the path `gh pr merge` is missing for
+// repos whose merge queue is configured without `allow_auto_merge`
+// (cli/cli#13398). It resolves the PR's node id, runs the mutation, and
+// returns a human-readable confirmation (queue state/position) for the
+// deck's progress log.
+func (c *Client) enqueuePR(repoDir string, n int) (string, error) {
+	idOut, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "pr", "view", strconv.Itoa(n), "--json", "id",
+	)
+	if err != nil {
+		return idOut, fmt.Errorf("enqueue PR %d: gh pr view --json id: %w: %s", n, err, strings.TrimSpace(idOut))
+	}
+	var idResp struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(idOut), &idResp); err != nil {
+		return idOut, fmt.Errorf("enqueue PR %d: parse PR id: %w", n, err)
+	}
+	if idResp.ID == "" {
+		return idOut, fmt.Errorf("enqueue PR %d: empty PR node id", n)
+	}
+	const mutation = `mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position state}}}`
+	out, err := c.runner.Run(
+		context.Background(), repoDir,
+		"gh", "api", "graphql", "-f", "query="+mutation, "-f", "id="+idResp.ID,
+	)
+	if err != nil {
+		return out, fmt.Errorf("enqueue PR %d: %w: %s", n, err, strings.TrimSpace(out))
+	}
+	return enqueueSummary(n, out), nil
+}
+
+// enqueueSummary turns the enqueuePullRequest mutation response into a
+// one-line confirmation, falling back to the raw output if the shape is
+// unexpected.
+func enqueueSummary(n int, out string) string {
+	var resp struct {
+		Data struct {
+			EnqueuePullRequest struct {
+				MergeQueueEntry *struct {
+					Position int    `json:"position"`
+					State    string `json:"state"`
+				} `json:"mergeQueueEntry"`
+			} `json:"enqueuePullRequest"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return strings.TrimSpace(out)
+	}
+	e := resp.Data.EnqueuePullRequest.MergeQueueEntry
+	if e == nil {
+		return fmt.Sprintf("added PR #%d to the merge queue", n)
+	}
+	state := strings.TrimSpace(e.State)
+	if state == "" {
+		state = "queued"
+	}
+	return fmt.Sprintf("added PR #%d to the merge queue (state %s, position %d)", n, state, e.Position)
+}
+
+// mentionsMergeQueue reports whether gh's output indicates the target
+// branch requires a merge queue (so an explicit merge strategy must be
+// dropped).
+func mentionsMergeQueue(s string) bool {
+	return strings.Contains(strings.ToLower(s), "merge queue")
+}
+
+// mentionsAutoMergeBlocked reports whether gh failed because it tried to
+// enable auto-merge on a repo that doesn't allow it — the signature
+// (cli/cli#13398) of a merge-queue repo configured without
+// `allow_auto_merge`.
+func mentionsAutoMergeBlocked(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "auto merge is not allowed") ||
+		strings.Contains(l, "enablepullrequestautomerge")
+}
+
 // GetPRStatus fetches a single PR by number via `gh pr view` and returns
 // the same projection as ListPRStatus. Used by the deck to top up
 // PR-pinned workspaces (entries with PRNumber > 0) that fell outside the
