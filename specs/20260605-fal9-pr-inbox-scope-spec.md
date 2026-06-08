@@ -37,13 +37,15 @@ needed to do the same.
      failing || merge conflicts || behind base).
   3. **Ready to merge** — `Mine` && open && !draft && approved && CI
      passing-or-none && merge state clean, or `IsInMergeQueue`.
-  4. **Waiting for review** — `Mine` && open && !draft && none of the
-     above (review pending, CI pending counts here too).
-  5. **Your drafts** — `Mine` && open && `IsDraft`. (New: today's
-     open-PR scope excludes drafts entirely.)
-  6. **Other open PRs** — catch-all for open PRs that are neither mine
+  4. **Other open PRs** — catch-all for open PRs that are neither mine
      nor awaiting my review (e.g. a coworker's branch checked out
      locally). Keeps every workspace the old scope showed reachable.
+  5. **Mine** — your own in-flight PRs that aren't blocked on you:
+     waiting for review (`Mine` && open && !draft && none of the
+     actionable states) or still a draft (`Mine` && open && `IsDraft`).
+     The bottom pile — nothing here needs your action right now.
+     (Drafts + waiting were separate buckets in the first cut; merged
+     into one "Mine" section 2026-06-08, see change log.)
 - Bucket headers render with counts — `Needs your review (3)` — in the
   slot project headers use today. Empty buckets are hidden (no `(0)`
   rows).
@@ -104,7 +106,7 @@ needed to do the same.
     ● #405 migrate orders table         [shop-api]
          󰭹  @andrewcohen · andrew/orders-migration
 
-  Waiting for review (3)
+  Mine (3)
     …
   ```
 
@@ -164,6 +166,12 @@ needed to do the same.
   (`ReviewRerequested`) now sort ahead of first-time requests — you
   already did a pass, so they're cheaper to action and easy to lose.
   Secondary sort stays project/label.
+- 2026-06-08: Regrouped the six buckets into five. "Waiting for review"
+  and "Your drafts" merged into one bottom **Mine** bucket (gray) —
+  your own in-flight PRs that aren't blocked on you. "Needs action" and
+  "Ready to merge" stay separate up top (still your move). New render
+  order: Needs your review → Needs action → Ready to merge → Other open
+  PRs → Mine.
 
 ## Implementation Plan
 1. **Bucket classifier** — `prInboxBucket(s PRStatus) inboxBucket`
@@ -194,8 +202,9 @@ needed to do the same.
       gone everywhere (status line, help, README).
 - [x] Inbox scope groups rows under bucket headers with counts, in
       action-first order; empty buckets don't render.
-- [x] Draft PR workspaces appear under "Your drafts" (they were
-      invisible in the old open-PR scope).
+- [x] Draft PR workspaces appear under "Mine" (they were invisible in
+      the old open-PR scope; first shipped as "Your drafts", folded
+      into "Mine" 2026-06-08).
 - [x] Every workspace visible in the old open-PR scope is still visible
       in inbox scope (catch-all bucket holds non-mine,
       non-review-requested open PRs).
