@@ -3093,3 +3093,38 @@ func TestEnterOnVirtualRowStartsReview(t *testing.T) {
 		t.Errorf("review job PR arg = %q, want 2", gotSpec.Arg)
 	}
 }
+
+// Within "Needs your review", re-reviews (you reviewed before, author
+// re-requested) sort ahead of first-time review requests; ties fall
+// back to project/label order.
+func TestInboxNeedsReviewSortsReReviewFirst(t *testing.T) {
+	items := []Item{
+		{ProjectName: "alpha", WorkspaceName: "fresh-a", RepoRoot: "/a", Bookmark: "b/fresh-a"},
+		{ProjectName: "alpha", WorkspaceName: "rereq-z", RepoRoot: "/a", Bookmark: "b/rereq-z"},
+		{ProjectName: "beta", WorkspaceName: "rereq-b", RepoRoot: "/b", Bookmark: "b/rereq-b"},
+	}
+	model := New(items, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/a": {
+			"b/fresh-a": {Number: 1, State: PRStateOpen, HeadRefName: "b/fresh-a", ReviewRequested: true},
+			"b/rereq-z": {Number: 2, State: PRStateOpen, HeadRefName: "b/rereq-z", ReviewRequested: true, ReviewRerequested: true},
+		},
+		"/b": {
+			"b/rereq-b": {Number: 3, State: PRStateOpen, HeadRefName: "b/rereq-b", ReviewRequested: true, ReviewRerequested: true},
+		},
+	}, nil)
+	model.scope = ScopeInbox
+	got := model.items()
+
+	// All three are in "Needs your review". Order: the two re-reviews
+	// first (by project: beta? no — alpha < beta, so rereq-z then
+	// rereq-b), then the fresh request.
+	want := []string{"rereq-z", "rereq-b", "fresh-a"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows, got %v", len(want), itemNames(got))
+	}
+	for i, w := range want {
+		if got[i].WorkspaceName != w {
+			t.Errorf("items()[%d] = %s, want %s (full order %v)", i, got[i].WorkspaceName, w, itemNames(got))
+		}
+	}
+}

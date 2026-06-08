@@ -160,6 +160,10 @@ needed to do the same.
   from "planned" at the user's request. New `Item.Virtual` flag,
   `inboxVirtualReviewItems` synthesis, enter→`ActionReview` routing in
   `trigger`, and per-action guards. Tests + README + this spec updated.
+- 2026-06-08: Within "Needs your review", re-reviews
+  (`ReviewRerequested`) now sort ahead of first-time requests — you
+  already did a pass, so they're cheaper to action and easy to lose.
+  Secondary sort stays project/label.
 
 ## Implementation Plan
 1. **Bucket classifier** — `prInboxBucket(s PRStatus) inboxBucket`
