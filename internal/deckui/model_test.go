@@ -2993,9 +2993,9 @@ func TestBodyRowsInboxBucketHeaders(t *testing.T) {
 // metaSegStyle drives meta-line token colors: only :port is tinted
 // (blue); everything else (author, branch, prompt, the "to review"
 // hint) stays muted. Asserting on GetForeground keeps this independent
-// of the test renderer's color profile (which strips ANSI). Both the
-// green author handle and the teal review hint were tried and toned
-// down for reading too loud.
+// of the test renderer's color profile (which strips ANSI). Author
+// (teal) and branch (green) tints were tried and read as too much color
+// repeated on every row, so the meta line stays mostly muted.
 func TestMetaSegStyle(t *testing.T) {
 	m := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
 	cases := []struct {
@@ -3041,7 +3041,7 @@ func TestInboxBucketColor(t *testing.T) {
 }
 
 // headerStyle resolves an inbox header label back to its bucket color
-// and uses the brightened ProjectHeader treatment outside the inbox.
+// and uses the teal ProjectHeader treatment outside the inbox.
 func TestHeaderStyleResolvesBucketColor(t *testing.T) {
 	m := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
 
@@ -3054,8 +3054,8 @@ func TestHeaderStyleResolvesBucketColor(t *testing.T) {
 	}
 
 	m.scope = ScopeAll
-	if got := m.headerStyle("shop-api"); got.GetForeground() != lipgloss.Color(colStrong) {
-		t.Errorf("project header should use Strong, got %v", got.GetForeground())
+	if got := m.headerStyle("shop-api"); got.GetForeground() != lipgloss.Color(colAccent) {
+		t.Errorf("project header should use Accent, got %v", got.GetForeground())
 	}
 }
 

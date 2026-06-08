@@ -25,13 +25,22 @@ type deckStyles struct {
 	Bar      lipgloss.Style // the ┃ selection bar prefix
 	Label    lipgloss.Style // plain terminal-default fg — a normal/active (un-muted) row label
 
-	// ProjectHeader is the brightened project-header treatment for the
-	// all / attention scopes (Strong + bold). Kept distinct from
-	// Accent so find-mode's teal header highlight still stands out.
+	// Title is the "awp deck" heading — bold, terminal-default fg
+	// (white). Kept plain so the teal project headers carry the hue
+	// without the title competing.
+	Title lipgloss.Style
+	// ProjectHeader is the project-header treatment for the all /
+	// attention scopes — teal (Accent) + bold, so the structural
+	// skeleton of every screen carries a hue instead of reading as
+	// bright-white-on-gray.
 	ProjectHeader lipgloss.Style
-	// Port colors the meta-line :port token blue (the rest of the meta
-	// line stays Muted). Author was tried in green but read as too loud,
-	// so the handle stays muted.
+	// FindHeader highlights the find-mode target project header. Project
+	// headers are teal now, so the find target moves to Warning + bold
+	// (the selection hue) to stay distinct while find mode is up.
+	FindHeader lipgloss.Style
+	// Port colors the meta-line :port token blue; the rest of the meta
+	// line stays Muted. Author (teal) and branch (green) tints were
+	// tried and read as too much color repeated on every row.
 	Port lipgloss.Style
 	// BucketHeader holds the urgency-colored, bold header style for
 	// each inbox bucket, indexed by inboxBucket.
@@ -52,7 +61,9 @@ func newDeckStyles() deckStyles {
 		Bar:      lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
 		Label:    lipgloss.NewStyle(),
 
-		ProjectHeader: lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong)).Bold(true),
+		Title:         lipgloss.NewStyle().Bold(true),
+		ProjectHeader: lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
+		FindHeader:    lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
 		Port:          lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
 	}
 	for b := inboxBucket(0); b < inboxBucketCount; b++ {

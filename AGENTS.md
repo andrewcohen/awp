@@ -190,19 +190,23 @@ so the user's terminal palette remaps them automatically:
 
 | Token | ANSI | Semantic role |
 |-------|------|---------------|
-| `Accent` | 6 (teal) | Titles, headers, "starting" status, open PR, focus, find-target header, inbox "needs your review" bucket |
+| `Accent` | 6 (teal) | Project headers (all / attention scopes), "starting" status, open PR, focus, inbox "needs your review" bucket |
 | `Info` | 4 (blue) | PR numbers, job-running glyph, meta-line `:port` |
-| `Success` | 2 (green) | Working / approved / done / author, inbox "ready to merge" bucket |
-| `Warning` | 3 (yellow) | Waiting / pending / draft / **row selection** / orphaned / inbox "waiting for review" bucket |
+| `Success` | 2 (green) | Working / approved / done, inbox "ready to merge" bucket |
+| `Warning` | 3 (yellow) | Waiting / pending / draft / **row selection** / **find-target header** / orphaned / inbox "waiting for review" bucket |
 | `Danger` | 1 (red) | Errors, CI failing, inbox "needs action" bucket |
 | `Spinner` | 5 (magenta) | Spinner only |
-| `Strong` | 15 (bright white) | Emphasized text, project headers (all / attention scopes) |
-| `Muted` | 8 (bright black) | Hints, footer, dim labels, meta-line author/branch/prompt, inbox drafts/other buckets |
+| `Strong` | 15 (bright white) | Emphasized text |
+| `Muted` | 8 (bright black) | Hints, footer, dim labels, scope label, meta-line author/branch/prompt/stale chip/separators, inbox drafts/other buckets |
 | `BgPanel` | 0 (surface) | Reserved — currently unused |
 
-**Header colors.** Project headers (all / attention scopes) use `Strong` (bright white, bold), kept distinct from the find-mode target header which uses `Accent` (teal). Inbox bucket headers are urgency-colored per `inboxBucketColor` — see the bucket table in the README. The deck caches these as `deckStyles.ProjectHeader` and `deckStyles.BucketHeader[bucket]`; resolve a header's style via `Model.headerStyle(label)`.
+The `awp deck` title is plain bold (terminal-default fg / white) — it deliberately stays uncolored so the teal project headers carry the structural hue without the title competing. The scope label (`scope: <label>`) is pinned to the top-right corner of the title row (muted); pressing `P` cycles it and flashes the new scope in the status bar.
 
-**Meta line.** The per-workspace meta line is mostly `Muted`. `renderMetaText` / `metaSegStyle` tint only the `:port` token (blue), after truncation so the width math stays ANSI-free. Author, branch, prompt, stale chips, and the virtual-row keyboard-return (`nf-md-keyboard_return`) `to review` hint all stay muted — a green `@author` and a teal review hint were both tried and toned down for reading too loud.
+**Header colors.** Project headers (all / attention scopes) use `Accent` (teal, bold) so the structural skeleton carries a hue. The find-mode target header moves to `Warning` (yellow, bold) — the selection hue — to stay distinct from the teal headers. Inbox bucket headers are urgency-colored per `inboxBucketColor` — see the bucket table in the README. The deck caches these as `deckStyles.ProjectHeader` / `deckStyles.FindHeader` / `deckStyles.BucketHeader[bucket]`; resolve a header's style via `Model.headerStyle(label)`.
+
+**Row labels.** Workspace row labels stay at the terminal default fg — the colored status dot carries the agent state. Tinting every label by status was tried and flooded the list (yellow "waiting" rows collided with the yellow selection bar), so only the cursor (`Warning` + bold + `┃`) and find-mode dimming recolor a label.
+
+**Meta line.** `renderMetaText` / `metaSegStyle` tint only the `:port` token (blue) after truncation (so the width math stays ANSI-free); everything else — author, branch, prompt, stale chip, the virtual-row keyboard-return (`nf-md-keyboard_return`) `to review` hint, and the `·` separators — stays `Muted`. Coloring the author (teal) and branch (green) was tried and read as too much color repeated on every row, so the meta line stays mostly muted.
 
 - **Never** call `lipgloss.Color("123")` with a raw 256-color code. Add a
   semantic token to `internal/charm/palette.go` first if you need a new
