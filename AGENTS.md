@@ -206,7 +206,7 @@ The `awp deck` title is plain bold (terminal-default fg / white) — it delibera
 
 **Row labels.** Workspace row labels stay at the terminal default fg — the colored status dot carries the agent state. Tinting every label by status was tried and flooded the list (yellow "waiting" rows collided with the yellow selection bar), so only the cursor (`Warning` + bold + `┃`) and find-mode dimming recolor a label.
 
-**Meta line.** `renderMetaText` / `metaSegStyle` tint only the `:port` token (blue) after truncation (so the width math stays ANSI-free); everything else — author, branch, prompt, stale chip, the virtual-row keyboard-return (`nf-md-keyboard_return`) `to review` hint, and the `·` separators — stays `Muted`. Coloring the author (teal) and branch (green) was tried and read as too much color repeated on every row, so the meta line stays mostly muted.
+**Meta line.** `renderMetaText` / `metaSegStyle` tint only the `:port` token (blue) after truncation (so the width math stays ANSI-free); everything else — author, branch, prompt, stale chip, the virtual-row keyboard-return (`nf-md-keyboard_return`) `to review` / `to check out` hint, and the `·` separators — stays `Muted`. Coloring the author (teal) and branch (green) was tried and read as too much color repeated on every row, so the meta line stays mostly muted.
 
 - **Never** call `lipgloss.Color("123")` with a raw 256-color code. Add a
   semantic token to `internal/charm/palette.go` first if you need a new

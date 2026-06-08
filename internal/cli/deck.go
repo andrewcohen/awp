@@ -478,6 +478,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 				Bookmark:         req.Workspace.Bookmark,
 				BookmarkToCreate: req.Workspace.BookmarkToCreate,
 				Prompt:           req.Workspace.Prompt,
+				PRNumber:         req.Workspace.PRNumber,
 				Yes:              true,
 			}, reporter)
 		}
@@ -804,6 +805,7 @@ func buildAsyncJobs(repoRoot string, runner Runner) (deckui.AsyncJobLauncher, de
 			Bookmark:         spec.Bookmark,
 			BookmarkToCreate: spec.BookmarkToCreate,
 			Prompt:           spec.Prompt,
+			PRNumber:         spec.PRNumber,
 			Arg:              spec.Arg,
 			WorkspaceName:    spec.WorkspaceName,
 			WorkspacePath:    spec.WorkspacePath,

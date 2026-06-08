@@ -239,6 +239,28 @@ func computeAutoBookmark(prefix, workspaceName string) string {
 	return strings.TrimRight(prefix, "/") + "/" + normalized
 }
 
+// proposeWorkspaceName derives a workspace-name default from a branch /
+// bookmark ref — the rough inverse of computeAutoBookmark. When the ref
+// carries the configured prefix (e.g. "andrew/fix-login") it strips it
+// to propose "fix-login"; the form's auto-bookmark then round-trips back
+// to the original ref, so creating from your own PR re-uses the PR
+// branch rather than forking a new one. Otherwise it falls back to the
+// last path segment.
+func proposeWorkspaceName(ref, prefix string) string {
+	ref = strings.TrimSpace(ref)
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" {
+		p := strings.TrimRight(prefix, "/") + "/"
+		if strings.HasPrefix(ref, p) {
+			return ref[len(p):]
+		}
+	}
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ref
+}
+
 // update routes a tea.Msg into the form. Returns the updated form, any
 // tea.Cmd that should run, and a newFormAction telling the caller what
 // to do next.

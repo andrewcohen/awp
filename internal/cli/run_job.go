@@ -211,6 +211,7 @@ func runCreateWorkspaceJob(runner Runner, svc workspace.Service, job jobs.Job, r
 		Bookmark:         job.Spec.Bookmark,
 		BookmarkToCreate: job.Spec.BookmarkToCreate,
 		Prompt:           job.Spec.Prompt,
+		PRNumber:         job.Spec.PRNumber,
 		Yes:              true,
 		NoSwitch:         true,
 	}, reporter)

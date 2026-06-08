@@ -63,10 +63,11 @@ type Item struct {
 	Active           bool
 	Current          bool
 	// Virtual marks a synthetic inbox row that has no local workspace —
-	// a review-requested PR you haven't pulled down yet (see
-	// inboxVirtualReviewItems). It resolves PR status via PRNumber and
-	// renders read-only: enter starts the review flow (which creates the
-	// real workspace); other workspace actions are no-ops.
+	// an open PR you haven't pulled down yet, either awaiting your review
+	// (inboxVirtualReviewItems) or your own (inboxVirtualMineItems). It
+	// resolves PR status via PRNumber and renders read-only: enter starts
+	// the review flow for a review-requested PR, or opens the prefilled
+	// new-workspace form for your own; other workspace actions are no-ops.
 	Virtual bool
 }
 
@@ -111,6 +112,10 @@ type NewWorkspaceRequest struct {
 	Bookmark         string // anchor revision for the new workspace's @
 	BookmarkToCreate string // new bookmark to create on @ (blank = skip)
 	Prompt           string
+	// PRNumber, when > 0, pins the created workspace to this PR (the
+	// create handler calls RecordPROverride) so it links immediately.
+	// Set when creating from a virtual "mine" inbox row; 0 otherwise.
+	PRNumber int
 }
 
 type ActionRequest struct {
@@ -189,6 +194,10 @@ type progressEventMsg struct {
 type NewWorkspaceInitial struct {
 	Bookmark string
 	Name     string
+	// PRNumber, when > 0, is carried through the form (not shown as a
+	// field) and pins the created workspace to this PR. Set when the form
+	// is opened from a virtual "mine" inbox row.
+	PRNumber int
 }
 
 // BookmarkFetcher returns a tea.Cmd that lists deduped bookmarks and emits a
@@ -853,10 +862,10 @@ type Model struct {
 	deleteErr         string
 	helpMode          bool
 	deleteTarget      Item
-	confirmMergePR    bool      // merge-PR confirmation modal active
-	mergeTarget       Item      // workspace whose PR the modal will merge
-	mergeStatus       PRStatus  // cached PR status shown in the modal (number/title)
-	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
+	confirmMergePR    bool     // merge-PR confirmation modal active
+	mergeTarget       Item     // workspace whose PR the modal will merge
+	mergeStatus       PRStatus // cached PR status shown in the modal (number/title)
+	pendingSelect     Item     // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
 	findStage         findStage
 	findProject       string
@@ -943,6 +952,12 @@ type Model struct {
 	newWorkspaceMode bool
 	newWorkspaceForm newWorkspaceForm
 	newWorkspaceRepo string
+	// newWorkspacePR pins the just-created workspace to a PR when the form
+	// was opened from a virtual "mine" inbox row, so the new workspace
+	// links to the PR (glyph + status) without reopening the deck. Carried
+	// alongside the form because it isn't an editable form field. Zero =
+	// the ordinary create path (no PR link).
+	newWorkspacePR int
 
 	// Rename form. Same modal-state-inside-Model pattern as the
 	// new-workspace form.
@@ -1300,6 +1315,11 @@ func (m Model) items() []Item {
 		// synthetic read-only rows, so "Needs your review" isn't limited
 		// to PRs that already have a local workspace.
 		filtered = append(filtered, m.inboxVirtualReviewItems(filtered)...)
+		// Likewise surface your own open PRs that have no local workspace
+		// so the Mine / Needs action / Ready to merge buckets aren't
+		// limited to PRs you happen to have checked out. Passing the
+		// review virtuals in too dedups against them.
+		filtered = append(filtered, m.inboxVirtualMineItems(filtered)...)
 		src = filtered
 	case ScopeAttention:
 		filtered := make([]Item, 0, len(src))
@@ -1434,6 +1454,66 @@ func (m Model) inboxVirtualReviewItems(real []Item) []Item {
 	return out
 }
 
+// inboxVirtualMineItems synthesizes read-only inbox rows for your own
+// open PRs that have no local workspace yet — the authored-by-you
+// counterpart to inboxVirtualReviewItems. Without it, the Mine / Needs
+// action / Ready to merge buckets only show PRs you happen to have
+// checked out; a PR you opened from another machine (or whose workspace
+// you deleted) would silently vanish from your inbox.
+//
+// Review-requested PRs are intentionally skipped here — inboxVirtualReviewItems
+// already covers them (you can't request review from yourself, so this is
+// belt-and-suspenders). prInboxBucket later sorts each row into its
+// section by PR state. existing should be the real workspace rows plus
+// the review virtuals so we dedup against both, by repo → PR#.
+func (m Model) inboxVirtualMineItems(existing []Item) []Item {
+	seen := map[string]map[int]bool{}
+	for _, it := range existing {
+		if st, ok := m.resolvePRStatus(it); ok {
+			if seen[it.RepoRoot] == nil {
+				seen[it.RepoRoot] = map[int]bool{}
+			}
+			seen[it.RepoRoot][st.Number] = true
+		}
+	}
+	projectByRepo := map[string]string{}
+	for _, it := range m.itemsAll {
+		if it.RepoRoot != "" && projectByRepo[it.RepoRoot] == "" {
+			projectByRepo[it.RepoRoot] = it.ProjectName
+		}
+	}
+	var out []Item
+	for repo, byHead := range m.prStatusByRepo {
+		for _, st := range byHead {
+			if st.State != PRStateOpen {
+				continue
+			}
+			if !st.Mine {
+				continue
+			}
+			if st.ReviewRequested || st.ReviewRerequested {
+				continue // covered by inboxVirtualReviewItems
+			}
+			if seen[repo][st.Number] {
+				continue
+			}
+			project := projectByRepo[repo]
+			if project == "" {
+				project = repoBaseName(repo)
+			}
+			out = append(out, Item{
+				ProjectName:   project,
+				WorkspaceName: fmt.Sprintf("#%d", st.Number),
+				RepoRoot:      repo,
+				PRNumber:      st.Number,
+				Bookmark:      st.HeadRefName, // drives the branch token on the meta line
+				Virtual:       true,
+			})
+		}
+	}
+	return out
+}
+
 // repoBaseName returns the last path segment of a repo root, used as a
 // fallback project label for a virtual row when no sibling workspace
 // supplies one.
@@ -1506,8 +1586,15 @@ func (m Model) metaLine(it Item) string {
 		parts = append(parts, glyphKeyboard+` "`+prompt+`"`)
 	}
 	if it.Virtual {
-		// No local workspace — call out the one action that exists.
-		parts = append(parts, glyphReturn+" to review")
+		// No local workspace — call out the one action that exists. For a
+		// PR awaiting your review that's "to review"; for your own PR with
+		// no workspace it's "to check out" (enter creates the workspace
+		// either way — same flow, honest verb).
+		hint := "to review"
+		if hasPR && pr.Mine && !pr.ReviewRequested && !pr.ReviewRerequested {
+			hint = "to check out"
+		}
+		parts = append(parts, glyphReturn+" "+hint)
 	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " · ")
@@ -1999,12 +2086,20 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 		if msg.action == ActionMergePR {
 			// Stay in the progress modal showing the success result; the
-			// user dismisses with esc/q/enter, which refreshes PR status.
-			// "submitted" rather than "merged" — on a merge-queue repo the
-			// PR is added to the queue, not merged on the spot. The log
-			// shows which one happened.
+			// user dismisses with esc/q/enter. "submitted" rather than
+			// "merged" — on a merge-queue repo the PR is added to the
+			// queue, not merged on the spot. The log shows which one
+			// happened.
 			m.status = fmt.Sprintf("PR #%s: merge submitted", msg.arg)
-			return m, nil
+			// Refetch this repo's PR status now so the merged PR drops out
+			// of the inbox (the fetch replaces the repo's cache with the
+			// open-PR set, sans the just-merged one). A plain refresh would
+			// be suppressed by the prStatusMinInterval throttle and keep
+			// showing the stale "open" glyph; forcePRStatusRefresh bypasses
+			// it.
+			var prCmd tea.Cmd
+			m, prCmd = m.forcePRStatusRefresh(msg.item.RepoRoot)
+			return m, prCmd
 		}
 		if msg.action == ActionRename {
 			m.status = fmt.Sprintf("renamed %s → %s", msg.item.WorkspaceName, msg.arg)
@@ -2222,7 +2317,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					return m, refreshCmd
 				}
 				if m.progressDoneAction == ActionMergePR && m.refresher != nil {
-					// Pull fresh PR status so the merged PR's glyph updates.
+					// Reload workspace rows on dismiss. The merged PR's
+					// status was already refetched when the merge
+					// succeeded (see the ActionMergePR branch in
+					// actionResultMsg), so by now the inbox filter has
+					// dropped it.
 					var refreshCmd tea.Cmd
 					m, refreshCmd = m.requestRefresh(true)
 					return m, refreshCmd
@@ -3086,6 +3185,7 @@ func (m *Model) launchNewForm(initial NewWorkspaceInitial, repo string) (tea.Mod
 	}
 	m.newWorkspaceMode = true
 	m.newWorkspaceRepo = repo
+	m.newWorkspacePR = initial.PRNumber
 	var initCmd tea.Cmd
 	trunk := ""
 	if m.trunkResolver != nil {
@@ -3182,6 +3282,7 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case newFormActionCancel:
 		m.newWorkspaceMode = false
 		m.newWorkspaceRepo = ""
+		m.newWorkspacePR = 0
 		m.newWorkspaceForm = newWorkspaceForm{}
 		m.status = ""
 		// tea.ClearScreen on every modal exit so the row list's first
@@ -3190,9 +3291,11 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, batchCmds(cmd, tea.ClearScreen)
 	case newFormActionSubmit:
 		req := form.request()
+		req.PRNumber = m.newWorkspacePR
 		repo := m.newWorkspaceRepo
 		m.newWorkspaceMode = false
 		m.newWorkspaceRepo = ""
+		m.newWorkspacePR = 0
 		m.newWorkspaceForm = newWorkspaceForm{}
 		updated, dispatchCmd := m.startCreateAction(req, repo)
 		return updated, batchCmds(cmd, dispatchCmd, tea.ClearScreen)
@@ -3383,13 +3486,26 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if item.Virtual {
-		// A virtual inbox row has no local workspace to act on. Enter
-		// (the default Summon) starts the review flow, which creates the
-		// workspace; every other workspace action is a no-op with a hint.
+		// A virtual inbox row has no local workspace to act on. The one
+		// gesture that exists is enter (Summon), and what it does depends
+		// on whose PR it is:
+		//   - your own PR  → open the new-workspace form prefilled with the
+		//     PR branch, so you land in a normal working workspace (not the
+		//     review flow's tuicr windows).
+		//   - awaiting your review → start the review flow, which creates
+		//     the workspace and primes the reviewer.
+		// The explicit review action (r) always starts a review regardless.
+		if a == ActionSummon {
+			if st, ok := m.resolvePRStatus(item); ok && st.Mine &&
+				!st.ReviewRequested && !st.ReviewRerequested {
+				name := proposeWorkspaceName(st.HeadRefName, m.bookmarkPrefix)
+				return m.launchNewForm(NewWorkspaceInitial{Bookmark: st.HeadRefName, Name: name, PRNumber: st.Number}, item.RepoRoot)
+			}
+		}
 		if a == ActionSummon || a == ActionReview {
 			return m.startAction(ActionReview, item, strconv.Itoa(item.PRNumber))
 		}
-		m.status = "no workspace yet — press enter to start a review"
+		m.status = "no workspace yet — press enter to create it"
 		return m, nil
 	}
 	if isProgressAction(a) {
@@ -3563,6 +3679,7 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		Bookmark:         strings.TrimSpace(req.Bookmark),
 		BookmarkToCreate: strings.TrimSpace(req.BookmarkToCreate),
 		Prompt:           strings.TrimSpace(req.Prompt),
+		PRNumber:         req.PRNumber,
 	}
 	// Pre-arm pendingSelect with the new workspace's likely name so the
 	// cursor snaps to it as soon as the refresh after the subprocess
