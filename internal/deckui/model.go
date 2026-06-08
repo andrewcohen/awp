@@ -1334,6 +1334,16 @@ func (m Model) items() []Item {
 			if bi != bj {
 				return bi < bj
 			}
+			// Within "Needs your review", surface re-reviews first — PRs
+			// you already reviewed that the author pushed to and
+			// re-requested. They're cheaper to act on (you only need to
+			// look at what changed) and easy to lose track of.
+			if bi == inboxNeedsYourReview {
+				ri, rj := m.itemNeedsReReview(sorted[i]), m.itemNeedsReReview(sorted[j])
+				if ri != rj {
+					return ri
+				}
+			}
 			return byProjectLabel(i, j)
 		})
 	} else {
@@ -1351,6 +1361,14 @@ func (m Model) itemInboxBucket(it Item) inboxBucket {
 		return inboxOtherOpen
 	}
 	return prInboxBucket(st)
+}
+
+// itemNeedsReReview reports whether the row is a re-request: you
+// reviewed the PR before and the author pushed and asked again. Used to
+// sort these to the top of the "Needs your review" bucket.
+func (m Model) itemNeedsReReview(it Item) bool {
+	st, ok := m.itemOpenPRStatus(it)
+	return ok && st.ReviewRerequested
 }
 
 // inboxVirtualReviewItems synthesizes read-only inbox rows for
