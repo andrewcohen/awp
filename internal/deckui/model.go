@@ -690,6 +690,55 @@ func inboxBucketLabel(b inboxBucket) string {
 	}
 }
 
+// inboxBucketColor maps a bucket to a palette token so its header reads
+// by urgency at a glance: teal = your move (review), red = something to
+// fix, green = ready, yellow = waiting on others, muted = no action
+// (drafts / other).
+func inboxBucketColor(b inboxBucket) string {
+	switch b {
+	case inboxNeedsYourReview:
+		return colAccent
+	case inboxNeedsAction:
+		return colDanger
+	case inboxReadyToMerge:
+		return colSuccess
+	case inboxWaitingForReview:
+		return colWarning
+	default:
+		return colMuted
+	}
+}
+
+// bucketFromHeaderLabel recovers the bucket from a header label like
+// "Needs action (2)" — the count suffix is stripped and the base
+// matched against inboxBucketLabel. Both sides go through the same
+// label function, so the round-trip is exact.
+func bucketFromHeaderLabel(label string) (inboxBucket, bool) {
+	base := label
+	if i := strings.LastIndex(label, " ("); i >= 0 {
+		base = label[:i]
+	}
+	for b := inboxBucket(0); b < inboxBucketCount; b++ {
+		if inboxBucketLabel(b) == base {
+			return b, true
+		}
+	}
+	return 0, false
+}
+
+// headerStyle returns the style for a group header. Inbox bucket headers
+// are urgency-colored; project headers (all / attention scopes) use the
+// brightened ProjectHeader treatment. Find-mode's teal highlight is
+// applied by the caller and wins over either.
+func (m Model) headerStyle(label string) lipgloss.Style {
+	if m.scope == ScopeInbox {
+		if b, ok := bucketFromHeaderLabel(label); ok {
+			return m.styles.BucketHeader[b]
+		}
+	}
+	return m.styles.ProjectHeader
+}
+
 // prInboxBucket classifies an OPEN PR into its inbox section. Callers
 // filter merged/closed PRs out of the inbox scope before classifying.
 //
@@ -1367,6 +1416,28 @@ func (m Model) metaLine(it Item) string {
 		id = "…"
 	}
 	return glyphBranch + " " + id
+}
+
+// renderMetaText colors the semantic tokens of an already-truncated
+// meta line — @author green, :port blue (per the palette table) — with
+// everything else (branch, prompt, stale chip, separators) muted.
+// Operating on the truncated plain string keeps the width math in
+// metaLine/truncate ANSI-free; coloring a token the truncation clipped
+// is harmless since the prefix that selects its color survives.
+func (m Model) renderMetaText(text string) string {
+	s := m.styles
+	segs := strings.Split(text, " · ")
+	for i, seg := range segs {
+		switch {
+		case strings.HasPrefix(seg, "@"):
+			segs[i] = s.Author.Render(seg)
+		case strings.HasPrefix(seg, ":"):
+			segs[i] = s.Port.Render(seg)
+		default:
+			segs[i] = s.Muted.Render(seg)
+		}
+	}
+	return strings.Join(segs, s.Muted.Render(" · "))
 }
 
 // devURLPort extracts the port from a dev URL like
@@ -3909,7 +3980,7 @@ func (m Model) renderList(width int) string {
 			// the row-count-based scroll capacity math exact.
 			body = append(body, "")
 		case deckRowHeader:
-			headerStyle := s.Muted
+			headerStyle := m.headerStyle(r.project)
 			if m.findMode && m.findStage == findStageWorkspace && r.project == m.findProject {
 				headerStyle = s.Accent
 			}
@@ -3994,7 +4065,7 @@ func (m Model) renderList(width int) string {
 				metaRoom = max(10, metaRoom-lipgloss.Width(glyphs)-2)
 			}
 			metaText := truncate(m.metaLine(item), metaRoom)
-			body = append(body, fitRow(line+s.Muted.Render(metaText), width-2))
+			body = append(body, fitRow(line+m.renderMetaText(metaText), width-2))
 		case deckRowCollapsed:
 			// Quiet default-only project: fold the project header, the
 			// lone "default" workspace row, and its meta line into one
@@ -4004,11 +4075,12 @@ func (m Model) renderList(width int) string {
 			// default workspace has a visible status dot never collapse
 			// (see collapsedProjects), so this row carries no dot.
 			item := items[r.itemIndex]
-			// The project name is colored like a project header (muted) by
-			// default so the row reads as project-level rather than a
-			// workspace label — otherwise a collapsed row blends into the
-			// workspace rows above it.
-			nameStyle := s.Muted
+			// The project name is colored like a project header so the row
+			// reads as project-level rather than a workspace label —
+			// otherwise a collapsed row blends into the workspace rows
+			// above it. (Collapse only happens in project-grouped scopes,
+			// so this is always the project-header treatment.)
+			nameStyle := s.ProjectHeader
 			// The find hint / cursor bar live in the same fixed prefix
 			// slot that project headers use, so the row doesn't shift
 			// when find mode toggles a hint in or out. No status glyph:
@@ -4050,12 +4122,12 @@ func (m Model) renderList(width int) string {
 			if reviewReq := m.prReviewReqGlyphForItem(item); reviewReq != "" {
 				line += " " + reviewReq
 			}
-			// Append the meta text inline (muted) when there's room left
-			// on the line after the name and glyphs.
+			// Append the meta text inline (semantic tokens colored) when
+			// there's room left on the line after the name and glyphs.
 			if meta := strings.TrimSpace(m.metaLine(item)); meta != "" {
 				metaRoom := width - 2 - lipgloss.Width(line) - 3
 				if metaRoom >= 6 {
-					line += "   " + s.Muted.Render(truncate(meta, metaRoom))
+					line += "   " + m.renderMetaText(truncate(meta, metaRoom))
 				}
 			}
 			body = append(body, fitRow(line, width-2))

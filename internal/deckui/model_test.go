@@ -2902,3 +2902,65 @@ func TestBodyRowsInboxBucketHeaders(t *testing.T) {
 		}
 	}
 }
+
+// renderMetaText colors @author green and :port blue while leaving the
+// rest muted. Verify the ANSI foreground codes land on the right tokens
+// and the visible text is unchanged after stripping ANSI.
+func TestRenderMetaTextColorsAuthorAndPort(t *testing.T) {
+	m := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
+	text := "@andrewcohen ·  andrew/fix · :5173 · note"
+	out := m.renderMetaText(text)
+
+	if got := ansi.Strip(out); got != text {
+		t.Errorf("visible text changed: got %q want %q", got, text)
+	}
+	// The green (author) and blue (port) codes must both appear.
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)).Render("@andrewcohen")
+	blue := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)).Render(":5173")
+	if !strings.Contains(out, green) {
+		t.Errorf("author token not rendered in success color; out=%q", out)
+	}
+	if !strings.Contains(out, blue) {
+		t.Errorf("port token not rendered in info color; out=%q", out)
+	}
+}
+
+// Inbox bucket headers are urgency-colored: review = accent, action =
+// danger, ready = success, waiting = warning, drafts/other = muted.
+func TestInboxBucketColor(t *testing.T) {
+	cases := []struct {
+		bucket inboxBucket
+		want   string
+	}{
+		{inboxNeedsYourReview, colAccent},
+		{inboxNeedsAction, colDanger},
+		{inboxReadyToMerge, colSuccess},
+		{inboxWaitingForReview, colWarning},
+		{inboxYourDrafts, colMuted},
+		{inboxOtherOpen, colMuted},
+	}
+	for _, c := range cases {
+		if got := inboxBucketColor(c.bucket); got != c.want {
+			t.Errorf("inboxBucketColor(%s) = %q, want %q", inboxBucketLabel(c.bucket), got, c.want)
+		}
+	}
+}
+
+// headerStyle resolves an inbox header label back to its bucket color
+// and uses the brightened ProjectHeader treatment outside the inbox.
+func TestHeaderStyleResolvesBucketColor(t *testing.T) {
+	m := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
+
+	m.scope = ScopeInbox
+	if got := m.headerStyle("Needs action (2)"); got.GetForeground() != lipgloss.Color(colDanger) {
+		t.Errorf("inbox 'Needs action' header should be danger-colored, got %v", got.GetForeground())
+	}
+	if got := m.headerStyle("Needs your review (1)"); got.GetForeground() != lipgloss.Color(colAccent) {
+		t.Errorf("inbox 'Needs your review' header should be accent-colored, got %v", got.GetForeground())
+	}
+
+	m.scope = ScopeAll
+	if got := m.headerStyle("shop-api"); got.GetForeground() != lipgloss.Color(colStrong) {
+		t.Errorf("project header should use Strong, got %v", got.GetForeground())
+	}
+}
