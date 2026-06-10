@@ -186,7 +186,20 @@ var prStatusCacheMu sync.Mutex
 // to merge, definitely don't prune" — that's the upstream-error shape
 // (gh returned [] when we know there are PRs). The throttle stamp
 // still updates so the next refresh respects the cooldown.
-func persistPRStatusBulkMerge(byRepo map[string]map[string]deckui.PRStatus, pinnedByRepo map[string]map[int]bool, fetchedAt time.Time) {
+// completeByRepo[repo] == true means the fresh set for that repo is the
+// COMPLETE list of its open PRs (the `gh pr list --state open` fetch was
+// not truncated at the limit). When complete, a cached entry absent from
+// the fresh set is definitively no longer open — it merged or closed —
+// so it's pruned regardless of its (stale) cached state, not just when
+// the cached state is already terminal. This is what clears a PR that
+// merged out of the open list: under `--state open` it never comes back
+// as MERGED to overwrite the stale OPEN entry, so without this it would
+// linger forever (and, if it had ReviewRequested/IsInMergeQueue set,
+// show as a phantom inbox row). When the fetch WAS truncated (== limit),
+// absence is ambiguous (could be an open PR beyond the cap), so we fall
+// back to the conservative terminal-only prune. Pinned PRs are always
+// kept either way — their real terminal state arrives via the top-up.
+func persistPRStatusBulkMerge(byRepo map[string]map[string]deckui.PRStatus, pinnedByRepo map[string]map[int]bool, completeByRepo map[string]bool, fetchedAt time.Time) {
 	if len(byRepo) == 0 {
 		return
 	}
@@ -213,6 +226,7 @@ func persistPRStatusBulkMerge(byRepo map[string]map[string]deckui.PRStatus, pinn
 			existing = map[string]deckui.PRStatus{}
 		}
 		pinned := pinnedByRepo[repo]
+		complete := completeByRepo[repo]
 		pruned := 0
 		for head, cached := range existing {
 			if _, inFresh := fresh[head]; inFresh {
@@ -221,7 +235,11 @@ func persistPRStatusBulkMerge(byRepo map[string]map[string]deckui.PRStatus, pinn
 			if pinned[cached.Number] {
 				continue
 			}
-			if isTerminalPRState(cached.State) {
+			// Complete fetch → absence means "no longer open", so drop it
+			// whatever its stale state says. Truncated fetch → only drop
+			// entries already known terminal (an absent OPEN entry might
+			// just be beyond the open-list cap).
+			if complete || isTerminalPRState(cached.State) {
 				delete(existing, head)
 				pruned++
 			}
