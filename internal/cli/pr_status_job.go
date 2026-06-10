@@ -151,19 +151,25 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 	for head, status := range topUps {
 		byHead[head] = status
 	}
+	// truncated == the open-list fetch hit the limit, so there are open
+	// PRs we didn't see. When NOT truncated the fresh set is the complete
+	// set of open PRs, which lets persistPRStatusBulkMerge prune cached
+	// entries that have since merged/closed out of the open list (they no
+	// longer come back as MERGED under `--state open` to overwrite the
+	// stale OPEN entry).
+	truncated := len(statuses) >= 100
 	persistPRStatusBulkMerge(
 		map[string]map[string]deckui.PRStatus{repo: byHead},
 		map[string]map[int]bool{repo: pinned},
+		map[string]bool{repo: !truncated},
 		time.Now(),
 	)
 	reporter.Step(fmt.Sprintf("%s — %d PRs (+%d pinned) (%s)", repo, len(statuses), len(topUps), time.Since(started).Round(time.Millisecond)))
 	// Diagnostic: log every PR # and head ref returned for this repo. If
 	// a PR you expect to see isn't in `numbers=[...]`, gh didn't return
-	// it — most likely the repo has more PRs than the `gh pr list
-	// --limit 100` cap and the PR is older than the cutoff. The
-	// `truncated` flag flags that condition explicitly (count == limit).
+	// it — most likely the repo has more open PRs than the `gh pr list
+	// --limit 100` cap. The `truncated` flag flags that explicitly.
 	numbers := sortedPRNumbers(byHead)
-	truncated := len(statuses) >= 100
 	deckDebugLogf("prStatus fetched repo=%s count=%d topup=%d truncated=%t numbers=%v",
 		repo, len(statuses), len(topUps), truncated, numbers)
 }

@@ -168,7 +168,10 @@ func TestPersistPRStatusBulkMergePrunesTerminalNotInFresh(t *testing.T) {
 			"andrew/current": {Number: 13, HeadRefName: "andrew/current", State: deckui.PRStateOpen},
 		},
 	}
-	persistPRStatusBulkMerge(fresh, nil, time.Now())
+	// nil completeByRepo → treated as a possibly-truncated fetch, so the
+	// conservative terminal-only prune applies and the absent OPEN PR is
+	// kept.
+	persistPRStatusBulkMerge(fresh, nil, nil, time.Now())
 
 	got, _, err := loadPRStatusCache()
 	if err != nil {
@@ -179,13 +182,52 @@ func TestPersistPRStatusBulkMergePrunesTerminalNotInFresh(t *testing.T) {
 		t.Errorf("current PR should remain")
 	}
 	if _, ok := byHead["andrew/old-open"]; !ok {
-		t.Errorf("OPEN PR missing from fresh should be kept (non-terminal)")
+		t.Errorf("OPEN PR missing from fresh should be kept (non-terminal, fetch not known-complete)")
 	}
 	if _, ok := byHead["andrew/old-merged"]; ok {
 		t.Errorf("MERGED PR missing from fresh should be pruned")
 	}
 	if _, ok := byHead["andrew/old-closed"]; ok {
 		t.Errorf("CLOSED PR missing from fresh should be pruned")
+	}
+}
+
+// TestPersistPRStatusBulkMergePrunesStaleOpenOnCompleteFetch pins the
+// fix for the phantom-inbox-row bug: a PR cached as OPEN (with
+// ReviewRequested / IsInMergeQueue set) that has since merged out of the
+// `--state open` list never comes back as MERGED to overwrite the stale
+// entry. When the fetch is COMPLETE (not truncated), its absence is
+// authoritative, so the stale OPEN entry must be pruned — otherwise it
+// lingers forever as a bogus "needs your review" / in-merge-queue row.
+func TestPersistPRStatusBulkMergePrunesStaleOpenOnCompleteFetch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := "/r"
+
+	persistPRStatusMerge(map[string]map[string]deckui.PRStatus{
+		repo: {
+			// Merged in reality, but cached as OPEN + review-requested +
+			// queued — exactly the redwood #2183 shape.
+			"andrew/brand-config": {Number: 2183, HeadRefName: "andrew/brand-config", State: deckui.PRStateOpen, ReviewRequested: true, IsInMergeQueue: true},
+			"andrew/current":      {Number: 13, HeadRefName: "andrew/current", State: deckui.PRStateOpen},
+		},
+	}, time.Now())
+
+	// Complete fetch (not truncated) returns only the still-open PR.
+	fresh := map[string]map[string]deckui.PRStatus{
+		repo: {"andrew/current": {Number: 13, HeadRefName: "andrew/current", State: deckui.PRStateOpen}},
+	}
+	persistPRStatusBulkMerge(fresh, nil, map[string]bool{repo: true}, time.Now())
+
+	got, _, err := loadPRStatusCache()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	byHead := got[repo]
+	if _, ok := byHead["andrew/brand-config"]; ok {
+		t.Errorf("stale OPEN PR absent from a complete fetch must be pruned (phantom inbox row)")
+	}
+	if _, ok := byHead["andrew/current"]; !ok {
+		t.Errorf("still-open PR present in the fresh set must remain")
 	}
 }
 
@@ -207,7 +249,9 @@ func TestPersistPRStatusBulkMergeKeepsPinnedTerminalPRs(t *testing.T) {
 		},
 	}
 	pinned := map[string]map[int]bool{repo: {100: true}}
-	persistPRStatusBulkMerge(fresh, pinned, time.Now())
+	// Even a complete fetch must keep pinned PRs (their terminal state
+	// arrives via the top-up), so assert retention under complete=true.
+	persistPRStatusBulkMerge(fresh, pinned, map[string]bool{repo: true}, time.Now())
 
 	got, _, err := loadPRStatusCache()
 	if err != nil {
@@ -233,6 +277,7 @@ func TestPersistPRStatusBulkMergeSkipsPruneOnEmptyFresh(t *testing.T) {
 	persistPRStatusBulkMerge(
 		map[string]map[string]deckui.PRStatus{repo: {}},
 		nil,
+		map[string]bool{repo: true},
 		time.Now(),
 	)
 
