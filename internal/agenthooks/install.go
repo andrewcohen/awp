@@ -277,23 +277,61 @@ func claudeSettingsPath() (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-func upsertAwpEntry(entries []any, event, state string) ([]any, bool) {
-	desired := desiredEntry(event, state)
-	for i, raw := range entries {
-		entry, ok := raw.(map[string]any)
+// awpCommandSignature is the stable substring every awp-installed hook
+// command contains, across every version and binary-path variant
+// (`awp …` vs `"${AWP_BIN:-awp}" …`). Recognizing entries by it lets us
+// reclaim hooks written by awp versions that predate the x-awp marker.
+const awpCommandSignature = "internal report-status"
+
+// isAwpEntry reports whether a hook entry was authored by awp — either
+// tagged with the x-awp marker (current installs) or, for entries
+// written before the marker existed, recognizable by the report-status
+// command awp installs. The marker-only check left legacy/old-format
+// entries unrecognized, so every install appended a fresh copy beside
+// them instead of replacing them — the duplication this dedups.
+func isAwpEntry(entry map[string]any) bool {
+	if _, ok := entry["x-awp"]; ok {
+		return true
+	}
+	hooks, _ := entry["hooks"].([]any)
+	for _, raw := range hooks {
+		h, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		if _, ok := entry["x-awp"]; !ok {
+		if cmd, _ := h["command"].(string); strings.Contains(cmd, awpCommandSignature) {
+			return true
+		}
+	}
+	return false
+}
+
+// upsertAwpEntry collapses every awp-authored entry for the event down to
+// a single canonical one, leaving user-defined entries untouched and in
+// their original order. This both refreshes a stale awp entry and prunes
+// the legacy/old-format duplicates that the previous marker-only match
+// could never see.
+func upsertAwpEntry(entries []any, event, state string) ([]any, bool) {
+	desired := desiredEntry(event, state)
+	nonAwp := make([]any, 0, len(entries))
+	awpCount := 0
+	var sole map[string]any
+	for _, raw := range entries {
+		if entry, ok := raw.(map[string]any); ok && isAwpEntry(entry) {
+			awpCount++
+			sole = entry
 			continue
 		}
-		if jsonEqual(entry, desired) {
-			return entries, false
-		}
-		entries[i] = desired
-		return entries, true
+		nonAwp = append(nonAwp, raw)
 	}
-	return append(entries, desired), true
+	// Already canonical: exactly one awp entry and it matches desired.
+	if awpCount == 1 && jsonEqual(sole, desired) {
+		return entries, false
+	}
+	out := make([]any, 0, len(nonAwp)+1)
+	out = append(out, nonAwp...)
+	out = append(out, desired)
+	return out, true
 }
 
 // removeAwpEntry drops every entry tagged with x-awp, preserving the order
@@ -303,32 +341,30 @@ func removeAwpEntry(entries []any) ([]any, bool) {
 	out := entries[:0:0]
 	removed := false
 	for _, raw := range entries {
-		if entry, ok := raw.(map[string]any); ok {
-			if _, isAwp := entry["x-awp"]; isAwp {
-				removed = true
-				continue
-			}
+		if entry, ok := raw.(map[string]any); ok && isAwpEntry(entry) {
+			removed = true
+			continue
 		}
 		out = append(out, raw)
 	}
 	return out, removed
 }
 
+// awpEntryMatches reports whether the event is in its canonical
+// awp-installed shape: exactly one awp entry, equal to desired. Legacy
+// duplicates or an old-format entry make it false, so IsClaudeInstalled
+// reports drift and the next InstallClaude run dedups it.
 func awpEntryMatches(entries []any, event, state string) bool {
 	desired := desiredEntry(event, state)
+	awpCount := 0
+	var sole map[string]any
 	for _, raw := range entries {
-		entry, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if _, ok := entry["x-awp"]; !ok {
-			continue
-		}
-		if jsonEqual(entry, desired) {
-			return true
+		if entry, ok := raw.(map[string]any); ok && isAwpEntry(entry) {
+			awpCount++
+			sole = entry
 		}
 	}
-	return false
+	return awpCount == 1 && jsonEqual(sole, desired)
 }
 
 func desiredEntry(event, state string) map[string]any {
