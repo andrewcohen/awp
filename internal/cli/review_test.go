@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,6 +106,40 @@ func TestBuildReviewPrompt(t *testing.T) {
 	// No comments → sentinel line, not an empty section.
 	if !strings.Contains(got, "(none — no prior comments on this PR)") {
 		t.Fatalf("expected sentinel for empty comments, got %q", got)
+	}
+}
+
+func TestReviewPromptFileAndPointer(t *testing.T) {
+	ws := t.TempDir()
+
+	instructions := "Please review PR #7: a thing\n\nlong instructions ...\n"
+	path, err := writeReviewPromptFile(ws, instructions)
+	if err != nil {
+		t.Fatalf("writeReviewPromptFile: %v", err)
+	}
+	if want := filepath.Join(ws, ".awp", "review-prompt.md"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != instructions {
+		t.Errorf("file content = %q, want %q", got, instructions)
+	}
+
+	pr := github.PRInfo{Number: 7, Title: "a thing"}
+	pointer := buildReviewPointerPrompt(pr, path)
+	// The pointer must be short and must name the PR plus the file path,
+	// so the agent knows what to read.
+	if !strings.Contains(pointer, "PR #7") || !strings.Contains(pointer, "a thing") {
+		t.Errorf("pointer missing PR header: %q", pointer)
+	}
+	if !strings.Contains(pointer, path) {
+		t.Errorf("pointer missing prompt path %q: %q", path, pointer)
+	}
+	if lines := strings.Count(pointer, "\n"); lines > 12 {
+		t.Errorf("pointer prompt is not tiny (%d lines): %q", lines, pointer)
 	}
 }
 

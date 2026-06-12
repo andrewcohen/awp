@@ -249,7 +249,19 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	} else {
 		reporter.Log(fmt.Sprintf("found %d existing comment(s)", len(comments)))
 	}
-	prompt := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments)
+	// Render the full review instructions, but don't paste them into the
+	// agent terminal — that ~170-line block is what users complained was
+	// "too big". Write it to disk and hand the agent a tiny pointer prompt
+	// instead; the agent reads the file itself. Falls back to the inline
+	// prompt if the write fails, so a read-only home dir still works.
+	instructions := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments)
+	prompt := instructions
+	if promptPath, werr := writeReviewPromptFile(wsPath, instructions); werr != nil {
+		reporter.Log(fmt.Sprintf("could not write review prompt file (sending inline): %v", werr))
+	} else {
+		reporter.Log(fmt.Sprintf("review prompt: %s", promptPath))
+		prompt = buildReviewPointerPrompt(pr, promptPath)
+	}
 
 	if !have["agent"] {
 		reporter.Step("Open agent window")
@@ -367,6 +379,46 @@ func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 		return 0, fmt.Errorf("picker returned unknown label %q", selected)
 	}
 	return n, nil
+}
+
+// writeReviewPromptFile renders the full review instructions to
+// <workspace>/.awp/review-prompt.md and returns its absolute path. Keeping
+// the file inside the per-PR review workspace means it's removed when the
+// workspace is pruned (no accumulation in a global dir), and since `.awp`
+// is gitignored it never shows up in `jj st` or the review diff. The agent
+// receives only the short pointer prompt from buildReviewPointerPrompt and
+// reads this file itself, keeping the terminal-pasted prompt tiny.
+func writeReviewPromptFile(wsPath, content string) (string, error) {
+	abs, err := filepath.Abs(wsPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace path: %w", err)
+	}
+	dir := filepath.Join(abs, ".awp")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create review prompt dir: %w", err)
+	}
+	path := filepath.Join(dir, "review-prompt.md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write review prompt: %w", err)
+	}
+	return path, nil
+}
+
+// buildReviewPointerPrompt is the short prompt actually sent to the agent.
+// It names the PR and points at the on-disk instructions file rather than
+// inlining the full review guide.
+func buildReviewPointerPrompt(pr github.PRInfo, promptPath string) string {
+	title := strings.TrimSpace(pr.Title)
+	if title == "" {
+		title = "(no title)"
+	}
+	return fmt.Sprintf(`Review PR #%d: %s
+
+Your full review instructions and PR context are in this file:
+
+    %s
+
+Read that file first, then post your review comments via tuicr exactly as it describes.`, pr.Number, title, promptPath)
 }
 
 func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dataDir string, comments []github.PRComment) string {
