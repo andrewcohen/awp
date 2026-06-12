@@ -103,6 +103,74 @@ func TestRemoveAwpEntryDropsOnlyAwpEntries(t *testing.T) {
 	}
 }
 
+// legacyAwpEntry builds a pre-marker awp hook entry: the report-status
+// command awp installed before the x-awp marker (and bare-`awp`) existed,
+// with no x-awp key. These are what accumulated as duplicates in real
+// settings.json files because the marker-only match never recognized them.
+func legacyAwpEntry(state string) map[string]any {
+	return map[string]any{"hooks": []any{map[string]any{
+		"type":    "command",
+		"command": `[ -n "$TMUX" ] && awp internal report-status --state ` + state + ` >/dev/null 2>&1 || true`,
+	}}}
+}
+
+func TestUpsertAwpEntryDedupsLegacyEntries(t *testing.T) {
+	event, state := "Stop", "idle"
+	userEntry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "echo hi"}}}
+	// Two legacy unmarked awp entries around a user entry — the shape that
+	// accumulated in real installs.
+	entries := []any{legacyAwpEntry(state), userEntry, legacyAwpEntry(state)}
+
+	out, changed := upsertAwpEntry(entries, event, state)
+	if !changed {
+		t.Fatal("expected a change when collapsing duplicate awp entries")
+	}
+	awp, user := 0, 0
+	for _, raw := range out {
+		if isAwpEntry(raw.(map[string]any)) {
+			awp++
+		} else {
+			user++
+		}
+	}
+	if awp != 1 {
+		t.Errorf("expected exactly 1 awp entry after dedup, got %d", awp)
+	}
+	if user != 1 {
+		t.Errorf("expected the user entry to survive, got %d", user)
+	}
+	if !awpEntryMatches(out, event, state) {
+		t.Error("surviving awp entry should be the canonical (marked) one")
+	}
+}
+
+func TestUpsertAwpEntryNoChangeWhenCanonical(t *testing.T) {
+	event, state := "Stop", "idle"
+	if _, changed := upsertAwpEntry([]any{desiredEntry(event, state)}, event, state); changed {
+		t.Error("a single canonical entry should report no change (no needless rewrite)")
+	}
+}
+
+func TestAwpEntryMatchesRejectsDuplicates(t *testing.T) {
+	event, state := "Stop", "idle"
+	// Two canonical entries is still drift — IsClaudeInstalled must report
+	// false so the next InstallClaude collapses them.
+	entries := []any{desiredEntry(event, state), desiredEntry(event, state)}
+	if awpEntryMatches(entries, event, state) {
+		t.Error("duplicate awp entries should not count as a canonical install")
+	}
+}
+
+func TestRemoveAwpEntryDropsLegacyUnmarkedEntries(t *testing.T) {
+	out, removed := removeAwpEntry([]any{legacyAwpEntry("waiting")})
+	if !removed {
+		t.Fatal("expected removeAwpEntry to drop a legacy unmarked awp entry")
+	}
+	if len(out) != 0 {
+		t.Errorf("expected no entries left, got %d", len(out))
+	}
+}
+
 func TestHookMarkerVersionBumped(t *testing.T) {
 	// Guard: dropping the version below 5 would let stale installs from
 	// before the blocking-tool / PostToolUse rollout keep their older
