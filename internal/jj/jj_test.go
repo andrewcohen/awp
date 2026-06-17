@@ -273,7 +273,7 @@ func TestWorkspaceRevisionUsesCommitIDTemplate(t *testing.T) {
 	if rev != "abc123" {
 		t.Fatalf("revision = %q, want abc123", rev)
 	}
-	wantArgs := []string{"log", "-r", "qa@", "--no-graph", "-T", "commit_id.short() ++ \"\\n\""}
+	wantArgs := []string{"--ignore-working-copy", "log", "-r", "qa@", "--no-graph", "-T", "commit_id.short() ++ \"\\n\""}
 	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
 	}
@@ -291,9 +291,53 @@ func TestBookmarksAtRevisionUsesTemplate(t *testing.T) {
 	if !reflect.DeepEqual(names, wantNames) {
 		t.Fatalf("names = %#v, want %#v", names, wantNames)
 	}
-	wantArgs := []string{"bookmark", "list", "-r", "abc123", "-T", "name ++ \"\\n\""}
+	wantArgs := []string{"--ignore-working-copy", "bookmark", "list", "-r", "abc123", "-T", "name ++ \"\\n\""}
 	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
+	}
+}
+
+func TestTrunkUsesIgnoreWorkingCopy(t *testing.T) {
+	r := &fakeRunner{out: "main\n"}
+	c := New(r)
+
+	name, err := c.Trunk()
+	if err != nil {
+		t.Fatalf("Trunk returned error: %v", err)
+	}
+	if name != "main" {
+		t.Fatalf("trunk = %q, want main", name)
+	}
+	if len(r.lastArgs) == 0 || r.lastArgs[0] != "--ignore-working-copy" {
+		t.Fatalf("expected --ignore-working-copy first, got %#v", r.lastArgs)
+	}
+}
+
+// TestTrunkSkipsSnapshotWarning guards the regression where jj's
+// "Refused to snapshot some files" warning (merged into stdout by the
+// CombinedOutput runner) was returned verbatim as the trunk bookmark
+// name, surfacing in the new-workspace "Start from" picker.
+func TestTrunkSkipsSnapshotWarning(t *testing.T) {
+	r := &fakeRunner{out: "Warning: Refused to snapshot some files:\n  big.bin: 50.0MiB exceeds the maximum size allowed by config (1.0MiB)\nHint: increase snapshot.max-new-file-size\nmain\n"}
+	c := New(r)
+
+	name, err := c.Trunk()
+	if err != nil {
+		t.Fatalf("Trunk returned error: %v", err)
+	}
+	if name != "main" {
+		t.Fatalf("trunk = %q, want main (warning lines must be skipped)", name)
+	}
+}
+
+// TestParseWorkspaceNamesSkipsSnapshotWarning guards the same leak for
+// every picker fed through parseWorkspaceNames (AllBookmarks, etc.).
+func TestParseWorkspaceNamesSkipsSnapshotWarning(t *testing.T) {
+	out := "Warning: Refused to snapshot some files:\n  big.bin: 50.0MiB exceeds the maximum size allowed by config (1.0MiB)\nHint: increase snapshot.max-new-file-size\nmain\nandrew/feature\n"
+	got := parseWorkspaceNames(out)
+	want := []string{"main", "andrew/feature"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseWorkspaceNames = %#v, want %#v", got, want)
 	}
 }
 
