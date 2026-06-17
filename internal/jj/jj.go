@@ -248,7 +248,7 @@ func (c *Client) ForgetWorkspace(name string) error {
 }
 
 func (c *Client) WorkspaceRevision(name string) (string, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "log", "-r", name+"@", "--no-graph", "-T", "commit_id.short() ++ \"\\n\"")
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "log", "-r", name+"@", "--no-graph", "-T", "commit_id.short() ++ \"\\n\"")
 	if err != nil {
 		return "", formatCommandError(fmt.Sprintf("resolve workspace revision for %q", name), err, out)
 	}
@@ -310,7 +310,7 @@ func (c *Client) AllBookmarksByRecency() ([]string, error) {
 	// parser doesn't need a special-case.
 	const tmpl = `if(self.normal_target(), self.normal_target().committer().timestamp().format("%s"), "0") ++ "\t" ++ name ++ "\n"`
 	out, err := c.runner.Run(context.Background(), "",
-		"jj", "bookmark", "list", "--all-remotes", "-T", tmpl)
+		"jj", "--ignore-working-copy", "bookmark", "list", "--all-remotes", "-T", tmpl)
 	if err != nil {
 		return nil, formatCommandError("list bookmarks by recency", err, out)
 	}
@@ -363,7 +363,7 @@ func (c *Client) AllBookmarksByRecency() ([]string, error) {
 // of the same name exists it wins. The returned slice preserves the first-seen
 // order from `jj bookmark list --all`.
 func (c *Client) AllBookmarks() ([]string, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "list", "--all-remotes", "-T", "name ++ \"\\n\"")
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "bookmark", "list", "--all-remotes", "-T", "name ++ \"\\n\"")
 	if err != nil {
 		return nil, formatCommandError("list bookmarks", err, out)
 	}
@@ -393,13 +393,20 @@ func (c *Client) AllBookmarks() ([]string, error) {
 // "no bookmark resolved" so callers can fall back to a literal default
 // without aborting the form open.
 func (c *Client) Trunk() (string, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "log", "--no-graph", "-r", "trunk()", "-T", `bookmarks.map(|b| b.name()).join("\n")`)
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "log", "--no-graph", "-r", "trunk()", "-T", `bookmarks.map(|b| b.name()).join("\n")`)
 	if err != nil {
 		return "", formatCommandError("resolve trunk", err, out)
 	}
 	for _, line := range strings.Split(out, "\n") {
+		// Drop jj diagnostics (and their indented continuation lines) that
+		// CombinedOutput merges in from stderr — otherwise a leaked
+		// "Warning: Refused to snapshot some files:" line is returned as
+		// the trunk bookmark name.
+		if line != strings.TrimLeft(line, " \t") {
+			continue
+		}
 		name := strings.TrimSpace(line)
-		if name == "" {
+		if name == "" || isJJDiagnosticLine(name) {
 			continue
 		}
 		if idx := strings.Index(name, "@"); idx > 0 {
@@ -411,7 +418,7 @@ func (c *Client) Trunk() (string, error) {
 }
 
 func (c *Client) BookmarksAtRevision(revision string) ([]string, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "bookmark", "list", "-r", revision, "-T", "name ++ \"\\n\"")
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "bookmark", "list", "-r", revision, "-T", "name ++ \"\\n\"")
 	if err != nil {
 		return nil, formatCommandError(fmt.Sprintf("list bookmarks at revision %q", revision), err, out)
 	}
@@ -523,9 +530,18 @@ func IsStaleWorkingCopyError(err error) bool {
 func parseWorkspaceNames(out string) []string {
 	lines := strings.Split(out, "\n")
 	names := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for _, raw := range lines {
+		// jj writes diagnostics to stderr, which CombinedOutput merges
+		// into this stream. Template output (workspace/bookmark names) is
+		// never indented, so an indented line is a warning's continuation
+		// (e.g. the "  <file> exceeds the maximum size" detail under
+		// "Warning: Refused to snapshot some files:") — skip it before the
+		// ":" split below mistakes it for a "name: description" row.
+		if raw != strings.TrimLeft(raw, " \t") {
+			continue
+		}
+		line := strings.TrimSpace(raw)
+		if line == "" || isJJDiagnosticLine(line) {
 			continue
 		}
 		if idx := strings.Index(line, ":"); idx > 0 {
@@ -534,4 +550,16 @@ func parseWorkspaceNames(out string) []string {
 		names = append(names, line)
 	}
 	return names
+}
+
+// isJJDiagnosticLine reports whether a line is a jj diagnostic (warning,
+// hint, or error) rather than command output. These reach output parsers
+// because the command runner uses CombinedOutput, merging jj's stderr
+// into stdout; without filtering they surface as bogus picker rows (the
+// "Refused to snapshot some files" warning being the common offender).
+func isJJDiagnosticLine(line string) bool {
+	low := strings.ToLower(line)
+	return strings.HasPrefix(low, "warning:") ||
+		strings.HasPrefix(low, "hint:") ||
+		strings.HasPrefix(low, "error:")
 }
