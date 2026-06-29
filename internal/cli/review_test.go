@@ -74,7 +74,11 @@ func TestBuildReviewPrompt(t *testing.T) {
 	mustContain := []string{
 		"/Users/x/Library/Application Support/tuicr/reviews/sessions/abcd.json",
 		"gh:acme/widget/pr/42",
-		"index.json",
+		// Session resolution / recovery now points at the forge-aware
+		// `tuicr review list` rather than the old jq index.json hack, and
+		// uses the PR's owner/repo coordinate.
+		"tuicr review list --repo acme/widget",
+		"tuicr review list --all",
 		`--username "awp-agent"`,
 		"3-8 comments",
 		"Do not send a test ping",
@@ -101,7 +105,7 @@ func TestBuildReviewPrompt(t *testing.T) {
 	}
 	// Empty session path triggers the recovery prose, not a literal
 	// empty string in the template.
-	if !strings.Contains(got, "not yet registered") {
+	if !strings.Contains(got, "not resolved") {
 		t.Fatalf("expected recovery prose for empty session path, got %q", got)
 	}
 	// No comments → sentinel line, not an empty section.
