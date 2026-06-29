@@ -2,11 +2,16 @@ package cli
 
 // TODO(tuicr#368): every helper in this file peeks at tuicr's internal
 // state files (active_sessions.json, index.json) and guesses at the
-// directories-crate data-dir layout. The maintainer has acknowledged
-// the current discovery convention is informal and plans to formalize
-// an agent-facing protocol — replace this file with a call to whatever
-// CLI surface lands (likely a slug→path resolver or env-var pointer to
-// the data dir). https://github.com/agavra/tuicr/issues/368
+// directories-crate data-dir layout. The supported, forge-aware surface
+// now exists — `tuicr review list --repo <owner/repo>` (and `--all`)
+// emits JSON with slug→path for PR-mode sessions — and the review prompt
+// already tells the agent to resolve/verify the session that way. This
+// Go-side file peeking remains only as the fast path for the brief window
+// before a freshly-launched `tuicr pr` session registers; consider
+// replacing it with a `tuicr review list` shell-out once the async
+// registration timing is confirmed to be covered. The path we resolve is
+// now validated to exist (sessionFileExists) before we inject it.
+// https://github.com/agavra/tuicr/issues/368
 
 import (
 	"context"
@@ -87,13 +92,27 @@ func resolveTuicrSessionPath(dataDir, slug string) string {
 	if dataDir == "" || slug == "" {
 		return ""
 	}
-	if p := readActiveSessionsPath(filepath.Join(dataDir, "reviews", "active_sessions.json"), slug); p != "" {
+	// Validate the file exists before returning it: tuicr's index can
+	// outlive the session JSON it points at (pruned / moved), and we must
+	// never inject a --session path the agent will then fail to open.
+	if p := readActiveSessionsPath(filepath.Join(dataDir, "reviews", "active_sessions.json"), slug); sessionFileExists(p) {
 		return p
 	}
-	if p := readIndexPath(filepath.Join(dataDir, "reviews", "index.json"), dataDir, slug); p != "" {
+	if p := readIndexPath(filepath.Join(dataDir, "reviews", "index.json"), dataDir, slug); sessionFileExists(p) {
 		return p
 	}
 	return ""
+}
+
+// sessionFileExists reports whether p names an existing regular file. Used
+// to confirm a resolved session path is real before we hand it to the
+// agent as --session.
+func sessionFileExists(p string) bool {
+	if strings.TrimSpace(p) == "" {
+		return false
+	}
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 type tuicrActiveSessionsFile struct {
