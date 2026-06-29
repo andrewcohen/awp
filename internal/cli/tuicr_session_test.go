@@ -63,11 +63,22 @@ func TestResolveTuicrSessionPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Session files must actually exist — resolution validates the path
+	// before returning it (we never inject a --session path the agent
+	// can't open).
+	activeReal := filepath.Join(dir, "active-real.json")
+	writeFile(t, activeReal, `{}`)
+	idxReal := filepath.Join(reviewsDir, "sessions", "idx.json")
+	if err := os.MkdirAll(filepath.Dir(idxReal), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, idxReal, `{}`)
+
 	// 1. active_sessions.json hit — wins over index.json.
 	writeFile(t, filepath.Join(reviewsDir, "active_sessions.json"), `{
         "version": "1.0",
         "sessions": [
-          {"slug": "gh:o/r/pr/1", "path": "/abs/active.json"}
+          {"slug": "gh:o/r/pr/1", "path": "`+activeReal+`"}
         ]
     }`)
 	writeFile(t, filepath.Join(reviewsDir, "index.json"), `{
@@ -76,21 +87,32 @@ func TestResolveTuicrSessionPath(t *testing.T) {
           "gh:o/r/pr/1": [{"path": "sessions/idx.json"}]
         }
     }`)
-	if got := resolveTuicrSessionPath(dir, "gh:o/r/pr/1"); got != "/abs/active.json" {
-		t.Errorf("active_sessions.json hit: got %q want /abs/active.json", got)
+	if got := resolveTuicrSessionPath(dir, "gh:o/r/pr/1"); got != activeReal {
+		t.Errorf("active_sessions.json hit: got %q want %q", got, activeReal)
 	}
 
 	// 2. only index.json has it — resolve relative path against
 	//    <dataDir>/reviews/.
 	writeFile(t, filepath.Join(reviewsDir, "active_sessions.json"), `{"version":"1.0","sessions":[]}`)
-	wantAbs := filepath.Join(reviewsDir, "sessions", "idx.json")
-	if got := resolveTuicrSessionPath(dir, "gh:o/r/pr/1"); got != wantAbs {
-		t.Errorf("index.json hit: got %q want %q", got, wantAbs)
+	if got := resolveTuicrSessionPath(dir, "gh:o/r/pr/1"); got != idxReal {
+		t.Errorf("index.json hit: got %q want %q", got, idxReal)
 	}
 
 	// 3. neither has it — empty.
 	if got := resolveTuicrSessionPath(dir, "gh:o/r/pr/missing"); got != "" {
 		t.Errorf("missing slug: got %q want empty", got)
+	}
+
+	// 3b. slug present but the file it points at is gone — rejected, not
+	//     injected. This is the stale-index case the existence check fixes.
+	writeFile(t, filepath.Join(reviewsDir, "active_sessions.json"), `{
+        "version": "1.0",
+        "sessions": [
+          {"slug": "gh:o/r/pr/9", "path": "`+filepath.Join(dir, "does-not-exist.json")+`"}
+        ]
+    }`)
+	if got := resolveTuicrSessionPath(dir, "gh:o/r/pr/9"); got != "" {
+		t.Errorf("dangling path should be rejected: got %q want empty", got)
 	}
 
 	// 4. malformed JSON degrades to empty, not panic.

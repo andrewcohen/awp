@@ -436,10 +436,14 @@ func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dat
 	}
 	pathField := sessionPath
 	if strings.TrimSpace(pathField) == "" {
-		pathField = "(not yet registered — see the fallback discovery snippet below)"
+		pathField = "(not resolved — use `tuicr review list` to find it; see below)"
 	}
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = "<unknown>"
+	}
+	ownerRepo := "<owner>/<repo>"
+	if owner, repo := ownerRepoFromPRURL(pr.URL); owner != "" && repo != "" {
+		ownerRepo = owner + "/" + repo
 	}
 	return strings.NewReplacer(
 		"{{number}}", strconv.Itoa(pr.Number),
@@ -450,6 +454,7 @@ func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dat
 		"{{slug}}", slug,
 		"{{session_path}}", pathField,
 		"{{data_dir}}", dataDir,
+		"{{owner_repo}}", ownerRepo,
 		"{{comments}}", formatExistingComments(comments),
 	).Replace(reviewPromptTemplate)
 }

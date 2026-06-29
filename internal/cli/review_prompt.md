@@ -42,20 +42,30 @@ The session is already open. Use this absolute path as `--session`:
 
     {{session_path}}
 
-Why a path and not a slug: tuicr's `--repo`-scoped session lookup keys on
-the path the session was created with, which for `tuicr pr <n>` is
-`forge:github.com/...` — no local checkout matches it, so `tuicr review
-list --repo .` returns `[]` and the slug `{{slug}}` only resolves when
-passed alongside the right `--repo`. Passing the JSON file path directly
-sidesteps the whole lookup.
+Why a path and not a slug: a bare `--repo .` lookup keys on the local
+checkout, which for `tuicr pr <n>` never matches (the session's repo is
+stored as a forge coordinate, not a filesystem path). Passing the JSON
+file path directly sidesteps the lookup.
 
-If the path above is `(not yet registered ...)` — i.e. the review pane
-was still starting when this prompt was built — recover with:
+**Before you rely on that path, confirm it points at the right session.**
+The path above is injected by awp and can be stale or wrong — the session
+may have been pruned, relocated, or never registered if the review pane
+was still starting when this prompt was built. Verify (and, if needed,
+re-resolve) with tuicr's own session list, which is forge-aware:
 
-    jq -r --arg slug "{{slug}}" '.entries[$slug][0].path' \
-      "{{data_dir}}/reviews/index.json"
+    tuicr review list --repo {{owner_repo}}
 
-and prepend `{{data_dir}}/reviews/` if the result is relative.
+That prints a JSON array; find the object whose `slug` is `{{slug}}` and
+use its `path` field as your `--session`. Prefer the entry with
+`"active": true`; if several match, take the most recent `updated_at`. If
+`--repo {{owner_repo}}` returns nothing, widen to every persisted session:
+
+    tuicr review list --all
+
+If the injected path and the `tuicr review list` path disagree, **trust
+`tuicr review list`** — it reads tuicr's live registry, the injected path
+is a best-effort snapshot. If neither resolves a session for `{{slug}}`,
+stop and say so in chat rather than guessing or creating a new session.
 
 ### Comment shapes
 
