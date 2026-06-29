@@ -1027,6 +1027,49 @@ func (s *service) Delete(name string, force bool) error {
 	return s.DeleteWithOptions(name, DeleteOptions{Force: force})
 }
 
+// removeWorkspaceTree deletes a managed workspace directory with hard
+// guards so a delete can never destroy the source repo or the source's
+// real .awp (the default workspace's config dir). Returns true when the
+// directory was actually removed.
+//
+// A workspace's .awp is normally a symlink into the shared source .awp.
+// os.RemoveAll unlinks symlinks rather than following them, but we unlink
+// it explicitly first as belt-and-suspenders: there must be no path by
+// which removing a workspace can recurse into and wipe the source config.
+// unlinkAwpSymlink removes <dir>/.awp only when it is a symlink (the
+// shared-source-.awp link a workspace gets at bootstrap). This is called
+// before recursively removing a workspace dir so os.RemoveAll can never
+// follow the link into — and delete — the source repo's real .awp.
+func unlinkAwpSymlink(dir string) {
+	awp := filepath.Join(dir, ".awp")
+	if fi, err := os.Lstat(awp); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		_ = os.Remove(awp)
+	}
+}
+
+func (s *service) removeWorkspaceTree(path, sourceRepo string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if !s.isUnderManagedWorkspaceBase(path) {
+		s.logf("⏭️ Skipped workspace directory removal (%q outside managed base)", path)
+		return false
+	}
+	if strings.TrimSpace(sourceRepo) != "" && sameDir(path, sourceRepo) {
+		s.logf("🛑 Refusing to remove source repo %q as a workspace directory", path)
+		return false
+	}
+	// Unlink a .awp symlink before the recursive remove so the walk can
+	// never follow it into the shared source .awp.
+	unlinkAwpSymlink(path)
+	if err := os.RemoveAll(path); err != nil {
+		s.logf("⚠️ Could not remove workspace directory %q: %v", path, err)
+		return false
+	}
+	s.logf("✅ Removed workspace directory %q", path)
+	return true
+}
+
 func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 	force := opts.Force
 	repoRoot, err := s.jj.RepoRoot()
@@ -1035,6 +1078,13 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 	}
 	if err := s.guardRepoRoot(repoRoot); err != nil {
 		return err
+	}
+	// The source repo's .awp (the default workspace's real config dir) must
+	// never be removed by a workspace delete. Resolve it so removeWorkspaceTree
+	// can guard against it; fall back to repoRoot when not in a workspace.
+	sourceRepo, sErr := s.jj.SourceRepoRoot()
+	if sErr != nil || strings.TrimSpace(sourceRepo) == "" {
+		sourceRepo = repoRoot
 	}
 	normalized, err := NormalizeName(name)
 	if err != nil {
@@ -1092,13 +1142,8 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 			return err
 		}
 		s.logf("✅ Removed workspace state entry %q", normalized)
-		managedBase := s.managedWorkspaceBase()
-		if strings.HasPrefix(entry.Path, managedBase+string(filepath.Separator)) || entry.Path == managedBase {
-			_ = os.RemoveAll(entry.Path)
-			s.logf("✅ Removed workspace directory %q", entry.Path)
-			pruneEmptyParents(entry.Path, managedBase)
-		} else {
-			s.logf("⏭️ Skipped workspace directory removal (%q outside managed base)", entry.Path)
+		if s.removeWorkspaceTree(entry.Path, sourceRepo) {
+			pruneEmptyParents(entry.Path, s.managedWorkspaceBase())
 		}
 		if err := unmarkClaudeWorkspaceTrusted(entry.Path); err != nil {
 			s.logf("⚠️ Could not remove ~/.claude.json trust entry: %v", err)
@@ -1318,11 +1363,19 @@ func (s *service) runBuiltinBootstrap(sourceRepo, workspacePath string) error {
 	awpSrc := filepath.Join(sourceRepo, ".awp")
 	if st, err := os.Stat(awpSrc); err == nil && st.IsDir() {
 		awpDst := filepath.Join(workspacePath, ".awp")
-		_ = os.RemoveAll(awpDst)
-		if err := os.Symlink(awpSrc, awpDst); err != nil {
-			return fmt.Errorf("symlink .awp: %w", err)
+		// Never remove the source's own .awp. The sameDir(sourceRepo,
+		// workspacePath) guard above already prevents this, but guard the
+		// destructive RemoveAll directly too — wiping the source config is
+		// not worth risking on a future refactor of that early return.
+		if sameDir(awpDst, awpSrc) {
+			s.logf("🛑 Refusing to relink .awp onto the source repo itself (%q)", awpSrc)
+		} else {
+			_ = os.RemoveAll(awpDst)
+			if err := os.Symlink(awpSrc, awpDst); err != nil {
+				return fmt.Errorf("symlink .awp: %w", err)
+			}
+			s.logf("✅ Linked .awp/ → %s", awpSrc)
 		}
-		s.logf("✅ Linked .awp/ → %s", awpSrc)
 	}
 	if err := markClaudeWorkspaceTrusted(workspacePath); err != nil {
 		s.logf("⚠️ Could not mark workspace trusted in ~/.claude.json: %v", err)
@@ -1713,6 +1766,7 @@ func (s *service) PruneOrphans(dryRun bool) ([]string, error) {
 			}
 			removed = append(removed, wsPath)
 			if !dryRun {
+				unlinkAwpSymlink(wsPath)
 				if err := os.RemoveAll(wsPath); err != nil {
 					return removed, fmt.Errorf("remove %q: %w", wsPath, err)
 				}
