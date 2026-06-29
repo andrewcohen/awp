@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -110,15 +111,24 @@ func TestBuildReviewPrompt(t *testing.T) {
 }
 
 func TestReviewPromptFileAndPointer(t *testing.T) {
-	ws := t.TempDir()
+	// The prompt is written under ~/.awp/review-prompts/<repo>/<ws>.md, not
+	// inside the workspace tree (that dir is symlinked to the shared source
+	// .awp during prep). Pin HOME so the test writes into a temp dir.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
+	repoRoot := "/src/example-repo"
+	wsName := "pr-7-feature"
 	instructions := "Please review PR #7: a thing\n\nlong instructions ...\n"
-	path, err := writeReviewPromptFile(ws, instructions)
+	path, err := writeReviewPromptFile(repoRoot, wsName, instructions)
 	if err != nil {
 		t.Fatalf("writeReviewPromptFile: %v", err)
 	}
-	if want := filepath.Join(ws, ".awp", "review-prompt.md"); path != want {
+	if want := config.ReviewPromptPath(repoRoot, wsName); path != want {
 		t.Errorf("path = %q, want %q", path, want)
+	}
+	if !strings.HasPrefix(path, filepath.Join(home, ".awp", "review-prompts")) {
+		t.Errorf("path %q not under ~/.awp/review-prompts", path)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -126,6 +136,15 @@ func TestReviewPromptFileAndPointer(t *testing.T) {
 	}
 	if string(got) != instructions {
 		t.Errorf("file content = %q, want %q", got, instructions)
+	}
+
+	// Same workspace name in a different repo must not collide.
+	otherPath, err := writeReviewPromptFile("/src/other-repo", wsName, "other\n")
+	if err != nil {
+		t.Fatalf("writeReviewPromptFile (other repo): %v", err)
+	}
+	if otherPath == path {
+		t.Errorf("cross-repo prompts collided at %q", path)
 	}
 
 	pr := github.PRInfo{Number: 7, Title: "a thing"}

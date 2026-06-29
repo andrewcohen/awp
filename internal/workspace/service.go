@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/config"
 )
 
 // StaleWorkspaceError marks a PrepareWorkspace failure where the jj
@@ -1108,6 +1109,12 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 		s.logf("⏭️ Skipped workspace state cleanup (%q not managed by awp)", normalized)
 	}
 
+	// Review workspaces stash their rendered prompt at
+	// ~/.awp/review-prompts/<repo>/<name>.md (outside the workspace tree,
+	// since the in-workspace .awp is a symlink to the shared source .awp).
+	// Remove it here so prompts don't accumulate after the workspace is gone.
+	s.removeReviewPrompt(repoRoot, normalized)
+
 	abandoned, err := s.cleanupEmptyRevision(revision)
 	if err != nil {
 		return err
@@ -1489,6 +1496,27 @@ func (s *service) rollbackNewWorkspaceStart(repoRoot, name, path string) error {
 	return errors.Join(errs...)
 }
 
+// removeReviewPrompt deletes a review workspace's rendered prompt file
+// (~/.awp/review-prompts/<repo>/<name>.md) if present, then prunes the
+// now-empty per-repo directory. Best-effort: only review workspaces ever
+// have a prompt, so a missing file is the normal case for other workspaces
+// and is not logged as an error.
+func (s *service) removeReviewPrompt(repoRoot, name string) {
+	path := config.ReviewPromptPath(repoRoot, name)
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err == nil {
+		s.logf("✅ Removed review prompt %q", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		s.logf("⚠️ Could not remove review prompt %q: %v", path, err)
+		return
+	}
+	// Remove the per-repo dir if it's now empty; ignore the error when it
+	// still holds other repos' prompts (os.Remove refuses non-empty dirs).
+	_ = os.Remove(filepath.Dir(path))
+}
+
 func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revision string) (int, error) {
 	forgotten := 0
 	seen := map[string]struct{}{}
@@ -1688,6 +1716,11 @@ func (s *service) PruneOrphans(dryRun bool) ([]string, error) {
 				if err := os.RemoveAll(wsPath); err != nil {
 					return removed, fmt.Errorf("remove %q: %w", wsPath, err)
 				}
+				// Drop the orphan's review prompt too, if any. The repo
+				// and workspace dir names here are already normalized, so
+				// they resolve to the same review-prompts path the review
+				// flow wrote (see config.ReviewPromptPath).
+				s.removeReviewPrompt(repoDir.Name(), wsDir.Name())
 			}
 		}
 		if !dryRun {

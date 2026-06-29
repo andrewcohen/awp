@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -106,6 +107,58 @@ func globalConfigPath() string {
 		home = os.Getenv("HOME")
 	}
 	return filepath.Join(home, ".config", "awp", "config.json")
+}
+
+func awpHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		home = os.Getenv("HOME")
+	}
+	return filepath.Join(home, ".awp")
+}
+
+// ReviewPromptDir is where rendered PR-review prompts are written:
+// ~/.awp/review-prompts. The files deliberately live here rather than
+// inside the review workspace's own .awp/ — that directory is replaced
+// with a symlink to the shared source-repo .awp during workspace prep, so
+// a per-PR prompt written there would be shared across every review and
+// clobbered by the next one. Prompts are filed under a per-repo
+// subdirectory (see ReviewPromptPath) so workspace names that collide
+// across repos (e.g. pr-1-main) don't clobber each other, and so workspace
+// delete/prune can remove exactly the matching file.
+func ReviewPromptDir() string {
+	return filepath.Join(awpHome(), "review-prompts")
+}
+
+var reviewPromptUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// reviewPromptComponent sanitizes a path component to the same [a-z0-9-]
+// charset workspace names use, so the value is filesystem-safe and the
+// write side (review.go) and delete side (workspace.Delete) always agree.
+func reviewPromptComponent(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = reviewPromptUnsafe.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	if s == "" {
+		s = "repo"
+	}
+	return s
+}
+
+// ReviewPromptPath returns the prompt file path for a review workspace:
+// ~/.awp/review-prompts/<repo>/<workspace>.md, where <repo> is derived from
+// repoRoot's base name. Both the write and delete sides call this with the
+// same (repoRoot, workspace) pair so they resolve to the same file. Returns
+// "" for an empty workspace name so callers can skip cleanup safely.
+func ReviewPromptPath(repoRoot, workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return ""
+	}
+	repo := reviewPromptComponent(filepath.Base(filepath.Clean(repoRoot)))
+	return filepath.Join(ReviewPromptDir(), repo, reviewPromptComponent(workspace)+".md")
 }
 
 func loadFile(path string) (Config, error) {
