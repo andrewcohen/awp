@@ -256,7 +256,7 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	// prompt if the write fails, so a read-only home dir still works.
 	instructions := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments)
 	prompt := instructions
-	if promptPath, werr := writeReviewPromptFile(wsPath, instructions); werr != nil {
+	if promptPath, werr := writeReviewPromptFile(repoRoot, name, instructions); werr != nil {
 		reporter.Log(fmt.Sprintf("could not write review prompt file (sending inline): %v", werr))
 	} else {
 		reporter.Log(fmt.Sprintf("review prompt: %s", promptPath))
@@ -382,22 +382,24 @@ func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 }
 
 // writeReviewPromptFile renders the full review instructions to
-// <workspace>/.awp/review-prompt.md and returns its absolute path. Keeping
-// the file inside the per-PR review workspace means it's removed when the
-// workspace is pruned (no accumulation in a global dir), and since `.awp`
-// is gitignored it never shows up in `jj st` or the review diff. The agent
-// receives only the short pointer prompt from buildReviewPointerPrompt and
-// reads this file itself, keeping the terminal-pasted prompt tiny.
-func writeReviewPromptFile(wsPath, content string) (string, error) {
-	abs, err := filepath.Abs(wsPath)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace path: %w", err)
+// ~/.awp/review-prompts/<repo>/<workspace>.md (see config.ReviewPromptPath)
+// and returns its absolute path. The file lives outside the review
+// workspace on purpose: a review workspace's own .awp/ is replaced with a
+// symlink to the shared source-repo .awp during prep, so writing the prompt
+// there would make it shared across every review and clobbered by the next
+// one. Keying by repo + workspace name keeps each review's prompt private
+// (even when workspace names collide across repos) and lets workspace
+// delete/prune remove it. The agent receives only the short pointer prompt
+// from buildReviewPointerPrompt and reads this file itself, keeping the
+// terminal-pasted prompt tiny.
+func writeReviewPromptFile(repoRoot, wsName, content string) (string, error) {
+	path := config.ReviewPromptPath(repoRoot, wsName)
+	if path == "" {
+		return "", fmt.Errorf("empty workspace name for review prompt")
 	}
-	dir := filepath.Join(abs, ".awp")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("create review prompt dir: %w", err)
 	}
-	path := filepath.Join(dir, "review-prompt.md")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write review prompt: %w", err)
 	}

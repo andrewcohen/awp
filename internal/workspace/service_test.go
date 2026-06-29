@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andrewcohen/awp/internal/config"
 )
 
 func TestEntryUnmarshalReadsLegacyPROverride(t *testing.T) {
@@ -686,6 +688,36 @@ func TestDeleteAbandonsEmptyWorkspaceRevision(t *testing.T) {
 	}
 	if len(jj.abandoned) != 1 || jj.abandoned[0] != "abc123" {
 		t.Fatalf("expected abandoned abc123, got %+v", jj.abandoned)
+	}
+}
+
+func TestDeleteRemovesReviewPrompt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoRoot := t.TempDir()
+	jj := &fakeJJ{
+		repoRoot:      repoRoot,
+		existing:      map[string]bool{"pr-7-feature": true},
+		workspaceRevs: map[string]string{"pr-7-feature": "abc123"},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{"pr-7-feature": {Name: "pr-7-feature", Path: filepath.Join(repoRoot, ".awp", "workspaces", "pr-7-feature")}}}
+
+	// Seed the review prompt the review flow would have written.
+	promptPath := config.ReviewPromptPath(repoRoot, "pr-7-feature")
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(promptPath, []byte("review instructions"), 0o644); err != nil {
+		t.Fatalf("seed prompt: %v", err)
+	}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete("pr-7-feature", true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if _, err := os.Stat(promptPath); !os.IsNotExist(err) {
+		t.Fatalf("expected review prompt removed, stat err = %v", err)
 	}
 }
 
