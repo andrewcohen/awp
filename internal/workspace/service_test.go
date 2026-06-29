@@ -721,6 +721,53 @@ func TestDeleteRemovesReviewPrompt(t *testing.T) {
 	}
 }
 
+func TestDeletePreservesSourceAwpBehindWorkspaceSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Source repo with a real .awp/config.json — this is the default
+	// workspace's config and must survive deleting any other workspace.
+	sourceRepo := t.TempDir()
+	srcAwp := filepath.Join(sourceRepo, ".awp")
+	if err := os.MkdirAll(srcAwp, 0o755); err != nil {
+		t.Fatalf("mkdir source .awp: %v", err)
+	}
+	cfg := filepath.Join(srcAwp, "config.json")
+	if err := os.WriteFile(cfg, []byte(`{"hooks":{}}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Managed workspace whose .awp is a symlink into the source .awp,
+	// exactly as bootstrap creates it.
+	wsPath := filepath.Join(home, ".awp", "workspaces", "myrepo", "feature")
+	if err := os.MkdirAll(wsPath, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.Symlink(srcAwp, filepath.Join(wsPath, ".awp")); err != nil {
+		t.Fatalf("symlink .awp: %v", err)
+	}
+
+	jj := &fakeJJ{
+		repoRoot:      sourceRepo,
+		existing:      map[string]bool{"feature": true},
+		workspaceRevs: map[string]string{"feature": "abc123"},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{"feature": {Name: "feature", Path: wsPath}}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	if err := svc.Delete("feature", true); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+
+	if _, err := os.Stat(wsPath); !os.IsNotExist(err) {
+		t.Errorf("expected workspace dir removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(cfg); err != nil {
+		t.Fatalf("source .awp/config.json must survive workspace delete, got: %v", err)
+	}
+}
+
 func TestDeleteForgetsMatchingBookmarkIncludingRemotes(t *testing.T) {
 	repoRoot := t.TempDir()
 	jj := &fakeJJ{
