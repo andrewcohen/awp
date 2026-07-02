@@ -42,6 +42,7 @@ type deckKeyMap struct {
 	PRMenu        key.Binding
 	OpenURL       key.Binding
 	SendPrompt    key.Binding
+	PinChord      key.Binding
 }
 
 func newDeckKeyMap() deckKeyMap {
@@ -76,5 +77,6 @@ func newDeckKeyMap() deckKeyMap {
 		PRMenu:        key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "PR menu (o open · m merge · r repair · s set PR #)")),
 		OpenURL:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "open captured dev-server URL")),
 		SendPrompt:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "send a typed prompt to the workspace's agent")),
+		PinChord:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "pin chord (gg default · g<letter> group · gD unpin · gR name)")),
 	}
 }

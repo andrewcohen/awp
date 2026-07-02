@@ -724,6 +724,40 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			name, repo, prNumber, len(numbers), numbers, fetched, prCacheHasNumber(cached[repo], prNumber))
 		return nil
 	}
+	// pinGroupHandler persists the pin register onto the workspace's
+	// stored Entry.PinGroup. Drives the deck `g` chord. group == ""
+	// unpins.
+	pinGroupHandler := func(item deckui.Item, group string) error {
+		repo := strings.TrimSpace(item.RepoRoot)
+		if repo == "" {
+			return fmt.Errorf("workspace %q has no repo root", item.WorkspaceName)
+		}
+		name := item.WorkspaceName
+		updated := false
+		if err := linkStore.Update(repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+			if cur, ok := entries[name]; ok {
+				cur.PinGroup = strings.TrimSpace(group)
+				entries[name] = cur
+				updated = true
+			}
+			return entries
+		}); err != nil {
+			return err
+		}
+		if !updated {
+			return fmt.Errorf("workspace %q not found in store for repo %s", name, repo)
+		}
+		return nil
+	}
+	// pinGroupAliasHandler persists a register's display alias to the
+	// global pin-groups file. Drives the deck `gR` chord.
+	pinGroupAliasHandler := func(group, alias string) error {
+		return state.SavePinGroupAlias(group, alias)
+	}
+	pinGroupAliases, err := state.LoadPinGroupAliases()
+	if err != nil {
+		pinGroupAliases = map[string]string{}
+	}
 	stateEditor := func() tea.Cmd {
 		path, err := state.GlobalStorePath()
 		if err != nil {
@@ -791,6 +825,9 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}).
 		WithBookmarkLinkHandler(bookmarkLinkHandler).
 		WithPRNumberLinkHandler(prNumberLinkHandler).
+		WithPinGroupHandler(pinGroupHandler).
+		WithPinGroupAliasHandler(pinGroupAliasHandler).
+		WithPinGroupAliases(pinGroupAliases).
 		WithBookmarkPrefix(cfg.Deck.BookmarkPrefix).
 		WithStateEditor(stateEditor).WithUserActions(userActions).
 		WithUserActionsResolver(userActionsForRepo).
@@ -1265,6 +1302,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				RepoRoot:      r.repo,
 				Bookmark:      strings.TrimSpace(e.Bookmark),
 				PRNumber:      e.PRNumber,
+				PinGroup:      strings.TrimSpace(e.PinGroup),
 				Status:        status,
 				Unread:        unread,
 				PromptPreview: e.ActivePrompt,
