@@ -213,6 +213,10 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `p s` | Set (or clear, via blank/0) the PR # for the selected workspace. Pins the workspace to a specific PR so the deck resolves status by number rather than guessing from the bookmark. Persisted to `~/.awp/...` workspace state. |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
+| `g g` | Pin the selected workspace to the **default** group (chord — press `g`, then `g`). Pinned workspaces float to a ★-marked section at the top of the deck (all / attention scopes), above the project groups and out of their own project group. Pressing `g g` again on a default-pinned row unpins it. |
+| `g` + `a`–`z` | Pin the selected workspace to the letter group (e.g. `g a`). Groups are single-letter registers, vim-mark style; sections order default-first then alphabetically by name-or-letter. Aiming at the group the row is already in unpins it; a different letter moves it. While the chord is pending, each pinned section header shows a highlighted `[x]` chip so you can see which registers are in use. |
+| `g D` | Unpin / ungroup the selected workspace. |
+| `g R` | Name the selected row's group — opens an input to set a display alias for that register (cosmetic; the register key stays the letter). Aliases persist globally in `~/.awp/pin-groups.json`. Blank clears the alias. |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
 | `?` | Help overlay |
 | `q` / `esc` | Quit |
@@ -383,6 +387,8 @@ shouldn't need to run it directly.
 ## Concurrent writes
 
 Workspace state lives in a single `~/.awp/workspace-state.json` written from many places (every Claude/pi hook, the deck refresh tick, summon/delete/rename). Writes are guarded by an OS-level advisory lock (`flock`) on `~/.awp/workspace-state.json.lock` and committed via temp-file + atomic `rename`, so concurrent writers don't drop each other's changes or leave a torn file. The lock has a 2-second timeout — if a writer ever stalls, agent hooks fail loudly rather than blocking the agent's turn.
+
+A workspace's pin group (the `g` chord, above) is stored as `PinGroup` on its entry in that same file. The per-register **display aliases** set by `g R` live separately in `~/.awp/pin-groups.json` (a small `register → name` map) because a pin register spans repos in the deck's merged view — the alias is a property of the register, not of any one workspace.
 
 ## How status reporting works
 

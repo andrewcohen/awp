@@ -145,6 +145,13 @@ type Entry struct {
 	// the workspace or the agent exits. Surfaces as a tmux status badge
 	// and the "notified" dot in the deck.
 	Unread bool `json:",omitempty"`
+	// PinGroup pins this workspace to a register that floats it to a
+	// section at the top of the deck. "" means unpinned; "default" is the
+	// register bound to the `gg` chord; otherwise a single lowercase
+	// letter a–z. Register display aliases are stored globally (see
+	// state.PinGroupAliases) since a register spans repos in the deck's
+	// merged view.
+	PinGroup string `json:",omitempty"`
 }
 
 // UnmarshalJSON keeps reading old state files that still use the
