@@ -898,6 +898,25 @@ const (
 	findStageWorkspace
 )
 
+// findTargetKind distinguishes the two kinds of stage-1 find targets:
+// an unpinned project section and a pinned register section. The deck
+// groups pinned rows by register, so a register is a first-class jump
+// target alongside projects.
+type findTargetKind int
+
+const (
+	findTargetProject findTargetKind = iota
+	findTargetPin
+)
+
+// findTarget is a stage-1 find target. For a project, key is the
+// ProjectName; for a pin register, key is the register key
+// ("default" or a letter).
+type findTarget struct {
+	kind findTargetKind
+	key  string
+}
+
 const findHintAlphabet = "asdfghjklqwertyuiopzxcvbnm"
 
 type Model struct {
@@ -940,9 +959,11 @@ type Model struct {
 	pendingSelect     Item     // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
 	findStage         findStage
-	findProject       string
-	findProjectHints  map[string]string
-	findProjectLookup map[string]string
+	findProject       string // project name scoping the workspace stage ("" when a pin register scopes it instead)
+	findPinGroup      string // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
+	findProjectHints  map[string]string // project name → stage-1 hint (rendered on project headers)
+	findPinHints      map[string]string // register key → stage-1 hint (rendered on pinned section headers)
+	findProjectLookup map[string]findTarget
 	findProjectPrefix map[rune]bool
 	findRowHints      map[int]string
 	findRowLookup     map[string]int
@@ -1103,7 +1124,8 @@ func New(items []Item, handler Handler) Model {
 		itemsAll:          append([]Item(nil), items...),
 		scope:             ScopeAll,
 		findProjectHints:  map[string]string{},
-		findProjectLookup: map[string]string{},
+		findPinHints:      map[string]string{},
+		findProjectLookup: map[string]findTarget{},
 		findProjectPrefix: map[rune]bool{},
 		findRowHints:      map[int]string{},
 		findRowLookup:     map[string]int{},
@@ -2986,6 +3008,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				if m.findStage == findStageWorkspace && m.scope != ScopeInbox {
 					m.findStage = findStageProject
 					m.findProject = ""
+					m.findPinGroup = ""
 					m.findRowHints = map[int]string{}
 					m.findRowLookup = map[string]int{}
 					m.findRowPrefix = map[rune]bool{}
@@ -4478,7 +4501,7 @@ func (m Model) renderList(width int) string {
 		rows := append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
 		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(rows, "\n"))
 	}
-	projectHints, rowHints := m.findHints()
+	projectHints, pinHints, rowHints := m.findHints()
 	// Reserve a fixed-width prefix slot at all times so workspace rows
 	// and project headers don't shift horizontally between modes (no
 	// find / 1-char hint / 2-char hint). 2 cols is exactly a two-char
@@ -4528,19 +4551,30 @@ func (m Model) renderList(width int) string {
 			// the g chord is pending, lead with an emphasized [x] chip so
 			// the user can see which register each section is — the legend
 			// the chord's second keystroke targets.
-			star := s.ProjectHeader.Render("★")
-			label := s.ProjectHeader.Render(m.pinGroupLabel(r.project))
+			headerStyle := s.ProjectHeader
+			// In the workspace stage scoped to this register, highlight the
+			// section header with the find hue — matches how project
+			// headers light up for the selected project.
+			if m.findMode && m.findStage == findStageWorkspace && m.findPinGroup == r.project {
+				headerStyle = s.FindHeader
+			}
+			star := headerStyle.Render("★")
+			label := headerStyle.Render(m.pinGroupLabel(r.project))
 			if m.gChordMode {
 				chip := s.Selected.Render("[" + pinGroupChordLetter(r.project) + "]")
 				label = chip + " " + label
 			}
-			body = append(body, fmt.Sprintf("%s %s %s", prefixSlot.Render(""), star, label))
+			hintStr := ""
+			if hint, ok := pinHints[r.project]; ok {
+				hintStr = renderDeckHint(hint)
+			}
+			body = append(body, fmt.Sprintf("%s %s %s", prefixSlot.Render(hintStr), star, label))
 		case deckRowPrimary:
 			item := items[r.itemIndex]
 			// findProject is "" in the inbox scope's single-stage find
 			// (no project stage), so nothing dims there.
 			dim := m.findMode && m.findStage == findStageWorkspace &&
-				m.findProject != "" && item.ProjectName != m.findProject
+				!m.findRowInScope(item)
 			prefix := "  "
 			if hint, ok := rowHints[r.itemIndex]; ok {
 				prefix = renderDeckHint(hint)
@@ -5523,13 +5557,15 @@ func (m *Model) startFind() {
 	m.findMode = true
 	m.findPendingPrefix = 0
 	m.findProject = ""
+	m.findPinGroup = ""
 	if m.scope == ScopeInbox {
 		// The inbox scope has no project headers (rows section by
 		// bucket), so find skips the project stage and hints every
 		// row directly, like the mini-deck.
 		m.findStage = findStageWorkspace
 		m.findProjectHints = map[string]string{}
-		m.findProjectLookup = map[string]string{}
+		m.findPinHints = map[string]string{}
+		m.findProjectLookup = map[string]findTarget{}
 		m.findProjectPrefix = map[rune]bool{}
 		m.findRowHints, m.findRowLookup, m.findRowPrefix = m.buildRowHints("")
 		m.status = "find: workspace"
@@ -5539,7 +5575,7 @@ func (m *Model) startFind() {
 		return
 	}
 	m.findStage = findStageProject
-	m.findProjectHints, m.findProjectLookup, m.findProjectPrefix = m.buildProjectHints()
+	m.findProjectHints, m.findPinHints, m.findProjectLookup, m.findProjectPrefix = m.buildSectionHints()
 	m.findRowHints = map[int]string{}
 	m.findRowLookup = map[string]int{}
 	m.findRowPrefix = map[rune]bool{}
@@ -5550,9 +5586,11 @@ func (m *Model) cancelFind(status string) {
 	m.findMode = false
 	m.findStage = findStageProject
 	m.findProject = ""
+	m.findPinGroup = ""
 	m.findPendingPrefix = 0
 	m.findProjectHints = map[string]string{}
-	m.findProjectLookup = map[string]string{}
+	m.findPinHints = map[string]string{}
+	m.findProjectLookup = map[string]findTarget{}
 	m.findProjectPrefix = map[rune]bool{}
 	m.findRowHints = map[int]string{}
 	m.findRowLookup = map[string]int{}
@@ -5565,9 +5603,12 @@ func (m *Model) cancelFind(status string) {
 func (m Model) handleFindRune(r rune) (tea.Model, tea.Cmd) {
 	hadPending := m.findPendingPrefix != 0
 	if m.findStage == findStageProject {
-		project, ok := findHintStep(r, m.findProjectLookup, m.findProjectPrefix, &m.findPendingPrefix)
+		target, ok := findHintStep(r, m.findProjectLookup, m.findProjectPrefix, &m.findPendingPrefix)
 		if ok {
-			return m.enterWorkspaceStage(project), nil
+			if target.kind == findTargetPin {
+				return m.enterPinStage(target.key), nil
+			}
+			return m.enterWorkspaceStage(target.key), nil
 		}
 		switch {
 		case hadPending:
@@ -5597,11 +5638,12 @@ func (m Model) handleFindRune(r rune) (tea.Model, tea.Cmd) {
 
 func (m Model) enterWorkspaceStage(project string) Model {
 	m.findProject = project
+	m.findPinGroup = ""
 	m.findStage = findStageWorkspace
 	items := m.items()
 	matches := []int{}
 	for i, item := range items {
-		if item.ProjectName == project {
+		if strings.TrimSpace(item.PinGroup) == "" && item.ProjectName == project {
 			matches = append(matches, i)
 		}
 	}
@@ -5622,6 +5664,37 @@ func (m Model) enterWorkspaceStage(project string) Model {
 	return m
 }
 
+// enterPinStage scopes the workspace stage to a pinned register. Mirrors
+// enterWorkspaceStage: auto-selects when the register holds one row,
+// otherwise hints the register's rows.
+func (m Model) enterPinStage(group string) Model {
+	m.findProject = ""
+	m.findPinGroup = group
+	m.findStage = findStageWorkspace
+	items := m.items()
+	matches := []int{}
+	for i, item := range items {
+		if strings.TrimSpace(item.PinGroup) == group {
+			matches = append(matches, i)
+		}
+	}
+	if len(matches) == 0 {
+		m.cancelFind("find: cancelled")
+		return m
+	}
+	if len(matches) == 1 {
+		m.cursor = matches[0]
+		m.cancelFind("find: " + items[matches[0]].WorkspaceName)
+		return m
+	}
+	m.findRowHints, m.findRowLookup, m.findRowPrefix = m.buildPinRowHints(group)
+	m.status = "find: workspace"
+	if len(m.findRowLookup) == 0 {
+		m.cancelFind("find: cancelled")
+	}
+	return m
+}
+
 func stageStatus(stage findStage) string {
 	if stage == findStageWorkspace {
 		return "find: workspace"
@@ -5629,45 +5702,119 @@ func stageStatus(stage findStage) string {
 	return "find: project"
 }
 
-func (m Model) buildProjectHints() (map[string]string, map[string]string, map[rune]bool) {
+// buildSectionHints assigns stage-1 find hints across both kinds of
+// section: pinned registers (first, in the same default-first/alpha
+// order they render) and unpinned projects. Hints are globally unique
+// across both kinds so one keystroke lands unambiguously. Returns the
+// project-name→hint map (for project headers), the register-key→hint
+// map (for pinned section headers), the hint→target lookup, and the
+// two-key prefix set.
+func (m Model) buildSectionHints() (map[string]string, map[string]string, map[string]findTarget, map[rune]bool) {
 	items := m.items()
-	projects := make([]string, 0, len(items))
-	seen := map[string]struct{}{}
+	targets := []findTarget{}
+	labels := []string{}
+	seenPin := map[string]struct{}{}
+	seenProj := map[string]struct{}{}
+	// items() sorts pinned rows first in register order, so encounter
+	// order here matches the on-screen section order.
 	for _, item := range items {
-		if _, ok := seen[item.ProjectName]; ok {
+		if g := strings.TrimSpace(item.PinGroup); g != "" {
+			if _, ok := seenPin[g]; ok {
+				continue
+			}
+			seenPin[g] = struct{}{}
+			targets = append(targets, findTarget{kind: findTargetPin, key: g})
+			labels = append(labels, m.pinGroupLabel(g))
+		}
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.PinGroup) != "" {
 			continue
 		}
-		seen[item.ProjectName] = struct{}{}
-		projects = append(projects, item.ProjectName)
+		if _, ok := seenProj[item.ProjectName]; ok {
+			continue
+		}
+		seenProj[item.ProjectName] = struct{}{}
+		targets = append(targets, findTarget{kind: findTargetProject, key: item.ProjectName})
+		labels = append(labels, item.ProjectName)
 	}
-	hintByName := assignHints(projects)
-	lookup := map[string]string{}
+
+	hints := assignSectionHints(labels)
+	projectHints := map[string]string{}
+	pinHints := map[string]string{}
+	lookup := map[string]findTarget{}
 	prefix := map[rune]bool{}
-	forward := map[string]string{}
-	for name, hint := range hintByName {
-		forward[name] = hint
-		lookup[hint] = name
+	for i, t := range targets {
+		hint := hints[i]
+		if hint == "" {
+			continue
+		}
+		lookup[hint] = t
+		if t.kind == findTargetPin {
+			pinHints[t.key] = hint
+		} else {
+			projectHints[t.key] = hint
+		}
 		if len([]rune(hint)) == 2 {
 			prefix[[]rune(hint)[0]] = true
 		}
 	}
-	return forward, lookup, prefix
+	return projectHints, pinHints, lookup, prefix
 }
 
-// buildRowHints assigns easymotion hints to the rows of the given
-// project. project == "" hints every row (the inbox scope's
-// single-stage find); names are project-qualified there so duplicate
-// workspace names across projects can't collide on one hint.
+// assignSectionHints assigns easymotion hints to a list of section
+// labels by index, deriving mnemonics from the labels while tolerating
+// duplicate labels (two registers/projects can share a display name).
+// It delegates to assignHints over per-index-unique names — the NUL +
+// index suffix keeps each name distinct without adding mnemonic letters
+// (assignHints only draws a–z from the name) or changing the first
+// rune.
+func assignSectionHints(labels []string) []string {
+	names := make([]string, len(labels))
+	for i, l := range labels {
+		names[i] = l + "\x00" + strconv.Itoa(i)
+	}
+	byName := assignHints(names)
+	out := make([]string, len(labels))
+	for i := range labels {
+		out[i] = byName[names[i]]
+	}
+	return out
+}
+
+// buildRowHints assigns easymotion hints to the unpinned rows of the
+// given project. project == "" hints every row (the inbox scope's
+// single-stage find). Pinned rows are excluded — they belong to
+// register sections and are targeted via buildPinRowHints — so a
+// project stage only ever hints the rows shown in that project's
+// section.
 func (m Model) buildRowHints(project string) (map[int]string, map[string]int, map[rune]bool) {
+	if project == "" {
+		return m.buildRowHintsScoped(func(Item) bool { return true }, true)
+	}
+	return m.buildRowHintsScoped(func(it Item) bool {
+		return strings.TrimSpace(it.PinGroup) == "" && it.ProjectName == project
+	}, false)
+}
+
+// buildPinRowHints assigns hints to the rows of a pinned register.
+// Names are project-qualified because a register can span projects.
+func (m Model) buildPinRowHints(group string) (map[int]string, map[string]int, map[rune]bool) {
+	return m.buildRowHintsScoped(func(it Item) bool {
+		return strings.TrimSpace(it.PinGroup) == group
+	}, true)
+}
+
+func (m Model) buildRowHintsScoped(match func(Item) bool, qualify bool) (map[int]string, map[string]int, map[rune]bool) {
 	items := m.items()
 	rowIdx := []int{}
 	names := []string{}
 	for i, item := range items {
-		if project != "" && item.ProjectName != project {
+		if !match(item) {
 			continue
 		}
 		name := item.WorkspaceName
-		if project == "" {
+		if qualify {
 			name = item.ProjectName + "/" + name
 		}
 		rowIdx = append(rowIdx, i)
@@ -5691,21 +5838,45 @@ func (m Model) buildRowHints(project string) (map[int]string, map[string]int, ma
 	return forward, lookup, prefix
 }
 
-func (m Model) findHints() (map[string]string, map[int]string) {
+// findHints returns the hints to render this frame: project-header
+// hints (keyed by project name), pinned-section-header hints (keyed by
+// register key), and row hints (keyed by item index). Section-header
+// hints only show in the project stage; row hints only in the workspace
+// stage.
+func (m Model) findHints() (map[string]string, map[string]string, map[int]string) {
 	if !m.findMode {
-		return map[string]string{}, map[int]string{}
+		return map[string]string{}, map[string]string{}, map[int]string{}
 	}
 	projectHints := map[string]string{}
+	pinHints := map[string]string{}
 	if m.findStage == findStageProject {
 		for name, hint := range m.findProjectHints {
 			projectHints[name] = hint
+		}
+		for key, hint := range m.findPinHints {
+			pinHints[key] = hint
 		}
 	}
 	rowHints := map[int]string{}
 	for idx, hint := range m.findRowHints {
 		rowHints[idx] = hint
 	}
-	return projectHints, rowHints
+	return projectHints, pinHints, rowHints
+}
+
+// findRowInScope reports whether an item belongs to the section the
+// workspace stage is scoped to — a pinned register, an unpinned
+// project, or (inbox single-stage, neither set) every row. Rows out of
+// scope render dimmed while find mode is up.
+func (m Model) findRowInScope(it Item) bool {
+	switch {
+	case m.findPinGroup != "":
+		return strings.TrimSpace(it.PinGroup) == m.findPinGroup
+	case m.findProject != "":
+		return strings.TrimSpace(it.PinGroup) == "" && it.ProjectName == m.findProject
+	default:
+		return true
+	}
 }
 
 // mnemonicSecondKeys returns candidate second-key runes for a two-letter hint
