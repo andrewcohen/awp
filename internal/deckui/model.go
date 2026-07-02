@@ -69,6 +69,11 @@ type Item struct {
 	// the review flow for a review-requested PR, or opens the prefilled
 	// new-workspace form for your own; other workspace actions are no-ops.
 	Virtual bool
+	// PinGroup is the register this workspace is pinned to (from
+	// Entry.PinGroup): "" unpinned, "default" the gg register, or a
+	// single lowercase letter a–z. Pinned rows float to a section at the
+	// top of the deck in the All/Attention scopes.
+	PinGroup string
 }
 
 type Action int
@@ -503,6 +508,17 @@ type BookmarkLinkHandler func(item Item, bookmark string) error
 // overriding bookmark-based PR-status resolution.
 type PRNumberLinkHandler func(item Item, prNumber int) error
 
+// PinGroupHandler is called when the user pins, moves, or unpins a
+// workspace via the `g` chord. group == "" unpins; "default" is the
+// gg register; otherwise a single lowercase letter a–z. The handler
+// persists the register onto the workspace's stored Entry.PinGroup.
+type PinGroupHandler func(item Item, group string) error
+
+// PinGroupAliasHandler is called when the user renames a register's
+// display alias via the `gR` chord. An empty alias clears it. The
+// handler persists the register→alias map globally.
+type PinGroupAliasHandler func(group, alias string) error
+
 // BookmarksDoneMsg carries the result of an async bookmark fetch.
 type BookmarksDoneMsg struct {
 	Bookmarks []string
@@ -760,6 +776,56 @@ func (m Model) headerStyle(label string) lipgloss.Style {
 	return m.styles.ProjectHeader
 }
 
+// pinGroupDefault is the register key for the gg chord — the "default"
+// pinned register. Other registers are single lowercase letters a–z.
+const pinGroupDefault = "default"
+
+// pinGroupLabel is the display label for a register: its alias when one
+// is set, otherwise "pinned" for the default register or the bare
+// letter for a lettered register.
+func (m Model) pinGroupLabel(key string) string {
+	if alias := strings.TrimSpace(m.pinGroupAliases[key]); alias != "" {
+		return alias
+	}
+	if key == pinGroupDefault {
+		return "pinned"
+	}
+	return key
+}
+
+// pinGroupChordLetter is the keystroke that targets a register in the
+// `g` chord — "g" for the default register (gg), the letter otherwise.
+// Shown as an emphasized [x] chip in the section header while the chord
+// is pending.
+func pinGroupChordLetter(key string) string {
+	if key == pinGroupDefault {
+		return "g"
+	}
+	return key
+}
+
+// pinGroupSortKey orders registers: the default register first, then
+// the rest case-insensitively by display label (alias or letter).
+func (m Model) pinGroupSortKey(key string) string {
+	if key == pinGroupDefault {
+		return "\x00"
+	}
+	return "\x01" + strings.ToLower(m.pinGroupLabel(key))
+}
+
+// pinnedCount returns how many leading items in a pinned-first ordering
+// carry a register. items() sorts pinned rows ahead of unpinned ones in
+// the all / attention scopes, so this is the length of that prefix.
+func pinnedCount(items []Item) int {
+	n := 0
+	for _, it := range items {
+		if strings.TrimSpace(it.PinGroup) != "" {
+			n++
+		}
+	}
+	return n
+}
+
 // prInboxBucket classifies an OPEN PR into its inbox section. Callers
 // filter merged/closed PRs out of the inbox scope before classifying.
 //
@@ -906,7 +972,23 @@ type Model struct {
 	prNumberTarget      Item
 	prNumberErr         string
 	prNumberLinkHandler PRNumberLinkHandler
-	bookmarkMode        bool
+	// gChordMode is true after the user presses `g` and before the
+	// second key of the pin chord (gg / g<letter> / gD / gR) arrives.
+	// While pending, renderList highlights the register letter in each
+	// pinned section header so the user can see which registers are in
+	// use before choosing one.
+	gChordMode bool
+	// pinAliasMode is true while the `gR` alias-rename text input is
+	// open. pinAliasInput / pinAliasTarget back the modal; pinAliasErr
+	// surfaces validation.
+	pinAliasMode         bool
+	pinAliasInput        textinput.Model
+	pinAliasTarget       string // register key being renamed
+	pinAliasErr          string
+	pinGroupHandler      PinGroupHandler
+	pinGroupAliasHandler PinGroupAliasHandler
+	pinGroupAliases      map[string]string // register key → display alias
+	bookmarkMode         bool
 	bookmarkLoading     bool
 	bookmarkList        list.Model
 	bookmarkPurpose     bookmarkPurpose
@@ -1151,6 +1233,27 @@ func (m Model) WithPRNumberLinkHandler(h PRNumberLinkHandler) Model {
 	return m
 }
 
+// WithPinGroupHandler installs the persistence callback used by the
+// `g` pin chord. Without it, the chord shows a "not configured" status.
+func (m Model) WithPinGroupHandler(h PinGroupHandler) Model {
+	m.pinGroupHandler = h
+	return m
+}
+
+// WithPinGroupAliasHandler installs the persistence callback used by
+// the `gR` register-alias rename.
+func (m Model) WithPinGroupAliasHandler(h PinGroupAliasHandler) Model {
+	m.pinGroupAliasHandler = h
+	return m
+}
+
+// WithPinGroupAliases seeds the register→alias display map loaded from
+// the global pin-groups file at deck open.
+func (m Model) WithPinGroupAliases(aliases map[string]string) Model {
+	m.pinGroupAliases = aliases
+	return m
+}
+
 // WithBookmarkPrefix installs the configured bookmark prefix so the deck can
 // strip it when proposing a workspace name from a picked bookmark. Pass "" to
 // disable the strip (default).
@@ -1379,7 +1482,26 @@ func (m Model) items() []Item {
 			return byProjectLabel(i, j)
 		})
 	} else {
-		sort.SliceStable(sorted, byProjectLabel)
+		// All / attention scopes float pinned rows to the top, ordered by
+		// register (default first, then alphabetical by alias-or-letter),
+		// then by label within a register. Unpinned rows keep the
+		// (project, label) ordering. bodyRows relies on this pinned-first
+		// prefix to section the pinned region.
+		sort.SliceStable(sorted, func(i, j int) bool {
+			pi := strings.TrimSpace(sorted[i].PinGroup) != ""
+			pj := strings.TrimSpace(sorted[j].PinGroup) != ""
+			if pi != pj {
+				return pi
+			}
+			if pi {
+				ki, kj := m.pinGroupSortKey(sorted[i].PinGroup), m.pinGroupSortKey(sorted[j].PinGroup)
+				if ki != kj {
+					return ki < kj
+				}
+				return strings.ToLower(m.displayLabel(sorted[i])) < strings.ToLower(m.displayLabel(sorted[j]))
+			}
+			return byProjectLabel(i, j)
+		})
 	}
 	return sorted
 }
@@ -1826,7 +1948,7 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.findMode && !m.actionMode &&
 		!m.bookmarkMode && !m.reviewMode &&
 		!m.openMode && !m.helpMode && !m.newWorkspaceMode &&
-		!m.prMenuMode && !m.prNumberSetMode
+		!m.prMenuMode && !m.prNumberSetMode && !m.pinAliasMode
 }
 
 // requestRefresh starts a row refresh, coalescing concurrent requests.
@@ -2496,6 +2618,71 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.prNumberErr = ""
 			return m, cmd
 		}
+		if m.pinAliasMode {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.pinAliasMode = false
+				m.pinAliasInput.Blur()
+				m.pinAliasInput.SetValue("")
+				m.pinAliasErr = ""
+				m.status = ""
+				return m, tea.ClearScreen
+			case "enter":
+				alias := strings.TrimSpace(m.pinAliasInput.Value())
+				key := m.pinAliasTarget
+				if m.pinGroupAliasHandler != nil {
+					if err := m.pinGroupAliasHandler(key, alias); err != nil {
+						m.pinAliasErr = err.Error()
+						return m, nil
+					}
+				}
+				// Update the in-memory map so the section header re-renders
+				// with the new label on the next paint without a reload.
+				if m.pinGroupAliases == nil {
+					m.pinGroupAliases = map[string]string{}
+				}
+				if alias == "" {
+					delete(m.pinGroupAliases, key)
+				} else {
+					m.pinGroupAliases[key] = alias
+				}
+				m.pinAliasMode = false
+				m.pinAliasInput.Blur()
+				m.pinAliasInput.SetValue("")
+				m.pinAliasErr = ""
+				if alias == "" {
+					m.status = fmt.Sprintf("pin: cleared name for group %s", pinGroupChordLetter(key))
+				} else {
+					m.status = fmt.Sprintf("pin: group %s → %s", pinGroupChordLetter(key), alias)
+				}
+				return m, tea.ClearScreen
+			}
+			var cmd tea.Cmd
+			m.pinAliasInput, cmd = m.pinAliasInput.Update(msg)
+			m.pinAliasErr = ""
+			return m, cmd
+		}
+		if m.gChordMode {
+			m.gChordMode = false
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.status = ""
+				return m, nil
+			case "g":
+				return m.applyPinGroup(pinGroupDefault)
+			case "D":
+				return m.applyPinGroup("")
+			case "R":
+				return m.startPinAliasRename()
+			}
+			// A single lowercase letter targets that register; anything
+			// else cancels the chord.
+			if r := []rune(msg.String()); len(r) == 1 && r[0] >= 'a' && r[0] <= 'z' {
+				return m.applyPinGroup(string(r[0]))
+			}
+			m.status = ""
+			return m, nil
+		}
 		if m.prMenuMode {
 			switch msg.String() {
 			case "esc", "q", "ctrl+c":
@@ -3121,6 +3308,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			m.prMenuMode = true
 			m.status = "pr: o open in browser · d description · r repair · s set PR # · esc cancel"
+			return m, nil
+		case key.Matches(msg, km.PinChord):
+			if _, ok := m.selected(); !ok {
+				return m, nil
+			}
+			m.gChordMode = true
+			m.status = "pin: gg default · g<letter> group · gD unpin · gR name · esc cancel"
 			return m, nil
 		}
 	}
@@ -3941,6 +4135,10 @@ func (m Model) View() string {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.renderPRNumberSet())
 	}
+	if m.pinAliasMode {
+		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			m.renderPinAliasSet())
+	}
 	if m.helpMode {
 		// Center the help box over the existing view as a popover.
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -4324,6 +4522,19 @@ func (m Model) renderList(width int) string {
 			}
 			headerLine := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), r.project)
 			body = append(body, headerStyle.Render(headerLine))
+		case deckRowPinHeader:
+			// r.project holds the register key. Render the display label
+			// (alias / "pinned" / letter) in the project-header hue. While
+			// the g chord is pending, lead with an emphasized [x] chip so
+			// the user can see which register each section is — the legend
+			// the chord's second keystroke targets.
+			star := s.ProjectHeader.Render("★")
+			label := s.ProjectHeader.Render(m.pinGroupLabel(r.project))
+			if m.gChordMode {
+				chip := s.Selected.Render("[" + pinGroupChordLetter(r.project) + "]")
+				label = chip + " " + label
+			}
+			body = append(body, fmt.Sprintf("%s %s %s", prefixSlot.Render(""), star, label))
 		case deckRowPrimary:
 			item := items[r.itemIndex]
 			// findProject is "" in the inbox scope's single-stage find
@@ -4677,6 +4888,7 @@ const (
 	deckRowPrimary                      // item: status-tinted label
 	deckRowMeta                         // item: muted @author · branch · …
 	deckRowCollapsed                    // default-only project folded into one line
+	deckRowPinHeader                    // pinned-register section header (project field holds the register key)
 )
 
 // deckBodyRow is one structural line of the deck body. It carries enough
@@ -4777,7 +4989,55 @@ func (m Model) bodyRows(items []Item) []deckBodyRow {
 	if m.scope == ScopeInbox {
 		return deckBodyRows(items, nil, m.inboxGroupLabels(items))
 	}
-	return deckBodyRows(items, collapsedProjects(items), nil)
+	pinned := pinnedCount(items)
+	if pinned == 0 {
+		return deckBodyRows(items, collapsedProjects(items), nil)
+	}
+	return m.deckBodyRowsPinned(items, pinned)
+}
+
+// deckBodyRowsPinned lays out the all / attention body when some rows
+// are pinned. items must be ordered pinned-first (items() guarantees
+// this): the leading `pinned` items form the pinned region — sectioned
+// by register with a deckRowPinHeader per register, never collapsed —
+// and the remaining items form the usual project-grouped region (with
+// default-only collapse) beneath a blank spacer. Row itemIndex/headerRow
+// stay absolute into items so the renderer and scroll math agree.
+func (m Model) deckBodyRowsPinned(items []Item, pinned int) []deckBodyRow {
+	rows := make([]deckBodyRow, 0, len(items)*2)
+	lastKey := ""
+	headerIdx := -1
+	for i := 0; i < pinned; i++ {
+		key := items[i].PinGroup
+		if key != lastKey {
+			if lastKey != "" {
+				rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: headerIdx})
+			}
+			headerIdx = len(rows)
+			rows = append(rows, deckBodyRow{kind: deckRowPinHeader, itemIndex: -1, project: key, headerRow: headerIdx})
+			lastKey = key
+		}
+		rows = append(rows, deckBodyRow{kind: deckRowPrimary, itemIndex: i, project: key, headerRow: headerIdx})
+		rows = append(rows, deckBodyRow{kind: deckRowMeta, itemIndex: i, project: key, headerRow: headerIdx})
+	}
+	// Project-grouped region for the unpinned suffix. Build it against the
+	// suffix slice (so collapse detection only considers unpinned rows),
+	// then shift each row's itemIndex/headerRow into absolute coordinates.
+	suffix := items[pinned:]
+	if len(suffix) > 0 {
+		rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: headerIdx})
+		base := len(rows)
+		for _, r := range deckBodyRows(suffix, collapsedProjects(suffix), nil) {
+			if r.itemIndex >= 0 {
+				r.itemIndex += pinned
+			}
+			if r.headerRow >= 0 {
+				r.headerRow += base
+			}
+			rows = append(rows, r)
+		}
+	}
+	return rows
 }
 
 // inboxGroupLabels returns each item's bucket header label — "Needs your
@@ -4881,6 +5141,15 @@ func deckKeyGroups() []keyGroup {
 				{"p r", "repair this workspace's PR (prepopulates a fix prompt)"},
 				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
+			},
+		},
+		{
+			Title: "Pin / group",
+			Keys: [][2]string{
+				{"g g", "pin selected → default group (again unpins)"},
+				{"g a…z", "pin selected → group <letter> (same again unpins, different moves)"},
+				{"g D", "unpin selected workspace"},
+				{"g R", "name the selected row's group (display alias)"},
 			},
 		},
 		{
@@ -5150,6 +5419,103 @@ func (m Model) renderPRNumberSet() string {
 		lines = append(lines, "", errStyle.Render(m.prNumberErr))
 	}
 	lines = append(lines, "", hintStyle.Render("enter save · esc cancel"))
+	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
+// applyPinGroup pins, moves, or unpins the selected workspace. target
+// "" unpins (gD); otherwise "default" (gg) or a letter register. Aiming
+// at the register the row is already in unpins it (toggle); a different
+// target moves it. Persists via pinGroupHandler and refreshes so the
+// re-sort floats the row into (or out of) the pinned region.
+func (m Model) applyPinGroup(target string) (tea.Model, tea.Cmd) {
+	item, ok := m.selected()
+	if !ok || item.Virtual || strings.TrimSpace(item.WorkspaceName) == "" {
+		m.status = "pin: select a workspace row"
+		return m, nil
+	}
+	current := strings.TrimSpace(item.PinGroup)
+	newGroup := target
+	switch {
+	case target == "": // gD: unpin
+		if current == "" {
+			m.status = "pin: not pinned"
+			return m, nil
+		}
+		newGroup = ""
+	case current == target: // aim at the current register → toggle off
+		newGroup = ""
+	}
+	if m.pinGroupHandler == nil {
+		m.status = "pin: handler not configured"
+		return m, nil
+	}
+	if err := m.pinGroupHandler(item, newGroup); err != nil {
+		m.status = "pin: " + err.Error()
+		return m, nil
+	}
+	if newGroup == "" {
+		m.status = fmt.Sprintf("pin: unpinned %s", item.WorkspaceName)
+	} else {
+		m.status = fmt.Sprintf("pin: %s → %s", item.WorkspaceName, m.pinGroupLabel(newGroup))
+	}
+	var refreshCmd tea.Cmd
+	m, refreshCmd = m.requestRefresh(false)
+	return m, refreshCmd
+}
+
+// startPinAliasRename opens the alias-rename text input for the register
+// the selected workspace is pinned to. No-op with a hint when the
+// selected row isn't pinned.
+func (m Model) startPinAliasRename() (tea.Model, tea.Cmd) {
+	item, ok := m.selected()
+	if !ok || strings.TrimSpace(item.PinGroup) == "" {
+		m.status = "pin: select a pinned workspace to name its group"
+		return m, nil
+	}
+	key := strings.TrimSpace(item.PinGroup)
+	ti := textinput.New()
+	ti.Placeholder = "group name (blank clears)"
+	ti.CharLimit = 40
+	ti.SetValue(strings.TrimSpace(m.pinGroupAliases[key]))
+	ti.Focus()
+	m.pinAliasInput = ti
+	m.pinAliasTarget = key
+	m.pinAliasErr = ""
+	m.pinAliasMode = true
+	m.status = fmt.Sprintf("name group %s — enter saves · esc cancels", pinGroupChordLetter(key))
+	return m, batchCmds(tea.ClearScreen, textinput.Blink)
+}
+
+func (m Model) renderPinAliasSet() string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colAccent)).
+		Padding(1, 2).
+		Width(60)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
+
+	current := "none"
+	if a := strings.TrimSpace(m.pinGroupAliases[m.pinAliasTarget]); a != "" {
+		current = a
+	}
+	lines := []string{
+		titleStyle.Render("Name pin group " + pinGroupChordLetter(m.pinAliasTarget)),
+		"",
+		mutedStyle.Render("Sets the display label for this register in the"),
+		mutedStyle.Render("pinned section headers. Cosmetic — the register"),
+		mutedStyle.Render("key stays the letter you pin with."),
+		"",
+		mutedStyle.Render("Current name: " + current),
+		"",
+		mutedStyle.Render("Name (blank clears):"),
+		m.pinAliasInput.View(),
+	}
+	if m.pinAliasErr != "" {
+		lines = append(lines, "", errStyle.Render(m.pinAliasErr))
+	}
+	lines = append(lines, "", mutedStyle.Render("enter save · esc cancel"))
 	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
