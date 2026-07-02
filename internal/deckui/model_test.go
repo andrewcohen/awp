@@ -1260,9 +1260,12 @@ func TestFindHintsHideProjectLevelOnceInWorkspaceStage(t *testing.T) {
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	m = updated.(Model)
 
-	projectHints, rowHints := m.findHints()
+	projectHints, pinHints, rowHints := m.findHints()
 	if len(projectHints) != 0 {
 		t.Fatalf("expected no project hints in workspace stage, got %+v", projectHints)
+	}
+	if len(pinHints) != 0 {
+		t.Fatalf("expected no pin hints in workspace stage, got %+v", pinHints)
 	}
 	if len(rowHints) == 0 {
 		t.Fatal("expected row hints in workspace stage")
