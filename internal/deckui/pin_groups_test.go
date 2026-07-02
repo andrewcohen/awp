@@ -212,3 +212,99 @@ func TestPinChordRenameNoOpWhenUnpinned(t *testing.T) {
 		t.Fatal("gR on an unpinned row should not open the alias input")
 	}
 }
+
+// findModel: register "z" holds two rows (spanning two projects); the
+// unpinned "alpha" project holds two rows. Distinct first letters keep
+// the section hints single-key ('z' and 'a') for easy assertions.
+func findModel() Model {
+	return New([]Item{
+		{ProjectName: "alpha", WorkspaceName: "one"},
+		{ProjectName: "alpha", WorkspaceName: "two"},
+		{ProjectName: "beta", WorkspaceName: "x", PinGroup: "z"},
+		{ProjectName: "gamma", WorkspaceName: "y", PinGroup: "z"},
+	}, nil)
+}
+
+func TestFindHintsIncludePinnedRegisters(t *testing.T) {
+	updated, _ := findModel().Update(keyRunes('f'))
+	m := updated.(Model)
+	if m.findStage != findStageProject {
+		t.Fatalf("expected project stage, got %v", m.findStage)
+	}
+	if m.findPinHints["z"] != "z" {
+		t.Fatalf("expected pin hint z for register z, got %q (map=%+v)", m.findPinHints["z"], m.findPinHints)
+	}
+	if m.findProjectHints["alpha"] != "a" {
+		t.Fatalf("expected project hint a for alpha, got %q (map=%+v)", m.findProjectHints["alpha"], m.findProjectHints)
+	}
+	// The register and project targets resolve to their own kinds.
+	if tg := m.findProjectLookup["z"]; tg.kind != findTargetPin || tg.key != "z" {
+		t.Fatalf("hint z should target pin register z, got %+v", tg)
+	}
+	if tg := m.findProjectLookup["a"]; tg.kind != findTargetProject || tg.key != "alpha" {
+		t.Fatalf("hint a should target project alpha, got %+v", tg)
+	}
+}
+
+func TestFindSelectingRegisterScopesToRegister(t *testing.T) {
+	updated, _ := findModel().Update(keyRunes('f'))
+	m := updated.(Model)
+	updated, _ = m.Update(keyRunes('z'))
+	m = updated.(Model)
+	if m.findStage != findStageWorkspace || m.findPinGroup != "z" || m.findProject != "" {
+		t.Fatalf("expected workspace stage scoped to register z, got stage=%v pin=%q project=%q", m.findStage, m.findPinGroup, m.findProject)
+	}
+	// Only the two register rows (items 0,1) are hinted.
+	if len(m.findRowHints) != 2 {
+		t.Fatalf("expected 2 row hints for register z, got %d (%+v)", len(m.findRowHints), m.findRowHints)
+	}
+	// beta/x → 'b' lands the cursor on the first register row.
+	updated, _ = m.Update(keyRunes('b'))
+	m = updated.(Model)
+	if m.findMode {
+		t.Fatal("expected find to exit after selecting a row")
+	}
+	if it, _ := m.selected(); it.WorkspaceName != "x" {
+		t.Fatalf("expected cursor on register row x, got %q", it.WorkspaceName)
+	}
+}
+
+func TestFindSelectingProjectExcludesPinnedRows(t *testing.T) {
+	updated, _ := findModel().Update(keyRunes('f'))
+	m := updated.(Model)
+	updated, _ = m.Update(keyRunes('a'))
+	m = updated.(Model)
+	if m.findStage != findStageWorkspace || m.findProject != "alpha" || m.findPinGroup != "" {
+		t.Fatalf("expected workspace stage scoped to alpha, got stage=%v project=%q pin=%q", m.findStage, m.findProject, m.findPinGroup)
+	}
+	// Only alpha's two unpinned rows are hinted — no register rows.
+	if len(m.findRowHints) != 2 {
+		t.Fatalf("expected 2 row hints for alpha, got %d (%+v)", len(m.findRowHints), m.findRowHints)
+	}
+	items := m.items()
+	for idx := range m.findRowHints {
+		if items[idx].ProjectName != "alpha" || items[idx].PinGroup != "" {
+			t.Fatalf("row hint on out-of-scope item %+v", items[idx])
+		}
+	}
+}
+
+func TestFindRegisterWithSingleRowAutoSelects(t *testing.T) {
+	// pinnedModel: register "a" holds exactly one row (gamma/hot).
+	updated, _ := pinnedModel().Update(keyRunes('f'))
+	m := updated.(Model)
+	hint := m.findPinHints["a"]
+	if hint == "" {
+		t.Fatalf("expected a hint for register a, got none (%+v)", m.findPinHints)
+	}
+	for _, r := range hint {
+		updated, _ = m.Update(keyRunes(r))
+		m = updated.(Model)
+	}
+	if m.findMode {
+		t.Fatal("expected find to exit (single-row register auto-selects)")
+	}
+	if it, _ := m.selected(); it.WorkspaceName != "hot" {
+		t.Fatalf("expected cursor on the sole register-a row hot, got %q", it.WorkspaceName)
+	}
+}
