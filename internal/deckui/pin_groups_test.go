@@ -1,6 +1,7 @@
 package deckui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -210,6 +211,23 @@ func TestPinChordRenameNoOpWhenUnpinned(t *testing.T) {
 	m = updated.(Model)
 	if m.pinAliasMode {
 		t.Fatal("gR on an unpinned row should not open the alias input")
+	}
+}
+
+func TestPinnedMetaLineLeadsWithProject(t *testing.T) {
+	m := pinnedModel() // gamma/hot pinned to "a", gamma/feat pinned to "default"
+	items := m.items()
+	// items[1] is the "a"-pinned gamma/hot row.
+	if items[1].PinGroup != "a" || items[1].ProjectName != "gamma" {
+		t.Fatalf("test setup: unexpected row %+v", items[1])
+	}
+	meta := m.metaLine(items[1])
+	if !strings.HasPrefix(meta, "[gamma]") {
+		t.Fatalf("pinned meta line should lead with [gamma], got %q", meta)
+	}
+	// An unpinned row carries no project chip (its project header shows it).
+	if got := m.metaLine(items[3]); strings.HasPrefix(got, "[") {
+		t.Fatalf("unpinned meta line should not lead with a project chip, got %q", got)
 	}
 }
 
