@@ -1707,6 +1707,16 @@ const (
 // when none of the slots resolve.
 func (m Model) metaLine(it Item) string {
 	var parts []string
+	// Pinned rows are lifted out of their project group into a register
+	// section, so the project context is otherwise lost. Lead the meta
+	// line with it (all / attention scopes only — the inbox scope keeps
+	// the project on the primary row as a chip and renders no pinned
+	// region).
+	if m.scope != ScopeInbox && strings.TrimSpace(it.PinGroup) != "" {
+		if p := strings.TrimSpace(it.ProjectName); p != "" {
+			parts = append(parts, "["+p+"]")
+		}
+	}
 	pr, hasPR := m.resolvePRStatus(it)
 	if hasPR {
 		if author := strings.TrimSpace(pr.Author); author != "" {
