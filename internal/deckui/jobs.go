@@ -151,6 +151,34 @@ func hasActiveJobs(jobs []Job) bool {
 	return false
 }
 
+// workspaceJobJustFinished reports whether a workspace-producing job
+// (create-workspace or review — both write a new workspace into
+// workspace-state.json) transitioned to done between prev and cur. A
+// job counts as "just finished" if it is done now but was either
+// running/pending in prev or absent from prev entirely (prev can be nil
+// on the first jobs poll). Callers use this to fire an immediate row
+// refresh so the new workspace appears without waiting for the periodic
+// poll. Only "done" qualifies — error/cancelled/orphaned jobs leave no
+// new workspace to surface.
+func workspaceJobJustFinished(prev, cur []Job) bool {
+	prevStatus := make(map[string]JobStatus, len(prev))
+	for _, j := range prev {
+		prevStatus[j.ID] = j.Status
+	}
+	for _, j := range cur {
+		if j.Action != "create-workspace" && j.Action != "review" {
+			continue
+		}
+		if j.Status != JobDone {
+			continue
+		}
+		if was, ok := prevStatus[j.ID]; !ok || was != JobDone {
+			return true
+		}
+	}
+	return false
+}
+
 type jobsListMsg struct{ jobs []Job }
 
 // JobActionDoneMsg signals the result of a c/x action initiated from
