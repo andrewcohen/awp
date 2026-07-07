@@ -509,8 +509,8 @@ type BookmarkLinkHandler func(item Item, bookmark string) error
 type PRNumberLinkHandler func(item Item, prNumber int) error
 
 // PinGroupHandler is called when the user pins, moves, or unpins a
-// workspace via the `g` chord. group == "" unpins; "default" is the
-// gg register; otherwise a single lowercase letter a–z. The handler
+// workspace via the `m` chord. group == "" unpins; "default" is the
+// mm register; otherwise a single lowercase letter a–z. The handler
 // persists the register onto the workspace's stored Entry.PinGroup.
 type PinGroupHandler func(item Item, group string) error
 
@@ -794,12 +794,12 @@ func (m Model) pinGroupLabel(key string) string {
 }
 
 // pinGroupChordLetter is the keystroke that targets a register in the
-// `g` chord — "g" for the default register (gg), the letter otherwise.
+// `m` chord — "m" for the default register (mm), the letter otherwise.
 // Shown as an emphasized [x] chip in the section header while the chord
 // is pending.
 func pinGroupChordLetter(key string) string {
 	if key == pinGroupDefault {
-		return "g"
+		return "m"
 	}
 	return key
 }
@@ -993,12 +993,16 @@ type Model struct {
 	prNumberTarget      Item
 	prNumberErr         string
 	prNumberLinkHandler PRNumberLinkHandler
-	// gChordMode is true after the user presses `g` and before the
-	// second key of the pin chord (gg / g<letter> / gD / gR) arrives.
+	// pinChordMode is true after the user presses `m` and before the
+	// second key of the pin chord (mm / m<letter> / mD / mR) arrives.
 	// While pending, renderList highlights the register letter in each
 	// pinned section header so the user can see which registers are in
 	// use before choosing one.
-	gChordMode bool
+	pinChordMode bool
+	// gotoTopPending is true after the user presses `g` and before the
+	// second `g` of the vim-style `gg` jump-to-top chord arrives. Any
+	// other key cancels the chord.
+	gotoTopPending bool
 	// pinAliasMode is true while the `gR` alias-rename text input is
 	// open. pinAliasInput / pinAliasTarget back the modal; pinAliasErr
 	// surfaces validation.
@@ -2694,13 +2698,23 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.pinAliasErr = ""
 			return m, cmd
 		}
-		if m.gChordMode {
-			m.gChordMode = false
+		if m.gotoTopPending {
+			m.gotoTopPending = false
+			if msg.String() == "g" {
+				m.cursor = 0
+				return m, nil
+			}
+			// Any other key cancels the pending `gg` chord.
+			m.status = ""
+			return m, nil
+		}
+		if m.pinChordMode {
+			m.pinChordMode = false
 			switch msg.String() {
 			case "esc", "ctrl+c":
 				m.status = ""
 				return m, nil
-			case "g":
+			case "m":
 				return m.applyPinGroup(pinGroupDefault)
 			case "D":
 				return m.applyPinGroup("")
@@ -3346,8 +3360,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if _, ok := m.selected(); !ok {
 				return m, nil
 			}
-			m.gChordMode = true
-			m.status = "pin: gg default · g<letter> group · gD unpin · gR name · esc cancel"
+			m.pinChordMode = true
+			m.status = "pin: mm default · m<letter> group · mD unpin · mR name · esc cancel"
+			return m, nil
+		case key.Matches(msg, km.GotoTop):
+			m.gotoTopPending = true
+			return m, nil
+		case key.Matches(msg, km.GotoBottom):
+			if n := len(m.items()); n > 0 {
+				m.cursor = n - 1
+			}
 			return m, nil
 		}
 	}
@@ -4570,7 +4592,7 @@ func (m Model) renderList(width int) string {
 			}
 			star := headerStyle.Render("★")
 			label := headerStyle.Render(m.pinGroupLabel(r.project))
-			if m.gChordMode {
+			if m.pinChordMode {
 				chip := s.Selected.Render("[" + pinGroupChordLetter(r.project) + "]")
 				label = chip + " " + label
 			}
@@ -5143,6 +5165,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Navigate",
 			Keys: [][2]string{
 				{"↑/↓ j/k", "move cursor"},
+				{"gg / G", "jump to top / bottom of list"},
 				{"ctrl+u / ctrl+d", "jump ½ page up / down"},
 				{"/", "filter rows · esc clears"},
 				{"f", "find: project → workspace easymotion jump"},
@@ -5190,10 +5213,10 @@ func deckKeyGroups() []keyGroup {
 		{
 			Title: "Pin / group",
 			Keys: [][2]string{
-				{"g g", "pin selected → default group (again unpins)"},
-				{"g a…z", "pin selected → group <letter> (same again unpins, different moves)"},
-				{"g D", "unpin selected workspace"},
-				{"g R", "name the selected row's group (display alias)"},
+				{"m m", "pin selected → default group (again unpins)"},
+				{"m a…z", "pin selected → group <letter> (same again unpins, different moves)"},
+				{"m D", "unpin selected workspace"},
+				{"m R", "name the selected row's group (display alias)"},
 			},
 		},
 		{
