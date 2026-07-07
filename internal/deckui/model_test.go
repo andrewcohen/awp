@@ -3276,6 +3276,72 @@ func TestEnterOnVirtualRowStartsReview(t *testing.T) {
 	}
 }
 
+// A second enter on the same virtual review row while the first review
+// is still setting up must not dispatch a duplicate job. Once the
+// backing job reaches a terminal state the guard clears and enter works
+// again (retry after failure).
+func TestEnterOnVirtualRowDoesNotDoubleDispatchReview(t *testing.T) {
+	launches := 0
+	items := []Item{{ProjectName: "alpha", WorkspaceName: "sib", RepoRoot: "/a", Bookmark: "b/sib"}}
+	model := New(items, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			"/a": {
+				"feat/two": {Number: 2, State: PRStateOpen, HeadRefName: "feat/two", ReviewRequested: true},
+			},
+		}, nil).
+		WithAsyncJobLauncher(func(AsyncJobSpec) error { launches++; return nil })
+	model.scope = ScopeInbox
+
+	virtualIdx := -1
+	for i, it := range model.items() {
+		if it.Virtual {
+			virtualIdx = i
+			break
+		}
+	}
+	if virtualIdx < 0 {
+		t.Fatal("no virtual row present to select")
+	}
+	model.cursor = virtualIdx
+
+	// First enter dispatches the review setup.
+	updated, cmd := model.trigger(ActionSummon, "")
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("first enter returned no command")
+	}
+	execCmd(t, cmd)
+	if launches != 1 {
+		t.Fatalf("after first enter launches = %d, want 1", launches)
+	}
+
+	// Second enter while still setting up must be suppressed.
+	updated, cmd = model.trigger(ActionSummon, "")
+	model = updated.(Model)
+	if cmd != nil {
+		execCmd(t, cmd)
+	}
+	if launches != 1 {
+		t.Fatalf("second enter re-dispatched review: launches = %d, want 1", launches)
+	}
+
+	// A terminal job for the same PR clears the guard.
+	updated, _ = model.Update(jobsListMsg{jobs: []Job{
+		{ID: "j1", Action: "review", Title: "review · PR 2", RepoRoot: "/a", Status: JobDone},
+	}})
+	model = updated.(Model)
+
+	updated, cmd = model.trigger(ActionSummon, "")
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter after terminal job returned no command — guard did not clear")
+	}
+	execCmd(t, cmd)
+	if launches != 2 {
+		t.Fatalf("after guard cleared launches = %d, want 2", launches)
+	}
+}
+
 // Enter on a virtual row for YOUR OWN PR opens the prefilled
 // new-workspace form (anchored on the PR branch) instead of the review
 // flow — you want to keep working on it, not review it.

@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // refreshInterval is how often the deck polls for live tmux state
@@ -1053,6 +1054,13 @@ type Model struct {
 	jobRetryHandler         JobRetryHandler
 	jobDeleteWorkspaceRetry JobDeleteWorkspaceRetryHandler
 	jobs                    []Job
+	// reviewSetups tracks virtual-row review flows that have been
+	// dispatched but whose async job hasn't finished setting up yet.
+	// Keyed by reviewSetupKey (repoRoot + PR). Guards against a second
+	// enter re-dispatching the same review while the first is still
+	// creating the workspace / priming the reviewer. Cleared when the
+	// backing job reaches a terminal state (or dispatch fails).
+	reviewSetups            map[string]bool
 	jobsOverlay             bool
 	jobsList                list.Model
 	jobsViewport            viewport.Model
@@ -2152,11 +2160,24 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case jobsListMsg:
+		prevJobs := m.jobs
 		m.jobs = msg.jobs
+		m.pruneReviewSetups()
 		m.syncJobsListItems()
 		m.refreshJobsViewport()
 		var expireCmd tea.Cmd
 		m, expireCmd = m.syncJobActivities(msg.jobs)
+		// A create/review job produces a new workspace, but loadDeckItems
+		// reads workspace-state.json and the row only appears once the
+		// deck refreshes. Waiting for the 5 s poll (or the best-effort
+		// fsnotify watcher, which can miss or coalesce the write) makes
+		// the new workspace show up late or not until the next unrelated
+		// refresh. So the moment such a job flips to done, kick a row
+		// refresh explicitly.
+		var createRefreshCmd tea.Cmd
+		if workspaceJobJustFinished(prevJobs, msg.jobs) {
+			m, createRefreshCmd = m.requestRefresh(true)
+		}
 		// Bootstrap the spinner whenever activities exist so its glyph
 		// in the bottom bar actually animates. The spinner.TickMsg
 		// handler self-perpetuates while len(m.activities) > 0; this
@@ -2164,9 +2185,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// background refresh that wasn't preceded by a foreground
 		// action (which would already batch a Tick).
 		if len(m.activities) > 0 {
-			return m, tea.Batch(expireCmd, m.spinner.Tick)
+			return m, tea.Batch(expireCmd, createRefreshCmd, m.spinner.Tick)
 		}
-		return m, expireCmd
+		return m, batchCmds(expireCmd, createRefreshCmd)
 	case activityExpireMsg:
 		m = m.dropActivity(msg.id)
 		return m, nil
@@ -2181,6 +2202,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, refreshJobsListCmd(m.jobsListRefresher)
 	case asyncJobDispatchedMsg:
 		if msg.err != nil {
+			// Spawn failed before a job record exists, so the jobs-list
+			// sync will never clear the guard — drop it here so the user
+			// can retry the review.
+			if msg.spec.Action == "review" {
+				delete(m.reviewSetups, reviewSetupKey(msg.spec.RepoRoot, msg.spec.Arg))
+			}
 			m.status = "create: " + msg.err.Error()
 			return m, nil
 		}
@@ -3174,6 +3201,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "send prompt: select a workspace row"
 				return m, nil
 			}
+			if m2, blocked := m.blockIfSettingUp(item); blocked {
+				return m2, nil
+			}
 			m.promptMode = true
 			var initCmd tea.Cmd
 			m.promptForm, initCmd = newPromptForm(item, "")
@@ -3206,6 +3236,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if item.Virtual {
 				m.status = "no workspace yet — press enter to start a review"
 				return m, nil
+			}
+			// Deleting a workspace mid-create races the create subprocess
+			// (jj workspace add / bootstrap). Hold off until it finishes.
+			if m2, blocked := m.blockIfSettingUp(item); blocked {
+				return m2, nil
 			}
 			m.confirmDelete = true
 			m.deleteTarget = item
@@ -3244,6 +3279,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "rename: cannot rename the default workspace"
 				return m, nil
 			}
+			if m2, blocked := m.blockIfSettingUp(item); blocked {
+				return m2, nil
+			}
 			m.renameMode = true
 			var initCmd tea.Cmd
 			m.renameForm, initCmd = newRenameWorkspaceForm(item)
@@ -3258,6 +3296,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if item.Virtual {
 				m.status = "no workspace yet — press enter to start a review"
 				return m, nil
+			}
+			if m2, blocked := m.blockIfSettingUp(item); blocked {
+				return m2, nil
 			}
 			return m.startBookmarkLinker(item)
 		case msg.String() == "r":
@@ -3735,6 +3776,84 @@ func utf8DecodeRune(s string) (rune, int) {
 	return 0, 0
 }
 
+// workspaceSetupJob returns the in-flight create-workspace job still
+// preparing this row's workspace, if any. A workspace is registered in
+// workspace-state.json (so its row appears in the deck) the moment
+// `jj workspace add` runs — well before the bootstrap hooks (`pnpm i`
+// and friends) finish and the agent is launched. Matching the row to
+// its still-running create job lets the deck badge the row "setting up"
+// and refuse actions that need a ready workspace + agent.
+//
+// Match key: same repo root + same normalized workspace name. The create
+// spec carries the user-entered name (workspaceName); normalizing it the
+// same way the workspace service does keeps the match stable against
+// case / separator differences with the stored row name.
+func (m Model) workspaceSetupJob(item Item) (Job, bool) {
+	name := strings.TrimSpace(item.WorkspaceName)
+	if name == "" {
+		return Job{}, false
+	}
+	for _, j := range m.jobs {
+		if j.Action != "create-workspace" || j.Status.IsTerminal() {
+			continue
+		}
+		if strings.TrimSpace(j.RepoRoot) != strings.TrimSpace(item.RepoRoot) {
+			continue
+		}
+		if normalizeWorkspaceName(j.WorkspaceName) == name {
+			return j, true
+		}
+	}
+	return Job{}, false
+}
+
+func (m Model) workspaceSettingUp(item Item) bool {
+	_, ok := m.workspaceSetupJob(item)
+	return ok
+}
+
+// normalizeWorkspaceName mirrors the name the workspace service records
+// for a create request so a job's user-entered name matches the row's
+// stored name. An empty-after-normalization name collapses to "".
+func normalizeWorkspaceName(s string) string {
+	n, err := workspace.NormalizeName(s)
+	if err != nil {
+		return ""
+	}
+	return n
+}
+
+// workspaceSetupStepLabel returns the label of the create job's current
+// (last-running, else last) step for the "setting up · <step>" row hint.
+func workspaceSetupStepLabel(j Job) string {
+	for i := len(j.Steps) - 1; i >= 0; i-- {
+		st := j.Steps[i]
+		if !st.Done && !st.Error {
+			return strings.TrimSpace(st.Label)
+		}
+	}
+	if n := len(j.Steps); n > 0 {
+		return strings.TrimSpace(j.Steps[n-1].Label)
+	}
+	return ""
+}
+
+// blockIfSettingUp bails an action out with a status toast when the
+// selected workspace is still being created (tmux session + agent not
+// ready). Mirrors the item.Virtual guards on the same action handlers.
+func (m Model) blockIfSettingUp(item Item) (Model, bool) {
+	job, ok := m.workspaceSetupJob(item)
+	if !ok {
+		return m, false
+	}
+	if lbl := workspaceSetupStepLabel(job); lbl != "" {
+		m.status = fmt.Sprintf("%s is still setting up (%s)…", item.WorkspaceName, lbl)
+	} else {
+		m.status = fmt.Sprintf("%s is still setting up…", item.WorkspaceName)
+	}
+	return m, true
+}
+
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	item, ok := m.selected()
 	if !ok || m.handler == nil {
@@ -3758,10 +3877,23 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 			}
 		}
 		if a == ActionSummon || a == ActionReview {
-			return m.startAction(ActionReview, item, strconv.Itoa(item.PRNumber))
+			prArg := strconv.Itoa(item.PRNumber)
+			if m.reviewSetups[reviewSetupKey(item.RepoRoot, prArg)] {
+				m.status = fmt.Sprintf("review for PR %s is already starting…", prArg)
+				return m, nil
+			}
+			return m.startAction(ActionReview, item, prArg)
 		}
 		m.status = "no workspace yet — press enter to create it"
 		return m, nil
+	}
+	// The row shows up as soon as the workspace is registered in state,
+	// but the tmux session + agent aren't created until the create job's
+	// bootstrap hooks finish. Summoning / opening windows before then
+	// would attach to a session that doesn't exist yet, so hold the
+	// action until setup completes.
+	if m2, blocked := m.blockIfSettingUp(item); blocked {
+		return m2, nil
 	}
 	if isProgressAction(a) {
 		return m.startAction(a, item, arg)
@@ -3843,11 +3975,60 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 // so we deliberately do not write a "queued · …" status toast — it
 // would duplicate the activity entry.
 func (m *Model) startAsyncAction(spec AsyncJobSpec) (tea.Model, tea.Cmd) {
+	if spec.Action == "review" {
+		if m.reviewSetups == nil {
+			m.reviewSetups = map[string]bool{}
+		}
+		m.reviewSetups[reviewSetupKey(spec.RepoRoot, spec.Arg)] = true
+	}
 	launcher := m.asyncJobLauncher
 	dispatch := func() tea.Msg {
 		return asyncJobDispatchedMsg{spec: spec, err: launcher(spec)}
 	}
 	return *m, dispatch
+}
+
+// reviewSetupKey is the stable key for an in-flight virtual-row review
+// setup: repo root + PR number (as the string arg passed to the review
+// action). Matches whether built from an Item or an async job spec.
+func reviewSetupKey(repoRoot, prArg string) string {
+	return repoRoot + "#" + prArg
+}
+
+// pruneReviewSetups clears guard entries whose backing review job has
+// reached a terminal state. It never clears on a missing job: right
+// after dispatch the job hasn't appeared in the list yet, and dropping
+// the guard then would reopen the double-enter window. On success the
+// row also stops being virtual, so a lingering entry is harmless — the
+// guard is only consulted on the virtual path.
+func (m *Model) pruneReviewSetups() {
+	if len(m.reviewSetups) == 0 {
+		return
+	}
+	for _, j := range m.jobs {
+		arg, ok := reviewJobArg(j)
+		if !ok {
+			continue
+		}
+		switch j.Status {
+		case JobDone, JobCancelled, JobError, JobOrphaned:
+			delete(m.reviewSetups, reviewSetupKey(j.RepoRoot, arg))
+		}
+	}
+}
+
+// reviewJobArg returns the PR arg a review job was dispatched with,
+// recovered from its title ("review · PR <n>"). ok is false for
+// non-review jobs or titles that don't match the expected shape.
+func reviewJobArg(j Job) (string, bool) {
+	if j.Action != "review" {
+		return "", false
+	}
+	const prefix = "review · PR "
+	if !strings.HasPrefix(j.Title, prefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(j.Title, prefix)), true
 }
 
 // startQuickAction runs an action without entering progress mode. Used for
@@ -3935,6 +4116,10 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		BookmarkToCreate: strings.TrimSpace(req.BookmarkToCreate),
 		Prompt:           strings.TrimSpace(req.Prompt),
 		PRNumber:         req.PRNumber,
+		// Carry the requested name so the deck can match this job back to
+		// the row that appears (via workspace-state.json) while the job is
+		// still bootstrapping — see workspaceSetupJob.
+		WorkspaceName: strings.TrimSpace(req.Name),
 	}
 	// Pre-arm pendingSelect with the new workspace's likely name so the
 	// cursor snaps to it as soon as the refresh after the subprocess
@@ -4642,6 +4827,12 @@ func (m Model) renderList(width int) string {
 			// enrichment pass and is rare enough that a brief flash is
 			// preferable to a blank glyph slot.
 			glyph := statusGlyph(item.Status, dim, item.Unread)
+			// A workspace still being created shows up before its agent
+			// exists; badge it with the live spinner so it reads as
+			// in-progress rather than an idle/ready row.
+			if !dim && m.workspaceSettingUp(item) {
+				glyph = m.spinner.View()
+			}
 			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyph, chip, labelStyle.Render(label))
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
@@ -4680,7 +4871,18 @@ func (m Model) renderList(width int) string {
 				line += glyphs + "  "
 				metaRoom = max(10, metaRoom-lipgloss.Width(glyphs)-2)
 			}
-			metaText := truncate(m.metaLine(item), metaRoom)
+			// While the workspace is still being created, its port/branch
+			// meta isn't meaningful yet — surface the create job's current
+			// step instead ("setting up · pnpm i").
+			metaSrc := m.metaLine(item)
+			if job, ok := m.workspaceSetupJob(item); ok {
+				if lbl := workspaceSetupStepLabel(job); lbl != "" {
+					metaSrc = "setting up · " + lbl
+				} else {
+					metaSrc = "setting up…"
+				}
+			}
+			metaText := truncate(metaSrc, metaRoom)
 			body = append(body, fitRow(line+m.renderMetaText(metaText), width-2))
 		case deckRowCollapsed:
 			// Quiet default-only project: fold the project header, the
