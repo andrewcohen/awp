@@ -100,18 +100,18 @@ func chordPin(t *testing.T, m Model, second rune) (string, Model) {
 		return nil
 	}).WithRefresher(func() tea.Cmd { return nil })
 
-	updated, _ := m.Update(keyRunes('g'))
+	updated, _ := m.Update(keyRunes('m'))
 	m = updated.(Model)
-	if !m.gChordMode {
-		t.Fatal("expected g chord to be pending after g")
+	if !m.pinChordMode {
+		t.Fatal("expected m chord to be pending after m")
 	}
 	updated, _ = m.Update(keyRunes(second))
 	m = updated.(Model)
-	if m.gChordMode {
-		t.Fatal("expected g chord to clear after the second key")
+	if m.pinChordMode {
+		t.Fatal("expected m chord to clear after the second key")
 	}
 	if !called {
-		t.Fatalf("pin handler was not called for g%c", second)
+		t.Fatalf("pin handler was not called for m%c", second)
 	}
 	return got, m
 }
@@ -123,13 +123,13 @@ func TestPinChordDefaultAndLetter(t *testing.T) {
 	if got := m.items()[3].PinGroup; got != "" {
 		t.Fatalf("test setup: expected unpinned cursor row, got %q", got)
 	}
-	if got, _ := chordPin(t, m, 'g'); got != "default" {
-		t.Fatalf("gg on unpinned row: want default, got %q", got)
+	if got, _ := chordPin(t, m, 'm'); got != "default" {
+		t.Fatalf("mm on unpinned row: want default, got %q", got)
 	}
 	m2 := pinnedModel()
 	m2.cursor = 3
 	if got, _ := chordPin(t, m2, 'c'); got != "c" {
-		t.Fatalf("gc on unpinned row: want c, got %q", got)
+		t.Fatalf("mc on unpinned row: want c, got %q", got)
 	}
 }
 
@@ -174,12 +174,12 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 		savedAlias = alias
 		return nil
 	})
-	updated, _ := m.Update(keyRunes('g'))
+	updated, _ := m.Update(keyRunes('m'))
 	m = updated.(Model)
 	updated, _ = m.Update(keyRunes('R'))
 	m = updated.(Model)
 	if !m.pinAliasMode {
-		t.Fatal("expected alias input mode after gR on a pinned row")
+		t.Fatal("expected alias input mode after mR on a pinned row")
 	}
 	if m.pinAliasTarget != "a" {
 		t.Fatalf("expected alias target a, got %q", m.pinAliasTarget)
@@ -205,12 +205,12 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 func TestPinChordRenameNoOpWhenUnpinned(t *testing.T) {
 	m := pinnedModel()
 	m.cursor = 3 // the unpinned "main" row after the pinned-first sort
-	updated, _ := m.Update(keyRunes('g'))
+	updated, _ := m.Update(keyRunes('m'))
 	m = updated.(Model)
 	updated, _ = m.Update(keyRunes('R'))
 	m = updated.(Model)
 	if m.pinAliasMode {
-		t.Fatal("gR on an unpinned row should not open the alias input")
+		t.Fatal("mR on an unpinned row should not open the alias input")
 	}
 }
 

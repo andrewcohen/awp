@@ -198,9 +198,10 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `x` | User actions menu (configurable via `actions` in config) |
 | `n` | New workspace (inline form: workspace name / start-from / agent prompt). `start-from` is a select with `main` (default) and `pick a bookmark…` (opens the bookmark picker). The form also surfaces a `Will create bookmark:` hint when `deck.bookmark_prefix` is configured. |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
-| `f` | Find: easymotion-style section → workspace jump. Stage 1 hints every section header — both pinned register sections (see the `g` chord) and unpinned project headers; picking one scopes stage 2 to that section's rows. (In the inbox scope there are no headers, so `f` hints every row directly.) |
+| `f` | Find: easymotion-style section → workspace jump. Stage 1 hints every section header — both pinned register sections (see the `m` chord) and unpinned project headers; picking one scopes stage 2 to that section's rows. (In the inbox scope there are no headers, so `f` hints every row directly.) |
 | `/` | Filter rows · `esc` clears |
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
+| `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
 | `L` | Switch to last tmux session |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
@@ -213,10 +214,10 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `p s` | Set (or clear, via blank/0) the PR # for the selected workspace. Pins the workspace to a specific PR so the deck resolves status by number rather than guessing from the bookmark. Persisted to `~/.awp/...` workspace state. |
 | `D` | Delete workspace · on a `default` row, deletes the **project**: removes every other workspace under that repo and drops the project from the deck (the default workspace itself is left intact). Requires typing the project name to confirm. |
 | `,` | Edit global state file in `$EDITOR` |
-| `g g` | Pin the selected workspace to the **default** group (chord — press `g`, then `g`). Pinned workspaces float to a ★-marked section at the top of the deck (all / attention scopes), above the project groups and out of their own project group. Pressing `g g` again on a default-pinned row unpins it. |
-| `g` + `a`–`z` | Pin the selected workspace to the letter group (e.g. `g a`). Groups are single-letter registers, vim-mark style; sections order default-first then alphabetically by name-or-letter. Aiming at the group the row is already in unpins it; a different letter moves it. While the chord is pending, each pinned section header shows a highlighted `[x]` chip so you can see which registers are in use. |
-| `g D` | Unpin / ungroup the selected workspace. |
-| `g R` | Name the selected row's group — opens an input to set a display alias for that register (cosmetic; the register key stays the letter). Aliases persist globally in `~/.awp/pin-groups.json`. Blank clears the alias. |
+| `m m` | Pin the selected workspace to the **default** group (chord — press `m`, then `m`). Pinned workspaces float to a ★-marked section at the top of the deck (all / attention scopes), above the project groups and out of their own project group. Pressing `m m` again on a default-pinned row unpins it. |
+| `m` + `a`–`z` | Pin the selected workspace to the letter group (e.g. `m a`). Groups are single-letter registers, vim-mark style; sections order default-first then alphabetically by name-or-letter. Aiming at the group the row is already in unpins it; a different letter moves it. While the chord is pending, each pinned section header shows a highlighted `[x]` chip so you can see which registers are in use. |
+| `m D` | Unpin / ungroup the selected workspace. |
+| `m R` | Name the selected row's group — opens an input to set a display alias for that register (cosmetic; the register key stays the letter). Aliases persist globally in `~/.awp/pin-groups.json`. Blank clears the alias. |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
 | `?` | Help overlay |
 | `q` / `esc` | Quit |
@@ -388,7 +389,7 @@ shouldn't need to run it directly.
 
 Workspace state lives in a single `~/.awp/workspace-state.json` written from many places (every Claude/pi hook, the deck refresh tick, summon/delete/rename). Writes are guarded by an OS-level advisory lock (`flock`) on `~/.awp/workspace-state.json.lock` and committed via temp-file + atomic `rename`, so concurrent writers don't drop each other's changes or leave a torn file. The lock has a 2-second timeout — if a writer ever stalls, agent hooks fail loudly rather than blocking the agent's turn.
 
-A workspace's pin group (the `g` chord, above) is stored as `PinGroup` on its entry in that same file. The per-register **display aliases** set by `g R` live separately in `~/.awp/pin-groups.json` (a small `register → name` map) because a pin register spans repos in the deck's merged view — the alias is a property of the register, not of any one workspace.
+A workspace's pin group (the `m` chord, above) is stored as `PinGroup` on its entry in that same file. The per-register **display aliases** set by `m R` live separately in `~/.awp/pin-groups.json` (a small `register → name` map) because a pin register spans repos in the deck's merged view — the alias is a property of the register, not of any one workspace.
 
 ## How status reporting works
 
