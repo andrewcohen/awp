@@ -1,0 +1,17 @@
+[package]
+name = "awp-vt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The libghostty VT engine (real ghostty-vt) and a ratatui-free Screen."
+
+# One engine: the real libghostty-vt (Ghostty's terminal core), via the
+# `libghostty-vt` safe Rust crate. The `vendored` build compiles the native
+# library through libghostty-vt-sys.
+[dependencies]
+libghostty-vt = "0.2"
+
+[lints]
+workspace = true

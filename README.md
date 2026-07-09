@@ -2,6 +2,8 @@
 
 > ⚠️ **Disclaimer**: This project is heavily vibe-coded. The maintainer doesn't necessarily know what's inside any given file at any given moment. Treat the source as a sketch, not a contract: read it before depending on it, and assume any behavior may change without warning. Bug reports and PRs welcome; "this code is weird" is fair feedback.
 
+> 🦀 **Rust rewrite in progress** (`rust/`). A ground-up Rust rebuild of awp — an inverted, single-process deck (sidebar → shell tabs → live agent terminal) on `ratatui` + libghostty, with SQLite (WAL) state replacing the JSON files. It runs side by side with the Go build (non-destructive first-run migration). See [`rust/README.md`](rust/README.md) and the [spec](specs/20260709-vn9m-rust-rewrite-ratatui-libghostty-zmx-spec.md). The Go tree below remains the current shipping implementation.
+
 `awp` is a Go CLI and TUI for running multiple AI coding agents (Claude Code, pi.dev, …) in parallel across isolated [Jujutsu](https://github.com/martinvonz/jj) workspaces, each in its own [tmux](https://github.com/tmux/tmux) session. It gives you a single keyboard-driven dashboard ("the deck") to summon, switch between, and observe agents — including a live status indicator showing which agents are working, idle, or waiting on you.
 
 ## What problem it solves

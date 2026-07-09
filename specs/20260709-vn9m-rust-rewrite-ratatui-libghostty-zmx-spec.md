@@ -337,10 +337,67 @@ The implementer MUST reproduce these; they are encoded edge-case knowledge.
   plan. Decisions locked: rust/ subdir on branch; side-by-side migrate-on-first-
   run; pragmatic+enforced linting. Zig-dependency and no-inherited-tests risks
   accepted and mitigated via trait boundaries + pure-Rust default impls.
+- 2026-07-09: **Implementation landed** (`rust/` workspace, all six crates).
+  Three maintainer directions during the build refined the plan:
+  1. **Deck-only binary — no CLI.** The `awp` binary launches the deck and
+     nothing else; there is no `migrate` / `hooks` / `--help` command surface.
+     First-run migration and idempotent hook self-heal run automatically on deck
+     open. The single machine-facing exception is the invisible `report-status`
+     hook callback (the installed Claude hooks shell out to it), which the binary
+     honors and exits — plumbing, not a CLI. The migrate/hooks/report-status
+     *logic* remains fully implemented + unit-tested in `awp-store` / `awp-agent`.
+  2. **libghostty is the only VT engine.** There is no vt100-vs-libghostty
+     choice: `awp-vt` exposes exactly one engine, `LibghosttyEngine`. It drives
+     the native libghostty C ABI when linked (`AWP_LIBGHOSTTY_LIB` → build.rs
+     sets `awp_libghostty_native`) for peak performance, and otherwise runs on an
+     embedded VT core (the `vt100` crate, now an internal implementation detail —
+     not a public engine). The default build still needs no Zig. This resolves
+     the open question below by making native a *link-time* selection behind an
+     identical surface rather than a shipped-on-vt100 fallback engine.
+  3. Consequent to (2), the `awp-vt` `vt100-engine`/`libghostty` Cargo features
+     were removed; `vt100` is a non-optional internal dep. `awp-tui` keeps only
+     the `zmx` feature.
+  Status of the first pass: 71 unit tests green; fmt/clippy/build clean.
+- 2026-07-09: **Native libghostty + persistence landed** (second pass; maintainer
+  directions "libghostty must be linked, only libghostty" and "don't lose on
+  disconnect"):
+  1. **Real libghostty, linked.** `awp-vt` now depends on the `libghostty-vt`
+     crate (`uzaaft/libghostty-rs`), whose `libghostty-vt-sys` compiles the
+     genuine Ghostty terminal core from source via Zig. Bytes flow into a real
+     `ghostty::Terminal`; the screen is read back through Ghostty's render-state
+     row/cell iterators (resolved RGB + styles) into the ratatui-free `Screen`.
+     The hand-written FFI stub and the vt100 fallback are **deleted** —
+     `LibghosttyEngine::is_native()` is `true`. Consequence: the build now
+     **requires the Zig toolchain** (0.15.x); the "default build needs no Zig"
+     goal is explicitly retired per the maintainer's "libghostty required"
+     direction. CI installs Zig.
+  2. **Persistence via headless tmux, not zmx.** libghostty is only the
+     emulator; session/PTY management is ours. `TmuxBackend` holds sessions on a
+     dedicated, **invisible** tmux server (`-L awp`, status off, prefix None) so
+     they survive deck exit / disconnect, and `attach` runs `tmux attach` inside
+     our own PTY streamed into libghostty — tmux's UI is never shown. zmx is
+     dropped (not buildable here); the `SessionBackend` trait leaves the door
+     open to it. `LocalBackend` (portable-pty) remains for tests.
+  3. Binary is deck-only (plus the invisible `report-status` hook callback); no
+     Cargo feature flags remain.
+  Status: **75 tests green** including a tmux-persistence test and an end-to-end
+  test (tmux → PTY → real libghostty → rendered `Screen`, live shell output
+  verified); `cargo fmt --check`, `clippy --all-targets -D warnings`, and
+  `cargo build --workspace` all pass. Deferred follow-ups: `gh` PR/CI background
+  enrichment, report-status badge-suppression (is-viewing) query, shell-tab
+  switching wired to tmux windows.
 
 ## Open questions / follow-ups
-- Confirm the `libghostty-vt` C API exposes full styled-cell readout (fg/bg/
-  attrs), not just plain text; if immature, ship v1 on `vt100` and gate
-  libghostty until the C API lands cell attributes.
+- ~~Confirm the `libghostty-vt` C API exposes full styled-cell readout~~ →
+  **Resolved**: linked the real libghostty via the `libghostty-vt` crate and
+  read styled cells through Ghostty's render-state row/cell iterators. Not a
+  stub. The trade-off accepted per maintainer direction: the build now requires
+  the Zig toolchain.
+- ~~zmx session backend~~ → **Dropped**. libghostty is only the emulator;
+  persistence is provided by a headless, invisible `TmuxBackend` behind the
+  `SessionBackend` trait (survives disconnect). zmx could still slot in later.
 - Decide when `rust/` graduates to repo root and the Go tree is retired.
 - Optional: unix-socket writer→deck ping to eliminate `data_version` poll latency.
+- Wire the remaining deferred pieces: `gh` PR/CI background enrichment, the
+  report-status badge-suppression (is-viewing) query, and shell-tab switching
+  bound to tmux windows.

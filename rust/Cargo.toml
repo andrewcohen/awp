@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/awp-core",
+    "crates/awp-store",
+    "crates/awp-session",
+    "crates/awp-vt",
+    "crates/awp-agent",
+    "crates/awp-tui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/andrewcohen/awp"
+
+# UI depends on core; core never depends on UI. Enforced by crate deps below.
+[workspace.dependencies]
+awp-core = { path = "crates/awp-core" }
+awp-store = { path = "crates/awp-store" }
+awp-session = { path = "crates/awp-session" }
+awp-vt = { path = "crates/awp-vt" }
+awp-agent = { path = "crates/awp-agent" }
+
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ratatui = "0.29"
+crossterm = "0.28"
+portable-pty = "0.9"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
+# Keep release builds lean; the deck is latency-sensitive on switching.
+[profile.release]
+lto = "thin"

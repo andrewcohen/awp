@@ -1,0 +1,17 @@
+[package]
+name = "awp-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "awp domain core: types, state, and the single reducer. No I/O, no UI."
+
+# awp-core is the pure domain. It MUST NOT depend on ratatui, rusqlite, or any
+# I/O crate — the acceptance criteria enforce this. Keep this list minimal.
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

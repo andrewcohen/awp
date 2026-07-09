@@ -1,0 +1,30 @@
+[package]
+name = "awp-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "awp — the flattened ratatui deck: sidebar -> shell tabs -> live pane."
+
+[[bin]]
+name = "awp"
+path = "src/main.rs"
+
+[dependencies]
+awp-core = { workspace = true }
+awp-store = { workspace = true }
+awp-session = { workspace = true }
+awp-vt = { workspace = true }
+awp-agent = { workspace = true }
+anyhow = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# No feature flags: the VT engine is always the real libghostty (via awp-vt),
+# and sessions are always persisted on a headless tmux server (via awp-session).
+
+[lints]
+workspace = true
