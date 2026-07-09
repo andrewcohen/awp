@@ -33,7 +33,7 @@ import (
 // timeNowForJobs is a small indirection so a future test can stub
 // the clock used by orphan detection / GC. Production callers always
 // receive time.Now().
-var timeNowForJobs = func() time.Time { return time.Now() }
+var timeNowForJobs = time.Now
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
@@ -120,7 +120,7 @@ func deckDebugLogf(format string, args ...any) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, _ = fmt.Fprintf(f, "%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
 }
 
@@ -751,9 +751,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 	// pinGroupAliasHandler persists a register's display alias to the
 	// global pin-groups file. Drives the deck `gR` chord.
-	pinGroupAliasHandler := func(group, alias string) error {
-		return state.SavePinGroupAlias(group, alias)
-	}
+	pinGroupAliasHandler := state.SavePinGroupAlias
 	pinGroupAliases, err := state.LoadPinGroupAliases()
 	if err != nil {
 		pinGroupAliases = map[string]string{}
@@ -1736,14 +1734,6 @@ func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui
 	}
 	_ = svc.MarkRead(item.WorkspaceName)
 	return tmuxClient.SwitchClient(sessionName)
-}
-
-// agentPaneIsShell returns true when the agent window of a workspace session
-// has no agent process running (i.e. the pane has dropped back to a shell).
-// Used to mark a workspace as "exited" in the deck even when the workspace
-// state file still claims an older status.
-func agentPaneIsShell(tmuxClient *tmux.Client, sessionName string) bool {
-	return paneIsShell(tmuxClient, sessionName+":agent")
 }
 
 func paneIsShell(tmuxClient *tmux.Client, target string) bool {

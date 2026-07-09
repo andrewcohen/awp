@@ -611,9 +611,10 @@ func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int
 		gutter = "│"
 	}
 	gutterStyle := styleContext
-	if kind == '+' {
+	switch kind {
+	case '+':
 		gutterStyle = styleAdded
-	} else if kind == '-' {
+	case '-':
 		gutterStyle = styleDeleted
 	}
 	prefix := lineStyle.Render(fmt.Sprintf("%*s %*s ", oldWidth, oldText, newWidth, newText)) + gutterStyle.Render(gutter+" ")

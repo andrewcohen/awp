@@ -284,23 +284,6 @@ func newRunJobActionService(runner Runner, repoRoot string, in io.Reader, out io
 	})
 }
 
-// fileLogger is a small io.Writer that mirrors the subprocess's
-// stdout/stderr (already pointed at the sidecar log file by the
-// parent's spawn) into the inline log buffer for tray display.
-// Currently unused — keeping a sketch here for when we want to
-// stream subprocess child-process output (e.g. jj git fetch) into
-// the tray. Wire by passing into workspace.Service via a new option.
-type fileLogger struct {
-	mirror io.Writer
-}
-
-func (f fileLogger) Write(p []byte) (int, error) {
-	if f.mirror == nil {
-		return len(p), nil
-	}
-	return f.mirror.Write(p)
-}
-
 // runCustomJob runs a background user action (config.UserAction with
 // Background=true). Spec.Arg holds the action name; we resolve it
 // against the config rooted at Spec.RepoRoot and exec the command via

@@ -514,11 +514,6 @@ func bookmarkTrackCandidates(bookmark string) []trackCandidate {
 	}
 }
 
-func isMissingRevisionError(output string, err error) bool {
-	text := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
-	return strings.Contains(text, "doesn't exist") || strings.Contains(text, "does not exist") || strings.Contains(text, "no revisions to show") || strings.Contains(text, "doesn't have a working-copy commit")
-}
-
 func IsStaleWorkingCopyError(err error) bool {
 	if err == nil {
 		return false

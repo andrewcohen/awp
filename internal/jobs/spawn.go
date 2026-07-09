@@ -78,14 +78,14 @@ func (s *Store) Spawn(spec Spec, title string, opts SpawnOptions) (Job, error) {
 		_ = s.Delete(id)
 		return Job{}, fmt.Errorf("open job log: %w", err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
 	if err != nil {
 		_ = s.Delete(id)
 		return Job{}, fmt.Errorf("open /dev/null: %w", err)
 	}
-	defer devNull.Close()
+	defer func() { _ = devNull.Close() }()
 
 	cmd := exec.Command(binary, args...)
 	cmd.Stdin = devNull
