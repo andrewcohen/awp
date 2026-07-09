@@ -128,12 +128,13 @@ func (s *Service) RunWithOptions(opts Options) error {
 	}
 
 	hookCommands, err := s.hooks.PostWorkspaceStart(repoRoot)
-	if err != nil {
+	switch {
+	case err != nil:
 		issues++
 		fmt.Fprintf(s.out, "❌ .awp/config.json hooks: %v\n", err)
-	} else if len(hookCommands) == 0 {
+	case len(hookCommands) == 0:
 		fmt.Fprintln(s.out, "⚠️  .awp/config.json hooks: none configured")
-	} else {
+	default:
 		fmt.Fprintf(s.out, "✅ .awp/config.json hooks: %d configured\n", len(hookCommands))
 	}
 

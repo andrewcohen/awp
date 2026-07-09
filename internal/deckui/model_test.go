@@ -2495,33 +2495,10 @@ func TestPRMenuSetKeyBlankClearsOverride(t *testing.T) {
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m := updated.(Model)
 	m.prNumberInput.SetValue("")
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if gotPR != 0 {
 		t.Fatalf("expected blank submit to call handler with 0, got %d", gotPR)
 	}
-}
-
-// drainCmdForActionResult walks a tea.Cmd batch tree and returns the first
-// actionResultMsg it produces.
-func drainCmdForActionResult(t *testing.T, cmd tea.Cmd) actionResultMsg {
-	t.Helper()
-	queue := []tea.Cmd{cmd}
-	for len(queue) > 0 {
-		c := queue[0]
-		queue = queue[1:]
-		if c == nil {
-			continue
-		}
-		msg := c()
-		switch v := msg.(type) {
-		case actionResultMsg:
-			return v
-		case tea.BatchMsg:
-			queue = append(queue, v...)
-		}
-	}
-	t.Fatal("no actionResultMsg observed")
-	return actionResultMsg{}
 }
 
 func TestClampDeckViewportEdgeTriggered(t *testing.T) {

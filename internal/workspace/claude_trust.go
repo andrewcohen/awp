@@ -79,7 +79,7 @@ func updateClaudeProjectsEntry(workspacePath string, mutate func(projects map[st
 	if err != nil {
 		return fmt.Errorf("open claude.json lock: %w", err)
 	}
-	defer lf.Close()
+	defer func() { _ = lf.Close() }()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -95,7 +95,7 @@ func updateClaudeProjectsEntry(workspacePath string, mutate func(projects map[st
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) }()
 
 	root := map[string]any{}
 	data, err := os.ReadFile(path)

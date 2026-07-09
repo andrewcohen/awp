@@ -3743,39 +3743,6 @@ func (m *Model) startReviewPicker(repo string) (tea.Model, tea.Cmd) {
 	return *m, tea.Batch(m.spinner.Tick, m.prFetcher(repo))
 }
 
-// fuzzyMatch returns true if every rune of needle appears in haystack in
-// order (subsequence match). Used by the project picker so typing
-// "myrepo" matches "github.com/me/myrepo".
-func fuzzyMatch(haystack, needle string) bool {
-	if needle == "" {
-		return true
-	}
-	hi := 0
-	for _, nr := range needle {
-		found := false
-		for hi < len(haystack) {
-			hr, size := utf8DecodeRune(haystack[hi:])
-			hi += size
-			if hr == nr {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-func utf8DecodeRune(s string) (rune, int) {
-	for i, r := range s {
-		_ = i
-		return r, len(string(r))
-	}
-	return 0, 0
-}
-
 // workspaceSetupJob returns the in-flight create-workspace job still
 // preparing this row's workspace, if any. A workspace is registered in
 // workspace-state.json (so its row appears in the deck) the moment
@@ -4715,8 +4682,8 @@ func (m Model) renderList(width int) string {
 	header := []string{titleRow, ""}
 	items := m.items()
 	if len(items) == 0 {
-		rows := append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
-		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(rows, "\n"))
+		header = append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
+		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(header, "\n"))
 	}
 	projectHints, pinHints, rowHints := m.findHints()
 	// Reserve a fixed-width prefix slot at all times so workspace rows

@@ -35,7 +35,7 @@ func appendPendingAction(path, kind, target string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = fmt.Fprintf(f, "%s %s\n", kind, target)
 	return err
 }
@@ -52,7 +52,7 @@ func drainPendingActions(path string) ([]pendingAction, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var actions []pendingAction
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

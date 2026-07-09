@@ -30,11 +30,12 @@ func runInitHooks(args []string, out io.Writer) error {
 	}
 
 	piChanged, err := agenthooks.InstallPi()
-	if err != nil {
+	switch {
+	case err != nil:
 		_, _ = fmt.Fprintf(out, "pi.dev: skipped (%v)\n", err)
-	} else if piChanged {
+	case piChanged:
 		_, _ = fmt.Fprintln(out, "pi.dev: extension installed/updated")
-	} else {
+	default:
 		_, _ = fmt.Fprintln(out, "pi.dev: extension already up to date")
 	}
 	return nil

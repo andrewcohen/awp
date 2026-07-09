@@ -291,7 +291,7 @@ func (s *Store) withLock(id JobID, fn func() error) error {
 	if err != nil {
 		return fmt.Errorf("open job lock: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	deadline := time.Now().Add(lockTimeout)
 	for {
@@ -307,6 +307,6 @@ func (s *Store) withLock(id JobID, fn func() error) error {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 	return fn()
 }
