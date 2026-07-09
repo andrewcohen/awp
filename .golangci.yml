@@ -1,0 +1,56 @@
+# golangci-lint v2 config. Installed/pinned via mise (see mise.toml).
+# Run: mise exec -- golangci-lint run ./...
+#
+# Philosophy: start conservative (high-signal, low-noise) so the first run
+# isn't a wall of false positives, then layer in stricter linters over time.
+version: "2"
+
+linters:
+  # The v2 default set (errcheck, govet, ineffassign, staticcheck, unused) is
+  # already high-value; these are the additions worth the noise.
+  enable:
+    - gocritic   # opinionated correctness / performance / style + architectural smells
+    - revive     # configurable golint successor
+    - misspell   # typos in comments/strings
+    - unconvert  # redundant type conversions
+    - bodyclose  # unclosed HTTP response bodies
+    - depguard   # enforce import boundaries (see settings below)
+
+  settings:
+    errcheck:
+      # Writing to an already-open writer (stdout/stderr/TUI buffers) has no
+      # actionable error path — excluding the fmt.Fprint* family is a standard
+      # errcheck policy and avoids noise. Close/Flock errors stay checked.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    revive:
+      rules:
+        # Keep revive's high-value defaults (unused-parameter,
+        # redefines-builtin-id, early-return, …) but drop the doc-comment
+        # nags: nearly everything here lives under internal/ (not a public
+        # API), so "exported X should have a comment" is noise, not signal.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    depguard:
+      rules:
+        # internal/cli imports internal/deck2 to register the command, so
+        # deck2 importing cli back would be a build cycle. Encode that as a
+        # lint rule rather than relying on remembering it.
+        deck2-no-cli:
+          files:
+            - "**/internal/deck2/**"
+          deny:
+            - pkg: github.com/andrewcohen/awp/internal/cli
+              desc: "deck2 must not import cli (cli imports deck2 — would be an import cycle)"
+
+  exclusions:
+    # Keep test files exempt from the noisier style linters.
+    rules:
+      - path: _test\.go
+        linters:
+          - gocritic
+          - revive
