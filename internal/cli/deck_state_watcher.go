@@ -41,7 +41,7 @@ func newDeckStateChangeWatcher() deckui.StateChangeWatcher {
 		}
 		active = true
 		go func() {
-			defer watcher.Close()
+			defer func() { _ = watcher.Close() }()
 			defer close(done)
 			var debounce <-chan time.Time
 			pending := false

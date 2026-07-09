@@ -27,20 +27,20 @@ func BuildArgs(editorCmd, filePath string, line int) []string {
 	base := filepath.Base(strings.Fields(editorCmd)[0])
 	name := strings.ToLower(strings.TrimSuffix(base, filepath.Ext(base)))
 
-	switch {
-	case name == "code" || name == "codium":
+	switch name {
+	case "code", "codium":
 		if line > 0 {
 			return append(strings.Fields(editorCmd), "--goto", fmt.Sprintf("%s:%d", filePath, line))
 		}
-	case name == "vim" || name == "nvim" || name == "vi" || name == "gvim" || name == "mvim":
+	case "vim", "nvim", "vi", "gvim", "mvim":
 		if line > 0 {
 			return append(strings.Fields(editorCmd), fmt.Sprintf("+%d", line), filePath)
 		}
-	case name == "emacs" || name == "emacsclient" || name == "nano":
+	case "emacs", "emacsclient", "nano":
 		if line > 0 {
 			return append(strings.Fields(editorCmd), fmt.Sprintf("+%d", line), filePath)
 		}
-	case name == "hx" || name == "helix":
+	case "hx", "helix":
 		if line > 0 {
 			return append(strings.Fields(editorCmd), fmt.Sprintf("%s:%d", filePath, line))
 		}

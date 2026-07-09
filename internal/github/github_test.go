@@ -93,14 +93,6 @@ func (s *seqRunner) Run(_ context.Context, _ string, _ string, args ...string) (
 	return "", nil
 }
 
-func argsContain(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
 
 // enqueueOK is the three-step script for a successful merge-queue enqueue:
 // the --squash attempt fails with the given gh message, `gh pr view --json

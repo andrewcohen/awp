@@ -305,13 +305,7 @@ func (jobItemDelegate) Render(w io.Writer, m list.Model, index int, listItem lis
 	fmt.Fprint(w, row)
 }
 
-// jobsGotoTopKey / jobsGotoBottomKey are explicit g/G bindings layered
-// on top of list.Model's built-in nav so the existing overlay shortcuts
-// survive the migration.
 var (
-	jobsGotoTopKey    = key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top"))
-	jobsGotoBottomKey = key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom"))
-
 	// Action bindings surfaced in the overlay footer via the same
 	// help.Model as the bookmark/review/open pickers — so the colors
 	// (accent keys + muted descriptions + muted separators) match.
@@ -603,7 +597,7 @@ func writeOSC52Clipboard(text string) error {
 	if err != nil {
 		return fmt.Errorf("open tty: %w", err)
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }()
 	if _, err := tty.WriteString(seq); err != nil {
 		return fmt.Errorf("write tty: %w", err)
 	}
