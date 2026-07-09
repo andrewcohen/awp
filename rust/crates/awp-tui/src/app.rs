@@ -65,8 +65,19 @@ enum Mode {
     Prompt,
     /// `?` help overlay.
     Help,
+    /// `J` jobs / operation-log overlay.
+    Jobs,
     /// `f` easymotion find — accumulates a hint in `input`.
     Find,
+}
+
+/// A recorded deck operation (workspace create/delete/rename, PR merge/open),
+/// surfaced in the `J` overlay. Operations run synchronously; this is the log.
+#[derive(Debug, Clone)]
+struct Job {
+    title: String,
+    /// `Ok(summary)` on success, `Err(message)` on failure.
+    outcome: std::result::Result<String, String>,
 }
 
 /// The three-field new-workspace form.
@@ -99,6 +110,8 @@ pub struct App {
     find_hints: Vec<String>,
     /// The previously-open workspace, for the `L` last-session jump.
     last_opened: Option<WorkspaceId>,
+    /// Recorded operations, newest last, shown in the `J` overlay.
+    jobs: Vec<Job>,
     /// Pending-`g` flag for the `gg` jump-to-top chord.
     pending_g: bool,
     /// Last panel body area, so a freshly-opened pane is sized correctly.
@@ -127,6 +140,7 @@ impl App {
             target: None,
             find_hints: Vec::new(),
             last_opened: None,
+            jobs: Vec::new(),
             pending_g: false,
             panel_body: Rect::new(SIDEBAR_WIDTH + 1, 2, 40, 20),
             last_data_version: dv,
@@ -188,9 +202,21 @@ impl App {
                 name,
                 bookmark,
                 prompt,
-            } => self.create_workspace(&repo_root, &name, &bookmark, &prompt),
-            Effect::RenameWorkspace { id, new_name } => self.rename_workspace(&id, &new_name),
-            Effect::DeleteWorkspace { id } => self.delete_workspace(&id),
+            } => {
+                let r = self.create_workspace(&repo_root, &name, &bookmark, &prompt);
+                self.finish_job(format!("create {name}"), r);
+                Ok(())
+            }
+            Effect::RenameWorkspace { id, new_name } => {
+                let r = self.rename_workspace(&id, &new_name);
+                self.finish_job(format!("rename {} → {new_name}", id.name), r);
+                Ok(())
+            }
+            Effect::DeleteWorkspace { id } => {
+                let r = self.delete_workspace(&id);
+                self.finish_job(format!("delete {}", id.name), r);
+                Ok(())
+            }
             Effect::PersistPr { id, number } => {
                 if let Some(mut ws) = self.store.get_workspace(&id)? {
                     ws.pr_number = (number != 0).then_some(number);
@@ -212,8 +238,9 @@ impl App {
                     .workspace(&id)
                     .map(|w| w.path.clone())
                     .unwrap_or_default();
-                awp_agent::pr::open_web(&dir, number)?;
-                self.state.status_flash = Some(format!("opened PR #{number}"));
+                let r =
+                    awp_agent::pr::open_web(&dir, number).map(|()| format!("opened PR #{number}"));
+                self.finish_job(format!("open PR #{number}"), r);
                 Ok(())
             }
             Effect::MergePr { id, number } => {
@@ -222,10 +249,31 @@ impl App {
                     .workspace(&id)
                     .map(|w| w.path.clone())
                     .unwrap_or_default();
-                awp_agent::pr::merge_squash(&dir, number)?;
-                self.state.status_flash = Some(format!("merged PR #{number}"));
+                let r = awp_agent::pr::merge_squash(&dir, number)
+                    .map(|_| format!("merged PR #{number}"));
+                self.finish_job(format!("merge PR #{number}"), r);
                 Ok(())
             }
+        }
+    }
+
+    /// Record a completed operation in the job log and flash its result.
+    fn finish_job(&mut self, title: String, result: Result<String>) {
+        let outcome = match result {
+            Ok(summary) => {
+                self.state.status_flash = Some(summary.clone());
+                Ok(summary)
+            }
+            Err(err) => {
+                let msg = format!("{err:#}");
+                self.state.status_flash = Some(format!("error: {msg}"));
+                Err(msg)
+            }
+        };
+        self.jobs.push(Job { title, outcome });
+        // Bound the log.
+        if self.jobs.len() > 100 {
+            self.jobs.remove(0);
         }
     }
 
@@ -236,7 +284,7 @@ impl App {
         name: &str,
         bookmark: &str,
         prompt: &str,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let path = awp_agent::workspace::create(repo_root, name, bookmark)?;
         let norm = awp_agent::workspace::normalize_name(name);
         let ws = awp_core::Workspace {
@@ -252,25 +300,24 @@ impl App {
         let id = ws.id();
         self.dispatch_no_exec(Event::UpsertWorkspace(ws));
         self.open_workspace(&id)?;
-        self.state.status_flash = Some(format!("created {norm}"));
-        Ok(())
+        Ok(format!("created {norm}"))
     }
 
     /// Rename a workspace on disk (jj) and re-key its store row.
-    fn rename_workspace(&mut self, id: &WorkspaceId, new_name: &str) -> Result<()> {
+    fn rename_workspace(&mut self, id: &WorkspaceId, new_name: &str) -> Result<String> {
         // The reducer already re-keyed the in-RAM row; move the store row too.
         let Some(mut ws) = self.store.get_workspace(id)? else {
-            return Ok(());
+            return Ok(format!("renamed to {new_name}"));
         };
         let final_name = awp_agent::workspace::rename(&ws.path, new_name)?;
         self.store.delete_workspace(id)?;
-        ws.name = final_name;
+        ws.name = final_name.clone();
         self.store.upsert_workspace(&ws)?;
-        Ok(())
+        Ok(format!("renamed to {final_name}"))
     }
 
     /// Forget the jj workspace, kill its session, and drop the store row.
-    fn delete_workspace(&mut self, id: &WorkspaceId) -> Result<()> {
+    fn delete_workspace(&mut self, id: &WorkspaceId) -> Result<String> {
         let repo = basename(&id.repo_root);
         let session = SessionId(session_name(&repo, &id.name));
         let _ = self.backend.kill(&session);
@@ -280,7 +327,7 @@ impl App {
         }
         awp_agent::workspace::delete(&id.repo_root, &id.name)?;
         self.store.delete_workspace(id)?;
-        Ok(())
+        Ok(format!("deleted {}", id.name))
     }
 
     /// Send a prompt to the workspace's live agent by writing it (plus Enter) to
@@ -428,6 +475,7 @@ impl App {
             }
             KeyCode::Char('A') => self.open_target_input(Mode::Prompt, |_| String::new()),
             KeyCode::Char('f') => self.open_find(),
+            KeyCode::Char('J') => self.mode = Mode::Jobs,
             KeyCode::Char('L') => {
                 if let Some(id) = self.last_opened.clone() {
                     if let Err(err) = self.open_workspace(&id) {
@@ -488,7 +536,7 @@ impl App {
                 _ => self.close_mode(),
             },
             Mode::PrMenu => self.on_pr_menu_key(key.code),
-            Mode::Help => self.close_mode(),
+            Mode::Help | Mode::Jobs => self.close_mode(),
             Mode::Find => self.on_find_key(key.code),
             Mode::Normal => {}
         }
@@ -807,8 +855,41 @@ impl App {
         match self.mode {
             Mode::NewWorkspace => self.draw_new_form(frame, area),
             Mode::Help => self.draw_help(frame, area),
+            Mode::Jobs => self.draw_jobs(frame, area),
             _ => {}
         }
+    }
+
+    fn draw_jobs(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::widgets::Clear;
+        let rect = Self::overlay_rect(area, 70, 20);
+        frame.render_widget(Clear, rect);
+        let mut lines = vec![
+            Line::styled("jobs — recent operations", theme::project_header_style()),
+            Line::raw(""),
+        ];
+        if self.jobs.is_empty() {
+            lines.push(Line::styled("no operations yet", theme::muted_style()));
+        }
+        // Newest first, capped to the box height.
+        for job in self.jobs.iter().rev().take(15) {
+            let (glyph, style, detail) = match &job.outcome {
+                Ok(s) => ("✓", Style::default().fg(Palette::SUCCESS), s.clone()),
+                Err(e) => ("✗", Style::default().fg(Palette::DANGER), e.clone()),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{glyph} "), style),
+                Span::styled(format!("{:<24}", job.title), Style::default()),
+                Span::styled(detail, theme::muted_style()),
+            ]));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("any key closes", theme::muted_style()));
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Palette::ACCENT))
+            .padding(ratatui::widgets::Padding::new(1, 1, 0, 0));
+        frame.render_widget(Paragraph::new(lines).block(block), rect);
     }
 
     /// A centered bordered box, `frac`% of the area, cleared behind.
@@ -888,6 +969,7 @@ impl App {
             key("A", "send prompt to agent"),
             key("m …", "pin (m default / a–z / D unpin)"),
             key("f", "find (easymotion)"),
+            key("J", "jobs / operation log"),
             key("/", "filter"),
             key("P", "cycle scope (all/attention/inbox)"),
             key("^a", "toggle deck / pane focus"),
@@ -1405,6 +1487,28 @@ mod tests {
             app.state.workspace(&id).unwrap().bookmark.as_deref(),
             Some("andrew/x")
         );
+    }
+
+    #[test]
+    fn delete_records_a_job_and_jobs_overlay_opens() {
+        let mut app = seeded_app();
+        while app.state.selected_id() != Some(WorkspaceId::new("/r/beta", "wip")) {
+            app.on_key(key('j'));
+        }
+        app.on_key(key('D'));
+        app.on_key(key('y'));
+        // A job was recorded (delete succeeds against the in-memory store even
+        // though jj forget is a no-op here).
+        assert!(!app.jobs.is_empty());
+        assert_eq!(app.jobs.last().unwrap().title, "delete wip");
+        // Overlay opens on J and closes on any key.
+        app.on_key(key('J'));
+        assert_eq!(app.mode, Mode::Jobs);
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        app.on_key(key('x'));
+        assert_eq!(app.mode, Mode::Normal);
     }
 
     #[test]

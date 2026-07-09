@@ -127,6 +127,7 @@ Structured logs go to `~/.awp/awp-rs.log` (`AWP_LOG` controls the filter).
 | `A` | send a typed prompt to the agent |
 | `m` then `m` / `a`–`z` / `D` | pin to default / register / unpin |
 | `f` | find (easymotion hint jump) |
+| `J` | jobs / operation-log overlay |
 | `/` | filter (name / bookmark / prompt) |
 | `P` | cycle scope (all → attention → inbox) |
 | `?` | help overlay |
@@ -137,5 +138,7 @@ Structured logs go to `~/.awp/awp-rs.log` (`AWP_LOG` controls the filter).
 The window commands (`e/s/c/v/i/a`) open a named window in the workspace's
 headless tmux session and switch the live pane to it. Workspace lifecycle
 (`n/R/D`) drives `jj` (`workspace add` / `rename` / `forget`); PR actions drive
-`gh`. Remaining Go-deck follow-ups: the `J` jobs overlay, the `d` dev-server URL
-capture, the `x` user-actions menu, and `,` edit-state.
+`gh`; `J` shows the operation log. Remaining Go-deck follow-ups (lower value or
+architecture-specific): the `d` dev-server URL capture, the `x` user-actions
+menu, and `,` edit-state (the Go deck edited the JSON file directly; state is now
+SQLite).
