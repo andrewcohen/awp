@@ -7,8 +7,10 @@
 //! UI dependency.
 
 pub mod hooks;
+pub mod pr;
 pub mod repo;
 pub mod report_status;
 pub mod subprocess;
+pub mod workspace;
 
 pub use report_status::{Ident, ReportArgs};

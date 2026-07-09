@@ -383,9 +383,19 @@ The implementer MUST reproduce these; they are encoded edge-case knowledge.
   Status: **75 tests green** including a tmux-persistence test and an end-to-end
   test (tmux → PTY → real libghostty → rendered `Screen`, live shell output
   verified); `cargo fmt --check`, `clippy --all-targets -D warnings`, and
-  `cargo build --workspace` all pass. Deferred follow-ups: `gh` PR/CI background
-  enrichment, report-status badge-suppression (is-viewing) query, shell-tab
-  switching wired to tmux windows.
+  `cargo build --workspace` all pass.
+- 2026-07-09: **Deck command surface ported** (parity pass). A modal state
+  machine (`Mode`) inside the deck adds: `n` new-workspace form, `R` rename, `D`
+  delete (confirm), `p` PR menu (`o/m/d/s`), `B` bookmark, `A` send-prompt, `f`
+  easymotion find, `?` help overlay, `L` last-session, `m…` pin chord, and the
+  `inbox` scope (`P` cycles all→attention→inbox). Backed by new `awp-core`
+  events/effects (reducer-tested) and `awp-agent` jj/gh orchestration:
+  `workspace::{create,rename,delete}` (jj `workspace add`/`rename`/`forget`,
+  managed-path scheme) and `pr::{open_web,merge_squash}` — pure arg builders
+  unit-tested. **94 tests green**; fmt/clippy/build clean. The jj/gh *execution*
+  paths are wired but not end-to-end verified in the sandbox (no live repo / gh
+  auth). Remaining Go-deck follow-ups: `J` jobs overlay (needs a background-job
+  system), `d` dev-server URL capture, `x` user-actions menu, `,` edit-state.
 
 ## Open questions / follow-ups
 - ~~Confirm the `libghostty-vt` C API exposes full styled-cell readout~~ →

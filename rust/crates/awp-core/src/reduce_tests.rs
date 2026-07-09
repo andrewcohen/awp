@@ -75,7 +75,9 @@ fn cycle_scope_filters_to_attention_and_flashes() {
     assert_eq!(vis.len(), 2);
     assert!(vis.contains(&WorkspaceId::new("/r/alpha", "feature")));
     assert!(vis.contains(&WorkspaceId::new("/r/beta", "wip")));
-    reduce(&mut s, Event::CycleScope);
+    reduce(&mut s, Event::CycleScope); // → inbox
+    assert_eq!(s.scope, Scope::Inbox);
+    reduce(&mut s, Event::CycleScope); // → all
     assert_eq!(s.scope, Scope::All);
 }
 
@@ -255,6 +257,142 @@ fn quit_sets_flag() {
     let mut s = loaded();
     reduce(&mut s, Event::Quit);
     assert!(s.should_quit);
+}
+
+#[test]
+fn create_workspace_emits_effect() {
+    let mut s = loaded();
+    let effects = reduce(
+        &mut s,
+        Event::CreateWorkspace {
+            repo_root: "/r/alpha".into(),
+            name: "New Feature".into(),
+            bookmark: "main".into(),
+            prompt: "do it".into(),
+        },
+    );
+    assert_eq!(
+        effects,
+        vec![Effect::CreateWorkspace {
+            repo_root: "/r/alpha".into(),
+            name: "New Feature".into(),
+            bookmark: "main".into(),
+            prompt: "do it".into(),
+        }]
+    );
+}
+
+#[test]
+fn rename_rekeys_row_and_emits_effect() {
+    let mut s = loaded();
+    let id = WorkspaceId::new("/r/alpha", "main");
+    let effects = reduce(
+        &mut s,
+        Event::RenameWorkspace {
+            id: id.clone(),
+            new_name: "trunk".into(),
+        },
+    );
+    assert!(s
+        .workspace(&WorkspaceId::new("/r/alpha", "trunk"))
+        .is_some());
+    assert!(s.workspace(&id).is_none());
+    assert_eq!(
+        effects,
+        vec![Effect::RenameWorkspace {
+            id,
+            new_name: "trunk".into()
+        }]
+    );
+}
+
+#[test]
+fn rename_to_same_or_empty_is_noop() {
+    let mut s = loaded();
+    let id = WorkspaceId::new("/r/alpha", "main");
+    assert!(reduce(
+        &mut s,
+        Event::RenameWorkspace {
+            id: id.clone(),
+            new_name: "main".into()
+        }
+    )
+    .is_empty());
+    assert!(reduce(
+        &mut s,
+        Event::RenameWorkspace {
+            id,
+            new_name: "  ".into()
+        }
+    )
+    .is_empty());
+}
+
+#[test]
+fn delete_removes_row_and_prunes_empty_project() {
+    let mut s = loaded();
+    let effects = reduce(
+        &mut s,
+        Event::DeleteWorkspace {
+            id: WorkspaceId::new("/r/beta", "wip"),
+        },
+    );
+    assert!(s.workspace(&WorkspaceId::new("/r/beta", "wip")).is_none());
+    // beta had only one workspace → project pruned.
+    assert!(!s.projects.iter().any(|p| p.repo_root == "/r/beta"));
+    assert_eq!(effects.len(), 1);
+}
+
+#[test]
+fn set_pr_and_link_bookmark_persist() {
+    let mut s = loaded();
+    let id = WorkspaceId::new("/r/alpha", "main");
+    reduce(
+        &mut s,
+        Event::SetPr {
+            id: id.clone(),
+            number: 99,
+        },
+    );
+    assert_eq!(s.workspace(&id).unwrap().pr_number, Some(99));
+    reduce(
+        &mut s,
+        Event::LinkBookmark {
+            id: id.clone(),
+            bookmark: "andrew/x".into(),
+        },
+    );
+    assert_eq!(
+        s.workspace(&id).unwrap().bookmark.as_deref(),
+        Some("andrew/x")
+    );
+}
+
+#[test]
+fn open_pr_without_number_flashes() {
+    let mut s = loaded();
+    let effects = reduce(
+        &mut s,
+        Event::OpenPr {
+            id: WorkspaceId::new("/r/alpha", "main"),
+        },
+    );
+    assert!(effects.is_empty());
+    assert!(s.status_flash.is_some());
+}
+
+#[test]
+fn inbox_scope_shows_only_pr_rows() {
+    let mut s = loaded();
+    s.workspace_mut(&WorkspaceId::new("/r/alpha", "main"))
+        .unwrap()
+        .pr_number = Some(7);
+    // Cycle all → attention → inbox.
+    reduce(&mut s, Event::CycleScope);
+    reduce(&mut s, Event::CycleScope);
+    assert_eq!(s.scope, Scope::Inbox);
+    let vis = s.visible();
+    assert_eq!(vis, vec![WorkspaceId::new("/r/alpha", "main")]);
 }
 
 #[test]

@@ -56,8 +56,10 @@ impl AppState {
 
     /// Whether a workspace passes the active scope + filter.
     fn passes(&self, ws: &Workspace) -> bool {
-        if self.scope == Scope::Attention && !ws.wants_attention() {
-            return false;
+        match self.scope {
+            Scope::Attention if !ws.wants_attention() => return false,
+            Scope::Inbox if ws.pr_number.is_none() => return false,
+            _ => {}
         }
         if let Some(f) = &self.filter {
             if !f.is_empty() && !matches_filter(ws, f) {

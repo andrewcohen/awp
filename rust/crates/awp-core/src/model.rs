@@ -119,14 +119,18 @@ pub enum Scope {
     All,
     /// Only workspaces that want attention (working / waiting / unread).
     Attention,
+    /// Only workspaces associated with a PR (the review inbox).
+    Inbox,
 }
 
 impl Scope {
-    /// Cycle to the next scope. Matches the Go deck's `P` key.
+    /// Cycle to the next scope. Matches the Go deck's `P` key (all → attention →
+    /// inbox → all).
     pub fn next(self) -> Self {
         match self {
             Scope::All => Scope::Attention,
-            Scope::Attention => Scope::All,
+            Scope::Attention => Scope::Inbox,
+            Scope::Inbox => Scope::All,
         }
     }
 
@@ -135,6 +139,7 @@ impl Scope {
         match self {
             Scope::All => "all",
             Scope::Attention => "attention",
+            Scope::Inbox => "inbox",
         }
     }
 }

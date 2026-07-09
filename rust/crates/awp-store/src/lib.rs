@@ -224,6 +224,15 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// Delete a workspace row.
+    pub fn delete_workspace(&self, id: &WorkspaceId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM workspaces WHERE repo_root=?1 AND name=?2",
+            params![id.repo_root, id.name],
+        )?;
+        Ok(())
+    }
+
     /// Update a workspace's pin register (`None` unpins).
     pub fn set_pin(&self, id: &WorkspaceId, group: Option<&str>) -> Result<()> {
         self.conn.execute(

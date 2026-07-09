@@ -7,7 +7,7 @@
 
 use crate::effect::Effect;
 use crate::event::{Event, Focus};
-use crate::model::Project;
+use crate::model::{Project, WorkspaceId};
 use crate::state::AppState;
 
 /// Apply one event to the state, returning the side effects to perform.
@@ -133,6 +133,77 @@ pub fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             vec![Effect::PersistPin { id, group }]
         }
 
+        Event::CreateWorkspace {
+            repo_root,
+            name,
+            bookmark,
+            prompt,
+        } => vec![Effect::CreateWorkspace {
+            repo_root,
+            name,
+            bookmark,
+            prompt,
+        }],
+
+        Event::RenameWorkspace { id, new_name } => {
+            if new_name.trim().is_empty() || new_name == id.name {
+                return Vec::new();
+            }
+            // Optimistically re-key the row so the deck updates immediately.
+            if let Some(ws) = state.workspace_mut(&id) {
+                ws.name = new_name.clone();
+            }
+            state.clamp_selection();
+            vec![Effect::RenameWorkspace { id, new_name }]
+        }
+
+        Event::DeleteWorkspace { id } => {
+            remove_workspace(state, &id);
+            state.clamp_selection();
+            vec![Effect::DeleteWorkspace { id }]
+        }
+
+        Event::SetPr { id, number } => {
+            if let Some(ws) = state.workspace_mut(&id) {
+                ws.pr_number = (number != 0).then_some(number);
+            }
+            state.clamp_selection();
+            vec![Effect::PersistPr { id, number }]
+        }
+
+        Event::LinkBookmark { id, bookmark } => {
+            if let Some(ws) = state.workspace_mut(&id) {
+                ws.bookmark = (!bookmark.is_empty()).then(|| bookmark.clone());
+            }
+            vec![Effect::PersistBookmark { id, bookmark }]
+        }
+
+        Event::SendPrompt { id, text } => {
+            if text.trim().is_empty() {
+                return Vec::new();
+            }
+            if let Some(ws) = state.workspace_mut(&id) {
+                ws.active_prompt = Some(text.clone());
+            }
+            vec![Effect::SendPrompt { id, text }]
+        }
+
+        Event::OpenPr { id } => match state.workspace(&id).and_then(|w| w.pr_number) {
+            Some(number) => vec![Effect::OpenPrWeb { id, number }],
+            None => {
+                state.status_flash = Some("no PR for this workspace".into());
+                Vec::new()
+            }
+        },
+
+        Event::MergePr { id } => match state.workspace(&id).and_then(|w| w.pr_number) {
+            Some(number) => vec![Effect::MergePr { id, number }],
+            None => {
+                state.status_flash = Some("no PR for this workspace".into());
+                Vec::new()
+            }
+        },
+
         Event::Tick => Vec::new(),
 
         Event::Quit => {
@@ -140,6 +211,17 @@ pub fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+/// Remove a workspace row from the roster, dropping its project if it becomes
+/// empty.
+fn remove_workspace(state: &mut AppState, id: &WorkspaceId) {
+    for project in &mut state.projects {
+        if project.repo_root == id.repo_root {
+            project.workspaces.retain(|w| w.name != id.name);
+        }
+    }
+    state.projects.retain(|p| !p.workspaces.is_empty());
 }
 
 /// Install a fresh roster, keeping projects in stable name order and clamping

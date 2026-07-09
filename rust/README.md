@@ -114,20 +114,28 @@ Structured logs go to `~/.awp/awp-rs.log` (`AWP_LOG` controls the filter).
 | `j` / `k` or ↓ / ↑ | move selection |
 | `gg` / `G` | jump to top / bottom |
 | `Enter` / `a` | open (attach) the selected workspace's agent pane |
+| `L` | jump to the last-opened session |
 | `s` | shell window |
 | `e` | editor window (`$EDITOR`) |
 | `c` / `C` | review window (`tuicr -r @` / `tuicr -r main..@`) |
 | `v` | vcs window (`jjui`) |
 | `i` | ci window (`gh run watch`) |
+| `n` | new workspace (form: name / bookmark / prompt) |
+| `R` / `D` | rename / delete workspace |
+| `p` | PR menu — `o` open · `m` merge · `d` description · `s` set number |
+| `B` | link a bookmark to the workspace |
+| `A` | send a typed prompt to the agent |
 | `m` then `m` / `a`–`z` / `D` | pin to default / register / unpin |
+| `f` | find (easymotion hint jump) |
 | `/` | filter (name / bookmark / prompt) |
-| `P` | cycle scope (all ↔ attention) |
+| `P` | cycle scope (all → attention → inbox) |
+| `?` | help overlay |
 | `Ctrl-a` | toggle focus between deck and live pane |
 | `q` / `Ctrl-c` | quit |
 | in pane | keys forwarded raw to the shell |
 
 The window commands (`e/s/c/v/i/a`) open a named window in the workspace's
-headless tmux session and switch the live pane to it. Not yet ported from the Go
-deck (phased follow-up): `n` new / `R` rename / `D` delete workspace, the `p …`
-PR actions, `B` bookmark linker, `J` jobs overlay, `f` easymotion find, and the
-inbox scope.
+headless tmux session and switch the live pane to it. Workspace lifecycle
+(`n/R/D`) drives `jj` (`workspace add` / `rename` / `forget`); PR actions drive
+`gh`. Remaining Go-deck follow-ups: the `J` jobs overlay, the `d` dev-server URL
+capture, the `x` user-actions menu, and `,` edit-state.

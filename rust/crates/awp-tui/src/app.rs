@@ -38,9 +38,47 @@ fn new_engine(rows: u16, cols: u16) -> Box<dyn VtEngine> {
     Box::new(awp_vt::LibghosttyEngine::new(rows, cols))
 }
 
-/// A transient filter-input buffer (the `/` mode).
-struct FilterInput {
-    buffer: String,
+/// Which modal the deck is in. `Normal` is the row list; every other variant
+/// routes keys and rendering to a modal (form / picker / confirm / overlay),
+/// following the Go deck's "one program, states inside the model" pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum Mode {
+    #[default]
+    Normal,
+    /// `/` filter — edits `input`, applied live.
+    Filter,
+    /// `m` pin chord — waiting for the register key.
+    Pin,
+    /// `n` new-workspace form — edits `form`.
+    NewWorkspace,
+    /// `R` rename — edits `input`, acts on `target`.
+    Rename,
+    /// `D` confirm delete of `target`.
+    ConfirmDelete,
+    /// `p` PR action menu for `target`.
+    PrMenu,
+    /// `p s` set PR number — edits `input`, acts on `target`.
+    SetPr,
+    /// `B` link bookmark — edits `input`, acts on `target`.
+    Bookmark,
+    /// `A` send prompt — edits `input`, acts on `target`.
+    Prompt,
+    /// `?` help overlay.
+    Help,
+    /// `f` easymotion find — accumulates a hint in `input`.
+    Find,
+}
+
+/// The three-field new-workspace form.
+#[derive(Debug, Default, Clone)]
+struct NewForm {
+    name: String,
+    bookmark: String,
+    prompt: String,
+    /// Focused field: 0 name, 1 bookmark, 2 prompt.
+    field: usize,
+    /// Repo root the workspace is created under (the selected row's project).
+    repo_root: String,
 }
 
 /// The deck.
@@ -49,11 +87,20 @@ pub struct App {
     store: Store,
     backend: Box<dyn SessionBackend>,
     pane: Option<ActivePane>,
-    filter: Option<FilterInput>,
+    /// The active modal (or `Normal`).
+    mode: Mode,
+    /// Shared single-line input buffer for the text modes.
+    input: String,
+    /// New-workspace form state.
+    form: NewForm,
+    /// The workspace a modal acts on (rename / delete / PR / bookmark / prompt).
+    target: Option<WorkspaceId>,
+    /// Easymotion hint labels for the currently-visible rows (find mode).
+    find_hints: Vec<String>,
+    /// The previously-open workspace, for the `L` last-session jump.
+    last_opened: Option<WorkspaceId>,
     /// Pending-`g` flag for the `gg` jump-to-top chord.
     pending_g: bool,
-    /// Pending-`m` flag for the `m<reg>` pin chord.
-    pending_m: bool,
     /// Last panel body area, so a freshly-opened pane is sized correctly.
     panel_body: Rect,
     last_data_version: i64,
@@ -74,9 +121,13 @@ impl App {
             store,
             backend,
             pane: None,
-            filter: None,
+            mode: Mode::Normal,
+            input: String::new(),
+            form: NewForm::default(),
+            target: None,
+            find_hints: Vec::new(),
+            last_opened: None,
             pending_g: false,
-            pending_m: false,
             panel_body: Rect::new(SIDEBAR_WIDTH + 1, 2, 40, 20),
             last_data_version: dv,
         })
@@ -132,7 +183,118 @@ impl App {
                 self.dispatch_no_exec(Event::RosterLoaded(projects));
                 Ok(())
             }
+            Effect::CreateWorkspace {
+                repo_root,
+                name,
+                bookmark,
+                prompt,
+            } => self.create_workspace(&repo_root, &name, &bookmark, &prompt),
+            Effect::RenameWorkspace { id, new_name } => self.rename_workspace(&id, &new_name),
+            Effect::DeleteWorkspace { id } => self.delete_workspace(&id),
+            Effect::PersistPr { id, number } => {
+                if let Some(mut ws) = self.store.get_workspace(&id)? {
+                    ws.pr_number = (number != 0).then_some(number);
+                    self.store.upsert_workspace(&ws)?;
+                }
+                Ok(())
+            }
+            Effect::PersistBookmark { id, bookmark } => {
+                if let Some(mut ws) = self.store.get_workspace(&id)? {
+                    ws.bookmark = (!bookmark.is_empty()).then_some(bookmark);
+                    self.store.upsert_workspace(&ws)?;
+                }
+                Ok(())
+            }
+            Effect::SendPrompt { id, text } => self.send_prompt(&id, &text),
+            Effect::OpenPrWeb { id, number } => {
+                let dir = self
+                    .state
+                    .workspace(&id)
+                    .map(|w| w.path.clone())
+                    .unwrap_or_default();
+                awp_agent::pr::open_web(&dir, number)?;
+                self.state.status_flash = Some(format!("opened PR #{number}"));
+                Ok(())
+            }
+            Effect::MergePr { id, number } => {
+                let dir = self
+                    .state
+                    .workspace(&id)
+                    .map(|w| w.path.clone())
+                    .unwrap_or_default();
+                awp_agent::pr::merge_squash(&dir, number)?;
+                self.state.status_flash = Some(format!("merged PR #{number}"));
+                Ok(())
+            }
         }
+    }
+
+    /// Create a jj workspace, persist the row, start its session, and refocus.
+    fn create_workspace(
+        &mut self,
+        repo_root: &str,
+        name: &str,
+        bookmark: &str,
+        prompt: &str,
+    ) -> Result<()> {
+        let path = awp_agent::workspace::create(repo_root, name, bookmark)?;
+        let norm = awp_agent::workspace::normalize_name(name);
+        let ws = awp_core::Workspace {
+            repo_root: repo_root.to_string(),
+            name: norm.clone(),
+            path: path.to_string_lossy().to_string(),
+            bookmark: (!bookmark.trim().is_empty()).then(|| bookmark.trim().to_string()),
+            active_prompt: (!prompt.trim().is_empty()).then(|| prompt.trim().to_string()),
+            status: Status::Starting,
+            ..Default::default()
+        };
+        self.store.upsert_workspace(&ws)?;
+        let id = ws.id();
+        self.dispatch_no_exec(Event::UpsertWorkspace(ws));
+        self.open_workspace(&id)?;
+        self.state.status_flash = Some(format!("created {norm}"));
+        Ok(())
+    }
+
+    /// Rename a workspace on disk (jj) and re-key its store row.
+    fn rename_workspace(&mut self, id: &WorkspaceId, new_name: &str) -> Result<()> {
+        // The reducer already re-keyed the in-RAM row; move the store row too.
+        let Some(mut ws) = self.store.get_workspace(id)? else {
+            return Ok(());
+        };
+        let final_name = awp_agent::workspace::rename(&ws.path, new_name)?;
+        self.store.delete_workspace(id)?;
+        ws.name = final_name;
+        self.store.upsert_workspace(&ws)?;
+        Ok(())
+    }
+
+    /// Forget the jj workspace, kill its session, and drop the store row.
+    fn delete_workspace(&mut self, id: &WorkspaceId) -> Result<()> {
+        let repo = basename(&id.repo_root);
+        let session = SessionId(session_name(&repo, &id.name));
+        let _ = self.backend.kill(&session);
+        if self.pane.as_ref().map(|p| &p.id) == Some(id) {
+            self.pane = None;
+            self.state.focus = Focus::Deck;
+        }
+        awp_agent::workspace::delete(&id.repo_root, &id.name)?;
+        self.store.delete_workspace(id)?;
+        Ok(())
+    }
+
+    /// Send a prompt to the workspace's live agent by writing it (plus Enter) to
+    /// the pane's PTY. Falls back silently if the workspace isn't open.
+    fn send_prompt(&mut self, id: &WorkspaceId, text: &str) -> Result<()> {
+        if self.pane.as_ref().map(|p| &p.id) != Some(id) {
+            self.open_workspace(id)?;
+        }
+        if let Some(pane) = self.pane.as_mut() {
+            let mut bytes = text.as_bytes().to_vec();
+            bytes.push(b'\r');
+            let _ = pane.attached.write_input(&bytes);
+        }
+        Ok(())
     }
 
     /// Apply an event without executing effects (used from inside `execute` to
@@ -170,6 +332,12 @@ impl App {
             .backend
             .attach(&SessionId(name), &win)
             .map_err(|e| anyhow::anyhow!("attach session: {e}"))?;
+        // Remember the outgoing workspace for the `L` last-session jump.
+        if let Some(prev) = self.pane.as_ref().map(|p| p.id.clone()) {
+            if prev != *id {
+                self.last_opened = Some(prev);
+            }
+        }
         let engine = new_engine(rows, cols);
         self.pane = Some(ActivePane {
             id: id.clone(),
@@ -183,23 +351,20 @@ impl App {
 
     // --- key handling ------------------------------------------------------
 
-    /// Translate a key press into deck/panel behavior. Returns nothing; state
-    /// changes flow through `dispatch`.
+    /// Translate a key press into deck/panel/modal behavior.
     pub fn on_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        // Ctrl-a toggles focus everywhere.
+        // A modal owns all keys while it is open.
+        if self.mode != Mode::Normal {
+            self.on_mode_key(key);
+            return;
+        }
+        // Ctrl-a toggles deck ↔ panel focus (normal mode only).
         if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.dispatch(Event::ToggleFocus);
             return;
         }
-
-        // Filter-input mode captures typed text.
-        if self.filter.is_some() {
-            self.on_filter_key(key);
-            return;
-        }
-
         match self.state.focus {
             Focus::Panel => self.forward_to_pane(key),
             Focus::Deck => self.on_deck_key(key),
@@ -208,11 +373,6 @@ impl App {
 
     fn on_deck_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
-        // Second key of the `m` pin chord takes priority.
-        if self.pending_m {
-            self.on_pin_key(key);
-            return;
-        }
         let g_was_pending = self.pending_g;
         self.pending_g = false;
         match key.code {
@@ -233,13 +393,11 @@ impl App {
             KeyCode::Enter => self.dispatch(Event::OpenSelected),
             KeyCode::Char('P') => self.dispatch(Event::CycleScope),
             KeyCode::Char('/') => {
-                self.filter = Some(FilterInput {
-                    buffer: self.state.filter.clone().unwrap_or_default(),
-                });
+                self.input = self.state.filter.clone().unwrap_or_default();
+                self.mode = Mode::Filter;
             }
-            // Window commands: open (or focus) a named tmux window running a
-            // tool, ported from the Go deck's e/s/c/C/v/i/a keys.
-            KeyCode::Char('a') => self.dispatch(Event::OpenSelected), // agent (base window)
+            // Window commands (Go deck e/s/c/C/v/i/a).
+            KeyCode::Char('a') => self.dispatch(Event::OpenSelected),
             KeyCode::Char('s') => self.run_window("shell", &[]),
             KeyCode::Char('e') => {
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
@@ -249,27 +407,285 @@ impl App {
             KeyCode::Char('C') => self.run_window("review", &["tuicr", "-r", "main..@"]),
             KeyCode::Char('v') => self.run_window("vcs", &["jjui"]),
             KeyCode::Char('i') => self.run_window("ci", &["gh", "run", "watch"]),
-            // Pin chord: `m` then a register key (m/default, a–z, D unpin).
-            KeyCode::Char('m') => self.pending_m = true,
-            KeyCode::Esc => self.dispatch(Event::ClearFilter),
+            // Modal openers.
+            KeyCode::Char('m') => self.mode = Mode::Pin,
+            KeyCode::Char('n') => self.open_new_form(),
+            KeyCode::Char('R') => self.open_target_input(Mode::Rename, |ws| ws.name.clone()),
+            KeyCode::Char('D') => {
+                if let Some(id) = self.state.selected_id() {
+                    self.target = Some(id);
+                    self.mode = Mode::ConfirmDelete;
+                }
+            }
+            KeyCode::Char('p') => {
+                if let Some(id) = self.state.selected_id() {
+                    self.target = Some(id);
+                    self.mode = Mode::PrMenu;
+                }
+            }
+            KeyCode::Char('B') => {
+                self.open_target_input(Mode::Bookmark, |ws| ws.bookmark.clone().unwrap_or_default())
+            }
+            KeyCode::Char('A') => self.open_target_input(Mode::Prompt, |_| String::new()),
+            KeyCode::Char('f') => self.open_find(),
+            KeyCode::Char('L') => {
+                if let Some(id) = self.last_opened.clone() {
+                    if let Err(err) = self.open_workspace(&id) {
+                        self.state.status_flash = Some(format!("error: {err}"));
+                    } else {
+                        self.state.focus = Focus::Panel;
+                    }
+                }
+            }
+            KeyCode::Char('?') => self.mode = Mode::Help,
             _ => {}
         }
     }
 
-    /// Handle the second key of the `m` pin chord.
-    fn on_pin_key(&mut self, key: crossterm::event::KeyEvent) {
+    /// Route a key while a modal is open.
+    fn on_mode_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
-        self.pending_m = false;
+        match self.mode {
+            Mode::Filter => self.on_filter_key(key.code),
+            Mode::Pin => self.on_pin_key(key.code),
+            Mode::NewWorkspace => self.on_new_form_key(key),
+            Mode::Rename => {
+                if let Some(text) = self.on_text_key(key.code) {
+                    if let Some(id) = self.target.take() {
+                        self.dispatch(Event::RenameWorkspace { id, new_name: text });
+                    }
+                }
+            }
+            Mode::SetPr => {
+                if let Some(text) = self.on_text_key(key.code) {
+                    if let Some(id) = self.target.take() {
+                        let number = text.trim().parse::<u64>().unwrap_or(0);
+                        self.dispatch(Event::SetPr { id, number });
+                    }
+                }
+            }
+            Mode::Bookmark => {
+                if let Some(text) = self.on_text_key(key.code) {
+                    if let Some(id) = self.target.take() {
+                        self.dispatch(Event::LinkBookmark { id, bookmark: text });
+                    }
+                }
+            }
+            Mode::Prompt => {
+                if let Some(text) = self.on_text_key(key.code) {
+                    if let Some(id) = self.target.take() {
+                        self.dispatch(Event::SendPrompt { id, text });
+                    }
+                }
+            }
+            Mode::ConfirmDelete => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    if let Some(id) = self.target.take() {
+                        self.dispatch(Event::DeleteWorkspace { id });
+                    }
+                    self.close_mode();
+                }
+                _ => self.close_mode(),
+            },
+            Mode::PrMenu => self.on_pr_menu_key(key.code),
+            Mode::Help => self.close_mode(),
+            Mode::Find => self.on_find_key(key.code),
+            Mode::Normal => {}
+        }
+    }
+
+    fn on_filter_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        match code {
+            KeyCode::Esc => {
+                self.close_mode();
+                self.dispatch(Event::ClearFilter);
+            }
+            KeyCode::Enter => {
+                let text = std::mem::take(&mut self.input);
+                self.close_mode();
+                if text.is_empty() {
+                    self.dispatch(Event::ClearFilter);
+                } else {
+                    self.dispatch(Event::SetFilter(text));
+                }
+            }
+            KeyCode::Backspace => {
+                self.input.pop();
+                let live = self.input.clone();
+                self.dispatch(Event::SetFilter(live));
+            }
+            KeyCode::Char(c) => {
+                self.input.push(c);
+                let live = self.input.clone();
+                self.dispatch(Event::SetFilter(live));
+            }
+            _ => {}
+        }
+    }
+
+    fn on_pin_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        self.close_mode();
         let Some(id) = self.state.selected_id() else {
             return;
         };
-        let group = match key.code {
+        let group = match code {
             KeyCode::Char('m') => "default".to_string(),
-            KeyCode::Char('D') => String::new(), // unpin
+            KeyCode::Char('D') => String::new(),
             KeyCode::Char(c @ 'a'..='z') => c.to_string(),
             _ => return,
         };
         self.dispatch(Event::SetPin { id, group });
+    }
+
+    fn on_pr_menu_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        let Some(id) = self.target.clone() else {
+            self.close_mode();
+            return;
+        };
+        match code {
+            KeyCode::Char('o') => {
+                self.close_mode();
+                self.dispatch(Event::OpenPr { id });
+            }
+            KeyCode::Char('m') => {
+                self.close_mode();
+                self.dispatch(Event::MergePr { id });
+            }
+            KeyCode::Char('d') => {
+                self.close_mode();
+                self.run_window("pr", &["sh", "-c", "gh pr view | ${PAGER:-less}"]);
+            }
+            KeyCode::Char('s') => {
+                // Switch to the numeric SetPr input, keeping the target.
+                self.input.clear();
+                self.mode = Mode::SetPr;
+            }
+            _ => self.close_mode(),
+        }
+    }
+
+    /// Generic single-line text edit. Returns `Some(text)` on Enter (submit),
+    /// `None` otherwise; Esc cancels back to Normal.
+    fn on_text_key(&mut self, code: crossterm::event::KeyCode) -> Option<String> {
+        use crossterm::event::KeyCode;
+        match code {
+            KeyCode::Esc => {
+                self.close_mode();
+                None
+            }
+            KeyCode::Enter => {
+                let text = std::mem::take(&mut self.input);
+                self.close_mode();
+                Some(text)
+            }
+            KeyCode::Backspace => {
+                self.input.pop();
+                None
+            }
+            KeyCode::Char(c) => {
+                self.input.push(c);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Open a single-line input mode seeded from the selected workspace.
+    fn open_target_input(&mut self, mode: Mode, seed: impl Fn(&awp_core::Workspace) -> String) {
+        let Some(id) = self.state.selected_id() else {
+            return;
+        };
+        self.input = self.state.workspace(&id).map(seed).unwrap_or_default();
+        self.target = Some(id);
+        self.mode = mode;
+    }
+
+    /// Open the new-workspace form under the selected row's project.
+    fn open_new_form(&mut self) {
+        let repo_root = self
+            .state
+            .selected_id()
+            .map(|id| id.repo_root)
+            .or_else(|| self.state.projects.first().map(|p| p.repo_root.clone()))
+            .unwrap_or_default();
+        self.form = NewForm {
+            repo_root,
+            ..Default::default()
+        };
+        self.mode = Mode::NewWorkspace;
+    }
+
+    fn on_new_form_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc => self.close_mode(),
+            KeyCode::Tab | KeyCode::Down => self.form.field = (self.form.field + 1) % 3,
+            KeyCode::BackTab | KeyCode::Up => self.form.field = (self.form.field + 2) % 3,
+            KeyCode::Enter => {
+                if self.form.name.trim().is_empty() {
+                    self.state.status_flash = Some("name required".into());
+                    return;
+                }
+                let form = std::mem::take(&mut self.form);
+                self.close_mode();
+                self.dispatch(Event::CreateWorkspace {
+                    repo_root: form.repo_root,
+                    name: form.name,
+                    bookmark: form.bookmark,
+                    prompt: form.prompt,
+                });
+            }
+            KeyCode::Backspace => {
+                self.form_field_mut().pop();
+            }
+            KeyCode::Char(c) => self.form_field_mut().push(c),
+            _ => {}
+        }
+    }
+
+    fn form_field_mut(&mut self) -> &mut String {
+        match self.form.field {
+            0 => &mut self.form.name,
+            1 => &mut self.form.bookmark,
+            _ => &mut self.form.prompt,
+        }
+    }
+
+    /// Assign easymotion hint letters to the visible rows and enter find mode.
+    fn open_find(&mut self) {
+        let n = self.state.visible().len();
+        self.find_hints = (0..n)
+            .map(|i| ((b'a' + (i % 26) as u8) as char).to_string())
+            .collect();
+        self.input.clear();
+        self.mode = Mode::Find;
+    }
+
+    fn on_find_key(&mut self, code: crossterm::event::KeyCode) {
+        use crossterm::event::KeyCode;
+        match code {
+            KeyCode::Esc => self.close_mode(),
+            KeyCode::Char(c) => {
+                if let Some(idx) = self.find_hints.iter().position(|h| h == &c.to_string()) {
+                    self.close_mode();
+                    self.state.selected = idx;
+                    self.dispatch(Event::OpenSelected);
+                } else {
+                    self.close_mode();
+                }
+            }
+            _ => self.close_mode(),
+        }
+    }
+
+    /// Return to the row list, clearing transient modal state.
+    fn close_mode(&mut self) {
+        self.mode = Mode::Normal;
+        self.input.clear();
+        self.find_hints.clear();
     }
 
     /// Open (or focus) a named tmux window running `command` in the selected
@@ -299,39 +715,6 @@ impl App {
             return;
         }
         self.state.focus = Focus::Panel;
-    }
-
-    fn on_filter_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-        let Some(filter) = self.filter.as_mut() else {
-            return;
-        };
-        match key.code {
-            KeyCode::Esc => {
-                self.filter = None;
-                self.dispatch(Event::ClearFilter);
-            }
-            KeyCode::Enter => {
-                let text = filter.buffer.clone();
-                self.filter = None;
-                if text.is_empty() {
-                    self.dispatch(Event::ClearFilter);
-                } else {
-                    self.dispatch(Event::SetFilter(text));
-                }
-            }
-            KeyCode::Backspace => {
-                filter.buffer.pop();
-                let live = filter.buffer.clone();
-                self.dispatch(Event::SetFilter(live));
-            }
-            KeyCode::Char(c) => {
-                filter.buffer.push(c);
-                let live = filter.buffer.clone();
-                self.dispatch(Event::SetFilter(live));
-            }
-            _ => {}
-        }
     }
 
     /// Forward a raw keystroke to the live pane's PTY.
@@ -420,6 +803,101 @@ impl App {
             .split(area);
         self.draw_sidebar(frame, cols[0]);
         self.draw_panel(frame, cols[1]);
+        // Centered overlays for the multi-line modals.
+        match self.mode {
+            Mode::NewWorkspace => self.draw_new_form(frame, area),
+            Mode::Help => self.draw_help(frame, area),
+            _ => {}
+        }
+    }
+
+    /// A centered bordered box, `frac`% of the area, cleared behind.
+    fn overlay_rect(area: Rect, width: u16, height: u16) -> Rect {
+        let w = width.min(area.width.saturating_sub(2));
+        let h = height.min(area.height.saturating_sub(2));
+        let x = area.x + (area.width.saturating_sub(w)) / 2;
+        let y = area.y + (area.height.saturating_sub(h)) / 2;
+        Rect::new(x, y, w, h)
+    }
+
+    fn draw_new_form(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::widgets::Clear;
+        let rect = Self::overlay_rect(area, 60, 9);
+        frame.render_widget(Clear, rect);
+        let repo = basename(&self.form.repo_root);
+        let field_line = |idx: usize, label: &str, value: &str| -> Line<'static> {
+            let focused = self.form.field == idx;
+            let marker = if focused { "▶ " } else { "  " };
+            let style = if focused {
+                theme::selection_style()
+            } else {
+                Style::default()
+            };
+            Line::from(vec![
+                Span::styled(marker, theme::selection_style()),
+                Span::styled(format!("{label:<9}"), theme::muted_style()),
+                Span::styled(value.to_string(), style),
+                if focused {
+                    Span::styled("▏", theme::muted_style())
+                } else {
+                    Span::raw("")
+                },
+            ])
+        };
+        let lines = vec![
+            Line::styled(
+                format!("new workspace in {repo}"),
+                theme::project_header_style(),
+            ),
+            Line::raw(""),
+            field_line(0, "name", &self.form.name),
+            field_line(1, "bookmark", &self.form.bookmark),
+            field_line(2, "prompt", &self.form.prompt),
+            Line::raw(""),
+            Line::styled("tab next · enter create · esc cancel", theme::muted_style()),
+        ];
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Palette::ACCENT))
+            .padding(ratatui::widgets::Padding::new(1, 1, 0, 0));
+        frame.render_widget(Paragraph::new(lines).block(block), rect);
+    }
+
+    fn draw_help(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::widgets::Clear;
+        let rect = Self::overlay_rect(area, 60, 20);
+        frame.render_widget(Clear, rect);
+        let key = |k: &str, d: &str| -> Line<'static> {
+            Line::from(vec![
+                Span::styled(format!("{k:<10}"), theme::selection_style()),
+                Span::raw(d.to_string()),
+            ])
+        };
+        let lines = vec![
+            Line::styled("awp deck — keys", theme::project_header_style()),
+            Line::raw(""),
+            key("j / k", "move selection"),
+            key("gg / G", "jump top / bottom"),
+            key("enter / a", "open agent pane"),
+            key("L", "jump to last session"),
+            key("s e c v i", "shell / editor / review / vcs / ci window"),
+            key("n", "new workspace"),
+            key("R / D", "rename / delete workspace"),
+            key("p", "PR menu (open/merge/desc/set#)"),
+            key("B", "link bookmark"),
+            key("A", "send prompt to agent"),
+            key("m …", "pin (m default / a–z / D unpin)"),
+            key("f", "find (easymotion)"),
+            key("/", "filter"),
+            key("P", "cycle scope (all/attention/inbox)"),
+            key("^a", "toggle deck / pane focus"),
+            key("? / q", "help / quit"),
+        ];
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Palette::ACCENT))
+            .padding(ratatui::widgets::Padding::new(1, 1, 0, 0));
+        frame.render_widget(Paragraph::new(lines).block(block), rect);
     }
 
     fn draw_sidebar(&self, frame: &mut Frame, area: Rect) {
@@ -470,11 +948,23 @@ impl App {
             by_project.entry(header).or_default().push(id.clone());
         }
 
+        // In find mode, map each visible id to its hint letter.
+        let hints: std::collections::HashMap<WorkspaceId, String> = if self.mode == Mode::Find {
+            visible
+                .iter()
+                .cloned()
+                .zip(self.find_hints.iter().cloned())
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         for header in order {
             lines.push(Line::styled(header.clone(), theme::project_header_style()));
             for id in by_project.get(&header).into_iter().flatten() {
-                lines.push(self.row_line(id, selected.as_ref() == Some(id)));
+                let hint = hints.get(id).map(String::as_str);
+                lines.push(self.row_line(id, selected.as_ref() == Some(id), hint));
             }
         }
         if lines.is_empty() {
@@ -483,7 +973,7 @@ impl App {
         lines
     }
 
-    fn row_line(&self, id: &WorkspaceId, is_selected: bool) -> Line<'static> {
+    fn row_line(&self, id: &WorkspaceId, is_selected: bool, hint: Option<&str>) -> Line<'static> {
         let ws = self.state.workspace(id);
         let (status, unread, label, pr) = match ws {
             Some(w) => (w.status, w.unread, w.name.clone(), w.pr_number),
@@ -491,7 +981,10 @@ impl App {
         };
         let (glyph, glyph_style) = theme::status_glyph(status, unread);
         let mut spans: Vec<Span<'static>> = Vec::new();
-        if is_selected {
+        if let Some(h) = hint {
+            // Find-mode hint replaces the prefix slot.
+            spans.push(Span::styled(format!("{h} "), theme::selection_style()));
+        } else if is_selected {
             spans.push(Span::styled(
                 theme::SELECTION_PREFIX,
                 theme::selection_style(),
@@ -516,17 +1009,63 @@ impl App {
     }
 
     fn footer_line(&self) -> Line<'static> {
-        if let Some(filter) = &self.filter {
-            return Line::from(vec![
-                Span::styled("/", theme::selection_style()),
-                Span::raw(filter.buffer.clone()),
-            ]);
+        // Prompt-style footers for the single-line modal inputs.
+        let input_prompt = |label: &str| -> Line<'static> {
+            Line::from(vec![
+                Span::styled(format!("{label}: "), theme::selection_style()),
+                Span::raw(self.input.clone()),
+                Span::styled("▏", theme::muted_style()),
+            ])
+        };
+        match self.mode {
+            Mode::Filter => {
+                return Line::from(vec![
+                    Span::styled("/", theme::selection_style()),
+                    Span::raw(self.input.clone()),
+                ])
+            }
+            Mode::Rename => return input_prompt("rename"),
+            Mode::SetPr => return input_prompt("PR #"),
+            Mode::Bookmark => return input_prompt("bookmark"),
+            Mode::Prompt => return input_prompt("prompt"),
+            Mode::Pin => {
+                return Line::styled(
+                    "pin → m default · a–z register · D unpin",
+                    theme::muted_style(),
+                )
+            }
+            Mode::PrMenu => {
+                return Line::styled(
+                    "PR → o open · m merge · d description · s set number · esc",
+                    theme::muted_style(),
+                )
+            }
+            Mode::ConfirmDelete => {
+                let name = self
+                    .target
+                    .as_ref()
+                    .map(|id| id.name.clone())
+                    .unwrap_or_default();
+                return Line::from(vec![
+                    Span::styled(
+                        format!("delete {name}? "),
+                        Style::default().fg(Palette::DANGER),
+                    ),
+                    Span::styled("y", theme::selection_style()),
+                    Span::raw(" / "),
+                    Span::styled("n", theme::selection_style()),
+                ]);
+            }
+            Mode::Find => {
+                return Line::styled("find: press a hint letter · esc", theme::muted_style())
+            }
+            _ => {}
         }
         if let Some(flash) = &self.state.status_flash {
             return Line::styled(flash.clone(), theme::muted_style());
         }
         Line::styled(
-            "j/k move · enter open · e edit · s shell · c review · v vcs · i ci · m pin · / filter · P scope · ^a focus · q quit",
+            "j/k move · enter open · n new · R rename · D del · p PR · B mark · A prompt · f find · m pin · / filter · P scope · ? help · q quit",
             theme::muted_style(),
         )
     }
@@ -770,14 +1309,136 @@ mod tests {
         let mut app = seeded_app();
         let id = app.state.selected_id().unwrap();
         app.on_key(key('m'));
-        assert!(app.pending_m);
+        assert_eq!(app.mode, Mode::Pin);
         app.on_key(key('m'));
-        assert!(!app.pending_m);
+        assert_eq!(app.mode, Mode::Normal);
         assert!(app.state.workspace(&id).unwrap().is_pinned());
         // `m D` unpins.
         app.on_key(key('m'));
         app.on_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE));
         assert!(!app.state.workspace(&id).unwrap().is_pinned());
+    }
+
+    #[test]
+    fn new_form_collects_fields_and_dispatches_create() {
+        let mut app = seeded_app();
+        app.on_key(key('n'));
+        assert_eq!(app.mode, Mode::NewWorkspace);
+        for c in "feat".chars() {
+            app.on_key(key(c));
+        }
+        assert_eq!(app.form.name, "feat");
+        app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        for c in "main".chars() {
+            app.on_key(key(c));
+        }
+        assert_eq!(app.form.bookmark, "main");
+        // Enter dispatches CreateWorkspace (create_workspace runs jj → may error
+        // in a sandbox, but the mode closes regardless).
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn new_form_requires_name() {
+        let mut app = seeded_app();
+        app.on_key(key('n'));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // Still open, flashed the requirement.
+        assert_eq!(app.mode, Mode::NewWorkspace);
+        assert!(app.state.status_flash.is_some());
+    }
+
+    #[test]
+    fn confirm_delete_removes_on_y() {
+        let mut app = seeded_app();
+        // Select beta/wip (a single-workspace project) to avoid touching others.
+        while app.state.selected_id() != Some(WorkspaceId::new("/r/beta", "wip")) {
+            app.on_key(key('j'));
+        }
+        app.on_key(key('D'));
+        assert_eq!(app.mode, Mode::ConfirmDelete);
+        app.on_key(key('y'));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app
+            .state
+            .workspace(&WorkspaceId::new("/r/beta", "wip"))
+            .is_none());
+    }
+
+    #[test]
+    fn confirm_delete_cancels_on_n() {
+        let mut app = seeded_app();
+        app.on_key(key('D'));
+        app.on_key(key('n'));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.visible().len(), 3);
+    }
+
+    #[test]
+    fn pr_menu_set_number_flow() {
+        let mut app = seeded_app();
+        let id = app.state.selected_id().unwrap();
+        app.on_key(key('p'));
+        assert_eq!(app.mode, Mode::PrMenu);
+        app.on_key(key('s'));
+        assert_eq!(app.mode, Mode::SetPr);
+        for c in "123".chars() {
+            app.on_key(key(c));
+        }
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.state.workspace(&id).unwrap().pr_number, Some(123));
+    }
+
+    #[test]
+    fn bookmark_input_links() {
+        let mut app = seeded_app();
+        let id = app.state.selected_id().unwrap();
+        app.on_key(key('B'));
+        assert_eq!(app.mode, Mode::Bookmark);
+        for c in "andrew/x".chars() {
+            app.on_key(key(c));
+        }
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            app.state.workspace(&id).unwrap().bookmark.as_deref(),
+            Some("andrew/x")
+        );
+    }
+
+    #[test]
+    fn help_overlay_opens_and_closes() {
+        let mut app = seeded_app();
+        app.on_key(key('?'));
+        assert_eq!(app.mode, Mode::Help);
+        app.on_key(key('x'));
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn find_hint_jumps_to_row() {
+        let mut app = seeded_app();
+        app.on_key(key('f'));
+        assert_eq!(app.mode, Mode::Find);
+        assert_eq!(app.find_hints.len(), 3);
+        // Third row's hint is 'c'.
+        app.sync_size(Rect::new(0, 0, 100, 30));
+        app.on_key(key('c'));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.state.selected, 2);
+    }
+
+    #[test]
+    fn help_and_form_render_without_panicking() {
+        let mut app = seeded_app();
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        app.on_key(key('?'));
+        term.draw(|f| app.draw(f)).unwrap();
+        app.close_mode();
+        app.on_key(key('n'));
+        term.draw(|f| app.draw(f)).unwrap();
     }
 
     #[test]

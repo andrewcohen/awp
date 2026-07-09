@@ -67,6 +67,54 @@ pub enum Event {
         group: String,
     },
 
+    /// Create a new workspace (`n` form). The row appears once the executor
+    /// reports it back via `UpsertWorkspace`.
+    CreateWorkspace {
+        repo_root: String,
+        name: String,
+        bookmark: String,
+        prompt: String,
+    },
+
+    /// Rename the selected workspace (`R` form).
+    RenameWorkspace {
+        id: WorkspaceId,
+        new_name: String,
+    },
+
+    /// Delete the selected workspace (`D`, after confirmation).
+    DeleteWorkspace {
+        id: WorkspaceId,
+    },
+
+    /// Set a workspace's PR number (`p s`). Zero clears it.
+    SetPr {
+        id: WorkspaceId,
+        number: u64,
+    },
+
+    /// Link a bookmark to a workspace (`B`).
+    LinkBookmark {
+        id: WorkspaceId,
+        bookmark: String,
+    },
+
+    /// Send a typed prompt to a workspace's agent (`A`).
+    SendPrompt {
+        id: WorkspaceId,
+        text: String,
+    },
+
+    /// Open a workspace's PR in the browser (`p o`).
+    OpenPr {
+        id: WorkspaceId,
+    },
+
+    /// Squash-merge a workspace's PR (`p m`).
+    MergePr {
+        id: WorkspaceId,
+    },
+
     /// Periodic tick (spinner, poll cadence).
     Tick,
 
