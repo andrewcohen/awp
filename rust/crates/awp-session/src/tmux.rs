@@ -150,10 +150,18 @@ impl SessionBackend for TmuxBackend {
         if !Self::has_session(&id.0) {
             return Err(SessionError::NoSession(id.0.clone()));
         }
-        // Run a tmux attach client inside our own PTY. Selecting the target
-        // window first ensures the requested shell tab is active. Keys typed in
-        // the deck's pane are forwarded raw into this PTY → tmux → the shell.
-        let target = format!("{}:{}", exact(&id.0), win.0);
+        // Select the requested window, then attach to the *session* (not a fixed
+        // window). Attaching to the session means the client follows the active
+        // window, so later `open_window` / select-window calls switch the pane
+        // in place — no re-attach. Keys typed in the deck's pane forward raw
+        // into this PTY → tmux → the shell.
+        if !win.0.is_empty() {
+            let _ = Self::tmux(&[
+                "select-window",
+                "-t",
+                &format!("{}:{}", exact(&id.0), win.0),
+            ]);
+        }
         let mut spec = SessionSpec::new(id.0.clone(), String::new());
         spec.command = Some(vec![
             "tmux".into(),
@@ -161,7 +169,7 @@ impl SessionBackend for TmuxBackend {
             SOCKET.into(),
             "attach-session".into(),
             "-t".into(),
-            target,
+            exact(&id.0),
         ]);
         // A capable TERM so tmux emits rich sequences for libghostty to parse.
         spec.env.insert("TERM".into(), "xterm-256color".into());
@@ -193,6 +201,25 @@ impl SessionBackend for TmuxBackend {
             return Ok(());
         }
         Self::tmux(&["kill-session", "-t", &exact(&id.0)]).map(|_| ())
+    }
+
+    fn open_window(&self, id: &SessionId, name: &str, command: &[String]) -> crate::Result<()> {
+        if !Self::has_session(&id.0) {
+            return Err(SessionError::NoSession(id.0.clone()));
+        }
+        let session = exact(&id.0);
+        // Focus an existing window of this name, else create it.
+        if let Some(win) = self.windows(id)?.into_iter().find(|w| w.title == name) {
+            let target = format!("{session}:{}", win.id.0);
+            return Self::tmux(&["select-window", "-t", &target]).map(|_| ());
+        }
+        // new-window inherits the session's start dir (the workspace path). A
+        // trailing command runs in the window; empty → the default shell.
+        let mut args: Vec<&str> = vec!["new-window", "-t", &session, "-n", name];
+        for part in command {
+            args.push(part.as_str());
+        }
+        Self::tmux(&args).map(|_| ())
     }
 }
 
@@ -236,6 +263,29 @@ mod tests {
         assert!(TmuxBackend::has_session(&name));
         // Idempotent.
         backend.ensure(&id, &spec).unwrap();
+        // open_window creates a named window and it shows up in the list.
+        let sid = SessionId(name.clone());
+        backend
+            .open_window(&sid, "editor", &["cat".to_string()])
+            .unwrap();
+        let titles: Vec<String> = backend
+            .windows(&sid)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.title)
+            .collect();
+        assert!(titles.iter().any(|t| t == "editor"), "windows: {titles:?}");
+        // Idempotent focus (no duplicate window).
+        backend
+            .open_window(&sid, "editor", &["cat".to_string()])
+            .unwrap();
+        let editor_count = backend
+            .windows(&sid)
+            .unwrap()
+            .into_iter()
+            .filter(|w| w.title == "editor")
+            .count();
+        assert_eq!(editor_count, 1);
         // Cleanup.
         backend.kill(&SessionId(name.clone())).unwrap();
         assert!(!TmuxBackend::has_session(&name));

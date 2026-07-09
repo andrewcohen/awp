@@ -52,6 +52,8 @@ pub struct App {
     filter: Option<FilterInput>,
     /// Pending-`g` flag for the `gg` jump-to-top chord.
     pending_g: bool,
+    /// Pending-`m` flag for the `m<reg>` pin chord.
+    pending_m: bool,
     /// Last panel body area, so a freshly-opened pane is sized correctly.
     panel_body: Rect,
     last_data_version: i64,
@@ -74,6 +76,7 @@ impl App {
             pane: None,
             filter: None,
             pending_g: false,
+            pending_m: false,
             panel_body: Rect::new(SIDEBAR_WIDTH + 1, 2, 40, 20),
             last_data_version: dv,
         })
@@ -205,6 +208,11 @@ impl App {
 
     fn on_deck_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
+        // Second key of the `m` pin chord takes priority.
+        if self.pending_m {
+            self.on_pin_key(key);
+            return;
+        }
         let g_was_pending = self.pending_g;
         self.pending_g = false;
         match key.code {
@@ -229,9 +237,68 @@ impl App {
                     buffer: self.state.filter.clone().unwrap_or_default(),
                 });
             }
+            // Window commands: open (or focus) a named tmux window running a
+            // tool, ported from the Go deck's e/s/c/C/v/i/a keys.
+            KeyCode::Char('a') => self.dispatch(Event::OpenSelected), // agent (base window)
+            KeyCode::Char('s') => self.run_window("shell", &[]),
+            KeyCode::Char('e') => {
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+                self.run_window("editor", &[editor.as_str()]);
+            }
+            KeyCode::Char('c') => self.run_window("review", &["tuicr", "-r", "@"]),
+            KeyCode::Char('C') => self.run_window("review", &["tuicr", "-r", "main..@"]),
+            KeyCode::Char('v') => self.run_window("vcs", &["jjui"]),
+            KeyCode::Char('i') => self.run_window("ci", &["gh", "run", "watch"]),
+            // Pin chord: `m` then a register key (m/default, a–z, D unpin).
+            KeyCode::Char('m') => self.pending_m = true,
             KeyCode::Esc => self.dispatch(Event::ClearFilter),
             _ => {}
         }
+    }
+
+    /// Handle the second key of the `m` pin chord.
+    fn on_pin_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        self.pending_m = false;
+        let Some(id) = self.state.selected_id() else {
+            return;
+        };
+        let group = match key.code {
+            KeyCode::Char('m') => "default".to_string(),
+            KeyCode::Char('D') => String::new(), // unpin
+            KeyCode::Char(c @ 'a'..='z') => c.to_string(),
+            _ => return,
+        };
+        self.dispatch(Event::SetPin { id, group });
+    }
+
+    /// Open (or focus) a named tmux window running `command` in the selected
+    /// (or currently-open) workspace's session, and move focus to the pane.
+    fn run_window(&mut self, name: &str, command: &[&str]) {
+        let Some(id) = self
+            .pane
+            .as_ref()
+            .map(|p| p.id.clone())
+            .or_else(|| self.state.selected_id())
+        else {
+            return;
+        };
+        // Make sure the pane is attached to this workspace's session so window
+        // switches show up in place.
+        if self.pane.as_ref().map(|p| &p.id) != Some(&id) {
+            if let Err(err) = self.open_workspace(&id) {
+                self.state.status_flash = Some(format!("error: {err}"));
+                return;
+            }
+        }
+        let repo = basename(&id.repo_root);
+        let session = SessionId(session_name(&repo, &id.name));
+        let cmd: Vec<String> = command.iter().map(|s| s.to_string()).collect();
+        if let Err(err) = self.backend.open_window(&session, name, &cmd) {
+            self.state.status_flash = Some(format!("error: {err}"));
+            return;
+        }
+        self.state.focus = Focus::Panel;
     }
 
     fn on_filter_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -459,7 +526,7 @@ impl App {
             return Line::styled(flash.clone(), theme::muted_style());
         }
         Line::styled(
-            "j/k move · enter open · / filter · P scope · ^a focus · q quit",
+            "j/k move · enter open · e edit · s shell · c review · v vcs · i ci · m pin · / filter · P scope · ^a focus · q quit",
             theme::muted_style(),
         )
     }
@@ -696,6 +763,21 @@ mod tests {
         let mut app = seeded_app();
         app.on_key(key('q'));
         assert!(app.should_quit());
+    }
+
+    #[test]
+    fn m_chord_pins_selected_to_default_register() {
+        let mut app = seeded_app();
+        let id = app.state.selected_id().unwrap();
+        app.on_key(key('m'));
+        assert!(app.pending_m);
+        app.on_key(key('m'));
+        assert!(!app.pending_m);
+        assert!(app.state.workspace(&id).unwrap().is_pinned());
+        // `m D` unpins.
+        app.on_key(key('m'));
+        app.on_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE));
+        assert!(!app.state.workspace(&id).unwrap().is_pinned());
     }
 
     #[test]

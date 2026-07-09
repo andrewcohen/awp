@@ -1,2 +1,6 @@
 [tools]
 go = "latest"
+# Rust toolchain for the rust/ rewrite (matches rust/rust-toolchain.toml).
+rust = "1.94.1"
+# Zig is required to build the native libghostty-vt that awp-vt links.
+zig = "0.15.2"

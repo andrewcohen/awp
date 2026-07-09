@@ -113,9 +113,21 @@ Structured logs go to `~/.awp/awp-rs.log` (`AWP_LOG` controls the filter).
 |-----|--------|
 | `j` / `k` or ↓ / ↑ | move selection |
 | `gg` / `G` | jump to top / bottom |
-| `Enter` | open (attach) the selected workspace |
+| `Enter` / `a` | open (attach) the selected workspace's agent pane |
+| `s` | shell window |
+| `e` | editor window (`$EDITOR`) |
+| `c` / `C` | review window (`tuicr -r @` / `tuicr -r main..@`) |
+| `v` | vcs window (`jjui`) |
+| `i` | ci window (`gh run watch`) |
+| `m` then `m` / `a`–`z` / `D` | pin to default / register / unpin |
 | `/` | filter (name / bookmark / prompt) |
 | `P` | cycle scope (all ↔ attention) |
 | `Ctrl-a` | toggle focus between deck and live pane |
 | `q` / `Ctrl-c` | quit |
 | in pane | keys forwarded raw to the shell |
+
+The window commands (`e/s/c/v/i/a`) open a named window in the workspace's
+headless tmux session and switch the live pane to it. Not yet ported from the Go
+deck (phased follow-up): `n` new / `R` rename / `D` delete workspace, the `p …`
+PR actions, `B` bookmark linker, `J` jobs overlay, `f` easymotion find, and the
+inbox scope.

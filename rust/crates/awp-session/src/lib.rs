@@ -47,6 +47,14 @@ pub trait SessionBackend {
     fn list(&self) -> Result<Vec<SessionInfo>>;
     /// Kill a session and its shells.
     fn kill(&self, id: &SessionId) -> Result<()>;
+
+    /// Open (or focus, if it already exists) a named window running `command`
+    /// in the session, and make it the active window. An empty `command` opens
+    /// a plain shell. Backends without multi-window support may no-op. This is
+    /// how the deck's editor / review / vcs / ci / shell commands are spawned.
+    fn open_window(&self, _id: &SessionId, _name: &str, _command: &[String]) -> Result<()> {
+        Ok(())
+    }
 }
 
 mod local;
