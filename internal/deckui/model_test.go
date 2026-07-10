@@ -413,7 +413,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 		t.Fatal("expected no command before confirmation")
 	}
 	m := updated.(Model)
-	if !m.confirmDelete {
+	if _, ok := m.active.(*confirmDeleteModal); !ok {
 		t.Fatal("expected delete confirmation mode")
 	}
 	if called {
@@ -465,7 +465,7 @@ func TestDeleteCanBeCancelled(t *testing.T) {
 		t.Fatal("expected no command when cancelling")
 	}
 	m = updated.(Model)
-	if m.confirmDelete {
+	if m.active != nil {
 		t.Fatal("expected confirmation mode to end")
 	}
 	if called {
@@ -2256,17 +2256,18 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	if m.prMenuMode {
 		t.Fatalf("expected prMenuMode false after p m")
 	}
-	if !m.confirmMergePR {
-		t.Fatalf("expected confirmMergePR after p m")
+	cm, ok := m.active.(*confirmMergeModal)
+	if !ok {
+		t.Fatalf("expected confirm-merge modal after p m")
 	}
-	if m.mergeStatus.Number != 99 {
-		t.Fatalf("expected mergeStatus.Number 99, got %d", m.mergeStatus.Number)
+	if cm.status.Number != 99 {
+		t.Fatalf("expected merge status Number 99, got %d", cm.status.Number)
 	}
 	if calls != 0 {
 		t.Fatalf("merge must not dispatch before confirmation; got calls=%d", calls)
 	}
 	// The confirm modal must surface the exact command for confidence.
-	if view := m.renderMergePRConfirm(); !strings.Contains(view, "gh pr merge 99 --squash") || !strings.Contains(view, "#99") {
+	if view := cm.renderPopover(&m); !strings.Contains(view, "gh pr merge 99 --squash") || !strings.Contains(view, "#99") {
 		t.Fatalf("expected merge confirm to show command and PR number; got %q", view)
 	}
 
@@ -2275,8 +2276,8 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	// dispatch cmd invokes it synchronously).
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	got := updated.(Model)
-	if got.confirmMergePR {
-		t.Fatalf("expected confirmMergePR cleared after y")
+	if got.active != nil {
+		t.Fatalf("expected confirm-merge modal cleared after y")
 	}
 	if !got.progressMode {
 		t.Fatalf("expected progress modal to open and stay until success/failure")
@@ -2335,8 +2336,8 @@ func TestPRMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m := updated.(Model)
-	if m.confirmMergePR {
-		t.Fatalf("expected confirmMergePR cleared after n")
+	if m.active != nil {
+		t.Fatalf("expected confirm-merge modal cleared after n")
 	}
 	if calls != 0 {
 		t.Fatalf("cancel must not dispatch; got calls=%d", calls)
@@ -2352,7 +2353,7 @@ func TestPRMenuMergeKeyNoopsWhenPRNotOpen(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	m := updated.(Model)
-	if m.confirmMergePR {
+	if m.active != nil {
 		t.Fatalf("expected no merge confirm for a non-open PR")
 	}
 	if !strings.Contains(m.status, "nothing to merge") {

@@ -771,20 +771,17 @@ type Model struct {
 	// single-slot replacement for the deck's per-mode bool flags; modes are
 	// migrated onto it incrementally (see modal.go). When set, Update
 	// dispatches keys to it before the legacy flag handlers.
-	active            modal
-	filterInput       textinput.Model
-	filtering         bool
-	filter            string
-	confirmDelete     bool
-	deleteIsProject   bool // confirmDelete branch: project-level delete (typed confirmation)
-	deleteInput       textinput.Model
-	deleteErr         string
-	helpMode          bool
+	active      modal
+	filterInput textinput.Model
+	filtering   bool
+	filter      string
+	helpMode    bool
+	// deleteTarget is the row a confirm-delete modal targets. It outlives
+	// the modal: the progress-completion handler reads it to decide the
+	// post-delete cursor selection, so it stays on the Model rather than
+	// living only on confirmDeleteModal.
 	deleteTarget      Item
-	confirmMergePR    bool     // merge-PR confirmation modal active
-	mergeTarget       Item     // workspace whose PR the modal will merge
-	mergeStatus       PRStatus // cached PR status shown in the modal (number/title)
-	pendingSelect     Item     // after next refresh, cursor jumps to this (project, workspace) if present
+	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
 	findStage         findStage
 	findProject       string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
@@ -1560,7 +1557,7 @@ func prStatusReposPolicy(items []Item, lastFetch map[string]time.Time, now time.
 func (m Model) canBackgroundRefresh() bool {
 	return m.refresher != nil && !m.busy && !m.progressMode &&
 		m.active == nil &&
-		!m.confirmDelete && !m.filtering &&
+		!m.filtering &&
 		!m.findMode && !m.actionMode &&
 		!m.helpMode && !m.newWorkspaceMode &&
 		!m.prMenuMode && !m.prNumberSetMode && !m.pinAliasMode
@@ -2067,71 +2064,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.confirmDelete {
-			if m.deleteIsProject {
-				switch msg.String() {
-				case "esc", "ctrl+c":
-					m.confirmDelete = false
-					m.deleteIsProject = false
-					m.deleteInput.Blur()
-					m.deleteInput.SetValue("")
-					m.deleteErr = ""
-					m.status = ""
-					return m, tea.ClearScreen
-				case "enter":
-					typed := strings.TrimSpace(m.deleteInput.Value())
-					if typed != m.deleteTarget.ProjectName {
-						m.deleteErr = "project name didn't match"
-						return m, nil
-					}
-					m.confirmDelete = false
-					m.deleteIsProject = false
-					m.deleteInput.Blur()
-					m.deleteInput.SetValue("")
-					m.deleteErr = ""
-					if m.handler == nil {
-						m.status = "delete project: handler not configured"
-						return m, tea.ClearScreen
-					}
-					updated, cmd := m.startAction(ActionDeleteProject, m.deleteTarget, "")
-					return updated, batchCmds(cmd, tea.ClearScreen)
-				}
-				var cmd tea.Cmd
-				m.deleteInput, cmd = m.deleteInput.Update(msg)
-				m.deleteErr = ""
-				return m, cmd
-			}
-			switch strings.ToLower(msg.String()) {
-			case "y", "enter":
-				m.confirmDelete = false
-				if m.handler == nil {
-					m.status = "delete: handler not configured"
-					return m, nil
-				}
-				return m.startAction(ActionDelete, m.deleteTarget, "")
-			case "n", "esc", "q":
-				m.confirmDelete = false
-				m.status = ""
-				return m, nil
-			}
-			return m, nil
-		}
-		if m.confirmMergePR {
-			switch strings.ToLower(msg.String()) {
-			case "y", "enter":
-				m.confirmMergePR = false
-				if m.handler == nil {
-					m.status = "merge: handler not configured"
-					return m, nil
-				}
-				return m.startAction(ActionMergePR, m.mergeTarget, strconv.Itoa(m.mergeStatus.Number))
-			case "n", "esc", "q":
-				m.confirmMergePR = false
-				m.status = ""
-				return m, nil
-			}
-			return m, nil
-		}
 		if m.filtering {
 			switch msg.String() {
 			case "esc":
@@ -2395,10 +2327,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = fmt.Sprintf("pr: #%d is %s — nothing to merge", status.Number, strings.ToLower(string(status.State)))
 					return m, nil
 				}
-				m.confirmMergePR = true
-				m.mergeTarget = item
-				m.mergeStatus = status
-				m.status = fmt.Sprintf("merge PR #%d? [y/N]", status.Number)
+				var mergeModal *confirmMergeModal
+				mergeModal, m.status = newConfirmMerge(item, status)
+				m.active = mergeModal
 				return m, tea.ClearScreen
 			case "s":
 				m.prMenuMode = false
@@ -2637,29 +2568,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if m2, blocked := m.blockIfSettingUp(item); blocked {
 				return m2, nil
 			}
-			m.confirmDelete = true
 			m.deleteTarget = item
-			m.deleteErr = ""
-			if strings.TrimSpace(item.WorkspaceName) == "default" {
-				// "Deleting" the default workspace is reinterpreted as
-				// deleting the whole project from the deck: every
-				// non-default workspace under this repo is removed and
-				// the project is dropped from workspace state. The
-				// default jj workspace itself stays. Require typing
-				// the project name to confirm — it's a bigger blast
-				// radius than a single-workspace delete.
-				m.deleteIsProject = true
-				ti := textinput.New()
-				ti.Placeholder = item.ProjectName
-				ti.CharLimit = 128
-				ti.Focus()
-				m.deleteInput = ti
-				m.status = fmt.Sprintf("delete project %q?", item.ProjectName)
-				return m, textinput.Blink
-			}
-			m.deleteIsProject = false
-			m.status = fmt.Sprintf("delete %s? [y/N]", item.WorkspaceName)
-			return m, nil
+			var deleteModal *confirmDeleteModal
+			var deleteCmd tea.Cmd
+			deleteModal, deleteCmd, m.status = newConfirmDelete(item)
+			m.active = deleteModal
+			return m, deleteCmd
 		case key.Matches(msg, km.Rename):
 			item, ok := m.selected()
 			if !ok || strings.TrimSpace(item.WorkspaceName) == "" {
@@ -3571,6 +3485,11 @@ func (m Model) View() string {
 	if m.promptMode {
 		return m.promptForm.view(m.width, m.height)
 	}
+	// Popover modals (confirmations, small prompts) render as a centered
+	// box over a blank canvas — no body/footer composition.
+	if pm, ok := m.active.(popoverModal); ok {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, pm.renderPopover(&m))
+	}
 
 	// The workspace row list runs full-width — per-row metadata lives
 	// on the second line of each row (see metaLine). The new-menu and
@@ -3581,7 +3500,9 @@ func (m Model) View() string {
 	var left, right string
 	switch {
 	case m.active != nil:
-		left, right = m.active.view(&m)
+		if bm, ok := m.active.(bodyModal); ok {
+			left, right = bm.view(&m)
+		}
 	default:
 		left = m.renderList(m.width)
 	}
@@ -3665,14 +3586,6 @@ func (m Model) View() string {
 		padBlock = strings.Join(blanks, "\n")
 	}
 	view := lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
-	if m.confirmDelete {
-		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			m.renderDeleteConfirm())
-	}
-	if m.confirmMergePR {
-		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			m.renderMergePRConfirm())
-	}
 	if m.prNumberSetMode {
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			m.renderPRNumberSet())
@@ -4792,92 +4705,6 @@ func (m Model) progressFooter() string {
 		return "done · press esc to dismiss"
 	}
 	return "running... (no cancel)"
-}
-
-func (m Model) renderDeleteConfirm() string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colDanger)).
-		Padding(1, 2).
-		Width(60)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colDanger))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
-
-	if m.deleteIsProject {
-		project := strings.TrimSpace(m.deleteTarget.ProjectName)
-		if project == "" {
-			project = "this project"
-		}
-		lines := []string{
-			titleStyle.Render("Delete project " + project + "?"),
-			"",
-			mutedStyle.Render("Removes every non-default workspace under this repo and"),
-			mutedStyle.Render("drops the project from the deck. The default workspace"),
-			mutedStyle.Render("itself is left intact."),
-			"",
-			mutedStyle.Render("Type the project name to confirm:"),
-			m.deleteInput.View(),
-		}
-		if m.deleteErr != "" {
-			lines = append(lines, "", errStyle.Render(m.deleteErr))
-		}
-		lines = append(lines, "", hintStyle.Render("enter confirm · esc cancel"))
-		return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
-	}
-
-	name := strings.TrimSpace(m.deleteTarget.WorkspaceName)
-	if name == "" {
-		name = "this workspace"
-	}
-	lines := []string{
-		titleStyle.Render("Delete workspace " + name + "?"),
-		"",
-		hintStyle.Render("y confirm · n / esc cancel"),
-	}
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
-}
-
-func (m Model) renderMergePRConfirm() string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colAccent)).
-		Padding(1, 2).
-		Width(64)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	prStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)).Bold(true)
-	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong))
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-
-	s := m.mergeStatus
-	cmd := fmt.Sprintf("gh pr merge %d --squash", s.Number)
-
-	lines := []string{
-		titleStyle.Render(fmt.Sprintf("Merge PR %s?", prStyle.Render("#"+strconv.Itoa(s.Number)))),
-		"",
-	}
-	if title := strings.TrimSpace(s.Title); title != "" {
-		lines = append(lines, truncate(title, 58))
-	}
-	lines = append(lines,
-		"",
-		labelStyle.Render("Runs:"),
-		cmdStyle.Render("  "+cmd),
-	)
-	if s.IsInMergeQueue {
-		// The rocket is showing for this row — the PR is already in the
-		// repo's merge queue.
-		lines = append(lines, labelStyle.Render(fmt.Sprintf("  %s already in the merge queue — re-adds it to the queue", prGlyphInQueue)))
-	} else {
-		lines = append(lines, labelStyle.Render("  squash by default; falls back to the merge queue if required"))
-	}
-	lines = append(lines,
-		"",
-		hintStyle.Render("y confirm · n / esc cancel"),
-	)
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (m Model) selected() (Item, bool) {
