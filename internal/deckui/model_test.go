@@ -311,7 +311,7 @@ func TestStateChangedDoesNotRefreshDuringOverlay(t *testing.T) {
 			watched++
 			return func() tea.Msg { return StateChangedMsg{} }
 		})
-	model.helpMode = true
+	model.active = helpModal{}
 
 	_, cmd := model.Update(StateChangedMsg{})
 	if cmd == nil {
