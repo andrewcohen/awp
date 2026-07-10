@@ -1458,8 +1458,9 @@ func TestReviewModeEntersOnR(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m := updated.(Model)
-	if !m.reviewMode || !m.reviewLoading {
-		t.Fatal("expected review mode + loading")
+	rp, ok := m.active.(*reviewPicker)
+	if !ok || !rp.loading {
+		t.Fatal("expected review picker + loading")
 	}
 	if cmd == nil {
 		t.Fatal("expected fetch command")
@@ -1470,10 +1471,11 @@ func TestReviewModeEntersOnR(t *testing.T) {
 	if !fetchCalled {
 		t.Fatal("expected fetch to be called")
 	}
-	if m.reviewLoading {
-		t.Fatal("expected loading to be false after fetch")
+	rp, ok = m.active.(*reviewPicker)
+	if !ok || rp.loading {
+		t.Fatal("expected loaded review picker after fetch")
 	}
-	items := m.reviewList.Items()
+	items := rp.list.Items()
 	if len(items) != 1 {
 		t.Fatalf("expected 1 PR in list, got %d", len(items))
 	}
@@ -1505,8 +1507,12 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 	// move down to second PR
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m := updated.(Model)
-	if m.reviewList.Index() != 1 {
-		t.Fatalf("expected cursor 1, got %d", m.reviewList.Index())
+	rp, ok := m.active.(*reviewPicker)
+	if !ok {
+		t.Fatal("expected review picker active")
+	}
+	if rp.list.Index() != 1 {
+		t.Fatalf("expected cursor 1, got %d", rp.list.Index())
 	}
 
 	// press enter
@@ -1524,8 +1530,8 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 	if got.Arg != "20" {
 		t.Fatalf("expected arg '20', got %q", got.Arg)
 	}
-	if m.reviewMode {
-		t.Fatal("expected review mode to exit after selection")
+	if m.active != nil {
+		t.Fatal("expected review picker to close after selection")
 	}
 }
 
@@ -1542,8 +1548,8 @@ func TestReviewModeCancelWithEsc(t *testing.T) {
 
 	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m := updated.(Model)
-	if m.reviewMode {
-		t.Fatal("expected review mode cancelled")
+	if m.active != nil {
+		t.Fatal("expected review picker cancelled")
 	}
 	if m.status != "" {
 		t.Fatalf("unexpected status: %q", m.status)
@@ -1554,8 +1560,8 @@ func TestReviewModeNoPRsFetcher(t *testing.T) {
 	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m := updated.(Model)
-	if m.reviewMode {
-		t.Fatal("expected no review mode without fetcher")
+	if m.active != nil {
+		t.Fatal("expected no review picker without fetcher")
 	}
 	if m.status != "review: not configured" {
 		t.Fatalf("unexpected status: %q", m.status)
@@ -1573,8 +1579,8 @@ func TestReviewModeEmptyPRs(t *testing.T) {
 	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
-	if !m.reviewMode {
-		t.Fatal("expected review mode to stay open so user can see empty state")
+	if _, ok := m.active.(*reviewPicker); !ok {
+		t.Fatal("expected review picker to stay open so user can see empty state")
 	}
 	if m.status != "review: no open PRs (esc to cancel)" {
 		t.Fatalf("unexpected status: %q", m.status)

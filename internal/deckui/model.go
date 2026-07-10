@@ -397,12 +397,6 @@ func newReviewList() (list.Model, *reviewItemDelegate) {
 	return l, d
 }
 
-func resetReviewList(l *list.Model) {
-	l.SetItems(nil)
-	l.ResetFilter()
-	l.ResetSelected()
-}
-
 // projectItem is the list.Item shape for the open / project picker.
 // FilterValue concatenates Name and Path so the user can fuzzy-match on
 // either; Title shows only the Name to keep rows compact.
@@ -824,10 +818,6 @@ type Model struct {
 	bookmarkFetcher   BookmarkFetcher
 	trunkResolver     TrunkResolver
 	stateEditor       StateEditorLauncher
-	reviewMode        bool
-	reviewLoading     bool
-	reviewList        list.Model
-	reviewDelegate    *reviewItemDelegate
 	prMenuMode        bool
 	// prNumberSetMode is true while the `p s` chord's numeric input
 	// modal is open. prNumberInput / prNumberTarget back the modal.
@@ -970,7 +960,6 @@ func New(items []Item, handler Handler) Model {
 	fi.CharLimit = 64
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner))
-	reviewList, reviewDelegate := newReviewList()
 	m := Model{
 		itemsAll:          append([]Item(nil), items...),
 		scope:             ScopeAll,
@@ -984,8 +973,6 @@ func New(items []Item, handler Handler) Model {
 		handler:           handler,
 		filterInput:       fi,
 		bookmarkList:      newBookmarkList(),
-		reviewList:        reviewList,
-		reviewDelegate:    reviewDelegate,
 		jobsList:          newJobsList(),
 		jobsViewport:      newJobsViewport(),
 		deckViewport:      newDeckViewport(),
@@ -1590,7 +1577,7 @@ func (m Model) canBackgroundRefresh() bool {
 		m.active == nil &&
 		!m.confirmDelete && !m.filtering &&
 		!m.findMode && !m.actionMode &&
-		!m.bookmarkMode && !m.reviewMode &&
+		!m.bookmarkMode &&
 		!m.helpMode && !m.newWorkspaceMode &&
 		!m.prMenuMode && !m.prNumberSetMode && !m.pinAliasMode
 }
@@ -1704,8 +1691,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if m.bookmarkMode && m.bookmarkLoading {
 			m.bookmarkList.SetItems([]list.Item{loadingItem{label: glyph + " loading bookmarks..."}})
 		}
-		if m.reviewMode && m.reviewLoading {
-			m.reviewList.SetItems([]list.Item{loadingItem{label: glyph + " loading PRs..."}})
+		if rp, ok := m.active.(*reviewPicker); ok && rp.loading {
+			rp.tickLoading(glyph)
 		}
 		if op, ok := m.active.(*openPicker); ok && op.loading {
 			op.tickLoading(glyph)
@@ -1998,31 +1985,19 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, expireCmd
 	case PRFetchDoneMsg:
 		m.busy = false
-		if !m.reviewMode {
+		rp, ok := m.active.(*reviewPicker)
+		if !ok {
 			return m, nil
 		}
-		m.reviewLoading = false
 		if msg.Err != nil {
-			m.reviewMode = false
+			m.active = nil
 			m.status = "review: " + msg.Err.Error()
 			return m, nil
 		}
-		items := make([]list.Item, 0, len(msg.PRs))
-		for _, pr := range msg.PRs {
-			items = append(items, reviewItem{pr: pr})
-		}
-		m.reviewList.SetShowStatusBar(true)
-		m.reviewList.SetItems(items)
-		m.reviewList.ResetSelected()
-		m.reviewDelegate.recompute(items)
-		if len(msg.PRs) == 0 {
-			m.status = "review: no open PRs (esc to cancel)"
-		} else {
-			// list.Model renders its own key-help footer; clear the
-			// status so the picker's chrome isn't duplicated in the
-			// deck's bottom bar.
-			m.status = ""
-		}
+		// setPRs returns the status line (empty unless there were no PRs);
+		// on a non-empty list list.Model renders its own key-help footer so
+		// the deck's bottom bar stays clear.
+		m.status = rp.setPRs(msg.PRs)
 		return m, nil
 	case refreshDoneMsg:
 		m.refreshing = false
@@ -2536,58 +2511,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.bookmarkList, cmd = m.bookmarkList.Update(msg)
 			return m, cmd
 		}
-		if m.reviewMode {
-			if m.reviewLoading {
-				switch msg.String() {
-				case "esc", "q", "ctrl+c":
-					m.reviewMode = false
-					m.reviewLoading = false
-					m.status = ""
-				}
-				return m, nil
-			}
-			filtering := m.reviewList.FilterState() == list.Filtering
-			switch msg.String() {
-			case "enter":
-				// See bookmark mode for rationale: enter during filter
-				// commits the filter; second enter actually picks.
-				if filtering {
-					break
-				}
-				if m.handler == nil {
-					return m, nil
-				}
-				it, ok := m.reviewList.SelectedItem().(reviewItem)
-				if !ok {
-					return m, nil
-				}
-				pr := it.pr
-				item, _ := m.selected()
-				m.reviewMode = false
-				resetReviewList(&m.reviewList)
-				var prCmd tea.Cmd
-				m, prCmd = m.forcePRStatusRefresh(item.RepoRoot)
-				updated, dispatchCmd := m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
-				return updated, batchCmds(prCmd, dispatchCmd)
-			case "esc", "ctrl+c":
-				if !filtering && m.reviewList.FilterState() != list.FilterApplied {
-					m.reviewMode = false
-					resetReviewList(&m.reviewList)
-					m.status = ""
-					return m, nil
-				}
-			case "q":
-				if !filtering {
-					m.reviewMode = false
-					resetReviewList(&m.reviewList)
-					m.status = ""
-					return m, nil
-				}
-			}
-			var cmd tea.Cmd
-			m.reviewList, cmd = m.reviewList.Update(msg)
-			return m, cmd
-		}
 		if m.findMode {
 			switch msg.String() {
 			case "esc", "ctrl+c":
@@ -2872,11 +2795,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "review: select a row with a known repo"
 				return m, nil
 			}
-			m.reviewMode = true
-			m.reviewLoading = true
-			resetReviewList(&m.reviewList)
-			m.reviewList.SetShowStatusBar(false)
-			m.reviewList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading PRs..."}})
+			m.active = newReviewPicker(m.spinner.View())
 			m.busy = true
 			m.status = ""
 			return m, tea.Batch(m.spinner.Tick, m.prFetcher(item.RepoRoot))
@@ -2979,11 +2898,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	if m.bookmarkMode {
 		var cmd tea.Cmd
 		m.bookmarkList, cmd = m.bookmarkList.Update(msg)
-		return m, cmd
-	}
-	if m.reviewMode {
-		var cmd tea.Cmd
-		m.reviewList, cmd = m.reviewList.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -3284,11 +3198,7 @@ func (m *Model) startReviewPicker(repo string) (tea.Model, tea.Cmd) {
 		m.status = "review: no repo"
 		return *m, nil
 	}
-	m.reviewMode = true
-	m.reviewLoading = true
-	resetReviewList(&m.reviewList)
-	m.reviewList.SetShowStatusBar(false)
-	m.reviewList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading PRs..."}})
+	m.active = newReviewPicker(m.spinner.View())
 	m.busy = true
 	m.status = ""
 	return *m, tea.Batch(m.spinner.Tick, m.prFetcher(repo))
@@ -3788,8 +3698,6 @@ func (m Model) View() string {
 		// JoinVertical's pad newlines don't clear residue).
 		// Single-column avoids the issue and gives the list more room.
 		left = m.renderBookmarkList(m.width)
-	case m.reviewMode:
-		left = m.renderReviewList(m.width)
 	default:
 		left = m.renderList(m.width)
 	}
@@ -3826,8 +3734,6 @@ func (m Model) View() string {
 	// deck's enter pick / esc cancel conventions.
 	case m.active != nil:
 		rightSeg = m.active.footerHelp()
-	case m.reviewMode && !m.reviewLoading:
-		rightSeg = m.reviewList.Help.ShortHelpView(pickerShortHelp(m.reviewList))
 	case m.bookmarkMode && !m.bookmarkLoading:
 		rightSeg = m.bookmarkList.Help.ShortHelpView(pickerShortHelp(m.bookmarkList))
 	case m.filter != "":
@@ -3848,7 +3754,7 @@ func (m Model) View() string {
 	// since the overlay doesn't apply there — those screens surface
 	// their own actionable hints in rightSeg.
 	hint := "? help"
-	if m.active != nil || m.bookmarkMode || m.reviewMode ||
+	if m.active != nil || m.bookmarkMode ||
 		m.jobsOverlay || m.prMenuMode || m.findMode || m.actionMode {
 		hint = ""
 	}
@@ -4968,20 +4874,6 @@ func (m *Model) renderBookmarkList(width int) string {
 	}
 	m.bookmarkList.SetSize(listWidth, listHeight)
 	return containerStyle.Render(m.bookmarkList.View())
-}
-
-func (m *Model) renderReviewList(width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
-	listWidth := width - 2
-	if listWidth < 8 {
-		listWidth = 8
-	}
-	listHeight := m.height - 5
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	m.reviewList.SetSize(listWidth, listHeight)
-	return containerStyle.Render(m.reviewList.View())
 }
 
 func (m *Model) renderProgress(width int) string {
