@@ -211,4 +211,3 @@ func (p workspaceFormProgram) View() string {
 	}
 	return p.form.view(p.width, p.height)
 }
-

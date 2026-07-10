@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/charm"

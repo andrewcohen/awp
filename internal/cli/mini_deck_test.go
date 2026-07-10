@@ -25,9 +25,9 @@ func TestBuildMiniDeckRowsFiltersAndSorts(t *testing.T) {
 	snap := deckTmuxSnapshot{
 		known: true,
 		liveByName: map[string]string{
-			DeckSessionName("alpha", "running"):   "$1",
-			DeckSessionName("zeta", "feature-x"):  "$2",
-			DeckSessionName("alpha", "notified"):  "$3",
+			DeckSessionName("alpha", "running"):  "$1",
+			DeckSessionName("zeta", "feature-x"): "$2",
+			DeckSessionName("alpha", "notified"): "$3",
 		},
 		agentShell: map[string]bool{},
 	}

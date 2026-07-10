@@ -998,22 +998,22 @@ func toDeckJob(j jobs.Job, store *jobs.Store) deckui.Job {
 		ended = *j.EndedAt
 	}
 	return deckui.Job{
-		ID:            string(j.ID),
-		Title:         j.Title,
-		Action:        string(j.Spec.Action),
-		Status:        deckui.JobStatus(j.Status),
-		StartedAt:     j.StartedAt,
-		EndedAt:       ended,
-		Steps:         steps,
-		LogsTail:      j.LogsInline,
+		ID:             string(j.ID),
+		Title:          j.Title,
+		Action:         string(j.Spec.Action),
+		Status:         deckui.JobStatus(j.Status),
+		StartedAt:      j.StartedAt,
+		EndedAt:        ended,
+		Steps:          steps,
+		LogsTail:       j.LogsInline,
 		ErrMsg:         j.ErrMsg,
 		ErrorKind:      j.ErrorKind,
 		ErrorWorkspace: j.ErrorWorkspace,
 		LogPath:        store.LogPath(j.ID),
-		PID:           j.PID,
-		WorkspaceName: j.Spec.WorkspaceName,
-		WorkspacePath: j.Spec.WorkspacePath,
-		RepoRoot:      j.Spec.RepoRoot,
+		PID:            j.PID,
+		WorkspaceName:  j.Spec.WorkspaceName,
+		WorkspacePath:  j.Spec.WorkspacePath,
+		RepoRoot:       j.Spec.RepoRoot,
 	}
 }
 
@@ -1294,23 +1294,23 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			// later fills them in.
 			head := headByPath[strings.TrimSpace(e.Path)]
 			item := deckui.Item{
-				ProjectName:   r.project,
-				WorkspaceName: e.Name,
-				Path:          e.Path,
-				RepoRoot:      r.repo,
-				Bookmark:      strings.TrimSpace(e.Bookmark),
-				PRNumber:      e.PRNumber,
-				PinGroup:      strings.TrimSpace(e.PinGroup),
-				Status:        status,
-				Unread:        unread,
-				PromptPreview: e.ActivePrompt,
+				ProjectName:      r.project,
+				WorkspaceName:    e.Name,
+				Path:             e.Path,
+				RepoRoot:         r.repo,
+				Bookmark:         strings.TrimSpace(e.Bookmark),
+				PRNumber:         e.PRNumber,
+				PinGroup:         strings.TrimSpace(e.PinGroup),
+				Status:           status,
+				Unread:           unread,
+				PromptPreview:    e.ActivePrompt,
 				HeadDesc:         head.desc,
 				HeadChangeID:     head.changeID,
 				BookmarkCommitID: head.bookmarkCommitID,
-				TmuxWindow:    sessionName,
-				SessionName:   sessionName,
-				Active:        active,
-				Current:       current,
+				TmuxWindow:       sessionName,
+				SessionName:      sessionName,
+				Active:           active,
+				Current:          current,
 			}
 			items = append(items, item)
 		}

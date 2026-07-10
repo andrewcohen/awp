@@ -37,14 +37,14 @@ var validReportStates = map[string]struct{}{
 // Optional flags capture the active prompt alongside the state transition:
 //   - --prompt <text>     persist the literal text as the workspace's ActivePrompt.
 //   - --prompt-stdin      read a Claude-style hook payload JSON from stdin and
-//                         extract its top-level "prompt" field. Empty/missing
-//                         is treated as "no prompt update" rather than an error.
+//     extract its top-level "prompt" field. Empty/missing
+//     is treated as "no prompt update" rather than an error.
 //   - --waiting-when-tool <list>
-//                         comma-separated tool names. When the PreToolUse hook
-//                         payload's tool_name matches any, override --state to
-//                         "waiting". Lets a single catch-all PreToolUse hook
-//                         emit "waiting" for input-blocking tools (e.g.
-//                         AskUserQuestion) and "working" for everything else.
+//     comma-separated tool names. When the PreToolUse hook
+//     payload's tool_name matches any, override --state to
+//     "waiting". Lets a single catch-all PreToolUse hook
+//     emit "waiting" for input-blocking tools (e.g.
+//     AskUserQuestion) and "working" for everything else.
 func runReportStatus(args []string, out io.Writer) error {
 	if isHelpArgSlice(args) {
 		_, _ = fmt.Fprintln(out, "Usage: awp internal report-status --state <working|idle|waiting|exited> [--prompt <text>|--prompt-stdin] [--waiting-when-tool <tool>[,<tool>...]]")

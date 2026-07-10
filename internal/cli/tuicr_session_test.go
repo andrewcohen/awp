@@ -10,10 +10,10 @@ import (
 
 func TestTuicrSessionSlug(t *testing.T) {
 	cases := []struct {
-		name  string
-		url   string
-		num   int
-		want  string
+		name string
+		url  string
+		num  int
+		want string
 	}{
 		{
 			name: "https github PR url",
