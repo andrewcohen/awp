@@ -329,11 +329,23 @@ preserves behavior.
 13. Add sub-component tests for modals with non-trivial logic (find-mode
     hint stepping, progress log, pickers).
 
-### Phase 4 — Callback collapse (Deps interface)
-14. Group the ~20 `WithXxx` callbacks into a `deckui.Deps` interface by
-    concern (workspace actions, PR data, jobs, project nav, persistence).
-15. Implement `Deps` in the `cli` wiring; replace the callback fields and
-    the `WithXxx` builder chain with a single injected `Deps`.
+### Phase 4 — Callback grouping (deckDeps)
+14. Group the ~24 injected callbacks into a single `deckDeps` struct
+    (`deps.go`) **embedded** in `Model`.
+
+> **Deviation from initial draft (done 2026-07-10):** a bare `Deps`
+> *interface* replacing the `WithXxx` builder would churn all 102 internal
+> `m.handler(…)` call-sites, all 42 `WithXxx` test call-sites, and the
+> `cli` wiring — large, mechanical, and purely stylistic now that the
+> god-object *state* is decomposed. Instead the callbacks move into an
+> **embedded `deckDeps` struct**: Go promotes embedded fields, so every
+> `m.handler` / `m.refresher` / … access and every `WithXxx` setter keeps
+> working unchanged. The `Model` struct definition drops ~24 loose fields
+> for one embedded struct, the dependencies are documented as a unit, and
+> swapping `deckDeps` for a service-backed interface later stays a
+> contained change. Zero call-site or test churn; the only edit outside
+> the struct defs was moving `handler` out of the `New()` composite literal
+> (promoted fields can't be set there) to an assignment.
 
 ### Deferred — SQLite (separate spec)
 Implement the Phase-1 interfaces with a SQLite backend; switch only the
@@ -428,6 +440,12 @@ touches only the wiring + one new package — `deckdata`/`deckui` untouched.
   (`internal/deckdata` read model). Phase 3 started: chose incremental
   rollout + single active-modal slot; increment 1 migrated the open picker
   onto `Model.active`.
+- 2026-07-10: Phase 3 increments 7–8 landed (help + jobs overlays; 10
+  overlay modals total on `Model.active`). Fixed a pre-existing help bug
+  (tall popover clipped its header off the top → top-align oversized
+  popovers). Phase 4 landed via embedded `deckDeps` (grouping, not a bare
+  interface — see deviation) removing ~24 loose Model fields with zero
+  call-site/test churn.
 - 2026-07-10: Phase 3 increments 2–6 landed: review + bookmark pickers,
   confirm-delete/merge, pr-number/pin-alias input popovers, and the pr
   action menu — 8 overlay modals now on `Model.active` (~26 fields removed).

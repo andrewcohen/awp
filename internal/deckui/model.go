@@ -766,7 +766,10 @@ type Model struct {
 	width        int
 	height       int
 	status       string
-	handler      Handler
+	// deckDeps groups the injected dependency callbacks (handler,
+	// refresher, fetchers, job handlers, …). Embedded so m.handler etc.
+	// still resolve via promotion; see deps.go.
+	deckDeps
 	// active is the current modal overlay, or nil for row mode. It is the
 	// single-slot replacement for the deck's per-mode bool flags; modes are
 	// migrated onto it incrementally (see modal.go). When set, Update
@@ -779,33 +782,24 @@ type Model struct {
 	// the modal: the progress-completion handler reads it to decide the
 	// post-delete cursor selection, so it stays on the Model rather than
 	// living only on confirmDeleteModal.
-	deleteTarget        Item
-	pendingSelect       Item // after next refresh, cursor jumps to this (project, workspace) if present
-	findMode            bool
-	findStage           findStage
-	findProject         string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
-	findPinGroup        string            // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
-	findProjectHints    map[string]string // project name → stage-1 hint (rendered on project headers)
-	findPinHints        map[string]string // register key → stage-1 hint (rendered on pinned section headers)
-	findProjectLookup   map[string]findTarget
-	findProjectPrefix   map[rune]bool
-	findRowHints        map[int]string
-	findRowLookup       map[string]int
-	findRowPrefix       map[rune]bool
-	findPendingPrefix   rune
-	refresher           Refresher
-	refreshing          bool // true while a m.refresher() command is in flight
-	refreshPending      bool // a change signal arrived mid-refresh; re-run on completion
-	hookInstaller       HookInstaller
-	stateWatcher        StateChangeWatcher
-	prFetcher           PRFetcher
-	prStatusFetcher     PRStatusFetcher
-	prStatusByRepo      map[string]map[string]PRStatus // repoRoot → headRefName → status
-	prStatusFetchedAt   map[string]time.Time           // repoRoot → wall clock of last successful fetch
-	bookmarkFetcher     BookmarkFetcher
-	trunkResolver       TrunkResolver
-	stateEditor         StateEditorLauncher
-	prNumberLinkHandler PRNumberLinkHandler
+	deleteTarget      Item
+	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
+	findMode          bool
+	findStage         findStage
+	findProject       string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
+	findPinGroup      string            // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
+	findProjectHints  map[string]string // project name → stage-1 hint (rendered on project headers)
+	findPinHints      map[string]string // register key → stage-1 hint (rendered on pinned section headers)
+	findProjectLookup map[string]findTarget
+	findProjectPrefix map[rune]bool
+	findRowHints      map[int]string
+	findRowLookup     map[string]int
+	findRowPrefix     map[rune]bool
+	findPendingPrefix rune
+	refreshing        bool                           // true while a m.refresher() command is in flight
+	refreshPending    bool                           // a change signal arrived mid-refresh; re-run on completion
+	prStatusByRepo    map[string]map[string]PRStatus // repoRoot → headRefName → status
+	prStatusFetchedAt map[string]time.Time           // repoRoot → wall clock of last successful fetch
 	// pinChordMode is true after the user presses `m` and before the
 	// second key of the pin chord (mm / m<letter> / mD / mR) arrives.
 	// While pending, renderList highlights the register letter in each
@@ -815,42 +809,29 @@ type Model struct {
 	// gotoTopPending is true after the user presses `g` and before the
 	// second `g` of the vim-style `gg` jump-to-top chord arrives. Any
 	// other key cancels the chord.
-	gotoTopPending       bool
-	pinGroupHandler      PinGroupHandler
-	pinGroupAliasHandler PinGroupAliasHandler
-	pinGroupAliases      map[string]string // register key → display alias
-	bookmarkLinkHandler  BookmarkLinkHandler
+	gotoTopPending  bool
+	pinGroupAliases map[string]string // register key → display alias
 	// bookmarkPrefix mirrors config.Deck.BookmarkPrefix. When non-empty
 	// and a bookmark picked for the new-workspace flow begins with
 	// "<prefix>/", the form's workspace-name field is pre-filled with the
 	// stripped tail so the user gets a clean default ("andrew/foo" → "foo").
-	bookmarkPrefix          string
-	userActions             []UserAction
-	userActionsResolver     UserActionsResolver
-	actionMode              bool
-	actionMenuActions       []UserAction
-	actionAliasLookup       map[string]UserAction
-	spinner                 spinner.Model
-	busy                    bool
-	progressViewport        viewport.Model
-	progressMode            bool
-	progressTitle           string
-	progressSteps           []ProgressStep
-	progressLog             []string
-	progressErr             error
-	progressDone            bool
-	progressDoneAction      Action
-	progressChan            chan progressEvent
-	projectFinder           ProjectFinder
-	projectOpener           ProjectOpener
-	asyncJobLauncher        AsyncJobLauncher
-	jobsListRefresher       JobsListRefresher
-	jobCancelHandler        JobCancelHandler
-	jobDismissHandler       JobDismissHandler
-	jobLogOpener            JobLogOpener
-	jobRetryHandler         JobRetryHandler
-	jobDeleteWorkspaceRetry JobDeleteWorkspaceRetryHandler
-	jobs                    []Job
+	bookmarkPrefix     string
+	userActions        []UserAction
+	actionMode         bool
+	actionMenuActions  []UserAction
+	actionAliasLookup  map[string]UserAction
+	spinner            spinner.Model
+	busy               bool
+	progressViewport   viewport.Model
+	progressMode       bool
+	progressTitle      string
+	progressSteps      []ProgressStep
+	progressLog        []string
+	progressErr        error
+	progressDone       bool
+	progressDoneAction Action
+	progressChan       chan progressEvent
+	jobs               []Job
 	// reviewSetups tracks virtual-row review flows that have been
 	// dispatched but whose async job hasn't finished setting up yet.
 	// Keyed by reviewSetupKey (repoRoot + PR). Guards against a second
@@ -892,8 +873,7 @@ type Model struct {
 	// devURLs holds the most recent dev-server URL discovered for each
 	// tmux session, keyed by session name. Replaced wholesale on every
 	// DevURLsMsg so disappearing servers clear automatically.
-	devURLs          map[string]string
-	devURLDiscoverer DevURLDiscoverer
+	devURLs map[string]string
 }
 
 type NewWorkspaceDoneMsg struct {
@@ -935,7 +915,6 @@ func New(items []Item, handler Handler) Model {
 		findRowHints:      map[int]string{},
 		findRowLookup:     map[string]int{},
 		findRowPrefix:     map[rune]bool{},
-		handler:           handler,
 		filterInput:       fi,
 		deckViewport:      newDeckViewport(),
 		progressViewport:  newProgressViewport(),
@@ -943,6 +922,7 @@ func New(items []Item, handler Handler) Model {
 		styles:            newDeckStyles(),
 		spinner:           sp,
 	}
+	m.handler = handler
 	if idx := m.indexCurrent(); idx >= 0 {
 		m.cursor = idx
 	}
