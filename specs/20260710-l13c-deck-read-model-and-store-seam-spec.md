@@ -228,6 +228,22 @@ preserves behavior.
    sort order; pin grouping; bookmark→PR-number migration.
 
 ### Phase 3 — Modal decomposition (the god-model core)
+
+> **Rollout decision (2026-07-10):** migrate modes onto the slot
+> **incrementally**, validating each step and pausing for manual QA before
+> the bulk. Modal design = **single active-modal slot** (mutually
+> exclusive; no stack). Until a mode is migrated it keeps its bool flag and
+> the flag dispatch runs when `active == nil`.
+>
+> **Increment 1 (done):** introduced the `modal` interface (`modal.go`) +
+> `Model.active` slot, and migrated the **open/project picker** onto it
+> (`modal_open.go` — the least-entangled picker: select = projectOpener +
+> quit). Removed `openMode`/`openLoading`/`openList` fields and the
+> `renderOpenList`/`renderOpenDetails`/`resetOpenList` helpers. Added
+> `modal_open_test.go` (open→load→populate, enter-selects-and-quits,
+> esc-closes). Next increments: review picker, bookmark picker, then the
+> remaining modes.
+
 9. Introduce the `modal` interface + `modalAction` and refactor the
    existing sub-component modals (`jobsOverlay`, `confirmDelete`,
    `confirmMergePR`, forms) to satisfy it.
@@ -337,3 +353,8 @@ touches only the wiring + one new package — `deckdata`/`deckui` untouched.
   in-scope work — modal-flag collapse into a single active-modal
   abstraction (Phase 3) and callback collapse into a `Deps` interface
   (Phase 4). Picker *unification* and SQLite remain deferred.
+- 2026-07-10: Phase 1 landed (store seams + PR-cache race fix). Phase 2a
+  landed (`internal/prstatus` type relocation). Phase 2b landed
+  (`internal/deckdata` read model). Phase 3 started: chose incremental
+  rollout + single active-modal slot; increment 1 migrated the open picker
+  onto `Model.active`.
