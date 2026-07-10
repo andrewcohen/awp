@@ -406,7 +406,7 @@ func renderJobsOverlay(width, height int, l *list.Model, v *viewport.Model, empt
 		emptyMsg := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(innerWidth).
 			Render("No jobs in flight. Press n to create a workspace.")
 		body := lipgloss.JoinVertical(lipgloss.Left, title, "", emptyMsg, "", help)
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, boxStyle.Render(body))
+		return boxStyle.Render(body)
 	}
 
 	const gutter = 2
@@ -417,8 +417,7 @@ func renderJobsOverlay(width, height int, l *list.Model, v *viewport.Model, empt
 	v.Height = bodyHeight
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, l.View(), "  ", v.View())
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-		boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", help)))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", help))
 }
 
 func renderJobDetails(j Job, width int) string {

@@ -1008,17 +1008,17 @@ func TestJobsOverlayOpensOnCapitalJ(t *testing.T) {
 	})
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
 	m := updated.(Model)
-	if !m.jobsOverlay {
+	if _, ok := m.active.(*jobsModal); !ok {
 		t.Fatal("expected J to open jobs overlay")
 	}
 }
 
 func TestJobsOverlayClosesOnEsc(t *testing.T) {
 	model := New(nil, nil)
-	model.jobsOverlay = true
+	model.active = newJobsModal(nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m := updated.(Model)
-	if m.jobsOverlay {
+	if m.active != nil {
 		t.Fatal("expected esc to close overlay")
 	}
 }
@@ -1030,9 +1030,8 @@ func TestJobsOverlayCancelInvokesHandler(t *testing.T) {
 			called = id
 			return nil
 		})
-	model.jobsOverlay = true
 	model.jobs = []Job{{ID: "abc", Status: JobRunning}}
-	model.syncJobsListItems()
+	model.active = newJobsModal(model.jobs)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if cmd == nil {
 		t.Fatal("expected cancel cmd")
@@ -1048,9 +1047,8 @@ func TestJobsOverlayCancelTerminalNoop(t *testing.T) {
 	calls := 0
 	model := New(nil, nil).
 		WithJobCancelHandler(func(id string) error { calls++; return nil })
-	model.jobsOverlay = true
 	model.jobs = []Job{{ID: "abc", Status: JobDone}}
-	model.syncJobsListItems()
+	model.active = newJobsModal(model.jobs)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	m := updated.(Model)
 	if calls != 0 {
@@ -1065,9 +1063,8 @@ func TestJobsOverlayDismissRequiresTerminal(t *testing.T) {
 	calls := 0
 	model := New(nil, nil).
 		WithJobDismissHandler(func(id string) error { calls++; return nil })
-	model.jobsOverlay = true
 	model.jobs = []Job{{ID: "abc", Status: JobRunning}}
-	model.syncJobsListItems()
+	model.active = newJobsModal(model.jobs)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	m := updated.(Model)
 	if calls != 0 {
@@ -1085,7 +1082,6 @@ func TestJobsOverlayDeleteAndRetryInvokesHandlerOnStaleWorkspace(t *testing.T) {
 			called = id
 			return nil
 		})
-	model.jobsOverlay = true
 	// CRITICAL: WorkspaceName is the row the user was on (often
 	// `default`), but ErrorWorkspace is what the failure attached to
 	// (the pr-N-* workspace). D must dispatch on the latter.
@@ -1096,7 +1092,7 @@ func TestJobsOverlayDeleteAndRetryInvokesHandlerOnStaleWorkspace(t *testing.T) {
 		WorkspaceName:  "default",
 		ErrorWorkspace: "pr-1-feat",
 	}}
-	model.syncJobsListItems()
+	model.active = newJobsModal(model.jobs)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
 	if cmd == nil {
 		t.Fatal("expected D to dispatch a cmd for a stale-workspace job")
@@ -1112,7 +1108,6 @@ func TestJobsOverlayDeleteAndRetryRefusesNonStaleJob(t *testing.T) {
 	calls := 0
 	model := New(nil, nil).
 		WithJobDeleteWorkspaceRetryHandler(func(id string) error { calls++; return nil })
-	model.jobsOverlay = true
 	// Generic failure with no ErrorKind — D must not fire even with
 	// ErrorWorkspace populated.
 	model.jobs = []Job{{
@@ -1121,7 +1116,7 @@ func TestJobsOverlayDeleteAndRetryRefusesNonStaleJob(t *testing.T) {
 		WorkspaceName:  "default",
 		ErrorWorkspace: "pr-2-bar",
 	}}
-	model.syncJobsListItems()
+	model.active = newJobsModal(model.jobs)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
 	if cmd != nil {
 		_ = cmd()
@@ -1143,7 +1138,6 @@ func TestJobsOverlayDeleteAndRetryRefusesWithoutErrorWorkspace(t *testing.T) {
 	calls := 0
 	model := New(nil, nil).
 		WithJobDeleteWorkspaceRetryHandler(func(id string) error { calls++; return nil })
-	model.jobsOverlay = true
 	model.jobs = []Job{{
 		ID:            "no-ws-1",
 		Status:        JobError,
@@ -1152,7 +1146,7 @@ func TestJobsOverlayDeleteAndRetryRefusesWithoutErrorWorkspace(t *testing.T) {
 		// ErrorWorkspace intentionally empty — falling back to
 		// WorkspaceName here is exactly the bug we're avoiding.
 	}}
-	model.syncJobsListItems()
+	model.active = newJobsModal(model.jobs)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
 	if cmd != nil {
 		_ = cmd()

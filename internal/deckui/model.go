@@ -858,9 +858,6 @@ type Model struct {
 	// creating the workspace / priming the reviewer. Cleared when the
 	// backing job reaches a terminal state (or dispatch fails).
 	reviewSetups map[string]bool
-	jobsOverlay  bool
-	jobsList     list.Model
-	jobsViewport viewport.Model
 
 	// New-workspace form. When newWorkspaceMode is true the deck's
 	// View renders the form in place of the row list and Update
@@ -940,8 +937,6 @@ func New(items []Item, handler Handler) Model {
 		findRowPrefix:     map[rune]bool{},
 		handler:           handler,
 		filterInput:       fi,
-		jobsList:          newJobsList(),
-		jobsViewport:      newJobsViewport(),
 		deckViewport:      newDeckViewport(),
 		progressViewport:  newProgressViewport(),
 		keymap:            newDeckKeyMap(),
@@ -1715,8 +1710,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		prevJobs := m.jobs
 		m.jobs = msg.jobs
 		m.pruneReviewSetups()
-		m.syncJobsListItems()
-		m.refreshJobsViewport()
+		if jm, ok := m.active.(*jobsModal); ok {
+			jm.sync(m.jobs)
+			jm.refreshViewport()
+		}
 		var expireCmd tea.Cmd
 		m, expireCmd = m.syncJobActivities(msg.jobs)
 		// A create/review job produces a new workspace, but loadDeckItems
@@ -2191,9 +2188,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.jobsOverlay {
-			return m.updateJobsOverlay(msg)
-		}
 		km := m.keymap
 		switch {
 		case key.Matches(msg, km.Help):
@@ -2205,10 +2199,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			// (filtering) + the new-workspace form.
 			return m, tea.ClearScreen
 		case key.Matches(msg, km.Jobs):
-			m.jobsOverlay = true
-			m.jobsList.ResetSelected()
-			m.syncJobsListItems()
-			m.refreshJobsViewport()
+			m.active = newJobsModal(m.jobs)
 			// tea.ClearScreen on modal entry — same rationale as `?`
 			// above. Without this, the deck row list bleeds through
 			// the surrounding area of the jobs popover.
@@ -3319,7 +3310,7 @@ func (m Model) View() string {
 	// their own actionable hints in rightSeg.
 	hint := "? help"
 	if m.active != nil ||
-		m.jobsOverlay || m.findMode || m.actionMode {
+		m.findMode || m.actionMode {
 		hint = ""
 	}
 	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, hint, m.width-2)
@@ -3346,196 +3337,7 @@ func (m Model) View() string {
 		}
 		padBlock = strings.Join(blanks, "\n")
 	}
-	view := lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
-	if m.jobsOverlay {
-		view = renderJobsOverlay(m.width, m.height, &m.jobsList, &m.jobsViewport, len(m.jobs) == 0)
-	}
-	return view
-}
-
-// updateJobsOverlay handles keypresses while the J overlay is active.
-// Selection + scroll are owned by bubbles (jobsList and jobsViewport);
-// this function intercepts the overlay's close keys and job-action
-// shortcuts (c/x/r/o/y), then delegates the rest to the appropriate
-// bubble. Actions only fire when the list isn't actively filtering so
-// the letter keys can be typed into the filter input.
-func (m Model) updateJobsOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	filtering := m.jobsList.FilterState() == list.Filtering
-	if !filtering {
-		switch msg.String() {
-		case "esc", "q", "J":
-			if m.jobsList.FilterState() == list.FilterApplied {
-				m.jobsList.ResetFilter()
-				return m, nil
-			}
-			m.jobsOverlay = false
-			return m, nil
-		case "g":
-			m.jobsList.Select(0)
-			m.refreshJobsViewport()
-			return m, nil
-		case "G":
-			if n := len(m.jobsList.Items()); n > 0 {
-				m.jobsList.Select(n - 1)
-				m.refreshJobsViewport()
-			}
-			return m, nil
-		case "c":
-			j, ok := m.selectedJob()
-			if !ok || m.jobCancelHandler == nil {
-				return m, nil
-			}
-			if j.Status.IsTerminal() {
-				m.status = "cancel: job already finished"
-				return m, nil
-			}
-			handler := m.jobCancelHandler
-			id := j.ID
-			return m, func() tea.Msg {
-				return JobActionDoneMsg{JobID: id, Kind: "cancel", Err: handler(id)}
-			}
-		case "x":
-			j, ok := m.selectedJob()
-			if !ok || m.jobDismissHandler == nil {
-				return m, nil
-			}
-			if !j.Status.IsTerminal() {
-				m.status = "dismiss: cancel a running job first"
-				return m, nil
-			}
-			handler := m.jobDismissHandler
-			id := j.ID
-			return m, func() tea.Msg {
-				return JobActionDoneMsg{JobID: id, Kind: "dismiss", Err: handler(id)}
-			}
-		case "r":
-			j, ok := m.selectedJob()
-			if !ok || m.jobRetryHandler == nil {
-				return m, nil
-			}
-			if !j.Status.IsTerminal() {
-				m.status = "retry: job is still running"
-				return m, nil
-			}
-			if j.Status == JobDone {
-				m.status = "retry: job already succeeded"
-				return m, nil
-			}
-			handler := m.jobRetryHandler
-			id := j.ID
-			return m, func() tea.Msg {
-				return JobActionDoneMsg{JobID: id, Kind: "retry", Err: handler(id)}
-			}
-		case "D":
-			// Delete-workspace-and-retry. Only meaningful for jobs whose
-			// ErrorKind tags them as recoverable via this affordance.
-			j, ok := m.selectedJob()
-			if !ok || m.jobDeleteWorkspaceRetry == nil {
-				return m, nil
-			}
-			if j.ErrorKind != "stale_workspace" {
-				m.status = "D: only applies to jobs failed with a stale workspace"
-				return m, nil
-			}
-			if strings.TrimSpace(j.ErrorWorkspace) == "" {
-				m.status = "D: job has no error workspace recorded"
-				return m, nil
-			}
-			handler := m.jobDeleteWorkspaceRetry
-			id := j.ID
-			return m, func() tea.Msg {
-				return JobActionDoneMsg{JobID: id, Kind: "delete-and-retry", Err: handler(id)}
-			}
-		case "o":
-			j, ok := m.selectedJob()
-			if !ok || m.jobLogOpener == nil {
-				return m, nil
-			}
-			return m, m.jobLogOpener(j.ID)
-		case "y":
-			j, ok := m.selectedJob()
-			if !ok {
-				return m, nil
-			}
-			text := jobDetailsForCopy(j)
-			if err := writeSystemClipboard(text); err != nil {
-				m.status = "copy: " + err.Error()
-			} else {
-				m.status = fmt.Sprintf("copied %d bytes to clipboard", len(text))
-			}
-			return m, nil
-		}
-	} else if msg.String() == "esc" {
-		// While actively filtering, esc cancels the filter (list owns
-		// that) — never closes the overlay.
-		var cmd tea.Cmd
-		m.jobsList, cmd = m.jobsList.Update(msg)
-		m.refreshJobsViewport()
-		return m, cmd
-	}
-	// Route pgup/pgdn/ctrl+u/ctrl+d to the details viewport so the user
-	// can scroll the log without moving the list selection.
-	switch msg.String() {
-	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
-		var cmd tea.Cmd
-		m.jobsViewport, cmd = m.jobsViewport.Update(msg)
-		return m, cmd
-	}
-	priorIdx := m.jobsList.Index()
-	var cmd tea.Cmd
-	m.jobsList, cmd = m.jobsList.Update(msg)
-	if m.jobsList.Index() != priorIdx {
-		m.refreshJobsViewport()
-	}
-	return m, cmd
-}
-
-// selectedJob returns the currently highlighted Job and ok=true, or
-// ok=false when there are no items or the cast fails.
-func (m Model) selectedJob() (Job, bool) {
-	it, ok := m.jobsList.SelectedItem().(jobItem)
-	if !ok {
-		return Job{}, false
-	}
-	return it.job, true
-}
-
-// syncJobsListItems projects m.jobs into the bubbles/list items slice
-// while preserving the cursor on the same Job ID when possible. Called
-// from jobsListMsg (live refresh) and from the J open path.
-func (m *Model) syncJobsListItems() {
-	var selectedID string
-	if it, ok := m.jobsList.SelectedItem().(jobItem); ok {
-		selectedID = it.job.ID
-	}
-	items := make([]list.Item, 0, len(m.jobs))
-	keepIdx := -1
-	for i, j := range m.jobs {
-		items = append(items, jobItem{job: j})
-		if j.ID == selectedID {
-			keepIdx = i
-		}
-	}
-	m.jobsList.SetItems(items)
-	if keepIdx >= 0 {
-		m.jobsList.Select(keepIdx)
-	}
-}
-
-// refreshJobsViewport re-renders the details pane content from the
-// currently selected job. viewport.SetContent preserves YOffset when
-// the existing scroll position is still valid, so this is safe to call
-// on every Update tick.
-func (m *Model) refreshJobsViewport() {
-	width := m.jobsViewport.Width
-	if width <= 0 {
-		width = 40
-	}
-	if j, ok := m.selectedJob(); ok {
-		m.jobsViewport.SetContent(renderJobDetails(j, width))
-	} else {
-		m.jobsViewport.SetContent("")
-	}
+	return lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
 }
 
 func (m Model) renderHelp(width int) string {
