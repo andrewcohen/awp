@@ -780,39 +780,33 @@ type Model struct {
 	// the modal: the progress-completion handler reads it to decide the
 	// post-delete cursor selection, so it stays on the Model rather than
 	// living only on confirmDeleteModal.
-	deleteTarget      Item
-	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
-	findMode          bool
-	findStage         findStage
-	findProject       string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
-	findPinGroup      string            // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
-	findProjectHints  map[string]string // project name → stage-1 hint (rendered on project headers)
-	findPinHints      map[string]string // register key → stage-1 hint (rendered on pinned section headers)
-	findProjectLookup map[string]findTarget
-	findProjectPrefix map[rune]bool
-	findRowHints      map[int]string
-	findRowLookup     map[string]int
-	findRowPrefix     map[rune]bool
-	findPendingPrefix rune
-	refresher         Refresher
-	refreshing        bool // true while a m.refresher() command is in flight
-	refreshPending    bool // a change signal arrived mid-refresh; re-run on completion
-	hookInstaller     HookInstaller
-	stateWatcher      StateChangeWatcher
-	prFetcher         PRFetcher
-	prStatusFetcher   PRStatusFetcher
-	prStatusByRepo    map[string]map[string]PRStatus // repoRoot → headRefName → status
-	prStatusFetchedAt map[string]time.Time           // repoRoot → wall clock of last successful fetch
-	bookmarkFetcher   BookmarkFetcher
-	trunkResolver     TrunkResolver
-	stateEditor       StateEditorLauncher
-	prMenuMode        bool
-	// prNumberSetMode is true while the `p s` chord's numeric input
-	// modal is open. prNumberInput / prNumberTarget back the modal.
-	prNumberSetMode     bool
-	prNumberInput       textinput.Model
-	prNumberTarget      Item
-	prNumberErr         string
+	deleteTarget        Item
+	pendingSelect       Item // after next refresh, cursor jumps to this (project, workspace) if present
+	findMode            bool
+	findStage           findStage
+	findProject         string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
+	findPinGroup        string            // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
+	findProjectHints    map[string]string // project name → stage-1 hint (rendered on project headers)
+	findPinHints        map[string]string // register key → stage-1 hint (rendered on pinned section headers)
+	findProjectLookup   map[string]findTarget
+	findProjectPrefix   map[rune]bool
+	findRowHints        map[int]string
+	findRowLookup       map[string]int
+	findRowPrefix       map[rune]bool
+	findPendingPrefix   rune
+	refresher           Refresher
+	refreshing          bool // true while a m.refresher() command is in flight
+	refreshPending      bool // a change signal arrived mid-refresh; re-run on completion
+	hookInstaller       HookInstaller
+	stateWatcher        StateChangeWatcher
+	prFetcher           PRFetcher
+	prStatusFetcher     PRStatusFetcher
+	prStatusByRepo      map[string]map[string]PRStatus // repoRoot → headRefName → status
+	prStatusFetchedAt   map[string]time.Time           // repoRoot → wall clock of last successful fetch
+	bookmarkFetcher     BookmarkFetcher
+	trunkResolver       TrunkResolver
+	stateEditor         StateEditorLauncher
+	prMenuMode          bool
 	prNumberLinkHandler PRNumberLinkHandler
 	// pinChordMode is true after the user presses `m` and before the
 	// second key of the pin chord (mm / m<letter> / mD / mR) arrives.
@@ -823,14 +817,7 @@ type Model struct {
 	// gotoTopPending is true after the user presses `g` and before the
 	// second `g` of the vim-style `gg` jump-to-top chord arrives. Any
 	// other key cancels the chord.
-	gotoTopPending bool
-	// pinAliasMode is true while the `gR` alias-rename text input is
-	// open. pinAliasInput / pinAliasTarget back the modal; pinAliasErr
-	// surfaces validation.
-	pinAliasMode         bool
-	pinAliasInput        textinput.Model
-	pinAliasTarget       string // register key being renamed
-	pinAliasErr          string
+	gotoTopPending       bool
 	pinGroupHandler      PinGroupHandler
 	pinGroupAliasHandler PinGroupAliasHandler
 	pinGroupAliases      map[string]string // register key → display alias
@@ -1560,7 +1547,7 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.filtering &&
 		!m.findMode && !m.actionMode &&
 		!m.helpMode && !m.newWorkspaceMode &&
-		!m.prMenuMode && !m.prNumberSetMode && !m.pinAliasMode
+		!m.prMenuMode
 }
 
 // requestRefresh starts a row refresh, coalescing concurrent requests.
@@ -2101,108 +2088,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			return m, cmd
 		}
-		if m.prNumberSetMode {
-			switch msg.String() {
-			case "esc", "ctrl+c":
-				m.prNumberSetMode = false
-				m.prNumberInput.Blur()
-				m.prNumberInput.SetValue("")
-				m.prNumberErr = ""
-				m.status = ""
-				return m, tea.ClearScreen
-			case "enter":
-				typed := strings.TrimSpace(m.prNumberInput.Value())
-				prNumber := 0
-				if typed != "" {
-					n, err := strconv.Atoi(typed)
-					if err != nil || n < 0 {
-						m.prNumberErr = "enter a non-negative integer (or blank to clear)"
-						return m, nil
-					}
-					prNumber = n
-				}
-				if m.prNumberLinkHandler == nil {
-					m.prNumberSetMode = false
-					m.prNumberInput.Blur()
-					m.prNumberInput.SetValue("")
-					m.status = "pr: set PR # handler not configured"
-					return m, tea.ClearScreen
-				}
-				target := m.prNumberTarget
-				if err := m.prNumberLinkHandler(target, prNumber); err != nil {
-					m.prNumberErr = err.Error()
-					return m, nil
-				}
-				m.prNumberSetMode = false
-				m.prNumberInput.Blur()
-				m.prNumberInput.SetValue("")
-				m.prNumberErr = ""
-				if prNumber == 0 {
-					m.status = fmt.Sprintf("pr: cleared PR # override on %s/%s", target.ProjectName, target.WorkspaceName)
-				} else {
-					m.status = fmt.Sprintf("pr: pinned %s/%s → PR #%d", target.ProjectName, target.WorkspaceName, prNumber)
-				}
-				// Force a PR-status refetch alongside the row refresh:
-				// the override may point at a PR not in the cache yet
-				// (cold start, stale cache, or the PR appeared after the
-				// last gh poll). Bypassing the 60s throttle ensures the
-				// pinned PR's status shows up on the next paint instead
-				// of waiting up to a minute.
-				var prCmd tea.Cmd
-				m, prCmd = m.forcePRStatusRefresh(target.RepoRoot)
-				var refreshCmd tea.Cmd
-				m, refreshCmd = m.requestRefresh(true)
-				return m, batchCmds(tea.ClearScreen, refreshCmd, prCmd)
-			}
-			var cmd tea.Cmd
-			m.prNumberInput, cmd = m.prNumberInput.Update(msg)
-			m.prNumberErr = ""
-			return m, cmd
-		}
-		if m.pinAliasMode {
-			switch msg.String() {
-			case "esc", "ctrl+c":
-				m.pinAliasMode = false
-				m.pinAliasInput.Blur()
-				m.pinAliasInput.SetValue("")
-				m.pinAliasErr = ""
-				m.status = ""
-				return m, tea.ClearScreen
-			case "enter":
-				alias := strings.TrimSpace(m.pinAliasInput.Value())
-				key := m.pinAliasTarget
-				if m.pinGroupAliasHandler != nil {
-					if err := m.pinGroupAliasHandler(key, alias); err != nil {
-						m.pinAliasErr = err.Error()
-						return m, nil
-					}
-				}
-				// Update the in-memory map so the section header re-renders
-				// with the new label on the next paint without a reload.
-				if m.pinGroupAliases == nil {
-					m.pinGroupAliases = map[string]string{}
-				}
-				if alias == "" {
-					delete(m.pinGroupAliases, key)
-				} else {
-					m.pinGroupAliases[key] = alias
-				}
-				m.pinAliasMode = false
-				m.pinAliasInput.Blur()
-				m.pinAliasInput.SetValue("")
-				m.pinAliasErr = ""
-				if alias == "" {
-					m.status = fmt.Sprintf("pin: cleared name for group %s", pinGroupChordLetter(key))
-				} else {
-					m.status = fmt.Sprintf("pin: group %s → %s", pinGroupChordLetter(key), alias)
-				}
-				return m, tea.ClearScreen
-			}
-			var cmd tea.Cmd
-			m.pinAliasInput, cmd = m.pinAliasInput.Update(msg)
-			m.pinAliasErr = ""
-			return m, cmd
-		}
 		if m.gotoTopPending {
 			m.gotoTopPending = false
 			if msg.String() == "g" {
@@ -2338,19 +2223,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = "pr: select a workspace row"
 					return m, nil
 				}
-				ti := textinput.New()
-				ti.Placeholder = "PR # (blank or 0 to clear)"
-				ti.CharLimit = 12
-				if item.PRNumber > 0 {
-					ti.SetValue(strconv.Itoa(item.PRNumber))
-				}
-				ti.Focus()
-				m.prNumberInput = ti
-				m.prNumberTarget = item
-				m.prNumberErr = ""
-				m.prNumberSetMode = true
-				m.status = fmt.Sprintf("set PR # for %s/%s — enter saves · esc cancels", item.ProjectName, item.WorkspaceName)
-				return m, batchCmds(tea.ClearScreen, textinput.Blink)
+				var prModal *prNumberModal
+				var prCmd tea.Cmd
+				prModal, prCmd, m.status = newPRNumberModal(item)
+				m.active = prModal
+				return m, prCmd
 			}
 			return m, nil
 		}
@@ -3586,14 +3463,6 @@ func (m Model) View() string {
 		padBlock = strings.Join(blanks, "\n")
 	}
 	view := lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
-	if m.prNumberSetMode {
-		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			m.renderPRNumberSet())
-	}
-	if m.pinAliasMode {
-		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			m.renderPinAliasSet())
-	}
 	if m.helpMode {
 		// Center the help box over the existing view as a popover.
 		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -4715,43 +4584,6 @@ func (m Model) selected() (Item, bool) {
 	return items[m.cursor], true
 }
 
-func (m Model) renderPRNumberSet() string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colAccent)).
-		Padding(1, 2).
-		Width(60)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
-
-	target := strings.TrimSpace(m.prNumberTarget.WorkspaceName)
-	if target == "" {
-		target = "this workspace"
-	}
-	current := "none"
-	if m.prNumberTarget.PRNumber > 0 {
-		current = fmt.Sprintf("#%d", m.prNumberTarget.PRNumber)
-	}
-	lines := []string{
-		titleStyle.Render("Pin PR # for " + target),
-		"",
-		mutedStyle.Render("Pins this workspace to a specific PR so the deck"),
-		mutedStyle.Render("resolves status directly by number."),
-		"",
-		mutedStyle.Render("Current PR: " + current),
-		"",
-		mutedStyle.Render("PR number (blank or 0 clears):"),
-		m.prNumberInput.View(),
-	}
-	if m.prNumberErr != "" {
-		lines = append(lines, "", errStyle.Render(m.prNumberErr))
-	}
-	lines = append(lines, "", hintStyle.Render("enter save · esc cancel"))
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
-}
-
 // applyPinGroup pins, moves, or unpins the selected workspace. target
 // "" unpins (gD); otherwise "default" (gg) or a letter register. Aiming
 // at the register the row is already in unpins it (toggle); a different
@@ -4803,50 +4635,11 @@ func (m Model) startPinAliasRename() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	key := strings.TrimSpace(item.PinGroup)
-	ti := textinput.New()
-	ti.Placeholder = "group name (blank clears)"
-	ti.CharLimit = 40
-	ti.SetValue(strings.TrimSpace(m.pinGroupAliases[key]))
-	ti.Focus()
-	m.pinAliasInput = ti
-	m.pinAliasTarget = key
-	m.pinAliasErr = ""
-	m.pinAliasMode = true
-	m.status = fmt.Sprintf("name group %s — enter saves · esc cancels", pinGroupChordLetter(key))
-	return m, batchCmds(tea.ClearScreen, textinput.Blink)
-}
-
-func (m Model) renderPinAliasSet() string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colAccent)).
-		Padding(1, 2).
-		Width(60)
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
-	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
-
-	current := "none"
-	if a := strings.TrimSpace(m.pinGroupAliases[m.pinAliasTarget]); a != "" {
-		current = a
-	}
-	lines := []string{
-		titleStyle.Render("Name pin group " + pinGroupChordLetter(m.pinAliasTarget)),
-		"",
-		mutedStyle.Render("Sets the display label for this register in the"),
-		mutedStyle.Render("pinned section headers. Cosmetic — the register"),
-		mutedStyle.Render("key stays the letter you pin with."),
-		"",
-		mutedStyle.Render("Current name: " + current),
-		"",
-		mutedStyle.Render("Name (blank clears):"),
-		m.pinAliasInput.View(),
-	}
-	if m.pinAliasErr != "" {
-		lines = append(lines, "", errStyle.Render(m.pinAliasErr))
-	}
-	lines = append(lines, "", mutedStyle.Render("enter save · esc cancel"))
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	var aliasModal *pinAliasModal
+	var cmd tea.Cmd
+	aliasModal, cmd, m.status = newPinAliasModal(&m, key)
+	m.active = aliasModal
+	return m, cmd
 }
 
 func (m *Model) startFind() {

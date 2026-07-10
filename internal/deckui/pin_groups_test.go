@@ -178,11 +178,12 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 	m = updated.(Model)
 	updated, _ = m.Update(keyRunes('R'))
 	m = updated.(Model)
-	if !m.pinAliasMode {
+	am, ok := m.active.(*pinAliasModal)
+	if !ok {
 		t.Fatal("expected alias input mode after mR on a pinned row")
 	}
-	if m.pinAliasTarget != "a" {
-		t.Fatalf("expected alias target a, got %q", m.pinAliasTarget)
+	if am.target != "a" {
+		t.Fatalf("expected alias target a, got %q", am.target)
 	}
 	// Type "auth" and submit.
 	for _, r := range "auth" {
@@ -191,7 +192,7 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.pinAliasMode {
+	if m.active != nil {
 		t.Fatal("expected alias mode to close on enter")
 	}
 	if saved != "a" || savedAlias != "auth" {
@@ -209,7 +210,7 @@ func TestPinChordRenameNoOpWhenUnpinned(t *testing.T) {
 	m = updated.(Model)
 	updated, _ = m.Update(keyRunes('R'))
 	m = updated.(Model)
-	if m.pinAliasMode {
+	if _, ok := m.active.(*pinAliasModal); ok {
 		t.Fatal("mR on an unpinned row should not open the alias input")
 	}
 }
