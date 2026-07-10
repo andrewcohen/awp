@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/deckdata"
 	"github.com/andrewcohen/awp/internal/prstatus"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -47,36 +47,11 @@ func scheduleDevURLTick() tea.Cmd {
 	return tea.Tick(devURLInterval, func(t time.Time) tea.Msg { return devURLTickMsg(t) })
 }
 
-type Item struct {
-	ProjectName      string
-	WorkspaceName    string
-	Path             string
-	RepoRoot         string
-	Bookmark         string // jj bookmark associated with this workspace (still used for the new-workspace form, not for PR lookup)
-	PRNumber         int    // PR this workspace is associated with; when > 0, used to resolve PR status
-	Status           string
-	Unread           bool
-	PromptPreview    string
-	HeadDesc         string
-	HeadChangeID     string // jj short change-id of the working-copy commit
-	BookmarkCommitID string // full hex commit-id of the workspace's local bookmark; compared to PR head SHA on GitHub to detect "behind remote" / re-review
-	TmuxWindow       string
-	SessionName      string
-	Active           bool
-	Current          bool
-	// Virtual marks a synthetic inbox row that has no local workspace —
-	// an open PR you haven't pulled down yet, either awaiting your review
-	// (inboxVirtualReviewItems) or your own (inboxVirtualMineItems). It
-	// resolves PR status via PRNumber and renders read-only: enter starts
-	// the review flow for a review-requested PR, or opens the prefilled
-	// new-workspace form for your own; other workspace actions are no-ops.
-	Virtual bool
-	// PinGroup is the register this workspace is pinned to (from
-	// Entry.PinGroup): "" unpinned, "default" the gg register, or a
-	// single lowercase letter a–z. Pinned rows float to a section at the
-	// top of the deck in the All/Attention scopes.
-	PinGroup string
-}
+// Item is the deck row type; it lives in internal/deckdata (the read
+// model) so the selection logic can be tested without this Bubble Tea
+// package. The alias keeps deckui's and cli's references compiling
+// unchanged.
+type Item = deckdata.Item
 
 type Action int
 
@@ -554,34 +529,20 @@ type StateChangeWatcher func() tea.Cmd
 // keeps polling as the correctness fallback.
 type StateChangedMsg struct{}
 
-// Scope controls which items are shown in the deck list. Cycled with `P`;
-// not persisted unless an initial scope is supplied via `awp deck --scope`.
-// Declaration order is the cycle order (all → attention → inbox → all).
-type Scope int
+// Scope, its values, and ParseScope live in internal/deckdata (the read
+// model). These aliases keep deckui's and cli's references unchanged.
+type Scope = deckdata.Scope
 
 const (
-	ScopeAll       Scope = iota // every known workspace across all projects
-	ScopeAttention              // matches the mini-deck filter: active agent or unread notification
-	ScopeInbox                  // open-PR workspaces sectioned by next-move bucket (GitHub-inbox style)
+	ScopeAll       = deckdata.ScopeAll
+	ScopeAttention = deckdata.ScopeAttention
+	ScopeInbox     = deckdata.ScopeInbox
+	scopeCount     = deckdata.ScopeCount
 )
 
-const scopeCount = 3
-
 // ParseScope maps the user-facing names accepted by `awp deck --scope`
-// onto Scope values. Names are matched case-insensitively; hyphens and
-// spaces are interchangeable. `pr` and the legacy `open-pr` are accepted
-// as aliases for `inbox`.
-func ParseScope(s string) (Scope, bool) {
-	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(s, " ", "-"))) {
-	case "all":
-		return ScopeAll, true
-	case "attention":
-		return ScopeAttention, true
-	case "inbox", "pr", "open-pr":
-		return ScopeInbox, true
-	}
-	return ScopeAll, false
-}
+// onto Scope values. See deckdata.ParseScope.
+func ParseScope(s string) (Scope, bool) { return deckdata.ParseScope(s) }
 
 // PRItem is a lightweight PR summary for the review picker.
 type PRItem struct {
@@ -661,34 +622,22 @@ const (
 	PRMergeStateUnstable = prstatus.PRMergeStateUnstable
 )
 
-// inboxBucket sections the inbox scope the way GitHub's pull-request
-// inbox does: by what the deck owner's next move is. Declaration order
-// is render order — most urgent next-move first.
-type inboxBucket int
+// inboxBucket, its values, and the label helpers live in
+// internal/deckdata (the read model). These aliases keep deckui's
+// references unchanged; the urgency coloring below stays here since it's
+// presentation.
+type inboxBucket = deckdata.InboxBucket
 
 const (
-	inboxNeedsYourReview inboxBucket = iota // someone else's PR, your review is the blocker
-	inboxNeedsAction                        // your PR, something to fix (feedback, CI, conflicts)
-	inboxReadyToMerge                       // your PR, approved + green — go press the button
-	inboxOtherOpen                          // open PR that's neither yours nor awaiting you
-	inboxMine                               // your PR, ball in someone else's court — waiting for review or still a draft
-	inboxBucketCount
+	inboxNeedsYourReview = deckdata.InboxNeedsYourReview
+	inboxNeedsAction     = deckdata.InboxNeedsAction
+	inboxReadyToMerge    = deckdata.InboxReadyToMerge
+	inboxOtherOpen       = deckdata.InboxOtherOpen
+	inboxMine            = deckdata.InboxMine
+	inboxBucketCount     = deckdata.InboxBucketCount
 )
 
-func inboxBucketLabel(b inboxBucket) string {
-	switch b {
-	case inboxNeedsYourReview:
-		return "Needs your review"
-	case inboxNeedsAction:
-		return "Needs action"
-	case inboxReadyToMerge:
-		return "Ready to merge"
-	case inboxOtherOpen:
-		return "Other open PRs"
-	default:
-		return "Mine"
-	}
-}
+func inboxBucketLabel(b inboxBucket) string { return deckdata.InboxBucketLabel(b) }
 
 // inboxBucketColor maps a bucket to a palette token so its header reads
 // by urgency at a glance: teal = your move (review), red = something to
@@ -708,21 +657,8 @@ func inboxBucketColor(b inboxBucket) string {
 	}
 }
 
-// bucketFromHeaderLabel recovers the bucket from a header label like
-// "Needs action (2)" — the count suffix is stripped and the base
-// matched against inboxBucketLabel. Both sides go through the same
-// label function, so the round-trip is exact.
 func bucketFromHeaderLabel(label string) (inboxBucket, bool) {
-	base := label
-	if i := strings.LastIndex(label, " ("); i >= 0 {
-		base = label[:i]
-	}
-	for b := inboxBucket(0); b < inboxBucketCount; b++ {
-		if inboxBucketLabel(b) == base {
-			return b, true
-		}
-	}
-	return 0, false
+	return deckdata.BucketFromHeaderLabel(label)
 }
 
 // headerStyle returns the style for a group header. Inbox bucket headers
@@ -740,19 +676,13 @@ func (m Model) headerStyle(label string) lipgloss.Style {
 
 // pinGroupDefault is the register key for the gg chord — the "default"
 // pinned register. Other registers are single lowercase letters a–z.
-const pinGroupDefault = "default"
+const pinGroupDefault = deckdata.PinGroupDefault
 
 // pinGroupLabel is the display label for a register: its alias when one
 // is set, otherwise "pinned" for the default register or the bare
 // letter for a lettered register.
 func (m Model) pinGroupLabel(key string) string {
-	if alias := strings.TrimSpace(m.pinGroupAliases[key]); alias != "" {
-		return alias
-	}
-	if key == pinGroupDefault {
-		return "pinned"
-	}
-	return key
+	return deckdata.PinGroupLabel(m.pinGroupAliases, key)
 }
 
 // pinGroupChordLetter is the keystroke that targets a register in the
@@ -766,62 +696,14 @@ func pinGroupChordLetter(key string) string {
 	return key
 }
 
-// pinGroupSortKey orders registers: the default register first, then
-// the rest case-insensitively by display label (alias or letter).
-func (m Model) pinGroupSortKey(key string) string {
-	if key == pinGroupDefault {
-		return "\x00"
-	}
-	return "\x01" + strings.ToLower(m.pinGroupLabel(key))
-}
-
 // pinnedCount returns how many leading items in a pinned-first ordering
 // carry a register. items() sorts pinned rows ahead of unpinned ones in
 // the all / attention scopes, so this is the length of that prefix.
-func pinnedCount(items []Item) int {
-	n := 0
-	for _, it := range items {
-		if strings.TrimSpace(it.PinGroup) != "" {
-			n++
-		}
-	}
-	return n
-}
+func pinnedCount(items []Item) int { return deckdata.PinnedCount(items) }
 
-// prInboxBucket classifies an OPEN PR into its inbox section. Callers
-// filter merged/closed PRs out of the inbox scope before classifying.
-//
-// Precedence, locked by tests: a review request always wins (it names
-// you regardless of the PR's own state); within your own PRs the draft
-// check precedes CI/decision checks — a draft isn't submitted for
-// review yet, so its CI state is informational, not actionable, and it
-// belongs in the bottom "Mine" pile rather than "Needs action".
-// Anything of yours that isn't broken, ready, or a draft (i.e. waiting
-// on reviewers) also lands in "Mine".
-func prInboxBucket(s PRStatus) inboxBucket {
-	if s.ReviewRequested || s.ReviewRerequested {
-		return inboxNeedsYourReview
-	}
-	if !s.Mine {
-		return inboxOtherOpen
-	}
-	if s.IsDraft {
-		return inboxMine
-	}
-	if s.ReviewDecision == PRReviewChangesRequested ||
-		s.CIState == PRCIFailing ||
-		s.MergeStateStatus == PRMergeStateDirty ||
-		s.MergeStateStatus == PRMergeStateBehind {
-		return inboxNeedsAction
-	}
-	if s.IsInMergeQueue ||
-		(s.ReviewDecision == PRReviewApproved &&
-			(s.CIState == PRCIPassing || s.CIState == PRCINone) &&
-			s.MergeStateStatus == PRMergeStateClean) {
-		return inboxReadyToMerge
-	}
-	return inboxMine
-}
+// prInboxBucket classifies an OPEN PR into its inbox section. See
+// deckdata.PRInboxBucket.
+func prInboxBucket(s PRStatus) inboxBucket { return deckdata.PRInboxBucket(s) }
 
 // PRStatusFetcher returns a tea.Cmd that fetches PR status for one or more
 // repos (one gh call per repo, parallel). The fetcher streams one
@@ -1405,259 +1287,32 @@ func aliasLookup(actions []UserAction) map[string]UserAction {
 	return out
 }
 
-func (m Model) items() []Item {
-	src := m.itemsAll
-	switch m.scope {
-	case ScopeInbox:
-		filtered := make([]Item, 0, len(src))
-		for _, it := range src {
-			if _, ok := m.itemOpenPRStatus(it); ok {
-				filtered = append(filtered, it)
-			}
-		}
-		// Surface review-requested PRs you haven't checked out yet as
-		// synthetic read-only rows, so "Needs your review" isn't limited
-		// to PRs that already have a local workspace.
-		filtered = append(filtered, m.inboxVirtualReviewItems(filtered)...)
-		// Likewise surface your own open PRs that have no local workspace
-		// so the Mine / Needs action / Ready to merge buckets aren't
-		// limited to PRs you happen to have checked out. Passing the
-		// review virtuals in too dedups against them.
-		filtered = append(filtered, m.inboxVirtualMineItems(filtered)...)
-		src = filtered
-	case ScopeAttention:
-		filtered := make([]Item, 0, len(src))
-		for _, it := range src {
-			if AttentionIncluded(it.Status, it.Unread, it.Active) {
-				filtered = append(filtered, it)
-			}
-		}
-		src = filtered
+// rm builds the deckdata read-model view from the model's current raw
+// inputs. It's a cheap value (maps/slices are reference types), so the
+// read-model delegations below rebuild it per call rather than caching.
+func (m Model) rm() deckdata.View {
+	return deckdata.View{
+		All:            m.itemsAll,
+		Scope:          m.scope,
+		Filter:         m.filter,
+		PRStatusByRepo: m.prStatusByRepo,
+		PinAliases:     m.pinGroupAliases,
+		Attention:      AttentionIncluded,
 	}
-	f := strings.ToLower(strings.TrimSpace(m.filter))
-	if f != "" {
-		out := make([]Item, 0, len(src))
-		for _, it := range src {
-			if strings.Contains(strings.ToLower(it.WorkspaceName), f) ||
-				strings.Contains(strings.ToLower(it.ProjectName), f) ||
-				strings.Contains(strings.ToLower(m.displayLabel(it)), f) {
-				out = append(out, it)
-			}
-		}
-		src = out
-	}
-	// Sort by (project, displayed label) so rows alphabetize by what the
-	// user actually sees — PR title when one is resolved from the cache,
-	// workspace name otherwise. Stable sort preserves the upstream
-	// ordering for ties. The inbox scope sorts by bucket first so rows
-	// section under the bucket headers in next-move order.
-	sorted := append([]Item(nil), src...)
-	byProjectLabel := func(i, j int) bool {
-		if sorted[i].ProjectName != sorted[j].ProjectName {
-			return sorted[i].ProjectName < sorted[j].ProjectName
-		}
-		return strings.ToLower(m.displayLabel(sorted[i])) < strings.ToLower(m.displayLabel(sorted[j]))
-	}
-	if m.scope == ScopeInbox {
-		sort.SliceStable(sorted, func(i, j int) bool {
-			bi, bj := m.itemInboxBucket(sorted[i]), m.itemInboxBucket(sorted[j])
-			if bi != bj {
-				return bi < bj
-			}
-			// Within "Needs your review", surface re-reviews first — PRs
-			// you already reviewed that the author pushed to and
-			// re-requested. They're cheaper to act on (you only need to
-			// look at what changed) and easy to lose track of.
-			if bi == inboxNeedsYourReview {
-				ri, rj := m.itemNeedsReReview(sorted[i]), m.itemNeedsReReview(sorted[j])
-				if ri != rj {
-					return ri
-				}
-			}
-			return byProjectLabel(i, j)
-		})
-	} else {
-		// All / attention scopes float pinned rows to the top, ordered by
-		// register (default first, then alphabetical by alias-or-letter),
-		// then by label within a register. Unpinned rows keep the
-		// (project, label) ordering. bodyRows relies on this pinned-first
-		// prefix to section the pinned region.
-		sort.SliceStable(sorted, func(i, j int) bool {
-			pi := strings.TrimSpace(sorted[i].PinGroup) != ""
-			pj := strings.TrimSpace(sorted[j].PinGroup) != ""
-			if pi != pj {
-				return pi
-			}
-			if pi {
-				ki, kj := m.pinGroupSortKey(sorted[i].PinGroup), m.pinGroupSortKey(sorted[j].PinGroup)
-				if ki != kj {
-					return ki < kj
-				}
-				return strings.ToLower(m.displayLabel(sorted[i])) < strings.ToLower(m.displayLabel(sorted[j]))
-			}
-			return byProjectLabel(i, j)
-		})
-	}
-	return sorted
 }
 
-// itemInboxBucket classifies a workspace for the inbox scope. Items the
-// scope filter would exclude (no open PR resolvable) land in the
-// catch-all bucket; the filter runs first, so that's defensive only.
-func (m Model) itemInboxBucket(it Item) inboxBucket {
-	st, ok := m.itemOpenPRStatus(it)
-	if !ok {
-		return inboxOtherOpen
-	}
-	return prInboxBucket(st)
-}
+// items returns the visible, filtered, sorted deck rows for the current
+// scope. See deckdata.View.Items.
+func (m Model) items() []Item { return m.rm().Items() }
 
-// itemNeedsReReview reports whether the row is a re-request: you
-// reviewed the PR before and the author pushed and asked again. Used to
-// sort these to the top of the "Needs your review" bucket.
-func (m Model) itemNeedsReReview(it Item) bool {
-	st, ok := m.itemOpenPRStatus(it)
-	return ok && st.ReviewRerequested
-}
-
-// inboxVirtualReviewItems synthesizes read-only inbox rows for
-// review-requested PRs that have no local workspace, so "Needs your
-// review" surfaces PRs you haven't pulled down yet. The PR status cache
-// only holds repos where you already have at least one workspace, so a
-// virtual row is always a not-yet-checked-out PR in a repo you work in;
-// its project name is borrowed from a sibling workspace in that repo.
-//
-// real is the inbox scope's already-filtered workspace rows; PRs they
-// resolve to are skipped so a checked-out PR never doubles up. Each
-// virtual Item resolves its status via PRNumber (no bookmark on file)
-// and carries the PR head ref so the meta line can show the branch.
-func (m Model) inboxVirtualReviewItems(real []Item) []Item {
-	// PRs already represented by a real workspace row, by repo → PR#.
-	seen := map[string]map[int]bool{}
-	for _, it := range real {
-		if st, ok := m.resolvePRStatus(it); ok {
-			if seen[it.RepoRoot] == nil {
-				seen[it.RepoRoot] = map[int]bool{}
-			}
-			seen[it.RepoRoot][st.Number] = true
-		}
-	}
-	projectByRepo := map[string]string{}
-	for _, it := range m.itemsAll {
-		if it.RepoRoot != "" && projectByRepo[it.RepoRoot] == "" {
-			projectByRepo[it.RepoRoot] = it.ProjectName
-		}
-	}
-	var out []Item
-	for repo, byHead := range m.prStatusByRepo {
-		for _, st := range byHead {
-			if st.State != PRStateOpen {
-				continue
-			}
-			if !st.ReviewRequested && !st.ReviewRerequested {
-				continue
-			}
-			if seen[repo][st.Number] {
-				continue
-			}
-			project := projectByRepo[repo]
-			if project == "" {
-				project = repoBaseName(repo)
-			}
-			out = append(out, Item{
-				ProjectName:   project,
-				WorkspaceName: fmt.Sprintf("#%d", st.Number),
-				RepoRoot:      repo,
-				PRNumber:      st.Number,
-				Bookmark:      st.HeadRefName, // drives the branch token on the meta line
-				Virtual:       true,
-			})
-		}
-	}
-	return out
-}
-
-// inboxVirtualMineItems synthesizes read-only inbox rows for your own
-// open PRs that have no local workspace yet — the authored-by-you
-// counterpart to inboxVirtualReviewItems. Without it, the Mine / Needs
-// action / Ready to merge buckets only show PRs you happen to have
-// checked out; a PR you opened from another machine (or whose workspace
-// you deleted) would silently vanish from your inbox.
-//
-// Review-requested PRs are intentionally skipped here — inboxVirtualReviewItems
-// already covers them (you can't request review from yourself, so this is
-// belt-and-suspenders). prInboxBucket later sorts each row into its
-// section by PR state. existing should be the real workspace rows plus
-// the review virtuals so we dedup against both, by repo → PR#.
-func (m Model) inboxVirtualMineItems(existing []Item) []Item {
-	seen := map[string]map[int]bool{}
-	for _, it := range existing {
-		if st, ok := m.resolvePRStatus(it); ok {
-			if seen[it.RepoRoot] == nil {
-				seen[it.RepoRoot] = map[int]bool{}
-			}
-			seen[it.RepoRoot][st.Number] = true
-		}
-	}
-	projectByRepo := map[string]string{}
-	for _, it := range m.itemsAll {
-		if it.RepoRoot != "" && projectByRepo[it.RepoRoot] == "" {
-			projectByRepo[it.RepoRoot] = it.ProjectName
-		}
-	}
-	var out []Item
-	for repo, byHead := range m.prStatusByRepo {
-		for _, st := range byHead {
-			if st.State != PRStateOpen {
-				continue
-			}
-			if !st.Mine {
-				continue
-			}
-			if st.ReviewRequested || st.ReviewRerequested {
-				continue // covered by inboxVirtualReviewItems
-			}
-			if seen[repo][st.Number] {
-				continue
-			}
-			project := projectByRepo[repo]
-			if project == "" {
-				project = repoBaseName(repo)
-			}
-			out = append(out, Item{
-				ProjectName:   project,
-				WorkspaceName: fmt.Sprintf("#%d", st.Number),
-				RepoRoot:      repo,
-				PRNumber:      st.Number,
-				Bookmark:      st.HeadRefName, // drives the branch token on the meta line
-				Virtual:       true,
-			})
-		}
-	}
-	return out
-}
-
-// repoBaseName returns the last path segment of a repo root, used as a
-// fallback project label for a virtual row when no sibling workspace
-// supplies one.
-func repoBaseName(repo string) string {
-	repo = strings.TrimRight(repo, "/")
-	if i := strings.LastIndexByte(repo, '/'); i >= 0 {
-		return repo[i+1:]
-	}
-	return repo
-}
+// itemInboxBucket classifies a workspace for the inbox scope. See
+// deckdata.View.InboxBucket.
+func (m Model) itemInboxBucket(it Item) inboxBucket { return m.rm().InboxBucket(it) }
 
 // displayLabel returns the text that renders on a row: "#N title" when a
 // PR is resolvable from the cache, falling back to the workspace name.
-func (m Model) displayLabel(it Item) string {
-	if pr, ok := m.resolvePRStatus(it); ok {
-		if t := strings.TrimSpace(pr.Title); t != "" {
-			return fmt.Sprintf("#%d %s", pr.Number, t)
-		}
-	}
-	return it.WorkspaceName
-}
+// See deckdata.View.DisplayLabel.
+func (m Model) displayLabel(it Item) string { return m.rm().DisplayLabel(it) }
 
 // Nerd Font glyphs used on the meta line. Both require a Nerd Font
 // to render \u2014 they fall back to missing-glyph boxes otherwise.
@@ -1798,18 +1453,6 @@ func promptPreviewSnippet(p string, n int) string {
 	}
 	p = strings.Join(strings.Fields(p), " ")
 	return truncate(p, n)
-}
-
-// itemOpenPRStatus returns the cached status of the workspace's OPEN PR.
-// Drafts count — the inbox scope sections them into "Your drafts" rather
-// than hiding them. Resolution goes through resolvePRStatus, so a pinned
-// PRNumber works even when no bookmark is on file. Used by ScopeInbox.
-func (m Model) itemOpenPRStatus(it Item) (PRStatus, bool) {
-	st, ok := m.resolvePRStatus(it)
-	if !ok || st.State != PRStateOpen {
-		return PRStatus{}, false
-	}
-	return st, true
 }
 
 // initKickMsg drives the first-paint side effects (initial enrich
@@ -6626,38 +6269,9 @@ func prReviewReqGlyphColor(s PRStatus) string {
 	return colInfo
 }
 
-// resolvePRStatus is the one PR-lookup entry point. Returns the cached
-// PR for this workspace via item.PRNumber. Falls back to a bookmark →
-// headRefName lookup ONLY when PRNumber is unset and a bookmark is
-// present — kept as a compat path so workspaces created before the
-// rename (and not yet migrated by the deck's state load) still resolve.
-// Once the migration runs against every stale entry, the bookmark
-// branch is dead code; we'll delete it in a follow-up after the next
-// deck release.
-func (m Model) resolvePRStatus(item Item) (PRStatus, bool) {
-	repo := strings.TrimSpace(item.RepoRoot)
-	if repo == "" {
-		return PRStatus{}, false
-	}
-	byHead, ok := m.prStatusByRepo[repo]
-	if !ok {
-		return PRStatus{}, false
-	}
-	if item.PRNumber > 0 {
-		for _, s := range byHead {
-			if s.Number == item.PRNumber {
-				return s, true
-			}
-		}
-		return PRStatus{}, false
-	}
-	if bm := strings.TrimSpace(item.Bookmark); bm != "" {
-		if s, ok := byHead[bm]; ok {
-			return s, true
-		}
-	}
-	return PRStatus{}, false
-}
+// resolvePRStatus is the one PR-lookup entry point. See
+// deckdata.View.ResolvePRStatus.
+func (m Model) resolvePRStatus(item Item) (PRStatus, bool) { return m.rm().ResolvePRStatus(item) }
 
 // prStatusLabelForItem resolves the workspace's PR and returns the
 // matched status plus a human-readable label. The label appends a
