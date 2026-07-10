@@ -267,9 +267,38 @@ preserves behavior.
 > `confirmDelete`/`deleteIsProject`/`deleteInput`/`deleteErr`/
 > `confirmMergePR`/`mergeTarget`/`mergeStatus` fields.
 >
-> Next increments: small input popovers (pr-number set, pin alias), chord
-> modes (pin chord, pr menu, action), forms (new/rename/prompt), overlays
-> (jobs, help, progress), find mode.
+> **Increment 5 (done):** migrated the two small textinput popovers —
+> `p s` pr-number pin and `gR` pin-group alias (`modal_input.go`) — as
+> popoverModals.
+>
+> **Increment 6 (done):** migrated the `p` PR action menu
+> (`modal_prmenu.go`). It has no overlay (row list stays visible), so it's a
+> bodyModal whose view is the row list; the footer now falls back to the
+> status line when a modal's footerHelp is empty.
+>
+> **Modal-slot boundary decision (2026-07-10).** 8 mutually-exclusive
+> overlay modals are now on `Model.active` (3 pickers, 2 confirms, 2 input
+> popovers, pr menu), removing ~26 fields. The remaining flag-based modes
+> are intentionally left off the single slot:
+>
+> - **Forms (new/rename/prompt).** Already decomposed into sub-structs
+>   (`newWorkspaceForm`/`renameForm`/`promptForm`) with `update→(self,cmd,
+>   action)` + `view` + a `dispatchXForm` interpreter — the anti-god-object
+>   goal is met. More importantly, the **new-workspace form ↔ bookmark
+>   picker round-trip** requires the form to persist *underneath* the picker
+>   (the picker's Start-from flow reverts into the still-populated form).
+>   A single active slot is mutually exclusive (we chose no stack), so the
+>   form must remain a persistent field. Migrating it would break the
+>   round-trip or force a modal stack. **Decision: forms stay as fields.**
+> - **Transient chords** (`pinChordMode`, `gotoTopPending`) and the inline
+>   `filtering` state are bare bools with no sub-state and are coupled to
+>   row-list rendering (pin chord highlights register letters). They aren't
+>   god-object bloat; leave as flags.
+> - **Large overlays** (`jobsOverlay`, `helpMode`, `progressMode`) and
+>   `findMode` are mutually-exclusive and *could* move onto the slot later.
+>   help/jobs are straightforward; progress (streaming state) and find
+>   (multi-stage, render-coupled state machine) are higher-risk and worth
+>   doing deliberately with their own QA. Left as follow-ups.
 
 9. Introduce the `modal` interface + `modalAction` and refactor the
    existing sub-component modals (`jobsOverlay`, `confirmDelete`,
@@ -385,3 +414,11 @@ touches only the wiring + one new package — `deckdata`/`deckui` untouched.
   (`internal/deckdata` read model). Phase 3 started: chose incremental
   rollout + single active-modal slot; increment 1 migrated the open picker
   onto `Model.active`.
+- 2026-07-10: Phase 3 increments 2–6 landed: review + bookmark pickers,
+  confirm-delete/merge, pr-number/pin-alias input popovers, and the pr
+  action menu — 8 overlay modals now on `Model.active` (~26 fields removed).
+  Recorded the modal-slot boundary decision: forms stay as persistent
+  fields (round-trip with the bookmark picker needs them underneath; single
+  slot is intentionally non-stacking), transient chords + inline filter
+  stay as flags, and the large overlays / find mode are deliberate
+  follow-ups.
