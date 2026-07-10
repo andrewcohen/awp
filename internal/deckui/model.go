@@ -269,15 +269,6 @@ func newBookmarkList() list.Model {
 	return l
 }
 
-// resetBookmarkList clears items, cursor, and filter on the picker's
-// list.Model. Called from every close/cancel path so the picker reopens
-// in a clean state.
-func resetBookmarkList(l *list.Model) {
-	l.SetItems(nil)
-	l.ResetFilter()
-	l.ResetSelected()
-}
-
 func bookmarkPickerTitle(p bookmarkPurpose, target Item) string {
 	switch p {
 	case bookmarkPurposeLinkExisting:
@@ -846,11 +837,6 @@ type Model struct {
 	pinGroupHandler      PinGroupHandler
 	pinGroupAliasHandler PinGroupAliasHandler
 	pinGroupAliases      map[string]string // register key → display alias
-	bookmarkMode         bool
-	bookmarkLoading      bool
-	bookmarkList         list.Model
-	bookmarkPurpose      bookmarkPurpose
-	bookmarkLinkTarget   Item
 	bookmarkLinkHandler  BookmarkLinkHandler
 	// bookmarkPrefix mirrors config.Deck.BookmarkPrefix. When non-empty
 	// and a bookmark picked for the new-workspace flow begins with
@@ -972,7 +958,6 @@ func New(items []Item, handler Handler) Model {
 		findRowPrefix:     map[rune]bool{},
 		handler:           handler,
 		filterInput:       fi,
-		bookmarkList:      newBookmarkList(),
 		jobsList:          newJobsList(),
 		jobsViewport:      newJobsViewport(),
 		deckViewport:      newDeckViewport(),
@@ -1577,7 +1562,6 @@ func (m Model) canBackgroundRefresh() bool {
 		m.active == nil &&
 		!m.confirmDelete && !m.filtering &&
 		!m.findMode && !m.actionMode &&
-		!m.bookmarkMode &&
 		!m.helpMode && !m.newWorkspaceMode &&
 		!m.prMenuMode && !m.prNumberSetMode && !m.pinAliasMode
 }
@@ -1688,8 +1672,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// each tick is the simplest way to animate the glyph next to
 		// the loading message without writing a custom delegate.
 		glyph := m.spinner.View()
-		if m.bookmarkMode && m.bookmarkLoading {
-			m.bookmarkList.SetItems([]list.Item{loadingItem{label: glyph + " loading bookmarks..."}})
+		if bp, ok := m.active.(*bookmarkPicker); ok && bp.loading {
+			bp.tickLoading(glyph)
 		}
 		if rp, ok := m.active.(*reviewPicker); ok && rp.loading {
 			rp.tickLoading(glyph)
@@ -1914,28 +1898,21 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case BookmarksDoneMsg:
 		m.busy = false
-		if !m.bookmarkMode {
+		bp, ok := m.active.(*bookmarkPicker)
+		if !ok {
 			return m, nil
 		}
-		m.bookmarkLoading = false
 		if msg.Err != nil {
-			m.bookmarkMode = false
+			m.active = nil
 			m.status = "bookmark: " + msg.Err.Error()
 			return m, nil
 		}
 		if len(msg.Bookmarks) == 0 {
-			m.bookmarkMode = false
+			m.active = nil
 			m.status = "bookmark: no bookmarks found"
 			return m, nil
 		}
-		items := make([]list.Item, 0, len(msg.Bookmarks))
-		for _, b := range msg.Bookmarks {
-			items = append(items, bookmarkItem{name: b})
-		}
-		m.bookmarkList.SetShowStatusBar(true)
-		m.bookmarkList.SetItems(items)
-		m.bookmarkList.ResetSelected()
-		m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, m.bookmarkLinkTarget)
+		bp.setBookmarks(msg.Bookmarks)
 		// list.Model renders its own key-help footer (/, enter, esc);
 		// duplicating it in the deck's status bar would show the same
 		// hints twice.
@@ -2450,67 +2427,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			cmd := m.active.update(&m, msg)
 			return m, cmd
 		}
-		if m.bookmarkMode {
-			if m.bookmarkLoading {
-				switch msg.String() {
-				case "esc", "ctrl+c":
-					m.bookmarkMode = false
-					m.bookmarkLoading = false
-					m.status = ""
-					if m.bookmarkPurpose == bookmarkPurposeNewWorkspaceStartFrom {
-						m.bookmarkPurpose = bookmarkPurposeNewWorkspace
-						m.newWorkspaceMode = true
-						m.newWorkspaceForm.RevertStartFrom()
-						return m, tea.ClearScreen
-					}
-				}
-				return m, nil
-			}
-			// list.Model owns cursor + filter + paginator state. We only
-			// intercept the keys whose default semantics don't match the
-			// existing picker UX:
-			//   - enter: select the highlighted row directly, even while
-			//     filtering (list's default would just commit the filter,
-			//     forcing a double-enter to pick).
-			//   - esc / ctrl+c while not filtering: close the picker
-			//     (list's default is no-op at that point; first esc still
-			//     clears an active filter via list's own handling).
-			filtering := m.bookmarkList.FilterState() == list.Filtering
-			switch msg.String() {
-			case "enter":
-				// During filter typing the DefaultDelegate hides the
-				// selection indicator (intentional: list disables
-				// CursorUp/Down while filtering). Defer enter to the
-				// list so AcceptWhileFiltering commits the filter —
-				// the selector becomes visible, j/k navigates, and a
-				// second enter actually picks.
-				if filtering {
-					break
-				}
-				if it, ok := m.bookmarkList.SelectedItem().(bookmarkItem); ok && strings.TrimSpace(it.name) != "" {
-					return m.acceptBookmarkSelection(it.name)
-				}
-				return m, nil
-			case "esc", "ctrl+c":
-				if !filtering && m.bookmarkList.FilterState() != list.FilterApplied {
-					fromForm := m.bookmarkPurpose == bookmarkPurposeNewWorkspaceStartFrom
-					m.bookmarkMode = false
-					resetBookmarkList(&m.bookmarkList)
-					m.bookmarkPurpose = bookmarkPurposeNewWorkspace
-					m.bookmarkLinkTarget = Item{}
-					m.status = ""
-					if fromForm {
-						m.newWorkspaceMode = true
-						m.newWorkspaceForm.RevertStartFrom()
-						return m, tea.ClearScreen
-					}
-					return m, nil
-				}
-			}
-			var cmd tea.Cmd
-			m.bookmarkList, cmd = m.bookmarkList.Update(msg)
-			return m, cmd
-		}
 		if m.findMode {
 			switch msg.String() {
 			case "esc", "ctrl+c":
@@ -2895,11 +2811,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		cmd := m.active.update(&m, msg)
 		return m, cmd
 	}
-	if m.bookmarkMode {
-		var cmd tea.Cmd
-		m.bookmarkList, cmd = m.bookmarkList.Update(msg)
-		return m, cmd
-	}
 	return m, nil
 }
 
@@ -2938,8 +2849,7 @@ func pickerShortHelp(l list.Model) []key.Binding {
 // repo root is stashed so submit can dispatch a create job through the
 // existing async-job path.
 func (m *Model) launchNewForm(initial NewWorkspaceInitial, repo string) (tea.Model, tea.Cmd) {
-	m.bookmarkMode = false
-	resetBookmarkList(&m.bookmarkList)
+	m.active = nil
 	if strings.TrimSpace(repo) == "" {
 		m.status = "new: select a row with a known repo"
 		return *m, nil
@@ -3067,13 +2977,7 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.newWorkspaceMode = false
-		m.bookmarkMode = true
-		m.bookmarkPurpose = bookmarkPurposeNewWorkspaceStartFrom
-		m.bookmarkLoading = true
-		resetBookmarkList(&m.bookmarkList)
-		m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, Item{})
-		m.bookmarkList.SetShowStatusBar(false)
-		m.bookmarkList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading bookmarks..."}})
+		m.active = newBookmarkPicker(m.spinner.View(), bookmarkPurposeNewWorkspaceStartFrom, Item{})
 		return m, batchCmds(cmd, m.spinner.Tick, m.bookmarkFetcher(m.newWorkspaceRepo), tea.ClearScreen)
 	}
 	return m, cmd
@@ -3103,21 +3007,15 @@ func batchCmds(cmds ...tea.Cmd) tea.Cmd {
 // BookmarkLinkHandler. Shared between filter-mode (enter selects
 // directly) and nav-mode (enter after committing a filter) so the two
 // paths can't diverge.
-func (m *Model) acceptBookmarkSelection(name string) (tea.Model, tea.Cmd) {
-	switch m.bookmarkPurpose {
+func (m *Model) acceptBookmarkSelection(name string, purpose bookmarkPurpose, target Item) (tea.Model, tea.Cmd) {
+	switch purpose {
 	case bookmarkPurposeNewWorkspaceStartFrom:
-		m.bookmarkMode = false
-		resetBookmarkList(&m.bookmarkList)
-		m.bookmarkPurpose = bookmarkPurposeNewWorkspace
+		m.active = nil
 		m.newWorkspaceMode = true
 		m.newWorkspaceForm.SetPickedBookmark(name)
 		return *m, tea.ClearScreen
 	case bookmarkPurposeLinkExisting:
-		target := m.bookmarkLinkTarget
-		m.bookmarkMode = false
-		resetBookmarkList(&m.bookmarkList)
-		m.bookmarkPurpose = bookmarkPurposeNewWorkspace
-		m.bookmarkLinkTarget = Item{}
+		m.active = nil
 		if m.bookmarkLinkHandler == nil {
 			m.status = "link: not configured"
 			return *m, nil
@@ -3173,14 +3071,7 @@ func (m *Model) startBookmarkLinker(target Item) (tea.Model, tea.Cmd) {
 		m.status = "link: select a row with a known repo"
 		return *m, nil
 	}
-	m.bookmarkMode = true
-	m.bookmarkPurpose = bookmarkPurposeLinkExisting
-	m.bookmarkLinkTarget = target
-	m.bookmarkLoading = true
-	resetBookmarkList(&m.bookmarkList)
-	m.bookmarkList.Title = bookmarkPickerTitle(m.bookmarkPurpose, m.bookmarkLinkTarget)
-	m.bookmarkList.SetShowStatusBar(false)
-	m.bookmarkList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " loading bookmarks..."}})
+	m.active = newBookmarkPicker(m.spinner.View(), bookmarkPurposeLinkExisting, target)
 	m.busy = true
 	m.status = ""
 	return *m, tea.Batch(m.spinner.Tick, m.bookmarkFetcher(target.RepoRoot))
@@ -3691,13 +3582,6 @@ func (m Model) View() string {
 	switch {
 	case m.active != nil:
 		left, right = m.active.view(&m)
-	case m.bookmarkMode:
-		// JoinHorizontal between a short loading-state left pane and a
-		// tall static right pane caused painting bleed during load
-		// (lipgloss pads with empty rows, not space-filled rows, and
-		// JoinVertical's pad newlines don't clear residue).
-		// Single-column avoids the issue and gives the list more room.
-		left = m.renderBookmarkList(m.width)
 	default:
 		left = m.renderList(m.width)
 	}
@@ -3734,8 +3618,6 @@ func (m Model) View() string {
 	// deck's enter pick / esc cancel conventions.
 	case m.active != nil:
 		rightSeg = m.active.footerHelp()
-	case m.bookmarkMode && !m.bookmarkLoading:
-		rightSeg = m.bookmarkList.Help.ShortHelpView(pickerShortHelp(m.bookmarkList))
 	case m.filter != "":
 		rightSeg = dim.Render(fmt.Sprintf("filter: %q · %s", m.filter, statusText))
 	default:
@@ -3754,7 +3636,7 @@ func (m Model) View() string {
 	// since the overlay doesn't apply there — those screens surface
 	// their own actionable hints in rightSeg.
 	hint := "? help"
-	if m.active != nil || m.bookmarkMode ||
+	if m.active != nil ||
 		m.jobsOverlay || m.prMenuMode || m.findMode || m.actionMode {
 		hint = ""
 	}
@@ -4855,25 +4737,6 @@ func deckKeyGroups() []keyGroup {
 			},
 		},
 	}
-}
-
-func (m *Model) renderBookmarkList(width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
-	// Reserve 2 rows for container padding plus 3 for the deck's bottom
-	// footer (status line + 1 row top/bottom padding). list.Model handles
-	// its own title, status bar, paginator, and help footer inside the
-	// remaining space — and a single loadingItem during the fetch so
-	// the chrome's shape stays constant.
-	listWidth := width - 2
-	if listWidth < 8 {
-		listWidth = 8
-	}
-	listHeight := m.height - 5
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	m.bookmarkList.SetSize(listWidth, listHeight)
-	return containerStyle.Render(m.bookmarkList.View())
 }
 
 func (m *Model) renderProgress(width int) string {
