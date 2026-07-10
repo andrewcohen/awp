@@ -33,18 +33,18 @@ type Model struct {
 	LoadDiff        func() (string, error)
 	OpenFile        OpenFunc
 
-	files          []diff.FileDiff
-	filtered       []diff.FileDiff
-	filesCursor    int
-	hunksCursor    int
-	hunkScroll     int
-	focus          Focus
-	filterInput    textinput.Model
-	width          int
-	height         int
-	status         string
-	statusErr      bool
-	refreshing     bool
+	files       []diff.FileDiff
+	filtered    []diff.FileDiff
+	filesCursor int
+	hunksCursor int
+	hunkScroll  int
+	focus       Focus
+	filterInput textinput.Model
+	width       int
+	height      int
+	status      string
+	statusErr   bool
+	refreshing  bool
 }
 
 type diffLoadedMsg struct {

@@ -77,15 +77,15 @@ type JobStep struct {
 // Job is the deckui-side projection of an internal/jobs.Job. The
 // wiring layer fills these in on every refresh tick.
 type Job struct {
-	ID            string
-	Title         string
-	Action        string
-	Status        JobStatus
-	StartedAt     time.Time
-	EndedAt       time.Time
-	Steps         []JobStep
-	LogsTail      []string
-	ErrMsg        string
+	ID        string
+	Title     string
+	Action    string
+	Status    JobStatus
+	StartedAt time.Time
+	EndedAt   time.Time
+	Steps     []JobStep
+	LogsTail  []string
+	ErrMsg    string
 	// ErrorKind tags failures the overlay can offer typed recovery for.
 	// Empty for generic failures. Currently the only kind is
 	// "stale_workspace" (mirrors jobs.ErrorKindStaleWorkspace) — when
@@ -100,10 +100,10 @@ type Job struct {
 	// nuke `default` when the user was sitting on that row.
 	ErrorWorkspace string
 	LogPath        string
-	PID           int
-	WorkspaceName string
-	WorkspacePath string
-	RepoRoot      string
+	PID            int
+	WorkspaceName  string
+	WorkspacePath  string
+	RepoRoot       string
 }
 
 // JobsListRefresher returns the current set of async jobs, ordered
@@ -271,9 +271,9 @@ func (j jobItem) FilterValue() string {
 
 type jobItemDelegate struct{}
 
-func (jobItemDelegate) Height() int                                { return 1 }
-func (jobItemDelegate) Spacing() int                               { return 0 }
-func (jobItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd    { return nil }
+func (jobItemDelegate) Height() int                             { return 1 }
+func (jobItemDelegate) Spacing() int                            { return 0 }
+func (jobItemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 func (jobItemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
 	item, ok := listItem.(jobItem)
 	if !ok {
@@ -622,4 +622,3 @@ func jobStatusGlyph(s JobStatus) (string, string) {
 	}
 	return "·", colMuted
 }
-

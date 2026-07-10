@@ -163,7 +163,7 @@ func TestCtrlUPagesHunks(t *testing.T) {
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
 		NewPath: "foo.go",
 		Status:  "M",
-		Hunks: []diff.Hunk{{NewStart: 1, Lines: []diff.HunkLine{{Type: ' ', Content: "a"}}}, {NewStart: 2, Lines: []diff.HunkLine{{Type: ' ', Content: "b"}}}, {NewStart: 3, Lines: []diff.HunkLine{{Type: ' ', Content: "c"}}}, {NewStart: 4, Lines: []diff.HunkLine{{Type: ' ', Content: "d"}}}, {NewStart: 5, Lines: []diff.HunkLine{{Type: ' ', Content: "e"}}}, {NewStart: 6, Lines: []diff.HunkLine{{Type: ' ', Content: "f"}}}, {NewStart: 7, Lines: []diff.HunkLine{{Type: ' ', Content: "g"}}}, {NewStart: 8, Lines: []diff.HunkLine{{Type: ' ', Content: "h"}}}},
+		Hunks:   []diff.Hunk{{NewStart: 1, Lines: []diff.HunkLine{{Type: ' ', Content: "a"}}}, {NewStart: 2, Lines: []diff.HunkLine{{Type: ' ', Content: "b"}}}, {NewStart: 3, Lines: []diff.HunkLine{{Type: ' ', Content: "c"}}}, {NewStart: 4, Lines: []diff.HunkLine{{Type: ' ', Content: "d"}}}, {NewStart: 5, Lines: []diff.HunkLine{{Type: ' ', Content: "e"}}}, {NewStart: 6, Lines: []diff.HunkLine{{Type: ' ', Content: "f"}}}, {NewStart: 7, Lines: []diff.HunkLine{{Type: ' ', Content: "g"}}}, {NewStart: 8, Lines: []diff.HunkLine{{Type: ' ', Content: "h"}}}},
 	}}})
 	got := updated.(Model)
 	got.focus = FocusHunks
@@ -200,7 +200,7 @@ func TestRenderHunkLinesUsesMinimalLineNumberGutterWidth(t *testing.T) {
 	h := diff.Hunk{
 		OldStart: 1,
 		NewStart: 1,
-		Lines: []diff.HunkLine{{Type: ' ', Content: "one"}, {Type: '+', Content: "two"}},
+		Lines:    []diff.HunkLine{{Type: ' ', Content: "one"}, {Type: '+', Content: "two"}},
 	}
 	lines := renderHunkLines(h, 80)
 	if len(lines) != 2 {

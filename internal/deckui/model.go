@@ -960,8 +960,8 @@ type Model struct {
 	pendingSelect     Item     // after next refresh, cursor jumps to this (project, workspace) if present
 	findMode          bool
 	findStage         findStage
-	findProject       string // project name scoping the workspace stage ("" when a pin register scopes it instead)
-	findPinGroup      string // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
+	findProject       string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
+	findPinGroup      string            // register key scoping the workspace stage ("" when a project scopes it, or in the project stage)
 	findProjectHints  map[string]string // project name → stage-1 hint (rendered on project headers)
 	findPinHints      map[string]string // register key → stage-1 hint (rendered on pinned section headers)
 	findProjectLookup map[string]findTarget
@@ -1015,11 +1015,11 @@ type Model struct {
 	pinGroupAliasHandler PinGroupAliasHandler
 	pinGroupAliases      map[string]string // register key → display alias
 	bookmarkMode         bool
-	bookmarkLoading     bool
-	bookmarkList        list.Model
-	bookmarkPurpose     bookmarkPurpose
-	bookmarkLinkTarget  Item
-	bookmarkLinkHandler BookmarkLinkHandler
+	bookmarkLoading      bool
+	bookmarkList         list.Model
+	bookmarkPurpose      bookmarkPurpose
+	bookmarkLinkTarget   Item
+	bookmarkLinkHandler  BookmarkLinkHandler
 	// bookmarkPrefix mirrors config.Deck.BookmarkPrefix. When non-empty
 	// and a bookmark picked for the new-workspace flow begins with
 	// "<prefix>/", the form's workspace-name field is pre-filled with the
@@ -1060,10 +1060,10 @@ type Model struct {
 	// enter re-dispatching the same review while the first is still
 	// creating the workspace / priming the reviewer. Cleared when the
 	// backing job reaches a terminal state (or dispatch fails).
-	reviewSetups            map[string]bool
-	jobsOverlay             bool
-	jobsList                list.Model
-	jobsViewport            viewport.Model
+	reviewSetups map[string]bool
+	jobsOverlay  bool
+	jobsList     list.Model
+	jobsViewport viewport.Model
 
 	// New-workspace form. When newWorkspaceMode is true the deck's
 	// View renders the form in place of the row list and Update

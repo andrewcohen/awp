@@ -569,7 +569,7 @@ func forkFetchURLFromOrigin(runner Runner, repoRoot, headOwner, headName string)
 //
 // Recognized inputs:
 //   - URL form:  ssh://git@host/old/repo[.git]   → ssh://git@host/<owner>/<name>.git
-//                https://host/old/repo[.git]     → https://host/<owner>/<name>.git
+//     https://host/old/repo[.git]     → https://host/<owner>/<name>.git
 //   - SCP form:  git@host:old/repo.git           → git@host:<owner>/<name>.git
 func rewriteFetchURL(origin, owner, name, fallback string) string {
 	owner = strings.TrimSpace(owner)
