@@ -427,12 +427,6 @@ func newOpenList() list.Model {
 	return l
 }
 
-func resetOpenList(l *list.Model) {
-	l.SetItems(nil)
-	l.ResetFilter()
-	l.ResetSelected()
-}
-
 // newDeckViewport returns the viewport for the project-grouped workspace
 // list. Its key bindings are wiped: the deck owns navigation via its own
 // j/k handling (which mutates m.cursor and then calls clampDeckViewport
@@ -782,12 +776,17 @@ type Model struct {
 	// renderList syncs it into deckViewport.YOffset after content is
 	// loaded so viewport's internal clamp doesn't reset it to zero
 	// against an empty content buffer.
-	deckViewport      viewport.Model
-	deckYOffset       int
-	width             int
-	height            int
-	status            string
-	handler           Handler
+	deckViewport viewport.Model
+	deckYOffset  int
+	width        int
+	height       int
+	status       string
+	handler      Handler
+	// active is the current modal overlay, or nil for row mode. It is the
+	// single-slot replacement for the deck's per-mode bool flags; modes are
+	// migrated onto it incrementally (see modal.go). When set, Update
+	// dispatches keys to it before the legacy flag handlers.
+	active            modal
 	filterInput       textinput.Model
 	filtering         bool
 	filter            string
@@ -884,9 +883,6 @@ type Model struct {
 	progressDone            bool
 	progressDoneAction      Action
 	progressChan            chan progressEvent
-	openMode                bool
-	openLoading             bool
-	openList                list.Model
 	projectFinder           ProjectFinder
 	projectOpener           ProjectOpener
 	asyncJobLauncher        AsyncJobLauncher
@@ -990,7 +986,6 @@ func New(items []Item, handler Handler) Model {
 		bookmarkList:      newBookmarkList(),
 		reviewList:        reviewList,
 		reviewDelegate:    reviewDelegate,
-		openList:          newOpenList(),
 		jobsList:          newJobsList(),
 		jobsViewport:      newJobsViewport(),
 		deckViewport:      newDeckViewport(),
@@ -1592,10 +1587,11 @@ func prStatusReposPolicy(items []Item, lastFetch map[string]time.Time, now time.
 
 func (m Model) canBackgroundRefresh() bool {
 	return m.refresher != nil && !m.busy && !m.progressMode &&
+		m.active == nil &&
 		!m.confirmDelete && !m.filtering &&
 		!m.findMode && !m.actionMode &&
 		!m.bookmarkMode && !m.reviewMode &&
-		!m.openMode && !m.helpMode && !m.newWorkspaceMode &&
+		!m.helpMode && !m.newWorkspaceMode &&
 		!m.prMenuMode && !m.prNumberSetMode && !m.pinAliasMode
 }
 
@@ -1711,8 +1707,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if m.reviewMode && m.reviewLoading {
 			m.reviewList.SetItems([]list.Item{loadingItem{label: glyph + " loading PRs..."}})
 		}
-		if m.openMode && m.openLoading {
-			m.openList.SetItems([]list.Item{loadingItem{label: glyph + " scanning project roots..."}})
+		if op, ok := m.active.(*openPicker); ok && op.loading {
+			op.tickLoading(glyph)
 		}
 		return m, cmd
 	case refreshTickMsg:
@@ -1960,27 +1956,21 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case ProjectsDoneMsg:
 		m.busy = false
-		if !m.openMode {
+		op, ok := m.active.(*openPicker)
+		if !ok {
 			return m, nil
 		}
-		m.openLoading = false
 		if msg.Err != nil {
-			m.openMode = false
+			m.active = nil
 			m.status = "open: " + msg.Err.Error()
 			return m, nil
 		}
 		if len(msg.Projects) == 0 {
-			m.openMode = false
+			m.active = nil
 			m.status = "open: no projects found (configure deck.project_roots)"
 			return m, nil
 		}
-		items := make([]list.Item, 0, len(msg.Projects))
-		for _, p := range msg.Projects {
-			items = append(items, projectItem{project: p})
-		}
-		m.openList.SetShowStatusBar(true)
-		m.openList.SetItems(items)
-		m.openList.ResetSelected()
+		op.setProjects(msg.Projects)
 		// list.Model renders its own key-help footer; clear the status
 		// so the deck's bottom bar doesn't duplicate the picker's hints.
 		m.status = ""
@@ -2481,46 +2471,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.openMode {
-			if m.openLoading {
-				switch msg.String() {
-				case "esc", "ctrl+c":
-					m.openMode = false
-					m.openLoading = false
-					m.status = ""
-				}
-				return m, nil
-			}
-			filtering := m.openList.FilterState() == list.Filtering
-			switch msg.String() {
-			case "enter":
-				// See bookmark mode for rationale: enter during filter
-				// commits the filter; second enter actually picks.
-				if filtering {
-					break
-				}
-				if m.projectOpener == nil {
-					return m, nil
-				}
-				it, ok := m.openList.SelectedItem().(projectItem)
-				if !ok {
-					return m, nil
-				}
-				if err := m.projectOpener(it.project); err != nil {
-					m.status = "open: " + err.Error()
-					return m, nil
-				}
-				return m, tea.Quit
-			case "esc", "ctrl+c":
-				if !filtering && m.openList.FilterState() != list.FilterApplied {
-					m.openMode = false
-					resetOpenList(&m.openList)
-					m.status = ""
-					return m, nil
-				}
-			}
-			var cmd tea.Cmd
-			m.openList, cmd = m.openList.Update(msg)
+		if m.active != nil {
+			cmd := m.active.update(&m, msg)
 			return m, cmd
 		}
 		if m.bookmarkMode {
@@ -2947,11 +2899,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "open: not configured (set deck.project_roots in config)"
 				return m, nil
 			}
-			m.openMode = true
-			m.openLoading = true
-			resetOpenList(&m.openList)
-			m.openList.SetShowStatusBar(false)
-			m.openList.SetItems([]list.Item{loadingItem{label: m.spinner.View() + " scanning project roots..."}})
+			m.active = newOpenPicker(m.spinner.View())
 			m.busy = true
 			m.status = ""
 			return m, tea.Batch(m.spinner.Tick, m.projectFinder())
@@ -3024,6 +2972,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// above route keys to the active picker; this fallthrough catches
 	// everything else so those internal messages reach the list and the
 	// filter actually applies as the user types.
+	if m.active != nil {
+		cmd := m.active.update(&m, msg)
+		return m, cmd
+	}
 	if m.bookmarkMode {
 		var cmd tea.Cmd
 		m.bookmarkList, cmd = m.bookmarkList.Update(msg)
@@ -3032,11 +2984,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	if m.reviewMode {
 		var cmd tea.Cmd
 		m.reviewList, cmd = m.reviewList.Update(msg)
-		return m, cmd
-	}
-	if m.openMode {
-		var cmd tea.Cmd
-		m.openList, cmd = m.openList.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -3832,12 +3779,8 @@ func (m Model) View() string {
 	// always single-column.
 	var left, right string
 	switch {
-	case m.openMode:
-		leftW, rightW := pickerSplit(m.width, m.deckStacked())
-		left = m.renderOpenList(leftW)
-		if rightW > 0 {
-			right = m.renderOpenDetails(rightW)
-		}
+	case m.active != nil:
+		left, right = m.active.view(&m)
 	case m.bookmarkMode:
 		// JoinHorizontal between a short loading-state left pane and a
 		// tall static right pane caused painting bleed during load
@@ -3881,12 +3824,12 @@ func (m Model) View() string {
 	// the footer. pickerShortHelp drops the list's "? more" / "q quit"
 	// (neither does anything useful in our pickers) and adds the
 	// deck's enter pick / esc cancel conventions.
+	case m.active != nil:
+		rightSeg = m.active.footerHelp()
 	case m.reviewMode && !m.reviewLoading:
 		rightSeg = m.reviewList.Help.ShortHelpView(pickerShortHelp(m.reviewList))
 	case m.bookmarkMode && !m.bookmarkLoading:
 		rightSeg = m.bookmarkList.Help.ShortHelpView(pickerShortHelp(m.bookmarkList))
-	case m.openMode && !m.openLoading:
-		rightSeg = m.openList.Help.ShortHelpView(pickerShortHelp(m.openList))
 	case m.filter != "":
 		rightSeg = dim.Render(fmt.Sprintf("filter: %q · %s", m.filter, statusText))
 	default:
@@ -3905,7 +3848,7 @@ func (m Model) View() string {
 	// since the overlay doesn't apply there — those screens surface
 	// their own actionable hints in rightSeg.
 	hint := "? help"
-	if m.bookmarkMode || m.reviewMode || m.openMode ||
+	if m.active != nil || m.bookmarkMode || m.reviewMode ||
 		m.jobsOverlay || m.prMenuMode || m.findMode || m.actionMode {
 		hint = ""
 	}
@@ -5006,41 +4949,6 @@ func deckKeyGroups() []keyGroup {
 			},
 		},
 	}
-}
-
-func (m *Model) renderOpenList(width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
-	listWidth := width - 2
-	if listWidth < 8 {
-		listWidth = 8
-	}
-	listHeight := m.height - 5
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	m.openList.SetSize(listWidth, listHeight)
-	return containerStyle.Render(m.openList.View())
-}
-
-func (m Model) renderOpenDetails(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("open")
-	lines := []string{title, ""}
-	if it, ok := m.openList.SelectedItem().(projectItem); ok {
-		lines = append(lines,
-			"Selection: "+it.project.Name,
-			"Path:      "+it.project.Path,
-		)
-	} else {
-		lines = append(lines, "Pick a project to summon (or create) its default workspace.")
-	}
-	lines = append(lines, "",
-		"Keys:",
-		"/        fuzzy filter",
-		"↑/↓      navigate",
-		"enter    open",
-		"esc      cancel",
-	)
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderBookmarkList(width int) string {
