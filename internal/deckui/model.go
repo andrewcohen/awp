@@ -3231,10 +3231,18 @@ func (m Model) View() string {
 	if m.promptMode {
 		return m.promptForm.view(m.width, m.height)
 	}
-	// Popover modals (confirmations, small prompts) render as a centered
-	// box over a blank canvas — no body/footer composition.
+	// Popover modals (confirmations, small prompts, help) render as a box
+	// over a blank canvas — no body/footer composition. Center small
+	// popovers; top-align any that are taller than the viewport (e.g. the
+	// help overlay on a short terminal) so their header — which carries the
+	// close hint — stays on screen instead of clipping off the top.
 	if pm, ok := m.active.(popoverModal); ok {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, pm.renderPopover(&m))
+		content := pm.renderPopover(&m)
+		vpos := lipgloss.Center
+		if lipgloss.Height(content) > m.height {
+			vpos = lipgloss.Top
+		}
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, vpos, content)
 	}
 
 	// The workspace row list runs full-width — per-row metadata lives
