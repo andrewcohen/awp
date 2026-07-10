@@ -20,11 +20,23 @@ import (
 // same instant the subprocess heartbeats. Two seconds is plenty.
 const lockTimeout = 2 * time.Second
 
+// ReadStore is the read-only view of the job store: enumerate all
+// records and fetch one by ID. It is the seam the deck read model
+// (internal/deckdata) depends on so the backing store can be swapped
+// (e.g. for a SQLite implementation) without touching the read model.
+// The concrete file-backed *Store satisfies it.
+type ReadStore interface {
+	List() ([]Job, error)
+	Get(id JobID) (Job, error)
+}
+
 // Store reads and writes job records under a directory, defaulting to
 // ~/.awp/jobs/. All writes are atomic (flock + temp file + rename).
 type Store struct {
 	dir string
 }
+
+var _ ReadStore = (*Store)(nil)
 
 // NewStore returns a Store rooted at ~/.awp/jobs/. The directory is
 // created lazily on first write.

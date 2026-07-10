@@ -17,6 +17,31 @@ import (
 // lowercase letter a–z. An empty alias is treated as "no alias" and
 // removed from the map.
 
+// PinGroupAliasStore is the seam over pin-group alias persistence:
+// load the whole register→alias map, or set/clear one register's
+// alias. The deck read model (internal/deckdata) and the deck wiring
+// depend on this interface so the backing store can be swapped (e.g.
+// for a SQLite implementation) without touching callers. The
+// file-backed FilePinGroupAliasStore satisfies it.
+type PinGroupAliasStore interface {
+	Load() (map[string]string, error)
+	Save(key, alias string) error
+}
+
+// FilePinGroupAliasStore is the JSON-file-backed PinGroupAliasStore
+// (~/.awp/pin-groups.json). It is a thin adapter over the package-level
+// LoadPinGroupAliases / SavePinGroupAlias functions.
+type FilePinGroupAliasStore struct{}
+
+var _ PinGroupAliasStore = FilePinGroupAliasStore{}
+
+// Load reads the register→alias map. A missing file yields an empty map.
+func (FilePinGroupAliasStore) Load() (map[string]string, error) { return LoadPinGroupAliases() }
+
+// Save sets (or, with an empty alias, clears) the display alias for a
+// register and persists the whole map atomically.
+func (FilePinGroupAliasStore) Save(key, alias string) error { return SavePinGroupAlias(key, alias) }
+
 // PinGroupAliasesPath returns the path of the global pin-group alias
 // JSON file.
 func PinGroupAliasesPath() (string, error) { return pinGroupAliasesPath() }
