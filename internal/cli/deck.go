@@ -137,6 +137,13 @@ func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedA
 	if len(byRepo) == 0 {
 		return
 	}
+	// Serialize against persistPRStatusBulkMerge: both do a
+	// load→merge→save read-modify-write on the same on-disk cache file.
+	// The single-PR write-through path (review) can fire while a bulk
+	// fetch is mid-flight; without sharing the lock the two would clobber
+	// each other's merged entries.
+	prStatusCacheMu.Lock()
+	defer prStatusCacheMu.Unlock()
 	persistByRepo, persistFetchedAt, loadErr := loadPRStatusCache()
 	if loadErr != nil {
 		deckDebugLogf("prStatus cache reload err=%v", loadErr)
@@ -159,9 +166,11 @@ func persistPRStatusMerge(byRepo map[string]map[string]deckui.PRStatus, fetchedA
 	}
 }
 
-// prStatusCacheMu serializes the load→merge→save read-modify-write in
-// persistPRStatusBulkMerge so the concurrent per-repo fetches in the
-// pr-status job don't clobber each other's cache entries.
+// prStatusCacheMu serializes every load→merge→save read-modify-write on
+// the on-disk PR-status cache: the concurrent per-repo fetches in the
+// pr-status job (persistPRStatusBulkMerge) and the single-PR
+// write-through from `awp review` (persistPRStatusMerge). All writers
+// share this one lock so none clobbers another's cache entries.
 var prStatusCacheMu sync.Mutex
 
 // persistPRStatusBulkMerge is the bulk-fetch persistence path. It
