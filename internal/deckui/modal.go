@@ -28,10 +28,26 @@ type modal interface {
 	// m.active = nil to close itself) and returns any command to run. The
 	// model's Update calls this before the legacy flag dispatch.
 	update(m *Model, msg tea.Msg) tea.Cmd
+	// footerHelp returns the status-bar right segment for this modal, or
+	// "" to leave it blank (e.g. while loading, or for popovers that render
+	// their own hints).
+	footerHelp() string
+}
+
+// bodyModal renders full-width in place of the row list (pickers, menus).
+// View composes its (left, right) panes into the deck body with the normal
+// footer beneath.
+type bodyModal interface {
+	modal
 	// view returns the modal's body as (left, right) panes. right is ""
 	// for single-column modals; the caller joins them.
 	view(m *Model) (left, right string)
-	// footerHelp returns the status-bar right segment for this modal, or
-	// "" to leave it blank (e.g. while loading).
-	footerHelp() string
+}
+
+// popoverModal renders as a centered box over a blank canvas (confirms,
+// small input prompts). View returns its render directly instead of
+// composing a body + footer.
+type popoverModal interface {
+	modal
+	renderPopover(m *Model) string
 }
