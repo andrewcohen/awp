@@ -775,7 +775,6 @@ type Model struct {
 	filterInput textinput.Model
 	filtering   bool
 	filter      string
-	helpMode    bool
 	// deleteTarget is the row a confirm-delete modal targets. It outlives
 	// the modal: the progress-completion handler reads it to decide the
 	// post-delete cursor selection, so it stays on the Model rather than
@@ -1545,7 +1544,7 @@ func (m Model) canBackgroundRefresh() bool {
 		m.active == nil &&
 		!m.filtering &&
 		!m.findMode && !m.actionMode &&
-		!m.helpMode && !m.newWorkspaceMode
+		!m.newWorkspaceMode
 }
 
 // requestRefresh starts a row refresh, coalescing concurrent requests.
@@ -2192,20 +2191,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.helpMode {
-			switch msg.String() {
-			case "?", "esc", "q", "enter":
-				m.helpMode = false
-			}
-			return m, nil
-		}
 		if m.jobsOverlay {
 			return m.updateJobsOverlay(msg)
 		}
 		km := m.keymap
 		switch {
 		case key.Matches(msg, km.Help):
-			m.helpMode = true
+			m.active = helpModal{}
 			// tea.ClearScreen on modal entry: the renderer's
 			// previous-frame buffer otherwise leaves stripes of the
 			// underlying view visible wherever the popover doesn't
@@ -3355,11 +3347,6 @@ func (m Model) View() string {
 		padBlock = strings.Join(blanks, "\n")
 	}
 	view := lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
-	if m.helpMode {
-		// Center the help box over the existing view as a popover.
-		view = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			m.renderHelp(m.width))
-	}
 	if m.jobsOverlay {
 		view = renderJobsOverlay(m.width, m.height, &m.jobsList, &m.jobsViewport, len(m.jobs) == 0)
 	}
