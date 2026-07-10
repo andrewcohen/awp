@@ -178,18 +178,36 @@ satisfy `modal` rather than being addressed by their own bool.
 Phased; each phase is a separate change that compiles, passes tests, and
 preserves behavior.
 
-### Phase 1 — Store interfaces (pure seam, no logic moves)
-1. Add `jobs.ReadStore` (`List`/`Get`); `*Store` already satisfies it.
-2. Create `internal/prstatus`: move `cli/pr_status_cache.go` and the
-   `loadPRStatusCache`/`invalidatePRStatusCacheRepo`/`persistPRStatusMerge`/
-   `persistPRStatusBulkMerge` logic out of `cli/deck.go` behind a `Cache`
-   interface; route single-PR and bulk writes through one lock to close the
-   race.
-3. Add `state.PinGroupAliasStore` over the existing load/save functions.
-4. Repoint `cli` wiring at the interfaces; extend `depguard`. No behavior
-   change.
+### Phase 1 — Store interfaces + PR-cache race fix (pure seam, no logic moves)
+1. Add `jobs.ReadStore` (`List`/`Get`); `*Store` already satisfies it
+   (compile-time assert).
+2. Add `state.PinGroupAliasStore` over the existing load/save functions,
+   with a `FilePinGroupAliasStore` concrete impl (compile-time assert).
+3. Close the PR-cache write race **in place**: route `persistPRStatusMerge`
+   (single-PR write-through) through the same `prStatusCacheMu` that
+   `persistPRStatusBulkMerge` already uses. No package move yet.
 
-### Phase 2 — `deckdata` read model
+> **Deviation from initial draft:** the `internal/prstatus` package
+> *extraction* was pulled out of Phase 1 and folded into Phase 2. The
+> PR-status cache stores `deckui.PRStatus`, whose type cluster (`PRState`,
+> `PRReviewDecision`, `PRCIState`, `PRMergeStateStatus` + ~18 constants)
+> lives in `deckui`. Relocating that cluster to a lower package is
+> entangled with the read-model work (Phase 2), so extracting the cache
+> package early would either drag Phase 2's type move into Phase 1 or point
+> the import the wrong way (`prstatus → deckui`). Phase 1 keeps the cache
+> in `cli` and only fixes the race; Phase 2 creates `internal/prstatus`,
+> relocates the `PRStatus` type cluster there (with aliases left in
+> `deckui` for churn control), and moves the cache behind a `Cache`
+> interface.
+
+### Phase 2 — `internal/prstatus` + `deckdata` read model
+5a. Create `internal/prstatus`: relocate the `PRStatus` type cluster
+   (`PRState`, `PRReviewDecision`, `PRCIState`, `PRMergeStateStatus`,
+   `PRStatus` + constants) from `deckui/model.go` into it, leaving type/const
+   aliases in `deckui` so existing references compile unchanged. Move the
+   cache (`loadPRStatusCache`/`invalidatePRStatusCacheRepo`/
+   `persistPRStatusMerge`/`persistPRStatusBulkMerge`) out of
+   `cli/pr_status_cache.go` + `cli/deck.go` behind a `Cache` interface.
 5. Create `internal/deckdata`; move the deck row view type there from
    `deckui`.
 6. Move join/derivation into `deckdata`: `resolvePRStatus`,
