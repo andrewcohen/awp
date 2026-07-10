@@ -806,7 +806,6 @@ type Model struct {
 	bookmarkFetcher     BookmarkFetcher
 	trunkResolver       TrunkResolver
 	stateEditor         StateEditorLauncher
-	prMenuMode          bool
 	prNumberLinkHandler PRNumberLinkHandler
 	// pinChordMode is true after the user presses `m` and before the
 	// second key of the pin chord (mm / m<letter> / mD / mR) arrives.
@@ -1546,8 +1545,7 @@ func (m Model) canBackgroundRefresh() bool {
 		m.active == nil &&
 		!m.filtering &&
 		!m.findMode && !m.actionMode &&
-		!m.helpMode && !m.newWorkspaceMode &&
-		!m.prMenuMode
+		!m.helpMode && !m.newWorkspaceMode
 }
 
 // requestRefresh starts a row refresh, coalescing concurrent requests.
@@ -2119,118 +2117,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.status = ""
 			return m, nil
 		}
-		if m.prMenuMode {
-			switch msg.String() {
-			case "esc", "q", "ctrl+c":
-				m.prMenuMode = false
-				m.status = "pr: cancelled"
-				return m, nil
-			case "o":
-				m.prMenuMode = false
-				item, ok := m.selected()
-				if !ok {
-					return m, nil
-				}
-				status, _, ok := m.prStatusLabelForItem(item)
-				if !ok {
-					m.status = "pr: no PR for this workspace"
-					return m, nil
-				}
-				url := strings.TrimSpace(status.URL)
-				if url == "" {
-					m.status = "pr: no URL on cached PR (re-open the deck to refresh)"
-					return m, nil
-				}
-				if err := openBrowser(url); err != nil {
-					m.status = "pr: " + err.Error()
-				} else {
-					m.status = "pr: opened " + url
-				}
-				return m, nil
-			case "d":
-				m.prMenuMode = false
-				item, ok := m.selected()
-				if !ok {
-					return m, nil
-				}
-				status, _, ok := m.prStatusLabelForItem(item)
-				if !ok {
-					m.status = "pr: no PR for this workspace"
-					return m, nil
-				}
-				if status.Number <= 0 {
-					m.status = "pr: description unavailable (no PR number cached — try p s)"
-					return m, nil
-				}
-				// Open the description the way a review opens: a dedicated
-				// tmux window in the workspace's session. gh renders the
-				// body with TTY formatting; less keeps it scrollable and
-				// searchable, and q drops back to a shell in the window.
-				winCmd := fmt.Sprintf("env GH_FORCE_TTY=100%% gh pr view %d | less -R", status.Number)
-				return m.trigger(ActionOpenWindow, "pr:"+winCmd)
-			case "r":
-				m.prMenuMode = false
-				item, ok := m.selected()
-				if !ok {
-					return m, nil
-				}
-				status, label, ok := m.prStatusLabelForItem(item)
-				if !ok {
-					m.status = "pr: no PR for this workspace"
-					return m, nil
-				}
-				prompt := prRepairPrompt(status, item.BookmarkCommitID, itemIsMyPR(item, m.bookmarkPrefix))
-				if prompt == "" {
-					m.status = "pr: nothing to repair (" + label + ")"
-					return m, nil
-				}
-				// Don't dispatch the repair prompt straight to the agent.
-				// Hand it to the send-prompt form prepopulated, so the user
-				// can review and edit it before sending. Same form/flow as
-				// the `A` "send a typed prompt" dialog.
-				m.promptMode = true
-				var initCmd tea.Cmd
-				m.promptForm, initCmd = newPromptForm(item, prompt)
-				m.status = "repair: review prompt · enter send · ctrl+g $EDITOR · esc cancel"
-				return m, batchCmds(initCmd, tea.ClearScreen)
-			case "m":
-				m.prMenuMode = false
-				item, ok := m.selected()
-				if !ok {
-					return m, nil
-				}
-				status, _, ok := m.prStatusLabelForItem(item)
-				if !ok {
-					m.status = "pr: no PR for this workspace"
-					return m, nil
-				}
-				if status.Number <= 0 {
-					m.status = "pr: merge unavailable (no PR number cached — try p s)"
-					return m, nil
-				}
-				if status.State != PRStateOpen {
-					m.status = fmt.Sprintf("pr: #%d is %s — nothing to merge", status.Number, strings.ToLower(string(status.State)))
-					return m, nil
-				}
-				var mergeModal *confirmMergeModal
-				mergeModal, m.status = newConfirmMerge(item, status)
-				m.active = mergeModal
-				return m, tea.ClearScreen
-			case "s":
-				m.prMenuMode = false
-				item, ok := m.selected()
-				if !ok || strings.TrimSpace(item.WorkspaceName) == "" {
-					m.status = "pr: select a workspace row"
-					return m, nil
-				}
-				var prModal *prNumberModal
-				var prCmd tea.Cmd
-				prModal, prCmd, m.status = newPRNumberModal(item)
-				m.active = prModal
-				return m, prCmd
-			}
-			return m, nil
-		}
 		if m.active != nil {
 			cmd := m.active.update(&m, msg)
 			return m, cmd
@@ -2572,7 +2458,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if _, ok := m.selected(); !ok {
 				return m, nil
 			}
-			m.prMenuMode = true
+			m.active = prMenuModal{}
 			m.status = "pr: o open in browser · d description · r repair · s set PR # · esc cancel"
 			return m, nil
 		case key.Matches(msg, km.PinChord):
@@ -3415,7 +3301,13 @@ func (m Model) View() string {
 	// (neither does anything useful in our pickers) and adds the
 	// deck's enter pick / esc cancel conventions.
 	case m.active != nil:
-		rightSeg = m.active.footerHelp()
+		// Pickers surface their key hints here; chord modals (pr menu)
+		// return "" and fall back to the status line (their menu prompt).
+		if fh := m.active.footerHelp(); fh != "" {
+			rightSeg = fh
+		} else {
+			rightSeg = dim.Render(statusText)
+		}
 	case m.filter != "":
 		rightSeg = dim.Render(fmt.Sprintf("filter: %q · %s", m.filter, statusText))
 	default:
@@ -3435,7 +3327,7 @@ func (m Model) View() string {
 	// their own actionable hints in rightSeg.
 	hint := "? help"
 	if m.active != nil ||
-		m.jobsOverlay || m.prMenuMode || m.findMode || m.actionMode {
+		m.jobsOverlay || m.findMode || m.actionMode {
 		hint = ""
 	}
 	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, hint, m.width-2)
