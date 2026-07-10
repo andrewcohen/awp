@@ -322,10 +322,28 @@ place of the row list.
 - Use least-privilege defaults for files, network calls, and credentials.
 - Never hardcode secrets or tokens.
 
+## Linting & formatting
+
+golangci-lint is pinned via `mise.toml` (config in `.golangci.yml`), and the
+repo is kept at **zero lint issues**. **Format and lint before every commit:**
+
+- **Format**: `mise exec -- gofmt -w .` (or `go fmt ./...`).
+- **Lint**: `mise exec -- golangci-lint run ./...` — must report `0 issues`.
+
+Fix findings rather than suppressing them. If a rule is pure noise for this
+codebase, tune it in `.golangci.yml` instead of scattering `//nolint`
+directives (and say why in the config comment). The ruleset is curated for
+high signal — staticcheck, govet, errcheck, ineffassign, unused, gocritic,
+revive, misspell, unconvert, bodyclose — plus a `depguard` rule enforcing the
+`internal/deck2 → internal/cli` import boundary. New code lands at 0 issues:
+lint as you go, don't let a backlog re-accumulate.
+
 ## Validation Before Handoff
 
 When applicable, run:
 
+- `mise exec -- gofmt -l .` (no output = everything is formatted)
+- `mise exec -- golangci-lint run ./...` (must be `0 issues`)
 - `go test ./...`
 - `go vet ./...`
 - `go build ./...`
@@ -337,6 +355,8 @@ If you cannot run something, state what was not run and why.
 - Prefer **Jujutsu (`jj`)** workflows by default.
 - Use git only when explicitly requested or when `jj` cannot do the task.
 - Name new `jj` bookmarks with the `andrew/` prefix.
+- **Before committing, format and lint** (see *Linting & formatting*): the
+  tree must be `gofmt`-clean and `golangci-lint run` must report `0 issues`.
 
 ## Spec Workflow
 
