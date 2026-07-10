@@ -8,9 +8,9 @@ import (
 
 func TestFormatUnreadSummary(t *testing.T) {
 	tests := []struct {
-		name    string
-		all     map[string]map[string]workspace.Entry
-		want    string
+		name      string
+		all       map[string]map[string]workspace.Entry
+		want      string
 		wantEmpty bool
 	}{
 		{

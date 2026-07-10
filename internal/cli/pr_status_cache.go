@@ -19,8 +19,8 @@ import (
 const prStatusCacheName = "pr-status-cache.json"
 
 type prStatusCacheRepo struct {
-	FetchedAt time.Time                    `json:"fetched_at"`
-	PRs       map[string]deckui.PRStatus   `json:"prs"`
+	FetchedAt time.Time                  `json:"fetched_at"`
+	PRs       map[string]deckui.PRStatus `json:"prs"`
 }
 
 type prStatusCacheFile struct {

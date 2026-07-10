@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/charm"
@@ -50,7 +50,7 @@ func newPromptForm(target Item, initial string) (promptForm, tea.Cmd) {
 		huh.NewGroup(
 			huh.NewText().
 				Title("Prompt").
-				Description("Send this prompt to "+strings.TrimSpace(target.ProjectName)+" / "+strings.TrimSpace(target.WorkspaceName)).
+				Description("Send this prompt to " + strings.TrimSpace(target.ProjectName) + " / " + strings.TrimSpace(target.WorkspaceName)).
 				Placeholder("prompt to dispatch to the agent...").
 				CharLimit(0).
 				Lines(6).

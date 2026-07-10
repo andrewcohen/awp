@@ -61,9 +61,9 @@ func TestDoctorRunReportsSuccess(t *testing.T) {
 		out string
 		err error
 	}{
-		"jj --version": {out: "jj 0.1"},
-		"tmux -V":      {out: "tmux 3.4"},
-		"jj root":      {out: repo + "\n"},
+		"jj --version":                         {out: "jj 0.1"},
+		"tmux -V":                              {out: "tmux 3.4"},
+		"jj root":                              {out: repo + "\n"},
 		"jj workspace list -T name ++ \"\\n\"": {out: "default\n"},
 		"jj log -r default@ --no-graph -T commit_id.short() ++ \"\\n\"": {out: "abc123\n"},
 	}}
@@ -90,9 +90,9 @@ func TestDoctorRunFailsForUnsupportedHooksKey(t *testing.T) {
 		out string
 		err error
 	}{
-		"jj --version": {out: "jj 0.1"},
-		"tmux -V":      {out: "tmux 3.4"},
-		"jj root":      {out: repo + "\n"},
+		"jj --version":                         {out: "jj 0.1"},
+		"tmux -V":                              {out: "tmux 3.4"},
+		"jj root":                              {out: repo + "\n"},
 		"jj workspace list -T name ++ \"\\n\"": {out: "default\n"},
 		"jj log -r default@ --no-graph -T commit_id.short() ++ \"\\n\"": {out: "abc123\n"},
 	}}
@@ -114,10 +114,10 @@ func TestDoctorRunFailsForInvalidWorkspace(t *testing.T) {
 		out string
 		err error
 	}{
-		"jj --version": {out: "jj 0.1"},
-		"tmux -V":      {out: "tmux 3.4"},
-		"jj root":      {out: repo + "\n"},
-		"jj workspace list -T name ++ \"\\n\"":                         {out: "broken\n"},
+		"jj --version":                         {out: "jj 0.1"},
+		"tmux -V":                              {out: "tmux 3.4"},
+		"jj root":                              {out: repo + "\n"},
+		"jj workspace list -T name ++ \"\\n\"": {out: "broken\n"},
 		"jj log -r broken@ --no-graph -T commit_id.short() ++ \"\\n\"": {err: errors.New("no wc")},
 	}}
 

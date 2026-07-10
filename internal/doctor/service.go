@@ -24,10 +24,10 @@ type HookProvider interface {
 }
 
 type Service struct {
-	runner   Runner
-	hooks    HookProvider
-	homeDir  string
-	out      io.Writer
+	runner  Runner
+	hooks   HookProvider
+	homeDir string
+	out     io.Writer
 }
 
 type Dependencies struct {

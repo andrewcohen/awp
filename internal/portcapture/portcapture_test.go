@@ -189,10 +189,10 @@ func TestPickURL(t *testing.T) {
 
 func TestSplitAddrPort(t *testing.T) {
 	cases := []struct {
-		in       string
-		addr     string
-		port     int
-		ok       bool
+		in   string
+		addr string
+		port int
+		ok   bool
 	}{
 		{in: "*:5173", addr: "*", port: 5173, ok: true},
 		{in: "127.0.0.1:5173", addr: "127.0.0.1", port: 5173, ok: true},

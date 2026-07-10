@@ -93,7 +93,6 @@ func (s *seqRunner) Run(_ context.Context, _ string, _ string, args ...string) (
 	return "", nil
 }
 
-
 // enqueueOK is the three-step script for a successful merge-queue enqueue:
 // the --squash attempt fails with the given gh message, `gh pr view --json
 // id` resolves the node id, and the enqueuePullRequest mutation succeeds.

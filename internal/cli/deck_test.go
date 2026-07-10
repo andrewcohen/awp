@@ -83,8 +83,8 @@ func (s *deckFakeService) Open(string, string, string, bool) error      { return
 func (s *deckFakeService) PrepareWorkspace(string, string, bool) (string, string, error) {
 	return "", "", nil
 }
-func (s *deckFakeService) Bootstrap(string) error      { return nil }
-func (s *deckFakeService) BootstrapAll() error         { return nil }
+func (s *deckFakeService) Bootstrap(string) error { return nil }
+func (s *deckFakeService) BootstrapAll() error    { return nil }
 func (s *deckFakeService) Rename(old, new string) error {
 	s.renameOld = old
 	s.renameNew = new
@@ -107,17 +107,17 @@ func (s *deckFakeService) RecordSession(name, id, sess string) error {
 	s.recordedSess = sess
 	return nil
 }
-func (s *deckFakeService) RecordBookmark(string, string) error        { return nil }
-func (s *deckFakeService) RecordPROverride(string, int) error         { return nil }
-func (s *deckFakeService) UpdatePrompt(string, string) error          { return nil }
-func (s *deckFakeService) UpdateStatus(string, string) error          { return nil }
-func (s *deckFakeService) ClearSession(string) error                  { return nil }
-func (s *deckFakeService) PruneOrphans(bool) ([]string, error)        { return nil, nil }
-func (s *deckFakeService) MarkRead(string) error                      { return nil }
+func (s *deckFakeService) RecordBookmark(string, string) error { return nil }
+func (s *deckFakeService) RecordPROverride(string, int) error  { return nil }
+func (s *deckFakeService) UpdatePrompt(string, string) error   { return nil }
+func (s *deckFakeService) UpdateStatus(string, string) error   { return nil }
+func (s *deckFakeService) ClearSession(string) error           { return nil }
+func (s *deckFakeService) PruneOrphans(bool) ([]string, error) { return nil, nil }
+func (s *deckFakeService) MarkRead(string) error               { return nil }
 
 func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
-		"tmux list-sessions -F #{session_id}\t#{session_name}":                                  "$1\t[awp]repo__qa\n",
+		"tmux list-sessions -F #{session_id}\t#{session_name}":                                                                       "$1\t[awp]repo__qa\n",
 		"tmux new-window -d -t [awp]repo__qa: -P -F #{session_name}:#{window_index} -c /tmp/ws -e AWP_WORKSPACE=qa -e AWP_REPO=repo": "[awp]repo__qa:3\n",
 	}}
 	client := tmux.New(runner)

@@ -24,9 +24,9 @@ import (
 // which the form wrapper polls each update to emit the OpenPicker
 // action — on the "main" row Enter just advances to the next field.
 type startFromField struct {
-	options    []startFromOption
-	value      *string
-	focused    bool
+	options     []startFromOption
+	value       *string
+	focused     bool
 	pickPending bool
 
 	title       string
@@ -198,7 +198,7 @@ func (s *startFromField) Error() error { return nil }
 
 // Run / accessible — not used; this field always runs inside a form.
 
-func (s *startFromField) Run() error                              { return nil }
+func (s *startFromField) Run() error                                   { return nil }
 func (s *startFromField) RunAccessible(_ io.Writer, _ io.Reader) error { return nil }
 
 // Flags
@@ -218,12 +218,12 @@ func (s *startFromField) KeyBinds() []key.Binding {
 
 // Configuration setters from huh.Field
 
-func (s *startFromField) WithTheme(t *huh.Theme) huh.Field            { s.theme = t; return s }
-func (s *startFromField) WithAccessible(bool) huh.Field               { return s }
-func (s *startFromField) WithKeyMap(*huh.KeyMap) huh.Field            { return s }
-func (s *startFromField) WithWidth(w int) huh.Field                   { s.width = w; return s }
-func (s *startFromField) WithHeight(int) huh.Field                    { return s }
-func (s *startFromField) WithPosition(huh.FieldPosition) huh.Field    { return s }
+func (s *startFromField) WithTheme(t *huh.Theme) huh.Field         { s.theme = t; return s }
+func (s *startFromField) WithAccessible(bool) huh.Field            { return s }
+func (s *startFromField) WithKeyMap(*huh.KeyMap) huh.Field         { return s }
+func (s *startFromField) WithWidth(w int) huh.Field                { s.width = w; return s }
+func (s *startFromField) WithHeight(int) huh.Field                 { return s }
+func (s *startFromField) WithPosition(huh.FieldPosition) huh.Field { return s }
 
 // Identity / value
 
