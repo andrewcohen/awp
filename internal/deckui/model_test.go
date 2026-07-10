@@ -2253,9 +2253,6 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	m := updated.(Model)
-	if m.prMenuMode {
-		t.Fatalf("expected prMenuMode false after p m")
-	}
 	cm, ok := m.active.(*confirmMergeModal)
 	if !ok {
 		t.Fatalf("expected confirm-merge modal after p m")
@@ -2371,13 +2368,13 @@ func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 		}},
 	}, nil)
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	if !updated.(Model).prMenuMode {
-		t.Fatalf("expected prMenuMode after p")
+	if _, ok := updated.(Model).active.(prMenuModal); !ok {
+		t.Fatalf("expected pr menu after p")
 	}
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m := updated.(Model)
-	if m.prMenuMode {
-		t.Fatalf("expected prMenuMode false after r")
+	if _, ok := m.active.(prMenuModal); ok {
+		t.Fatalf("expected pr menu dismissed after r")
 	}
 	// Repair now routes through the send-prompt form prepopulated with
 	// the repair prompt, so the user can review/edit before sending —
