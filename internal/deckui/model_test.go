@@ -2423,16 +2423,17 @@ func TestPRMenuSetKeyPersistsNumber(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m := updated.(Model)
-	if !m.prNumberSetMode {
-		t.Fatalf("expected prNumberSetMode after p s")
+	pm, ok := m.active.(*prNumberModal)
+	if !ok {
+		t.Fatalf("expected pr-number modal after p s")
 	}
-	m.prNumberInput.SetValue("123")
+	pm.input.SetValue("123")
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if gotPR != 123 {
 		t.Fatalf("expected handler called with 123, got %d", gotPR)
 	}
-	if updated.(Model).prNumberSetMode {
-		t.Fatalf("expected prNumberSetMode false after enter")
+	if updated.(Model).active != nil {
+		t.Fatalf("expected pr-number modal closed after enter")
 	}
 }
 
@@ -2456,7 +2457,11 @@ func TestPRMenuSetKeyForcesPRStatusRefetch(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m := updated.(Model)
-	m.prNumberInput.SetValue("77")
+	pm, ok := m.active.(*prNumberModal)
+	if !ok {
+		t.Fatalf("expected pr-number modal after p s")
+	}
+	pm.input.SetValue("77")
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = updated
 	if cmd == nil {
@@ -2501,7 +2506,11 @@ func TestPRMenuSetKeyBlankClearsOverride(t *testing.T) {
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m := updated.(Model)
-	m.prNumberInput.SetValue("")
+	pm, ok := m.active.(*prNumberModal)
+	if !ok {
+		t.Fatalf("expected pr-number modal after p s")
+	}
+	pm.input.SetValue("")
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if gotPR != 0 {
 		t.Fatalf("expected blank submit to call handler with 0, got %d", gotPR)
