@@ -237,12 +237,26 @@ preserves behavior.
 >
 > **Increment 1 (done):** introduced the `modal` interface (`modal.go`) +
 > `Model.active` slot, and migrated the **open/project picker** onto it
-> (`modal_open.go` — the least-entangled picker: select = projectOpener +
-> quit). Removed `openMode`/`openLoading`/`openList` fields and the
-> `renderOpenList`/`renderOpenDetails`/`resetOpenList` helpers. Added
-> `modal_open_test.go` (open→load→populate, enter-selects-and-quits,
-> esc-closes). Next increments: review picker, bookmark picker, then the
-> remaining modes.
+> (`modal_open.go`). Removed `openMode`/`openLoading`/`openList` and the
+> render/reset helpers. Added `modal_open_test.go`.
+>
+> **Increment 2 (done):** migrated the **review picker** (`modal_review.go`)
+> — owns its list + reviewItemDelegate; select runs
+> forcePRStatusRefresh + startAction against the `*Model`. Removed
+> `reviewMode`/`reviewLoading`/`reviewList`/`reviewDelegate` and helpers;
+> updated the five existing review tests to `m.active.(*reviewPicker)`.
+>
+> **Increment 3 (done):** migrated the **bookmark picker**
+> (`modal_bookmark.go`) — the most entangled: carries its purpose +
+> link-target, reverts to the new-workspace form on cancel, and links via
+> `acceptBookmarkSelection` (now parameterized by purpose/target). Removed
+> `bookmarkMode`/`bookmarkLoading`/`bookmarkList`/`bookmarkPurpose`/
+> `bookmarkLinkTarget` and helpers. Added `modal_bookmark_test.go`.
+>
+> All three pickers now route through `Model.active`; the message
+> fallthrough and spinner-tick loading refresh dispatch to it via type
+> assertion. Next increments: the remaining flag-based modes (jobs overlay,
+> confirms, forms, find, progress, pr menu, pin chords, help).
 
 9. Introduce the `modal` interface + `modalAction` and refactor the
    existing sub-component modals (`jobsOverlay`, `confirmDelete`,
