@@ -255,8 +255,21 @@ preserves behavior.
 >
 > All three pickers now route through `Model.active`; the message
 > fallthrough and spinner-tick loading refresh dispatch to it via type
-> assertion. Next increments: the remaining flag-based modes (jobs overlay,
-> confirms, forms, find, progress, pr menu, pin chords, help).
+> assertion.
+>
+> **Increment 4 (done):** migrated the **confirm-delete** and
+> **confirm-merge** modals (`modal_confirm.go`). These render as centered
+> popovers, so the `modal` interface was split into `bodyModal` (pickers,
+> full-body) and `popoverModal` (confirms, centered box); View early-returns
+> for popovers. `deleteTarget` stays on the Model (the progress-completion
+> handler reads it post-delete). Updated the delete/merge tests to assert
+> against `m.active.(*confirmDeleteModal)` / `(*confirmMergeModal)`. Removed
+> `confirmDelete`/`deleteIsProject`/`deleteInput`/`deleteErr`/
+> `confirmMergePR`/`mergeTarget`/`mergeStatus` fields.
+>
+> Next increments: small input popovers (pr-number set, pin alias), chord
+> modes (pin chord, pr menu, action), forms (new/rename/prompt), overlays
+> (jobs, help, progress), find mode.
 
 9. Introduce the `modal` interface + `modalAction` and refactor the
    existing sub-component modals (`jobsOverlay`, `confirmDelete`,
