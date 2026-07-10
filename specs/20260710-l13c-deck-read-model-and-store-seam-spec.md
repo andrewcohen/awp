@@ -299,6 +299,20 @@ preserves behavior.
 >   help/jobs are straightforward; progress (streaming state) and find
 >   (multi-stage, render-coupled state machine) are higher-risk and worth
 >   doing deliberately with their own QA. Left as follow-ups.
+>
+> **Increment 7 (done):** migrated the `?` **help** overlay
+> (`modal_help.go`) as a stateless popoverModal delegating to
+> `m.renderHelp`.
+>
+> **Increment 8 (done):** migrated the `J` **jobs** overlay
+> (`modal_jobs.go`) — owns its list + details viewport; job actions run
+> against the *Model's handlers; `jobsListMsg` syncs the active modal via
+> type assertion. `renderJobsOverlay` no longer self-centers (returns the
+> box; the generic popover path centers it), unifying it with the other
+> popovers. 10 overlay modals now on `Model.active`.
+>
+> Remaining on flags: forms (by design), transient chords + inline filter
+> (by design), and `progressMode` + `findMode` (higher-risk follow-ups).
 
 9. Introduce the `modal` interface + `modalAction` and refactor the
    existing sub-component modals (`jobsOverlay`, `confirmDelete`,
