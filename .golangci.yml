@@ -46,6 +46,30 @@ linters:
           deny:
             - pkg: github.com/andrewcohen/awp/internal/cli
               desc: "deck2 must not import cli (cli imports deck2 — would be an import cycle)"
+        # The read model (deckdata) and PR type package (prstatus) are pure
+        # data layers below the TUI. Keep them free of the TUI and its
+        # framework so the selection logic stays unit-testable without a
+        # terminal and reusable outside the deck.
+        deckdata-pure:
+          files:
+            - "**/internal/deckdata/**"
+          deny:
+            - pkg: github.com/andrewcohen/awp/internal/cli
+              desc: "deckdata is the pure read model — cli depends on it, not the reverse"
+            - pkg: github.com/andrewcohen/awp/internal/deckui
+              desc: "deckdata is below deckui — deckui depends on deckdata, not the reverse"
+            - pkg: github.com/charmbracelet/bubbletea
+              desc: "deckdata is a pure data layer — no Bubble Tea"
+            - pkg: github.com/charmbracelet/lipgloss
+              desc: "deckdata is a pure data layer — no lipgloss"
+        prstatus-pure:
+          files:
+            - "**/internal/prstatus/**"
+          deny:
+            - pkg: github.com/andrewcohen/awp/internal/cli
+              desc: "prstatus is a leaf type package — cli depends on it, not the reverse"
+            - pkg: github.com/andrewcohen/awp/internal/deckui
+              desc: "prstatus is a leaf type package — deckui depends on it, not the reverse"
 
   exclusions:
     # Keep test files exempt from the noisier style linters.
