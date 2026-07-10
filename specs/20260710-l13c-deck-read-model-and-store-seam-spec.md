@@ -204,10 +204,17 @@ preserves behavior.
 5a. Create `internal/prstatus`: relocate the `PRStatus` type cluster
    (`PRState`, `PRReviewDecision`, `PRCIState`, `PRMergeStateStatus`,
    `PRStatus` + constants) from `deckui/model.go` into it, leaving type/const
-   aliases in `deckui` so existing references compile unchanged. Move the
-   cache (`loadPRStatusCache`/`invalidatePRStatusCacheRepo`/
-   `persistPRStatusMerge`/`persistPRStatusBulkMerge`) out of
-   `cli/pr_status_cache.go` + `cli/deck.go` behind a `Cache` interface.
+   aliases in `deckui` so existing references compile unchanged.
+
+> **Deviation:** the PR-status *cache* (`loadPRStatusCache`/
+> `persistPRStatusMerge`/`persistPRStatusBulkMerge`/
+> `invalidatePRStatusCacheRepo`) stays in `internal/cli`. It is a
+> refreshable `gh`-API cache, not core persisted state a SQLite backend
+> would own, and moving it drags `deckDebugLogf` coupling plus 8+ call
+> sites for little architectural gain. The pure read model
+> (`internal/deckdata`) instead takes the loaded PR-status data as an
+> injected map argument, which keeps it `cli`-free without a `Cache`
+> interface. Only the *type* moves to `prstatus`.
 5. Create `internal/deckdata`; move the deck row view type there from
    `deckui`.
 6. Move join/derivation into `deckdata`: `resolvePRStatus`,
@@ -254,8 +261,10 @@ touches only the wiring + one new package — `deckdata`/`deckui` untouched.
 - [ ] `jobs.ReadStore`, `prstatus.Cache`, and `state.PinGroupAliasStore`
       interfaces exist; `deckdata` depends on interfaces, not concrete
       stores.
-- [ ] PR-status cache no longer lives in `internal/cli`; the single-PR vs.
-      bulk-merge write race is closed.
+- [ ] The `PRStatus` type cluster lives in `internal/prstatus` (aliases in
+      `deckui`); the single-PR vs. bulk-merge PR-cache write race is closed
+      (Phase 1). The cache itself stays in `cli`; `deckdata` receives PR
+      data as an injected map (see Phase 2 deviation note).
 - [ ] `deckui.Model` and `cli/deck.go` no longer contain `resolvePRStatus`,
       `prInboxBucket`, scope filter, or deck sort (delegated to `deckdata`).
 - [ ] The 18+ modal bools are replaced by a single `active modal` slot;
