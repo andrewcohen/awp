@@ -311,7 +311,7 @@ func TestStateChangedDoesNotRefreshDuringOverlay(t *testing.T) {
 			watched++
 			return func() tea.Msg { return StateChangedMsg{} }
 		})
-	model.active = helpModal{}
+	model.active = newHelpModal()
 
 	_, cmd := model.Update(StateChangedMsg{})
 	if cmd == nil {
@@ -2832,10 +2832,9 @@ func TestRenderListCollapsesDefaultOnlyProject(t *testing.T) {
 // truncation, every two-column rendering has the same height
 // regardless of viewport width.
 func TestRenderHelpTruncatesInsteadOfWrapping(t *testing.T) {
-	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
-
 	height := func(width int) int {
-		return strings.Count(model.renderHelp(width), "\n") + 1
+		_, inner := helpBoxDims(width)
+		return strings.Count(helpColumns(inner), "\n") + 1
 	}
 
 	wide := height(200)
@@ -2843,15 +2842,14 @@ func TestRenderHelpTruncatesInsteadOfWrapping(t *testing.T) {
 	// layout, but narrow enough that long binding descriptions used to
 	// wrap before truncation was added.
 	if narrow := height(90); narrow != wide {
-		t.Errorf("help overlay height should not depend on width in two-column mode: width 200 → %d lines, width 90 → %d lines", wide, narrow)
+		t.Errorf("help columns height should not depend on width in two-column mode: width 200 → %d lines, width 90 → %d lines", wide, narrow)
 	}
 
-	// No rendered line may exceed the box width at the narrow size.
-	// boxWidth 82 plus 2 cols of border = 84 total.
-	out := model.renderHelp(90)
-	for _, line := range strings.Split(out, "\n") {
-		if w := ansi.StringWidth(line); w > 84 {
-			t.Errorf("help line exceeds box width 84 (got %d): %q", w, line)
+	// No content line may exceed the inner column width at the narrow size.
+	_, inner := helpBoxDims(90)
+	for _, line := range strings.Split(helpColumns(inner), "\n") {
+		if w := ansi.StringWidth(line); w > inner {
+			t.Errorf("help line exceeds inner width %d (got %d): %q", inner, w, line)
 		}
 	}
 }

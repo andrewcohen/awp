@@ -2171,7 +2171,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		km := m.keymap
 		switch {
 		case key.Matches(msg, km.Help):
-			m.active = helpModal{}
+			m.active = newHelpModal()
 			// tea.ClearScreen on modal entry: the renderer's
 			// previous-frame buffer otherwise leaves stripes of the
 			// underlying view visible wherever the popover doesn't
@@ -3328,9 +3328,29 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
 }
 
-func (m Model) renderHelp(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("awp deck — help (?, esc, or enter to close)")
+// helpBoxDims returns the help popover's outer box width and the inner
+// content width, clamped to the viewport. Shared by the help modal (which
+// frames a scroll viewport at these dims) and tests.
+func helpBoxDims(width int) (boxWidth, innerWidth int) {
+	const (
+		targetWidth = 110
+		boxOverhead = 6 // border (2) + horizontal padding (2*2)
+	)
+	boxWidth = targetWidth
+	if width > 0 && width-8 < boxWidth {
+		boxWidth = width - 8
+	}
+	if boxWidth < 64 {
+		boxWidth = 64
+	}
+	return boxWidth, boxWidth - boxOverhead
+}
 
+// helpColumns renders the scrollable help body — the status/PR/activity
+// legend (left) and key bindings (right) — clipped to innerWidth. The
+// framing box, title, and scroll hint live on the help modal
+// (modal_help.go); this is just the content the viewport scrolls.
+func helpColumns(innerWidth int) string {
 	dot := func(state string, unread bool, label string) string {
 		return statusGlyph(state, false, unread) + "  " + label
 	}
@@ -3404,22 +3424,9 @@ func (m Model) renderHelp(width int) string {
 	rightBlock := strings.Join(keyLines, "\n")
 
 	// Two-column layout: status legend (with activity-bar legend) on the
-	// left, key bindings on the right. Box widens to fit both — clamps to
-	// the available viewport width and falls back to a single tall block
+	// left, key bindings on the right; falls back to a single stacked block
 	// under ~70 cols.
-	const (
-		targetWidth = 110
-		gutter      = 4
-		boxOverhead = 6 // border (2) + horizontal padding (2*2)
-	)
-	boxWidth := targetWidth
-	if width > 0 && width-8 < boxWidth {
-		boxWidth = width - 8
-	}
-	if boxWidth < 64 {
-		boxWidth = 64
-	}
-	innerWidth := boxWidth - boxOverhead
+	const gutter = 4
 
 	// Clamp every legend / key line to its column width: truncate with an
 	// ellipsis rather than letting lipgloss .Width wrap long lines onto
@@ -3432,25 +3439,15 @@ func (m Model) renderHelp(width int) string {
 		return lipgloss.NewStyle().Width(w).Render(strings.Join(lines, "\n"))
 	}
 
-	var cols string
 	if innerWidth >= 70 {
 		leftWidth := (innerWidth - gutter) * 9 / 20
 		rightWidth := innerWidth - gutter - leftWidth
 		left := clipBlock(leftBlock, leftWidth)
 		right := clipBlock(rightBlock, rightWidth)
-		cols = lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gutter), right)
-	} else {
-		// Narrow terminal — stack vertically like the old layout.
-		cols = clipBlock(leftBlock, innerWidth) + "\n\n" + clipBlock(rightBlock, innerWidth)
+		return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", gutter), right)
 	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left, title, "", cols)
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colAccent)).
-		Padding(1, 2).
-		Width(boxWidth).
-		Render(body)
+	// Narrow terminal — stack vertically like the old layout.
+	return clipBlock(leftBlock, innerWidth) + "\n\n" + clipBlock(rightBlock, innerWidth)
 }
 
 func (m Model) renderList(width int) string {
