@@ -1531,7 +1531,7 @@ func sendPromptToAgent(tmuxClient *tmux.Client, svc workspace.Service, item deck
 	// start the agent with the prompt as argv[1] — the same trick
 	// `awp w open --prompt` uses on a brand-new session.
 	if sessionWasNew || !haveAgent || paneIsShell(tmuxClient, agentTarget) {
-		invocation := strings.TrimSpace(config.AgentInvocation(item.RepoRoot))
+		invocation := strings.TrimSpace(codingAgentInvocation(item.RepoRoot))
 		if invocation == "" {
 			return errors.New("send-prompt: no agent invocation configured")
 		}
@@ -1629,7 +1629,7 @@ func createWorkspaceSession(tmuxClient *tmux.Client, sessionName, path, repoRoot
 		return "", err
 	}
 	id, _ := tmuxClient.SessionIDByName(sessionName)
-	if invocation := strings.TrimSpace(config.AgentInvocation(repoRoot)); invocation != "" {
+	if invocation := strings.TrimSpace(codingAgentInvocation(repoRoot)); invocation != "" {
 		_ = tmuxClient.SendCommand(sessionName+":agent", invocation)
 	}
 	return id, nil
@@ -1774,7 +1774,7 @@ func defaultWindowCommandWithRepo(windowName, repoRoot string) string {
 	case "vcs":
 		return "jjui"
 	case "agent":
-		return config.AgentInvocation(repoRoot)
+		return codingAgentInvocation(repoRoot)
 	}
 	return ""
 }

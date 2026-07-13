@@ -11,7 +11,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
@@ -86,6 +85,8 @@ func (a *App) Run(args []string) error {
 		return runRunJob(a.svc, a.runner, args[1:])
 	case "review":
 		return a.runReview(args[1:])
+	case "watch":
+		return a.runWatch(args[1:])
 	case "internal":
 		return a.runInternal(args[1:])
 	case "init":
@@ -511,7 +512,7 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	promptArg := strings.TrimSpace(req.Prompt)
 	switch {
 	case sessionWasNew:
-		invocation := config.AgentInvocation(repoRoot)
+		invocation := codingAgentInvocation(repoRoot)
 		cmd := invocation
 		if promptArg != "" {
 			step("Send prompt to agent")

@@ -239,6 +239,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `awp w bootstrap [name]` | Re-run bootstrap hooks for a workspace |
 | `awp w bootstrap --all` | Re-run bootstrap hooks for every tracked workspace in the current repo (continues on failure) |
 | `awp review [pr#]` | Pick or open a PR for review in a fresh workspace. Opens a `review` window running `tuicr pr <n>`, resolves the persisted session JSON path from tuicr's `active_sessions.json` / `index.json`, and primes the agent with that absolute path plus a precise commit-SHA diff range so it can `tuicr review add` findings without falling back to the (broken-for-PR-mode) `--repo .` lookup. The PR's existing comments (inline review comments, review summaries, and conversation comments) are fetched and embedded in the prompt so the agent doesn't re-raise points already made — it's told to stay non-redundant but may agree or disagree with them. The full review instructions (the lengthy reviewing guide plus PR context) are written to `~/.awp/review-prompts/<repo>/<workspace>.md`; the agent receives only a short pointer prompt that names the PR and tells it to read that file, so the terminal isn't flooded with the whole guide (falls back to the inline prompt if the file can't be written). The file lives outside the workspace tree on purpose — a review workspace's own `.awp/` is symlinked to the shared source-repo `.awp/` during prep, so a prompt written there would be shared across every review and clobbered by the next one. Keying by repo + workspace name keeps each review's prompt private (even when workspace names collide across repos), and deleting or pruning the workspace removes the matching prompt file. The fetched PR is also written through to `~/.awp/pr-status-cache.json` and pinned to the new workspace as `PRNumber`, so `p o` / row glyphs resolve the instant `awp review` returns — no waiting for the next periodic fetch. Agent makes no file edits, commits, or GitHub comments. **Re-reviewing a force-pushed PR:** because a tuicr session's identity includes the PR head SHA, a force-push/rebase leaves the review pane on an old head (stale diff) and strands the prior pass's draft comments in the old-head session — which `tuicr review list` no longer surfaces. On re-run, `awp review` compares the live session's head to the freshly-fetched PR head; if they differ it resets the `review` window so tuicr reopens on the current head, and — when the current-head session has no comments of its own — it locates the prior-head session(s) that still hold drafts (by scanning tuicr's `sessions/`) and instructs the agent to re-anchor and carry those comments forward into the current session. The old session JSON is left untouched as the source of record. |
+| `awp watch [name]` | Read-only live view of an agent's progress on the current task, built from its Claude Code transcript. Shows the **units of work** (from the agent's task list / todos, falling back to a markdown checklist or `Unit N:` prose) coupled with the current unit's position in the project's **dev loop** (`explore → implement → test → gates → commit`), plus per-unit gate pass/fail and a churn/stall signal. With no name, shows a picker. Observe-only — it never runs gates or steers the agent. Flags: `--once` (print one frame and exit), `--transcript <path>` (replay a specific transcript), `--suggest` (print a prompt to configure `dev_loop`), `--preamble` (print the loop instruction to give an agent, generated from `dev_loop`). |
 | `awp diff` | Charm-styled diff viewer |
 | `awp doctor [--global] [--fix]` | Health checks; `--fix` repairs missing hooks/env |
 | `awp init hooks` | Install/update global Claude + pi integrations (idempotent) |
@@ -307,6 +308,28 @@ When the deck exits, `deck-cleanup` also kills any leftover `[awp]<repo>__<works
 When set, a new workspace created with **no explicit bookmark** auto-creates a jj bookmark named `<prefix>/<workspace-name>` at the new workspace's revision and records it in `Entry.Bookmark`. The deck's per-row PR glyph matches `Entry.Bookmark` against PR `headRefName`, so the auto-bookmark lets a freshly-created workspace's PR (once pushed) light up in the deck without a manual `B`-link step.
 
 Unset = no auto-create. The `B` key in the deck stays available for backfilling existing workspaces whose bookmark is empty.
+
+### `dev_loop`
+
+Defines the per-unit development loop that `awp watch` visualizes: the ordered `phases` a unit of work passes through, and the `gates` (named checks) awp recognizes in the agent's transcript. Each gate has a `name`, the `phase` it belongs to, and a `match` regex tested against the shell command the agent ran (a paired non-zero exit marks the gate red). Optional per-gate fields: `command` (the human-facing command shown in `awp watch --preamble`, distinct from the detection regex — use it to express intent like `"pnpm lint <files you changed>"`; falls back to the first alternative of `match` when unset), `not_match` (exclude commands that also match this regex — e.g. skip `wip:` commits), and `marker: true` (a phase transition like `commit` that advances the loop but isn't a pass/fail check, so it's kept out of the gate lights).
+
+Unset = an inferred default (Go: `gofmt` / `go vet` / `golangci-lint` / `go test` / `go build`, then a `commit` marker). Run `awp watch --suggest` for a ready-to-paste prompt that has an agent inspect the repo and write this block; `awp watch --preamble` prints the matching loop instruction to give the agent, generated from the same config so the observed loop and the instructed loop can't drift.
+
+**Auto-injection.** When `dev_loop` is configured (has phases/gates) **and** the agent is Claude, new coding workspaces launch the agent with the generated loop instruction appended to its **system prompt**: awp writes the preamble to `~/.awp/dev-loop/<repo>.md` and launches `claude --append-system-prompt-file <that path>`, so every new agent starts already following the loop `awp watch` observes — no manual paste. It's the system prompt (not a one-shot prompt prefix) so it persists across the session and applies even when the workspace is opened without an initial prompt. Note the instruction is **invisible inside Claude Code** — the system prompt is shown in neither the chat nor the transcript JSONL (that's the point: it keeps the prompt clean). The `awp review` flow is intentionally excluded (a reviewer shouldn't be told to work in units / run gates / commit), and non-Claude agents fall back to no injection (`--append-system-prompt-file` is Claude-specific).
+
+```json
+"dev_loop": {
+  "phases": ["explore", "implement", "test", "gates", "commit"],
+  "gates": [
+    { "name": "fmt", "phase": "gates", "match": "gofmt|go fmt" },
+    { "name": "vet", "phase": "gates", "match": "go vet" },
+    { "name": "lint", "phase": "gates", "match": "golangci-lint" },
+    { "name": "test", "phase": "test", "match": "go test" },
+    { "name": "build", "phase": "gates", "match": "go build" },
+    { "name": "commit", "phase": "commit", "match": "jj (commit|describe|squash)|jj git push", "not_match": "wip:", "marker": true }
+  ]
+}
+```
 
 ## Tmux status bar badge
 
