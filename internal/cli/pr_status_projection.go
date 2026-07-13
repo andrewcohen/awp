@@ -27,6 +27,7 @@ func prStatusFromGithub(s github.PRStatus, queued bool, viewer string) deckui.PR
 		Number:           s.Number,
 		HeadRefName:      s.HeadRefName,
 		HeadRefOid:       s.HeadRefOid,
+		BaseRefName:      s.BaseRefName,
 		Title:            s.Title,
 		Author:           s.Author,
 		URL:              s.URL,

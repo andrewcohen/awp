@@ -59,9 +59,13 @@ const (
 // compare it against a local commit-id to detect "PR has moved since I
 // last looked," which feeds the re-review signal.
 type PRStatus struct {
-	Number           int
-	HeadRefName      string
-	HeadRefOid       string
+	Number      int
+	HeadRefName string
+	HeadRefOid  string
+	// BaseRefName is the branch this PR merges into. When it matches
+	// another open PR's HeadRefName in the same repo, this PR is stacked
+	// on that one — the edge deckdata's inbox stack layout is built from.
+	BaseRefName      string
 	Title            string
 	Author           string
 	URL              string
