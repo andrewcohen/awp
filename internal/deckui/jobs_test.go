@@ -50,9 +50,21 @@ func TestWorkspaceJobJustFinished(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "non-workspace job ignored",
+			name: "delete running -> done",
 			prev: []Job{{ID: "1", Action: "delete", Status: JobRunning}},
 			cur:  []Job{{ID: "1", Action: "delete", Status: JobDone}},
+			want: true,
+		},
+		{
+			name: "delete-project running -> done",
+			prev: []Job{{ID: "1", Action: "delete-project", Status: JobRunning}},
+			cur:  []Job{{ID: "1", Action: "delete-project", Status: JobDone}},
+			want: true,
+		},
+		{
+			name: "non-lifecycle job ignored",
+			prev: []Job{{ID: "1", Action: "custom", Status: JobRunning}},
+			cur:  []Job{{ID: "1", Action: "custom", Status: JobDone}},
 			want: false,
 		},
 	}
