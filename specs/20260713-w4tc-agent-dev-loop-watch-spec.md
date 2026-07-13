@@ -161,9 +161,28 @@ UNITS  (no todo list — showing current work)      # v1 degraded breadth
     workspace (`internal/deckui/modal_watch.go`; `popoverModal` mirroring
     `helpModal`, own 1s tick since background refresh pauses during modals).
     Not a nested tea.Program. (done)
-16. **Future:** deck-row progress summary + stall alert; optional observe+nudge
-    steering; "all units complete" state; prompt-prepend injection for
-    non-Claude agents.
+16. **Future — dev_loop enforcement hook (the real lever for consistent task
+    usage).** A system-prompt preamble is only a nudge; observed live, an agent
+    given the preamble still skipped `TaskCreate` (naming the right tool helps
+    but doesn't guarantee it). To make the loop *stick*, enforce it via awp's
+    existing Claude Code hook infrastructure (awp already installs
+    `PostToolUse` / `Stop` hooks for status reporting — see README "How status
+    reporting works"). Sketch:
+    - On `Stop` (or after N `Edit`/`Write` tool calls with no `TaskCreate` in
+      the session), have the hook inject a reminder / soft-block: "create your
+      unit task list before continuing."
+    - Optionally, at unit "commit" time, verify the just-committed unit's gates
+      went green (cross-check the transcript) before letting the loop advance.
+    - This is the step from *observe-only* to an actual **control loop** (the
+      original framing). It changes the feature from passive to active, so it's
+      a deliberate separate effort — keep the preamble as best-effort until
+      then. Gate on: does soft-block-on-Stop actually improve compliance without
+      being annoying? Prototype with one hook + a counter before committing to
+      it.
+17. **Future (smaller):** deck-row progress summary + stall alert; "all units
+    complete" state; prompt-prepend injection for non-Claude agents; make the
+    preamble's task-tool name configurable (currently hardcoded
+    `TaskCreate`/`TaskUpdate`).
 
 ## Acceptance Criteria
 - [x] `awp watch --once --transcript <finished session>` renders a correct loop
