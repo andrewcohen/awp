@@ -42,6 +42,13 @@ type Item struct {
 	// the review flow for a review-requested PR, or opens the prefilled
 	// new-workspace form for your own; other workspace actions are no-ops.
 	Virtual bool
+	// Optimistic marks a synthetic row shown the instant a create is
+	// submitted, before the detached subprocess writes the workspace into
+	// workspace-state.json. It bridges the gap until a refresh surfaces the
+	// real row (see deckui Model.optimisticCreates); the row renders with
+	// the "creating…" spinner treatment and its lifecycle actions are
+	// blocked. Pure data — deckui owns the rendering and reconciliation.
+	Optimistic bool
 	// PinGroup is the register this workspace is pinned to (from
 	// Entry.PinGroup): "" unpinned, "default" the gg register, or a
 	// single lowercase letter a–z. Pinned rows float to a section at the
