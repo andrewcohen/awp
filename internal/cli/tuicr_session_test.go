@@ -226,6 +226,50 @@ func TestFindPriorSessionsWithComments(t *testing.T) {
 	}
 }
 
+func TestSessionCommentsForHead(t *testing.T) {
+	dir := t.TempDir()
+	sessions := filepath.Join(dir, "reviews", "sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) { writeFile(t, filepath.Join(sessions, name), body) }
+
+	// Two current-head sessions (unusual but tolerated): counts sum. A
+	// prior-head and other-PR session are ignored.
+	write("cur1.json", `{"pr_session_key":{"number":5,"head_sha":"NEW"},"review_comments":[{"b":1}]}`)
+	write("cur2.json", `{"pr_session_key":{"number":5,"head_sha":"NEW"},"files":{"a.go":{"line_comments":[{"l":1},{"l":2}]}}}`)
+	write("old.json", `{"pr_session_key":{"number":5,"head_sha":"OLD"},"review_comments":[{"b":1}]}`)
+	write("otherpr.json", `{"pr_session_key":{"number":6,"head_sha":"NEW"},"review_comments":[{"b":1}]}`)
+
+	if got := sessionCommentsForHead(dir, 5, "NEW"); got != 3 {
+		t.Errorf("NEW head: got %d want 3", got)
+	}
+	if got := sessionCommentsForHead(dir, 5, "MISSING"); got != 0 {
+		t.Errorf("absent head: got %d want 0", got)
+	}
+	// Guards.
+	if got := sessionCommentsForHead("", 5, "NEW"); got != 0 {
+		t.Errorf("empty dataDir: got %d want 0", got)
+	}
+	if got := sessionCommentsForHead(dir, 5, ""); got != 0 {
+		t.Errorf("empty head: got %d want 0", got)
+	}
+}
+
+func TestShortSHA(t *testing.T) {
+	cases := map[string]string{
+		"16d77d5f2c1401bb6f9530d2305df8570d6bc3d1": "16d77d5f",
+		"abc":      "abc",
+		"":         "",
+		"abcdefgh": "abcdefgh",
+	}
+	for in, want := range cases {
+		if got := shortSHA(in); got != want {
+			t.Errorf("shortSHA(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
