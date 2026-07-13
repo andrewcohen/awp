@@ -62,6 +62,9 @@ func TestBuildReviewPrompt(t *testing.T) {
 			{Author: "hubot", Kind: "review", Body: "LGTM overall"},
 			{Author: "carol", Kind: "comment", Body: "needs a test"},
 		},
+		[]priorSession{
+			{Path: "/data/reviews/sessions/old.json", HeadSHA: "16d77d5f2c1401bb6f9530d2305df8570d6bc3d1", Comments: 4, Updated: "2026-07-09T17:40:48Z"},
+		},
 	)
 	if !strings.Contains(got, "PR #42") || !strings.Contains(got, "add thing") ||
 		!strings.Contains(got, "does X") || !strings.Contains(got, "abc123..def456") {
@@ -91,6 +94,11 @@ func TestBuildReviewPrompt(t *testing.T) {
 		"review @hubot: LGTM overall",
 		"comment @carol: needs a test",
 		"Do not restate",
+		// Prior-head carry-forward: section heading, the rendered session
+		// line (path + short head + count), and the migration guidance.
+		"Carrying forward comments from a prior head",
+		"/data/reviews/sessions/old.json — head 16d77d5f, 4 comments",
+		"Re-anchor each comment",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {
@@ -99,7 +107,7 @@ func TestBuildReviewPrompt(t *testing.T) {
 	}
 
 	empty := github.PRInfo{Number: 1, Title: "t", Body: "  "}
-	got = buildReviewPrompt(empty, "develop", "develop..@", "", "", "", nil)
+	got = buildReviewPrompt(empty, "develop", "develop..@", "", "", "", nil, nil)
 	if !strings.Contains(got, "(no description)") {
 		t.Fatalf("expected placeholder for empty body, got %q", got)
 	}
@@ -111,6 +119,28 @@ func TestBuildReviewPrompt(t *testing.T) {
 	// No comments → sentinel line, not an empty section.
 	if !strings.Contains(got, "(none — no prior comments on this PR)") {
 		t.Fatalf("expected sentinel for empty comments, got %q", got)
+	}
+	// No prior sessions → carry-forward sentinel, section stays inert.
+	if !strings.Contains(got, "(none — no prior-head draft comments to carry forward)") {
+		t.Fatalf("expected sentinel for empty prior sessions, got %q", got)
+	}
+}
+
+func TestFormatPriorSessions(t *testing.T) {
+	if got := formatPriorSessions(nil); got != "(none — no prior-head draft comments to carry forward)" {
+		t.Errorf("empty: got %q", got)
+	}
+	got := formatPriorSessions([]priorSession{
+		{Path: "/s/a.json", HeadSHA: "abcdef0123456789", Comments: 1, Updated: "2026-07-01T10:00:00Z"},
+		{Path: "/s/b.json", HeadSHA: "short", Comments: 3},
+	})
+	// Singular "comment" for count 1, plural for >1; head truncated to 8;
+	// updated appended only when present.
+	if !strings.Contains(got, "/s/a.json — head abcdef01, 1 comment, updated 2026-07-01T10:00:00Z") {
+		t.Errorf("singular/updated line wrong: %q", got)
+	}
+	if !strings.Contains(got, "/s/b.json — head short, 3 comments") || strings.Contains(got, "head short, 3 comments, updated") {
+		t.Errorf("plural/no-updated line wrong: %q", got)
 	}
 }
 

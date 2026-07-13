@@ -67,6 +67,35 @@ If the injected path and the `tuicr review list` path disagree, **trust
 is a best-effort snapshot. If neither resolves a session for `{{slug}}`,
 stop and say so in chat rather than guessing or creating a new session.
 
+### Carrying forward comments from a prior head
+
+If the PR was force-pushed or rebased since it was last reviewed, earlier
+draft comments live in a session for the *old* head and are invisible to
+`tuicr review list`. awp has already located them for you:
+
+{{prior_sessions}}
+
+When that list names one or more sessions, migrate their comments into the
+current session (`{{session_path}}`) **before** starting your own review:
+
+1. Read each prior session JSON. Comments live in `review_comments[]`
+   (review- and file-scoped) and, per file, `files.<path>.line_comments[]`
+   and `files.<path>.file_comments[]`.
+2. Re-anchor each comment against the **current** diff:
+   - Line comment whose line still exists → re-post on the current line
+     number (content may have shifted; find the line it refers to).
+   - Line comment whose line is gone → post it file-scoped and note the
+     original location (e.g. "(was line 42 before the force-push)").
+   - File- and review-scoped comments → re-post as-is.
+3. Re-post with `tuicr review add --session "{{session_path}}" ...`,
+   preserving the original `--type`, the `:robot: ` prefix, and
+   `--username "awp-agent"`.
+4. Skip any comment already published on the PR (see "Existing comments"
+   above) or that you would raise yourself in this pass — don't duplicate.
+
+Do not edit or delete the prior session files; they are your source of
+record. If the list above says "(none)", there is nothing to carry forward.
+
 ### Comment shapes
 
 - **Line comment**: `--target-file <path> --line <n> --side new` (use
