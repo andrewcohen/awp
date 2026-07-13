@@ -152,6 +152,24 @@ type Entry struct {
 	// state.PinGroupAliases) since a register spans repos in the deck's
 	// merged view.
 	PinGroup string `json:",omitempty"`
+	// DevLoop is the last dev-loop progress snapshot the deck computed for
+	// this workspace's agent (see internal/watch). It is a cache, refreshed
+	// by the deck's background loader while the agent is working, so the
+	// next deck open can render the row's progress on the fast first paint
+	// without re-scanning the transcript — avoiding a branch/port → progress
+	// "flash". Nil when no snapshot has been recorded.
+	DevLoop *DevLoopSnapshot `json:",omitempty"`
+}
+
+// DevLoopSnapshot is the persisted form of the deck's dev-loop meta line:
+// the same done/total + phase + current-unit projection carried on a deck
+// row, cached in the state file so it survives across deck processes. It
+// mirrors deckui.DevLoopSummary; the deck loader maps between the two.
+type DevLoopSnapshot struct {
+	Done  int    `json:",omitempty"`
+	Total int    `json:",omitempty"`
+	Phase string `json:",omitempty"`
+	Task  string `json:",omitempty"`
 }
 
 // UnmarshalJSON keeps reading old state files that still use the

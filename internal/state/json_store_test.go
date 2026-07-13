@@ -43,6 +43,30 @@ func TestJSONStoreRoundTripGlobalPerRepo(t *testing.T) {
 		t.Fatalf("unexpected repoB entry: %+v", gotB)
 	}
 
+	// The dev-loop snapshot cache round-trips so the next deck open can
+	// render progress on the fast first paint.
+	if gotA["foo"].DevLoop != nil {
+		t.Fatalf("expected no DevLoop snapshot by default, got %+v", gotA["foo"].DevLoop)
+	}
+	withLoop := map[string]workspace.Entry{"foo": {
+		Name: "foo", Path: "/tmp/foo",
+		DevLoop: &workspace.DevLoopSnapshot{Done: 2, Total: 5, Phase: "test", Task: "add coverage"},
+	}}
+	if err := store.Save(repoA, withLoop); err != nil {
+		t.Fatalf("Save repoA with DevLoop returned error: %v", err)
+	}
+	reloaded, err := store.Load(repoA)
+	if err != nil {
+		t.Fatalf("reload repoA returned error: %v", err)
+	}
+	dl := reloaded["foo"].DevLoop
+	if dl == nil {
+		t.Fatal("DevLoop snapshot did not round-trip")
+	}
+	if dl.Done != 2 || dl.Total != 5 || dl.Phase != "test" || dl.Task != "add coverage" {
+		t.Fatalf("DevLoop snapshot round-trip mismatch: %+v", dl)
+	}
+
 	globalPath := filepath.Join(home, ".awp", "workspace-state.json")
 	data, err := os.ReadFile(globalPath)
 	if err != nil {
