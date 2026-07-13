@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -166,6 +167,124 @@ func readIndexPath(file, dataDir, slug string) string {
 		return rel
 	}
 	return filepath.Join(dataDir, "reviews", rel)
+}
+
+// tuicrSessionFile is the subset of a tuicr session JSON we read. tuicr
+// owns the full schema; we deliberately parse only the fields we need so
+// added fields don't break us. Comments live in two places: the
+// top-level review_comments[] (review- and file-scoped) and, per file,
+// files.<path>.{line_comments,file_comments}[].
+type tuicrSessionFile struct {
+	PRSessionKey struct {
+		Number  int    `json:"number"`
+		HeadSHA string `json:"head_sha"`
+	} `json:"pr_session_key"`
+	UpdatedAt      string            `json:"updated_at"`
+	ReviewComments []json.RawMessage `json:"review_comments"`
+	Files          map[string]struct {
+		LineComments []json.RawMessage `json:"line_comments"`
+		FileComments []json.RawMessage `json:"file_comments"`
+	} `json:"files"`
+}
+
+// commentCount totals every stored comment across the review, file, and
+// line scopes.
+func (s tuicrSessionFile) commentCount() int {
+	n := len(s.ReviewComments)
+	for _, f := range s.Files {
+		n += len(f.LineComments) + len(f.FileComments)
+	}
+	return n
+}
+
+// readSessionFile reads and parses a tuicr session JSON. Returns ok=false
+// on any read/parse error so callers can skip a bad file rather than fail.
+func readSessionFile(path string) (tuicrSessionFile, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return tuicrSessionFile{}, false
+	}
+	var s tuicrSessionFile
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return tuicrSessionFile{}, false
+	}
+	return s, true
+}
+
+// readSessionHeadSHA returns the head SHA a session JSON is anchored to
+// (pr_session_key.head_sha), or "" if the file is missing, malformed, or
+// not a PR session. Used to tell whether the tuicr pane's current session
+// is on the same head as the freshly-fetched PR.
+func readSessionHeadSHA(path string) string {
+	s, ok := readSessionFile(path)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(s.PRSessionKey.HeadSHA)
+}
+
+// priorSession names a tuicr session for a PR that is anchored to a head
+// other than the current one and still holds unpublished draft comments —
+// i.e. comments stranded when the PR head moved.
+type priorSession struct {
+	Path     string
+	HeadSHA  string
+	Updated  string
+	Comments int
+}
+
+// findPriorSessionsWithComments scans tuicr's on-disk session store for
+// sessions belonging to prNumber whose head differs from currentHead and
+// that still carry at least one comment. Newest first.
+//
+// This scans reviews/sessions/*.json directly because `tuicr review list`
+// collapses to a single entry per PR slug and hides the older-head
+// sessions where stranded drafts live — the CLI cannot surface them.
+// (Same TODO(tuicr#368) caveat as the rest of this file: it peeks at
+// tuicr's data-dir layout.)
+func findPriorSessionsWithComments(dataDir string, prNumber int, currentHead string) []priorSession {
+	if dataDir == "" || prNumber <= 0 {
+		return nil
+	}
+	currentHead = strings.TrimSpace(currentHead)
+	glob := filepath.Join(dataDir, "reviews", "sessions", "*.json")
+	matches, err := filepath.Glob(glob)
+	if err != nil {
+		return nil
+	}
+	var out []priorSession
+	for _, path := range matches {
+		s, ok := readSessionFile(path)
+		if !ok {
+			continue
+		}
+		if s.PRSessionKey.Number != prNumber {
+			continue
+		}
+		head := strings.TrimSpace(s.PRSessionKey.HeadSHA)
+		// Skip the current-head session (that's the migration target, not
+		// a source) and any session with no resolvable head.
+		if head == "" || head == currentHead {
+			continue
+		}
+		n := s.commentCount()
+		if n == 0 {
+			continue
+		}
+		out = append(out, priorSession{
+			Path:     path,
+			HeadSHA:  head,
+			Updated:  strings.TrimSpace(s.UpdatedAt),
+			Comments: n,
+		})
+	}
+	// Newest first. tuicr stamps updated_at as RFC3339, whose date/time
+	// prefix dominates a lexical compare, so string ordering matches
+	// chronological ordering for distinct instants.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Updated > out[j].Updated
+	})
+	return out
 }
 
 // awaitTuicrSessionPath polls resolveTuicrSessionPath until it returns
