@@ -254,7 +254,7 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	// "too big". Write it to disk and hand the agent a tiny pointer prompt
 	// instead; the agent reads the file itself. Falls back to the inline
 	// prompt if the write fails, so a read-only home dir still works.
-	instructions := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments)
+	instructions := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments, nil)
 	prompt := instructions
 	if promptPath, werr := writeReviewPromptFile(repoRoot, name, instructions); werr != nil {
 		reporter.Log(fmt.Sprintf("could not write review prompt file (sending inline): %v", werr))
@@ -423,7 +423,7 @@ Your full review instructions and PR context are in this file:
 Read that file first, then post your review comments via tuicr exactly as it describes.`, pr.Number, title, promptPath)
 }
 
-func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dataDir string, comments []github.PRComment) string {
+func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dataDir string, comments []github.PRComment, priorSessions []priorSession) string {
 	body := strings.TrimSpace(pr.Body)
 	if body == "" {
 		body = "(no description)"
@@ -456,7 +456,35 @@ func buildReviewPrompt(pr github.PRInfo, base, diffRange, slug, sessionPath, dat
 		"{{data_dir}}", dataDir,
 		"{{owner_repo}}", ownerRepo,
 		"{{comments}}", formatExistingComments(comments),
+		"{{prior_sessions}}", formatPriorSessions(priorSessions),
 	).Replace(reviewPromptTemplate)
+}
+
+// formatPriorSessions renders the {{prior_sessions}} slot: the tuicr
+// session files (from earlier heads of this PR) that still hold draft
+// comments the agent should carry forward. Returns a sentinel line when
+// there are none, so the carry-forward section stays inert.
+func formatPriorSessions(priorSessions []priorSession) string {
+	if len(priorSessions) == 0 {
+		return "(none — no prior-head draft comments to carry forward)"
+	}
+	var b strings.Builder
+	for _, s := range priorSessions {
+		head := s.HeadSHA
+		if len(head) > 8 {
+			head = head[:8]
+		}
+		plural := "s"
+		if s.Comments == 1 {
+			plural = ""
+		}
+		fmt.Fprintf(&b, "- %s — head %s, %d comment%s", s.Path, head, s.Comments, plural)
+		if s.Updated != "" {
+			fmt.Fprintf(&b, ", updated %s", s.Updated)
+		}
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // formatExistingComments renders the PR's existing comments as a compact
