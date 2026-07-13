@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -787,8 +788,15 @@ type Model struct {
 	// the modal: the progress-completion handler reads it to decide the
 	// post-delete cursor selection, so it stays on the Model rather than
 	// living only on confirmDeleteModal.
-	deleteTarget      Item
-	pendingSelect     Item // after next refresh, cursor jumps to this (project, workspace) if present
+	deleteTarget  Item
+	pendingSelect Item // after next refresh, cursor jumps to this (project, workspace) if present
+	// optimisticCreates holds synthetic workspace rows for creates that
+	// have been submitted but whose workspace-state.json entry hasn't
+	// landed yet. Keyed by workspaceKey(repoRoot, name). Merged into the
+	// view by items() (via rm's mergedItemsAll), reconciled away in
+	// refreshDoneMsg once the real row appears, and dropped when the
+	// backing create job fails or the spawn fails.
+	optimisticCreates map[string]Item
 	findMode          bool
 	findStage         findStage
 	findProject       string            // project name scoping the workspace stage ("" when a pin register scopes it instead)
@@ -1221,13 +1229,36 @@ func aliasLookup(actions []UserAction) map[string]UserAction {
 // read-model delegations below rebuild it per call rather than caching.
 func (m Model) rm() deckdata.View {
 	return deckdata.View{
-		All:            m.itemsAll,
+		All:            m.mergedItemsAll(),
 		Scope:          m.scope,
 		Filter:         m.filter,
 		PRStatusByRepo: m.prStatusByRepo,
 		PinAliases:     m.pinGroupAliases,
 		Attention:      AttentionIncluded,
 	}
+}
+
+// mergedItemsAll is itemsAll plus any optimistic create rows whose real
+// row hasn't landed yet, so a just-submitted create appears in the deck
+// immediately. Optimistic rows superseded by a real row of the same
+// (repo, name) are dropped so a just-persisted workspace isn't shown
+// twice during the reconcile window.
+func (m Model) mergedItemsAll() []Item {
+	if len(m.optimisticCreates) == 0 {
+		return m.itemsAll
+	}
+	real := make(map[string]bool, len(m.itemsAll))
+	for _, it := range m.itemsAll {
+		real[workspaceKey(it.RepoRoot, it.WorkspaceName)] = true
+	}
+	out := append([]Item(nil), m.itemsAll...)
+	for key, opt := range m.optimisticCreates {
+		if real[key] {
+			continue
+		}
+		out = append(out, opt)
+	}
+	return out
 }
 
 // items returns the visible, filtered, sorted deck rows for the current
@@ -1744,15 +1775,18 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			jm.sync(m.jobs)
 			jm.refreshViewport()
 		}
+		// Retire an optimistic create row whose job has failed — no real
+		// row will ever land for it.
+		m.pruneOptimisticCreates()
 		var expireCmd tea.Cmd
 		m, expireCmd = m.syncJobActivities(msg.jobs)
-		// A create/review job produces a new workspace, but loadDeckItems
-		// reads workspace-state.json and the row only appears once the
-		// deck refreshes. Waiting for the 5 s poll (or the best-effort
-		// fsnotify watcher, which can miss or coalesce the write) makes
-		// the new workspace show up late or not until the next unrelated
-		// refresh. So the moment such a job flips to done, kick a row
-		// refresh explicitly.
+		// A create/review job adds a workspace row and a delete job
+		// removes one, but loadDeckItems reads workspace-state.json and
+		// the change only shows once the deck refreshes. Waiting for the
+		// 5 s poll (or the best-effort fsnotify watcher, which can miss or
+		// coalesce the write) makes the row appear/disappear late or not
+		// until the next unrelated refresh. So the moment such a job flips
+		// to done, kick a row refresh explicitly.
 		var createRefreshCmd tea.Cmd
 		if workspaceJobJustFinished(prevJobs, msg.jobs) {
 			m, createRefreshCmd = m.requestRefresh(true)
@@ -1786,6 +1820,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			// can retry the review.
 			if msg.spec.Action == "review" {
 				delete(m.reviewSetups, reviewSetupKey(msg.spec.RepoRoot, msg.spec.Arg))
+			}
+			if msg.spec.Action == "create-workspace" {
+				m.dropOptimisticCreate(msg.spec.RepoRoot, msg.spec.WorkspaceName)
 			}
 			m.status = "create: " + msg.err.Error()
 			return m, nil
@@ -2001,6 +2038,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, batchCmds(enrichExpireCmd, rerunCmd)
 		}
 		m.itemsAll = append([]Item(nil), msg.items...)
+		// Retire optimistic create rows whose real row has now landed (or
+		// whose backing job failed), so the reconciled row replaces the
+		// synthetic one.
+		m.pruneOptimisticCreates()
 		items := m.items()
 		if pending := m.pendingSelect; pending.WorkspaceName != "" {
 			for i, it := range items {
@@ -2829,6 +2870,127 @@ func (m Model) workspaceSettingUp(item Item) bool {
 	return ok
 }
 
+// workspaceDeleteJob returns the in-flight (non-terminal) delete job
+// targeting this row, if any. Mirrors workspaceSetupJob so a row being
+// removed gets the same "deleting…" spinner treatment a row being
+// created gets for "setting up…".
+func (m Model) workspaceDeleteJob(item Item) (Job, bool) {
+	name := normalizeWorkspaceName(item.WorkspaceName)
+	if name == "" {
+		return Job{}, false
+	}
+	for _, j := range m.jobs {
+		if j.Action != "delete" || j.Status.IsTerminal() {
+			continue
+		}
+		if strings.TrimSpace(j.RepoRoot) != strings.TrimSpace(item.RepoRoot) {
+			continue
+		}
+		if normalizeWorkspaceName(j.WorkspaceName) == name {
+			return j, true
+		}
+	}
+	return Job{}, false
+}
+
+func (m Model) workspaceDeleting(item Item) bool {
+	_, ok := m.workspaceDeleteJob(item)
+	return ok
+}
+
+// workspaceKey is the stable identity for a workspace row: repo root +
+// normalized name. Used to reconcile optimistic create rows against the
+// rows that land from workspace-state.json.
+func workspaceKey(repoRoot, name string) string {
+	return strings.TrimSpace(repoRoot) + "\x00" + normalizeWorkspaceName(name)
+}
+
+// addOptimisticCreate records a synthetic row so a just-submitted create
+// appears in the deck immediately, before the detached subprocess writes
+// state. ProjectName is copied from an existing row in the same repo so
+// the optimistic row groups under the right project header.
+func (m *Model) addOptimisticCreate(item Item) {
+	if normalizeWorkspaceName(item.WorkspaceName) == "" {
+		return
+	}
+	item.Optimistic = true
+	item.WorkspaceName = normalizeWorkspaceName(item.WorkspaceName)
+	if strings.TrimSpace(item.ProjectName) == "" {
+		item.ProjectName = m.projectNameForRepo(item.RepoRoot)
+	}
+	if m.optimisticCreates == nil {
+		m.optimisticCreates = map[string]Item{}
+	}
+	m.optimisticCreates[workspaceKey(item.RepoRoot, item.WorkspaceName)] = item
+}
+
+// dropOptimisticCreate removes an optimistic row by (repo, name), e.g.
+// when its create spawn fails before any job record exists.
+func (m *Model) dropOptimisticCreate(repoRoot, name string) {
+	if len(m.optimisticCreates) == 0 {
+		return
+	}
+	delete(m.optimisticCreates, workspaceKey(repoRoot, name))
+}
+
+// pruneOptimisticCreates drops synthetic rows once the real row has
+// landed in itemsAll, or once the backing create job has failed. A
+// successful (done) job is deliberately not a drop trigger — it always
+// wrote a real row, so the real-row check reconciles it without a
+// disappear/reappear flicker.
+func (m *Model) pruneOptimisticCreates() {
+	if len(m.optimisticCreates) == 0 {
+		return
+	}
+	real := make(map[string]bool, len(m.itemsAll))
+	for _, it := range m.itemsAll {
+		real[workspaceKey(it.RepoRoot, it.WorkspaceName)] = true
+	}
+	for key, opt := range m.optimisticCreates {
+		if real[key] {
+			delete(m.optimisticCreates, key)
+			continue
+		}
+		if job, ok := m.optimisticCreateJob(opt); ok && job.Status.IsTerminal() && job.Status != JobDone {
+			delete(m.optimisticCreates, key)
+		}
+	}
+}
+
+// optimisticCreateJob finds the create-workspace job (terminal or not)
+// backing an optimistic row. Unlike workspaceSetupJob it also matches
+// terminal jobs, so pruneOptimisticCreates can retire a failed create.
+func (m Model) optimisticCreateJob(item Item) (Job, bool) {
+	name := normalizeWorkspaceName(item.WorkspaceName)
+	if name == "" {
+		return Job{}, false
+	}
+	for _, j := range m.jobs {
+		if j.Action != "create-workspace" {
+			continue
+		}
+		if strings.TrimSpace(j.RepoRoot) != strings.TrimSpace(item.RepoRoot) {
+			continue
+		}
+		if normalizeWorkspaceName(j.WorkspaceName) == name {
+			return j, true
+		}
+	}
+	return Job{}, false
+}
+
+// projectNameForRepo returns the project name the deck uses for rows in
+// the given repo, taken from an existing row, else the repo's basename.
+func (m Model) projectNameForRepo(repoRoot string) string {
+	rr := strings.TrimSpace(repoRoot)
+	for _, it := range m.itemsAll {
+		if strings.TrimSpace(it.RepoRoot) == rr {
+			return it.ProjectName
+		}
+	}
+	return filepath.Base(rr)
+}
+
 // normalizeWorkspaceName mirrors the name the workspace service records
 // for a create request so a job's user-entered name matches the row's
 // stored name. An empty-after-normalization name collapses to "".
@@ -2859,6 +3021,13 @@ func workspaceSetupStepLabel(j Job) string {
 // selected workspace is still being created (tmux session + agent not
 // ready). Mirrors the item.Virtual guards on the same action handlers.
 func (m Model) blockIfSettingUp(item Item) (Model, bool) {
+	if item.Optimistic {
+		// Optimistic row: the workspace-state entry (and tmux session,
+		// agent, path) don't exist yet, so every lifecycle action is a
+		// no-op at best. Toast and swallow.
+		m.status = fmt.Sprintf("%s is still being created…", item.WorkspaceName)
+		return m, true
+	}
 	job, ok := m.workspaceSetupJob(item)
 	if !ok {
 		return m, false
@@ -3144,15 +3313,37 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		// still bootstrapping — see workspaceSetupJob.
 		WorkspaceName: strings.TrimSpace(req.Name),
 	}
-	// Pre-arm pendingSelect with the new workspace's likely name so the
-	// cursor snaps to it as soon as the refresh after the subprocess
-	// write lands. If the eventual name differs (e.g. the create flow
-	// generated a name when both Name and Bookmark were blank) the
-	// snap will be a no-op and the cursor stays put.
-	if n := strings.TrimSpace(req.Name); n != "" {
-		m.pendingSelect = Item{WorkspaceName: n}
-	} else if b := strings.TrimSpace(req.Bookmark); b != "" {
-		m.pendingSelect = Item{WorkspaceName: b}
+	// Show the new workspace immediately as an optimistic row, so it
+	// appears the instant the form is submitted rather than after the
+	// detached subprocess writes workspace-state.json and a refresh
+	// surfaces it. refreshDoneMsg reconciles the synthetic row away once
+	// the real one lands. When both Name and Bookmark are blank the create
+	// flow generates the name, so there's nothing to predict — skip the
+	// optimistic row and fall back to the post-refresh behavior.
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = strings.TrimSpace(req.Bookmark)
+	}
+	if name != "" {
+		m.addOptimisticCreate(Item{
+			WorkspaceName: name,
+			RepoRoot:      repoRoot,
+			Bookmark:      strings.TrimSpace(req.Bookmark),
+			PRNumber:      req.PRNumber,
+			PromptPreview: strings.TrimSpace(req.Prompt),
+			Status:        "starting",
+		})
+		// Pre-arm pendingSelect so the cursor stays on the row across the
+		// swap from the optimistic row to the real one, then snap now so
+		// the just-added row is selected immediately.
+		normalized := normalizeWorkspaceName(name)
+		m.pendingSelect = Item{WorkspaceName: normalized}
+		for i, it := range m.items() {
+			if it.WorkspaceName == normalized && strings.TrimSpace(it.RepoRoot) == strings.TrimSpace(repoRoot) {
+				m.cursor = i
+				break
+			}
+		}
 	}
 	launcher := m.asyncJobLauncher
 	dispatch := func() tea.Msg {
@@ -3661,10 +3852,11 @@ func (m Model) renderList(width int) string {
 			// enrichment pass and is rare enough that a brief flash is
 			// preferable to a blank glyph slot.
 			glyph := statusGlyph(item.Status, dim, item.Unread)
-			// A workspace still being created shows up before its agent
-			// exists; badge it with the live spinner so it reads as
-			// in-progress rather than an idle/ready row.
-			if !dim && m.workspaceSettingUp(item) {
+			// A workspace still being created (optimistic row or a live
+			// create job) or being deleted shows up in a transient state;
+			// badge it with the live spinner so it reads as in-progress
+			// rather than an idle/ready row.
+			if !dim && (item.Optimistic || m.workspaceSettingUp(item) || m.workspaceDeleting(item)) {
 				glyph = m.spinner.View()
 			}
 			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyph, stackPrefix, labelStyle.Render(label))
@@ -3710,16 +3902,24 @@ func (m Model) renderList(width int) string {
 				line += glyphs + "  "
 				metaRoom = max(10, metaRoom-lipgloss.Width(glyphs)-2)
 			}
-			// While the workspace is still being created, its port/branch
-			// meta isn't meaningful yet — surface the create job's current
-			// step instead ("setting up · pnpm i").
+			// While the workspace is mid-lifecycle, its port/branch meta
+			// isn't meaningful yet — surface the transient state instead:
+			// "deleting…" while a delete job runs, "setting up · pnpm i"
+			// from a live create job's current step, or a plain "creating…"
+			// for an optimistic row whose job hasn't registered yet.
 			metaSrc := m.metaLine(item)
-			if job, ok := m.workspaceSetupJob(item); ok {
-				if lbl := workspaceSetupStepLabel(job); lbl != "" {
+			setupJob, settingUp := m.workspaceSetupJob(item)
+			switch {
+			case m.workspaceDeleting(item):
+				metaSrc = "deleting…"
+			case settingUp:
+				if lbl := workspaceSetupStepLabel(setupJob); lbl != "" {
 					metaSrc = "setting up · " + lbl
 				} else {
 					metaSrc = "setting up…"
 				}
+			case item.Optimistic:
+				metaSrc = "creating…"
 			}
 			metaText := truncate(metaSrc, metaRoom)
 			body = append(body, fitRow(line+m.renderMetaText(metaText), width-2))
