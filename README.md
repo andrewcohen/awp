@@ -221,6 +221,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `m D` | Unpin / ungroup the selected workspace. |
 | `m R` | Name the selected row's group — opens an input to set a display alias for that register (cosmetic; the register key stays the letter). Aliases persist globally in `~/.awp/pin-groups.json`. Blank clears the alias. |
 | `J` | Jobs overlay (running async dispatches — cancel, retry, dismiss, open log, yank to clipboard) |
+| `w` | Watch overlay — live dev-loop progress for the selected workspace (units + loop phase + gate pass/fail), read from the agent's transcript; scroll with `↑`/`↓` / `pgup`/`pgdn`, `esc`/`q`/`w` to close. See [`awp watch`](#cli-reference-highlights) and the `dev_loop` config. |
 | `?` | Help overlay (scrollable — `↑`/`↓` or `j`/`k` to scroll, `pgup`/`pgdn` / `ctrl+u`/`ctrl+d` to page; `?` / `esc` / `q` / `enter` to close) |
 | `q` / `esc` | Quit |
 

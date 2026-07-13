@@ -2184,6 +2184,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			// above. Without this, the deck row list bleeds through
 			// the surrounding area of the jobs popover.
 			return m, tea.Batch(tea.ClearScreen, refreshJobsListCmd(m.jobsListRefresher))
+		case key.Matches(msg, km.Watch):
+			item, ok := m.selected()
+			if !ok {
+				return m, nil
+			}
+			m.active = newWatchModal(item)
+			// tea.ClearScreen on modal entry — same rationale as `J` above.
+			return m, tea.Batch(tea.ClearScreen, scheduleWatchTick())
 		case key.Matches(msg, km.Quit):
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
@@ -4175,6 +4183,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Async jobs",
 			Keys: [][2]string{
 				{"J", "jobs overlay (list, cancel, retry, dismiss, open log)"},
+				{"w", "watch dev-loop progress for the selected workspace"},
 			},
 		},
 		{
