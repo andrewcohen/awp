@@ -226,9 +226,15 @@ func TestStickyChoice(t *testing.T) {
 
 func TestGeneratePreamble(t *testing.T) {
 	p := GeneratePreamble(DefaultLoop())
-	for _, want := range []string{"TodoWrite", "gofmt", "go test", "wip:"} {
+	for _, want := range []string{"TaskCreate", "TaskUpdate", "gofmt", "go test", "wip:"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("preamble missing %q:\n%s", want, p)
+		}
+	}
+	// Wrong/absent tool name and harness plumbing must not appear.
+	for _, bad := range []string{"TodoWrite", "ToolSearch"} {
+		if strings.Contains(p, bad) {
+			t.Fatalf("preamble should not reference %q:\n%s", bad, p)
 		}
 	}
 	if strings.Contains(p, "Unit N") {

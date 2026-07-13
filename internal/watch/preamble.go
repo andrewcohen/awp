@@ -12,9 +12,9 @@ import (
 func GeneratePreamble(loop Loop) string {
 	var b strings.Builder
 	b.WriteString("Work one small, independently committable unit at a time.\n\n")
-	b.WriteString("Use the TodoWrite tool (create it before you start) to track the units — ")
-	b.WriteString("one item per unit. Mark a unit in_progress when you start it and completed ")
-	b.WriteString("only once all its gates pass. This is required, not optional.\n\n")
+	b.WriteString("Track the units with your task tools: TaskCreate one item per unit before ")
+	b.WriteString("you start, then TaskUpdate to mark a unit in_progress when you start it and ")
+	b.WriteString("completed only once all its gates pass. This is required, not optional.\n\n")
 	b.WriteString("For each unit: implement, then run each gate as its own command and get ")
 	b.WriteString("them all green before moving on:\n")
 	for _, g := range loop.Gates {
