@@ -207,6 +207,35 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 			return err
 		}
 	}
+	// TODO(tuicr#368): the slug + data-dir + JSON-file lookup chain is a
+	// workaround for tuicr's --repo-scoped session resolution not
+	// finding PR-mode sessions (their repo_path is "forge:github.com/...",
+	// not a local path). Replace once tuicr exposes a stable agent
+	// discovery protocol. https://github.com/agavra/tuicr/issues/368
+	slug := tuicrSessionSlug(pr.URL, pr.Number)
+	dataDir := tuicrDataDir()
+
+	// Reset a stale review pane. When the PR was force-pushed/rebased
+	// since it was last opened here, the existing `review` window keeps
+	// showing tuicr on the *old* head — a different session with a stale
+	// diff (and none of a re-review's fresh comments). If the live
+	// session's head disagrees with the freshly-fetched PR head, kill the
+	// window so the block below relaunches `tuicr pr <n>` on the current
+	// head. Non-destructive: the old session JSON stays on disk, which is
+	// what the prior-draft migration below reads from.
+	if have["review"] && pr.HeadSHA != "" && slug != "" {
+		if cur := resolveTuicrSessionPath(dataDir, slug); cur != "" {
+			if liveHead := readSessionHeadSHA(cur); liveHead != "" && liveHead != pr.HeadSHA {
+				reporter.Step("Reset review window (PR head moved since last open)")
+				reporter.Log(fmt.Sprintf("tuicr was on %s; PR head is now %s", shortSHA(liveHead), shortSHA(pr.HeadSHA)))
+				if err := tmuxClient.KillWindow(sessionName + ":review"); err != nil {
+					return err
+				}
+				have["review"] = false
+			}
+		}
+	}
+
 	// Open the review window *before* the agent so `tuicr pr <n>` has
 	// a head start writing active_sessions.json. The agent prompt then
 	// embeds the resolved session JSON path: tuicr's --repo-scoped
@@ -223,13 +252,6 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		}
 	}
 
-	// TODO(tuicr#368): the slug + data-dir + JSON-file lookup chain is a
-	// workaround for tuicr's --repo-scoped session resolution not
-	// finding PR-mode sessions (their repo_path is "forge:github.com/...",
-	// not a local path). Replace once tuicr exposes a stable agent
-	// discovery protocol. https://github.com/agavra/tuicr/issues/368
-	slug := tuicrSessionSlug(pr.URL, pr.Number)
-	dataDir := tuicrDataDir()
 	sessionPath := awaitTuicrSessionPath(context.Background(), dataDir, slug, sessionDiscoveryTimeout)
 	if sessionPath != "" {
 		reporter.Log(fmt.Sprintf("tuicr session: %s", sessionPath))
@@ -249,12 +271,26 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	} else {
 		reporter.Log(fmt.Sprintf("found %d existing comment(s)", len(comments)))
 	}
+	// Surface draft comments stranded on a prior head so the agent can
+	// carry them forward. Only when the current-head session has no
+	// comments of its own: a populated current session means the drafts
+	// were already migrated (or a fresh review is in flight), and
+	// re-injecting the prior list would duplicate them. Anchored on
+	// pr.HeadSHA (not sessionPath) so it's correct even if the injected
+	// path lags tuicr's live registry after a reset.
+	var priorSessions []priorSession
+	if dataDir != "" && pr.HeadSHA != "" && sessionCommentsForHead(dataDir, pr.Number, pr.HeadSHA) == 0 {
+		priorSessions = findPriorSessionsWithComments(dataDir, pr.Number, pr.HeadSHA)
+		if len(priorSessions) > 0 {
+			reporter.Log(fmt.Sprintf("carrying forward drafts from %d prior-head session(s)", len(priorSessions)))
+		}
+	}
 	// Render the full review instructions, but don't paste them into the
 	// agent terminal — that ~170-line block is what users complained was
 	// "too big". Write it to disk and hand the agent a tiny pointer prompt
 	// instead; the agent reads the file itself. Falls back to the inline
 	// prompt if the write fails, so a read-only home dir still works.
-	instructions := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments, nil)
+	instructions := buildReviewPrompt(pr, base, diffRange, slug, sessionPath, dataDir, comments, priorSessions)
 	prompt := instructions
 	if promptPath, werr := writeReviewPromptFile(repoRoot, name, instructions); werr != nil {
 		reporter.Log(fmt.Sprintf("could not write review prompt file (sending inline): %v", werr))
@@ -470,15 +506,11 @@ func formatPriorSessions(priorSessions []priorSession) string {
 	}
 	var b strings.Builder
 	for _, s := range priorSessions {
-		head := s.HeadSHA
-		if len(head) > 8 {
-			head = head[:8]
-		}
 		plural := "s"
 		if s.Comments == 1 {
 			plural = ""
 		}
-		fmt.Fprintf(&b, "- %s — head %s, %d comment%s", s.Path, head, s.Comments, plural)
+		fmt.Fprintf(&b, "- %s — head %s, %d comment%s", s.Path, shortSHA(s.HeadSHA), s.Comments, plural)
 		if s.Updated != "" {
 			fmt.Fprintf(&b, ", updated %s", s.Updated)
 		}

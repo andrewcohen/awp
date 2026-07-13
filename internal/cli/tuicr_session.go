@@ -287,6 +287,41 @@ func findPriorSessionsWithComments(dataDir string, prNumber int, currentHead str
 	return out
 }
 
+// sessionCommentsForHead totals the comments across every session for
+// prNumber anchored to head. Used to decide whether prior-head drafts
+// still need carrying forward: a non-zero count means the current head
+// already holds comments, so re-injecting the prior list would duplicate.
+func sessionCommentsForHead(dataDir string, prNumber int, head string) int {
+	if dataDir == "" || prNumber <= 0 || strings.TrimSpace(head) == "" {
+		return 0
+	}
+	head = strings.TrimSpace(head)
+	matches, err := filepath.Glob(filepath.Join(dataDir, "reviews", "sessions", "*.json"))
+	if err != nil {
+		return 0
+	}
+	total := 0
+	for _, path := range matches {
+		s, ok := readSessionFile(path)
+		if !ok || s.PRSessionKey.Number != prNumber {
+			continue
+		}
+		if strings.TrimSpace(s.PRSessionKey.HeadSHA) == head {
+			total += s.commentCount()
+		}
+	}
+	return total
+}
+
+// shortSHA truncates a git object id to its first 8 characters for log
+// and prompt display. Shorter or empty input is returned unchanged.
+func shortSHA(sha string) string {
+	if len(sha) > 8 {
+		return sha[:8]
+	}
+	return sha
+}
+
 // awaitTuicrSessionPath polls resolveTuicrSessionPath until it returns
 // a non-empty path or the timeout elapses. Used after launching
 // `tuicr pr <n>` in its tmux window — the TUI writes active_sessions.json
