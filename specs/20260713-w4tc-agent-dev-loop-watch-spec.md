@@ -157,7 +157,11 @@ UNITS  (no todo list — showing current work)      # v1 degraded breadth
     append to the *same* session file, and a new session *file* is always an
     independent session. There is no lineage to stitch, and doing so would only
     risk merging unrelated sessions. Stickiness (item 13) handles the real case.
-15. **Future:** deck-row progress summary + stall alert; optional observe+nudge
+15. Deck integration: `w` key opens a live watch popover modal for the selected
+    workspace (`internal/deckui/modal_watch.go`; `popoverModal` mirroring
+    `helpModal`, own 1s tick since background refresh pauses during modals).
+    Not a nested tea.Program. (done)
+16. **Future:** deck-row progress summary + stall alert; optional observe+nudge
     steering; "all units complete" state; prompt-prepend injection for
     non-Claude agents.
 
