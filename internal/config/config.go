@@ -51,6 +51,37 @@ type Config struct {
 		// a PR's headRefName. Unset = no auto-create (default).
 		BookmarkPrefix string `json:"bookmark_prefix,omitempty"`
 	} `json:"deck,omitempty"`
+	// DevLoop defines the per-unit-of-work development loop that `awp
+	// watch` visualizes: the ordered phases a unit passes through and the
+	// gates (named checks awp recognizes in the agent's transcript) that
+	// gate each phase. Unset = an inferred default loop (see
+	// watch.DefaultLoop).
+	DevLoop struct {
+		Phases []string      `json:"phases,omitempty"`
+		Gates  []DevLoopGate `json:"gates,omitempty"`
+	} `json:"dev_loop,omitempty"`
+}
+
+// DevLoopGate is one gate in the dev loop: a named check whose shell command
+// awp recognizes in the agent's transcript, tied to the phase it belongs to.
+// Match is a regular expression tested against the bash command the agent
+// ran; a paired tool_result exit code decides pass/fail.
+type DevLoopGate struct {
+	Name  string `json:"name"`
+	Phase string `json:"phase,omitempty"`
+	Match string `json:"match"`
+	// Command is the human-facing command shown in the generated preamble
+	// (awp watch --preamble). It's distinct from Match (a detection regex):
+	// use it to express the intended invocation, e.g. "pnpm lint <files you
+	// changed>". Falls back to the first alternative of Match when unset.
+	Command string `json:"command,omitempty"`
+	// NotMatch, when set, excludes commands that also match this regex even
+	// if they match Match — e.g. a commit marker that ignores "wip:" commits.
+	NotMatch string `json:"not_match,omitempty"`
+	// Marker entries detect a phase transition (e.g. reaching "commit") but
+	// are not pass/fail checks — they advance the loop's phase without
+	// appearing in the gate-lights row.
+	Marker bool `json:"marker,omitempty"`
 }
 
 // DefaultAgent is the agent command used when neither global nor project
@@ -197,6 +228,12 @@ func merge(global, project Config) Config {
 	}
 	if strings.TrimSpace(out.Deck.BookmarkPrefix) == "" {
 		out.Deck.BookmarkPrefix = global.Deck.BookmarkPrefix
+	}
+	if len(out.DevLoop.Phases) == 0 {
+		out.DevLoop.Phases = global.DevLoop.Phases
+	}
+	if len(out.DevLoop.Gates) == 0 {
+		out.DevLoop.Gates = global.DevLoop.Gates
 	}
 	return out
 }
