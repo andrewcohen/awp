@@ -157,9 +157,13 @@ const (
 // now — important for collaborator PRs where the head is on a branch the
 // local jj repo doesn't track.
 type PRStatus struct {
-	Number           int
-	HeadRefName      string
-	HeadRefOid       string
+	Number      int
+	HeadRefName string
+	HeadRefOid  string
+	// BaseRefName is the branch this PR merges into. When it matches
+	// another open PR's HeadRefName, the two PRs form a stack edge
+	// (this PR is stacked on that one); otherwise the base is trunk.
+	BaseRefName      string
 	Title            string
 	Author           string
 	URL              string
@@ -207,6 +211,7 @@ type rawPRStatus struct {
 	Number      int    `json:"number"`
 	HeadRefName string `json:"headRefName"`
 	HeadRefOid  string `json:"headRefOid"`
+	BaseRefName string `json:"baseRefName"`
 	Title       string `json:"title"`
 	URL         string `json:"url"`
 	Author      struct {
@@ -293,7 +298,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "open",
 		"--limit", "100",
-		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
+		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -308,6 +313,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 			Number:            r.Number,
 			HeadRefName:       r.HeadRefName,
 			HeadRefOid:        r.HeadRefOid,
+			BaseRefName:       r.BaseRefName,
 			Title:             r.Title,
 			Author:            r.Author.Login,
 			URL:               r.URL,
@@ -333,6 +339,7 @@ func PRStatusFromInfo(p PRInfo) PRStatus {
 		Number:           p.Number,
 		HeadRefName:      p.HeadRef,
 		HeadRefOid:       p.HeadSHA,
+		BaseRefName:      p.BaseRef,
 		Title:            p.Title,
 		Author:           p.Author,
 		URL:              p.URL,
@@ -496,7 +503,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
-		"--json", "number,headRefName,headRefOid,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
+		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
 	)
 	if err != nil {
 		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
@@ -509,6 +516,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 		Number:            r.Number,
 		HeadRefName:       r.HeadRefName,
 		HeadRefOid:        r.HeadRefOid,
+		BaseRefName:       r.BaseRefName,
 		Title:             r.Title,
 		Author:            r.Author.Login,
 		URL:               r.URL,

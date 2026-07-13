@@ -1244,6 +1244,7 @@ const (
 	glyphBranch   = "\uf418"     // nf-oct-git_branch
 	glyphKeyboard = "\U000F030C" // nf-md-keyboard
 	glyphReturn   = "\U000F0311" // nf-md-keyboard_return \u2014 leads the "to review" hint on virtual rows
+	glyphBlocked  = "\uf023"     // nf-fa-lock \u2014 stacked PR blocked by an unready ancestor
 )
 
 // metaLine returns the secondary text for a workspace row in a dense
@@ -1298,13 +1299,13 @@ func (m Model) metaLine(it Item) string {
 		parts = append(parts, glyphKeyboard+` "`+prompt+`"`)
 	}
 	if it.Virtual {
-		// No local workspace — call out the one action that exists. For a
-		// PR awaiting your review that's "to review"; for your own PR with
-		// no workspace it's "to check out" (enter creates the workspace
-		// either way — same flow, honest verb).
-		hint := "to review"
-		if hasPR && pr.Mine && !pr.ReviewRequested && !pr.ReviewRerequested {
-			hint = "to check out"
+		// No local workspace — call out the one action that exists. A PR
+		// awaiting your review is "to review"; everything else (your own
+		// PR, or a stack-completion link that's someone else's) is "to
+		// check out" — enter opens the new-workspace form for it.
+		hint := "to check out"
+		if hasPR && (pr.ReviewRequested || pr.ReviewRerequested) {
+			hint = "to review"
 		}
 		parts = append(parts, glyphReturn+" "+hint)
 	}
@@ -2836,12 +2837,18 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 		//   - awaiting your review → start the review flow, which creates
 		//     the workspace and primes the reviewer.
 		// The explicit review action (r) always starts a review regardless.
-		if a == ActionSummon {
-			if st, ok := m.resolvePRStatus(item); ok && st.Mine &&
-				!st.ReviewRequested && !st.ReviewRerequested {
-				name := proposeWorkspaceName(st.HeadRefName, m.bookmarkPrefix)
-				return m.launchNewForm(NewWorkspaceInitial{Bookmark: st.HeadRefName, Name: name, PRNumber: st.Number}, item.RepoRoot)
+		st, hasSt := m.resolvePRStatus(item)
+		reviewReq := hasSt && (st.ReviewRequested || st.ReviewRerequested)
+		if a == ActionSummon && !reviewReq {
+			// Not awaiting your review → check the branch out via the
+			// new-workspace form. Covers both your own PRs and
+			// stack-completion links (a stacked PR that's someone else's).
+			head, prNum := item.Bookmark, item.PRNumber
+			if hasSt {
+				head, prNum = st.HeadRefName, st.Number
 			}
+			name := proposeWorkspaceName(head, m.bookmarkPrefix)
+			return m.launchNewForm(NewWorkspaceInitial{Bookmark: head, Name: name, PRNumber: prNum}, item.RepoRoot)
 		}
 		if a == ActionSummon || a == ActionReview {
 			prArg := strconv.Itoa(item.PRNumber)
@@ -3387,6 +3394,7 @@ func helpColumns(innerWidth int) string {
 		prDot(prGlyphReviewReq, colInfo, "your review requested"),
 		prDot(prGlyphReviewReq, colWarning, "review re-requested"),
 		prDot(prGlyphChangesReq, colWarning, "review feedback on your PR"),
+		prDot(glyphBlocked, colDanger, "blocked on base (stacked PR)"),
 	}
 	activityLines := []string{
 		lipgloss.NewStyle().Bold(true).Render("Activity bar (bottom)"),
@@ -3544,6 +3552,14 @@ func (m Model) renderList(width int) string {
 				hintStr = renderDeckHint(hint)
 			}
 			body = append(body, fmt.Sprintf("%s %s %s", prefixSlot.Render(hintStr), star, label))
+		case deckRowSubHeader:
+			// Inbox project subheader under a bucket header: muted blue,
+			// non-bold, indented one step past the bucket header so the
+			// two-level section reads as bucket → project. Blue (not the
+			// teal project-header hue) keeps it distinct from the teal
+			// "Needs your review" bucket header.
+			line := fmt.Sprintf("%s   %s", prefixSlot.Render(""), r.project)
+			body = append(body, s.SubHeader.Render(line))
 		case deckRowPrimary:
 			item := items[r.itemIndex]
 			// findProject is "" in the inbox scope's single-stage find
@@ -3573,11 +3589,22 @@ func (m Model) renderList(width int) string {
 			}
 			// Inbox scope sections by bucket, so the project context moves
 			// onto the row as a muted chip (mini-deck pattern).
-			chip := ""
-			if m.scope == ScopeInbox {
-				chip = s.Muted.Render("["+item.ProjectName+"]") + " "
+			// A PR stacked on another visible PR nests under it with a tree
+			// connector so the dependency reads top-down. The connector is
+			// flat — every stacked child (any depth) sits at one indent
+			// under its root rather than a per-depth staircase, so deep
+			// stacks don't drift right and eat label width. Depth 0 (root /
+			// standalone) gets no connector. Teal (Accent) marks it as
+			// structure. Applies in every scope that annotates stacks
+			// (StackDepth is 0 elsewhere).
+			stackPrefix := ""
+			if item.StackDepth > 0 {
+				stackPrefix = s.Accent.Render("└─ ")
 			}
-			label := truncate(m.displayLabel(item), max(10, width-19-lipgloss.Width(chip)))
+			// Inbox rows carry no [project] chip — the project subheader
+			// (inboxBodyRows) provides that context now, so the label starts
+			// right after the status glyph (plus any stack connector).
+			label := truncate(m.displayLabel(item), max(10, width-19-lipgloss.Width(stackPrefix)))
 			// Status is canonical in JSON, so render the stored glyph
 			// immediately on the fast first paint. The only tmux-derived
 			// override is `working` → `exited` (agent shell death — Claude
@@ -3591,7 +3618,7 @@ func (m Model) renderList(width int) string {
 			if !dim && m.workspaceSettingUp(item) {
 				glyph = m.spinner.View()
 			}
-			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyph, chip, labelStyle.Render(label))
+			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyph, stackPrefix, labelStyle.Render(label))
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
@@ -3607,10 +3634,15 @@ func (m Model) renderList(width int) string {
 			// name-only and the glyph cluster lines up in a column.
 			// Truncated to fit; lipgloss.Width pads but doesn't clip.
 			const metaIndentW = prefixWidth + 1 + 1 + 1 + 4 // prefix + space + glyph + space + extra subordinate indent
+			// Stacked child rows do NOT shift their meta line by the "└─ "
+			// connector width: the subtext dedents back to the common meta
+			// column so every row's meta lines up, even though the child's
+			// label is connector-indented above it.
 			metaIndent := strings.Repeat(" ", metaIndentW)
 			glyphs := ""
 			for _, g := range []string{
 				m.prGlyphForItem(item),
+				m.prBlockedGlyphForItem(item),
 				m.prStaleGlyphForItem(item),
 				m.prLocalStaleGlyphForItem(item),
 				m.prReviewReqGlyphForItem(item),
@@ -3915,6 +3947,7 @@ const (
 	deckRowMeta                         // item: muted @author · branch · …
 	deckRowCollapsed                    // default-only project folded into one line
 	deckRowPinHeader                    // pinned-register section header (project field holds the register key)
+	deckRowSubHeader                    // secondary header (inbox: project name under a bucket header)
 )
 
 // deckBodyRow is one structural line of the deck body. It carries enough
@@ -4013,13 +4046,50 @@ func deckBodyRows(items []Item, collapsed map[string]bool, groups []string) []de
 // collapses.
 func (m Model) bodyRows(items []Item) []deckBodyRow {
 	if m.scope == ScopeInbox {
-		return deckBodyRows(items, nil, m.inboxGroupLabels(items))
+		return m.inboxBodyRows(items)
 	}
 	pinned := pinnedCount(items)
 	if pinned == 0 {
 		return deckBodyRows(items, collapsedProjects(items), nil)
 	}
 	return m.deckBodyRowsPinned(items, pinned)
+}
+
+// inboxBodyRows lays out the inbox scope: a bucket header per section
+// (the governing header for sticky-scroll and cursor context), then a
+// project subheader whenever the project changes within a bucket, then
+// each item's primary + meta rows. items must be pre-ordered by
+// (bucket, project, stack) — View.Items guarantees this — so equal
+// buckets and projects are already contiguous. The per-row [project]
+// chip is dropped in this scope; the subheader carries the project.
+func (m Model) inboxBodyRows(items []Item) []deckBodyRow {
+	labels := m.inboxGroupLabels(items)
+	rows := make([]deckBodyRow, 0, len(items)*2)
+	lastBucket, lastProject := "", ""
+	bucketHdr := -1
+	for i, it := range items {
+		if labels[i] != lastBucket {
+			if lastBucket != "" {
+				rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: bucketHdr})
+			}
+			bucketHdr = len(rows)
+			rows = append(rows, deckBodyRow{kind: deckRowHeader, itemIndex: -1, project: labels[i], headerRow: bucketHdr})
+			lastBucket = labels[i]
+			lastProject = "" // force a project subheader at the start of every bucket
+		}
+		if it.ProjectName != lastProject {
+			// Blank line between project groups within a bucket (not before
+			// the first project — the bucket header already leads that one).
+			if lastProject != "" {
+				rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: bucketHdr})
+			}
+			rows = append(rows, deckBodyRow{kind: deckRowSubHeader, itemIndex: -1, project: it.ProjectName, headerRow: bucketHdr})
+			lastProject = it.ProjectName
+		}
+		rows = append(rows, deckBodyRow{kind: deckRowPrimary, itemIndex: i, project: it.ProjectName, headerRow: bucketHdr})
+		rows = append(rows, deckBodyRow{kind: deckRowMeta, itemIndex: i, project: it.ProjectName, headerRow: bucketHdr})
+	}
+	return rows
 }
 
 // deckBodyRowsPinned lays out the all / attention body when some rows
@@ -4074,7 +4144,11 @@ func (m Model) inboxGroupLabels(items []Item) []string {
 	buckets := make([]inboxBucket, len(items))
 	counts := make(map[inboxBucket]int, inboxBucketCount)
 	for i, it := range items {
-		buckets[i] = m.itemInboxBucket(it)
+		// Section by the stack's bucket (SectionBucket), not the row's
+		// own — a stacked PR shares its stack's header so the chain stays
+		// contiguous under one section. Items() sets SectionBucket for
+		// every inbox row (== own bucket for standalone PRs).
+		buckets[i] = it.SectionBucket
 		counts[buckets[i]]++
 	}
 	labels := make([]string, len(items))
@@ -5316,6 +5390,17 @@ func (m Model) prReviewReqGlyphForItem(item Item) string {
 		return m.styles.Warning.Render(g)
 	}
 	return m.styles.Info.Render(g)
+}
+
+// prBlockedGlyphForItem badges a stacked PR that can't merge yet because
+// an open ancestor in its stack isn't ready — the glyph-column twin of the
+// tree connector, so "blocked on base" is visible without reading the
+// chain. StackBlocked is set by the stack layout (View.Items).
+func (m Model) prBlockedGlyphForItem(item Item) string {
+	if !item.StackBlocked {
+		return ""
+	}
+	return m.styles.Danger.Render(glyphBlocked)
 }
 
 // statusGlyph renders a colored ● for an agent status. Only "loud" states

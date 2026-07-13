@@ -47,6 +47,20 @@ type Item struct {
 	// single lowercase letter a–z. Pinned rows float to a section at the
 	// top of the deck in the All/Attention scopes.
 	PinGroup string
+	// StackDepth is the row's depth in its PR stack, set only by
+	// View.Items in the inbox scope: 0 for a standalone PR or the base
+	// (root) of a stack, 1+ for a PR stacked on another open PR. Drives
+	// the render indent. Zero in every other scope.
+	StackDepth int
+	// SectionBucket is the inbox bucket this row sections under. For a
+	// standalone PR it's the row's own bucket; for a PR in a stack it's
+	// the whole stack's bucket (its most-actionable member) so the stack
+	// stays contiguous under one header. Set only by View.Items (inbox).
+	SectionBucket InboxBucket
+	// StackBlocked is true when this PR has an open ancestor in its stack
+	// that isn't ready to merge — it can't land until that ancestor does.
+	// Set alongside StackDepth wherever stacks are annotated.
+	StackBlocked bool
 }
 
 // Scope controls which items are shown in the deck list. Cycled with `P`;
