@@ -11,6 +11,194 @@ import (
 // every row to count as needing attention.
 func alwaysAttention(string, bool, bool) bool { return true }
 
+func TestInboxStackLayoutGroupsAndOrders(t *testing.T) {
+	v := View{
+		Scope: ScopeInbox,
+		All: []Item{
+			{WorkspaceName: "base", ProjectName: "p", RepoRoot: "/r", PRNumber: 1},
+			{WorkspaceName: "top", ProjectName: "p", RepoRoot: "/r", PRNumber: 2},
+			{WorkspaceName: "solo", ProjectName: "p", RepoRoot: "/r", PRNumber: 3},
+		},
+		PRStatusByRepo: map[string]map[string]prstatus.PRStatus{"/r": {
+			// base ← top is a stack. base alone is "Mine" (draft); top is
+			// "Needs action" (CI failing). The stack sections under the most
+			// actionable member: Needs action.
+			"base": {Number: 1, HeadRefName: "base", BaseRefName: "main", State: prstatus.PRStateOpen, Mine: true, IsDraft: true},
+			"top":  {Number: 2, HeadRefName: "top", BaseRefName: "base", State: prstatus.PRStateOpen, Mine: true, CIState: prstatus.PRCIFailing},
+			// solo is a standalone review request → Needs your review, sorts
+			// ahead of the stack's bucket.
+			"solo": {Number: 3, HeadRefName: "solo", BaseRefName: "main", State: prstatus.PRStateOpen, ReviewRequested: true},
+		}},
+	}
+	got := v.Items()
+	var names []string
+	for _, it := range got {
+		names = append(names, it.WorkspaceName)
+	}
+	// solo (NeedsYourReview) first; then the stack root "base" then its
+	// child "top", contiguous and root-first.
+	if want := []string{"solo", "base", "top"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("order = %v, want %v", names, want)
+	}
+	byName := map[string]Item{}
+	for _, it := range got {
+		byName[it.WorkspaceName] = it
+	}
+	if d := byName["base"].StackDepth; d != 0 {
+		t.Errorf("base StackDepth = %d, want 0 (stack root)", d)
+	}
+	if d := byName["top"].StackDepth; d != 1 {
+		t.Errorf("top StackDepth = %d, want 1 (stacked on base)", d)
+	}
+	if b := byName["base"].SectionBucket; b != InboxNeedsAction {
+		t.Errorf("base SectionBucket = %s, want Needs action", InboxBucketLabel(b))
+	}
+	if b := byName["top"].SectionBucket; b != InboxNeedsAction {
+		t.Errorf("top SectionBucket = %s, want Needs action", InboxBucketLabel(b))
+	}
+	// top is stacked on base, which is a draft (not ready to merge), so
+	// top is blocked; base is the root and blocks on nothing.
+	if !byName["top"].StackBlocked {
+		t.Errorf("top should be blocked by its unready base")
+	}
+	if byName["base"].StackBlocked {
+		t.Errorf("base (stack root) should not be blocked")
+	}
+}
+
+func TestAllScopeStackLayoutGroupsWithinProject(t *testing.T) {
+	v := View{
+		Scope: ScopeAll,
+		All: []Item{
+			{WorkspaceName: "solo", ProjectName: "beta", RepoRoot: "/b", PRNumber: 5},
+			{WorkspaceName: "child", ProjectName: "alpha", RepoRoot: "/a", PRNumber: 2},
+			{WorkspaceName: "root", ProjectName: "alpha", RepoRoot: "/a", PRNumber: 1},
+		},
+		PRStatusByRepo: map[string]map[string]prstatus.PRStatus{
+			"/a": {
+				"root":  {Number: 1, HeadRefName: "root", BaseRefName: "main", State: prstatus.PRStateOpen},
+				"child": {Number: 2, HeadRefName: "child", BaseRefName: "root", State: prstatus.PRStateOpen},
+			},
+			"/b": {"solo": {Number: 5, HeadRefName: "solo", BaseRefName: "main", State: prstatus.PRStateOpen}},
+		},
+	}
+	got := v.Items()
+	var names []string
+	for _, it := range got {
+		names = append(names, it.WorkspaceName)
+	}
+	// Project alpha (with its stack root → child contiguous) before beta.
+	if want := []string{"root", "child", "solo"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("all-scope order = %v, want %v", names, want)
+	}
+	byName := map[string]Item{}
+	for _, it := range got {
+		byName[it.WorkspaceName] = it
+	}
+	if d := byName["child"].StackDepth; d != 1 {
+		t.Errorf("child StackDepth = %d, want 1 (stacked on root) in all scope", d)
+	}
+	if d := byName["root"].StackDepth; d != 0 {
+		t.Errorf("root StackDepth = %d, want 0", d)
+	}
+}
+
+func TestInboxStackCompletionPullsInNonOwnedLink(t *testing.T) {
+	// A stack base ← mid ← tip where base and tip are yours (surfaced) but
+	// mid is a teammate's PR (neither yours nor review-requested). Without
+	// completion the chain would render base … tip with a hole; completion
+	// pulls mid in as a virtual row so the stack is whole.
+	v := View{
+		Scope: ScopeInbox,
+		All: []Item{
+			{WorkspaceName: "base-ws", ProjectName: "p", RepoRoot: "/r", PRNumber: 10},
+		},
+		PRStatusByRepo: map[string]map[string]prstatus.PRStatus{"/r": {
+			"base": {Number: 10, HeadRefName: "base", BaseRefName: "main", State: prstatus.PRStateOpen, Mine: true},
+			"mid":  {Number: 11, HeadRefName: "mid", BaseRefName: "base", State: prstatus.PRStateOpen},
+			"tip":  {Number: 12, HeadRefName: "tip", BaseRefName: "mid", State: prstatus.PRStateOpen, Mine: true},
+		}},
+	}
+	got := v.Items()
+	byNum := map[int]Item{}
+	var order []int
+	for _, it := range got {
+		byNum[it.PRNumber] = it
+		order = append(order, it.PRNumber)
+	}
+	mid, ok := byNum[11]
+	if !ok {
+		t.Fatalf("expected #11 (non-owned middle link) pulled in for completion; got rows %v", order)
+	}
+	if !mid.Virtual {
+		t.Errorf("#11 completion row should be virtual")
+	}
+	if want := []int{10, 11, 12}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("stack order = %v, want %v (base, mid, tip contiguous)", order, want)
+	}
+	if d := byNum[12].StackDepth; d != 2 {
+		t.Errorf("tip StackDepth = %d, want 2", d)
+	}
+}
+
+func TestAllScopePinDragsWholeStack(t *testing.T) {
+	// tip (#2137) is pinned; its base (#2264) is not. A pin drags the whole
+	// stack up, so both land in the pinned prefix, contiguous root → tip,
+	// with the base dragged into the tip's register. An unrelated unpinned
+	// PR stays below.
+	seed := map[string]map[string]prstatus.PRStatus{"/r": {
+		"base":  {Number: 2264, HeadRefName: "base", BaseRefName: "main", State: prstatus.PRStateOpen},
+		"tip":   {Number: 2137, HeadRefName: "tip", BaseRefName: "base", State: prstatus.PRStateOpen},
+		"other": {Number: 99, HeadRefName: "other", BaseRefName: "main", State: prstatus.PRStateOpen},
+	}}
+	items := []Item{
+		{WorkspaceName: "other", ProjectName: "redwood", RepoRoot: "/r", PRNumber: 99, Bookmark: "other"},
+		{WorkspaceName: "base", ProjectName: "redwood", RepoRoot: "/r", PRNumber: 2264, Bookmark: "base"},
+		{WorkspaceName: "tip", ProjectName: "redwood", RepoRoot: "/r", PRNumber: 2137, Bookmark: "tip", PinGroup: "default"},
+	}
+	got := View{Scope: ScopeAll, All: items, PRStatusByRepo: seed}.Items()
+	if len(got) != 3 {
+		t.Fatalf("got %d items, want 3", len(got))
+	}
+	if got[0].WorkspaceName != "base" || got[1].WorkspaceName != "tip" {
+		t.Fatalf("expected dragged stack [base, tip] first; got %q, %q", got[0].WorkspaceName, got[1].WorkspaceName)
+	}
+	if got[0].PinGroup != "default" {
+		t.Errorf("base should be dragged into the 'default' register; got PinGroup %q", got[0].PinGroup)
+	}
+	if got[0].StackDepth != 0 || got[1].StackDepth != 1 {
+		t.Errorf("stack depths = %d,%d want 0,1", got[0].StackDepth, got[1].StackDepth)
+	}
+	if PinnedCount(got) != 2 {
+		t.Errorf("PinnedCount = %d, want 2 (base dragged in + pinned tip)", PinnedCount(got))
+	}
+	if got[2].WorkspaceName != "other" || got[2].PinGroup != "" {
+		t.Errorf("unrelated unpinned PR should stay below, unpinned; got %q pin=%q", got[2].WorkspaceName, got[2].PinGroup)
+	}
+}
+
+func TestInboxStackLayoutIgnoresNonOpenParent(t *testing.T) {
+	v := View{
+		Scope: ScopeInbox,
+		All: []Item{
+			{WorkspaceName: "child", ProjectName: "p", RepoRoot: "/r", PRNumber: 1},
+		},
+		PRStatusByRepo: map[string]map[string]prstatus.PRStatus{"/r": {
+			// child's base is a merged PR's head — merged PRs are filtered
+			// out of the inbox, so there's no visible parent to stack on.
+			"child":  {Number: 1, HeadRefName: "child", BaseRefName: "merged", State: prstatus.PRStateOpen, ReviewRequested: true},
+			"merged": {Number: 9, HeadRefName: "merged", State: prstatus.PRStateMerged},
+		}},
+	}
+	got := v.Items()
+	if len(got) != 1 {
+		t.Fatalf("items = %d, want 1", len(got))
+	}
+	if d := got[0].StackDepth; d != 0 {
+		t.Errorf("StackDepth = %d, want 0 (merged parent is not a visible stack edge)", d)
+	}
+}
+
 func TestPRInboxBucketClassification(t *testing.T) {
 	cases := []struct {
 		name   string

@@ -2,7 +2,6 @@ package deckdata
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/prstatus"
@@ -53,6 +52,11 @@ func (v View) Items() []Item {
 		// limited to PRs you happen to have checked out. Passing the
 		// review virtuals in too dedups against them.
 		filtered = append(filtered, v.inboxVirtualMineItems(filtered)...)
+		// Complete any partially-shown stack: pull in the open PRs that
+		// connect the rows above (ancestors + descendants) even when they're
+		// not yours and not awaiting your review, so a stack never renders
+		// with a hole in the chain. Runs last so it only fills real gaps.
+		filtered = append(filtered, v.inboxVirtualStackItems(filtered)...)
 		src = filtered
 	case ScopeAttention:
 		filtered := make([]Item, 0, len(src))
@@ -81,53 +85,21 @@ func (v View) Items() []Item {
 	// ordering for ties. The inbox scope sorts by bucket first so rows
 	// section under the bucket headers in next-move order.
 	sorted := append([]Item(nil), src...)
-	byProjectLabel := func(i, j int) bool {
-		if sorted[i].ProjectName != sorted[j].ProjectName {
-			return sorted[i].ProjectName < sorted[j].ProjectName
-		}
-		return strings.ToLower(v.DisplayLabel(sorted[i])) < strings.ToLower(v.DisplayLabel(sorted[j]))
-	}
 	if v.Scope == ScopeInbox {
-		sort.SliceStable(sorted, func(i, j int) bool {
-			bi, bj := v.InboxBucket(sorted[i]), v.InboxBucket(sorted[j])
-			if bi != bj {
-				return bi < bj
-			}
-			// Within "Needs your review", surface re-reviews first — PRs
-			// you already reviewed that the author pushed to and
-			// re-requested. They're cheaper to act on (you only need to
-			// look at what changed) and easy to lose track of.
-			if bi == InboxNeedsYourReview {
-				ri, rj := v.NeedsReReview(sorted[i]), v.NeedsReReview(sorted[j])
-				if ri != rj {
-					return ri
-				}
-			}
-			return byProjectLabel(i, j)
-		})
-	} else {
-		// All / attention scopes float pinned rows to the top, ordered by
-		// register (default first, then alphabetical by alias-or-letter),
-		// then by label within a register. Unpinned rows keep the
-		// (project, label) ordering. deckui's bodyRows relies on this
-		// pinned-first prefix to section the pinned region.
-		sort.SliceStable(sorted, func(i, j int) bool {
-			pi := strings.TrimSpace(sorted[i].PinGroup) != ""
-			pj := strings.TrimSpace(sorted[j].PinGroup) != ""
-			if pi != pj {
-				return pi
-			}
-			if pi {
-				ki, kj := PinGroupSortKey(v.PinAliases, sorted[i].PinGroup), PinGroupSortKey(v.PinAliases, sorted[j].PinGroup)
-				if ki != kj {
-					return ki < kj
-				}
-				return strings.ToLower(v.DisplayLabel(sorted[i])) < strings.ToLower(v.DisplayLabel(sorted[j]))
-			}
-			return byProjectLabel(i, j)
-		})
+		// Stack layout owns the inbox ordering: it sections by bucket (a
+		// stack sections under its most-actionable member), surfaces
+		// re-reviews first within "Needs your review", and orders by
+		// project + label — the same order the old bucket sort produced
+		// when nothing is stacked — while keeping each stack's members
+		// contiguous and depth-annotated for the render indent.
+		return v.stackOrderedInbox(sorted)
 	}
-	return sorted
+	// All / attention scopes: pinned rows float to the top (register order),
+	// unpinned rows group by project, and PR stacks stay contiguous root →
+	// tip. A pin drags its whole stack into the register so the chain never
+	// splits across the pinned/project regions. The result is pinned-first,
+	// which deckui's pinnedCount + deckBodyRowsPinned rely on.
+	return v.stackOrderedDeck(sorted)
 }
 
 // ResolvePRStatus finds the PR status for an item: by pinned PRNumber
@@ -308,6 +280,104 @@ func (v View) inboxVirtualMineItems(existing []Item) []Item {
 				RepoRoot:      repo,
 				PRNumber:      st.Number,
 				Bookmark:      st.HeadRefName, // drives the branch token on the meta line
+				Virtual:       true,
+			})
+		}
+	}
+	return out
+}
+
+// inboxVirtualStackItems completes partially-shown PR stacks. Given the
+// rows already in the inbox (real workspaces + review/mine virtuals), it
+// walks the base/head graph over each repo's open PRs — both directions,
+// ancestors and descendants — from the already-visible heads, and
+// synthesizes a read-only virtual row for every connected stack member
+// that isn't shown yet, regardless of ownership. Without this a stack
+// whose middle (or base) link is someone else's PR would render with a
+// gap, breaking the visual chain.
+//
+// existing must be the rows already assembled (workspaces + review + mine
+// virtuals) so we seed from and dedup against them, by repo → PR#.
+func (v View) inboxVirtualStackItems(existing []Item) []Item {
+	visibleHead := map[string]map[string]bool{}
+	seenNum := map[string]map[int]bool{}
+	for _, it := range existing {
+		st, ok := v.ResolvePRStatus(it)
+		if !ok {
+			continue
+		}
+		if visibleHead[it.RepoRoot] == nil {
+			visibleHead[it.RepoRoot] = map[string]bool{}
+			seenNum[it.RepoRoot] = map[int]bool{}
+		}
+		visibleHead[it.RepoRoot][st.HeadRefName] = true
+		seenNum[it.RepoRoot][st.Number] = true
+	}
+	projectByRepo := map[string]string{}
+	for _, it := range v.All {
+		if it.RepoRoot != "" && projectByRepo[it.RepoRoot] == "" {
+			projectByRepo[it.RepoRoot] = it.ProjectName
+		}
+	}
+	var out []Item
+	for repo, byHead := range v.PRStatusByRepo {
+		heads := visibleHead[repo]
+		if len(heads) == 0 {
+			continue // no visible PR in this repo → no stack to complete
+		}
+		// Index descendants: base branch → heads of the PRs stacked on it.
+		childrenOf := map[string][]string{}
+		for h, st := range byHead {
+			if st.State == prstatus.PRStateOpen {
+				childrenOf[st.BaseRefName] = append(childrenOf[st.BaseRefName], h)
+			}
+		}
+		// BFS both directions (ancestor via base, descendants via childrenOf)
+		// from every visible head to reach the whole connected stack.
+		seen := make(map[string]bool, len(heads))
+		queue := make([]string, 0, len(heads))
+		for h := range heads {
+			seen[h] = true
+			queue = append(queue, h)
+		}
+		for len(queue) > 0 {
+			h := queue[0]
+			queue = queue[1:]
+			st, ok := byHead[h]
+			if !ok || st.State != prstatus.PRStateOpen {
+				continue
+			}
+			if base := st.BaseRefName; base != "" && !seen[base] {
+				if anc, ok := byHead[base]; ok && anc.State == prstatus.PRStateOpen {
+					seen[base] = true
+					queue = append(queue, base)
+				}
+			}
+			for _, c := range childrenOf[h] {
+				if !seen[c] {
+					seen[c] = true
+					queue = append(queue, c)
+				}
+			}
+		}
+		for h := range seen {
+			if heads[h] {
+				continue // already visible
+			}
+			st := byHead[h]
+			if st.State != prstatus.PRStateOpen || seenNum[repo][st.Number] {
+				continue
+			}
+			project := projectByRepo[repo]
+			if project == "" {
+				project = repoBaseName(repo)
+			}
+			out = append(out, Item{
+				ProjectName:   project,
+				WorkspaceName: fmt.Sprintf("#%d", st.Number),
+				RepoRoot:      repo,
+				PRNumber:      st.Number,
+				Bookmark:      st.HeadRefName,
 				Virtual:       true,
 			})
 		}

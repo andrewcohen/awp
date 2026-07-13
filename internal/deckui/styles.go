@@ -38,6 +38,10 @@ type deckStyles struct {
 	// headers are teal now, so the find target moves to Warning + bold
 	// (the selection hue) to stay distinct while find mode is up.
 	FindHeader lipgloss.Style
+	// SubHeader is the inbox project subheader nested under a bucket
+	// header: a non-bold muted blue (Info), subordinate to the
+	// urgency-colored bucket header above it.
+	SubHeader lipgloss.Style
 	// Port colors the meta-line :port token blue; the rest of the meta
 	// line stays Muted. Author (teal) and branch (green) tints were
 	// tried and read as too much color repeated on every row.
@@ -64,6 +68,7 @@ func newDeckStyles() deckStyles {
 		Title:         lipgloss.NewStyle().Bold(true),
 		ProjectHeader: lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
 		FindHeader:    lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
+		SubHeader:     lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
 		Port:          lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
 	}
 	for b := inboxBucket(0); b < inboxBucketCount; b++ {
