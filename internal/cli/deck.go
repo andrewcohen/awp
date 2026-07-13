@@ -27,6 +27,7 @@ import (
 	"github.com/andrewcohen/awp/internal/portcapture"
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
+	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -1231,6 +1232,118 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		mu.Unlock()
 	}
 
+	// Dev-loop progress summaries (rendered on the row meta line, see
+	// deckui.Model.metaLine). For each workspace whose agent is actively
+	// working, replay its Claude Code transcript into a compact
+	// done/total + phase + current-unit snapshot. This mirrors the `w`
+	// watch overlay's data source (watch.Resolve → BuildState) so the row
+	// and the overlay agree. The transcript scan can be large, so it is
+	// gated to active + working rows (usually a handful) and only runs
+	// once real tmux state is known (snap.known) — the fast first paint
+	// stays cheap and the next full refresh fills these in ~50 ms later.
+	// Best-effort and bounded by deckEnrichTimeout, like the head
+	// enrichment above.
+	devLoopByPath := map[string]*deckui.DevLoopSummary{}
+	if snap.known {
+		loopByRepo := map[string]watch.Loop{}
+		type dlSpec struct {
+			path, status string
+			loop         watch.Loop
+		}
+		var specs []dlSpec
+		seen := map[string]bool{}
+		for _, r := range repos {
+			for _, e := range repoMap[r.repo] {
+				if !isWorkingStatus(e.Status) {
+					continue
+				}
+				sessionName := DeckSessionName(r.project, e.Name)
+				if _, live := snap.liveByName[sessionName]; !live || snap.agentShell[sessionName] {
+					// No live session, or the :agent pane fell back to a
+					// bare shell — the stored "working" is stale.
+					continue
+				}
+				p := strings.TrimSpace(e.Path)
+				if p == "" || seen[p] {
+					continue
+				}
+				seen[p] = true
+				loop, ok := loopByRepo[r.repo]
+				if !ok {
+					cfg, _ := config.Load(r.repo)
+					loop = watch.Resolve(cfg)
+					loopByRepo[r.repo] = loop
+				}
+				specs = append(specs, dlSpec{path: p, status: e.Status, loop: loop})
+			}
+		}
+		if len(specs) > 0 {
+			live := make(map[string]*deckui.DevLoopSummary, len(specs))
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			for _, s := range specs {
+				wg.Add(1)
+				go func(s dlSpec) {
+					defer wg.Done()
+					summary := buildDevLoopSummary(s.loop, s.path, s.status)
+					if summary == nil {
+						return
+					}
+					mu.Lock()
+					live[s.path] = summary
+					mu.Unlock()
+				}(s)
+			}
+			done := make(chan struct{})
+			go func() { wg.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(deckEnrichTimeout):
+			}
+			mu.Lock()
+			for k, v := range live {
+				devLoopByPath[k] = v
+			}
+			mu.Unlock()
+		}
+		// Persist the fresh summaries so the next deck open's fast first
+		// paint can render progress from the cache without a transcript
+		// scan. Write per repo, and only when a workspace's snapshot
+		// actually changed — a no-op Update still rewrites the state file
+		// and would bounce back through the deck's state-file watcher, so
+		// compare-and-skip keeps writes at the agent's pace (a snapshot
+		// changes only when the agent does something) rather than once per
+		// refresh.
+		for _, r := range repos {
+			changed := map[string]*workspace.DevLoopSnapshot{}
+			for name, e := range repoMap[r.repo] {
+				fresh := devLoopByPath[strings.TrimSpace(e.Path)]
+				if fresh == nil {
+					// No fresh scan (not working, or timed out): leave the
+					// cached snapshot untouched rather than wiping it on a
+					// transient miss.
+					continue
+				}
+				snapshot := &workspace.DevLoopSnapshot{Done: fresh.Done, Total: fresh.Total, Phase: fresh.Phase, Task: fresh.Task}
+				if !devLoopSnapshotEqual(e.DevLoop, snapshot) {
+					changed[name] = snapshot
+				}
+			}
+			if len(changed) == 0 {
+				continue
+			}
+			_ = store.Update(r.repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+				for name, snapshot := range changed {
+					if cur, ok := entries[name]; ok {
+						cur.DevLoop = snapshot
+						entries[name] = cur
+					}
+				}
+				return entries
+			})
+		}
+	}
+
 	var items []deckui.Item
 	for _, r := range repos {
 		entries := repoMap[r.repo]
@@ -1297,6 +1410,21 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				}
 			}
 
+			// Dev-loop progress: prefer the freshly-computed summary; when
+			// there isn't one yet (fast first paint skips the scan, or the
+			// scan timed out) fall back to the cached snapshot in the entry
+			// for an actively-working row, so the row shows its last-known
+			// progress immediately instead of flashing the branch/port meta.
+			devLoop := devLoopByPath[strings.TrimSpace(e.Path)]
+			if devLoop == nil && active && isWorkingStatus(status) && e.DevLoop != nil {
+				devLoop = &deckui.DevLoopSummary{
+					Done:  e.DevLoop.Done,
+					Total: e.DevLoop.Total,
+					Phase: e.DevLoop.Phase,
+					Task:  e.DevLoop.Task,
+				}
+			}
+
 			// Head info comes from the parallel pre-fetch above; missing
 			// entry (e.g. j == nil on fast first paint, or empty path)
 			// leaves both fields blank — the enrichment pass ~50 ms
@@ -1320,6 +1448,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				SessionName:      sessionName,
 				Active:           active,
 				Current:          current,
+				DevLoop:          devLoop,
 			}
 			items = append(items, item)
 		}
@@ -1346,6 +1475,44 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 	}
 
 	return items, nil
+}
+
+// devLoopSnapshotEqual reports whether two cached snapshots carry the same
+// progress, treating nil as "no snapshot". Used to skip a state-file write
+// when the deck recomputes an unchanged summary.
+func devLoopSnapshotEqual(a, b *workspace.DevLoopSnapshot) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// buildDevLoopSummary replays the workspace's newest agent transcript into
+// the row-sized dev-loop projection rendered on the meta line. Returns nil
+// when there is no transcript, the scan fails, or the derived state has
+// nothing worth showing (no todos, no phase, no in-progress unit) — the
+// meta line then falls through to its normal port/branch content.
+func buildDevLoopSummary(loop watch.Loop, path, status string) *deckui.DevLoopSummary {
+	transcript, err := watch.Locate(path)
+	if err != nil || transcript == "" {
+		return nil
+	}
+	st, err := watch.BuildState(loop, transcript, status, time.Now())
+	if err != nil {
+		return nil
+	}
+	summary := &deckui.DevLoopSummary{
+		Done:  st.DoneCount(),
+		Total: len(st.Todos),
+		Phase: st.CurrentPhase,
+	}
+	if cur := st.CurrentUnit(); cur >= 0 {
+		summary.Task = st.Todos[cur].Content
+	}
+	if summary.Total == 0 && summary.Phase == "" && summary.Task == "" {
+		return nil
+	}
+	return summary
 }
 
 func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Runner, req deckui.ActionRequest, reporter deckui.Reporter) error {

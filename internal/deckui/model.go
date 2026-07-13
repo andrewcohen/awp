@@ -53,6 +53,11 @@ func scheduleDevURLTick() tea.Cmd {
 // unchanged.
 type Item = deckdata.Item
 
+// DevLoopSummary is the row-sized dev-loop progress projection carried on
+// an Item (see deckdata.DevLoopSummary); aliased here so deckui call sites
+// and tests read it without importing deckdata directly.
+type DevLoopSummary = deckdata.DevLoopSummary
+
 type Action int
 
 const (
@@ -1259,6 +1264,17 @@ const (
 // Each slot drops out when empty; falls back to the workspace name
 // when none of the slots resolve.
 func (m Model) metaLine(it Item) string {
+	// When the agent is actively working through a dev loop, its progress
+	// is the most useful thing to show — it replaces the port/branch meta
+	// with "<done>/<total> · <phase> · ▶ <current unit>". Populated off the
+	// render path by the deck refresher (internal/cli/deck.go) and only for
+	// rows with real progress, so a nil DevLoop falls through to the
+	// standard meta line below.
+	if it.DevLoop != nil {
+		if s := formatDevLoopMeta(*it.DevLoop); s != "" {
+			return s
+		}
+	}
 	var parts []string
 	// Pinned rows are lifted out of their project group into a register
 	// section, so the project context is otherwise lost. Lead the meta
@@ -1350,6 +1366,39 @@ func (m Model) metaSegStyle(seg string) lipgloss.Style {
 		return m.styles.Port
 	}
 	return m.styles.Muted
+}
+
+// devLoopUnitGlyph marks the in-progress unit on the dev-loop meta line,
+// matching the "▶ <current>" cursor the `w` watch overlay uses so the row
+// and the overlay read as the same signal.
+const devLoopUnitGlyph = "▶"
+
+// formatDevLoopMeta renders a dev-loop progress summary as a meta-line
+// string, progress-first: "<done>/<total> · <phase> · ▶ <task>". Each slot
+// drops out when empty (no todo list → no count; no in-progress unit → no
+// task), and the whole thing is empty when there is nothing to show —
+// metaLine treats that as "fall through to the normal meta line". The
+// result flows through renderMetaText like any other meta text, so it stays
+// muted and its width math (split on " · ") is unchanged.
+//
+// A finished loop (all units done, e.g. 12/12) also renders empty: there's
+// no in-progress work left to surface, so the row reverts to its normal
+// branch/port meta rather than pinning a "done" count.
+func formatDevLoopMeta(s DevLoopSummary) string {
+	if s.Total > 0 && s.Done >= s.Total {
+		return ""
+	}
+	var parts []string
+	if s.Total > 0 {
+		parts = append(parts, fmt.Sprintf("%d/%d", s.Done, s.Total))
+	}
+	if s.Phase != "" {
+		parts = append(parts, s.Phase)
+	}
+	if task := strings.TrimSpace(s.Task); task != "" {
+		parts = append(parts, devLoopUnitGlyph+" "+task)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // devURLPort extracts the port from a dev URL like

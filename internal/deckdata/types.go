@@ -61,6 +61,24 @@ type Item struct {
 	// that isn't ready to merge — it can't land until that ancestor does.
 	// Set alongside StackDepth wherever stacks are annotated.
 	StackBlocked bool
+	// DevLoop is a compact snapshot of the agent's dev-loop progress
+	// (todos done, current phase, in-progress unit), derived from the
+	// agent's transcript by internal/watch. It is populated only for rows
+	// whose agent is actively working and whose transcript yields real
+	// progress; nil otherwise. When set, it replaces the port/branch meta
+	// line — see deckui.Model.metaLine.
+	DevLoop *DevLoopSummary
+}
+
+// DevLoopSummary is the row-sized projection of watch.State: just enough
+// of the agent's dev-loop progress to render on a deck row's meta line.
+// It is pure data — the full unit list, gate lights, and churn detail live
+// in the `w` watch overlay (internal/watch.State).
+type DevLoopSummary struct {
+	Done  int    // completed todos / units
+	Total int    // total todos / units (0 when the agent emitted no list)
+	Phase string // current dev-loop phase (explore/implement/test/gates/commit)
+	Task  string // the in-progress unit's content ("" when none is in progress)
 }
 
 // Scope controls which items are shown in the deck list. Cycled with `P`;
