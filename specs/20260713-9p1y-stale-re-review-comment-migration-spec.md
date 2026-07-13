@@ -4,7 +4,7 @@
 - **Spec ID**: `20260713-9p1y`
 - **Feature name**: stale re-review comment migration
 - **Owner**: acohen
-- **Status**: In Progress
+- **Status**: Done
 - **Last updated**: 2026-07-13
 
 ## Goal
@@ -97,3 +97,10 @@ loses the earlier draft comments.
 
 ## Spec Change Log
 - 2026-07-13: Initial draft.
+- 2026-07-13: Implemented. Migration is surfaced whenever prior-head
+  sessions with comments exist *and* the current-head session is empty
+  (rather than strictly on an awp-detected re-head) so the case where the
+  user already reloaded tuicr onto the new head via `:e` is still caught,
+  while repeated same-head reviews don't re-migrate. Window reset stays
+  gated on the live session's head differing from the fetched PR head.
+  Status → Done.
