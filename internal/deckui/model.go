@@ -5110,8 +5110,14 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 		b.WriteString("You are reviewing this PR — the author is not you. Do NOT modify files, run jj/git mutations on the branch, or push. Report what you find in chat.")
 		return b.String()
 	}
+	// Owner tone: any of these fixes pushes new commits, which under
+	// branch protection ("dismiss stale reviews on push") can drop an
+	// existing approval. Remind the agent to re-request review once the
+	// reviewer's comments are addressed so the PR isn't left silently
+	// blocked. Harmless when there was no review to dismiss.
+	reReview := " If pushing new commits dismisses an existing review — or the change addresses a reviewer's comments — re-request review from the affected reviewer(s) once their feedback is addressed so the PR isn't left blocked."
 	if len(issues) == 1 {
-		return fmt.Sprintf("%s has %s. Please %s, then push the fix.", ref, issues[0].label, issues[0].fix)
+		return fmt.Sprintf("%s has %s. Please %s, then push the fix.%s", ref, issues[0].label, issues[0].fix, reReview)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s has multiple issues to address:\n", ref)
@@ -5119,6 +5125,7 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 		fmt.Fprintf(&b, "- %s — please %s.\n", it.label, it.fix)
 	}
 	b.WriteString("Push the fixes when done.")
+	b.WriteString(reReview)
 	return b.String()
 }
 
