@@ -2764,13 +2764,6 @@ func (m *Model) acceptBookmarkSelection(name string, purpose bookmarkPurpose, ta
 			return *m, nil
 		}
 		m.status = fmt.Sprintf("linked %s → %s", target.WorkspaceName, name)
-		// Explicit link is a "tell me now" action — bypass the 60s
-		// throttle so a freshly-opened PR shows up without making the
-		// user wait or close+reopen the deck. Drop just this repo's
-		// fetchedAt so other repos are unaffected.
-		if m.prStatusFetchedAt != nil && strings.TrimSpace(target.RepoRoot) != "" {
-			delete(m.prStatusFetchedAt, target.RepoRoot)
-		}
 		cmds := []tea.Cmd{}
 		linkID := "workspace:link:" + target.WorkspaceName
 		*m = m.startActivity(linkID, linkID, 0)
@@ -2784,8 +2777,14 @@ func (m *Model) acceptBookmarkSelection(name string, purpose bookmarkPurpose, ta
 		if refreshCmd != nil {
 			cmds = append(cmds, refreshCmd)
 		}
+		// A fresh link is a direct "this workspace is that PR now" signal,
+		// so force an immediate PR-status fetch — same as the `p s` PR-number
+		// override. forcePRStatusRefresh bypasses both the throttle and the
+		// eligibility gate that prStatusRefreshCmd applies, which matters
+		// here because the just-linked bookmark isn't in m.itemsAll yet, so
+		// the periodic policy wouldn't consider the repo eligible.
 		var prCmd tea.Cmd
-		*m, prCmd = m.prStatusRefreshCmd(time.Now())
+		*m, prCmd = m.forcePRStatusRefresh(target.RepoRoot)
 		if prCmd != nil {
 			cmds = append(cmds, prCmd)
 		}
