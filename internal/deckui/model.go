@@ -2222,6 +2222,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.findRowLookup = map[string]int{}
 					m.findRowPrefix = map[rune]bool{}
 					m.status = "find: project"
+					// Re-collapse to the header column and reset scroll.
+					m.clampDeckViewport()
 					return m, nil
 				}
 				m.cancelFind("find: cancelled")
@@ -4193,6 +4195,15 @@ func (m *Model) clampDeckViewport() {
 	capacity := m.deckBodyCapacity()
 	rows := m.bodyRows(items)
 	total := len(rows)
+	// While find mode is up the layout is collapsed (collapseForFind), and
+	// the cursor isn't the thing being navigated — the hint targets are —
+	// so scroll to the find focus row rather than the cursor: the top of
+	// the header column in the project stage, or the chosen section's
+	// header in the workspace stage.
+	if m.findMode && m.scope != ScopeInbox {
+		m.deckYOffset = findViewportOffset(m.findFocusTopRow(rows), total, capacity)
+		return
+	}
 	if total <= capacity {
 		m.deckYOffset = 0
 		return
@@ -4246,6 +4257,48 @@ func (m *Model) clampDeckViewport() {
 		yoff = 0
 	}
 	m.deckYOffset = yoff
+}
+
+// findFocusTopRow returns the body-row index the viewport should bring
+// into view while find mode is up. The project stage focuses the top (0)
+// so the compacted header column reads from the first section; the
+// workspace stage focuses the expanded section's header so the chosen
+// project's/register's rows are on screen. rows must be the collapsed
+// layout (bodyRows under find mode).
+func (m Model) findFocusTopRow(rows []deckBodyRow) int {
+	if m.findStage != findStageWorkspace {
+		return 0
+	}
+	for i, r := range rows {
+		switch r.kind {
+		case deckRowHeader:
+			if m.findProject != "" && r.project == m.findProject {
+				return i
+			}
+		case deckRowPinHeader:
+			if m.findPinGroup != "" && r.project == m.findPinGroup {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+// findViewportOffset positions the find focus row near the top of the
+// viewport, leaving a deckScrollOff-sized band of context above it, and
+// clamps the result to the scrollable range.
+func findViewportOffset(focus, total, capacity int) int {
+	if total <= capacity {
+		return 0
+	}
+	yoff := focus - deckScrollOff
+	if maxOffset := total - capacity; yoff > maxOffset {
+		yoff = maxOffset
+	}
+	if yoff < 0 {
+		yoff = 0
+	}
+	return yoff
 }
 
 // itemBodyHeight is the number of body lines a non-collapsed workspace
@@ -4370,10 +4423,75 @@ func (m Model) bodyRows(items []Item) []deckBodyRow {
 		return m.inboxBodyRows(items)
 	}
 	pinned := pinnedCount(items)
+	var rows []deckBodyRow
 	if pinned == 0 {
-		return deckBodyRows(items, collapsedProjects(items), nil)
+		rows = deckBodyRows(items, collapsedProjects(items), nil)
+	} else {
+		rows = m.deckBodyRowsPinned(items, pinned)
 	}
-	return m.deckBodyRowsPinned(items, pinned)
+	return m.collapseForFind(rows, items)
+}
+
+// collapseForFind rewrites the body layout while find mode is up so a
+// long list stays scannable. The project stage shows only section
+// headers — every workspace row folds away, so the whole project
+// skeleton fits on one screen. The workspace stage expands only the
+// chosen project / register; the other sections stay as one-line headers
+// for context. Returns rows unchanged when find mode is off or in the
+// inbox scope (which has no project stage). Header, sub-header, and
+// collapsed rows always survive so their body indices stay valid targets
+// for headerRow references; only workspace primary/meta rows of
+// un-expanded sections are dropped, and headerRow is remapped into the
+// compacted slice.
+func (m Model) collapseForFind(rows []deckBodyRow, items []Item) []deckBodyRow {
+	if !m.findMode || m.scope == ScopeInbox {
+		return rows
+	}
+	// In the project stage the list is a pure header column, so drop the
+	// inter-group spacers too — one line per section is the point.
+	dropSpacers := m.findStage == findStageProject
+	out := make([]deckBodyRow, 0, len(rows))
+	oldToNew := make([]int, len(rows))
+	for i, r := range rows {
+		oldToNew[i] = -1
+		switch r.kind {
+		case deckRowPrimary, deckRowMeta:
+			if r.itemIndex < 0 || r.itemIndex >= len(items) || !m.findRowExpanded(items[r.itemIndex]) {
+				continue
+			}
+		case deckRowSpacer:
+			if dropSpacers {
+				continue
+			}
+		}
+		oldToNew[i] = len(out)
+		out = append(out, r)
+	}
+	// Remap headerRow into the compacted slice. Every referenced header
+	// row is a header/collapsed row, which collapse never drops, so the
+	// mapping is always defined.
+	for i := range out {
+		if h := out[i].headerRow; h >= 0 && h < len(oldToNew) && oldToNew[h] >= 0 {
+			out[i].headerRow = oldToNew[h]
+		}
+	}
+	return out
+}
+
+// findRowExpanded reports whether a workspace row's section is currently
+// expanded under find mode's collapse. The project stage expands nothing
+// (only headers show); the workspace stage expands the single scoped
+// project or register (findRowInScope). Outside find mode / in the inbox
+// scope every row is expanded — collapseForFind gates on those before
+// calling, so in practice this only decides workspace-stage scoping.
+func (m Model) findRowExpanded(it Item) bool {
+	if !m.findMode || m.scope == ScopeInbox {
+		return true
+	}
+	if m.findStage == findStageProject {
+		return false
+	}
+	return m.findRowInScope(it)
 }
 
 // inboxBodyRows lays out the inbox scope: a bucket header per section
@@ -4523,7 +4641,7 @@ func deckKeyGroups() []keyGroup {
 				{"gg / G", "jump to top / bottom of list"},
 				{"ctrl+u / ctrl+d", "jump ½ page up / down"},
 				{"/", "filter rows · esc clears"},
-				{"f", "find: project → workspace easymotion jump"},
+				{"f", "find: collapse to sections → expand one → jump"},
 				{"P", "cycle scope (all → attention → inbox)"},
 				{"L", "switch to last tmux session"},
 			},
@@ -4739,6 +4857,9 @@ func (m *Model) startFind() {
 	m.findRowLookup = map[string]int{}
 	m.findRowPrefix = map[rune]bool{}
 	m.status = "find: project"
+	// The list just collapsed to a header column; reset the viewport to
+	// the top so it reads from the first section.
+	m.clampDeckViewport()
 }
 
 func (m *Model) cancelFind(status string) {
@@ -4819,7 +4940,10 @@ func (m Model) enterWorkspaceStage(project string) Model {
 	m.status = "find: workspace"
 	if len(m.findRowLookup) == 0 {
 		m.cancelFind("find: cancelled")
+		return m
 	}
+	// Scroll the now-expanded project into view.
+	(&m).clampDeckViewport()
 	return m
 }
 
@@ -4850,7 +4974,10 @@ func (m Model) enterPinStage(group string) Model {
 	m.status = "find: workspace"
 	if len(m.findRowLookup) == 0 {
 		m.cancelFind("find: cancelled")
+		return m
 	}
+	// Scroll the now-expanded register into view.
+	(&m).clampDeckViewport()
 	return m
 }
 
