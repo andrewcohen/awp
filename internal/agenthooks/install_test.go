@@ -205,6 +205,46 @@ func TestSyncEventEntriesInstallsGateHooksAlongsideStatus(t *testing.T) {
 	}
 }
 
+func TestGateRecordFailureSpecInstalled(t *testing.T) {
+	// PostToolUse fires only on success and PostToolUseFailure only on
+	// failure, so recording fail requires a hook on the failure event
+	// passing --result fail.
+	var pass, fail *hookSpec
+	for _, s := range gateHookSpecs() {
+		s := s
+		if s.id != "gate-record" {
+			continue
+		}
+		switch s.event {
+		case "PostToolUse":
+			pass = &s
+		case "PostToolUseFailure":
+			fail = &s
+		}
+	}
+	if pass == nil || !strings.Contains(pass.command, "--result pass") {
+		t.Errorf("PostToolUse gate-record should pass --result pass; got %+v", pass)
+	}
+	if fail == nil {
+		t.Fatal("missing PostToolUseFailure gate-record spec")
+	}
+	if fail.matcher != "Bash" || !strings.Contains(fail.command, "--result fail") {
+		t.Errorf("PostToolUseFailure gate-record should match Bash and pass --result fail; got %+v", fail)
+	}
+}
+
+func TestGateCheckHookCommandPreservesExit(t *testing.T) {
+	// The completion block is signalled by exit code 2 + stderr, so the
+	// gate-check hook command must NOT redirect stderr or force exit 0.
+	cmd := GateCheckHookCommand()
+	if strings.Contains(cmd, "2>/dev/null") {
+		t.Errorf("gate-check command must not swallow stderr: %q", cmd)
+	}
+	if strings.Contains(cmd, "|| true") {
+		t.Errorf("gate-check command must not mask the exit code with || true: %q", cmd)
+	}
+}
+
 func TestGateCheckSpecMatchesTaskUpdate(t *testing.T) {
 	var found bool
 	for _, s := range specsByEvent()["PreToolUse"] {
