@@ -111,6 +111,8 @@ func (a *App) runInternal(args []string) error {
 		return runMarkRead(args[1:])
 	case "gate":
 		return a.runGate(args[1:])
+	case "loop":
+		return a.runLoop(args[1:])
 	default:
 		return fmt.Errorf("unknown internal subcommand %q", args[0])
 	}

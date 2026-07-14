@@ -17,7 +17,7 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 8
+const HookMarkerVersion = 9
 
 // BlockingTools lists tool names that block on user input. When a
 // PreToolUse hook fires for one of these, awp reports "waiting" instead of
@@ -72,6 +72,15 @@ func GateCheckHookCommand() string {
 	return `[ -n "$TMUX" ] || exit 0; "${AWP_BIN:-awp}" internal gate check --hook`
 }
 
+// LoopTrackHookCommand returns the shell snippet for the loop-track hook
+// (`awp internal loop track`). Like gate record it swallows stdout/stderr and
+// the exit code so tracking never breaks a turn (it always exits 0 anyway),
+// gates on $TMUX, and honors $AWP_BIN. It carries no --result: the phase it
+// records doesn't depend on the tool's pass/fail outcome.
+func LoopTrackHookCommand() string {
+	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal loop track >/dev/null 2>&1 || true`
+}
+
 // hookSpec is one awp-managed hook entry: the event it lives under, an
 // optional tool-name matcher, a stable id (so multiple awp entries can
 // coexist under one event and each be upserted independently), and the
@@ -98,6 +107,12 @@ func gateHookSpecs() []hookSpec {
 		{event: "PostToolUse", matcher: "Bash", id: "gate-record", command: GateRecordHookCommand("pass")},
 		{event: "PostToolUseFailure", matcher: "Bash", id: "gate-record", command: GateRecordHookCommand("fail")},
 		{event: "PreToolUse", matcher: "TaskUpdate", id: "gate-check", command: GateCheckHookCommand()},
+		// Matcher-less: the loop-track hook fires for every tool so it can
+		// derive the current dev-loop phase from edits/reads/bash and reset it
+		// on a TaskUpdate→in_progress. Runs on both the success and failure
+		// PostToolUse events so a failed command still advances the phase.
+		{event: "PostToolUse", id: "loop-track", command: LoopTrackHookCommand()},
+		{event: "PostToolUseFailure", id: "loop-track", command: LoopTrackHookCommand()},
 	}
 }
 
@@ -348,7 +363,7 @@ func claudeSettingsPath() (string, error) {
 // contain, across every version and binary-path variant (`awp …` vs
 // `"${AWP_BIN:-awp}" …`). Recognizing entries by them lets us reclaim hooks
 // written by awp versions that predate the x-awp marker (or the id field).
-var awpCommandSignatures = []string{"internal report-status", "gate record", "gate check"}
+var awpCommandSignatures = []string{"internal report-status", "gate record", "gate check", "loop track"}
 
 // entryCommand returns the first command string in a hook entry's hooks list.
 func entryCommand(entry map[string]any) string {
@@ -394,6 +409,8 @@ func awpEntryID(entry map[string]any) string {
 		return "gate-record"
 	case strings.Contains(cmd, "gate check"):
 		return "gate-check"
+	case strings.Contains(cmd, "loop track"):
+		return "loop-track"
 	case strings.Contains(cmd, "internal report-status"):
 		return "status"
 	}

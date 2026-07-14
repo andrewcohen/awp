@@ -1358,11 +1358,15 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					continue
 				}
 				snapshot := &workspace.DevLoopSnapshot{Done: fresh.Done, Total: fresh.Total, Phase: fresh.Phase, Task: fresh.Task}
-				// UnitKey is hook-managed (set by `awp gate check` on a unit's
-				// TaskUpdate→in_progress); the scan can't derive Claude's real
-				// task id, so carry it forward untouched.
+				// These fields are hook-managed and can't be derived by the scan,
+				// so carry them forward untouched: UnitKey (set by `awp gate
+				// check` on a unit's TaskUpdate→in_progress), GatesSealed (set
+				// on a green completion), and Started (the `awp internal loop
+				// track` per-unit implementation flag).
 				if e.DevLoop != nil {
 					snapshot.UnitKey = e.DevLoop.UnitKey
+					snapshot.GatesSealed = e.DevLoop.GatesSealed
+					snapshot.Started = e.DevLoop.Started
 				}
 				// Reconcile gate results from the transcript scan when it
 				// observed any; otherwise keep the event-driven map so a scan
