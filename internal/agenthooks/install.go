@@ -17,7 +17,7 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 6
+const HookMarkerVersion = 7
 
 // BlockingTools lists tool names that block on user input. When a
 // PreToolUse hook fires for one of these, awp reports "waiting" instead of
@@ -52,6 +52,60 @@ func HookCommand(event, state string) string {
 		}
 	}
 	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + extra + ` >/dev/null 2>&1 || true`
+}
+
+// GateHookCommand returns the shell snippet for a dev-loop gate hook (`awp
+// gate <sub>`). Unlike the status hooks, stdout is NOT redirected: Claude
+// reads it as the hook's JSON result (a PostToolUse nudge or a PreToolUse
+// deny). It still gates on $TMUX and honors $AWP_BIN, and swallows a
+// non-zero exit so a gate hook never breaks an agent turn.
+func GateHookCommand(sub string) string {
+	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" gate ` + sub + ` 2>/dev/null || true`
+}
+
+// hookSpec is one awp-managed hook entry: the event it lives under, an
+// optional tool-name matcher, a stable id (so multiple awp entries can
+// coexist under one event and each be upserted independently), and the
+// command it runs. state is carried in the marker only for the status
+// entries (empty for gate entries).
+type hookSpec struct {
+	event   string
+	matcher string
+	id      string
+	state   string
+	command string
+}
+
+// gateHookSpecs are the dev-loop enforcement hooks: a PostToolUse(Bash) hook
+// that records gate results, and a PreToolUse(TaskUpdate) hook that resets a
+// unit's gates / blocks completion. They coexist with the matcher-less status
+// entries on the same events. The commands self-gate on the repo having a
+// dev_loop configured, so installing them globally is a no-op elsewhere.
+func gateHookSpecs() []hookSpec {
+	return []hookSpec{
+		{event: "PostToolUse", matcher: "Bash", id: "gate-record", command: GateHookCommand("record")},
+		{event: "PreToolUse", matcher: "TaskUpdate", id: "gate-check", command: GateHookCommand("check --hook")},
+	}
+}
+
+// desiredHookSpecs is the full set of awp-managed hook entries: the status
+// reporters (one matcher-less entry per event) plus the gate hooks.
+func desiredHookSpecs() []hookSpec {
+	var specs []hookSpec
+	for event, state := range DesiredClaudeHooks() {
+		specs = append(specs, hookSpec{event: event, id: "status", state: state, command: HookCommand(event, state)})
+	}
+	specs = append(specs, gateHookSpecs()...)
+	return specs
+}
+
+// specsByEvent groups the desired specs by event.
+func specsByEvent() map[string][]hookSpec {
+	out := map[string][]hookSpec{}
+	for _, s := range desiredHookSpecs() {
+		out[s.event] = append(out[s.event], s)
+	}
+	return out
 }
 
 // DesiredClaudeHooks returns the event → state mapping awp installs into
@@ -141,9 +195,9 @@ func InstallClaude() (bool, error) {
 	}
 
 	changed := false
-	for event, state := range DesiredClaudeHooks() {
+	for event, specs := range specsByEvent() {
 		entries, _ := hooks[event].([]any)
-		entries, evtChanged := upsertAwpEntry(entries, event, state)
+		entries, evtChanged := syncEventEntries(entries, specs)
 		if evtChanged {
 			changed = true
 		}
@@ -211,9 +265,9 @@ func IsClaudeInstalled() (bool, error) {
 	if hooks == nil {
 		return false, nil
 	}
-	for event, state := range DesiredClaudeHooks() {
+	for event, specs := range specsByEvent() {
 		entries, _ := hooks[event].([]any)
-		if !awpEntryMatches(entries, event, state) {
+		if !eventAwpEntriesMatch(entries, specs) {
 			return false, nil
 		}
 	}
@@ -277,66 +331,109 @@ func claudeSettingsPath() (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-// awpCommandSignature is the stable substring every awp-installed hook
-// command contains, across every version and binary-path variant
-// (`awp …` vs `"${AWP_BIN:-awp}" …`). Recognizing entries by it lets us
-// reclaim hooks written by awp versions that predate the x-awp marker.
-const awpCommandSignature = "internal report-status"
+// awpCommandSignatures are stable substrings the awp-installed hook commands
+// contain, across every version and binary-path variant (`awp …` vs
+// `"${AWP_BIN:-awp}" …`). Recognizing entries by them lets us reclaim hooks
+// written by awp versions that predate the x-awp marker (or the id field).
+var awpCommandSignatures = []string{"internal report-status", "gate record", "gate check"}
 
-// isAwpEntry reports whether a hook entry was authored by awp — either
-// tagged with the x-awp marker (current installs) or, for entries
-// written before the marker existed, recognizable by the report-status
-// command awp installs. The marker-only check left legacy/old-format
-// entries unrecognized, so every install appended a fresh copy beside
-// them instead of replacing them — the duplication this dedups.
+// entryCommand returns the first command string in a hook entry's hooks list.
+func entryCommand(entry map[string]any) string {
+	hooks, _ := entry["hooks"].([]any)
+	for _, raw := range hooks {
+		if h, ok := raw.(map[string]any); ok {
+			if cmd, _ := h["command"].(string); cmd != "" {
+				return cmd
+			}
+		}
+	}
+	return ""
+}
+
+// isAwpEntry reports whether a hook entry was authored by awp — either tagged
+// with the x-awp marker (current installs) or recognizable by one of the
+// commands awp installs (entries written before the marker existed).
 func isAwpEntry(entry map[string]any) bool {
 	if _, ok := entry["x-awp"]; ok {
 		return true
 	}
-	hooks, _ := entry["hooks"].([]any)
-	for _, raw := range hooks {
-		h, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cmd, _ := h["command"].(string); strings.Contains(cmd, awpCommandSignature) {
+	cmd := entryCommand(entry)
+	for _, sig := range awpCommandSignatures {
+		if strings.Contains(cmd, sig) {
 			return true
 		}
 	}
 	return false
 }
 
-// upsertAwpEntry collapses every awp-authored entry for the event down to
-// a single canonical one, leaving user-defined entries untouched and in
-// their original order. This both refreshes a stale awp entry and prunes
-// the legacy/old-format duplicates that the previous marker-only match
-// could never see.
-func upsertAwpEntry(entries []any, event, state string) ([]any, bool) {
-	desired := desiredEntry(event, state)
-	nonAwp := make([]any, 0, len(entries))
-	awpCount := 0
-	var sole map[string]any
-	for _, raw := range entries {
-		if entry, ok := raw.(map[string]any); ok && isAwpEntry(entry) {
-			awpCount++
-			sole = entry
-			continue
+// awpEntryID resolves an awp entry's stable id — from the x-awp marker when
+// present, otherwise inferred from its command so pre-id installs still map
+// onto the right desired spec. Returns "" for an unrecognized awp entry.
+func awpEntryID(entry map[string]any) string {
+	if x, ok := entry["x-awp"].(map[string]any); ok {
+		if id, _ := x["id"].(string); id != "" {
+			return id
 		}
-		nonAwp = append(nonAwp, raw)
 	}
-	// Already canonical: exactly one awp entry and it matches desired.
-	if awpCount == 1 && jsonEqual(sole, desired) {
-		return entries, false
+	cmd := entryCommand(entry)
+	switch {
+	case strings.Contains(cmd, "gate record"):
+		return "gate-record"
+	case strings.Contains(cmd, "gate check"):
+		return "gate-check"
+	case strings.Contains(cmd, "internal report-status"):
+		return "status"
 	}
-	out := make([]any, 0, len(nonAwp)+1)
-	out = append(out, nonAwp...)
-	out = append(out, desired)
-	return out, true
+	return ""
 }
 
-// removeAwpEntry drops every entry tagged with x-awp, preserving the order
-// and any non-awp entries. Returns the filtered slice and whether anything
-// was removed.
+// syncEventEntries reconciles one event's entries against the awp specs
+// desired for it. Each awp entry is matched to a spec by id and rewritten in
+// place if stale; awp entries whose id is no longer desired (or duplicates)
+// are dropped; missing specs are appended. Non-awp entries keep their place
+// and order.
+func syncEventEntries(entries []any, specs []hookSpec) ([]any, bool) {
+	desiredByID := map[string]hookSpec{}
+	for _, s := range specs {
+		desiredByID[s.id] = s
+	}
+	out := make([]any, 0, len(entries)+len(specs))
+	seen := map[string]bool{}
+	changed := false
+	for _, raw := range entries {
+		entry, ok := raw.(map[string]any)
+		if !ok || !isAwpEntry(entry) {
+			out = append(out, raw)
+			continue
+		}
+		id := awpEntryID(entry)
+		spec, want := desiredByID[id]
+		if !want || seen[id] {
+			// No longer desired, unrecognized, or a duplicate awp entry.
+			changed = true
+			continue
+		}
+		seen[id] = true
+		desired := desiredEntry(spec)
+		if !jsonEqual(entry, desired) {
+			changed = true
+		}
+		out = append(out, desired)
+	}
+	for _, s := range specs {
+		if seen[s.id] {
+			continue
+		}
+		out = append(out, desiredEntry(s))
+		seen[s.id] = true
+		changed = true
+	}
+	return out, changed
+}
+
+// removeAwpEntry drops every awp-authored entry, preserving order and any
+// non-awp entries. Returns the filtered slice and whether anything was
+// removed.
 func removeAwpEntry(entries []any) ([]any, bool) {
 	out := entries[:0:0]
 	removed := false
@@ -350,36 +447,55 @@ func removeAwpEntry(entries []any) ([]any, bool) {
 	return out, removed
 }
 
-// awpEntryMatches reports whether the event is in its canonical
-// awp-installed shape: exactly one awp entry, equal to desired. Legacy
-// duplicates or an old-format entry make it false, so IsClaudeInstalled
-// reports drift and the next InstallClaude run dedups it.
-func awpEntryMatches(entries []any, event, state string) bool {
-	desired := desiredEntry(event, state)
-	awpCount := 0
-	var sole map[string]any
-	for _, raw := range entries {
-		if entry, ok := raw.(map[string]any); ok && isAwpEntry(entry) {
-			awpCount++
-			sole = entry
-		}
+// eventAwpEntriesMatch reports whether the event carries exactly the desired
+// awp entries in canonical shape (each spec present once, equal to desired,
+// no stray awp entries). Drift makes IsClaudeInstalled report "not installed"
+// so the next InstallClaude reconciles.
+func eventAwpEntriesMatch(entries []any, specs []hookSpec) bool {
+	desiredByID := map[string]hookSpec{}
+	for _, s := range specs {
+		desiredByID[s.id] = s
 	}
-	return awpCount == 1 && jsonEqual(sole, desired)
+	seen := map[string]bool{}
+	for _, raw := range entries {
+		entry, ok := raw.(map[string]any)
+		if !ok || !isAwpEntry(entry) {
+			continue
+		}
+		id := awpEntryID(entry)
+		spec, want := desiredByID[id]
+		if !want || seen[id] {
+			return false
+		}
+		if !jsonEqual(entry, desiredEntry(spec)) {
+			return false
+		}
+		seen[id] = true
+	}
+	return len(seen) == len(desiredByID)
 }
 
-func desiredEntry(event, state string) map[string]any {
-	return map[string]any{
-		"x-awp": map[string]any{
-			"version": float64(HookMarkerVersion),
-			"state":   state,
-		},
+func desiredEntry(s hookSpec) map[string]any {
+	marker := map[string]any{
+		"version": float64(HookMarkerVersion),
+		"id":      s.id,
+	}
+	if s.state != "" {
+		marker["state"] = s.state
+	}
+	entry := map[string]any{
+		"x-awp": marker,
 		"hooks": []any{
 			map[string]any{
 				"type":    "command",
-				"command": HookCommand(event, state),
+				"command": s.command,
 			},
 		},
 	}
+	if s.matcher != "" {
+		entry["matcher"] = s.matcher
+	}
+	return entry
 }
 
 func jsonEqual(a, b any) bool {

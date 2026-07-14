@@ -114,14 +114,21 @@ func legacyAwpEntry(state string) map[string]any {
 	}}}
 }
 
-func TestUpsertAwpEntryDedupsLegacyEntries(t *testing.T) {
+// statusSpec is the matcher-less status-reporting spec for an event, matching
+// what desiredHookSpecs builds.
+func statusSpec(event, state string) hookSpec {
+	return hookSpec{event: event, id: "status", state: state, command: HookCommand(event, state)}
+}
+
+func TestSyncEventEntriesDedupsLegacyEntries(t *testing.T) {
 	event, state := "Stop", "idle"
 	userEntry := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "echo hi"}}}
 	// Two legacy unmarked awp entries around a user entry — the shape that
 	// accumulated in real installs.
 	entries := []any{legacyAwpEntry(state), userEntry, legacyAwpEntry(state)}
+	specs := []hookSpec{statusSpec(event, state)}
 
-	out, changed := upsertAwpEntry(entries, event, state)
+	out, changed := syncEventEntries(entries, specs)
 	if !changed {
 		t.Fatal("expected a change when collapsing duplicate awp entries")
 	}
@@ -139,25 +146,91 @@ func TestUpsertAwpEntryDedupsLegacyEntries(t *testing.T) {
 	if user != 1 {
 		t.Errorf("expected the user entry to survive, got %d", user)
 	}
-	if !awpEntryMatches(out, event, state) {
+	if !eventAwpEntriesMatch(out, specs) {
 		t.Error("surviving awp entry should be the canonical (marked) one")
 	}
 }
 
-func TestUpsertAwpEntryNoChangeWhenCanonical(t *testing.T) {
+func TestSyncEventEntriesNoChangeWhenCanonical(t *testing.T) {
 	event, state := "Stop", "idle"
-	if _, changed := upsertAwpEntry([]any{desiredEntry(event, state)}, event, state); changed {
+	specs := []hookSpec{statusSpec(event, state)}
+	if _, changed := syncEventEntries([]any{desiredEntry(specs[0])}, specs); changed {
 		t.Error("a single canonical entry should report no change (no needless rewrite)")
 	}
 }
 
-func TestAwpEntryMatchesRejectsDuplicates(t *testing.T) {
+func TestEventAwpEntriesMatchRejectsDuplicates(t *testing.T) {
 	event, state := "Stop", "idle"
+	specs := []hookSpec{statusSpec(event, state)}
 	// Two canonical entries is still drift — IsClaudeInstalled must report
 	// false so the next InstallClaude collapses them.
-	entries := []any{desiredEntry(event, state), desiredEntry(event, state)}
-	if awpEntryMatches(entries, event, state) {
+	entries := []any{desiredEntry(specs[0]), desiredEntry(specs[0])}
+	if eventAwpEntriesMatch(entries, specs) {
 		t.Error("duplicate awp entries should not count as a canonical install")
+	}
+}
+
+func TestSyncEventEntriesInstallsGateHooksAlongsideStatus(t *testing.T) {
+	// PostToolUse carries both the matcher-less status entry and the
+	// Bash-matched gate-record entry; they must coexist.
+	specs := specsByEvent()["PostToolUse"]
+	if len(specs) != 2 {
+		t.Fatalf("PostToolUse should have 2 awp specs (status + gate-record), got %d", len(specs))
+	}
+	out, changed := syncEventEntries(nil, specs)
+	if !changed {
+		t.Fatal("expected a change installing into an empty event")
+	}
+	ids := map[string]bool{}
+	var gateEntry map[string]any
+	for _, raw := range out {
+		e := raw.(map[string]any)
+		id := awpEntryID(e)
+		ids[id] = true
+		if id == "gate-record" {
+			gateEntry = e
+		}
+	}
+	if !ids["status"] || !ids["gate-record"] {
+		t.Errorf("expected both status and gate-record entries, got ids %v", ids)
+	}
+	if gateEntry["matcher"] != "Bash" {
+		t.Errorf("gate-record entry matcher = %v, want Bash", gateEntry["matcher"])
+	}
+	if cmd := entryCommand(gateEntry); !strings.Contains(cmd, "gate record") {
+		t.Errorf("gate-record command = %q, want it to run `gate record`", cmd)
+	}
+	if !eventAwpEntriesMatch(out, specs) {
+		t.Error("freshly synced entries should match the desired specs")
+	}
+}
+
+func TestGateCheckSpecMatchesTaskUpdate(t *testing.T) {
+	var found bool
+	for _, s := range specsByEvent()["PreToolUse"] {
+		if s.id == "gate-check" {
+			found = true
+			if s.matcher != "TaskUpdate" {
+				t.Errorf("gate-check matcher = %q, want TaskUpdate", s.matcher)
+			}
+			if !strings.Contains(s.command, "gate check --hook") {
+				t.Errorf("gate-check command = %q, want `gate check --hook`", s.command)
+			}
+		}
+	}
+	if !found {
+		t.Error("PreToolUse should include a gate-check spec")
+	}
+}
+
+func TestSyncEventEntriesDropsUpgradedStatusEntry(t *testing.T) {
+	// A legacy status entry on PostToolUse should be rewritten to the new
+	// id-tagged form, and the gate-record entry added — without duplicating.
+	event := "PostToolUse"
+	specs := specsByEvent()[event]
+	out, _ := syncEventEntries([]any{legacyAwpEntry("working")}, specs)
+	if !eventAwpEntriesMatch(out, specs) {
+		t.Errorf("upgrading a legacy status entry should converge to canonical; got %v", out)
 	}
 }
 
