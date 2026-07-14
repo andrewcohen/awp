@@ -269,6 +269,156 @@ func TestGateRecordNudgeOffSuppresses(t *testing.T) {
 	}
 }
 
+func TestGateCheckHookInProgressResetsGates(t *testing.T) {
+	const root = "/tmp/awp-gate-reset"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "fail"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-reset", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"2","status":"in_progress","subject":"next unit"}}`)
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateCheck: %v", err)
+	}
+	snap := fs.byRepo[root]["feat-x"].DevLoop
+	if len(snap.Gates) != 0 {
+		t.Errorf("gates after reset = %v, want empty", snap.Gates)
+	}
+	if snap.UnitKey != "2" {
+		t.Errorf("UnitKey = %q, want 2", snap.UnitKey)
+	}
+	if snap.Task != "next unit" {
+		t.Errorf("Task = %q, want %q", snap.Task, "next unit")
+	}
+}
+
+func TestGateCheckHookSameUnitKeepsGates(t *testing.T) {
+	const root = "/tmp/awp-gate-same-unit"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-same-unit", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	// UnitKey seeded as "1"; re-marking task 1 in_progress must be idempotent.
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"in_progress"}}`)
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateCheck: %v", err)
+	}
+	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["fmt"]; got != "pass" {
+		t.Errorf("gate fmt = %q after re-marking same unit, want pass (kept)", got)
+	}
+}
+
+func TestGateCheckHookCompletedDeniesWhenRed(t *testing.T) {
+	const root = "/tmp/awp-gate-deny"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "fail", "build": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-deny", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	var out bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &out); err != nil {
+		t.Fatalf("runGateCheck: %v", err)
+	}
+	decision, reason := parsePreToolUseDecision(t, out.String())
+	if decision != "deny" {
+		t.Fatalf("permissionDecision = %q, want deny (out=%q)", decision, out.String())
+	}
+	if !contains(reason, "test") || !contains(reason, "red") {
+		t.Errorf("reason = %q, want it to name the red 'test' gate", reason)
+	}
+	if !contains(reason, "prompt plumbing") {
+		t.Errorf("reason = %q, want it to name the unit", reason)
+	}
+}
+
+func TestGateCheckHookCompletedDeniesWhenPending(t *testing.T) {
+	const root = "/tmp/awp-gate-deny-pending"
+	fs := newFakeStore()
+	// fmt+test pass, build never ran (pending).
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-deny-pending", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	var out bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &out); err != nil {
+		t.Fatalf("runGateCheck: %v", err)
+	}
+	decision, reason := parsePreToolUseDecision(t, out.String())
+	if decision != "deny" {
+		t.Fatalf("permissionDecision = %q, want deny", decision)
+	}
+	if !contains(reason, "build") || !contains(reason, "hasn't run") {
+		t.Errorf("reason = %q, want it to flag the pending 'build' gate", reason)
+	}
+}
+
+func TestGateCheckHookCompletedAllowsWhenGreen(t *testing.T) {
+	const root = "/tmp/awp-gate-allow"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass", "build": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-allow", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	var out bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &out); err != nil {
+		t.Fatalf("runGateCheck: %v", err)
+	}
+	if out.String() != "" {
+		t.Errorf("all green should allow (no output); got %q", out.String())
+	}
+}
+
+func TestGateCheckSelfExitCodes(t *testing.T) {
+	const root = "/tmp/awp-gate-self"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "fail", "build": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-self", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	// Not ready → non-nil error (non-zero exit).
+	withStdin(t, ``)
+	if err := runGateCheck(nil, &bytes.Buffer{}); err == nil {
+		t.Fatal("self-check with a red gate should return an error")
+	}
+
+	// All green → nil.
+	fs.byRepo[root]["feat-x"].DevLoop.Gates["test"] = "pass"
+	var out bytes.Buffer
+	if err := runGateCheck(nil, &out); err != nil {
+		t.Fatalf("self-check all-green should succeed: %v", err)
+	}
+	if !contains(out.String(), "ready to complete") {
+		t.Errorf("self-check output = %q, want a ready confirmation", out.String())
+	}
+}
+
+func parsePreToolUseDecision(t *testing.T, s string) (decision, reason string) {
+	t.Helper()
+	if s == "" {
+		return "", ""
+	}
+	var payload struct {
+		HookSpecificOutput struct {
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(s), &payload); err != nil {
+		t.Fatalf("parse deny JSON: %v (%q)", err, s)
+	}
+	return payload.HookSpecificOutput.PermissionDecision, payload.HookSpecificOutput.PermissionDecisionReason
+}
+
 func parseAdditionalContext(t *testing.T, s string) string {
 	t.Helper()
 	if s == "" {
