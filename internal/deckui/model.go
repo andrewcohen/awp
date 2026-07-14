@@ -5211,22 +5211,24 @@ func mnemonicSecondKeys(name string, first rune) []rune {
 }
 
 // assignHints picks EasyMotion-style hints for the given ordered list of
-// target names. Unique first letters become single-key hints; collisions
-// promote all sharing targets to two-key hints (preferred first letter +
-// home-row disambiguator). Names whose first rune is not [a-z] fall through
-// to the disambiguator pool for their first char. If smart assignment cannot
-// cover every target, the function falls back to sequential home-row hints.
+// target names, preferring the shortest hint for every target: each claims
+// a single key when one is free, falling back to a two-key hint only when
+// it can't. Targets are processed in list order, so earlier (higher on
+// screen) targets win contested keys. A target's candidate keys come from
+// its own name — its initial, then the salient letters (word-initials, then
+// the rest) — so hints stay mnemonic even when the initial is taken.
+//
+// The result is prefix-free: a letter used as a single-key hint is never
+// also the first key of a two-key hint. The find dispatcher relies on this
+// to know whether a keystroke lands immediately (single hint) or opens a
+// two-key sequence (prefix). If smart assignment somehow can't cover every
+// target, the function falls back to sequential home-row hints.
 func assignHints(names []string) map[string]string {
 	out := map[string]string{}
 	if len(names) == 0 {
 		return out
 	}
-	type bucket struct {
-		key   rune
-		names []string
-	}
-	var ordered []*bucket
-	byKey := map[rune]*bucket{}
+
 	firstRune := func(s string) rune {
 		rs := []rune(s)
 		if len(rs) == 0 {
@@ -5238,106 +5240,87 @@ func assignHints(names []string) map[string]string {
 		}
 		return 0
 	}
+	// singleCandidates lists a name's preferred single keys in priority
+	// order: its initial, then its salient letters. mnemonicSecondKeys
+	// already excludes the initial, so prepending it can't duplicate.
+	singleCandidates := func(name string) []rune {
+		first := firstRune(name)
+		cands := make([]rune, 0, 8)
+		if first != 0 {
+			cands = append(cands, first)
+		}
+		return append(cands, mnemonicSecondKeys(name, first)...)
+	}
+
+	alphabet := []rune(findHintAlphabet)
+	usedSingle := map[rune]bool{} // letters committed as single-key hints
+	usedHint := map[string]bool{} // every assigned hint (single or double)
+
+	// Pass 1: hand each target the highest-priority free single key drawn
+	// from its own name. Anything that can't get one spills to pass 2.
+	var overflow []string
 	for _, name := range names {
-		k := firstRune(name)
-		b, ok := byKey[k]
-		if !ok {
-			b = &bucket{key: k}
-			byKey[k] = b
-			ordered = append(ordered, b)
-		}
-		b.names = append(b.names, name)
-	}
-
-	reservedSingle := map[rune]bool{}
-	for _, b := range ordered {
-		if b.key != 0 && len(b.names) == 1 {
-			reservedSingle[b.key] = true
-			out[b.names[0]] = string(b.key)
-		}
-	}
-
-	secondPool := make([]rune, 0, len(findHintAlphabet))
-	for _, c := range findHintAlphabet {
-		if !reservedSingle[c] {
-			secondPool = append(secondPool, c)
-		}
-	}
-
-	used := map[string]bool{}
-	for _, hint := range out {
-		used[hint] = true
-	}
-
-	inSecondPool := map[rune]bool{}
-	for _, c := range secondPool {
-		inSecondPool[c] = true
-	}
-
-	assignDouble := func(name string, first rune, candidates []rune) bool {
-		tryRune := func(second rune) bool {
-			if !inSecondPool[second] {
-				return false
-			}
-			hint := string(first) + string(second)
-			if used[hint] {
-				return false
-			}
-			used[hint] = true
-			out[name] = hint
-			return true
-		}
-		for _, second := range candidates {
-			if tryRune(second) {
-				return true
-			}
-		}
-		for _, second := range secondPool {
-			if tryRune(second) {
-				return true
-			}
-		}
-		return false
-	}
-
-	for _, b := range ordered {
-		if b.key == 0 || len(b.names) <= 1 {
-			continue
-		}
-		for _, name := range b.names {
-			assignDouble(name, b.key, mnemonicSecondKeys(name, b.key))
-		}
-	}
-
-	if fallback, ok := byKey[0]; ok {
-		firstPool := make([]rune, 0, len(findHintAlphabet))
-		for _, c := range findHintAlphabet {
-			if reservedSingle[c] {
+		claimed := false
+		for _, r := range singleCandidates(name) {
+			if usedSingle[r] {
 				continue
 			}
-			firstPool = append(firstPool, c)
+			usedSingle[r] = true
+			usedHint[string(r)] = true
+			out[name] = string(r)
+			claimed = true
+			break
 		}
-		for _, name := range fallback.names {
-			for _, first := range firstPool {
-				if assignDouble(name, first, mnemonicSecondKeys(name, first)) {
-					break
-				}
-			}
+		if !claimed {
+			overflow = append(overflow, name)
 		}
 	}
 
-	for _, name := range names {
-		if _, ok := out[name]; ok {
-			continue
-		}
-		legacy := map[string]string{}
-		for i, n := range names {
-			if i >= len(findHintAlphabet) {
+	// Pass 2: two-key hints for the overflow. The prefix must not be a
+	// letter already used as a single hint (keeps the set prefix-free);
+	// prefer the name's own letters for both keys, then the alphabet.
+	for _, name := range overflow {
+		prefixCands := append(singleCandidates(name), alphabet...)
+		assigned := false
+		for _, p := range prefixCands {
+			if p == 0 || usedSingle[p] {
+				continue
+			}
+			secondCands := append(mnemonicSecondKeys(name, p), alphabet...)
+			for _, s := range secondCands {
+				if s == 0 {
+					continue
+				}
+				hint := string(p) + string(s)
+				if usedHint[hint] {
+					continue
+				}
+				usedHint[hint] = true
+				out[name] = hint
+				assigned = true
 				break
 			}
-			legacy[n] = string(findHintAlphabet[i])
+			if assigned {
+				break
+			}
 		}
-		return legacy
+		if !assigned {
+			return legacyHints(names)
+		}
+	}
+
+	return out
+}
+
+// legacyHints is the last-resort fallback when smart assignment can't
+// cover every target: sequential home-row keys in list order.
+func legacyHints(names []string) map[string]string {
+	out := map[string]string{}
+	for i, n := range names {
+		if i >= len(findHintAlphabet) {
+			break
+		}
+		out[n] = string(findHintAlphabet[i])
 	}
 	return out
 }
