@@ -81,7 +81,8 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 			m.status = "pr: no PR for this workspace"
 			return nil
 		}
-		prompt := prRepairPrompt(status, item.BookmarkCommitID, itemIsMyPR(item, m.bookmarkPrefix))
+		mine := itemIsMyPR(item, m.bookmarkPrefix)
+		prompt := prRepairPrompt(status, item.BookmarkCommitID, mine)
 		if prompt == "" {
 			m.status = "pr: nothing to repair (" + label + ")"
 			return nil
@@ -92,6 +93,21 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		m.promptMode = true
 		var initCmd tea.Cmd
 		m.promptForm, initCmd = newPromptForm(item, prompt)
+		// Reviewer repair on a stale PR: mark the form so submit reloads the
+		// tuicr review window onto the PR's current head before the agent
+		// receives the prompt. Gate on the same `prStaleSuffix` signal that
+		// renders the `· stale` row chip (local bookmark behind the PR head) —
+		// that's the signal the deck already surfaced, and it means the review
+		// window is showing an old head. A non-stale reviewer repair (e.g.
+		// addressing comments on the current head) sends unchanged. Owner
+		// repair (mine) pushes commits later, so there's nothing to reload.
+		stale := prStaleSuffix(status, item.BookmarkCommitID) != ""
+		if !mine && status.Number > 0 && stale {
+			m.promptForm.repair = true
+			m.promptForm.prNumber = status.Number
+			m.promptForm.prHeadSHA = status.HeadRefOid
+			m.promptForm.prURL = status.URL
+		}
 		m.status = "repair: review prompt · enter send · ctrl+g $EDITOR · esc cancel"
 		return batchCmds(initCmd, tea.ClearScreen)
 	case "m":

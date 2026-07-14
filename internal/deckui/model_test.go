@@ -987,6 +987,146 @@ func TestSendPromptFormSubmitInvokesHandler(t *testing.T) {
 	}
 }
 
+// repairPromptForm builds a repair-originated prompt form targeting item,
+// prepopulated and short-circuited to StateCompleted so a dispatch submits
+// immediately (same shortcut as TestSendPromptFormSubmitInvokesHandler).
+func repairPromptForm(m *Model, item Item, prompt string, prNumber int, headSHA, prURL string) {
+	var initCmd tea.Cmd
+	m.promptForm, initCmd = newPromptForm(item, prompt)
+	_ = initCmd
+	m.promptMode = true
+	m.promptForm.repair = true
+	m.promptForm.prNumber = prNumber
+	m.promptForm.prHeadSHA = headSHA
+	m.promptForm.prURL = prURL
+	*m.promptForm.promptVal = prompt
+	m.promptForm.form.State = huh.StateCompleted
+}
+
+// drainForMsg runs every sub-command in a (possibly batched) cmd and
+// returns the first result matching want's dynamic type, or nil.
+func drainForMsg(cmd tea.Cmd, match func(tea.Msg) bool) tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	run := func(m tea.Msg) tea.Msg {
+		if m != nil && match(m) {
+			return m
+		}
+		return nil
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub == nil {
+				continue
+			}
+			if got := run(sub()); got != nil {
+				return got
+			}
+		}
+		return nil
+	}
+	return run(msg)
+}
+
+func TestRepairPromptSubmitInvokesReviewReloader(t *testing.T) {
+	var gotItem Item
+	var gotPR int
+	var gotHead, gotURL, gotPrompt string
+	handlerCalled := false
+	item := Item{ProjectName: "grove", WorkspaceName: "review-430"}
+	model := New([]Item{item}, func(ActionRequest) error {
+		handlerCalled = true
+		return nil
+	}).WithReviewReloader(func(it Item, prNumber int, prHeadSHA, prURL, prompt string) tea.Cmd {
+		gotItem, gotPR, gotHead, gotURL, gotPrompt = it, prNumber, prHeadSHA, prURL, prompt
+		return func() tea.Msg {
+			return ReviewReloadedMsg{Item: it, Reloaded: true, ShortHead: "abcd1234"}
+		}
+	})
+	repairPromptForm(&model, item, "please re-review", 430, "abcd1234deadbeef", "https://github.com/o/r/pull/430")
+
+	updated, cmd := model.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m := updated.(Model)
+	if m.promptMode {
+		t.Fatal("submit should leave prompt mode")
+	}
+	rr := drainForMsg(cmd, func(msg tea.Msg) bool { _, ok := msg.(ReviewReloadedMsg); return ok })
+	if rr == nil {
+		t.Fatal("expected ReviewReloadedMsg from reloader cmd")
+	}
+	if handlerCalled {
+		t.Fatal("repair submit should route through the reloader, not the generic handler")
+	}
+	if gotPR != 430 || gotHead != "abcd1234deadbeef" || gotURL != "https://github.com/o/r/pull/430" {
+		t.Fatalf("reloader got wrong PR context: pr=%d head=%q url=%q", gotPR, gotHead, gotURL)
+	}
+	if gotPrompt != "please re-review" {
+		t.Fatalf("reloader got wrong prompt: %q", gotPrompt)
+	}
+	if gotItem.WorkspaceName != "review-430" {
+		t.Fatalf("reloader got wrong item: %+v", gotItem)
+	}
+
+	updated, _ = m.Update(rr)
+	m = updated.(Model)
+	if m.busy {
+		t.Fatal("ReviewReloadedMsg should clear busy")
+	}
+	if !strings.Contains(m.status, "reloaded review on abcd1234") || !strings.Contains(m.status, "sent") {
+		t.Fatalf("unexpected status after reload: %q", m.status)
+	}
+}
+
+// With no reloader wired, a repair-originated submit falls back to the
+// generic ActionSendPrompt path (pre-reload behavior).
+func TestRepairPromptSubmitFallsBackWithoutReloader(t *testing.T) {
+	var gotAction Action
+	item := Item{ProjectName: "grove", WorkspaceName: "review-430"}
+	model := New([]Item{item}, func(req ActionRequest) error {
+		gotAction = req.Action
+		return nil
+	})
+	repairPromptForm(&model, item, "please re-review", 430, "abcd", "https://github.com/o/r/pull/430")
+
+	updated, cmd := model.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = updated.(Model)
+	if msg := cmd(); msg != nil {
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				if sub != nil {
+					_ = sub()
+				}
+			}
+		}
+	}
+	if gotAction != ActionSendPrompt {
+		t.Fatalf("expected fallback to ActionSendPrompt, got %v", gotAction)
+	}
+}
+
+// A reload/send error surfaces on the status line and never claims the
+// prompt was sent.
+func TestReviewReloadedMsgErrorStatus(t *testing.T) {
+	m := New([]Item{{ProjectName: "grove", WorkspaceName: "review-430"}}, nil)
+	m.busy = true
+	updated, _ := m.Update(ReviewReloadedMsg{
+		Item: Item{ProjectName: "grove", WorkspaceName: "review-430"},
+		Err:  errors.New("kill window: boom"),
+	})
+	got := updated.(Model)
+	if got.busy {
+		t.Fatal("error should clear busy")
+	}
+	if !strings.HasPrefix(got.status, "repair: ") || !strings.Contains(got.status, "boom") {
+		t.Fatalf("expected repair error status, got %q", got.status)
+	}
+	if strings.Contains(got.status, "sent") {
+		t.Fatalf("error status must not claim the prompt was sent: %q", got.status)
+	}
+}
+
 func TestSendPromptFormRejectsEmpty(t *testing.T) {
 	// Validation lives inside huh.NewText.Validate; exercise it
 	// directly against the bound value rather than driving keys

@@ -18,6 +18,7 @@ type deckDeps struct {
 	prFetcher       PRFetcher
 	prStatusFetcher PRStatusFetcher
 	bookmarkFetcher BookmarkFetcher
+	reviewReloader  ReviewReloader
 	trunkResolver   TrunkResolver
 	stateEditor     StateEditorLauncher
 

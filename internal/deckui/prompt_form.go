@@ -24,6 +24,17 @@ type promptForm struct {
 	target    Item
 	form      *huh.Form
 	promptVal *string
+
+	// repair marks this form as PR-repair-originated (opened via `p r`),
+	// as opposed to the blank `A` send-prompt dialog. When set and the PR
+	// is someone else's (prNumber > 0), submit routes through the review
+	// reloader so a stale tuicr review window is reloaded onto the PR's
+	// current head before the agent receives the prompt. prNumber /
+	// prHeadSHA / prURL carry just enough PR context for that reload.
+	repair    bool
+	prNumber  int
+	prHeadSHA string
+	prURL     string
 }
 
 type promptFormAction int
