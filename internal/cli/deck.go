@@ -1325,13 +1325,20 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					continue
 				}
 				snapshot := &workspace.DevLoopSnapshot{Done: fresh.Done, Total: fresh.Total, Phase: fresh.Phase, Task: fresh.Task}
-				// Preserve the event-driven gate results the `awp gate record`
-				// hook writes; the transcript scan here doesn't yet recompute
-				// them (see the reconciler unit), so carry them forward rather
-				// than clobbering with a zero value on every refresh.
+				// UnitKey is hook-managed (set by `awp gate check` on a unit's
+				// TaskUpdate→in_progress); the scan can't derive Claude's real
+				// task id, so carry it forward untouched.
 				if e.DevLoop != nil {
-					snapshot.Gates = e.DevLoop.Gates
 					snapshot.UnitKey = e.DevLoop.UnitKey
+				}
+				// Reconcile gate results from the transcript scan when it
+				// observed any; otherwise keep the event-driven map so a scan
+				// miss doesn't wipe hook-recorded results.
+				switch {
+				case len(fresh.Gates) > 0:
+					snapshot.Gates = fresh.Gates
+				case e.DevLoop != nil:
+					snapshot.Gates = e.DevLoop.Gates
 				}
 				if !devLoopSnapshotEqual(e.DevLoop, snapshot) {
 					changed[name] = snapshot
@@ -1430,6 +1437,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					Total: e.DevLoop.Total,
 					Phase: e.DevLoop.Phase,
 					Task:  e.DevLoop.Task,
+					Gates: e.DevLoop.Gates,
 				}
 			}
 
@@ -1529,10 +1537,31 @@ func buildDevLoopSummary(loop watch.Loop, path, status string) *deckui.DevLoopSu
 	if cur := st.CurrentUnit(); cur >= 0 {
 		summary.Task = st.Todos[cur].Content
 	}
-	if summary.Total == 0 && summary.Phase == "" && summary.Task == "" {
+	// Reconcile the current unit's gate results from the transcript (the
+	// authoritative is_error signal), so the event-driven `awp gate record`
+	// snapshot self-heals against a dropped hook. Only observed results are
+	// recorded — an unrun gate stays absent (treated as pending downstream),
+	// matching the map the hook writes so equality checks don't churn.
+	if gm := reconcileGates(st); len(gm) > 0 {
+		summary.Gates = gm
+	}
+	if summary.Total == 0 && summary.Phase == "" && summary.Task == "" && len(summary.Gates) == 0 {
 		return nil
 	}
 	return summary
+}
+
+// reconcileGates projects a watch.State's per-gate results into the snapshot
+// map shape (name -> pass/fail), skipping gates that haven't run.
+func reconcileGates(st watch.State) map[string]string {
+	gm := map[string]string{}
+	for _, g := range st.Gates {
+		if g.Result == "" {
+			continue
+		}
+		gm[g.Name] = g.Result
+	}
+	return gm
 }
 
 func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Runner, req deckui.ActionRequest, reporter deckui.Reporter) error {
