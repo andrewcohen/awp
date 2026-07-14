@@ -143,13 +143,28 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 			case "tool_use":
 				switch b.Name {
 				case "TaskCreate":
-					taskCreates++
-					id := strconv.Itoa(taskCreates)
 					var in struct {
 						Subject string `json:"subject"`
+						Content string `json:"content"`
 					}
 					_ = json.Unmarshal(b.Input, &in)
-					taskByID[id] = &Todo{Content: in.Subject, Status: "pending"}
+					subject := strings.TrimSpace(in.Subject)
+					if subject == "" {
+						subject = strings.TrimSpace(in.Content)
+					}
+					if subject == "" {
+						// A subjectless TaskCreate fails validation (the tool
+						// requires `subject`) and creates nothing — e.g. the
+						// batch {"tasks":[…]} form an agent might try first.
+						// Skipping it avoids minting a phantom empty task and,
+						// crucially, keeps the synthetic ids aligned with the
+						// tool's own "Task #N" numbering so a later
+						// TaskUpdate(taskId) targets the right task.
+						break
+					}
+					taskCreates++
+					id := strconv.Itoa(taskCreates)
+					taskByID[id] = &Todo{Content: subject, Status: "pending"}
 					taskOrder = append(taskOrder, id)
 				case "TaskUpdate":
 					var in struct {
