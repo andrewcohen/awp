@@ -314,8 +314,10 @@ func resetGateUnit(root, wsName, taskID, subject string) {
 	})
 }
 
-// currentUnitLabel returns a quotable label for the in-progress unit, e.g.
-// "'prompt plumbing'", falling back to "the current unit".
+// currentUnitLabel returns a quotable noun phrase for the in-progress unit,
+// e.g. "unit 'prompt plumbing'", falling back to "the current unit" when the
+// unit's content isn't known. The full phrase (not just the name) is returned
+// so callers can drop it straight into a sentence without double-wording.
 func currentUnitLabel(root, wsName string) string {
 	entries, err := stateStore().Load(root)
 	if err != nil {
@@ -323,14 +325,15 @@ func currentUnitLabel(root, wsName string) string {
 	}
 	name := resolveLiveWorkspaceName(entries, wsName)
 	if e, ok := entries[name]; ok && e.DevLoop != nil && strings.TrimSpace(e.DevLoop.Task) != "" {
-		return "'" + e.DevLoop.Task + "'"
+		return "unit '" + e.DevLoop.Task + "'"
 	}
 	return "the current unit"
 }
 
 // gateDenyReason builds an actionable, quotable reason for blocking
 // completion: it names the unit, the first blocking gate (a red one before a
-// pending one), and the command to run.
+// pending one), and the command to run. unitLabel is a full noun phrase from
+// currentUnitLabel ("unit 'X'" or "the current unit").
 func gateDenyReason(loop watch.Loop, gates map[string]string, unitLabel string) string {
 	var pending *watch.Gate
 	for i := range loop.Gates {
@@ -340,7 +343,7 @@ func gateDenyReason(loop watch.Loop, gates map[string]string, unitLabel string) 
 		}
 		switch gates[g.Name] {
 		case "fail":
-			return fmt.Sprintf("unit %s can't be marked complete: gate '%s' is red (last run failed). Run `%s` and re-check.",
+			return fmt.Sprintf("%s can't be marked complete: gate '%s' is red (last run failed). Run `%s` and re-check.",
 				unitLabel, g.Name, g.DisplayCommand())
 		case "pass":
 			// green — keep looking
@@ -351,11 +354,11 @@ func gateDenyReason(loop watch.Loop, gates map[string]string, unitLabel string) 
 		}
 	}
 	if pending != nil {
-		return fmt.Sprintf("unit %s can't be marked complete: gate '%s' hasn't run yet. Run `%s` and re-check.",
+		return fmt.Sprintf("%s can't be marked complete: gate '%s' hasn't run yet. Run `%s` and re-check.",
 			unitLabel, pending.Name, pending.DisplayCommand())
 	}
 	// Shouldn't reach here (caller checks gatesAllGreen first), but be safe.
-	return fmt.Sprintf("unit %s can't be marked complete: its gates are not all green.", unitLabel)
+	return fmt.Sprintf("%s can't be marked complete: its gates are not all green.", unitLabel)
 }
 
 // gateRecordReport is the --json debug shape for `awp gate record`.
