@@ -81,6 +81,53 @@ func TestBuildDevLoopSummary(t *testing.T) {
 	if got.Task != "wire meta line" {
 		t.Errorf("task = %q, want %q", got.Task, "wire meta line")
 	}
+	// The passing `go test` gate is reconciled from the transcript into the
+	// gate map so the event-driven snapshot self-heals.
+	if got.Gates["test"] != "pass" {
+		t.Errorf("reconciled gates = %v, want test=pass", got.Gates)
+	}
+	if _, ok := got.Gates["build"]; ok {
+		t.Errorf("gates should omit unrun gates; got %v", got.Gates)
+	}
+}
+
+func TestBuildDevLoopSummaryReconcilesFailingGate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ws := filepath.Join(t.TempDir(), "proj", "ws-fail")
+	writeTranscript(t, home, ws,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"TodoWrite","input":{"todos":[{"content":"wire meta line","status":"in_progress"}]}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"go build ./..."}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b1","is_error":true}]}}`,
+	)
+	got := buildDevLoopSummary(watch.DefaultLoop(), ws, "working")
+	if got == nil {
+		t.Fatal("buildDevLoopSummary = nil, want a summary")
+	}
+	if got.Gates["build"] != "fail" {
+		t.Errorf("reconciled gates = %v, want build=fail", got.Gates)
+	}
+}
+
+func TestDevLoopSnapshotEqualGates(t *testing.T) {
+	base := &workspace.DevLoopSnapshot{Done: 1, Gates: map[string]string{"test": "pass"}}
+	same := &workspace.DevLoopSnapshot{Done: 1, Gates: map[string]string{"test": "pass"}}
+	diffVal := &workspace.DevLoopSnapshot{Done: 1, Gates: map[string]string{"test": "fail"}}
+	diffLen := &workspace.DevLoopSnapshot{Done: 1, Gates: map[string]string{"test": "pass", "build": "pass"}}
+	diffKey := &workspace.DevLoopSnapshot{Done: 1, UnitKey: "2", Gates: map[string]string{"test": "pass"}}
+
+	if !devLoopSnapshotEqual(base, same) {
+		t.Error("equal gate maps should compare equal")
+	}
+	if devLoopSnapshotEqual(base, diffVal) {
+		t.Error("different gate value should compare unequal")
+	}
+	if devLoopSnapshotEqual(base, diffLen) {
+		t.Error("different gate count should compare unequal")
+	}
+	if devLoopSnapshotEqual(base, diffKey) {
+		t.Error("different UnitKey should compare unequal")
+	}
 }
 
 func TestBuildDevLoopSummaryNoTranscript(t *testing.T) {
