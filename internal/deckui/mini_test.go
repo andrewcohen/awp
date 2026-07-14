@@ -96,40 +96,50 @@ func TestMiniModelFindModeJumpsCursor(t *testing.T) {
 }
 
 func TestMiniModelFindModeTwoCharHint(t *testing.T) {
+	// The hint keys are "<project>/<workspace>": "a/a" and "a/aa" share
+	// their only letter, so the first claims the single 'a' and the second
+	// overflows to a two-key hint — exercising the pending-prefix flow.
 	rows := []MiniRow{
-		{Project: "redwood", Workspace: "react-compiler", Status: "working"},
-		{Project: "redwood", Workspace: "router-rewrite", Status: "waiting"},
+		{Project: "a", Workspace: "a", Status: "working"},
+		{Project: "a", Workspace: "aa", Status: "waiting"},
 	}
 	m := NewMiniModel(rows)
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	m = next.(MiniModel)
-	// Both share "r" as first letter, so both should get 2-char hints
-	// and "r" should register as a pending prefix.
-	if !m.findPrefix['r'] {
-		t.Fatalf("expected r to be a pending prefix, got: %v", m.findPrefix)
+
+	// Find the row that overflowed to a two-key hint.
+	twoKeyIdx, runes := -1, []rune(nil)
+	for idx, hint := range m.findHints {
+		if r := []rune(hint); len(r) == 2 {
+			twoKeyIdx, runes = idx, r
+			break
+		}
 	}
-	// Press "r" — should not jump yet, should set pending.
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if twoKeyIdx < 0 {
+		t.Fatalf("expected one row on a two-key hint, got %v", m.findHints)
+	}
+	if !m.findPrefix[runes[0]] {
+		t.Fatalf("expected %q to be a pending prefix, got: %v", string(runes[0]), m.findPrefix)
+	}
+
+	// Press the first key — should not jump yet, should set pending.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[0]}})
 	m = next.(MiniModel)
-	if m.findPending != 'r' {
-		t.Fatalf("expected pending=r, got %q", m.findPending)
+	if m.findPending != runes[0] {
+		t.Fatalf("expected pending=%q, got %q", string(runes[0]), m.findPending)
 	}
 	if !m.FindMode() {
 		t.Fatal("should still be in find mode after first key of two-char hint")
 	}
-	// Press the second char of whichever hint row 0 got.
-	hint := m.findHints[0]
-	if len([]rune(hint)) != 2 {
-		t.Fatalf("expected row 0 to have a 2-char hint, got %q", hint)
-	}
-	second := []rune(hint)[1]
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{second}})
+
+	// Press the second key — completes the hint and jumps.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[1]}})
 	m = next.(MiniModel)
 	if m.FindMode() {
 		t.Fatal("find mode should exit after the second char completes")
 	}
-	if m.Cursor() != 0 {
-		t.Fatalf("cursor should be 0, got %d", m.Cursor())
+	if m.Cursor() != twoKeyIdx {
+		t.Fatalf("cursor should be %d, got %d", twoKeyIdx, m.Cursor())
 	}
 }
 

@@ -1398,46 +1398,53 @@ func TestFindFocusTopRowTargetsExpandedHeader(t *testing.T) {
 	}
 }
 
-func TestFindPromotesPrefixCollisionsToTwoKey(t *testing.T) {
+// twoKeyProjectFind builds a find-mode model where one project is forced
+// onto a two-key hint: "a" and "aa" share the only letter available, so
+// whichever is processed first claims the single 'a' and the other
+// overflows to a two-key sequence. Both carry two workspaces so resolving
+// the hint lands in the workspace stage (rather than auto-selecting a lone
+// row). Returns the model (in project stage), the overflowed project's
+// name, and its hint runes.
+func twoKeyProjectFind(t *testing.T) (Model, string, []rune) {
+	t.Helper()
 	model := New([]Item{
-		{ProjectName: "repo-a", WorkspaceName: "one"},
-		{ProjectName: "repo-a", WorkspaceName: "alt"},
-		{ProjectName: "repo-b", WorkspaceName: "two"},
-		{ProjectName: "repo-b", WorkspaceName: "tmp"},
+		{ProjectName: "a", WorkspaceName: "one"},
+		{ProjectName: "a", WorkspaceName: "alt"},
+		{ProjectName: "aa", WorkspaceName: "two"},
+		{ProjectName: "aa", WorkspaceName: "tmp"},
 	}, nil)
-
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	m := updated.(Model)
+	for _, name := range []string{"a", "aa"} {
+		if runes := []rune(m.findProjectHints[name]); len(runes) == 2 {
+			return m, name, runes
+		}
+	}
+	t.Fatalf("expected one project on a two-key hint, got %+v", m.findProjectHints)
+	return m, "", nil
+}
 
-	hintA := m.findProjectHints["repo-a"]
-	hintB := m.findProjectHints["repo-b"]
-	if len([]rune(hintA)) != 2 || len([]rune(hintB)) != 2 {
-		t.Fatalf("expected two-key hints for colliding projects, got %q / %q", hintA, hintB)
-	}
-	if hintA[0] != 'r' || hintB[0] != 'r' {
-		t.Fatalf("expected both hints to share prefix r, got %q / %q", hintA, hintB)
-	}
-	if hintA == hintB {
-		t.Fatalf("expected distinct hints, got %q twice", hintA)
-	}
-	if !m.findProjectPrefix['r'] {
-		t.Fatalf("expected r registered as reserved prefix, got %+v", m.findProjectPrefix)
+func TestFindTwoKeyHintResolvesInTwoKeystrokes(t *testing.T) {
+	m, name, runes := twoKeyProjectFind(t)
+	if !m.findProjectPrefix[runes[0]] {
+		t.Fatalf("expected %q registered as a reserved prefix, got %+v", string(runes[0]), m.findProjectPrefix)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	// First keystroke: stay in project stage with the prefix pending.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[0]}})
 	m = updated.(Model)
-	if m.findPendingPrefix != 'r' {
-		t.Fatalf("expected pending prefix r, got %q", m.findPendingPrefix)
+	if m.findPendingPrefix != runes[0] {
+		t.Fatalf("expected pending prefix %q, got %q", string(runes[0]), m.findPendingPrefix)
 	}
 	if m.findStage != findStageProject {
 		t.Fatalf("expected to stay in project stage while pending, got %v", m.findStage)
 	}
 
-	second := rune(hintB[1])
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{second}})
+	// Second keystroke: resolve to the colliding project's workspace stage.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[1]}})
 	m = updated.(Model)
-	if m.findStage != findStageWorkspace || m.findProject != "repo-b" {
-		t.Fatalf("expected workspace stage for repo-b, got stage=%v project=%q", m.findStage, m.findProject)
+	if m.findStage != findStageWorkspace || m.findProject != name {
+		t.Fatalf("expected workspace stage for %q, got stage=%v project=%q", name, m.findStage, m.findProject)
 	}
 	if m.findPendingPrefix != 0 {
 		t.Fatalf("expected pending prefix cleared, got %q", m.findPendingPrefix)
@@ -1445,16 +1452,11 @@ func TestFindPromotesPrefixCollisionsToTwoKey(t *testing.T) {
 }
 
 func TestFindEscClearsPendingPrefixWithoutExitingFind(t *testing.T) {
-	model := New([]Item{
-		{ProjectName: "repo-a", WorkspaceName: "one"},
-		{ProjectName: "repo-b", WorkspaceName: "two"},
-	}, nil)
+	m, _, runes := twoKeyProjectFind(t)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	m := updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[0]}})
 	m = updated.(Model)
-	if m.findPendingPrefix != 'r' {
+	if m.findPendingPrefix != runes[0] {
 		t.Fatalf("expected pending prefix set, got %q", m.findPendingPrefix)
 	}
 
@@ -1519,49 +1521,62 @@ func TestAssignHintsUniqueFirstLettersStaySingle(t *testing.T) {
 	}
 }
 
-func TestAssignHintsPromotesCollisions(t *testing.T) {
+func TestAssignHintsCollisionsTakeMnemonicSingles(t *testing.T) {
+	// The first target to want a letter keeps the single key; the others
+	// fall to a different single key drawn from their own name rather than
+	// being promoted to two-key hints.
 	got := assignHints([]string{"auth", "api", "billing"})
+	if got["auth"] != "a" {
+		t.Fatalf("expected auth to keep single hint a, got %q", got["auth"])
+	}
 	if got["billing"] != "b" {
 		t.Fatalf("expected billing single hint b, got %q", got["billing"])
 	}
-	for _, name := range []string{"auth", "api"} {
-		hint := got[name]
-		if len(hint) != 2 || hint[0] != 'a' {
-			t.Fatalf("expected two-key hint starting with a for %q, got %q", name, hint)
-		}
+	// api collides on 'a'; it should still land a single key from its name.
+	if hint := got["api"]; len(hint) != 1 || hint == "a" {
+		t.Fatalf("expected api to take a distinct single key, got %q", hint)
 	}
-	if got["auth"] == got["api"] {
-		t.Fatalf("expected distinct hints, got %q twice", got["auth"])
+	if got["api"] == got["auth"] {
+		t.Fatalf("expected distinct hints, got %q twice", got["api"])
 	}
 }
 
-func TestAssignHintsSecondCharAvoidsReservedSingles(t *testing.T) {
-	got := assignHints([]string{"alpha", "alt", "beta"})
-	if got["beta"] != "b" {
-		t.Fatalf("expected beta single hint b, got %q", got["beta"])
+func TestAssignHintsPriorityIsListOrder(t *testing.T) {
+	// Mirrors the deck screenshot: earlier rows win contested keys, and a
+	// letter claimed by an earlier row is unavailable to a later one.
+	got := assignHints([]string{
+		"fixes",                  // f
+		"assistant",              // a
+		"fgt-app-main",           // f taken, a taken → m (word-initial of "main")
+		"fgt-reusable-workflows", // f taken → r (word-initial of "reusable")
+		"g8t",                    // g
+		"grove",                  // g taken, r taken → o
+	})
+	want := map[string]string{
+		"fixes":                  "f",
+		"assistant":              "a",
+		"fgt-app-main":           "m",
+		"fgt-reusable-workflows": "r",
+		"g8t":                    "g",
+		"grove":                  "o",
 	}
-	for _, name := range []string{"alpha", "alt"} {
-		hint := got[name]
-		if len(hint) != 2 || hint[0] != 'a' {
-			t.Fatalf("expected two-key hint starting with a for %q, got %q", name, hint)
-		}
-		if hint[1] == 'b' {
-			t.Fatalf("second char must not reuse reserved single %q for %q", "b", name)
+	for name, expected := range want {
+		if got[name] != expected {
+			t.Fatalf("expected %q for %q, got %q (full=%+v)", expected, name, got[name], got)
 		}
 	}
 }
 
-func TestAssignHintsNonLetterFirstCharFallsBack(t *testing.T) {
+func TestAssignHintsNonLetterFirstUsesNameLetters(t *testing.T) {
+	// A non-[a-z] initial is skipped, but the name's later letters still
+	// yield a mnemonic single key rather than forcing a two-key hint.
 	got := assignHints([]string{"1project", "alpha"})
 	if got["alpha"] != "a" {
 		t.Fatalf("expected alpha single hint a, got %q", got["alpha"])
 	}
 	hint := got["1project"]
-	if len(hint) != 2 {
-		t.Fatalf("expected two-key fallback hint for %q, got %q", "1project", hint)
-	}
-	if hint[0] < 'a' || hint[0] > 'z' {
-		t.Fatalf("expected fallback first char from pool, got %q", hint)
+	if len(hint) != 1 || hint[0] < 'a' || hint[0] > 'z' {
+		t.Fatalf("expected a single mnemonic hint for %q, got %q", "1project", hint)
 	}
 }
 
