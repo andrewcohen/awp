@@ -168,6 +168,30 @@ func TestTaskListReconstruction(t *testing.T) {
 	}
 }
 
+func TestTaskCreateSkipsSubjectlessCreate(t *testing.T) {
+	// An agent's first TaskCreate uses the batch {"tasks":[…]} form, which
+	// has no top-level `subject` and fails validation (creates nothing). The
+	// two real single-subject creates follow. The failed one must not mint a
+	// phantom task or consume id 1 — otherwise TaskUpdate(taskId "1") would
+	// target the phantom instead of the first real task.
+	st := build(t,
+		line("assistant", tu("TaskCreate", "c0", map[string]any{"tasks": `[{"content":"x","status":"pending"}]`})),
+		line("user", tr("c0", true)),
+		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "first real"})),
+		line("assistant", tu("TaskCreate", "c2", map[string]any{"subject": "second real"})),
+		line("assistant", tu("TaskUpdate", "u1", map[string]any{"taskId": "1", "status": "in_progress"})),
+	)
+	if len(st.Todos) != 2 {
+		t.Fatalf("want 2 todos (phantom skipped), got %d: %+v", len(st.Todos), st.Todos)
+	}
+	if st.Todos[0].Content != "first real" || st.Todos[0].Status != "in_progress" {
+		t.Fatalf("taskId 1 should be the first real task, in_progress: %+v", st.Todos[0])
+	}
+	if st.Todos[1].Content != "second real" {
+		t.Fatalf("todo 1 wrong: %+v", st.Todos[1])
+	}
+}
+
 func TestChecklistFallback(t *testing.T) {
 	st := build(t,
 		line("assistant", txt("Plan:\n- [x] wire it up\n- [ ] add tests\n- [~] docs")),
