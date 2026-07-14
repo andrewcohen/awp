@@ -55,12 +55,12 @@ func HookCommand(event, state string) string {
 }
 
 // GateHookCommand returns the shell snippet for a dev-loop gate hook (`awp
-// gate <sub>`). Unlike the status hooks, stdout is NOT redirected: Claude
-// reads it as the hook's JSON result (a PostToolUse nudge or a PreToolUse
-// deny). It still gates on $TMUX and honors $AWP_BIN, and swallows a
-// non-zero exit so a gate hook never breaks an agent turn.
+// internal gate <sub>`). Unlike the status hooks, stdout is NOT redirected:
+// Claude reads it as the hook's JSON result (a PostToolUse nudge or a
+// PreToolUse deny). It still gates on $TMUX and honors $AWP_BIN, and swallows
+// a non-zero exit so a gate hook never breaks an agent turn.
 func GateHookCommand(sub string) string {
-	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" gate ` + sub + ` 2>/dev/null || true`
+	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal gate ` + sub + ` 2>/dev/null || true`
 }
 
 // hookSpec is one awp-managed hook entry: the event it lives under, an
