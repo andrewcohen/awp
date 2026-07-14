@@ -27,6 +27,8 @@ func (a *App) runGate(args []string) error {
 	switch args[0] {
 	case "record":
 		return runGateRecord(args[1:], a.out)
+	case "check":
+		return runGateCheck(args[1:], a.out)
 	default:
 		return fmt.Errorf("unknown gate subcommand %q", args[0])
 	}
@@ -35,9 +37,14 @@ func (a *App) runGate(args []string) error {
 const gateUsage = `awp gate — dev-loop gate enforcement hooks
 
 Usage:
-  awp gate record [--json]   PostToolUse(Bash) hook: record a gate's pass/fail
-                             into the current unit's snapshot. Silent unless
-                             --json (debug) or a nudge transition fires.
+  awp gate record [--json]      PostToolUse(Bash) hook: record a gate's
+                                pass/fail into the current unit's snapshot.
+                                Silent unless --json (debug) or a nudge fires.
+  awp gate check [--hook]        PreToolUse(TaskUpdate) hook: on status
+        [--workspace <ws>]       in_progress reset the unit's gates; on
+                                 completed deny unless the unit's gates are all
+                                 green. Without --hook, a self-check: exit 0 if
+                                 ready, else non-zero + reason on stderr.
 
 Both read the Claude hook JSON payload on stdin and resolve the workspace
 from $AWP_WORKSPACE / $AWP_REPO_ROOT (tmux fallback). They no-op silently
@@ -204,6 +211,191 @@ func runGateRecord(args []string, out io.Writer) error {
 		report.ReadyToComplete = gatesAllGreen(loop, report.UnitGates)
 	}
 	return emitGateRecord(out, jsonOut, report, nudge)
+}
+
+// runGateCheck implements `awp gate check`. In --hook mode it is the
+// PreToolUse(TaskUpdate) hook: a status of in_progress resets the unit's gate
+// results (a fresh unit begins), and completed is denied unless every
+// configured gate is green. Without --hook it is a self-check the agent (or a
+// human) can run: exit 0 when the current unit is ready to complete, else a
+// non-zero exit with an actionable reason.
+func runGateCheck(args []string, out io.Writer) error {
+	hook := false
+	wsFlag := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--hook":
+			hook = true
+		case arg == "--workspace":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--workspace requires a value")
+			}
+			wsFlag = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--workspace="):
+			wsFlag = strings.TrimPrefix(arg, "--workspace=")
+		case arg == "--task":
+			// Accepted for forward-compatibility; v1 checks the current unit.
+			if i+1 >= len(args) {
+				return fmt.Errorf("--task requires a value")
+			}
+			i++
+		case strings.HasPrefix(arg, "--task="):
+		default:
+			return fmt.Errorf("unknown argument %q", arg)
+		}
+	}
+	if hook {
+		return runGateCheckHook(out)
+	}
+	return runGateCheckSelf(wsFlag, out)
+}
+
+// runGateCheckHook handles the PreToolUse(TaskUpdate) payload: reset on
+// in_progress, deny-or-allow on completed. It always returns nil — a denial
+// is expressed by printing a permissionDecision, not a non-zero exit — so a
+// hook error never wedges the agent.
+func runGateCheckHook(out io.Writer) error {
+	payload, _ := readGatePayload()
+	if payload.ToolName != "" && payload.ToolName != "TaskUpdate" {
+		return nil // not our tool → allow
+	}
+	var in struct {
+		TaskID  string `json:"taskId"`
+		Status  string `json:"status"`
+		Subject string `json:"subject"`
+	}
+	_ = json.Unmarshal(payload.ToolInput, &in)
+
+	loop, root, wsName, ok := resolveGateLoop()
+	if !ok {
+		return nil // no dev_loop → allow
+	}
+
+	switch in.Status {
+	case "in_progress":
+		resetGateUnit(root, wsName, in.TaskID, in.Subject)
+		return nil
+	case "completed":
+		gates := currentGates(root, wsName)
+		if gatesAllGreen(loop, gates) {
+			return nil // ready → allow
+		}
+		printPreToolUseDeny(out, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
+		return nil
+	default:
+		return nil // pending / deleted / unset → allow
+	}
+}
+
+// runGateCheckSelf is the by-hand self-check: exit 0 when the current unit is
+// ready to complete, otherwise a non-zero exit whose error message names the
+// blocking gate.
+func runGateCheckSelf(wsFlag string, out io.Writer) error {
+	loop, root, wsName, ok := resolveGateLoop()
+	if !ok {
+		// No dev_loop / unresolved workspace: nothing to gate, treat as ready.
+		_, _ = fmt.Fprintln(out, "gate check: no dev_loop configured — nothing to check")
+		return nil
+	}
+	if strings.TrimSpace(wsFlag) != "" {
+		wsName = wsFlag
+	}
+	gates := currentGates(root, wsName)
+	if gatesAllGreen(loop, gates) {
+		_, _ = fmt.Fprintf(out, "gate check: %s ready to complete (all gates green)\n", currentUnitLabel(root, wsName))
+		return nil
+	}
+	return fmt.Errorf("gate check: %s", gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
+}
+
+// resetGateUnit clears the recorded gate results and rebinds the snapshot to a
+// new unit (taskID) when a different unit goes in_progress. Re-marking the
+// same unit in_progress is idempotent (gates are kept). Done/Total/Phase are
+// left to the deck's reconciler.
+func resetGateUnit(root, wsName, taskID, subject string) {
+	_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+		name := resolveLiveWorkspaceName(entries, wsName)
+		entry, ok := entries[name]
+		if !ok {
+			return entries
+		}
+		snap := entry.DevLoop
+		if snap == nil {
+			snap = &workspace.DevLoopSnapshot{}
+		}
+		if snap.UnitKey == taskID && taskID != "" {
+			return entries // same unit — don't wipe its gates
+		}
+		snap.UnitKey = taskID
+		snap.Gates = map[string]string{}
+		snap.Task = strings.TrimSpace(subject)
+		entry.DevLoop = snap
+		entries[name] = entry
+		return entries
+	})
+}
+
+// currentUnitLabel returns a quotable label for the in-progress unit, e.g.
+// "'prompt plumbing'", falling back to "the current unit".
+func currentUnitLabel(root, wsName string) string {
+	entries, err := stateStore().Load(root)
+	if err != nil {
+		return "the current unit"
+	}
+	name := resolveLiveWorkspaceName(entries, wsName)
+	if e, ok := entries[name]; ok && e.DevLoop != nil && strings.TrimSpace(e.DevLoop.Task) != "" {
+		return "'" + e.DevLoop.Task + "'"
+	}
+	return "the current unit"
+}
+
+// gateDenyReason builds an actionable, quotable reason for blocking
+// completion: it names the unit, the first blocking gate (a red one before a
+// pending one), and the command to run.
+func gateDenyReason(loop watch.Loop, gates map[string]string, unitLabel string) string {
+	var pending *watch.Gate
+	for i := range loop.Gates {
+		g := loop.Gates[i]
+		if g.Marker {
+			continue
+		}
+		switch gates[g.Name] {
+		case "fail":
+			return fmt.Sprintf("unit %s can't be marked complete: gate '%s' is red (last run failed). Run `%s` and re-check.",
+				unitLabel, g.Name, g.DisplayCommand())
+		case "pass":
+			// green — keep looking
+		default:
+			if pending == nil {
+				pending = &loop.Gates[i]
+			}
+		}
+	}
+	if pending != nil {
+		return fmt.Sprintf("unit %s can't be marked complete: gate '%s' hasn't run yet. Run `%s` and re-check.",
+			unitLabel, pending.Name, pending.DisplayCommand())
+	}
+	// Shouldn't reach here (caller checks gatesAllGreen first), but be safe.
+	return fmt.Sprintf("unit %s can't be marked complete: its gates are not all green.", unitLabel)
+}
+
+// printPreToolUseDeny prints a PreToolUse hook result denying the tool call
+// with a reason the agent can act on.
+func printPreToolUseDeny(out io.Writer, reason string) {
+	payload := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "deny",
+			"permissionDecisionReason": reason,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(out, string(data))
 }
 
 // gateRecordReport is the --json debug shape for `awp gate record`.
