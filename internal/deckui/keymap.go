@@ -55,7 +55,7 @@ func newDeckKeyMap() deckKeyMap {
 		Watch:         key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "watch dev-loop progress for the selected workspace")),
 		Quit:          key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q/esc", "quit · esc clears filter first")),
 		Filter:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter rows · esc clears")),
-		Find:          key.NewBinding(key.WithKeys("f", "F"), key.WithHelp("f", "find: project → workspace easymotion jump")),
+		Find:          key.NewBinding(key.WithKeys("f", "F"), key.WithHelp("f", "find: collapse to sections → expand one → jump")),
 		Down:          key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("↓/j", "move cursor")),
 		Up:            key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "move cursor")),
 		HalfPageDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "jump ½ page down")),

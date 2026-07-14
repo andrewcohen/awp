@@ -1271,6 +1271,133 @@ func TestFindHintsHideProjectLevelOnceInWorkspaceStage(t *testing.T) {
 	}
 }
 
+func TestFindProjectStageCollapsesToHeaders(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "alpha", WorkspaceName: "main"},
+		{ProjectName: "alpha", WorkspaceName: "dev"},
+		{ProjectName: "beta", WorkspaceName: "one"},
+		{ProjectName: "beta", WorkspaceName: "two"},
+		{ProjectName: "gamma", WorkspaceName: "x"},
+		{ProjectName: "gamma", WorkspaceName: "y"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	if m.findStage != findStageProject {
+		t.Fatalf("expected project stage, got %v", m.findStage)
+	}
+
+	rows := m.bodyRows(m.items())
+	headers := 0
+	for _, r := range rows {
+		switch r.kind {
+		case deckRowPrimary, deckRowMeta:
+			t.Fatalf("project stage should fold away workspace rows, found kind %v", r.kind)
+		case deckRowSpacer:
+			t.Fatalf("project stage should drop inter-section spacers, found one")
+		case deckRowHeader:
+			headers++
+		}
+	}
+	if headers != 3 {
+		t.Fatalf("expected 3 project headers, got %d", headers)
+	}
+}
+
+func TestFindWorkspaceStageExpandsOnlySelected(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "alpha", WorkspaceName: "main"},
+		{ProjectName: "alpha", WorkspaceName: "dev"},
+		{ProjectName: "beta", WorkspaceName: "one"},
+		{ProjectName: "beta", WorkspaceName: "two"},
+		{ProjectName: "gamma", WorkspaceName: "x"},
+		{ProjectName: "gamma", WorkspaceName: "y"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m = updated.(Model)
+	if m.findStage != findStageWorkspace || m.findProject != "beta" {
+		t.Fatalf("expected workspace stage for beta, got stage=%v project=%q", m.findStage, m.findProject)
+	}
+
+	items := m.items()
+	rows := m.bodyRows(items)
+	primaries, headers := 0, 0
+	for _, r := range rows {
+		switch r.kind {
+		case deckRowPrimary:
+			if items[r.itemIndex].ProjectName != "beta" {
+				t.Fatalf("only beta should expand, found row for %q", items[r.itemIndex].ProjectName)
+			}
+			primaries++
+		case deckRowMeta:
+			if items[r.itemIndex].ProjectName != "beta" {
+				t.Fatalf("only beta should expand, found meta row for %q", items[r.itemIndex].ProjectName)
+			}
+		case deckRowHeader:
+			headers++
+		}
+	}
+	if primaries != 2 {
+		t.Fatalf("expected beta's 2 workspaces expanded, got %d primary rows", primaries)
+	}
+	if headers != 3 {
+		t.Fatalf("expected all 3 project headers retained for context, got %d", headers)
+	}
+}
+
+func TestFindViewportOffset(t *testing.T) {
+	// Everything fits: never scroll.
+	if got := findViewportOffset(20, 10, 30); got != 0 {
+		t.Fatalf("fits-on-screen should offset 0, got %d", got)
+	}
+	// Focus near the top: clamp the scrolloff band to 0.
+	if got := findViewportOffset(1, 100, 20); got != 0 {
+		t.Fatalf("top focus should offset 0, got %d", got)
+	}
+	// Focus mid-list: leave a deckScrollOff band above it.
+	if got := findViewportOffset(50, 100, 20); got != 50-deckScrollOff {
+		t.Fatalf("mid focus should offset %d, got %d", 50-deckScrollOff, got)
+	}
+	// Focus near the end: clamp to the last full page.
+	if got := findViewportOffset(99, 100, 20); got != 100-20 {
+		t.Fatalf("bottom focus should clamp to %d, got %d", 100-20, got)
+	}
+}
+
+func TestFindFocusTopRowTargetsExpandedHeader(t *testing.T) {
+	model := New([]Item{
+		{ProjectName: "alpha", WorkspaceName: "main"},
+		{ProjectName: "alpha", WorkspaceName: "dev"},
+		{ProjectName: "beta", WorkspaceName: "one"},
+		{ProjectName: "beta", WorkspaceName: "two"},
+		{ProjectName: "gamma", WorkspaceName: "x"},
+		{ProjectName: "gamma", WorkspaceName: "y"},
+	}, nil)
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m := updated.(Model)
+	if got := m.findFocusTopRow(m.bodyRows(m.items())); got != 0 {
+		t.Fatalf("project stage should focus the top, got %d", got)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+	if m.findProject != "gamma" {
+		t.Fatalf("expected gamma selected, got %q", m.findProject)
+	}
+	rows := m.bodyRows(m.items())
+	focus := m.findFocusTopRow(rows)
+	if focus < 0 || focus >= len(rows) {
+		t.Fatalf("focus row %d out of range (len %d)", focus, len(rows))
+	}
+	if r := rows[focus]; r.kind != deckRowHeader || r.project != "gamma" {
+		t.Fatalf("focus should land on the gamma header, got kind=%v project=%q", r.kind, r.project)
+	}
+}
+
 func TestFindPromotesPrefixCollisionsToTwoKey(t *testing.T) {
 	model := New([]Item{
 		{ProjectName: "repo-a", WorkspaceName: "one"},

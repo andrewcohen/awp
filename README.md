@@ -211,7 +211,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `x` | User actions menu (configurable via `actions` in config) |
 | `n` | New workspace (inline form: workspace name / start-from / agent prompt). `start-from` is a select with `main` (default) and `pick a bookmark…` (opens the bookmark picker). The form also surfaces a `Will create bookmark:` hint when `deck.bookmark_prefix` is configured. |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
-| `f` | Find: easymotion-style section → workspace jump. Stage 1 hints every section header — both pinned register sections (see the `m` chord) and unpinned project headers; picking one scopes stage 2 to that section's rows. (In the inbox scope there are no headers, so `f` hints every row directly.) |
+| `f` | Find: easymotion-style section → workspace jump. Stage 1 collapses the list to just section headers — both pinned register sections (see the `m` chord) and unpinned project headers — and hints each one, so a long list fits on one screen; picking one expands only that section (the rest stay as one-line headers for context) and scopes stage 2 to its rows. `backspace` re-collapses to the header list. (In the inbox scope there are no headers, so `f` hints every row directly.) |
 | `/` | Filter rows · `esc` clears |
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
 | `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
