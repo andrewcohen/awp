@@ -1104,16 +1104,46 @@ func captureDeckTmuxSnapshot(tmuxClient *tmux.Client, fast bool) deckTmuxSnapsho
 	}
 	snap.currentSession, _ = tmuxClient.CurrentSessionName()
 	panes, _ := tmuxClient.ListPanes()
+	snap.agentShell = agentShellSessions(panes)
+	return snap
+}
+
+// agentShellSessions reports, per session, whether its "agent" window has
+// fallen back to a bare shell — i.e. the agent process is gone. A window
+// counts as shell-fallback only when it has panes and NONE of them run a
+// non-shell process. Keying on "any pane is a shell" instead wrongly flagged
+// sessions where the agent is alive but the user has split an extra shell (or
+// an `awp watch`) pane into the same window, which then dropped the row to
+// "exited", hid it from the attention scope, and cleared its unread dot.
+func agentShellSessions(panes []tmux.Pane) map[string]bool {
+	hasAgentWindow := map[string]bool{}
+	hasLiveProcess := map[string]bool{}
 	for _, p := range panes {
 		if p.Window != "agent" {
 			continue
 		}
-		switch strings.TrimSpace(p.Command) {
-		case "bash", "zsh", "fish", "sh", "dash":
-			snap.agentShell[p.Session] = true
+		hasAgentWindow[p.Session] = true
+		if !isShellCommand(p.Command) {
+			hasLiveProcess[p.Session] = true
 		}
 	}
-	return snap
+	out := map[string]bool{}
+	for sess := range hasAgentWindow {
+		if !hasLiveProcess[sess] {
+			out[sess] = true
+		}
+	}
+	return out
+}
+
+// isShellCommand reports whether a pane's current command is an interactive
+// shell (the mark of an agent window that has dropped back to a prompt).
+func isShellCommand(cmd string) bool {
+	switch strings.TrimSpace(cmd) {
+	case "bash", "zsh", "fish", "sh", "dash":
+		return true
+	}
+	return false
 }
 
 // loadDeckItems builds the deck's row data from workspace-state.json
