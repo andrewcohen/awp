@@ -56,6 +56,37 @@ func TestBookmarkPickerLinkFlow(t *testing.T) {
 	}
 }
 
+// Linking a bookmark is a direct "this workspace is that PR" signal, so it
+// must force a PR-status fetch even when the periodic policy would skip the
+// repo — the freshly-linked bookmark isn't in itemsAll yet, so eligibility
+// hasn't caught up. Mirrors the `p s` PR-number override.
+func TestBookmarkLinkForcesPRStatusRefresh(t *testing.T) {
+	var linked [2]string
+	var fetched [][]string
+	m := bookmarkLinkModel(t, &linked).
+		WithPRStatusFetcher(func(repos []string) tea.Cmd {
+			fetched = append(fetched, repos)
+			return nil
+		})
+
+	updated, cmd := m.Update(keyB)
+	dm := updated.(Model)
+	updated, _ = dm.Update(execCmd(t, cmd)) // BookmarksDoneMsg
+	dm = updated.(Model)
+
+	// "ws" has no bookmark/PRNumber on file, so the throttled policy would
+	// deem "/tmp" ineligible and fetch nothing. The forced refresh must fetch
+	// it anyway.
+	updated, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	dm = updated.(Model)
+	if dm.active != nil {
+		t.Fatalf("expected picker closed after selection, got %T", dm.active)
+	}
+	if len(fetched) != 1 || len(fetched[0]) != 1 || fetched[0][0] != "/tmp" {
+		t.Fatalf("expected a forced fetch of [/tmp], got %v", fetched)
+	}
+}
+
 func TestBookmarkPickerEscClosesWithoutLinking(t *testing.T) {
 	var linked [2]string
 	m := bookmarkLinkModel(t, &linked)
