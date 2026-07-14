@@ -171,10 +171,19 @@ func runGateRecord(args []string, out io.Writer) error {
 	}
 	report.recorded = true
 	report.Unit = snap.Task
-	prevResult := snap.Gates[gate.Name]
-	prevReady := gatesAllGreen(loop, snap.Gates)
-	newGates := make(map[string]string, len(snap.Gates)+1)
-	for k, v := range snap.Gates {
+	// A sealed unit (completed with all gates green) keeps its results only so
+	// a re-marked completion stays idempotent; the first gate run afterward
+	// begins a new unit, so start from an empty gate set. This resets gates
+	// across a unit boundary even when the agent never marked the next unit
+	// in_progress.
+	existing := snap.Gates
+	if snap.GatesSealed {
+		existing = nil
+	}
+	prevResult := existing[gate.Name]
+	prevReady := gatesAllGreen(loop, existing)
+	newGates := make(map[string]string, len(existing)+1)
+	for k, v := range existing {
 		newGates[k] = v
 	}
 	newGates[gate.Name] = result
@@ -183,7 +192,7 @@ func runGateRecord(args []string, out io.Writer) error {
 	report.UnitGates = unitGates(loop, newGates)
 	report.ReadyToComplete = nowReady
 
-	if prevResult != result {
+	if snap.GatesSealed || prevResult != result {
 		_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
 			name := resolveLiveWorkspaceName(entries, wsName)
 			entry, ok := entries[name]
@@ -193,6 +202,12 @@ func runGateRecord(args []string, out io.Writer) error {
 			s := entry.DevLoop
 			if s == nil {
 				s = &workspace.DevLoopSnapshot{}
+			}
+			// Re-check the seal under the store lock: a new unit's first gate
+			// clears the prior unit's results before recording this one.
+			if s.GatesSealed {
+				s.Gates = map[string]string{}
+				s.GatesSealed = false
 			}
 			if s.Gates == nil {
 				s.Gates = map[string]string{}
@@ -275,6 +290,9 @@ func runGateCheckHook(errOut io.Writer) error {
 	case "completed":
 		gates := currentGates(root, wsName)
 		if gatesAllGreen(loop, gates) {
+			// Seal the unit so the next recorded gate starts a fresh set even
+			// if the agent skips marking the next unit in_progress.
+			sealGates(root, wsName)
 			return nil // ready → allow
 		}
 		_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
@@ -331,8 +349,30 @@ func resetGateUnit(root, wsName, taskID, subject string) {
 		}
 		snap.UnitKey = taskID
 		snap.Gates = map[string]string{}
+		snap.GatesSealed = false
 		snap.Task = strings.TrimSpace(subject)
 		entry.DevLoop = snap
+		entries[name] = entry
+		return entries
+	})
+}
+
+// sealGates marks the current unit's gates as sealed after a green completion:
+// the results stay so a re-marked completion is idempotent, but the next
+// recorded gate (runGateRecord) clears them as a new unit begins. Skips the
+// write when there's no snapshot or it's already sealed, so an idempotent
+// re-complete doesn't churn the state file.
+func sealGates(root, wsName string) {
+	if cur := currentDevLoop(root, wsName); cur == nil || cur.GatesSealed {
+		return
+	}
+	_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+		name := resolveLiveWorkspaceName(entries, wsName)
+		entry, ok := entries[name]
+		if !ok || entry.DevLoop == nil || entry.DevLoop.GatesSealed {
+			return entries
+		}
+		entry.DevLoop.GatesSealed = true
 		entries[name] = entry
 		return entries
 	})

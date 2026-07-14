@@ -171,11 +171,11 @@ func TestEventAwpEntriesMatchRejectsDuplicates(t *testing.T) {
 }
 
 func TestSyncEventEntriesInstallsGateHooksAlongsideStatus(t *testing.T) {
-	// PostToolUse carries both the matcher-less status entry and the
-	// Bash-matched gate-record entry; they must coexist.
+	// PostToolUse carries the matcher-less status entry, the Bash-matched
+	// gate-record entry, and the matcher-less loop-track entry; all coexist.
 	specs := specsByEvent()["PostToolUse"]
-	if len(specs) != 2 {
-		t.Fatalf("PostToolUse should have 2 awp specs (status + gate-record), got %d", len(specs))
+	if len(specs) != 3 {
+		t.Fatalf("PostToolUse should have 3 awp specs (status + gate-record + loop-track), got %d", len(specs))
 	}
 	out, changed := syncEventEntries(nil, specs)
 	if !changed {
@@ -191,8 +191,8 @@ func TestSyncEventEntriesInstallsGateHooksAlongsideStatus(t *testing.T) {
 			gateEntry = e
 		}
 	}
-	if !ids["status"] || !ids["gate-record"] {
-		t.Errorf("expected both status and gate-record entries, got ids %v", ids)
+	if !ids["status"] || !ids["gate-record"] || !ids["loop-track"] {
+		t.Errorf("expected status, gate-record and loop-track entries, got ids %v", ids)
 	}
 	if gateEntry["matcher"] != "Bash" {
 		t.Errorf("gate-record entry matcher = %v, want Bash", gateEntry["matcher"])

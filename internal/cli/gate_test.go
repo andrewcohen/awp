@@ -399,6 +399,52 @@ func TestGateCheckHookSameUnitKeepsGates(t *testing.T) {
 	}
 }
 
+// TestGateCompletionSealsAndNextGateResets covers the unit-boundary reset when
+// the agent never marks the next unit in_progress: a green completion seals the
+// gates (kept for idempotent re-complete), and the next recorded gate clears
+// them so the new unit is gated on its own results only.
+func TestGateCompletionSealsAndNextGateResets(t *testing.T) {
+	const root = "/tmp/awp-gate-seal"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass", "build": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-seal", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	// Complete the unit — all gates green → allowed, and the unit is sealed.
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("completed check: %v", err)
+	}
+	snap := fs.byRepo[root]["feat-x"].DevLoop
+	if !snap.GatesSealed {
+		t.Fatalf("expected GatesSealed after a green completion")
+	}
+	if len(snap.Gates) != 3 {
+		t.Errorf("a sealed unit keeps its gates for idempotent re-complete; got %v", snap.Gates)
+	}
+
+	// Re-marking the same unit completed stays allowed (gates still present).
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("idempotent re-complete should stay allowed: %v", err)
+	}
+
+	// The next unit runs a gate without ever marking in_progress: the sealed
+	// results are cleared and only the new gate is recorded.
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gofmt -l ."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateRecord: %v", err)
+	}
+	snap = fs.byRepo[root]["feat-x"].DevLoop
+	if snap.GatesSealed {
+		t.Errorf("recording a gate should clear the seal")
+	}
+	if len(snap.Gates) != 1 || snap.Gates["fmt"] != "pass" {
+		t.Errorf("next unit should start with only its own gate; got %v", snap.Gates)
+	}
+}
+
 func TestGateCheckHookCompletedBlocksWhenRed(t *testing.T) {
 	const root = "/tmp/awp-gate-deny"
 	fs := newFakeStore()
