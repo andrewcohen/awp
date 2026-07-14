@@ -83,6 +83,37 @@ func TestGateRecordWritesPass(t *testing.T) {
 	}
 }
 
+func TestGateRecordSkipsWriteWhenUnchanged(t *testing.T) {
+	const root = "/tmp/awp-gate-noop"
+	fs := newFakeStore()
+	// test already recorded pass for the current unit.
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"test": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-noop", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	// Re-running the passing test gate records the same value — no write.
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateRecord: %v", err)
+	}
+	if fs.updates != 0 {
+		t.Errorf("re-recording an unchanged gate result should not write state; updates=%d", fs.updates)
+	}
+
+	// A changed result (fail) does write.
+	withStdin(t, `{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "fail"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateRecord: %v", err)
+	}
+	if fs.updates != 1 {
+		t.Errorf("a changed gate result should write exactly once; updates=%d", fs.updates)
+	}
+	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["test"]; got != "fail" {
+		t.Errorf("gate test = %q, want fail", got)
+	}
+}
+
 func TestGateRecordWritesFailViaResultFlag(t *testing.T) {
 	const root = "/tmp/awp-gate-fail-flag"
 	fs := newFakeStore()
