@@ -299,13 +299,7 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 }
 
 func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string]*GateState, pending map[string]string, currentTodo *string, started *bool, resetUnit func(time.Time)) {
-	setPhase := func(p string) {
-		if loop.hasPhase(p) {
-			st.CurrentPhase = p
-		}
-	}
-	switch b.Name {
-	case "TodoWrite":
+	if b.Name == "TodoWrite" {
 		var in struct {
 			Todos []Todo `json:"todos"`
 		}
@@ -320,46 +314,41 @@ func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string
 				}
 			}
 		}
-	case "ExitPlanMode":
-		// The plan is done; implementation begins.
-		*started = true
-		setPhase("implement")
+		return
+	}
+
+	// Pull the phase-relevant inputs, then let the shared PhaseForTool decide
+	// the phase / started transition (kept identical between scan and hook).
+	var command, filePath string
+	switch b.Name {
 	case "Bash":
 		var in struct {
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(b.Input, &in)
-		if g := loop.gateFor(in.Command); g != nil {
-			*started = true
-			setPhase(g.Phase)
-			if g.Marker {
-				// Phase marker (e.g. commit): advances the loop, no pass/fail.
-				break
-			}
-			if gates[g.Name] == nil {
-				gates[g.Name] = &GateState{Name: g.Name, Phase: g.Phase}
-			}
-			pending[b.ID] = g.Name
-		} else if !*started && isExploreCommand(in.Command) {
-			setPhase("explore")
-		}
+		command = in.Command
 	case "Edit", "Write", "MultiEdit":
 		var in struct {
 			FilePath string `json:"file_path"`
 		}
 		_ = json.Unmarshal(b.Input, &in)
-		*started = true
-		if isTestFile(in.FilePath) && loop.hasPhase("test") {
-			setPhase("test")
-		} else {
-			setPhase("implement")
+		filePath = in.FilePath
+	}
+	if p, ns := loop.PhaseForTool(b.Name, command, filePath, *started); p != "" || ns != *started {
+		if p != "" {
+			st.CurrentPhase = p
 		}
-	case "Read", "Grep", "Glob", "LS", "NotebookRead":
-		// Read-only investigation counts as exploration only until the
-		// agent starts implementing; reads mid-implementation don't regress
-		// the phase back to explore.
-		if !*started {
-			setPhase("explore")
+		*started = ns
+	}
+
+	// A non-marker Bash gate sets up a pending result to resolve against the
+	// following tool_result (the authoritative pass/fail signal).
+	if b.Name == "Bash" {
+		if g := loop.gateFor(command); g != nil && !g.Marker {
+			if gates[g.Name] == nil {
+				gates[g.Name] = &GateState{Name: g.Name, Phase: g.Phase}
+			}
+			pending[b.ID] = g.Name
 		}
 	}
 }

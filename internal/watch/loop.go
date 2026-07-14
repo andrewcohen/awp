@@ -133,6 +133,46 @@ func (l Loop) gateFor(command string) *Gate {
 	return nil
 }
 
+// PhaseForTool derives the dev-loop phase a tool invocation implies and
+// whether it marks implementation as started for the current unit. It returns
+// ("", started) when the tool implies no phase change. command is the Bash
+// command (empty for non-Bash tools); filePath is the edited file (empty for
+// non-edits). Shared by the transcript scan (handleToolUse) and the PostToolUse
+// phase hook so the two agree on how a tool maps to a phase — one source of
+// truth, no drift.
+func (l Loop) PhaseForTool(tool, command, filePath string, started bool) (phase string, nowStarted bool) {
+	set := func(p string) string {
+		if l.hasPhase(p) {
+			return p
+		}
+		return ""
+	}
+	switch tool {
+	case "ExitPlanMode":
+		// The plan is done; implementation begins.
+		return set("implement"), true
+	case "Bash":
+		if g := l.gateFor(command); g != nil {
+			return set(g.Phase), true
+		}
+		if !started && isExploreCommand(command) {
+			return set("explore"), started
+		}
+	case "Edit", "Write", "MultiEdit":
+		if isTestFile(filePath) && l.hasPhase("test") {
+			return "test", true
+		}
+		return set("implement"), true
+	case "Read", "Grep", "Glob", "LS", "NotebookRead":
+		// Read-only investigation counts as exploration only until the agent
+		// starts implementing; reads mid-implementation don't regress the phase.
+		if !started {
+			return set("explore"), started
+		}
+	}
+	return "", started
+}
+
 // hasPhase reports whether name is one of the loop's phases.
 func (l Loop) hasPhase(name string) bool {
 	for _, p := range l.Phases {

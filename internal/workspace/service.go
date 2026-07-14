@@ -180,6 +180,20 @@ type DevLoopSnapshot struct {
 	// taskId that last went in_progress. When a different unit begins, the
 	// gate results are cleared so they don't leak across units.
 	UnitKey string `json:",omitempty"`
+	// GatesSealed marks that the current unit was completed with all gates
+	// green: the results are kept (so re-marking the same unit completed is
+	// idempotent) but the next recorded gate begins a fresh unit and clears
+	// them. This resets gates across a unit boundary even when the agent
+	// never marks the next unit in_progress — the lapse `resetGateUnit`
+	// alone can't catch.
+	GatesSealed bool `json:",omitempty"`
+	// Started records whether implementation has begun in the current unit.
+	// It is maintained event-driven by the `awp internal loop track`
+	// PostToolUse hook so the cached Phase stays live across deck opens
+	// without a transcript scan; it mirrors the scan's per-unit `started`
+	// flag (reset when a new unit begins) and drives the same phase
+	// derivation (watch.Loop.PhaseForTool).
+	Started bool `json:",omitempty"`
 }
 
 // UnmarshalJSON keeps reading old state files that still use the
