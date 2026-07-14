@@ -28,3 +28,18 @@ func TestNormalizeNameEmpty(t *testing.T) {
 		t.Fatal("expected error for empty normalized name")
 	}
 }
+
+func TestReviewWorkspaceName(t *testing.T) {
+	if got := ReviewWorkspaceName(42, "feat/x"); got != "pr-42-feat/x" {
+		t.Fatalf("ReviewWorkspaceName = %q, want pr-42-feat/x", got)
+	}
+	// The deck normalizes the result before matching; confirm it lands where
+	// the workspace service would put a review checkout.
+	got, err := NormalizeName(ReviewWorkspaceName(42, "feat/x"))
+	if err != nil {
+		t.Fatalf("normalize returned error: %v", err)
+	}
+	if got != "pr-42-feat-x" {
+		t.Fatalf("normalized review name = %q, want pr-42-feat-x", got)
+	}
+}

@@ -61,10 +61,39 @@ func TestWorkspaceSettingUpIgnoresTerminalAndMismatched(t *testing.T) {
 		t.Error("a create job for another workspace should not match")
 	}
 
-	// Non-create action: no match.
-	m.jobs = []Job{{Action: "review", Status: JobRunning, RepoRoot: "/a", WorkspaceName: "feat-x"}}
+	// Non-setup action: no match.
+	m.jobs = []Job{{Action: "ci", Status: JobRunning, RepoRoot: "/a", WorkspaceName: "feat-x"}}
 	if m.workspaceSettingUp(item) {
-		t.Error("a non-create job should not count as setting up")
+		t.Error("a non-setup job (ci) should not count as setting up")
+	}
+}
+
+// A review job also prepares a workspace (the PR checkout), so its row
+// reads "setting up" while the job runs — same treatment create gets. The
+// review spec carries the predicted pr-<n>-<branch> name, matched by name
+// exactly like a create job.
+func TestWorkspaceSettingUpMatchesRunningReviewJob(t *testing.T) {
+	item := Item{ProjectName: "alpha", WorkspaceName: "pr-2-feat-x", RepoRoot: "/a"}
+	m := New([]Item{item}, func(ActionRequest) error { return nil })
+	m.jobs = []Job{{
+		Action:        "review",
+		Status:        JobRunning,
+		RepoRoot:      "/a",
+		WorkspaceName: "pr-2-feat-x",
+		Steps:         []JobStep{{Label: "jj git fetch"}},
+	}}
+	job, ok := m.workspaceSetupJob(item)
+	if !ok {
+		t.Fatal("a running review job should mark its workspace row setting up")
+	}
+	if lbl := workspaceSetupStepLabel(job); lbl != "jj git fetch" {
+		t.Errorf("setup step label = %q, want jj git fetch", lbl)
+	}
+
+	// Terminal review job: no longer setting up.
+	m.jobs[0].Status = JobDone
+	if m.workspaceSettingUp(item) {
+		t.Error("a done review job should not count as setting up")
 	}
 }
 

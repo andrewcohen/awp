@@ -1165,7 +1165,7 @@ func TestAsyncReviewSkipsProgressMode(t *testing.T) {
 	model := New([]Item{{ProjectName: "p", WorkspaceName: "w", RepoRoot: "/repo"}}, nil).
 		WithAsyncJobLauncher(func(s AsyncJobSpec) error { got = s; return nil })
 	item := Item{RepoRoot: "/repo", WorkspaceName: "w"}
-	updated, cmd := model.startAction(ActionReview, item, "42")
+	updated, cmd := model.startReview(item, 42, "feat-x")
 	_ = cmd()
 	m := updated.(Model)
 	if m.progressMode {
@@ -1173,6 +1173,11 @@ func TestAsyncReviewSkipsProgressMode(t *testing.T) {
 	}
 	if got.Action != "review" || got.Arg != "42" {
 		t.Fatalf("unexpected spec: %+v", got)
+	}
+	// The spec names the predicted review workspace so the deck can badge
+	// its row "setting up".
+	if got.WorkspaceName != "pr-42-feat-x" {
+		t.Fatalf("review spec WorkspaceName = %q, want pr-42-feat-x", got.WorkspaceName)
 	}
 }
 
@@ -3256,12 +3261,19 @@ func TestEnterOnVirtualRowStartsReview(t *testing.T) {
 	if gotSpec.Arg != "2" {
 		t.Errorf("review job PR arg = %q, want 2", gotSpec.Arg)
 	}
+	// The spec names the workspace the review will land under (predicted
+	// from the PR head ref), so the deck can match the running job to its
+	// row and badge it "setting up".
+	if gotSpec.WorkspaceName != "pr-2-feat/two" {
+		t.Errorf("review job WorkspaceName = %q, want pr-2-feat/two", gotSpec.WorkspaceName)
+	}
 }
 
-// A second enter on the same virtual review row while the first review
-// is still setting up must not dispatch a duplicate job. Once the
-// backing job reaches a terminal state the guard clears and enter works
-// again (retry after failure).
+// A second enter on the same PR while the first review is still setting up
+// must not dispatch a duplicate job. With the head ref known, the first
+// dispatch replaces the virtual inbox row with an optimistic "setting up"
+// row (they dedup on PR number), so the second enter lands on a
+// non-virtual row and is held by blockIfSettingUp rather than re-dispatched.
 func TestEnterOnVirtualRowDoesNotDoubleDispatchReview(t *testing.T) {
 	launches := 0
 	items := []Item{{ProjectName: "alpha", WorkspaceName: "sib", RepoRoot: "/a", Bookmark: "b/sib"}}
@@ -3286,7 +3298,7 @@ func TestEnterOnVirtualRowDoesNotDoubleDispatchReview(t *testing.T) {
 	}
 	model.cursor = virtualIdx
 
-	// First enter dispatches the review setup.
+	// First enter dispatches the review setup and adds the optimistic row.
 	updated, cmd := model.trigger(ActionSummon, "")
 	model = updated.(Model)
 	if cmd == nil {
@@ -3297,7 +3309,76 @@ func TestEnterOnVirtualRowDoesNotDoubleDispatchReview(t *testing.T) {
 		t.Fatalf("after first enter launches = %d, want 1", launches)
 	}
 
-	// Second enter while still setting up must be suppressed.
+	// The optimistic setting-up row now stands in for PR 2 — the virtual
+	// row is deduped away so the two don't render side by side.
+	foundOptimistic := false
+	for _, it := range model.items() {
+		if it.PRNumber == 2 && strings.TrimSpace(it.RepoRoot) == "/a" {
+			if it.Virtual {
+				t.Fatal("virtual row should be superseded by the optimistic review row")
+			}
+			foundOptimistic = true
+		}
+	}
+	if !foundOptimistic {
+		t.Fatal("no optimistic review row for PR 2 after dispatch")
+	}
+
+	// Second enter (cursor snapped onto the optimistic row) is held, not
+	// re-dispatched.
+	updated, cmd = model.trigger(ActionSummon, "")
+	model = updated.(Model)
+	if cmd != nil {
+		execCmd(t, cmd)
+	}
+	if launches != 1 {
+		t.Fatalf("second enter re-dispatched review: launches = %d, want 1", launches)
+	}
+}
+
+// When the PR head ref isn't known, the dispatch can't predict a workspace
+// name, so no optimistic row is added and the virtual inbox row stays put.
+// The reviewSetups guard then prevents a second enter from dispatching a
+// duplicate; a terminal job clears it so a retry works.
+func TestReviewGuardSuppressesDoubleDispatchWithoutHeadRef(t *testing.T) {
+	launches := 0
+	items := []Item{{ProjectName: "alpha", WorkspaceName: "sib", RepoRoot: "/a", Bookmark: "b/sib"}}
+	model := New(items, func(ActionRequest) error { return nil }).
+		WithPRStatusSeed(map[string]map[string]PRStatus{
+			// No HeadRefName → the head ref is unknown at dispatch.
+			"/a": {"feat/two": {Number: 2, State: PRStateOpen, ReviewRequested: true}},
+		}, nil).
+		WithAsyncJobLauncher(func(AsyncJobSpec) error { launches++; return nil })
+	model.scope = ScopeInbox
+
+	virtualIdx := -1
+	for i, it := range model.items() {
+		if it.Virtual {
+			virtualIdx = i
+			break
+		}
+	}
+	if virtualIdx < 0 {
+		t.Fatal("no virtual row present to select")
+	}
+	model.cursor = virtualIdx
+
+	// First enter dispatches; with no head ref there's no optimistic row, so
+	// the virtual row remains under the cursor.
+	updated, cmd := model.trigger(ActionSummon, "")
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("first enter returned no command")
+	}
+	execCmd(t, cmd)
+	if launches != 1 {
+		t.Fatalf("after first enter launches = %d, want 1", launches)
+	}
+	if !model.items()[model.cursor].Virtual {
+		t.Fatal("cursor row should still be virtual (no optimistic row without a head ref)")
+	}
+
+	// Second enter is suppressed by the guard.
 	updated, cmd = model.trigger(ActionSummon, "")
 	model = updated.(Model)
 	if cmd != nil {
