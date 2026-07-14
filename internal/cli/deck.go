@@ -564,6 +564,19 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 		return handleDeckAction(tmuxClient, actionSvc, runner, req, reporter)
 	}
+	reviewReloader := func(item deckui.Item, prNumber int, prHeadSHA, prURL, prompt string) tea.Cmd {
+		return func() tea.Msg {
+			dir := strings.TrimSpace(item.RepoRoot)
+			if dir == "" {
+				dir = repoRoot
+			}
+			deckDebugLogf("REPAIR-RELOAD closure entered ws=%q proj=%q pr=%d head=%q url=%q promptLen=%d", item.WorkspaceName, item.ProjectName, prNumber, prHeadSHA, prURL, len(prompt))
+			reloadSvc := newDeckActionServiceWithIO(runner, dir, nil, io.Discard)
+			reloaded, shortHead, err := runRepairReviewReload(reloadSvc, tmuxClient, item, prNumber, prHeadSHA, prURL, prompt, noopReporter{})
+			deckDebugLogf("REPAIR-RELOAD closure done reloaded=%v shortHead=%q err=%v", reloaded, shortHead, err)
+			return deckui.ReviewReloadedMsg{Item: item, Reloaded: reloaded, ShortHead: shortHead, Err: err}
+		}
+	}
 	bookmarkFetcher := func(itemRepoRoot string) tea.Cmd {
 		return func() tea.Msg {
 			dir := strings.TrimSpace(itemRepoRoot)
@@ -826,6 +839,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
+		WithReviewReloader(reviewReloader).
 		WithTrunkResolver(func(repo string) string {
 			fr := fixedDirRunner{base: runner, dir: repo}
 			name, _ := jj.New(fr).Trunk()

@@ -144,6 +144,50 @@ func TestFormatPriorSessions(t *testing.T) {
 	}
 }
 
+func TestRenderTuicrSessionBlock(t *testing.T) {
+	// Nothing to say when there's neither a resolved session nor prior drafts.
+	if got := renderTuicrSessionBlock("", "abcd1234deadbeef", nil); got != "" {
+		t.Errorf("empty inputs should render nothing, got %q", got)
+	}
+
+	// Session resolved, no prior drafts: names the head, the absolute
+	// --session path, and the re-resolve fallback.
+	got := renderTuicrSessionBlock("/data/reviews/sessions/x.json", "abcd1234deadbeef", nil)
+	for _, sub := range []string{
+		"current head (abcd1234)",
+		"--session",
+		"/data/reviews/sessions/x.json",
+		"tuicr review list --all",
+	} {
+		if !strings.Contains(got, sub) {
+			t.Errorf("session-only block missing %q in:\n%s", sub, got)
+		}
+	}
+	if strings.Contains(got, "carry forward") {
+		t.Errorf("session-only block should not mention carry-forward:\n%s", got)
+	}
+
+	// Session resolved + prior drafts: adds the carry-forward list.
+	prior := []priorSession{{Path: "/data/reviews/sessions/old.json", HeadSHA: "deadbeefcafef00d", Comments: 2, Updated: "2026-07-01T10:00:00Z"}}
+	got = renderTuicrSessionBlock("/data/reviews/sessions/x.json", "abcd1234deadbeef", prior)
+	if !strings.Contains(got, "carry forward") {
+		t.Errorf("block with prior drafts should mention carry-forward:\n%s", got)
+	}
+	if !strings.Contains(got, "/data/reviews/sessions/old.json — head deadbeef, 2 comments") {
+		t.Errorf("block missing prior-session line:\n%s", got)
+	}
+
+	// Session unresolved but prior drafts exist: steers to re-resolution and
+	// still lists the carry-forward sources.
+	got = renderTuicrSessionBlock("", "abcd1234deadbeef", prior)
+	if !strings.Contains(got, "isn't registered yet") {
+		t.Errorf("unresolved block should note the session isn't registered:\n%s", got)
+	}
+	if !strings.Contains(got, "/data/reviews/sessions/old.json") {
+		t.Errorf("unresolved block should still list prior drafts:\n%s", got)
+	}
+}
+
 func TestReviewPromptFileAndPointer(t *testing.T) {
 	// The prompt is written under ~/.awp/review-prompts/<repo>/<ws>.md, not
 	// inside the workspace tree (that dir is symlinked to the shared source

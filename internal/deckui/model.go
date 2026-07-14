@@ -569,6 +569,28 @@ type PRFetchDoneMsg struct {
 	Err error
 }
 
+// ReviewReloader reloads a stale tuicr review window onto a PR's current
+// head, splices a session block into the repair prompt naming the new
+// (and any prior-draft) session, and sends the augmented prompt to the
+// workspace agent. It runs on PR-repair submit for someone else's PR; the
+// wiring layer (internal/cli/deck.go) supplies the implementation. The
+// returned tea.Cmd emits a reviewReloadedMsg.
+//
+// When the workspace has no live review window, or the window is already
+// on prHeadSHA, no reload happens and the prompt is sent unchanged.
+type ReviewReloader func(item Item, prNumber int, prHeadSHA, prURL, prompt string) tea.Cmd
+
+// ReviewReloadedMsg reports the outcome of a ReviewReloader run: whether a
+// stale window was actually reloaded (and onto which short head SHA), plus
+// any error. The prompt was already sent by the reloader by the time this
+// lands, so the handler only updates status and retires the activity.
+type ReviewReloadedMsg struct {
+	Item      Item
+	Reloaded  bool
+	ShortHead string
+	Err       error
+}
+
 // The PR type cluster now lives in internal/prstatus so the pure read
 // model (internal/deckdata) can reference it without importing this
 // Bubble Tea package. These aliases keep the ~480 references in deckui and
@@ -987,6 +1009,14 @@ func (m Model) WithHookInstaller(h HookInstaller) Model {
 
 func (m Model) WithPRFetcher(f PRFetcher) Model {
 	m.prFetcher = f
+	return m
+}
+
+// WithReviewReloader installs the callback that reloads a stale tuicr
+// review window on PR-repair submit (see ReviewReloader). Without it,
+// repair prompts send unchanged (the pre-reload behavior).
+func (m Model) WithReviewReloader(r ReviewReloader) Model {
+	m.reviewReloader = r
 	return m
 }
 
@@ -1980,6 +2010,23 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, promptExpireCmd
 		}
 		return m, tea.Quit
+	case ReviewReloadedMsg:
+		m.busy = false
+		var expireCmd tea.Cmd
+		m, expireCmd = m.finishActivity("workspace:prompt:" + msg.Item.WorkspaceName)
+		if msg.Err != nil {
+			// Reload (or the subsequent send) failed. Surface it and do not
+			// pretend the prompt landed — the reloader sends only after a
+			// successful reload, so an error here means nothing was sent.
+			m.status = "repair: " + msg.Err.Error()
+			return m, expireCmd
+		}
+		if msg.Reloaded {
+			m.status = fmt.Sprintf("repair: reloaded review on %s · sent → %s/%s", msg.ShortHead, msg.Item.ProjectName, msg.Item.WorkspaceName)
+		} else {
+			m.status = fmt.Sprintf("sent prompt → %s/%s", msg.Item.ProjectName, msg.Item.WorkspaceName)
+		}
+		return m, expireCmd
 	case StateEditDoneMsg:
 		if msg.Err != nil {
 			m.status = "edit state: " + msg.Err.Error()
@@ -2721,8 +2768,24 @@ func (m Model) dispatchPromptForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case promptFormActionSubmit:
 		target := form.target
 		prompt := form.value()
+		repair := form.repair
+		prNumber := form.prNumber
+		prHeadSHA := form.prHeadSHA
+		prURL := form.prURL
 		m.promptMode = false
 		m.promptForm = promptForm{}
+		// Reviewer repair with a reloader wired: reload the (possibly
+		// stale) tuicr review window onto the PR's current head, splice the
+		// resolved session into the prompt, and send — all inside the
+		// reloader. It emits reviewReloadedMsg with the outcome.
+		if repair && prNumber > 0 && m.reviewReloader != nil {
+			m.busy = true
+			m.status = fmt.Sprintf("repair: reloading review window for %s/%s...", target.ProjectName, target.WorkspaceName)
+			actID := "workspace:prompt:" + target.WorkspaceName
+			m = m.startActivity(actID, actID, 0)
+			reload := m.reviewReloader(target, prNumber, prHeadSHA, prURL, prompt)
+			return m, batchCmds(cmd, tea.ClearScreen, m.spinner.Tick, reload)
+		}
 		if m.handler == nil {
 			m.status = "send prompt: handler not configured"
 			return m, batchCmds(cmd, tea.ClearScreen)
