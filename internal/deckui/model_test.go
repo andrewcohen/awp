@@ -613,6 +613,68 @@ func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
 	}
 }
 
+// TestRefreshTickSurvivesOpenForm guards the "new workspace stuck at
+// creating…" regression: a refreshTickMsg arriving while a modal form
+// owns the foreground must NOT be swallowed by the form dispatcher.
+// Each tick reschedules the next one, so a swallowed tick permanently
+// kills the deck's background refresh/job poll — and the just-created
+// workspace never lands (its optimistic row stays "creating…") until a
+// manual reload. The tick must still drive the job poll (proving the
+// loop lives) even though the row refresh itself is gated off while the
+// form is open.
+func TestRefreshTickSurvivesOpenForm(t *testing.T) {
+	polled := 0
+	model := New(nil, nil).
+		WithRefresher(func() tea.Cmd {
+			return func() tea.Msg { return RefreshDoneMsg(nil, nil) }
+		}).
+		WithJobsListRefresher(func() []Job {
+			polled++
+			return []Job{{ID: "j1", Action: "create-workspace", Status: JobRunning}}
+		})
+	// A create job is in flight, so refreshTickMsg should poll the jobs
+	// list. Mirror the mid-form state: the new-workspace form is open.
+	model.jobs = []Job{{ID: "j1", Action: "create-workspace", Status: JobRunning}}
+	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{Bookmark: "main"}, "", "")
+	model.newWorkspaceForm = form
+	model.newWorkspaceMode = true
+
+	updated, cmd := model.Update(refreshTickMsg(time.Now()))
+	if updated.(Model).newWorkspaceMode == false {
+		t.Fatal("refreshTickMsg must not close the form")
+	}
+	if cmd == nil {
+		t.Fatal("refreshTickMsg while form open returned no cmd — the tick loop is dead")
+	}
+	// Run the batch's leaves, but bound each so the rescheduled 5s
+	// tea.Tick doesn't block the test. The job-poll leaf increments the
+	// counter synchronously.
+	drainBounded(cmd)
+	if polled == 0 {
+		t.Fatal("jobs list was not polled — the background poll died while the form was open")
+	}
+}
+
+// drainBounded runs a (possibly batched) cmd's leaves, giving each a
+// short window so a self-rescheduling tea.Tick leaf doesn't stall the
+// test.
+func drainBounded(c tea.Cmd) {
+	if c == nil {
+		return
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- c() }()
+	select {
+	case msg := <-done:
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, inner := range batch {
+				drainBounded(inner)
+			}
+		}
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 // TestNewWorkspaceFormStartFromDefaultsToMain verifies that an empty
 // initial bookmark resolves to "main" via the Start-from select, not
 // the prior "current @" implicit default.

@@ -1695,14 +1695,34 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// return immediately, never falling through to the deck's normal
 	// handlers, which is the right semantics while the form has modal
 	// focus.
-	if m.newWorkspaceMode {
-		return m.dispatchNewWorkspaceForm(msg)
-	}
-	if m.renameMode {
-		return m.dispatchRenameForm(msg)
-	}
-	if m.promptMode {
-		return m.dispatchPromptForm(msg)
+	// Route input to the active modal form — EXCEPT the self-perpetuating
+	// background ticks. refreshTickMsg / devURLTickMsg each reschedule the
+	// next tick from their own handler in the main switch below; the loop
+	// only stays alive because every tick's handler fires the following
+	// one. If a form dispatcher swallowed a tick (it forwards everything
+	// to huh, which ignores these deck-private message types and returns
+	// no follow-up cmd) the loop would die silently for the rest of the
+	// session. Since the new-workspace form is typically open for several
+	// seconds and refreshInterval is 5s, a tick almost always lands while
+	// it's up — so the background refresh/job poll that reconciles a
+	// freshly-created workspace never fires again, and the row stays stuck
+	// on its optimistic "creating…" state until a manual deck reload. The
+	// tick handlers already gate their actual work on canBackgroundRefresh()
+	// (false while a form is open), so letting them through only keeps the
+	// timer alive; it does not disturb the form.
+	switch msg.(type) {
+	case refreshTickMsg, devURLTickMsg:
+		// fall through to the main switch, which reschedules the tick.
+	default:
+		if m.newWorkspaceMode {
+			return m.dispatchNewWorkspaceForm(msg)
+		}
+		if m.renameMode {
+			return m.dispatchRenameForm(msg)
+		}
+		if m.promptMode {
+			return m.dispatchPromptForm(msg)
+		}
 	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
