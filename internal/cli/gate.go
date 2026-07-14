@@ -13,12 +13,13 @@ import (
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
-// runGate dispatches `awp gate <subcommand>`. The subcommands are the
-// dev-loop enforcement hooks: `record` (a PostToolUse(Bash) hook that writes
-// the current unit's gate results into the workspace snapshot) and `check`
-// (a PreToolUse(TaskUpdate) hook that resets gates on a new unit and denies
-// completion until the unit's gates are green). Both are also usable by hand
-// for debugging.
+// runGate dispatches `awp internal gate <subcommand>`. The subcommands are
+// the dev-loop enforcement hooks: `record` (a PostToolUse(Bash) hook that
+// writes the current unit's gate results into the workspace snapshot) and
+// `check` (a PreToolUse(TaskUpdate) hook that resets gates on a new unit and
+// denies completion until the unit's gates are green). They live under
+// `internal` because they're agent/hook automation, not human-facing —
+// alongside `internal report-status`.
 func (a *App) runGate(args []string) error {
 	if len(args) == 0 || isHelpArgSlice(args) {
 		_, _ = fmt.Fprintln(a.out, gateUsage)
@@ -34,17 +35,19 @@ func (a *App) runGate(args []string) error {
 	}
 }
 
-const gateUsage = `awp gate — dev-loop gate enforcement hooks
+const gateUsage = `awp internal gate — dev-loop gate enforcement hooks
 
 Usage:
-  awp gate record [--json]      PostToolUse(Bash) hook: record a gate's
-                                pass/fail into the current unit's snapshot.
-                                Silent unless --json (debug) or a nudge fires.
-  awp gate check [--hook]        PreToolUse(TaskUpdate) hook: on status
-        [--workspace <ws>]       in_progress reset the unit's gates; on
-                                 completed deny unless the unit's gates are all
-                                 green. Without --hook, a self-check: exit 0 if
-                                 ready, else non-zero + reason on stderr.
+  awp internal gate record [--json]   PostToolUse(Bash) hook: record a gate's
+                                      pass/fail into the current unit's
+                                      snapshot. Silent unless --json (debug)
+                                      or a nudge fires.
+  awp internal gate check [--hook]     PreToolUse(TaskUpdate) hook: on status
+        [--workspace <ws>]             in_progress reset the unit's gates; on
+                                       completed deny unless the unit's gates
+                                       are all green. Without --hook, a
+                                       self-check: exit 0 if ready, else
+                                       non-zero + reason on stderr.
 
 Both read the Claude hook JSON payload on stdin and resolve the workspace
 from $AWP_WORKSPACE / $AWP_REPO_ROOT (tmux fallback). They no-op silently
