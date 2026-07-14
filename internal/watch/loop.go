@@ -87,6 +87,25 @@ func Resolve(cfg config.Config) Loop {
 	return loop
 }
 
+// MatchGate returns the first gate whose command pattern matches the bash
+// command, or nil if none do. It is the exported entry point the `awp gate`
+// hooks use to map a run command onto a named gate.
+func (l Loop) MatchGate(command string) *Gate { return l.gateFor(command) }
+
+// GateNames returns the names of the loop's non-marker gates in loop order —
+// the set the completion check requires green. Marker gates (e.g. commit)
+// have no pass/fail outcome and are excluded.
+func (l Loop) GateNames() []string {
+	out := make([]string, 0, len(l.Gates))
+	for _, g := range l.Gates {
+		if g.Marker {
+			continue
+		}
+		out = append(out, g.Name)
+	}
+	return out
+}
+
 // gateFor returns the gate whose command pattern matches the bash command,
 // or nil if none do.
 func (l Loop) gateFor(command string) *Gate {
