@@ -19,11 +19,16 @@ var (
 	styWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true)
 )
 
-// Render produces the combined todos+loop panel for the given state.
+// Render produces the combined todos+loop panel for the given state: the
+// Header line followed by the RenderBody section.
 func Render(loop Loop, workspace string, st State) string {
-	var b strings.Builder
+	return Header(workspace, st) + "\n\n" + RenderBody(loop, st)
+}
 
-	// Header.
+// Header renders the one-line panel header: "awp watch · <workspace>" plus the
+// agent status and time-on-unit. It's split out so the deck's watch overlay
+// can pin it as a sticky title without the body's task list repeating it.
+func Header(workspace string, st State) string {
 	head := styTitle.Render("awp watch") + styMuted.Render(" · "+workspace)
 	status := st.AgentStatus
 	if status == "" {
@@ -31,20 +36,25 @@ func Render(loop Loop, workspace string, st State) string {
 	}
 	head += "  " + styCurrent.Render(status)
 	if !st.UnitStart.IsZero() {
-		head += styMuted.Render("  ·  " + since(st.UnitStart, st.Now) + " on unit")
+		head += styMuted.Render("  ·  " + since(st.UnitStart, st.Now) + " on task")
 	}
-	b.WriteString(head + "\n\n")
+	return head
+}
 
+// RenderBody renders everything below the Header: the task list with the
+// current unit's loop ring, gate lights, and churn line.
+func RenderBody(loop Loop, st State) string {
+	var b strings.Builder
 	cur := st.CurrentUnit()
 
 	if len(st.Todos) == 0 {
 		// Degraded view: one implicit unit, just the loop.
-		b.WriteString(styMuted.Render("UNITS  (no todo list — showing current work)") + "\n")
+		b.WriteString(styMuted.Render("TASKS  (no todo list — showing current work)") + "\n")
 		b.WriteString(renderUnitBody(loop, st))
 		return b.String()
 	}
 
-	b.WriteString(styMuted.Render(fmt.Sprintf("UNITS  %d/%d", st.DoneCount(), len(st.Todos))) + "\n")
+	b.WriteString(styMuted.Render(fmt.Sprintf("TASKS  %d/%d", st.DoneCount(), len(st.Todos))) + "\n")
 	for i, t := range st.Todos {
 		switch {
 		case t.Status == "completed":
@@ -122,7 +132,7 @@ func churnLine(st State) string {
 		segs = append(segs, styWarn.Render(fmt.Sprintf("⇄ implement⇄%s %d×", worst.Name, worst.RedCount)))
 	}
 	if !st.UnitStart.IsZero() {
-		segs = append(segs, styMuted.Render(since(st.UnitStart, st.Now)+" on unit"))
+		segs = append(segs, styMuted.Render(since(st.UnitStart, st.Now)+" on task"))
 	}
 	if worst.RedCount >= 3 {
 		segs = append(segs, styWarn.Render("⚠ thrash"))
