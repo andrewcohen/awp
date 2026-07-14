@@ -192,6 +192,35 @@ func TestTaskCreateSkipsSubjectlessCreate(t *testing.T) {
 	}
 }
 
+func TestImpliesCurrentUnitWhenWorkStarted(t *testing.T) {
+	// Agent created one task but never marked it in_progress, then started
+	// working (ran a gate). The task should be implied in_progress so the
+	// loop/gates render under it.
+	st := build(t,
+		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "Add brand Sentry tag"})),
+		line("assistant", tu("Bash", "b1", map[string]any{"command": "go test ./..."})),
+		line("user", tr("b1", false)),
+	)
+	if len(st.Todos) != 1 {
+		t.Fatalf("want 1 todo, got %d", len(st.Todos))
+	}
+	if st.CurrentUnit() != 0 {
+		t.Fatalf("want the single started task implied in_progress, got CurrentUnit=%d (%+v)", st.CurrentUnit(), st.Todos)
+	}
+}
+
+func TestNoImpliedCurrentUnitBeforeWorkStarts(t *testing.T) {
+	// Only a read (exploration) — nothing started — so a freshly created
+	// task stays pending, not implied in_progress.
+	st := build(t,
+		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "planned work"})),
+		line("assistant", tu("Read", "r1", map[string]any{"file_path": "/x/y.go"})),
+	)
+	if st.CurrentUnit() != -1 {
+		t.Fatalf("want no implied current unit during exploration, got %d (%+v)", st.CurrentUnit(), st.Todos)
+	}
+}
+
 func TestChecklistFallback(t *testing.T) {
 	st := build(t,
 		line("assistant", txt("Plan:\n- [x] wire it up\n- [ ] add tests\n- [~] docs")),

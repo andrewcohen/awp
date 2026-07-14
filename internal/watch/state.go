@@ -266,6 +266,23 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 		}
 	}
 
+	// Imply the current unit when the agent started implementing (edits or
+	// gate runs) but never marked a todo in_progress — a common lapse that
+	// otherwise leaves the view a bare pending list with no current-unit body
+	// (loop ring, gate lights). Promote the first incomplete todo so that work
+	// surfaces under it. Guarded on `started` so a pure exploration/planning
+	// phase (only reads) still shows every todo as pending.
+	if started {
+		if st.CurrentUnit() < 0 {
+			for i := range st.Todos {
+				if st.Todos[i].Status != "completed" {
+					st.Todos[i].Status = "in_progress"
+					break
+				}
+			}
+		}
+	}
+
 	// Emit gates in loop order for stable rendering. Markers are phase
 	// transitions, not pass/fail checks — they don't appear in the row.
 	for _, g := range loop.Gates {
