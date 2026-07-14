@@ -930,11 +930,14 @@ func buildAsyncJobs(repoRoot string, runner Runner) (deckui.AsyncJobLauncher, de
 	// deleteAndRetry is the typed recovery for ErrorKindStaleWorkspace
 	// failures: nuke the workspace the failure attached to, then
 	// re-spawn the original job. CRITICAL: target ErrorWorkspace, not
-	// Spec.WorkspaceName — for review jobs they differ (the spec
-	// carries the row the user was on when they pressed `r`, often
-	// `default`, while the failure is against `pr-N-<branch>`).
-	// Falling back to Spec.WorkspaceName would silently delete the
-	// user's home row, which we did once and shouldn't do again.
+	// Spec.WorkspaceName. For review jobs Spec.WorkspaceName is the
+	// deck's *predicted* review workspace (`pr-N-<branch>`), which is
+	// blank when the head ref wasn't known at dispatch and could be
+	// wrong if the prediction drifted — ErrorWorkspace is the name the
+	// subprocess actually failed against, so it's the only safe delete
+	// target. (Historically the spec carried the user's home row, e.g.
+	// `default`; falling back to it silently deleted that row, which we
+	// did once and shouldn't do again.)
 	deleteAndRetry := func(id string) error {
 		orig, err := store.Get(jobs.JobID(id))
 		if err != nil {

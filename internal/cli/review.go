@@ -124,7 +124,7 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		}
 	}
 
-	wsName := fmt.Sprintf("pr-%d-%s", pr.Number, branch)
+	wsName := workspace.ReviewWorkspaceName(pr.Number, branch)
 	reporter.Step(fmt.Sprintf("Prepare jj workspace %s (bookmark %s)", wsName, branch))
 	name, wsPath, err := svc.PrepareWorkspace(wsName, branch, true)
 	if err != nil {
