@@ -279,10 +279,15 @@ func TestStickyChoice(t *testing.T) {
 
 func TestGeneratePreamble(t *testing.T) {
 	p := GeneratePreamble(DefaultLoop())
-	for _, want := range []string{"TaskCreate", "TaskUpdate", "gofmt", "go test", "wip:"} {
+	for _, want := range []string{"TaskCreate", "TaskUpdate", "gofmt", "go test"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("preamble missing %q:\n%s", want, p)
 		}
+	}
+	// The standalone commit sentence was cut as redundant with the opening
+	// "independently committable unit" line.
+	if strings.Contains(p, "Commit each finished") {
+		t.Fatalf("preamble should no longer carry the redundant commit sentence:\n%s", p)
 	}
 	// Wrong/absent tool name and harness plumbing must not appear.
 	for _, bad := range []string{"TodoWrite", "ToolSearch"} {
