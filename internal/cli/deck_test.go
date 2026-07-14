@@ -461,3 +461,26 @@ func TestDefaultWindowCommandAgentIncludesOptions(t *testing.T) {
 		t.Fatalf("defaultWindowCommandWithRepo agent = %q want %q", got, want)
 	}
 }
+
+func TestAgentShellSessionsIgnoresExtraShellPanes(t *testing.T) {
+	panes := []tmux.Pane{
+		// sentry-brand: alive agent + an `awp watch` split + a fish split.
+		{Session: "$145", Window: "agent", Command: "2.1.209"},
+		{Session: "$145", Window: "agent", Command: "awp"},
+		{Session: "$145", Window: "agent", Command: "fish"},
+		// truly dead: agent window is only a shell.
+		{Session: "$200", Window: "agent", Command: "fish"},
+		// a non-agent window's shell must not count.
+		{Session: "$300", Window: "shell", Command: "bash"},
+	}
+	got := agentShellSessions(panes)
+	if got["$145"] {
+		t.Error("session with a live agent pane must NOT be flagged shell-fallback despite extra shell splits")
+	}
+	if !got["$200"] {
+		t.Error("session whose agent window is only a shell should be flagged shell-fallback")
+	}
+	if got["$300"] {
+		t.Error("a shell in a non-agent window must not flag the session")
+	}
+}
