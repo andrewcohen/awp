@@ -1,8 +1,6 @@
 package deckui
 
 import (
-	"strconv"
-
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -85,7 +83,9 @@ func (p *reviewPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 		m.active = nil
 		var prCmd tea.Cmd
 		*m, prCmd = m.forcePRStatusRefresh(item.RepoRoot)
-		updated, dispatchCmd := m.startAction(ActionReview, item, strconv.Itoa(pr.Number))
+		// pr.HeadRef lets startReview predict the review workspace name and
+		// show it as an optimistic "setting up" row right away.
+		updated, dispatchCmd := m.startReview(item, pr.Number, pr.HeadRef)
 		*m = updated.(Model)
 		return batchCmds(prCmd, dispatchCmd)
 	case "esc", "ctrl+c":

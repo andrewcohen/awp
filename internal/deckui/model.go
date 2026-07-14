@@ -1821,7 +1821,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if msg.spec.Action == "review" {
 				delete(m.reviewSetups, reviewSetupKey(msg.spec.RepoRoot, msg.spec.Arg))
 			}
-			if msg.spec.Action == "create-workspace" {
+			// Retire the optimistic row (create-workspace and review both
+			// add one) since no job will land to reconcile it away.
+			if isSetupJobAction(msg.spec.Action) {
 				m.dropOptimisticCreate(msg.spec.RepoRoot, msg.spec.WorkspaceName)
 			}
 			m.status = "create: " + msg.err.Error()
@@ -2833,25 +2835,28 @@ func (m *Model) startReviewPicker(repo string) (tea.Model, tea.Cmd) {
 	return *m, tea.Batch(m.spinner.Tick, m.prFetcher(repo))
 }
 
-// workspaceSetupJob returns the in-flight create-workspace job still
-// preparing this row's workspace, if any. A workspace is registered in
-// workspace-state.json (so its row appears in the deck) the moment
+// workspaceSetupJob returns the in-flight create-workspace or review job
+// still preparing this row's workspace, if any. A workspace is registered
+// in workspace-state.json (so its row appears in the deck) the moment
 // `jj workspace add` runs — well before the bootstrap hooks (`pnpm i`
-// and friends) finish and the agent is launched. Matching the row to
-// its still-running create job lets the deck badge the row "setting up"
-// and refuse actions that need a ready workspace + agent.
+// and friends, or the review flow's tmux windows) finish and the agent is
+// launched. Matching the row to its still-running setup job lets the deck
+// badge the row "setting up" and refuse actions that need a ready
+// workspace + agent.
 //
-// Match key: same repo root + same normalized workspace name. The create
-// spec carries the user-entered name (workspaceName); normalizing it the
-// same way the workspace service does keeps the match stable against
-// case / separator differences with the stored row name.
+// Match key: same repo root + same normalized workspace name. Both the
+// create spec and the review spec carry the workspace name the flow will
+// land under (the review spec's is the predicted pr-<n>-<branch>, see
+// startReview); normalizing it the same way the workspace service does
+// keeps the match stable against case / separator differences with the
+// stored row name.
 func (m Model) workspaceSetupJob(item Item) (Job, bool) {
 	name := strings.TrimSpace(item.WorkspaceName)
 	if name == "" {
 		return Job{}, false
 	}
 	for _, j := range m.jobs {
-		if j.Action != "create-workspace" || j.Status.IsTerminal() {
+		if !isSetupJobAction(j.Action) || j.Status.IsTerminal() {
 			continue
 		}
 		if strings.TrimSpace(j.RepoRoot) != strings.TrimSpace(item.RepoRoot) {
@@ -2862,6 +2867,14 @@ func (m Model) workspaceSetupJob(item Item) (Job, bool) {
 		}
 	}
 	return Job{}, false
+}
+
+// isSetupJobAction reports whether a job action prepares a workspace whose
+// row should read "setting up" while the job runs. Both create-workspace
+// and review register a workspace-state row early (at `jj workspace add`)
+// and keep working afterward.
+func isSetupJobAction(action string) bool {
+	return action == "create-workspace" || action == "review"
 }
 
 func (m Model) workspaceSettingUp(item Item) bool {
@@ -2956,16 +2969,17 @@ func (m *Model) pruneOptimisticCreates() {
 	}
 }
 
-// optimisticCreateJob finds the create-workspace job (terminal or not)
-// backing an optimistic row. Unlike workspaceSetupJob it also matches
-// terminal jobs, so pruneOptimisticCreates can retire a failed create.
+// optimisticCreateJob finds the create-workspace or review job (terminal
+// or not) backing an optimistic row. Unlike workspaceSetupJob it also
+// matches terminal jobs, so pruneOptimisticCreates can retire a failed
+// setup.
 func (m Model) optimisticCreateJob(item Item) (Job, bool) {
 	name := normalizeWorkspaceName(item.WorkspaceName)
 	if name == "" {
 		return Job{}, false
 	}
 	for _, j := range m.jobs {
-		if j.Action != "create-workspace" {
+		if !isSetupJobAction(j.Action) {
 			continue
 		}
 		if strings.TrimSpace(j.RepoRoot) != strings.TrimSpace(item.RepoRoot) {
@@ -3073,7 +3087,14 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("review for PR %s is already starting…", prArg)
 				return m, nil
 			}
-			return m.startAction(ActionReview, item, prArg)
+			// Head ref drives the optimistic row's predicted name. A virtual
+			// review row carries it as Bookmark; prefer the live status when
+			// present.
+			branch := item.Bookmark
+			if hasSt && strings.TrimSpace(st.HeadRefName) != "" {
+				branch = st.HeadRefName
+			}
+			return m.startReview(item, item.PRNumber, branch)
 		}
 		m.status = "no workspace yet — press enter to create it"
 		return m, nil
@@ -3126,15 +3147,10 @@ func (m *Model) startAction(a Action, item Item, arg string) (tea.Model, tea.Cmd
 				WorkspacePath: item.Path,
 				Arg:           arg,
 			})
-		case ActionReview:
-			return m.startAsyncAction(AsyncJobSpec{
-				Action:        "review",
-				Title:         "review · PR " + arg,
-				RepoRoot:      item.RepoRoot,
-				WorkspaceName: item.WorkspaceName,
-				WorkspacePath: item.Path,
-				Arg:           arg,
-			})
+		// ActionReview is dispatched through startReview (which adds the
+		// optimistic "setting up" row and predicts the pr-<n>-<branch>
+		// workspace name), so it never reaches this async switch — startReview
+		// only falls back to startAction on the synchronous path below.
 		case ActionCustom:
 			if ua, ok := m.findUserAction(arg); ok && ua.Background {
 				return m.startAsyncAction(AsyncJobSpec{
@@ -3177,6 +3193,63 @@ func (m *Model) startAsyncAction(spec AsyncJobSpec) (tea.Model, tea.Cmd) {
 		return asyncJobDispatchedMsg{spec: spec, err: launcher(spec)}
 	}
 	return *m, dispatch
+}
+
+// startReview dispatches a PR review and — on the async path — shows the
+// PR's workspace immediately as an optimistic "setting up" row, the same
+// treatment a freshly-created workspace gets. branch is the PR's head ref,
+// used to predict the workspace name the review flow will land under
+// (workspace.ReviewWorkspaceName); when it's unknown the optimistic row is
+// skipped and the row simply appears after the review job writes state and
+// the next refresh surfaces it (the pre-existing behavior).
+func (m *Model) startReview(item Item, prNumber int, branch string) (tea.Model, tea.Cmd) {
+	arg := strconv.Itoa(prNumber)
+	// Synchronous fallback (no async launcher): the deck runs the review in
+	// its modal progress view, so there's no row to make optimistic.
+	if m.asyncJobLauncher == nil {
+		return m.startAction(ActionReview, item, arg)
+	}
+	// rawName is the workspace the review will land under, predictable only
+	// when we know the head ref. Empty branch → skip the optimistic row and
+	// leave the spec's WorkspaceName blank (the pre-existing behavior).
+	branch = strings.TrimSpace(branch)
+	rawName := ""
+	if branch != "" {
+		rawName = workspace.ReviewWorkspaceName(prNumber, branch)
+		// Optimistic row so the review workspace shows up the instant `r` /
+		// enter is pressed, badged "setting up" until the review job finishes
+		// — mirrors startAsyncCreateAction. Carrying PRNumber lets the inbox
+		// virtual-row builder dedup this PR's placeholder row against it, so
+		// the two don't render side by side.
+		m.addOptimisticCreate(Item{
+			WorkspaceName: rawName,
+			RepoRoot:      item.RepoRoot,
+			Bookmark:      branch,
+			PRNumber:      prNumber,
+			Status:        "starting",
+		})
+		// Keep the cursor on the row across the optimistic→real swap, then
+		// snap now so the just-added row is selected immediately.
+		normalized := normalizeWorkspaceName(rawName)
+		m.pendingSelect = Item{WorkspaceName: normalized}
+		for i, it := range m.items() {
+			if it.WorkspaceName == normalized && strings.TrimSpace(it.RepoRoot) == strings.TrimSpace(item.RepoRoot) {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	// WorkspaceName is the predicted review workspace (pr-<n>-<branch>), not
+	// the row the user was on — so workspaceSetupJob / optimisticCreateJob
+	// match the review job to the row it actually prepares, and the jobs
+	// overlay names the right workspace.
+	return m.startAsyncAction(AsyncJobSpec{
+		Action:        "review",
+		Title:         "review · PR " + arg,
+		RepoRoot:      item.RepoRoot,
+		WorkspaceName: rawName,
+		Arg:           arg,
+	})
 }
 
 // reviewSetupKey is the stable key for an in-flight virtual-row review
