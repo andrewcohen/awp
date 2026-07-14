@@ -1244,21 +1244,57 @@ func (m Model) rm() deckdata.View {
 // (repo, name) are dropped so a just-persisted workspace isn't shown
 // twice during the reconcile window.
 func (m Model) mergedItemsAll() []Item {
-	if len(m.optimisticCreates) == 0 {
-		return m.itemsAll
-	}
-	real := make(map[string]bool, len(m.itemsAll))
+	// Drop "unmanaged" (live-session-only) rows for workspaces a delete job
+	// has already removed from state but whose tmux session kill is deferred
+	// to popup exit. Without this, the row flips from the real workspace to an
+	// adoptable "(live tmux session, not in store)" entry the moment the
+	// delete job finishes, and lingers until the deck closes.
+	base := make([]Item, 0, len(m.itemsAll)+len(m.optimisticCreates))
 	for _, it := range m.itemsAll {
+		if it.Status == "unmanaged" && m.hasDeleteJobFor(it.ProjectName, it.WorkspaceName) {
+			continue
+		}
+		base = append(base, it)
+	}
+	if len(m.optimisticCreates) == 0 {
+		return base
+	}
+	real := make(map[string]bool, len(base))
+	for _, it := range base {
 		real[workspaceKey(it.RepoRoot, it.WorkspaceName)] = true
 	}
-	out := append([]Item(nil), m.itemsAll...)
 	for key, opt := range m.optimisticCreates {
 		if real[key] {
 			continue
 		}
-		out = append(out, opt)
+		base = append(base, opt)
 	}
-	return out
+	return base
+}
+
+// hasDeleteJobFor reports whether any delete job (in-flight or already done)
+// targets the given project + workspace. Unlike workspaceDeleteJob it counts
+// terminal jobs too, because a completed delete removes the state row while
+// its tmux session lives on until popup exit — so the job record is what
+// tells the deck the leftover session is a teardown, not an adoptable
+// workspace.
+func (m Model) hasDeleteJobFor(projectName, workspaceName string) bool {
+	ws := normalizeWorkspaceName(workspaceName)
+	if ws == "" {
+		return false
+	}
+	for _, j := range m.jobs {
+		if j.Action != "delete" {
+			continue
+		}
+		if filepath.Base(strings.TrimSpace(j.RepoRoot)) != projectName {
+			continue
+		}
+		if normalizeWorkspaceName(j.WorkspaceName) == ws {
+			return true
+		}
+	}
+	return false
 }
 
 // items returns the visible, filtered, sorted deck rows for the current
