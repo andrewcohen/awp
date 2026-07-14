@@ -170,6 +170,16 @@ type DevLoopSnapshot struct {
 	Total int    `json:",omitempty"`
 	Phase string `json:",omitempty"`
 	Task  string `json:",omitempty"`
+	// Gates records the current unit's per-gate result, keyed by gate name
+	// (e.g. "test" → "pass"). Values are "pass", "fail", or "pending". It is
+	// written event-driven by the `awp gate record` PostToolUse hook and
+	// reset when a new unit begins, so it reflects only the in-progress
+	// unit's gates. Read by `awp gate check` to gate completion.
+	Gates map[string]string `json:",omitempty"`
+	// UnitKey identifies the unit the Gates belong to — the TaskUpdate
+	// taskId that last went in_progress. When a different unit begins, the
+	// gate results are cleared so they don't leak across units.
+	UnitKey string `json:",omitempty"`
 }
 
 // UnmarshalJSON keeps reading old state files that still use the
