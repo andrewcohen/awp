@@ -337,6 +337,162 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	return nil
 }
 
+// runRepairReviewReload reloads the tuicr `review` window onto the PR's
+// current head, augments a reviewer-repair prompt with a block naming the
+// reloaded session (and any prior-head sessions still holding draft
+// comments), then sends the augmented prompt to the workspace agent.
+//
+// The deck decides *whether* to reload (it only routes reviewer repairs on a
+// PR its `· stale` chip already flagged as behind the head), so this function
+// does not re-derive staleness — it reloads whenever a live `review` window
+// exists. Re-deriving from the tuicr session head was a mistake: it reads
+// "current" when the window was reloaded out-of-band and would then wrongly
+// suppress a reload the deck (and the user) expect. `:e` is idempotent, so
+// reloading an already-current window is harmless. With no live `review`
+// window the prompt is sent unchanged and reloaded is false.
+//
+// wantHead is the PR's current origin head, from the deck's cached PR status;
+// it's the head we wait for tuicr to re-anchor onto before naming the session.
+//
+// The reload is done *in place* by sending tuicr's `:e` command to the
+// review pane: tuicr re-fetches the PR, re-anchors the open review onto the
+// current head, and auto-migrates existing draft comments forward — all
+// without tearing down the tmux window/split. (Killing + relaunching the
+// window also lands on the current head, but throws away the pane and scroll
+// position; `:e` is the lighter, verified path.)
+//
+// Ordering guarantee: the window is reloaded (and tuicr has re-anchored) before
+// the agent receives the prompt. A send-keys error is returned without sending
+// anything, so the agent is never pointed at a window that failed to reload.
+func runRepairReviewReload(svc workspace.Service, tmuxClient *tmux.Client, item deckui.Item, prNumber int, wantHead, prURL, prompt string, reporter deckui.Reporter) (reloaded bool, shortHead string, err error) {
+	prompt = strings.TrimSpace(prompt)
+	wantHead = strings.TrimSpace(wantHead)
+	sessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
+	slug := tuicrSessionSlug(prURL, prNumber)
+	dataDir := tuicrDataDir()
+
+	// A live `review` window is all we need to reload. The deck only routes
+	// reviewer PR-repairs here (it already surfaced the stale / re-review
+	// signal), so we deliberately do NOT re-derive staleness from the tuicr
+	// session head: that reads "current" when the window was reloaded
+	// out-of-band even though the deck (and the user) still see the row as
+	// needing re-review, which would wrongly suppress the reload. `:e` is
+	// idempotent — reloading a window that's already current just refreshes
+	// it — so unconditional reload is safe.
+	haveReview := false
+	priorHead := ""
+	var listErr error
+	if prNumber > 0 {
+		windows, werr := tmuxClient.ListWindowsInSession(sessionName)
+		listErr = werr
+		if werr == nil {
+			for _, w := range windows {
+				if w.Name == "review" {
+					haveReview = true
+					break
+				}
+			}
+		}
+	}
+	if haveReview && dataDir != "" && slug != "" {
+		if cur := resolveTuicrSessionPath(dataDir, slug); cur != "" {
+			priorHead = readSessionHeadSHA(cur)
+		}
+	}
+	deckDebugLogf("REPAIR-RELOAD decide session=%q slug=%q dataDir=%q listErr=%v haveReview=%v priorHead=%q wantHead=%q",
+		sessionName, slug, dataDir, listErr, haveReview, priorHead, wantHead)
+
+	if !haveReview {
+		deckDebugLogf("REPAIR-RELOAD no review window -> plain send")
+		return false, "", sendPromptToAgent(tmuxClient, svc, item, prompt, reporter)
+	}
+
+	// Reload in place: `:e` tells tuicr to re-fetch and re-anchor onto the
+	// current head. SendCommand sends the literal `:e` followed by Enter.
+	reporter.Step("Reload review window (re-review requested)")
+	reporter.Log("reloading tuicr onto the PR's current head (tuicr :e)")
+	if serr := tmuxClient.SendCommand(sessionName+":review", ":e"); serr != nil {
+		deckDebugLogf("REPAIR-RELOAD :e send FAILED target=%q err=%v", sessionName+":review", serr)
+		return false, "", fmt.Errorf("reload review window (:e): %w", serr)
+	}
+	deckDebugLogf("REPAIR-RELOAD :e sent to %q", sessionName+":review")
+
+	// Wait for tuicr to finish re-anchoring — the `:e` re-fetch is async.
+	// Prefer the deck's cached head; if tuicr settles on a different head
+	// (cache lag) fall back to whatever session it now shows so the block
+	// still names the live session rather than nothing.
+	sessionPath := ""
+	if dataDir != "" && slug != "" {
+		sessionPath = awaitTuicrSessionPathForHead(context.Background(), dataDir, slug, wantHead, sessionDiscoveryTimeout)
+		if sessionPath == "" {
+			sessionPath = resolveTuicrSessionPath(dataDir, slug)
+		}
+	}
+	headForBlock := wantHead
+	if sessionPath != "" {
+		if h := readSessionHeadSHA(sessionPath); h != "" {
+			headForBlock = h
+		}
+		reporter.Log(fmt.Sprintf("tuicr session: %s", sessionPath))
+	} else {
+		reporter.Log("tuicr session not yet registered; agent will resolve it at use time")
+	}
+	deckDebugLogf("REPAIR-RELOAD resolved sessionPath=%q headForBlock=%q", sessionPath, headForBlock)
+
+	// Carry forward drafts stranded on a prior head — only when the current
+	// head has no comments of its own. tuicr's `:e` usually auto-migrates the
+	// prior drafts, in which case this stays empty (no redundant instructions).
+	var priorSessions []priorSession
+	if dataDir != "" && headForBlock != "" && sessionCommentsForHead(dataDir, prNumber, headForBlock) == 0 {
+		priorSessions = findPriorSessionsWithComments(dataDir, prNumber, headForBlock)
+		if len(priorSessions) > 0 {
+			reporter.Log(fmt.Sprintf("carrying forward drafts from %d prior-head session(s)", len(priorSessions)))
+		}
+	}
+
+	augmented := prompt
+	if block := renderTuicrSessionBlock(sessionPath, headForBlock, priorSessions); block != "" {
+		augmented = strings.TrimRight(prompt, "\n") + "\n\n" + block
+	}
+	if serr := sendPromptToAgent(tmuxClient, svc, item, augmented, reporter); serr != nil {
+		return true, shortSHA(headForBlock), serr
+	}
+	return true, shortSHA(headForBlock), nil
+}
+
+// renderTuicrSessionBlock builds the instructions appended to a reviewer-
+// repair prompt after the tuicr review window is reloaded onto the current
+// head. It names the reloaded session as the absolute `--session` path to
+// post the re-review into, and (when any exist) the prior-head sessions
+// whose draft comments should be carried forward first. Phrasing mirrors
+// review_prompt.md's session / carry-forward sections so the agent gets
+// consistent instructions across the review-open and repair entry points.
+// Returns "" when there's no session path and no prior sessions.
+func renderTuicrSessionBlock(sessionPath, headSHA string, priorSessions []priorSession) string {
+	sessionPath = strings.TrimSpace(sessionPath)
+	if sessionPath == "" && len(priorSessions) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "The tuicr review window was reloaded onto the PR's current head (%s).\n", shortSHA(headSHA))
+	if sessionPath != "" {
+		b.WriteString("Post your re-review into this session — pass it as the absolute `--session` path\n")
+		b.WriteString("(PR-mode sessions can't be resolved via `--repo`):\n\n")
+		fmt.Fprintf(&b, "    %s\n", sessionPath)
+		b.WriteString("\nIf that path doesn't open, re-resolve it with `tuicr review list --all` before posting.")
+	} else {
+		b.WriteString("The new session isn't registered yet; resolve it with `tuicr review list --all`\n")
+		b.WriteString("before posting your re-review (PR-mode sessions can't be resolved via `--repo`).")
+	}
+	if len(priorSessions) > 0 {
+		b.WriteString("\n\nEarlier-head draft comments to carry forward into the session above before you start:\n")
+		b.WriteString(formatPriorSessions(priorSessions))
+		b.WriteString("\nRead each prior session JSON, re-post the still-relevant comments into the current session, and do not edit or delete the prior files.")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // repoRootFromPath walks up from a workspace path to find the jj repo root (contains .jj).
 // For secondary jj workspaces, .jj/repo is a file whose contents point to the main repo's
 // .jj/repo directory; follow that pointer so the result is the source repo root, not the

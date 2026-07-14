@@ -270,6 +270,47 @@ func TestShortSHA(t *testing.T) {
 	}
 }
 
+func TestAwaitTuicrSessionPathForHead(t *testing.T) {
+	dir := t.TempDir()
+	reviewsDir := filepath.Join(dir, "reviews")
+	sessionsDir := filepath.Join(reviewsDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	slug := "gh:o/r/pr/7"
+	sess := filepath.Join(sessionsDir, "s.json")
+	writeFile(t, sess, `{"pr_session_key":{"number":7,"head_sha":"aaaa1111bbbb2222"}}`)
+	writeFile(t, filepath.Join(reviewsDir, "active_sessions.json"),
+		`{"version":"1.0","sessions":[{"slug":"`+slug+`","path":"`+sess+`"}]}`)
+
+	// Matching head resolves immediately.
+	if got := awaitTuicrSessionPathForHead(context.Background(), dir, slug, "aaaa1111bbbb2222", time.Second); got != sess {
+		t.Errorf("matching head: got %q want %q", got, sess)
+	}
+
+	// Empty wantHead degrades to any-non-empty-path behavior.
+	if got := awaitTuicrSessionPathForHead(context.Background(), dir, slug, "", time.Second); got != sess {
+		t.Errorf("empty wantHead: got %q want %q", got, sess)
+	}
+
+	// A head that never appears times out and returns "" (the caller then
+	// falls back to naming whatever session tuicr currently shows).
+	start := time.Now()
+	if got := awaitTuicrSessionPathForHead(context.Background(), dir, slug, "deadbeefdeadbeef", 200*time.Millisecond); got != "" {
+		t.Errorf("non-matching head: got %q want empty", got)
+	}
+	if elapsed := time.Since(start); elapsed < 150*time.Millisecond {
+		t.Errorf("expected to wait ~200ms before timing out, waited %s", elapsed)
+	}
+
+	// Cancelled context bails out promptly rather than waiting the timeout.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := awaitTuicrSessionPathForHead(ctx, dir, slug, "deadbeefdeadbeef", 5*time.Second); got != "" {
+		t.Errorf("cancelled ctx: got %q want empty", got)
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

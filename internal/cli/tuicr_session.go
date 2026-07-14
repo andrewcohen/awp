@@ -342,3 +342,31 @@ func awaitTuicrSessionPath(ctx context.Context, dataDir, slug string, timeout ti
 		}
 	}
 }
+
+// awaitTuicrSessionPathForHead is like awaitTuicrSessionPath but waits until
+// the resolved session is anchored to wantHead — i.e. tuicr has finished the
+// asynchronous re-fetch triggered by a `:e` reload and the registry now
+// points at the current-head session. Returns the matching path, or "" if
+// tuicr never re-anchored within the timeout (caller falls back to a
+// resolve-at-use-time instruction). With wantHead empty it degrades to
+// awaitTuicrSessionPath's "any non-empty path" behavior.
+func awaitTuicrSessionPathForHead(ctx context.Context, dataDir, slug, wantHead string, timeout time.Duration) string {
+	wantHead = strings.TrimSpace(wantHead)
+	if wantHead == "" {
+		return awaitTuicrSessionPath(ctx, dataDir, slug, timeout)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if p := resolveTuicrSessionPath(dataDir, slug); p != "" && readSessionHeadSHA(p) == wantHead {
+			return p
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
