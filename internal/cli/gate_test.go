@@ -150,10 +150,12 @@ func TestGateRecordFailViaEventNameFallback(t *testing.T) {
 	}
 }
 
-func TestGateRecordNoUnitInProgressRecordsNothing(t *testing.T) {
+func TestGateRecordWithoutInProgressStillRecords(t *testing.T) {
 	const root = "/tmp/awp-gate-nounit"
 	fs := newFakeStore()
-	// UnitKey empty → exploration, not a unit.
+	// No UnitKey: the agent never marked a task in_progress — a common lapse.
+	// Recording must still happen, otherwise the completion check later blocks
+	// on gates that actually passed.
 	fs.byRepo[root] = map[string]workspace.Entry{
 		"feat-x": {Name: "feat-x", Path: filepath.Join(root, "feat-x"), DevLoop: &workspace.DevLoopSnapshot{}},
 	}
@@ -165,8 +167,29 @@ func TestGateRecordNoUnitInProgressRecordsNothing(t *testing.T) {
 	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
-	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates; len(got) != 0 {
-		t.Errorf("gates = %v, want empty (no unit in progress)", got)
+	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["test"]; got != "pass" {
+		t.Errorf("gate test = %q, want pass (recorded even without in_progress)", got)
+	}
+}
+
+func TestGateRecordCreatesSnapshotWhenAbsent(t *testing.T) {
+	const root = "/tmp/awp-gate-nosnap"
+	fs := newFakeStore()
+	// Entry exists but has no DevLoop snapshot yet.
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"feat-x": {Name: "feat-x", Path: filepath.Join(root, "feat-x")},
+	}
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-nosnap", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateRecord: %v", err)
+	}
+	dl := fs.byRepo[root]["feat-x"].DevLoop
+	if dl == nil || dl.Gates["test"] != "pass" {
+		t.Errorf("expected a snapshot with test=pass, got %+v", dl)
 	}
 }
 

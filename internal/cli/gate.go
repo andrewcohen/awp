@@ -157,11 +157,17 @@ func runGateRecord(args []string, out io.Writer) error {
 	// the deck's fsnotify watcher → a refresh) unconditionally, so recording
 	// an unchanged result — e.g. an agent re-running a passing `test` — would
 	// otherwise churn the file and add flock contention across every hook
-	// process. Record only while a unit is in progress (UnitKey set by the
-	// TaskUpdate→in_progress hook); gates run during exploration are ignored.
+	// process.
+	//
+	// We record regardless of whether a unit is in progress. Agents routinely
+	// run gates without ever calling TaskUpdate(in_progress) (so UnitKey stays
+	// empty); gating recording on UnitKey meant those runs were silently
+	// dropped and the completion check then blocked on gates that had actually
+	// passed. Per-unit isolation still holds for agents that DO mark
+	// in_progress: resetGateUnit clears the gate set when a new unit begins.
 	snap := currentDevLoop(root, wsName)
-	if snap == nil || snap.UnitKey == "" {
-		return emitGateRecord(out, jsonOut, report, "")
+	if snap == nil {
+		snap = &workspace.DevLoopSnapshot{}
 	}
 	report.recorded = true
 	report.Unit = snap.Task
@@ -181,10 +187,13 @@ func runGateRecord(args []string, out io.Writer) error {
 		_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
 			name := resolveLiveWorkspaceName(entries, wsName)
 			entry, ok := entries[name]
-			if !ok || entry.DevLoop == nil || entry.DevLoop.UnitKey == "" {
+			if !ok {
 				return entries
 			}
 			s := entry.DevLoop
+			if s == nil {
+				s = &workspace.DevLoopSnapshot{}
+			}
 			if s.Gates == nil {
 				s.Gates = map[string]string{}
 			}
