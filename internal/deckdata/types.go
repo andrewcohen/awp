@@ -86,6 +86,11 @@ type DevLoopSummary struct {
 	Total int    // total todos / units (0 when the agent emitted no list)
 	Phase string // current dev-loop phase (explore/implement/test/gates/commit)
 	Task  string // the in-progress unit's content ("" when none is in progress)
+	// Gates is the current unit's per-gate result (name → pass/fail/pending),
+	// mirroring workspace.DevLoopSnapshot.Gates. Populated by the reconciling
+	// transcript scan (deck open) and carried to the persisted snapshot so the
+	// event-driven `awp gate` results self-heal. Nil when unknown.
+	Gates map[string]string
 }
 
 // Scope controls which items are shown in the deck list. Cycled with `P`;

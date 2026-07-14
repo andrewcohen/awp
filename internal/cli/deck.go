@@ -1325,6 +1325,14 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					continue
 				}
 				snapshot := &workspace.DevLoopSnapshot{Done: fresh.Done, Total: fresh.Total, Phase: fresh.Phase, Task: fresh.Task}
+				// Preserve the event-driven gate results the `awp gate record`
+				// hook writes; the transcript scan here doesn't yet recompute
+				// them (see the reconciler unit), so carry them forward rather
+				// than clobbering with a zero value on every refresh.
+				if e.DevLoop != nil {
+					snapshot.Gates = e.DevLoop.Gates
+					snapshot.UnitKey = e.DevLoop.UnitKey
+				}
 				if !devLoopSnapshotEqual(e.DevLoop, snapshot) {
 					changed[name] = snapshot
 				}
@@ -1484,7 +1492,19 @@ func devLoopSnapshotEqual(a, b *workspace.DevLoopSnapshot) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return *a == *b
+	if a.Done != b.Done || a.Total != b.Total || a.Phase != b.Phase ||
+		a.Task != b.Task || a.UnitKey != b.UnitKey {
+		return false
+	}
+	if len(a.Gates) != len(b.Gates) {
+		return false
+	}
+	for k, v := range a.Gates {
+		if b.Gates[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // buildDevLoopSummary replays the workspace's newest agent transcript into
