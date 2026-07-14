@@ -17,7 +17,7 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 7
+const HookMarkerVersion = 8
 
 // BlockingTools lists tool names that block on user input. When a
 // PreToolUse hook fires for one of these, awp reports "waiting" instead of
@@ -54,13 +54,22 @@ func HookCommand(event, state string) string {
 	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + extra + ` >/dev/null 2>&1 || true`
 }
 
-// GateHookCommand returns the shell snippet for a dev-loop gate hook (`awp
-// internal gate <sub>`). Unlike the status hooks, stdout is NOT redirected:
-// Claude reads it as the hook's JSON result (a PostToolUse nudge or a
-// PreToolUse deny). It still gates on $TMUX and honors $AWP_BIN, and swallows
-// a non-zero exit so a gate hook never breaks an agent turn.
-func GateHookCommand(sub string) string {
-	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal gate ` + sub + ` 2>/dev/null || true`
+// GateRecordHookCommand returns the shell snippet for the gate-record hook
+// (`awp internal gate record --result <verdict>`). stdout is NOT redirected —
+// Claude reads it as the hook's result (the PostToolUse nudge). stderr is
+// dropped and a non-zero exit is swallowed so recording never breaks a turn;
+// record always exits 0 anyway. It gates on $TMUX and honors $AWP_BIN.
+func GateRecordHookCommand(verdict string) string {
+	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal gate record --result ` + verdict + ` 2>/dev/null || true`
+}
+
+// GateCheckHookCommand returns the shell snippet for the gate-check hook
+// (`awp internal gate check --hook`). Unlike the other hooks it must NOT
+// swallow stderr or the exit code: the completion block is signalled by exit
+// code 2 with the reason on stderr, which Claude feeds back to the agent. It
+// exits 0 cleanly outside tmux so it never emits a spurious hook error there.
+func GateCheckHookCommand() string {
+	return `[ -n "$TMUX" ] || exit 0; "${AWP_BIN:-awp}" internal gate check --hook`
 }
 
 // hookSpec is one awp-managed hook entry: the event it lives under, an
@@ -83,8 +92,12 @@ type hookSpec struct {
 // dev_loop configured, so installing them globally is a no-op elsewhere.
 func gateHookSpecs() []hookSpec {
 	return []hookSpec{
-		{event: "PostToolUse", matcher: "Bash", id: "gate-record", command: GateHookCommand("record")},
-		{event: "PreToolUse", matcher: "TaskUpdate", id: "gate-check", command: GateHookCommand("check --hook")},
+		// PostToolUse fires only on success, PostToolUseFailure only on
+		// failure — so the event carries the pass/fail verdict; we pass it
+		// explicitly via --result.
+		{event: "PostToolUse", matcher: "Bash", id: "gate-record", command: GateRecordHookCommand("pass")},
+		{event: "PostToolUseFailure", matcher: "Bash", id: "gate-record", command: GateRecordHookCommand("fail")},
+		{event: "PreToolUse", matcher: "TaskUpdate", id: "gate-check", command: GateCheckHookCommand()},
 	}
 }
 

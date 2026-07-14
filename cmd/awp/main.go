@@ -41,6 +41,11 @@ func main() {
 		if errors.Is(err, cli.ErrOpenCancelled) {
 			os.Exit(2)
 		}
+		// The completion gate signals a block with exit code 2; the reason is
+		// already on stderr for Claude to feed back, so don't re-print it.
+		if errors.Is(err, cli.ErrGateBlocked) {
+			os.Exit(2)
+		}
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,6 +48,23 @@ func seedGateWorkspace(fs *fakeStore, root, ws string, gates map[string]string) 
 	}
 }
 
+func TestGateVerdict(t *testing.T) {
+	cases := []struct{ flag, event, want string }{
+		{"pass", "", "pass"},
+		{"fail", "", "fail"},
+		{"", "PostToolUse", "pass"},
+		{"", "PostToolUseFailure", "fail"},
+		{"", "", "pass"},                // default
+		{"fail", "PostToolUse", "fail"}, // explicit flag wins
+		{"pass", "PostToolUseFailure", "pass"},
+	}
+	for _, c := range cases {
+		if got := gateVerdict(c.flag, c.event); got != c.want {
+			t.Errorf("gateVerdict(%q,%q) = %q, want %q", c.flag, c.event, got, c.want)
+		}
+	}
+}
+
 func TestGateRecordWritesPass(t *testing.T) {
 	const root = "/tmp/awp-gate-pass"
 	fs := newFakeStore()
@@ -55,31 +73,49 @@ func TestGateRecordWritesPass(t *testing.T) {
 	withWorkspaceEnv(t, "feat-x", "awp-gate-pass", root)
 	withGateRepo(t, root, gateConfigJSON)
 
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord(nil, &bytes.Buffer{}); err != nil {
+	// PostToolUse fires on success → default verdict pass.
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
-
-	got := fs.byRepo[root]["feat-x"].DevLoop.Gates
-	if got["test"] != "pass" {
-		t.Errorf("gate test = %q, want pass (all gates: %v)", got["test"], got)
+	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["test"]; got != "pass" {
+		t.Errorf("gate test = %q, want pass", got)
 	}
 }
 
-func TestGateRecordWritesFailOnNonzeroExit(t *testing.T) {
-	const root = "/tmp/awp-gate-fail"
+func TestGateRecordWritesFailViaResultFlag(t *testing.T) {
+	const root = "/tmp/awp-gate-fail-flag"
 	fs := newFakeStore()
 	seedGateWorkspace(fs, root, "feat-x", nil)
 	withFakeStore(t, fs)
-	withWorkspaceEnv(t, "feat-x", "awp-gate-fail", root)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-fail-flag", root)
 	withGateRepo(t, root, gateConfigJSON)
 
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go build ./..."},"tool_response":{"is_error":true}}`)
-	if err := runGateRecord(nil, &bytes.Buffer{}); err != nil {
+	// The PostToolUseFailure hook passes --result fail.
+	withStdin(t, `{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"go build ./..."}}`)
+	if err := runGateRecord([]string{"--result", "fail"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["build"]; got != "fail" {
 		t.Errorf("gate build = %q, want fail", got)
+	}
+}
+
+func TestGateRecordFailViaEventNameFallback(t *testing.T) {
+	const root = "/tmp/awp-gate-fail-event"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", nil)
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-fail-event", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	// No --result flag: verdict falls back to hook_event_name.
+	withStdin(t, `{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"go build ./..."}}`)
+	if err := runGateRecord(nil, &bytes.Buffer{}); err != nil {
+		t.Fatalf("runGateRecord: %v", err)
+	}
+	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["build"]; got != "fail" {
+		t.Errorf("gate build = %q, want fail (from hook_event_name)", got)
 	}
 }
 
@@ -94,8 +130,8 @@ func TestGateRecordNoUnitInProgressRecordsNothing(t *testing.T) {
 	withWorkspaceEnv(t, "feat-x", "awp-gate-nounit", root)
 	withGateRepo(t, root, gateConfigJSON)
 
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord(nil, &bytes.Buffer{}); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates; len(got) != 0 {
@@ -113,8 +149,8 @@ func TestGateRecordCompoundCommandMatchesFirstGate(t *testing.T) {
 
 	// gofmt matches "fmt"; go test matches "test". First gate in loop order
 	// (fmt) wins; only it is recorded.
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"gofmt -l . && go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord(nil, &bytes.Buffer{}); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gofmt -l . && go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	got := fs.byRepo[root]["feat-x"].DevLoop.Gates
@@ -135,8 +171,8 @@ func TestGateRecordNonGateCommandRecordsNothing(t *testing.T) {
 	withGateRepo(t, root, gateConfigJSON)
 
 	var out bytes.Buffer
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"ls -la"},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord([]string{"--json"}, &out); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}`)
+	if err := runGateRecord([]string{"--json", "--result", "pass"}, &out); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	if len(fs.byRepo[root]["feat-x"].DevLoop.Gates) != 0 {
@@ -162,8 +198,8 @@ func TestGateRecordNoDevLoopNoOp(t *testing.T) {
 	// No dev_loop block → hooks no-op.
 	withGateRepo(t, root, `{}`)
 
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord(nil, &bytes.Buffer{}); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	if len(fs.byRepo[root]["feat-x"].DevLoop.Gates) != 0 {
@@ -180,13 +216,11 @@ func TestGateRecordJSONReport(t *testing.T) {
 	withGateRepo(t, root, gateConfigJSON)
 
 	var out bytes.Buffer
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord([]string{"--json"}, &out); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--json", "--result", "pass"}, &out); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	var rep struct {
-		Workspace       string            `json:"workspace"`
-		Unit            string            `json:"unit"`
 		MatchedGate     *string           `json:"matched_gate"`
 		Result          string            `json:"result"`
 		UnitGates       map[string]string `json:"unit_gates"`
@@ -218,8 +252,8 @@ func TestGateRecordNudgeAllGreen(t *testing.T) {
 	withGateRepo(t, root, gateConfigJSON)
 
 	var out bytes.Buffer
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord(nil, &out); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &out); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	ctx := parseAdditionalContext(t, out.String())
@@ -237,8 +271,8 @@ func TestGateRecordNudgeRedTransition(t *testing.T) {
 	withGateRepo(t, root, gateConfigJSON)
 
 	var out bytes.Buffer
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go build ./..."},"tool_response":{"exit_code":1}}`)
-	if err := runGateRecord(nil, &out); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"go build ./..."}}`)
+	if err := runGateRecord([]string{"--result", "fail"}, &out); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	ctx := parseAdditionalContext(t, out.String())
@@ -260,8 +294,8 @@ func TestGateRecordNudgeOffSuppresses(t *testing.T) {
 	]}}`)
 
 	var out bytes.Buffer
-	withStdin(t, `{"tool_name":"Bash","tool_input":{"command":"go test ./..."},"tool_response":{"exit_code":0}}`)
-	if err := runGateRecord(nil, &out); err != nil {
+	withStdin(t, `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"go test ./..."}}`)
+	if err := runGateRecord([]string{"--result", "pass"}, &out); err != nil {
 		t.Fatalf("runGateRecord: %v", err)
 	}
 	if out.String() != "" {
@@ -278,7 +312,7 @@ func TestGateCheckHookInProgressResetsGates(t *testing.T) {
 	withGateRepo(t, root, gateConfigJSON)
 
 	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"2","status":"in_progress","subject":"next unit"}}`)
-	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}); err != nil {
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateCheck: %v", err)
 	}
 	snap := fs.byRepo[root]["feat-x"].DevLoop
@@ -303,7 +337,7 @@ func TestGateCheckHookSameUnitKeepsGates(t *testing.T) {
 
 	// UnitKey seeded as "1"; re-marking task 1 in_progress must be idempotent.
 	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"in_progress"}}`)
-	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}); err != nil {
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runGateCheck: %v", err)
 	}
 	if got := fs.byRepo[root]["feat-x"].DevLoop.Gates["fmt"]; got != "pass" {
@@ -311,7 +345,7 @@ func TestGateCheckHookSameUnitKeepsGates(t *testing.T) {
 	}
 }
 
-func TestGateCheckHookCompletedDeniesWhenRed(t *testing.T) {
+func TestGateCheckHookCompletedBlocksWhenRed(t *testing.T) {
 	const root = "/tmp/awp-gate-deny"
 	fs := newFakeStore()
 	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "fail", "build": "pass"})
@@ -319,15 +353,13 @@ func TestGateCheckHookCompletedDeniesWhenRed(t *testing.T) {
 	withWorkspaceEnv(t, "feat-x", "awp-gate-deny", root)
 	withGateRepo(t, root, gateConfigJSON)
 
-	var out bytes.Buffer
+	var stderr bytes.Buffer
 	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
-	if err := runGateCheck([]string{"--hook"}, &out); err != nil {
-		t.Fatalf("runGateCheck: %v", err)
+	err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr)
+	if !errors.Is(err, ErrGateBlocked) {
+		t.Fatalf("expected ErrGateBlocked, got %v", err)
 	}
-	decision, reason := parsePreToolUseDecision(t, out.String())
-	if decision != "deny" {
-		t.Fatalf("permissionDecision = %q, want deny (out=%q)", decision, out.String())
-	}
+	reason := stderr.String()
 	if !contains(reason, "test") || !contains(reason, "red") {
 		t.Errorf("reason = %q, want it to name the red 'test' gate", reason)
 	}
@@ -336,7 +368,7 @@ func TestGateCheckHookCompletedDeniesWhenRed(t *testing.T) {
 	}
 }
 
-func TestGateCheckHookCompletedDeniesWhenPending(t *testing.T) {
+func TestGateCheckHookCompletedBlocksWhenPending(t *testing.T) {
 	const root = "/tmp/awp-gate-deny-pending"
 	fs := newFakeStore()
 	// fmt+test pass, build never ran (pending).
@@ -345,17 +377,14 @@ func TestGateCheckHookCompletedDeniesWhenPending(t *testing.T) {
 	withWorkspaceEnv(t, "feat-x", "awp-gate-deny-pending", root)
 	withGateRepo(t, root, gateConfigJSON)
 
-	var out bytes.Buffer
+	var stderr bytes.Buffer
 	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
-	if err := runGateCheck([]string{"--hook"}, &out); err != nil {
-		t.Fatalf("runGateCheck: %v", err)
+	err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr)
+	if !errors.Is(err, ErrGateBlocked) {
+		t.Fatalf("expected ErrGateBlocked, got %v", err)
 	}
-	decision, reason := parsePreToolUseDecision(t, out.String())
-	if decision != "deny" {
-		t.Fatalf("permissionDecision = %q, want deny", decision)
-	}
-	if !contains(reason, "build") || !contains(reason, "hasn't run") {
-		t.Errorf("reason = %q, want it to flag the pending 'build' gate", reason)
+	if !contains(stderr.String(), "build") || !contains(stderr.String(), "hasn't run") {
+		t.Errorf("reason = %q, want it to flag the pending 'build' gate", stderr.String())
 	}
 }
 
@@ -367,13 +396,13 @@ func TestGateCheckHookCompletedAllowsWhenGreen(t *testing.T) {
 	withWorkspaceEnv(t, "feat-x", "awp-gate-allow", root)
 	withGateRepo(t, root, gateConfigJSON)
 
-	var out bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
-	if err := runGateCheck([]string{"--hook"}, &out); err != nil {
-		t.Fatalf("runGateCheck: %v", err)
+	if err := runGateCheck([]string{"--hook"}, &stdout, &stderr); err != nil {
+		t.Fatalf("all green should allow (nil err), got %v", err)
 	}
-	if out.String() != "" {
-		t.Errorf("all green should allow (no output); got %q", out.String())
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Errorf("all green should be silent; stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
@@ -387,36 +416,19 @@ func TestGateCheckSelfExitCodes(t *testing.T) {
 
 	// Not ready → non-nil error (non-zero exit).
 	withStdin(t, ``)
-	if err := runGateCheck(nil, &bytes.Buffer{}); err == nil {
+	if err := runGateCheck(nil, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("self-check with a red gate should return an error")
 	}
 
 	// All green → nil.
 	fs.byRepo[root]["feat-x"].DevLoop.Gates["test"] = "pass"
 	var out bytes.Buffer
-	if err := runGateCheck(nil, &out); err != nil {
+	if err := runGateCheck(nil, &out, &bytes.Buffer{}); err != nil {
 		t.Fatalf("self-check all-green should succeed: %v", err)
 	}
 	if !contains(out.String(), "ready to complete") {
 		t.Errorf("self-check output = %q, want a ready confirmation", out.String())
 	}
-}
-
-func parsePreToolUseDecision(t *testing.T, s string) (decision, reason string) {
-	t.Helper()
-	if s == "" {
-		return "", ""
-	}
-	var payload struct {
-		HookSpecificOutput struct {
-			PermissionDecision       string `json:"permissionDecision"`
-			PermissionDecisionReason string `json:"permissionDecisionReason"`
-		} `json:"hookSpecificOutput"`
-	}
-	if err := json.Unmarshal([]byte(s), &payload); err != nil {
-		t.Fatalf("parse deny JSON: %v (%q)", err, s)
-	}
-	return payload.HookSpecificOutput.PermissionDecision, payload.HookSpecificOutput.PermissionDecisionReason
 }
 
 func parseAdditionalContext(t *testing.T, s string) string {

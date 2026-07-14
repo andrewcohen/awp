@@ -2,8 +2,10 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,6 +14,11 @@ import (
 	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
+
+// ErrGateBlocked signals that the completion gate denied a TaskUpdate. main
+// maps it to exit code 2 so Claude blocks the tool call and feeds the reason
+// (already written to stderr) back to the agent.
+var ErrGateBlocked = errors.New("gate blocked")
 
 // runGate dispatches `awp internal gate <subcommand>`. The subcommands are
 // the dev-loop enforcement hooks: `record` (a PostToolUse(Bash) hook that
@@ -29,7 +36,7 @@ func (a *App) runGate(args []string) error {
 	case "record":
 		return runGateRecord(args[1:], a.out)
 	case "check":
-		return runGateCheck(args[1:], a.out)
+		return runGateCheck(args[1:], a.out, os.Stderr)
 	default:
 		return fmt.Errorf("unknown gate subcommand %q", args[0])
 	}
@@ -53,16 +60,16 @@ Both read the Claude hook JSON payload on stdin and resolve the workspace
 from $AWP_WORKSPACE / $AWP_REPO_ROOT (tmux fallback). They no-op silently
 when the repo has no dev_loop configured.`
 
-// gateHookPayload is the subset of a Claude PreToolUse/PostToolUse hook
-// payload the gate commands read. tool_response is the tool's result object;
-// for Bash its shape is not authoritatively documented, so bashOutcome parses
-// it defensively.
+// gateHookPayload is the subset of a Claude hook payload the gate commands
+// read. hook_event_name is the verdict source for `gate record`: Claude fires
+// PostToolUse only after a tool *succeeds* and PostToolUseFailure after it
+// *fails*, so the event itself — not any exit-code field — is the reliable
+// pass/fail signal. (The Bash tool_response carries no exit status on the
+// builds we tested, which is why reading it was unreliable.)
 type gateHookPayload struct {
-	ToolName     string          `json:"tool_name"`
-	ToolInput    json.RawMessage `json:"tool_input"`
-	ToolResponse json.RawMessage `json:"tool_response"`
-	ToolOutput   json.RawMessage `json:"tool_output"`
-	IsError      *bool           `json:"is_error"`
+	HookEventName string          `json:"hook_event_name"`
+	ToolName      string          `json:"tool_name"`
+	ToolInput     json.RawMessage `json:"tool_input"`
 }
 
 // bashCommand pulls the shell command out of a Bash tool_input payload.
@@ -74,75 +81,47 @@ func (p gateHookPayload) bashCommand() string {
 	return in.Command
 }
 
-// bashOutcome derives pass/fail for a completed Bash command from the hook
-// payload. It returns ("", false) when the command was interrupted or when
-// the payload carries no reliable success signal, so callers can decide how
-// to treat an unknown outcome.
-//
-// The Bash tool_response schema isn't guaranteed across Claude Code versions,
-// so we probe a superset of the fields builds have used to express an exit
-// status: a numeric exit code, an is_error/success boolean, or interruption.
-func (p gateHookPayload) bashOutcome() (result string, known bool) {
-	resp := p.ToolResponse
-	if len(resp) == 0 {
-		resp = p.ToolOutput
-	}
-	var r struct {
-		ExitCode    *int  `json:"exit_code"`
-		ExitCodeAlt *int  `json:"exitCode"`
-		Code        *int  `json:"code"`
-		ReturnCode  *int  `json:"returnCode"`
-		IsError     *bool `json:"is_error"`
-		IsErrorAlt  *bool `json:"isError"`
-		Success     *bool `json:"success"`
-		Interrupted bool  `json:"interrupted"`
-	}
-	_ = json.Unmarshal(resp, &r)
-
-	if r.Interrupted {
-		// A killed/interrupted command didn't finish the gate — record
-		// nothing and let the reconciler settle it from the transcript.
-		return "", false
-	}
-	for _, code := range []*int{r.ExitCode, r.ExitCodeAlt, r.Code, r.ReturnCode} {
-		if code != nil {
-			return passFail(*code == 0), true
-		}
-	}
-	for _, ok := range []*bool{boolNot(r.IsError), boolNot(r.IsErrorAlt), boolNot(p.IsError), r.Success} {
-		if ok != nil {
-			return passFail(*ok), true
-		}
-	}
-	return "", false
-}
-
-func boolNot(b *bool) *bool {
-	if b == nil {
-		return nil
-	}
-	v := !*b
-	return &v
-}
-
-func passFail(ok bool) string {
-	if ok {
+// gateVerdict resolves pass/fail for a gate command. The explicit --result
+// flag wins (that's what the hook commands pass); otherwise the payload's
+// hook_event_name decides (PostToolUseFailure → fail). Anything else defaults
+// to "pass" — a matched gate command that completed via the success event.
+func gateVerdict(resultFlag, hookEvent string) string {
+	switch strings.ToLower(strings.TrimSpace(resultFlag)) {
+	case "fail":
+		return "fail"
+	case "pass":
 		return "pass"
 	}
-	return "fail"
+	if hookEvent == "PostToolUseFailure" {
+		return "fail"
+	}
+	return "pass"
 }
 
-// runGateRecord implements `awp gate record`: the PostToolUse(Bash) hook. It
-// matches the run command against the repo's dev_loop gates and records the
-// pass/fail into the in-progress unit's snapshot. It always exits 0 so a
-// misconfigured hook never breaks an agent turn; on a gate transition it may
-// print a PostToolUse nudge (rung 2) to stdout for the agent to read.
+// runGateRecord implements `awp gate record`: the PostToolUse(Bash) and
+// PostToolUseFailure(Bash) hook. It matches the run command against the repo's
+// dev_loop gates and records pass/fail into the in-progress unit's snapshot.
+// The verdict comes from which event fired (PostToolUse → pass,
+// PostToolUseFailure → fail), passed explicitly via --result on the hook
+// command with the hook_event_name payload field as a fallback. It always
+// exits 0 so a misconfigured hook never breaks an agent turn; on a gate
+// transition it may print a PostToolUse nudge (rung 2) to stdout.
 func runGateRecord(args []string, out io.Writer) error {
 	jsonOut := false
-	for _, arg := range args {
-		switch arg {
-		case "--json":
+	resultFlag := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--json":
 			jsonOut = true
+		case arg == "--result":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--result requires a value")
+			}
+			resultFlag = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--result="):
+			resultFlag = strings.TrimPrefix(arg, "--result=")
 		default:
 			return fmt.Errorf("unknown argument %q", arg)
 		}
@@ -169,14 +148,7 @@ func runGateRecord(args []string, out io.Writer) error {
 		// Not a gate (or a phase marker with no pass/fail) — record nothing.
 		return emitGateRecord(out, jsonOut, report, "")
 	}
-	result, known := payload.bashOutcome()
-	if !known {
-		// No reliable signal in the payload: assume the completed command
-		// passed. A genuine failure is corrected by the transcript reconciler
-		// (which reads is_error) on the next deck open — we bias toward not
-		// producing a false completion block here.
-		result = "pass"
-	}
+	result := gateVerdict(resultFlag, payload.HookEventName)
 	report.matched = gate.Name
 	report.Result = result
 
@@ -222,7 +194,7 @@ func runGateRecord(args []string, out io.Writer) error {
 // configured gate is green. Without --hook it is a self-check the agent (or a
 // human) can run: exit 0 when the current unit is ready to complete, else a
 // non-zero exit with an actionable reason.
-func runGateCheck(args []string, out io.Writer) error {
+func runGateCheck(args []string, out, errOut io.Writer) error {
 	hook := false
 	wsFlag := ""
 	for i := 0; i < len(args); i++ {
@@ -250,16 +222,18 @@ func runGateCheck(args []string, out io.Writer) error {
 		}
 	}
 	if hook {
-		return runGateCheckHook(out)
+		return runGateCheckHook(errOut)
 	}
 	return runGateCheckSelf(wsFlag, out)
 }
 
 // runGateCheckHook handles the PreToolUse(TaskUpdate) payload: reset on
-// in_progress, deny-or-allow on completed. It always returns nil — a denial
-// is expressed by printing a permissionDecision, not a non-zero exit — so a
-// hook error never wedges the agent.
-func runGateCheckHook(out io.Writer) error {
+// in_progress, deny-or-allow on completed. A denial is expressed by writing
+// the reason to stderr and returning ErrGateBlocked, which main maps to exit
+// code 2 — the exit code Claude treats as "block this tool call and feed
+// stderr back to the agent". Every other path returns nil (allow); a hook
+// error never wedges the agent because only exit 2 blocks.
+func runGateCheckHook(errOut io.Writer) error {
 	payload, _ := readGatePayload()
 	if payload.ToolName != "" && payload.ToolName != "TaskUpdate" {
 		return nil // not our tool → allow
@@ -285,8 +259,8 @@ func runGateCheckHook(out io.Writer) error {
 		if gatesAllGreen(loop, gates) {
 			return nil // ready → allow
 		}
-		printPreToolUseDeny(out, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
-		return nil
+		_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
+		return ErrGateBlocked
 	default:
 		return nil // pending / deleted / unset → allow
 	}
@@ -382,23 +356,6 @@ func gateDenyReason(loop watch.Loop, gates map[string]string, unitLabel string) 
 	}
 	// Shouldn't reach here (caller checks gatesAllGreen first), but be safe.
 	return fmt.Sprintf("unit %s can't be marked complete: its gates are not all green.", unitLabel)
-}
-
-// printPreToolUseDeny prints a PreToolUse hook result denying the tool call
-// with a reason the agent can act on.
-func printPreToolUseDeny(out io.Writer, reason string) {
-	payload := map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":            "PreToolUse",
-			"permissionDecision":       "deny",
-			"permissionDecisionReason": reason,
-		},
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	_, _ = fmt.Fprintln(out, string(data))
 }
 
 // gateRecordReport is the --json debug shape for `awp gate record`.
