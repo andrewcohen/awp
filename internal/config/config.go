@@ -59,6 +59,13 @@ type Config struct {
 	DevLoop struct {
 		Phases []string      `json:"phases,omitempty"`
 		Gates  []DevLoopGate `json:"gates,omitempty"`
+		// Nudge controls how chatty the `awp gate record` PostToolUse hook is
+		// when it feeds an in-context reminder back to the agent (rung 2 of the
+		// enforcement ladder). One of "off", "transitions" (default), or
+		// "verbose": off never speaks; transitions speaks only when a gate
+		// flips red or the unit's gates all go green; verbose also acknowledges
+		// each intermediate pass. Empty = "transitions".
+		Nudge string `json:"nudge,omitempty"`
 	} `json:"dev_loop,omitempty"`
 }
 
@@ -234,6 +241,9 @@ func merge(global, project Config) Config {
 	}
 	if len(out.DevLoop.Gates) == 0 {
 		out.DevLoop.Gates = global.DevLoop.Gates
+	}
+	if strings.TrimSpace(out.DevLoop.Nudge) == "" {
+		out.DevLoop.Nudge = global.DevLoop.Nudge
 	}
 	return out
 }

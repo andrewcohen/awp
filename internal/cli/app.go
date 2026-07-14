@@ -87,6 +87,8 @@ func (a *App) Run(args []string) error {
 		return a.runReview(args[1:])
 	case "watch":
 		return a.runWatch(args[1:])
+	case "gate":
+		return a.runGate(args[1:])
 	case "internal":
 		return a.runInternal(args[1:])
 	case "init":
