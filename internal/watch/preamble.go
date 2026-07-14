@@ -27,8 +27,7 @@ func GeneratePreamble(loop Loop) string {
 		}
 		fmt.Fprintf(&b, "     - %s\n", cmd)
 	}
-	b.WriteString("If a gate fails, fix and re-run it before continuing. Commit each finished ")
-	b.WriteString("unit (a real commit, not \"wip:\") before starting the next.\n")
+	b.WriteString("If a gate fails, fix and re-run it before continuing.\n")
 	return b.String()
 }
 
