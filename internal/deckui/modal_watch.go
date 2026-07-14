@@ -35,6 +35,7 @@ type watchModal struct {
 	agentStatus   string
 	transcript    string
 	vp            viewport.Model
+	header        string
 }
 
 // newWatchModal resolves the workspace's dev loop and seeds the first frame.
@@ -66,15 +67,20 @@ func (wm *watchModal) refresh() {
 		wm.transcript = located
 	}
 	if wm.transcript == "" {
+		wm.header = watch.Header(wm.label, watch.State{AgentStatus: wm.agentStatus})
 		wm.vp.SetContent("waiting for the agent to start its session…")
 		return
 	}
 	st, err := watch.BuildState(wm.loop, wm.transcript, wm.agentStatus, time.Now())
 	if err != nil {
+		wm.header = watch.Header(wm.label, watch.State{AgentStatus: wm.agentStatus})
 		wm.vp.SetContent("watch error: " + err.Error())
 		return
 	}
-	wm.vp.SetContent(watch.Render(wm.loop, wm.label, st))
+	// The header is pinned as the popover's sticky title (see renderPopover);
+	// the viewport carries only the body so the header isn't repeated.
+	wm.header = watch.Header(wm.label, st)
+	wm.vp.SetContent(watch.RenderBody(wm.loop, st))
 }
 
 func (wm *watchModal) footerHelp() string { return "" }
@@ -106,11 +112,10 @@ func (wm *watchModal) renderPopover(m *Model) string {
 	}
 	wm.vp.Height = vpHeight
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("watch · " + wm.label)
 	hintText := "↑/↓ scroll · pgup/pgdn page · esc close · repaints 1s"
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(hintText)
 
-	body := lipgloss.JoinVertical(lipgloss.Left, title, "", wm.vp.View(), "", hint)
+	body := lipgloss.JoinVertical(lipgloss.Left, wm.header, "", wm.vp.View(), "", hint)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
