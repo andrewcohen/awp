@@ -27,6 +27,38 @@ func TestAddOptimisticCreateMergesIntoItems(t *testing.T) {
 	}
 }
 
+func TestMergedItemsDropsUnmanagedRowMidDelete(t *testing.T) {
+	// After a delete job finishes, the state row is gone but the tmux session
+	// lingers (kill deferred to popup exit), so loadDeckItems surfaces it as
+	// an "unmanaged" adoptable row. A delete job for that workspace should
+	// suppress it so it doesn't flash back as "(live tmux session, not in
+	// store)".
+	m := New(nil, func(ActionRequest) error { return nil })
+	m.itemsAll = []Item{
+		{ProjectName: "alpha", WorkspaceName: "feat-x", Status: "unmanaged", SessionName: "[awp]alpha__feat-x"},
+	}
+	m.jobs = []Job{
+		{Action: "delete", Status: JobDone, RepoRoot: "/repos/alpha", WorkspaceName: "feat-x"},
+	}
+	for _, it := range m.mergedItemsAll() {
+		if it.WorkspaceName == "feat-x" {
+			t.Fatalf("unmanaged row for a deleted workspace should be suppressed; got %+v", it)
+		}
+	}
+
+	// Without the delete job, the unmanaged row is a genuine orphan and stays.
+	m.jobs = nil
+	found := false
+	for _, it := range m.mergedItemsAll() {
+		if it.WorkspaceName == "feat-x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("a genuine unmanaged row (no delete job) should still appear")
+	}
+}
+
 func TestAddOptimisticCreateSkipsEmptyName(t *testing.T) {
 	m := New(nil, func(ActionRequest) error { return nil })
 	m.addOptimisticCreate(Item{WorkspaceName: "   ", RepoRoot: "/a"})
