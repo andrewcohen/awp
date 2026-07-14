@@ -8,6 +8,7 @@ package watch
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/andrewcohen/awp/internal/config"
 )
@@ -25,6 +26,21 @@ type Gate struct {
 	Marker bool
 	re     *regexp.Regexp
 	notRe  *regexp.Regexp
+}
+
+// DisplayCommand returns the human-facing command for this gate: the
+// configured Command, falling back to the first alternative of the match
+// pattern (a readable stand-in for what the gate detects). Used in the
+// preamble and the completion-gate deny reason so both quote the same
+// invocation the agent should run.
+func (g Gate) DisplayCommand() string {
+	if strings.TrimSpace(g.Command) != "" {
+		return g.Command
+	}
+	if g.re != nil {
+		return firstAlt(g.re.String())
+	}
+	return g.Name
 }
 
 // Matches reports whether the given bash command invokes this gate — it must
