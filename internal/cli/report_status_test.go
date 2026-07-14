@@ -14,8 +14,9 @@ import (
 // fakeStore is an in-memory reportStatusStore for tests. It satisfies the
 // updater interface so writeWorkspaceStatus exercises the Update path.
 type fakeStore struct {
-	mu     sync.Mutex
-	byRepo map[string]map[string]workspace.Entry
+	mu      sync.Mutex
+	byRepo  map[string]map[string]workspace.Entry
+	updates int // count of Update calls, for asserting compare-and-skip
 }
 
 func newFakeStore() *fakeStore {
@@ -60,6 +61,7 @@ func (f *fakeStore) Save(repoRoot string, entries map[string]workspace.Entry) er
 func (f *fakeStore) Update(repoRoot string, fn func(map[string]workspace.Entry) map[string]workspace.Entry) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.updates++
 	cur := map[string]workspace.Entry{}
 	for k, v := range f.byRepo[repoRoot] {
 		cur[k] = v

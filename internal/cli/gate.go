@@ -152,38 +152,47 @@ func runGateRecord(args []string, out io.Writer) error {
 	report.matched = gate.Name
 	report.Result = result
 
-	var nudge string
-	_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
-		name := resolveLiveWorkspaceName(entries, wsName)
-		entry, ok := entries[name]
-		if !ok {
-			return entries
-		}
-		snap := entry.DevLoop
-		// Record only while a unit is in progress (its gates were reset by the
-		// TaskUpdate→in_progress hook, which sets UnitKey). Gates run during
-		// exploration, with no unit yet, are ignored.
-		if snap == nil || snap.UnitKey == "" {
-			return entries
-		}
-		if snap.Gates == nil {
-			snap.Gates = map[string]string{}
-		}
-		prevResult := snap.Gates[gate.Name]
-		prevReady := gatesAllGreen(loop, snap.Gates)
-		snap.Gates[gate.Name] = result
-		report.recorded = true
-		report.Unit = snap.Task
-		nowReady := gatesAllGreen(loop, snap.Gates)
-		nudge = gateNudge(gateNudgeMode(root), gate.Name, snap.Task, result, prevResult, prevReady, nowReady, loop, snap.Gates)
-		entry.DevLoop = snap
-		entries[name] = entry
-		return entries
-	})
+	// Read the current snapshot first and only write when this gate's result
+	// actually changes. store.Update rewrites the whole state file (and trips
+	// the deck's fsnotify watcher → a refresh) unconditionally, so recording
+	// an unchanged result — e.g. an agent re-running a passing `test` — would
+	// otherwise churn the file and add flock contention across every hook
+	// process. Record only while a unit is in progress (UnitKey set by the
+	// TaskUpdate→in_progress hook); gates run during exploration are ignored.
+	snap := currentDevLoop(root, wsName)
+	if snap == nil || snap.UnitKey == "" {
+		return emitGateRecord(out, jsonOut, report, "")
+	}
+	report.recorded = true
+	report.Unit = snap.Task
+	prevResult := snap.Gates[gate.Name]
+	prevReady := gatesAllGreen(loop, snap.Gates)
+	newGates := make(map[string]string, len(snap.Gates)+1)
+	for k, v := range snap.Gates {
+		newGates[k] = v
+	}
+	newGates[gate.Name] = result
+	nowReady := gatesAllGreen(loop, newGates)
+	nudge := gateNudge(gateNudgeMode(root), gate.Name, snap.Task, result, prevResult, prevReady, nowReady, loop, newGates)
+	report.UnitGates = unitGates(loop, newGates)
+	report.ReadyToComplete = nowReady
 
-	if report.recorded {
-		report.UnitGates = unitGates(loop, currentGates(root, wsName))
-		report.ReadyToComplete = gatesAllGreen(loop, report.UnitGates)
+	if prevResult != result {
+		_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+			name := resolveLiveWorkspaceName(entries, wsName)
+			entry, ok := entries[name]
+			if !ok || entry.DevLoop == nil || entry.DevLoop.UnitKey == "" {
+				return entries
+			}
+			s := entry.DevLoop
+			if s.Gates == nil {
+				s.Gates = map[string]string{}
+			}
+			s.Gates[gate.Name] = result
+			entry.DevLoop = s
+			entries[name] = entry
+			return entries
+		})
 	}
 	return emitGateRecord(out, jsonOut, report, nudge)
 }
@@ -292,6 +301,12 @@ func runGateCheckSelf(wsFlag string, out io.Writer) error {
 // same unit in_progress is idempotent (gates are kept). Done/Total/Phase are
 // left to the deck's reconciler.
 func resetGateUnit(root, wsName, taskID, subject string) {
+	// Skip the write when this unit is already active — an idempotent re-mark
+	// of in_progress shouldn't rewrite the state file (and trip a deck
+	// refresh) for no change.
+	if cur := currentDevLoop(root, wsName); cur != nil && cur.UnitKey == taskID && taskID != "" {
+		return
+	}
 	_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
 		name := resolveLiveWorkspaceName(entries, wsName)
 		entry, ok := entries[name]
@@ -490,13 +505,24 @@ func unitGates(loop watch.Loop, gates map[string]string) map[string]string {
 
 // currentGates loads the workspace's recorded gate map fresh from the store.
 func currentGates(root, wsName string) map[string]string {
+	if snap := currentDevLoop(root, wsName); snap != nil {
+		return snap.Gates
+	}
+	return nil
+}
+
+// currentDevLoop loads the workspace's persisted dev-loop snapshot fresh from
+// the store, resolving a possibly-renamed workspace name. Returns nil when the
+// workspace or its snapshot isn't found. Callers read only — the returned
+// pointer aliases the loaded copy, so build a new map before mutating.
+func currentDevLoop(root, wsName string) *workspace.DevLoopSnapshot {
 	entries, err := stateStore().Load(root)
 	if err != nil {
 		return nil
 	}
 	name := resolveLiveWorkspaceName(entries, wsName)
-	if e, ok := entries[name]; ok && e.DevLoop != nil {
-		return e.DevLoop.Gates
+	if e, ok := entries[name]; ok {
+		return e.DevLoop
 	}
 	return nil
 }
