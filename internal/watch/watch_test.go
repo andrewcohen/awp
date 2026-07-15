@@ -300,7 +300,7 @@ func TestStickyChoice(t *testing.T) {
 
 func TestGeneratePreamble(t *testing.T) {
 	p := GeneratePreamble(DefaultLoop())
-	for _, want := range []string{"TaskCreate", "TaskUpdate", "gofmt", "go test", "whole session"} {
+	for _, want := range []string{"TaskCreate", "TaskUpdate", "gofmt", "go test", "whole session", "a human has to see"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("preamble missing %q:\n%s", want, p)
 		}
