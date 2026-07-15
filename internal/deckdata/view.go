@@ -61,7 +61,11 @@ func (v View) Items() []Item {
 	case ScopeAttention:
 		filtered := make([]Item, 0, len(src))
 		for _, it := range src {
-			if v.Attention != nil && v.Attention(it.Status, it.Unread, it.Active) {
+			// Always keep the current workspace (the one the deck was opened
+			// from), even if it doesn't otherwise qualify — otherwise the
+			// cursor can't land on it and selection jitters to another row
+			// after the first tmux refresh settles.
+			if it.Current || (v.Attention != nil && v.Attention(it.Status, it.Unread, it.Active)) {
 				filtered = append(filtered, it)
 			}
 		}
