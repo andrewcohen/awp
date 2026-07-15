@@ -169,7 +169,9 @@ func (l Loop) PhaseForTool(tool, command string, hasTasks bool) string {
 // means no activity yet, which callers treat as "nothing to show". Shared by
 // the scan's end-of-replay fixup and the PostToolUse hook so they agree.
 func (l Loop) ResolvePhase(hasTasks bool, current string) string {
-	if hasTasks && current == "" && l.hasPhase("implement") {
+	// A task list existing means we're in the loop: an empty (no phase tool
+	// yet) or lingering explore phase becomes implement, where the loop starts.
+	if hasTasks && (current == "" || current == "explore") && l.hasPhase("implement") {
 		return "implement"
 	}
 	return current

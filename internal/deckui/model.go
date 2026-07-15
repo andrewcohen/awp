@@ -2419,6 +2419,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.active = newWatchModal(item)
 			// tea.ClearScreen on modal entry — same rationale as `J` above.
 			return m, tea.Batch(tea.ClearScreen, scheduleWatchTick())
+		case key.Matches(msg, km.WatchWindow):
+			if _, ok := m.selected(); !ok {
+				return m, nil
+			}
+			// Open the live `awp watch` view as a real tmux window in the
+			// workspace's session (vs the in-deck `w` overlay). `awp watch`
+			// resolves the workspace from the session's AWP_WORKSPACE env.
+			return m.trigger(ActionOpenWindow, "watch:awp watch")
 		case key.Matches(msg, km.Quit):
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
@@ -4812,6 +4820,7 @@ func deckKeyGroups() []keyGroup {
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},
+				{"W", "watch window (live `awp watch` dev-loop view for this workspace)"},
 				{"x", "user actions menu"},
 			},
 		},
