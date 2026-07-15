@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -60,33 +61,49 @@ func runLoopTrack() error {
 		return nil
 	}
 
-	phase, started := "", false
+	phase, hasTasks := "", false
 	if cur := currentDevLoop(root, wsName); cur != nil {
-		phase, started = cur.Phase, cur.Started
+		phase, hasTasks = cur.Phase, cur.HasTasks
 	}
 
-	newPhase, newStarted := phase, started
-	if payload.ToolName == "TaskUpdate" {
+	newPhase, newHasTasks := phase, hasTasks
+	switch payload.ToolName {
+	case "TaskCreate":
+		var in struct {
+			Subject string `json:"subject"`
+			Content string `json:"content"`
+		}
+		_ = json.Unmarshal(payload.ToolInput, &in)
+		if strings.TrimSpace(in.Subject) != "" || strings.TrimSpace(in.Content) != "" {
+			newHasTasks = true // a task list now exists → past explore
+		}
+	case "TaskUpdate":
 		var in struct {
 			Status string `json:"status"`
 		}
 		_ = json.Unmarshal(payload.ToolInput, &in)
 		if in.Status == "in_progress" {
-			newPhase, newStarted = "", false
+			newHasTasks = true
+			newPhase = "" // new unit — reset to the loop's start (implement)
 		}
-	} else {
+	default:
 		command := ""
 		if payload.ToolName == "Bash" {
 			command = payload.bashCommand()
 		}
-		p, ns := loop.PhaseForTool(payload.ToolName, command, started)
-		if p != "" {
+		if p := loop.PhaseForTool(payload.ToolName, command, hasTasks); p != "" {
 			newPhase = p
 		}
-		newStarted = ns
 	}
 
-	if newPhase == phase && newStarted == started {
+	// Crossing into the loop (the first task list) leaves explore behind.
+	if newHasTasks && !hasTasks {
+		newPhase = ""
+	}
+	// Resolve the phase against the task-list boundary (shared with the scan).
+	newPhase = loop.ResolvePhase(newHasTasks, newPhase)
+
+	if newPhase == phase && newHasTasks == hasTasks {
 		return nil // no change → skip the write
 	}
 	_ = stateUpdater().Update(root, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
@@ -100,7 +117,7 @@ func runLoopTrack() error {
 			s = &workspace.DevLoopSnapshot{}
 		}
 		s.Phase = newPhase
-		s.Started = newStarted
+		s.HasTasks = newHasTasks
 		entry.DevLoop = s
 		entries[name] = entry
 		return entries

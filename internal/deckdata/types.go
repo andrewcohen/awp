@@ -82,10 +82,11 @@ type Item struct {
 // It is pure data — the full unit list, gate lights, and churn detail live
 // in the `w` watch overlay (internal/watch.State).
 type DevLoopSummary struct {
-	Done  int    // completed todos / units
-	Total int    // total todos / units (0 when the agent emitted no list)
-	Phase string // current dev-loop phase (explore/implement/test/gates/commit)
-	Task  string // the in-progress unit's content ("" when none is in progress)
+	Done     int    // completed todos / units
+	Total    int    // total todos / units (0 when the agent emitted no list)
+	Phase    string // current dev-loop phase (explore/implement/verify/commit)
+	Task     string // the in-progress unit's content ("" when none is in progress)
+	HasTasks bool   // a task list exists — the boundary past the pre-loop explore phase
 	// Gates is the current unit's per-gate result (name → pass/fail/pending),
 	// mirroring workspace.DevLoopSnapshot.Gates. Populated by the reconciling
 	// transcript scan (deck open) and carried to the persisted snapshot so the
