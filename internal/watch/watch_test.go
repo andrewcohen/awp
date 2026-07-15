@@ -153,6 +153,24 @@ func TestPerUnitGateReset(t *testing.T) {
 	}
 }
 
+// Completing a unit resets its gates even when the follow-up work is ad-hoc
+// (no new in_progress) — otherwise the finished unit's green gates linger and
+// mislabel later work as already-passing.
+func TestGateResetOnCompletionBeforeAdHocWork(t *testing.T) {
+	st := build(t,
+		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "Unit A"})),
+		line("assistant", tu("TaskUpdate", "u1", map[string]any{"taskId": "1", "status": "in_progress"})),
+		line("assistant", tu("Bash", "b1", map[string]any{"command": "go test ./..."})),
+		line("user", tr("b1", false)), // test gate goes green
+		line("assistant", tu("TaskUpdate", "u2", map[string]any{"taskId": "1", "status": "completed"})),
+		// Ad-hoc follow-up: an edit, no new task / in_progress.
+		line("assistant", tu("Edit", "e1", map[string]any{"file_path": "app/foo.ts"})),
+	)
+	if g := gate(st, "test"); g.Result != "" {
+		t.Fatalf("test gate should reset on unit completion, got %q (stale green leaks into ad-hoc work)", g.Result)
+	}
+}
+
 func TestTaskListReconstruction(t *testing.T) {
 	st := build(t,
 		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "first"})),

@@ -82,9 +82,15 @@ func runLoopTrack() error {
 			Status string `json:"status"`
 		}
 		_ = json.Unmarshal(payload.ToolInput, &in)
-		if in.Status == "in_progress" {
+		switch in.Status {
+		case "in_progress":
 			newHasTasks = true
 			newPhase = "" // new unit — reset to the loop's start (implement)
+		case "completed":
+			// Finishing a unit resets the loop toward implement for the next
+			// one (this hook only fires for an allowed completion — a denied
+			// one blocks the tool, so PostToolUse never runs).
+			newPhase = ""
 		}
 	default:
 		command := ""

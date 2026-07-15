@@ -123,6 +123,24 @@ func TestLoopTrackInProgressResetsToImplement(t *testing.T) {
 	}
 }
 
+// Completing a unit resets the live phase toward implement for the next one.
+func TestLoopTrackCompletedResetsToImplement(t *testing.T) {
+	const root = "/tmp/awp-loop-complete"
+	fs := newFakeStore()
+	seedLoopWorkspace(fs, root, "feat-x", "verify", true)
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-loop-complete", root)
+	withGateRepo(t, root, loopConfigJSON)
+
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runLoopTrack(); err != nil {
+		t.Fatalf("runLoopTrack: %v", err)
+	}
+	if got := loopSnap(fs, root, "feat-x").Phase; got != "implement" {
+		t.Errorf("phase = %q, want implement after unit completion", got)
+	}
+}
+
 func TestLoopTrackSkipsWriteWhenUnchanged(t *testing.T) {
 	const root = "/tmp/awp-loop-noop"
 	fs := newFakeStore()
