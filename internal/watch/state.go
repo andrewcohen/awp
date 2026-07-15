@@ -183,6 +183,15 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 								currentTask = in.TaskID
 								resetUnit(ln.Timestamp)
 							}
+							// Finishing the current unit resets the loop for the
+							// next one: clear the gate lights and drop back toward
+							// implement, so later work — even ad-hoc, un-tracked
+							// edits — doesn't inherit the completed unit's stale
+							// green gates.
+							if in.Status == "completed" && in.TaskID == currentTask {
+								currentTask = ""
+								resetUnit(ln.Timestamp)
+							}
 						}
 					}
 				default:
