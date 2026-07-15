@@ -21,18 +21,18 @@ Inspect the project to discover its real development loop:
   scripts / justfile for the canonical format, lint, test, build, and commit
   commands (the "validation before handoff" gates).
 - Identify the natural phases a single unit of work passes through
-  (e.g. implement, test, gates, commit).
+  (e.g. explore, implement, verify, commit).
 
 Then write (or merge into) %s a "dev_loop" block in this exact shape:
 
 {
   "dev_loop": {
-    "phases": ["implement", "test", "gates", "commit"],
+    "phases": ["explore", "implement", "verify", "commit"],
     "gates": [
-      { "name": "fmt",    "phase": "gates",  "match": "<regex matching the format command>" },
-      { "name": "lint",   "phase": "gates",  "match": "<regex matching the lint command>" },
-      { "name": "test",   "phase": "test",   "match": "<regex matching the test command>" },
-      { "name": "build",  "phase": "gates",  "match": "<regex matching the build command>" },
+      { "name": "fmt",    "phase": "verify", "match": "<regex matching the format command>" },
+      { "name": "lint",   "phase": "verify", "match": "<regex matching the lint command>" },
+      { "name": "test",   "phase": "verify", "match": "<regex matching the test command>" },
+      { "name": "build",  "phase": "verify", "match": "<regex matching the build command>" },
       { "name": "commit", "phase": "commit", "match": "<regex matching the commit/push command>" }
     ]
   }

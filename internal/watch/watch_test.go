@@ -79,8 +79,8 @@ func TestResolveAndIsConfigured(t *testing.T) {
 	if IsConfigured(config.Config{}) {
 		t.Fatal("empty config should not be configured")
 	}
-	if got := Resolve(config.Config{}); len(got.Phases) != 5 {
-		t.Fatalf("default loop should have 5 phases, got %d", len(got.Phases))
+	if got := Resolve(config.Config{}); len(got.Phases) != 4 {
+		t.Fatalf("default loop should have 4 phases, got %d", len(got.Phases))
 	}
 
 	var cfg config.Config
@@ -123,8 +123,8 @@ func TestBuildStateGatePassFail(t *testing.T) {
 	if g := gate(st, "test"); g.Result != "fail" || g.RedCount != 1 {
 		t.Fatalf("test gate: want fail/1, got %q/%d", g.Result, g.RedCount)
 	}
-	if st.CurrentPhase != "test" {
-		t.Fatalf("phase: want test, got %q", st.CurrentPhase)
+	if st.CurrentPhase != "verify" {
+		t.Fatalf("phase: want verify, got %q", st.CurrentPhase)
 	}
 }
 

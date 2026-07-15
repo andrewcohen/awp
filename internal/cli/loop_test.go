@@ -9,9 +9,9 @@ import (
 
 // loopConfigJSON defines a loop with explicit phases so PhaseForTool's phase
 // guard (hasPhase) resolves.
-const loopConfigJSON = `{"dev_loop":{"phases":["explore","implement","test"],"gates":[
-  {"name":"test","phase":"test","match":"go test"},
-  {"name":"build","phase":"implement","match":"go build"}
+const loopConfigJSON = `{"dev_loop":{"phases":["explore","implement","verify","commit"],"gates":[
+  {"name":"test","phase":"verify","match":"go test"},
+  {"name":"build","phase":"verify","match":"go build"}
 ]}}`
 
 // seedLoopWorkspace registers a workspace whose snapshot carries a given
@@ -80,8 +80,8 @@ func TestLoopTrackGateBashSetsGatePhase(t *testing.T) {
 	if err := runLoopTrack(); err != nil {
 		t.Fatalf("runLoopTrack: %v", err)
 	}
-	if got := loopSnap(fs, root, "feat-x").Phase; got != "test" {
-		t.Errorf("phase = %q, want test", got)
+	if got := loopSnap(fs, root, "feat-x").Phase; got != "verify" {
+		t.Errorf("phase = %q, want verify", got)
 	}
 }
 

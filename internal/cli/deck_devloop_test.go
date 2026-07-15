@@ -61,7 +61,7 @@ func TestBuildDevLoopSummary(t *testing.T) {
 	ws := filepath.Join(t.TempDir(), "proj", "ws")
 
 	// A completed unit, an in-progress unit, and a `go test` gate that moves
-	// the loop into the test phase.
+	// the loop into the verify phase.
 	writeTranscript(t, home, ws,
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"TodoWrite","input":{"todos":[{"content":"scaffold","status":"completed"},{"content":"wire meta line","status":"in_progress"}]}}]}}`,
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"go test ./..."}}]}}`,
@@ -75,8 +75,8 @@ func TestBuildDevLoopSummary(t *testing.T) {
 	if got.Done != 1 || got.Total != 2 {
 		t.Errorf("progress = %d/%d, want 1/2", got.Done, got.Total)
 	}
-	if got.Phase != "test" {
-		t.Errorf("phase = %q, want %q", got.Phase, "test")
+	if got.Phase != "verify" {
+		t.Errorf("phase = %q, want %q", got.Phase, "verify")
 	}
 	if got.Task != "wire meta line" {
 		t.Errorf("task = %q, want %q", got.Task, "wire meta line")
