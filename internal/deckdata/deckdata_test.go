@@ -309,6 +309,20 @@ func TestItemsAttentionUsesInjectedPredicate(t *testing.T) {
 	}
 }
 
+func TestItemsAttentionKeepsCurrentWorkspace(t *testing.T) {
+	all := []Item{
+		{WorkspaceName: "a", ProjectName: "p", Status: "working", Active: true},
+		{WorkspaceName: "cur", ProjectName: "p", Status: "idle", Current: true},
+	}
+	// A predicate that qualifies nothing on its own — the current workspace
+	// must still survive so the cursor can land on it (no selection jitter).
+	none := func(string, bool, bool) bool { return false }
+	got := (View{Scope: ScopeAttention, All: all, Attention: none}).Items()
+	if len(got) != 1 || got[0].WorkspaceName != "cur" {
+		t.Fatalf("attention scope should keep the current workspace, got %+v", got)
+	}
+}
+
 func TestItemsTextFilterMatchesLabelAndProject(t *testing.T) {
 	v := View{
 		Scope:     ScopeAll,
