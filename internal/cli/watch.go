@@ -234,6 +234,17 @@ func (a *App) resolveWatchTarget(args []string, entries []workspace.CrossRepoEnt
 		return workspace.CrossRepoEntry{}, fmt.Errorf("no workspace matching %q", want)
 	}
 
+	// No positional: fall back to the workspace named by the session env
+	// (AWP_WORKSPACE), so `awp watch` inside a workspace session picks it up
+	// without a picker.
+	if wsName, _, _ := resolveWorkspaceIdent(); wsName != "" {
+		for _, e := range entries {
+			if e.Name == wsName {
+				return e, nil
+			}
+		}
+	}
+
 	choice, err := a.picker("Watch which workspace?", labels)
 	if err != nil {
 		return workspace.CrossRepoEntry{}, err
