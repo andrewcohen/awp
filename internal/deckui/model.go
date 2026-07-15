@@ -40,6 +40,27 @@ const devURLInterval = 2 * time.Second
 type refreshTickMsg time.Time
 type devURLTickMsg time.Time
 
+// isDeckBackgroundMsg reports whether msg is a deck-private background
+// message that the main Update switch must always process itself — never
+// route into a modal form's huh dispatcher. huh drops message types it
+// doesn't recognize (returning no follow-up command), so a swallowed
+// background message either kills a self-rescheduling loop (the refresh /
+// devURL / spinner ticks, the state watcher) or strands state only the
+// main switch resets (refreshDoneMsg clears m.refreshing; jobsListMsg
+// reconciles jobs and re-arms the spinner). See the guard in Update for
+// the full rationale. Keep this list in sync with the background-message
+// cases handled by the main switch.
+func isDeckBackgroundMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case refreshTickMsg, devURLTickMsg, spinner.TickMsg,
+		refreshDoneMsg, jobsListMsg, DevURLsMsg,
+		StateChangedMsg, activityExpireMsg:
+		return true
+	default:
+		return false
+	}
+}
+
 func scheduleRefreshTick() tea.Cmd {
 	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg { return refreshTickMsg(t) })
 }
@@ -1725,25 +1746,33 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// return immediately, never falling through to the deck's normal
 	// handlers, which is the right semantics while the form has modal
 	// focus.
-	// Route input to the active modal form — EXCEPT the self-perpetuating
-	// background ticks. refreshTickMsg / devURLTickMsg each reschedule the
-	// next tick from their own handler in the main switch below; the loop
-	// only stays alive because every tick's handler fires the following
-	// one. If a form dispatcher swallowed a tick (it forwards everything
-	// to huh, which ignores these deck-private message types and returns
-	// no follow-up cmd) the loop would die silently for the rest of the
-	// session. Since the new-workspace form is typically open for several
-	// seconds and refreshInterval is 5s, a tick almost always lands while
-	// it's up — so the background refresh/job poll that reconciles a
-	// freshly-created workspace never fires again, and the row stays stuck
-	// on its optimistic "creating…" state until a manual deck reload. The
-	// tick handlers already gate their actual work on canBackgroundRefresh()
-	// (false while a form is open), so letting them through only keeps the
-	// timer alive; it does not disturb the form.
-	switch msg.(type) {
-	case refreshTickMsg, devURLTickMsg:
-		// fall through to the main switch, which reschedules the tick.
-	default:
+	// Route input to the active modal form — EXCEPT deck-private background
+	// messages, which the main switch below must always handle itself. huh
+	// silently drops message types it doesn't recognize and returns no
+	// follow-up command, so any background message routed into a form
+	// dispatcher is lost for good. That breaks two classes of machinery:
+	//
+	//   - Self-rescheduling loops (refreshTickMsg / devURLTickMsg / the
+	//     spinner tick / the state watcher) stay alive only because each
+	//     handler fires the next iteration. Swallow one and the loop dies
+	//     silently for the rest of the session — the background refresh
+	//     that reconciles a freshly-created workspace never fires again and
+	//     the spinner glyph freezes mid-animation.
+	//   - State the main switch resets: refreshDoneMsg clears m.refreshing,
+	//     and if it's swallowed that flag stays true forever, wedging BOTH
+	//     the row refresh and the pr-status refresh (kicked from the
+	//     refreshDoneMsg handler). A wedged pr-status refresh never learns a
+	//     PR closed, so a closed PR lingers in the inbox until a manual deck
+	//     reload. jobsListMsg reconciles jobs and re-arms the spinner.
+	//
+	// A form is typically open for several seconds while refreshInterval is
+	// 5s, so a background message almost always lands while it's up. The
+	// main-switch handlers already gate their real work on
+	// canBackgroundRefresh() (false while a form is open), so letting these
+	// through only keeps the machinery alive; it does not disturb the form.
+	// Everything else — key input, huh's own cursor-blink/field messages —
+	// still goes to the active form.
+	if !isDeckBackgroundMsg(msg) {
 		if m.newWorkspaceMode {
 			return m.dispatchNewWorkspaceForm(msg)
 		}
