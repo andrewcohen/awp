@@ -5,7 +5,17 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// pasteSettleDelay gives the receiving TUI a beat to finish ingesting a
+// bracketed paste before the submit Enter arrives. Without it a large
+// multi-line paste — e.g. a reviewer-repair prompt with an appended tuicr
+// session block — can still be mid-ingest when Enter lands, so Claude Code
+// swallows the key as paste content instead of submitting: the text appears
+// but nothing sends. Small pastes win the race; large ones don't, which is why
+// the failure only shows up once a prompt grows past a few lines.
+const pasteSettleDelay = 150 * time.Millisecond
 
 type Runner interface {
 	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
@@ -85,6 +95,9 @@ func (c *Client) PasteText(name string, text string) error {
 	if _, err := c.runner.Run(context.Background(), "", "tmux", "paste-buffer", "-p", "-t", name); err != nil {
 		return fmt.Errorf("paste into tmux window %q: %w", name, err)
 	}
+	// Let the receiver finish ingesting the bracketed paste before the submit
+	// Enter, or a large paste eats the key instead of submitting.
+	time.Sleep(pasteSettleDelay)
 	if _, err := c.runner.Run(context.Background(), "", "tmux", "send-keys", "-t", name, "Enter"); err != nil {
 		return fmt.Errorf("submit pasted text in tmux window %q: %w", name, err)
 	}
