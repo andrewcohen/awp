@@ -392,6 +392,41 @@ func TestStateChangedCoalescesDuringRefresh(t *testing.T) {
 	}
 }
 
+// While a modal form (new-workspace / rename / prompt) is open, the
+// Update guard must NOT route deck-private background messages into the
+// form's huh dispatcher — huh drops them, which would strand m.refreshing
+// (wedging the row + pr-status refresh, so a closed PR lingers in the
+// inbox) and freeze the spinner. Background messages must fall through to
+// the main switch even with a form open.
+func TestFormDoesNotSwallowBackgroundMessages(t *testing.T) {
+	t.Run("refreshDoneMsg clears refreshing while form open", func(t *testing.T) {
+		model := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil).
+			WithRefresher(func() tea.Cmd { return nil })
+		model.newWorkspaceMode = true
+		model.refreshing = true
+
+		updated, _ := model.Update(RefreshDoneMsg([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil))
+		m := updated.(Model)
+		if m.refreshing {
+			t.Fatal("refreshDoneMsg was swallowed by the form dispatcher: m.refreshing stuck true")
+		}
+		if !m.newWorkspaceMode {
+			t.Fatal("processing a background message must not close the form")
+		}
+	})
+
+	t.Run("spinner tick keeps ticking while form open", func(t *testing.T) {
+		model := New([]Item{{ProjectName: "p", WorkspaceName: "w"}}, nil)
+		model.newWorkspaceMode = true
+		// Idle (no busy work, no activities): the tick handler reschedules
+		// the next tick, so a non-nil cmd means the loop stayed alive.
+		_, cmd := model.Update(spinner.TickMsg{})
+		if cmd == nil {
+			t.Fatal("spinner.TickMsg was swallowed by the form dispatcher: tick loop died")
+		}
+	})
+}
+
 func TestDeleteRequiresConfirmation(t *testing.T) {
 	called := false
 	refreshed := false
