@@ -15,6 +15,10 @@ func GeneratePreamble(loop Loop) string {
 	b.WriteString("Track the units with your task tools: TaskCreate one item per unit before ")
 	b.WriteString("you start, then TaskUpdate to mark a unit in_progress when you start it and ")
 	b.WriteString("completed only once all its gates pass. This is required, not optional.\n\n")
+	b.WriteString("Keep the list live for the whole session, not just the first plan: when a ")
+	b.WriteString("follow-up ask, correction, or new round of changes arrives mid-conversation, ")
+	b.WriteString("add it as a task (or tasks) before starting the work — don't drop to ad-hoc, ")
+	b.WriteString("untracked work once you've begun.\n\n")
 	b.WriteString("For each unit: implement, then run each gate as its own command and get ")
 	b.WriteString("them all green before moving on:\n")
 	for _, g := range loop.Gates {
