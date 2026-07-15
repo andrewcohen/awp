@@ -1318,8 +1318,17 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				loop, ok := loopByRepo[r.repo]
 				if !ok {
 					cfg, _ := config.Load(r.repo)
-					loop = watch.Resolve(cfg)
+					if watch.IsConfigured(cfg) {
+						loop = watch.Resolve(cfg)
+					}
+					// Unconfigured repos cache a zero Loop (empty Phases) so we
+					// skip them below without reloading config per row.
 					loopByRepo[r.repo] = loop
+				}
+				// Only watch repos that opted into a dev_loop — no guessed
+				// default-loop phase/gate meta line for the rest.
+				if len(loop.Phases) == 0 {
+					continue
 				}
 				specs = append(specs, dlSpec{path: p, status: e.Status, loop: loop})
 			}

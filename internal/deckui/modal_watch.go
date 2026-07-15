@@ -30,6 +30,7 @@ func scheduleWatchTick() tea.Cmd {
 // viewport-in-a-box shape.
 type watchModal struct {
 	loop          watch.Loop
+	configured    bool
 	workspacePath string
 	label         string
 	agentStatus   string
@@ -52,6 +53,7 @@ func newWatchModal(item Item) *watchModal {
 	}
 	wm := &watchModal{
 		loop:          watch.Resolve(cfg),
+		configured:    watch.IsConfigured(cfg),
 		workspacePath: item.Path,
 		label:         item.ProjectName + "/" + item.WorkspaceName,
 		agentStatus:   item.Status,
@@ -63,6 +65,12 @@ func newWatchModal(item Item) *watchModal {
 
 // refresh re-locates the newest transcript (sticky) and rebuilds the view.
 func (wm *watchModal) refresh() {
+	if !wm.configured {
+		// No dev_loop → don't watch with a guessed default loop.
+		wm.header = watch.Header(wm.label, watch.State{AgentStatus: wm.agentStatus})
+		wm.vp.SetContent("no dev_loop configured for this repo — run `awp watch --suggest` for a setup prompt.")
+		return
+	}
 	if located, err := watch.LocateSticky(wm.workspacePath, wm.transcript, time.Now()); err == nil {
 		wm.transcript = located
 	}
