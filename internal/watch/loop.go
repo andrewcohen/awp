@@ -133,39 +133,46 @@ func (l Loop) gateFor(command string) *Gate {
 	return nil
 }
 
-// PhaseForTool derives the dev-loop phase a tool invocation implies and
-// whether it marks implementation as started for the current unit. It returns
-// ("", started) when the tool implies no phase change. command is the Bash
-// command (empty for non-Bash tools). Shared by the transcript scan
-// (handleToolUse) and the PostToolUse phase hook so the two agree on how a tool
-// maps to a phase — one source of truth, no drift.
-func (l Loop) PhaseForTool(tool, command string, started bool) (phase string, nowStarted bool) {
+// PhaseForTool derives the dev-loop phase a tool invocation implies. `explore`
+// is the pre-task-list phase: before the agent has broken the work into a task
+// list (hasTasks == false) it's still investigating / writing the spec, so
+// every tool reads as `explore`. Once a task list exists, work is in the
+// per-unit implement → verify → commit loop — edits are `implement`, and a gate
+// command moves to that gate's phase; reads mid-loop don't change the phase
+// (returns ""). command is the Bash command (empty for non-Bash tools). Shared
+// by the transcript scan (handleToolUse) and the PostToolUse hook so the two
+// agree — one source of truth, no drift.
+func (l Loop) PhaseForTool(tool, command string, hasTasks bool) string {
 	set := func(p string) string {
 		if l.hasPhase(p) {
 			return p
 		}
 		return ""
 	}
+	if !hasTasks {
+		return set("explore")
+	}
 	switch tool {
 	case "Bash":
 		if g := l.gateFor(command); g != nil {
-			return set(g.Phase), true
-		}
-		if !started && isExploreCommand(command) {
-			return set("explore"), started
+			return set(g.Phase)
 		}
 	case "Edit", "Write", "MultiEdit":
-		// Any edit — including a test file — is implementation work; there's
-		// no separate test phase.
-		return set("implement"), true
-	case "Read", "Grep", "Glob", "LS", "NotebookRead":
-		// Read-only investigation counts as exploration only until the agent
-		// starts implementing; reads mid-implementation don't regress the phase.
-		if !started {
-			return set("explore"), started
-		}
+		return set("implement")
 	}
-	return "", started
+	return ""
+}
+
+// ResolvePhase defaults a not-yet-determined phase once a task list exists: the
+// per-unit loop starts at `implement`. Pre-task-list the phase is left as the
+// tools set it (any activity → `explore`, via PhaseForTool); an empty phase
+// means no activity yet, which callers treat as "nothing to show". Shared by
+// the scan's end-of-replay fixup and the PostToolUse hook so they agree.
+func (l Loop) ResolvePhase(hasTasks bool, current string) string {
+	if hasTasks && current == "" && l.hasPhase("implement") {
+		return "implement"
+	}
+	return current
 }
 
 // hasPhase reports whether name is one of the loop's phases.

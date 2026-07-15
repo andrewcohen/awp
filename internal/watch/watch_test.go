@@ -112,6 +112,9 @@ func TestCommitGateExcludesWip(t *testing.T) {
 
 func TestBuildStateGatePassFail(t *testing.T) {
 	st := build(t,
+		// A task list moves past explore into the per-unit loop.
+		line("assistant", tu("TaskCreate", "t1", map[string]any{"subject": "do the thing"})),
+		line("assistant", tu("TaskUpdate", "t2", map[string]any{"taskId": "1", "status": "in_progress"})),
 		line("assistant", tu("Bash", "b1", map[string]any{"command": "gofmt -w ."})),
 		line("user", tr("b1", false)),
 		line("assistant", tu("Bash", "b2", map[string]any{"command": "go test ./..."})),

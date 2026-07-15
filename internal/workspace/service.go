@@ -187,13 +187,13 @@ type DevLoopSnapshot struct {
 	// never marks the next unit in_progress — the lapse `resetGateUnit`
 	// alone can't catch.
 	GatesSealed bool `json:",omitempty"`
-	// Started records whether implementation has begun in the current unit.
-	// It is maintained event-driven by the `awp internal loop track`
-	// PostToolUse hook so the cached Phase stays live across deck opens
-	// without a transcript scan; it mirrors the scan's per-unit `started`
-	// flag (reset when a new unit begins) and drives the same phase
-	// derivation (watch.Loop.PhaseForTool).
-	Started bool `json:",omitempty"`
+	// HasTasks records whether the agent has created a task list yet — the
+	// boundary past the pre-loop `explore` phase. It is maintained
+	// event-driven by the `awp internal loop track` PostToolUse hook (set on
+	// the first TaskCreate) so the cached Phase stays live across deck opens
+	// without a transcript scan, and reconciled by the deck's scan
+	// (len(todos) > 0). Drives watch.Loop.PhaseForTool: no task list → explore.
+	HasTasks bool `json:",omitempty"`
 }
 
 // UnmarshalJSON keeps reading old state files that still use the

@@ -186,7 +186,11 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 						}
 					}
 				default:
-					handleToolUse(loop, b, ln.Timestamp, &st, gates, pending, &currentTodo, &started, resetUnit)
+					// A task list "exists" once any TaskCreate has landed or a
+					// live TodoWrite list is present — that's the boundary past
+					// explore.
+					hasTasks := taskCreates > 0 || len(st.Todos) > 0
+					handleToolUse(loop, b, ln.Timestamp, &st, gates, pending, &currentTodo, &started, hasTasks, resetUnit)
 				}
 				if !ln.Timestamp.IsZero() {
 					st.LastActivity = ln.Timestamp
@@ -283,6 +287,11 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 		}
 	}
 
+	// Resolve the final phase against the task-list boundary: no task list yet
+	// → explore (pre-loop planning / spec); a task list but no phase-relevant
+	// tool in the current unit → default to implement (the loop starts there).
+	st.CurrentPhase = loop.ResolvePhase(len(st.Todos) > 0, st.CurrentPhase)
+
 	// Emit gates in loop order for stable rendering. Markers are phase
 	// transitions, not pass/fail checks — they don't appear in the row.
 	for _, g := range loop.Gates {
@@ -298,15 +307,14 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 	return st, nil
 }
 
-func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string]*GateState, pending map[string]string, currentTodo *string, started *bool, resetUnit func(time.Time)) {
+func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string]*GateState, pending map[string]string, currentTodo *string, started *bool, hasTasks bool, resetUnit func(time.Time)) {
 	if b.Name == "TodoWrite" {
 		var in struct {
 			Todos []Todo `json:"todos"`
 		}
 		if json.Unmarshal(b.Input, &in) == nil {
 			st.Todos = in.Todos
-			// A new in_progress item begins a fresh unit: reset the clock
-			// and let the explore phase register again.
+			// A new in_progress item begins a fresh unit: reset the clock.
 			for _, t := range in.Todos {
 				if t.Status == "in_progress" && t.Content != *currentTodo {
 					*currentTodo = t.Content
@@ -317,9 +325,6 @@ func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string
 		return
 	}
 
-	// Pull the Bash command (the only phase-relevant input now), then let the
-	// shared PhaseForTool decide the phase / started transition (identical
-	// between scan and hook).
 	var command string
 	if b.Name == "Bash" {
 		var in struct {
@@ -328,11 +333,22 @@ func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string
 		_ = json.Unmarshal(b.Input, &in)
 		command = in.Command
 	}
-	if p, ns := loop.PhaseForTool(b.Name, command, *started); p != "" || ns != *started {
-		if p != "" {
-			st.CurrentPhase = p
+
+	// Breadth fallback: mark implementation started so a unit can be implied
+	// when the agent edits/gates without marking a todo in_progress.
+	switch b.Name {
+	case "Edit", "Write", "MultiEdit", "ExitPlanMode":
+		*started = true
+	case "Bash":
+		if loop.gateFor(command) != nil {
+			*started = true
 		}
-		*started = ns
+	}
+
+	// Depth: the current phase, gated on whether a task list exists yet
+	// (explore is the pre-task-list phase — see PhaseForTool).
+	if p := loop.PhaseForTool(b.Name, command, hasTasks); p != "" {
+		st.CurrentPhase = p
 	}
 
 	// A non-marker Bash gate sets up a pending result to resolve against the
@@ -346,12 +362,6 @@ func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string
 		}
 	}
 }
-
-// exploreCmd matches read-only investigative shell commands (used to detect
-// the explore phase before implementation begins).
-var exploreCmd = regexp.MustCompile(`(?m)^\s*(cd\s+[^&;|]*&&\s*)?(grep|rg|ls|cat|find|head|tail|sed|awk|tree|wc|jj\s+(log|st|status|diff|show)|git\s+(log|diff|status|show))\b`)
-
-func isExploreCommand(command string) bool { return exploreCmd.MatchString(command) }
 
 // decodeBlocks handles message.content being either a JSON array of blocks
 // or a bare string (which carries no tool blocks).
