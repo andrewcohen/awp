@@ -15,6 +15,7 @@ type deckKeyMap struct {
 	Help          key.Binding
 	Jobs          key.Binding
 	Watch         key.Binding
+	WatchWindow   key.Binding
 	Quit          key.Binding
 	Filter        key.Binding
 	Find          key.Binding
@@ -53,6 +54,7 @@ func newDeckKeyMap() deckKeyMap {
 		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help overlay")),
 		Jobs:          key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "jobs overlay")),
 		Watch:         key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "watch dev-loop progress for the selected workspace")),
+		WatchWindow:   key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "open the watch view in a new tmux window")),
 		Quit:          key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q/esc", "quit · esc clears filter first")),
 		Filter:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter rows · esc clears")),
 		Find:          key.NewBinding(key.WithKeys("f", "F"), key.WithHelp("f", "find: collapse to sections → expand one → jump")),
