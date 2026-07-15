@@ -65,16 +65,16 @@ type Loop struct {
 // DefaultLoop is the inferred loop used when a project's config carries no
 // dev_loop section. It encodes the generic Go "validation before handoff"
 // gate list (gofmt, vet, lint, test, build) plus a commit phase, arranged
-// as implement → test → gates → commit.
+// as explore → implement → verify → commit.
 func DefaultLoop() Loop {
 	return Loop{
-		Phases: []string{"explore", "implement", "test", "gates", "commit"},
+		Phases: []string{"explore", "implement", "verify", "commit"},
 		Gates: compile([]config.DevLoopGate{
-			{Name: "fmt", Phase: "gates", Match: `gofmt|go fmt`},
-			{Name: "vet", Phase: "gates", Match: `go vet`},
-			{Name: "lint", Phase: "gates", Match: `golangci-lint|golint`},
-			{Name: "build", Phase: "gates", Match: `go build`},
-			{Name: "test", Phase: "test", Match: `go test`},
+			{Name: "fmt", Phase: "verify", Match: `gofmt|go fmt`},
+			{Name: "vet", Phase: "verify", Match: `go vet`},
+			{Name: "lint", Phase: "verify", Match: `golangci-lint|golint`},
+			{Name: "build", Phase: "verify", Match: `go build`},
+			{Name: "test", Phase: "verify", Match: `go test`},
 			{Name: "commit", Phase: "commit", Match: `jj (commit|describe|squash)|jj git push|git commit`, NotMatch: `wip:`, Marker: true},
 		}),
 	}
@@ -136,11 +136,10 @@ func (l Loop) gateFor(command string) *Gate {
 // PhaseForTool derives the dev-loop phase a tool invocation implies and
 // whether it marks implementation as started for the current unit. It returns
 // ("", started) when the tool implies no phase change. command is the Bash
-// command (empty for non-Bash tools); filePath is the edited file (empty for
-// non-edits). Shared by the transcript scan (handleToolUse) and the PostToolUse
-// phase hook so the two agree on how a tool maps to a phase — one source of
-// truth, no drift.
-func (l Loop) PhaseForTool(tool, command, filePath string, started bool) (phase string, nowStarted bool) {
+// command (empty for non-Bash tools). Shared by the transcript scan
+// (handleToolUse) and the PostToolUse phase hook so the two agree on how a tool
+// maps to a phase — one source of truth, no drift.
+func (l Loop) PhaseForTool(tool, command string, started bool) (phase string, nowStarted bool) {
 	set := func(p string) string {
 		if l.hasPhase(p) {
 			return p
@@ -148,9 +147,6 @@ func (l Loop) PhaseForTool(tool, command, filePath string, started bool) (phase 
 		return ""
 	}
 	switch tool {
-	case "ExitPlanMode":
-		// The plan is done; implementation begins.
-		return set("implement"), true
 	case "Bash":
 		if g := l.gateFor(command); g != nil {
 			return set(g.Phase), true
@@ -159,9 +155,8 @@ func (l Loop) PhaseForTool(tool, command, filePath string, started bool) (phase 
 			return set("explore"), started
 		}
 	case "Edit", "Write", "MultiEdit":
-		if isTestFile(filePath) && l.hasPhase("test") {
-			return "test", true
-		}
+		// Any edit — including a test file — is implementation work; there's
+		// no separate test phase.
 		return set("implement"), true
 	case "Read", "Grep", "Glob", "LS", "NotebookRead":
 		// Read-only investigation counts as exploration only until the agent
