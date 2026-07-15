@@ -170,6 +170,12 @@ func (a *App) runWatch(args []string) error {
 	cfg, _ := config.Load(repoRoot)
 	loop := watch.Resolve(cfg)
 	configured := watch.IsConfigured(cfg)
+	if !configured {
+		// No dev_loop → don't watch with a guessed default loop; point the
+		// user at the setup prompt instead.
+		fmt.Fprintln(a.out, unconfiguredHint)
+		return nil
+	}
 
 	if once {
 		// One-shot: the transcript must already exist.
@@ -183,9 +189,6 @@ func (a *App) runWatch(args []string) error {
 		st, err := watch.BuildState(loop, transcript, agentStatus, time.Now())
 		if err != nil {
 			return err
-		}
-		if !configured {
-			fmt.Fprintln(a.out, unconfiguredHint)
 		}
 		fmt.Fprintln(a.out, watch.Render(loop, label, st))
 		return nil
