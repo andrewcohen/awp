@@ -75,18 +75,11 @@ func runLoopTrack() error {
 			newPhase, newStarted = "", false
 		}
 	} else {
-		var command, filePath string
-		switch payload.ToolName {
-		case "Bash":
+		command := ""
+		if payload.ToolName == "Bash" {
 			command = payload.bashCommand()
-		case "Edit", "Write", "MultiEdit":
-			var in struct {
-				FilePath string `json:"file_path"`
-			}
-			_ = json.Unmarshal(payload.ToolInput, &in)
-			filePath = in.FilePath
 		}
-		p, ns := loop.PhaseForTool(payload.ToolName, command, filePath, started)
+		p, ns := loop.PhaseForTool(payload.ToolName, command, started)
 		if p != "" {
 			newPhase = p
 		}

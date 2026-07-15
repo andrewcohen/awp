@@ -317,24 +317,18 @@ func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string
 		return
 	}
 
-	// Pull the phase-relevant inputs, then let the shared PhaseForTool decide
-	// the phase / started transition (kept identical between scan and hook).
-	var command, filePath string
-	switch b.Name {
-	case "Bash":
+	// Pull the Bash command (the only phase-relevant input now), then let the
+	// shared PhaseForTool decide the phase / started transition (identical
+	// between scan and hook).
+	var command string
+	if b.Name == "Bash" {
 		var in struct {
 			Command string `json:"command"`
 		}
 		_ = json.Unmarshal(b.Input, &in)
 		command = in.Command
-	case "Edit", "Write", "MultiEdit":
-		var in struct {
-			FilePath string `json:"file_path"`
-		}
-		_ = json.Unmarshal(b.Input, &in)
-		filePath = in.FilePath
 	}
-	if p, ns := loop.PhaseForTool(b.Name, command, filePath, *started); p != "" || ns != *started {
+	if p, ns := loop.PhaseForTool(b.Name, command, *started); p != "" || ns != *started {
 		if p != "" {
 			st.CurrentPhase = p
 		}
@@ -420,13 +414,4 @@ func firstLine(s string) string {
 		s = strings.TrimRight(cut, " ,.;:—-") + "…"
 	}
 	return s
-}
-
-func isTestFile(path string) bool {
-	base := strings.ToLower(path)
-	return strings.Contains(base, "_test.") ||
-		strings.Contains(base, ".test.") ||
-		strings.Contains(base, "test_") ||
-		strings.Contains(base, "spec.") ||
-		strings.Contains(base, "fixture")
 }
