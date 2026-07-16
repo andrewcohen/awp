@@ -17,7 +17,7 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 9
+const HookMarkerVersion = 10
 
 // BlockingTools lists tool names that block on user input. When a
 // PreToolUse hook fires for one of these, awp reports "waiting" instead of
@@ -72,6 +72,18 @@ func GateCheckHookCommand() string {
 	return `[ -n "$TMUX" ] || exit 0; "${AWP_BIN:-awp}" internal gate check --hook`
 }
 
+// RequireTaskHookCommand returns the shell snippet for the require-task hook
+// (`awp internal require-task --hook`). Like gate check it must NOT swallow
+// stderr or the exit code — a block is signalled by exit code 2 with the
+// reason on stderr, which Claude feeds back to the agent. Unlike the other
+// hooks it is NOT gated on $TMUX: the check reads the session's task list
+// (~/.claude/tasks/<session>), which is meaningful in every session, not just
+// awp-managed tmux ones. It guards on awp being resolvable so a session
+// without awp on PATH fails open (exit 0) rather than emitting a hook error.
+func RequireTaskHookCommand() string {
+	return `command -v "${AWP_BIN:-awp}" >/dev/null 2>&1 || exit 0; "${AWP_BIN:-awp}" internal require-task --hook`
+}
+
 // LoopTrackHookCommand returns the shell snippet for the loop-track hook
 // (`awp internal loop track`). Like gate record it swallows stdout/stderr and
 // the exit code so tracking never breaks a turn (it always exits 0 anyway),
@@ -116,14 +128,26 @@ func gateHookSpecs() []hookSpec {
 	}
 }
 
+// taskHookSpecs are the task-discipline enforcement hooks. Today just one: a
+// PreToolUse(Edit|Write|NotebookEdit) hook that denies editing a non-markdown
+// file unless a task is in_progress. Unlike the gate hooks it is not gated on
+// a dev_loop or on tmux — it enforces in every session.
+func taskHookSpecs() []hookSpec {
+	return []hookSpec{
+		{event: "PreToolUse", matcher: "Edit|Write|NotebookEdit", id: "require-task", command: RequireTaskHookCommand()},
+	}
+}
+
 // desiredHookSpecs is the full set of awp-managed hook entries: the status
-// reporters (one matcher-less entry per event) plus the gate hooks.
+// reporters (one matcher-less entry per event), the gate hooks, and the
+// task-discipline hooks.
 func desiredHookSpecs() []hookSpec {
 	var specs []hookSpec
 	for event, state := range DesiredClaudeHooks() {
 		specs = append(specs, hookSpec{event: event, id: "status", state: state, command: HookCommand(event, state)})
 	}
 	specs = append(specs, gateHookSpecs()...)
+	specs = append(specs, taskHookSpecs()...)
 	return specs
 }
 
@@ -363,7 +387,7 @@ func claudeSettingsPath() (string, error) {
 // contain, across every version and binary-path variant (`awp …` vs
 // `"${AWP_BIN:-awp}" …`). Recognizing entries by them lets us reclaim hooks
 // written by awp versions that predate the x-awp marker (or the id field).
-var awpCommandSignatures = []string{"internal report-status", "gate record", "gate check", "loop track"}
+var awpCommandSignatures = []string{"internal report-status", "gate record", "gate check", "loop track", "require-task"}
 
 // entryCommand returns the first command string in a hook entry's hooks list.
 func entryCommand(entry map[string]any) string {
@@ -409,6 +433,8 @@ func awpEntryID(entry map[string]any) string {
 		return "gate-record"
 	case strings.Contains(cmd, "gate check"):
 		return "gate-check"
+	case strings.Contains(cmd, "require-task"):
+		return "require-task"
 	case strings.Contains(cmd, "loop track"):
 		return "loop-track"
 	case strings.Contains(cmd, "internal report-status"):

@@ -111,6 +111,8 @@ func (a *App) runInternal(args []string) error {
 		return runMarkRead(args[1:])
 	case "gate":
 		return a.runGate(args[1:])
+	case "require-task":
+		return runRequireTask(args[1:], os.Stderr)
 	case "loop":
 		return a.runLoop(args[1:])
 	default:
