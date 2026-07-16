@@ -263,6 +263,63 @@ func TestGateCheckSpecMatchesTaskUpdate(t *testing.T) {
 	}
 }
 
+func TestRequireTaskHookCommandPreservesExit(t *testing.T) {
+	// The block is signalled by exit code 2 + stderr, so the command must NOT
+	// redirect stderr or force exit 0 around the awp invocation.
+	cmd := RequireTaskHookCommand()
+	if strings.Contains(cmd, "require-task --hook 2>/dev/null") {
+		t.Errorf("require-task command must not swallow the awp call's stderr: %q", cmd)
+	}
+	if strings.Contains(cmd, "|| true") {
+		t.Errorf("require-task command must not mask the exit code with || true: %q", cmd)
+	}
+	// It must NOT be tmux-gated — it enforces in every session.
+	if strings.Contains(cmd, "$TMUX") {
+		t.Errorf("require-task command must not gate on $TMUX: %q", cmd)
+	}
+}
+
+func TestRequireTaskSpecMatchesEditTools(t *testing.T) {
+	var found bool
+	for _, s := range specsByEvent()["PreToolUse"] {
+		if s.id == "require-task" {
+			found = true
+			if s.matcher != "Edit|Write|NotebookEdit" {
+				t.Errorf("require-task matcher = %q, want Edit|Write|NotebookEdit", s.matcher)
+			}
+			if !strings.Contains(s.command, "require-task --hook") {
+				t.Errorf("require-task command = %q, want `require-task --hook`", s.command)
+			}
+		}
+	}
+	if !found {
+		t.Error("PreToolUse should include a require-task spec")
+	}
+}
+
+func TestSyncEventEntriesInstallsRequireTaskAlongsideOthers(t *testing.T) {
+	// Starting from a legacy status entry on PreToolUse, sync should converge
+	// to the canonical set (status + gate-check + require-task) with no dupes.
+	event := "PreToolUse"
+	specs := specsByEvent()[event]
+	out, changed := syncEventEntries([]any{legacyAwpEntry("working")}, specs)
+	if !changed {
+		t.Fatal("expected sync to add the missing PreToolUse specs")
+	}
+	if !eventAwpEntriesMatch(out, specs) {
+		t.Errorf("PreToolUse should converge to canonical (status+gate-check+require-task); got %v", out)
+	}
+	var sawRequireTask bool
+	for _, raw := range out {
+		if entry, ok := raw.(map[string]any); ok && awpEntryID(entry) == "require-task" {
+			sawRequireTask = true
+		}
+	}
+	if !sawRequireTask {
+		t.Error("expected a require-task entry after sync")
+	}
+}
+
 func TestSyncEventEntriesDropsUpgradedStatusEntry(t *testing.T) {
 	// A legacy status entry on PostToolUse should be rewritten to the new
 	// id-tagged form, and the gate-record entry added — without duplicating.
