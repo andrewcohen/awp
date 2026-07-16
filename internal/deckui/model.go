@@ -3964,6 +3964,11 @@ func (m Model) renderList(width int) string {
 	// slot, in the same column as the project-header names.
 	const prefixWidth = 2
 	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	// Fixed single-cell slot for the status glyph. The status dot ("●")
+	// is one cell, but spinner.Dot frames carry a trailing space
+	// ("⣾ ", 2 cells), so a row entering a loading state would otherwise
+	// shift its label one column to the right. Clamp both to one cell.
+	glyphSlot := lipgloss.NewStyle().Width(1).MaxWidth(1)
 	// Build the scrollable region (project headers + workspace rows) from
 	// the shared structural layout (deckBodyRows) so the renderer and the
 	// scroll math (deckBodyCursorRow / deckBodyHeaderRowForCursor) never
@@ -4089,7 +4094,7 @@ func (m Model) renderList(width int) string {
 			if !dim && (item.Optimistic || m.workspaceSettingUp(item) || m.workspaceDeleting(item)) {
 				glyph = m.spinner.View()
 			}
-			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyph, stackPrefix, labelStyle.Render(label))
+			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyphSlot.Render(glyph), stackPrefix, labelStyle.Render(label))
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
