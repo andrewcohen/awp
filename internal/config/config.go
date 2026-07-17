@@ -89,6 +89,13 @@ type DevLoopGate struct {
 	// are not pass/fail checks — they advance the loop's phase without
 	// appearing in the gate-lights row.
 	Marker bool `json:"marker,omitempty"`
+	// Optional marks an advisory gate: it still records pass/fail and shows in
+	// the gate-lights row, but a red (or not-yet-run) optional gate does NOT
+	// block marking a unit complete. Instead the completion check allows the
+	// TaskUpdate and feeds a reminder about the still-red optional gate back to
+	// the agent. Use it for checks you want tracked but not enforced (e.g. a
+	// slow integration suite). Ignored on marker gates (they never block).
+	Optional bool `json:"optional,omitempty"`
 }
 
 // DefaultAgent is the agent command used when neither global nor project
