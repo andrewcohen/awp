@@ -29,9 +29,13 @@ func GeneratePreamble(loop Loop) string {
 		if cmd == "" {
 			cmd = firstAlt(g.re.String())
 		}
-		fmt.Fprintf(&b, "     - %s\n", cmd)
+		suffix := ""
+		if g.Optional {
+			suffix = " (optional — advisory, doesn't block completing the unit)"
+		}
+		fmt.Fprintf(&b, "     - %s%s\n", cmd, suffix)
 	}
-	b.WriteString("If a gate fails, fix and re-run it before continuing.\n\n")
+	b.WriteString("If a required gate fails, fix and re-run it before continuing.\n\n")
 	b.WriteString("For a unit whose correctness a human has to see (visual / layout / UX / ")
 	b.WriteString("rendered output), gates aren't enough — after they're green, ask the user ")
 	b.WriteString("to confirm what to look at and where, and wait for their OK before marking ")

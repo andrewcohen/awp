@@ -24,8 +24,11 @@ type Gate struct {
 	// Marker gates detect a phase transition (e.g. commit) but have no
 	// pass/fail outcome and are excluded from the gate-lights row.
 	Marker bool
-	re     *regexp.Regexp
-	notRe  *regexp.Regexp
+	// Optional gates are advisory: they show in the gate-lights row but a red
+	// optional gate does not block completing a unit (see RequiredGateNames).
+	Optional bool
+	re       *regexp.Regexp
+	notRe    *regexp.Regexp
 }
 
 // DisplayCommand returns the human-facing command for this gate: the
@@ -109,8 +112,9 @@ func Resolve(cfg config.Config) Loop {
 func (l Loop) MatchGate(command string) *Gate { return l.gateFor(command) }
 
 // GateNames returns the names of the loop's non-marker gates in loop order —
-// the set the completion check requires green. Marker gates (e.g. commit)
-// have no pass/fail outcome and are excluded.
+// the set shown in the gate-lights row. Marker gates (e.g. commit) have no
+// pass/fail outcome and are excluded. This includes optional gates: they are
+// tracked and displayed, just not enforced (see RequiredGateNames).
 func (l Loop) GateNames() []string {
 	out := make([]string, 0, len(l.Gates))
 	for _, g := range l.Gates {
@@ -120,6 +124,45 @@ func (l Loop) GateNames() []string {
 		out = append(out, g.Name)
 	}
 	return out
+}
+
+// RequiredGateNames returns the non-marker, non-optional gates in loop order —
+// the set the completion check requires green before a unit can be marked
+// complete. Optional gates are excluded: they're advisory, so a red optional
+// gate is surfaced as a reminder rather than a block.
+func (l Loop) RequiredGateNames() []string {
+	out := make([]string, 0, len(l.Gates))
+	for _, g := range l.Gates {
+		if g.Marker || g.Optional {
+			continue
+		}
+		out = append(out, g.Name)
+	}
+	return out
+}
+
+// OptionalGateNames returns the non-marker optional gates in loop order — the
+// advisory checks that are tracked and displayed but never block completion.
+func (l Loop) OptionalGateNames() []string {
+	out := make([]string, 0, len(l.Gates))
+	for _, g := range l.Gates {
+		if g.Marker || !g.Optional {
+			continue
+		}
+		out = append(out, g.Name)
+	}
+	return out
+}
+
+// GateByName returns the gate with the given name, or nil if the loop has no
+// such gate.
+func (l Loop) GateByName(name string) *Gate {
+	for i := range l.Gates {
+		if l.Gates[i].Name == name {
+			return &l.Gates[i]
+		}
+	}
+	return nil
 }
 
 // gateFor returns the gate whose command pattern matches the bash command,
@@ -200,7 +243,7 @@ func compile(specs []config.DevLoopGate) []Gate {
 			// A bad exclude pattern just means "no exclusion", not a dead gate.
 			notRe, _ = regexp.Compile(s.NotMatch)
 		}
-		out = append(out, Gate{Name: s.Name, Phase: s.Phase, Command: s.Command, Marker: s.Marker, re: re, notRe: notRe})
+		out = append(out, Gate{Name: s.Name, Phase: s.Phase, Command: s.Command, Marker: s.Marker, Optional: s.Optional, re: re, notRe: notRe})
 	}
 	return out
 }

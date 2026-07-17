@@ -255,18 +255,21 @@ func runGateCheck(args []string, out, errOut io.Writer) error {
 		}
 	}
 	if hook {
-		return runGateCheckHook(errOut)
+		return runGateCheckHook(out, errOut)
 	}
 	return runGateCheckSelf(wsFlag, out)
 }
 
 // runGateCheckHook handles the PreToolUse(TaskUpdate) payload: reset on
-// in_progress, deny-or-allow on completed. A denial is expressed by writing
-// the reason to stderr and returning ErrGateBlocked, which main maps to exit
-// code 2 — the exit code Claude treats as "block this tool call and feed
-// stderr back to the agent". Every other path returns nil (allow); a hook
-// error never wedges the agent because only exit 2 blocks.
-func runGateCheckHook(errOut io.Writer) error {
+// in_progress, deny-or-allow on completed. A denial (a required gate is red)
+// is expressed by writing the reason to stderr and returning ErrGateBlocked,
+// which main maps to exit code 2 — the exit code Claude treats as "block this
+// tool call and feed stderr back to the agent". When the required gates are
+// green but optional gates are still red, the completion is allowed and an
+// advisory reminder is printed to stdout as PreToolUse additionalContext.
+// Every other path returns nil (allow); a hook error never wedges the agent
+// because only exit 2 blocks.
+func runGateCheckHook(out, errOut io.Writer) error {
 	payload, _ := readGatePayload()
 	if payload.ToolName != "" && payload.ToolName != "TaskUpdate" {
 		return nil // not our tool → allow
@@ -289,17 +292,40 @@ func runGateCheckHook(errOut io.Writer) error {
 		return nil
 	case "completed":
 		gates := currentGates(root, wsName)
-		if gatesAllGreen(loop, gates) {
-			// Seal the unit so the next recorded gate starts a fresh set even
-			// if the agent skips marking the next unit in_progress.
-			sealGates(root, wsName)
-			return nil // ready → allow
+		if !gatesAllGreen(loop, gates) {
+			_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
+			return ErrGateBlocked
 		}
-		_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
-		return ErrGateBlocked
+		// Required gates are green → allow. Seal the unit so the next recorded
+		// gate starts a fresh set even if the agent skips marking the next unit
+		// in_progress.
+		sealGates(root, wsName)
+		if reds := redOptionalGates(loop, gates); len(reds) > 0 {
+			printPreToolUseContext(out, optionalGateAdvisory(loop, gates, reds, currentUnitLabel(root, wsName)))
+		}
+		return nil
 	default:
 		return nil // pending / deleted / unset → allow
 	}
+}
+
+// optionalGateAdvisory builds the reminder fed back to the agent when a unit
+// completes with its required gates green but one or more optional gates red.
+func optionalGateAdvisory(loop watch.Loop, gates map[string]string, reds []string, unitLabel string) string {
+	parts := make([]string, 0, len(reds))
+	for _, name := range reds {
+		state := "not run"
+		if gates[name] == "fail" {
+			state = "red"
+		}
+		cmd := name
+		if g := loop.GateByName(name); g != nil {
+			cmd = g.DisplayCommand()
+		}
+		parts = append(parts, fmt.Sprintf("'%s' (%s — `%s`)", name, state, cmd))
+	}
+	return fmt.Sprintf("%s completed; optional gate(s) still not green: %s. These are advisory (they didn't block completion) — run them if you want them clean.",
+		unitLabel, strings.Join(parts, ", "))
 }
 
 // runGateCheckSelf is the by-hand self-check: exit 0 when the current unit is
@@ -317,7 +343,11 @@ func runGateCheckSelf(wsFlag string, out io.Writer) error {
 	}
 	gates := currentGates(root, wsName)
 	if gatesAllGreen(loop, gates) {
-		_, _ = fmt.Fprintf(out, "gate check: %s ready to complete (all gates green)\n", currentUnitLabel(root, wsName))
+		msg := fmt.Sprintf("gate check: %s ready to complete (required gates green)", currentUnitLabel(root, wsName))
+		if reds := redOptionalGates(loop, gates); len(reds) > 0 {
+			msg += fmt.Sprintf(" — optional gate(s) still not green: %s", strings.Join(reds, ", "))
+		}
+		_, _ = fmt.Fprintln(out, msg)
 		return nil
 	}
 	return fmt.Errorf("gate check: %s", gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
@@ -402,8 +432,8 @@ func gateDenyReason(loop watch.Loop, gates map[string]string, unitLabel string) 
 	var pending *watch.Gate
 	for i := range loop.Gates {
 		g := loop.Gates[i]
-		if g.Marker {
-			continue
+		if g.Marker || g.Optional {
+			continue // markers never gate; optional gates are advisory
 		}
 		switch gates[g.Name] {
 		case "fail":
@@ -461,9 +491,23 @@ func emitGateRecord(out io.Writer, jsonOut bool, report gateRecordReport, nudge 
 // printPostToolUseContext prints a PostToolUse hook result feeding text back
 // into the agent's context.
 func printPostToolUseContext(out io.Writer, text string) {
+	printHookContext(out, "PostToolUse", text)
+}
+
+// printPreToolUseContext prints a PreToolUse hook result feeding text back
+// into the agent's context while still allowing the tool call (exit 0). Used
+// for the optional-gate advisory: completion is allowed, but the agent is
+// reminded of the still-red advisory gates.
+func printPreToolUseContext(out io.Writer, text string) {
+	printHookContext(out, "PreToolUse", text)
+}
+
+// printHookContext emits the hookSpecificOutput.additionalContext envelope
+// Claude reads to fold text into the agent's context for the given event.
+func printHookContext(out io.Writer, event, text string) {
 	payload := map[string]any{
 		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "PostToolUse",
+			"hookEventName":     event,
 			"additionalContext": text,
 		},
 	}
@@ -525,17 +569,32 @@ func gateProgress(loop watch.Loop, gates map[string]string) (green, total int) {
 
 // gatesAllGreen reports whether every non-marker gate in the loop is "pass".
 // An empty loop (no gates) is not "green" — there's nothing to have passed.
+// gatesAllGreen reports whether a unit is ready to complete: every REQUIRED
+// (non-marker, non-optional) gate is green. Optional gates never gate
+// completion, so a loop whose only checks are optional is always "ready" (the
+// completion hook still nudges about red optionals). This is the shared
+// readiness predicate for both the completion check and the record hook's
+// ready-transition nudge, so the two never disagree.
 func gatesAllGreen(loop watch.Loop, gates map[string]string) bool {
-	names := loop.GateNames()
-	if len(names) == 0 {
-		return false
-	}
-	for _, name := range names {
+	for _, name := range loop.RequiredGateNames() {
 		if gates[name] != "pass" {
 			return false
 		}
 	}
 	return true
+}
+
+// redOptionalGates returns the loop's optional gates that are not green
+// (failed or not yet run), in loop order — the advisory reminders surfaced
+// when a unit completes with required gates green.
+func redOptionalGates(loop watch.Loop, gates map[string]string) []string {
+	var out []string
+	for _, name := range loop.OptionalGateNames() {
+		if gates[name] != "pass" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // unitGates projects the loop's non-marker gates onto their recorded status,

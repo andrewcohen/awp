@@ -506,6 +506,80 @@ func TestGateCheckHookCompletedAllowsWhenGreen(t *testing.T) {
 	}
 }
 
+const gateConfigOptionalJSON = `{"dev_loop":{"gates":[
+  {"name":"fmt","match":"gofmt|go fmt"},
+  {"name":"test","match":"go test"},
+  {"name":"lint","match":"golangci-lint","optional":true},
+  {"name":"commit","match":"jj commit","marker":true}
+]}}`
+
+func TestGateCheckHookAllowsWhenOnlyOptionalRed(t *testing.T) {
+	const root = "/tmp/awp-gate-opt-allow"
+	fs := newFakeStore()
+	// Required gates green; the optional lint gate failed.
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass", "lint": "fail"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-opt-allow", root)
+	withGateRepo(t, root, gateConfigOptionalJSON)
+
+	var stdout, stderr bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &stdout, &stderr); err != nil {
+		t.Fatalf("required-green + optional-red should allow (nil err), got %v", err)
+	}
+	if stderr.String() != "" {
+		t.Errorf("allow should not write to stderr, got %q", stderr.String())
+	}
+	// The advisory is fed back as PreToolUse additionalContext on stdout.
+	if !contains(stdout.String(), "lint") || !contains(stdout.String(), "advisory") {
+		t.Errorf("stdout should carry the optional-gate advisory naming lint, got %q", stdout.String())
+	}
+	if !contains(stdout.String(), "PreToolUse") || !contains(stdout.String(), "additionalContext") {
+		t.Errorf("advisory should be a PreToolUse additionalContext envelope, got %q", stdout.String())
+	}
+}
+
+func TestGateCheckHookBlocksOnRequiredRedEvenIfOptionalGreen(t *testing.T) {
+	const root = "/tmp/awp-gate-opt-block"
+	fs := newFakeStore()
+	// Required test red, optional lint green — must still block.
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "fail", "lint": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-opt-block", root)
+	withGateRepo(t, root, gateConfigOptionalJSON)
+
+	var stderr bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr)
+	if !errors.Is(err, ErrGateBlocked) {
+		t.Fatalf("expected ErrGateBlocked for a red required gate, got %v", err)
+	}
+	if !contains(stderr.String(), "test") {
+		t.Errorf("reason should name the red required 'test' gate, got %q", stderr.String())
+	}
+	if contains(stderr.String(), "lint") {
+		t.Errorf("optional 'lint' gate should not appear in a block reason, got %q", stderr.String())
+	}
+}
+
+func TestGateCheckHookSilentWhenAllGreenIncludingOptional(t *testing.T) {
+	const root = "/tmp/awp-gate-opt-clean"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass", "lint": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-opt-clean", root)
+	withGateRepo(t, root, gateConfigOptionalJSON)
+
+	var stdout, stderr bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &stdout, &stderr); err != nil {
+		t.Fatalf("all green (incl optional) should allow, got %v", err)
+	}
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Errorf("all green should be silent; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func TestGateCheckSelfExitCodes(t *testing.T) {
 	const root = "/tmp/awp-gate-self"
 	fs := newFakeStore()
