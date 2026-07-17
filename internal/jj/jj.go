@@ -393,15 +393,29 @@ func (c *Client) AllBookmarks() ([]string, error) {
 // "no bookmark resolved" so callers can fall back to a literal default
 // without aborting the form open.
 func (c *Client) Trunk() (string, error) {
-	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "log", "--no-graph", "-r", "trunk()", "-T", `bookmarks.map(|b| b.name()).join("\n")`)
+	return c.BookmarkNameAt("trunk()")
+}
+
+// BookmarkNameAt returns the first bookmark name on the commit(s) that revset
+// resolves to, with any @remote suffix stripped, or "" when the revset is
+// empty / carries no bookmark. Run it against a specific workspace by wrapping
+// the runner so jj executes in that directory. Shares Trunk()'s handling of jj
+// diagnostics that get merged in from stderr.
+func (c *Client) BookmarkNameAt(revset string) (string, error) {
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "log", "--no-graph", "-r", revset, "-T", `bookmarks.map(|b| b.name()).join("\n")`)
 	if err != nil {
-		return "", formatCommandError("resolve trunk", err, out)
+		return "", formatCommandError(fmt.Sprintf("resolve bookmark at %q", revset), err, out)
 	}
+	return firstBookmarkName(out), nil
+}
+
+// firstBookmarkName picks the first real bookmark name out of jj log output,
+// dropping diagnostics (and their indented continuation lines) that
+// CombinedOutput merges in from stderr — otherwise a leaked
+// "Warning: Refused to snapshot some files:" line would be read as a name —
+// and stripping any @remote suffix.
+func firstBookmarkName(out string) string {
 	for _, line := range strings.Split(out, "\n") {
-		// Drop jj diagnostics (and their indented continuation lines) that
-		// CombinedOutput merges in from stderr — otherwise a leaked
-		// "Warning: Refused to snapshot some files:" line is returned as
-		// the trunk bookmark name.
 		if line != strings.TrimLeft(line, " \t") {
 			continue
 		}
@@ -412,9 +426,9 @@ func (c *Client) Trunk() (string, error) {
 		if idx := strings.Index(name, "@"); idx > 0 {
 			name = name[:idx]
 		}
-		return name, nil
+		return name
 	}
-	return "", nil
+	return ""
 }
 
 func (c *Client) BookmarksAtRevision(revision string) ([]string, error) {
