@@ -1636,7 +1636,14 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 	case deckui.ActionSummon:
 		return summonWorkspaceSession(tmuxClient, svc, item, reporter)
 	case deckui.ActionOpenWindow:
-		return openNamedWindow(tmuxClient, svc, item, req.Arg, reporter)
+		arg := req.Arg
+		if arg == deckui.ReviewStackArg {
+			base := resolveReviewStackBase(runner, resolvePath(svc, item), item.Bookmark)
+			// Single-quote the range: the trunk() fallback contains parens
+			// the pane shell would otherwise treat as a subshell.
+			arg = "review:tuicr -r '" + base + "..@'"
+		}
+		return openNamedWindow(tmuxClient, svc, item, arg, reporter)
 	case deckui.ActionCI:
 		return openCIWindow(tmuxClient, svc, runner, item, reporter)
 	case deckui.ActionLastSession:
@@ -1950,6 +1957,38 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 // openNamedWindow ensures the workspace session exists, then switches to the
 // named window, creating it (with an optional default command) if missing.
 // Finally, it switches the tmux client to the session so the user lands there.
+// resolveReviewStackBase returns the base revset the C (stack review) action
+// diffs @ against. It prefers the workspace's nearest stacked-parent bookmark
+// — the closest bookmarked ancestor of @ that is neither trunk nor the
+// workspace's own bookmark — so a stacked change is reviewed against its
+// parent rather than the whole stack. When nothing is stacked it falls back to
+// trunk(), which auto-resolves the repo's real default branch (so it's already
+// better than a hardcoded "main"). Runs jj read-only in the workspace dir;
+// any error degrades to trunk().
+func resolveReviewStackBase(runner Runner, dir, ownBookmark string) string {
+	if strings.TrimSpace(dir) == "" {
+		return "trunk()"
+	}
+	j := jj.New(fixedDirRunner{base: runner, dir: dir})
+	trunk, _ := j.Trunk()
+	if strings.TrimSpace(trunk) == "" {
+		trunk = "main"
+	}
+	// Nearest bookmarked ancestor of @ (heads = closest to @), excluding the
+	// trunk bookmark by name — bookmarks(exact:) matches both the local and
+	// @remote forms, so a locally-ahead trunk can't masquerade as a parent —
+	// and the workspace's own bookmark.
+	revset := fmt.Sprintf(`heads((trunk()..@) & bookmarks() ~ bookmarks(exact:%q)`, trunk)
+	if b := strings.TrimSpace(ownBookmark); b != "" {
+		revset += fmt.Sprintf(` ~ bookmarks(exact:%q)`, b)
+	}
+	revset += `)`
+	if parent, err := j.BookmarkNameAt(revset); err == nil && strings.TrimSpace(parent) != "" {
+		return parent
+	}
+	return "trunk()"
+}
+
 func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, arg string, reporter deckui.Reporter) error {
 	windowName, cmdOverride := arg, ""
 	if idx := strings.IndexByte(arg, ':'); idx >= 0 {
