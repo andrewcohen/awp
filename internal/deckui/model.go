@@ -105,6 +105,13 @@ const (
 	ActionMergePR
 )
 
+// ReviewStackArg is the ActionOpenWindow arg the C (stack review) action
+// emits. The handler resolves it to `tuicr -r '<base>..@'`, where <base> is
+// the workspace's nearest stacked-parent bookmark (or trunk() when nothing is
+// stacked). It's a sentinel rather than a built command because resolving the
+// base runs jj, which belongs in the action handler, not the TUI.
+const ReviewStackArg = "review:@stack-base@"
+
 type UserAction struct {
 	Name       string
 	Command    string
@@ -2511,7 +2518,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		case key.Matches(msg, km.ReviewWindow):
 			return m.trigger(ActionOpenWindow, "review")
 		case key.Matches(msg, km.ReviewMainWin):
-			return m.trigger(ActionOpenWindow, "review:tuicr -r main..@")
+			return m.trigger(ActionOpenWindow, ReviewStackArg)
 		case key.Matches(msg, km.VCSWindow):
 			return m.trigger(ActionOpenWindow, "vcs")
 		case key.Matches(msg, km.ShellWindow):
@@ -4821,7 +4828,7 @@ func deckKeyGroups() []keyGroup {
 				{"a", "agent window (re-attach without re-prompting)"},
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
-				{"c / C", "review window: tuicr -r @  /  tuicr -r main..@"},
+				{"c / C", "review window: working change (tuicr -r @)  /  change vs stack base (tuicr -r '<base>..@')"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},

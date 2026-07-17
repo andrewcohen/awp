@@ -205,7 +205,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `a` | Open agent window — re-launches the agent if its pane is at a shell |
 | `A` | Send a typed prompt to the workspace's agent (inline form). Header confirms the target project/workspace. If the agent is already running, the prompt is bracket-pasted as a user message; if it isn't, the agent launches with the prompt as its first message. Deck stays in focus — switch with `a` once you want to follow along. |
 | `e` | Open editor window (`$EDITOR`) |
-| `c` / `C` | Review window: `tuicr -r @` / `tuicr -r main..@` |
+| `c` / `C` | Review window. `c` reviews the working-copy change (`tuicr -r @`). `C` reviews the whole change **against its stack base** — awp resolves the base to the nearest stacked-parent bookmark (the closest bookmarked ancestor of `@` that is neither trunk nor the workspace's own bookmark), falling back to `trunk()` (jj's auto-resolved default branch) when nothing is stacked, then runs `tuicr -r '<base>..@'`. So a stacked change is reviewed against its parent instead of the whole stack, and a non-stacked change is reviewed against the real trunk regardless of whether it's named `main`, `master`, or something else. |
 | `v` | VCS window (`jjui`) |
 | `s` | Shell window |
 | `i` | CI window (`gh run watch`) |

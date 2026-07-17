@@ -313,6 +313,40 @@ func TestTrunkUsesIgnoreWorkingCopy(t *testing.T) {
 	}
 }
 
+func TestBookmarkNameAtReturnsNameAndPassesRevset(t *testing.T) {
+	r := &fakeRunner{out: "andrew/useexperiment-ssr\n"}
+	c := New(r)
+
+	name, err := c.BookmarkNameAt(`heads((trunk()..@) & bookmarks())`)
+	if err != nil {
+		t.Fatalf("BookmarkNameAt returned error: %v", err)
+	}
+	if name != "andrew/useexperiment-ssr" {
+		t.Fatalf("name = %q, want andrew/useexperiment-ssr", name)
+	}
+	// The revset must be passed through -r, with --ignore-working-copy so the
+	// query never locks or snapshots the workspace.
+	joined := strings.Join(r.lastArgs, " ")
+	if !strings.Contains(joined, "--ignore-working-copy") {
+		t.Errorf("expected --ignore-working-copy, got %#v", r.lastArgs)
+	}
+	if !strings.Contains(joined, "heads((trunk()..@) & bookmarks())") {
+		t.Errorf("revset not passed through, got %#v", r.lastArgs)
+	}
+}
+
+func TestBookmarkNameAtEmptyWhenNoBookmark(t *testing.T) {
+	r := &fakeRunner{out: "\n"}
+	c := New(r)
+	name, err := c.BookmarkNameAt(`heads(none())`)
+	if err != nil {
+		t.Fatalf("BookmarkNameAt returned error: %v", err)
+	}
+	if name != "" {
+		t.Fatalf("name = %q, want empty (no bookmark on the resolved commit)", name)
+	}
+}
+
 // TestTrunkSkipsSnapshotWarning guards the regression where jj's
 // "Refused to snapshot some files" warning (merged into stdout by the
 // CombinedOutput runner) was returned verbatim as the trunk bookmark
