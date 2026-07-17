@@ -97,6 +97,45 @@ func TestResolveAndIsConfigured(t *testing.T) {
 	}
 }
 
+func TestOptionalGatePartitioning(t *testing.T) {
+	var cfg config.Config
+	cfg.DevLoop.Gates = []config.DevLoopGate{
+		{Name: "fmt", Match: "gofmt"},
+		{Name: "test", Match: "go test"},
+		{Name: "lint", Match: "golangci-lint", Optional: true},
+		{Name: "commit", Match: "jj commit", Marker: true},
+	}
+	loop := Resolve(cfg)
+
+	// GateNames = all non-marker gates (shown in the lights row), incl optional.
+	if got := loop.GateNames(); !equalSlices(got, []string{"fmt", "test", "lint"}) {
+		t.Errorf("GateNames = %v, want [fmt test lint]", got)
+	}
+	// RequiredGateNames excludes the optional gate.
+	if got := loop.RequiredGateNames(); !equalSlices(got, []string{"fmt", "test"}) {
+		t.Errorf("RequiredGateNames = %v, want [fmt test]", got)
+	}
+	// OptionalGateNames = just the optional one.
+	if got := loop.OptionalGateNames(); !equalSlices(got, []string{"lint"}) {
+		t.Errorf("OptionalGateNames = %v, want [lint]", got)
+	}
+	if g := loop.GateByName("lint"); g == nil || !g.Optional {
+		t.Errorf("GateByName(lint) should return the optional gate, got %+v", g)
+	}
+}
+
+func equalSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCommitGateExcludesWip(t *testing.T) {
 	commit := loopGate(t, "commit")
 	if !commit.Matches(`jj commit -m "feat: add thing"`) {
