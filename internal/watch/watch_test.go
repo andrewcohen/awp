@@ -136,6 +136,39 @@ func equalSlices(a, b []string) bool {
 	return true
 }
 
+func TestRenderBodyOrdersCurrentUpcomingCompleted(t *testing.T) {
+	// Todos in a deliberately jumbled list order: done, current, done,
+	// pending, pending. The rendered body must reorder to
+	// current → upcoming → completed, each group keeping list order.
+	st := State{
+		Todos: []Todo{
+			{Content: "ZZdoneA", Status: "completed"},
+			{Content: "ZZcurrent", Status: "in_progress"},
+			{Content: "ZZdoneB", Status: "completed"},
+			{Content: "ZZupA", Status: "pending"},
+			{Content: "ZZupB", Status: "pending"},
+		},
+		CurrentPhase: "implement",
+	}
+	out := RenderBody(DefaultLoop(), st)
+
+	want := []string{"ZZcurrent", "ZZupA", "ZZupB", "ZZdoneA", "ZZdoneB"}
+	last := -1
+	for _, s := range want {
+		idx := strings.Index(out, s)
+		if idx < 0 {
+			t.Fatalf("%q missing from rendered body:\n%s", s, out)
+		}
+		if idx < last {
+			t.Fatalf("%q is out of order (want current→upcoming→completed):\n%s", s, out)
+		}
+		last = idx
+	}
+	if !strings.Contains(out, "← current") {
+		t.Error("current unit should carry the '← current' marker")
+	}
+}
+
 func TestCommitGateExcludesWip(t *testing.T) {
 	commit := loopGate(t, "commit")
 	if !commit.Matches(`jj commit -m "feat: add thing"`) {
