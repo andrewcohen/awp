@@ -55,16 +55,25 @@ func RenderBody(loop Loop, st State) string {
 	}
 
 	b.WriteString(styMuted.Render(fmt.Sprintf("TASKS  %d/%d", st.DoneCount(), len(st.Todos))) + "\n")
+	// Order: the current unit on top (with its loop body), then the upcoming
+	// units, then the completed ones — so the eye lands on what's happening
+	// now and what's next, with finished work sinking to the bottom. Each
+	// group keeps the todo list's own order.
+	if cur >= 0 && cur < len(st.Todos) {
+		b.WriteString("  " + styCurrent.Render("▶ "+st.Todos[cur].Content) + styMuted.Render("   ← current") + "\n")
+		b.WriteString(renderUnitBody(loop, st))
+	}
 	for i, t := range st.Todos {
-		switch {
-		case t.Status == "completed":
-			b.WriteString("  " + styDone.Render("✔ ") + styMuted.Render(t.Content) + "\n")
-		case i == cur:
-			b.WriteString("  " + styCurrent.Render("▶ "+t.Content) + styMuted.Render("   ← current") + "\n")
-			b.WriteString(renderUnitBody(loop, st))
-		default:
-			b.WriteString("  " + styMuted.Render("○ "+t.Content) + "\n")
+		if i == cur || t.Status == "completed" {
+			continue
 		}
+		b.WriteString("  " + styMuted.Render("○ "+t.Content) + "\n")
+	}
+	for i, t := range st.Todos {
+		if i == cur || t.Status != "completed" {
+			continue
+		}
+		b.WriteString("  " + styDone.Render("✔ ") + styMuted.Render(t.Content) + "\n")
 	}
 	return b.String()
 }
