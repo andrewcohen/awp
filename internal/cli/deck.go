@@ -623,6 +623,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 					HeadRef: pr.HeadRef,
 					Author:  author,
 					IsDraft: pr.IsDraft,
+					Labels:  pr.LabelNames(),
 				}
 			}
 			return deckui.PRFetchDoneMsg{PRs: items}

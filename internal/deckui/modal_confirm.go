@@ -201,6 +201,9 @@ func (c *confirmMergeModal) renderPopover(m *Model) string {
 	if title := strings.TrimSpace(s.Title); title != "" {
 		lines = append(lines, truncate(title, 58))
 	}
+	if len(s.Labels) > 0 {
+		lines = append(lines, labelStyle.Render("Labels: "+truncate(strings.Join(s.Labels, ", "), 50)))
+	}
 	lines = append(lines,
 		"",
 		labelStyle.Render("Runs:"),

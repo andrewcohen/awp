@@ -263,6 +263,31 @@ func TestPRStatusFromInfo(t *testing.T) {
 	}
 }
 
+func TestListPRStatusParsesLabels(t *testing.T) {
+	r := &fakeRunner{out: `[
+		{"number":1,"headRefName":"andrew/a","state":"OPEN","labels":[{"name":"bug"},{"name":"enhancement"}]},
+		{"number":2,"headRefName":"andrew/b","state":"OPEN","labels":[]}
+	]`}
+	got, err := New(r).ListPRStatus("/tmp/repo")
+	if err != nil {
+		t.Fatalf("ListPRStatus err: %v", err)
+	}
+	if !reflect.DeepEqual(got[0].Labels, []string{"bug", "enhancement"}) {
+		t.Errorf("PR 1 labels: got %v want [bug enhancement]", got[0].Labels)
+	}
+	if len(got[1].Labels) != 0 {
+		t.Errorf("PR 2 labels: got %v want none", got[1].Labels)
+	}
+	// The gh call must request the labels field.
+	joined := ""
+	for _, a := range r.gotArgs {
+		joined += " " + a
+	}
+	if !contains(joined, "labels") {
+		t.Errorf("expected %q in args, got %q", "labels", joined)
+	}
+}
+
 func TestFetchPRRunnerError(t *testing.T) {
 	r := &fakeRunner{err: errors.New("boom"), out: "bad"}
 	_, err := New(r).FetchPR(1)

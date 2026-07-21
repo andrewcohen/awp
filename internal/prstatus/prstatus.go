@@ -90,4 +90,8 @@ type PRStatus struct {
 	// REVIEW_REQUIRED, so this is the only signal that catches "someone
 	// gave you feedback to look at" on your own PR.
 	HasReviewComments bool
+	// Labels are the PR's GitHub label names, in gh's order. Rendered as
+	// muted chips on deck rows / pickers; names only (label colors are
+	// per-repo and don't route through the deck's semantic palette).
+	Labels []string
 }

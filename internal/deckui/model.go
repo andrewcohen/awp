@@ -390,7 +390,15 @@ func (d *reviewItemDelegate) Render(w io.Writer, m list.Model, index int, listIt
 		draft = " " + lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Render("draft")
 	}
 
-	fixed := prefixWidth + d.numW + 1 + 1 + lipgloss.Width("@"+pr.Author) + lipgloss.Width(draft)
+	// PR labels trail the row as a muted tag chip. Capped so a heavily
+	// labeled PR can't crowd out the title; the meta line on deck rows
+	// carries the full set.
+	labels := ""
+	if lt := truncate(labelsMetaText(pr.Labels), 30); lt != "" {
+		labels = " " + lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(lt)
+	}
+
+	fixed := prefixWidth + d.numW + 1 + 1 + lipgloss.Width("@"+pr.Author) + lipgloss.Width(draft) + lipgloss.Width(labels)
 	titleRoom := width - 1 - fixed
 	if titleRoom < 10 {
 		titleRoom = 10
@@ -402,8 +410,8 @@ func (d *reviewItemDelegate) Render(w io.Writer, m list.Model, index int, listIt
 	}
 	titleRendered := titleStyle.Render(titleText)
 
-	fmt.Fprintf(w, "%s%s  %s  %s%s",
-		prefixSlot.Render(prefix), numRendered, titleRendered, authorRendered, draft)
+	fmt.Fprintf(w, "%s%s  %s  %s%s%s",
+		prefixSlot.Render(prefix), numRendered, titleRendered, authorRendered, draft, labels)
 }
 
 // newReviewList builds the review picker's list.Model with our custom
@@ -564,6 +572,8 @@ type PRItem struct {
 	HeadRef string
 	Author  string
 	IsDraft bool
+	// Labels are the PR's GitHub label names, in gh's order.
+	Labels []string
 }
 
 // ProjectItem describes a discovered project directory shown in the open
@@ -1375,7 +1385,19 @@ const (
 	glyphKeyboard = "\U000F030C" // nf-md-keyboard
 	glyphReturn   = "\U000F0311" // nf-md-keyboard_return \u2014 leads the "to review" hint on virtual rows
 	glyphBlocked  = "\uf023"     // nf-fa-lock \u2014 stacked PR blocked by an unready ancestor
+	glyphTag      = "\uf412"     // nf-oct-tag \u2014 leads the PR label chips
 )
+
+// labelsMetaText renders PR label names as a single meta-line segment:
+// a tag glyph followed by the comma-joined names ("\uf412 bug, chore").
+// Returns "" when there are no labels so the slot drops out like every
+// other meta segment.
+func labelsMetaText(labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	return glyphTag + " " + strings.Join(labels, ", ")
+}
 
 // metaLine returns the secondary text for a workspace row in a dense
 // glyph-prefixed format: "@author · <branch> · :port · <kbd> \"prompt\"".
@@ -1434,6 +1456,9 @@ func (m Model) metaLine(it Item) string {
 	if hasPR {
 		if stale := prStaleSuffix(pr, it.BookmarkCommitID); stale != "" {
 			parts = append(parts, stale)
+		}
+		if lbls := labelsMetaText(pr.Labels); lbls != "" {
+			parts = append(parts, lbls)
 		}
 	}
 	if prompt := promptPreviewSnippet(it.PromptPreview, 40); prompt != "" {
