@@ -2616,6 +2616,10 @@ func TestMetaLineRendersPRLabels(t *testing.T) {
 	if !strings.Contains(meta, want) {
 		t.Errorf("meta line missing label segment %q; got %q", want, meta)
 	}
+	// Labels render before the branch segment.
+	if li, bi := strings.Index(meta, glyphTag), strings.Index(meta, glyphBranch); li < 0 || bi < 0 || li > bi {
+		t.Errorf("labels should precede the branch; label idx=%d branch idx=%d in %q", li, bi, meta)
+	}
 
 	// No labels → no tag segment.
 	model2 := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{

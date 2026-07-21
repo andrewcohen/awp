@@ -1438,6 +1438,9 @@ func (m Model) metaLine(it Item) string {
 		if author := strings.TrimSpace(pr.Author); author != "" {
 			parts = append(parts, "@"+author)
 		}
+		if lbls := labelsMetaText(pr.Labels); lbls != "" {
+			parts = append(parts, lbls)
+		}
 	}
 	// Bookmark wins over HeadDesc — see note in the prior revision:
 	// bookmarks load sync; HeadDesc arrives via the async jj enrichment
@@ -1456,9 +1459,6 @@ func (m Model) metaLine(it Item) string {
 	if hasPR {
 		if stale := prStaleSuffix(pr, it.BookmarkCommitID); stale != "" {
 			parts = append(parts, stale)
-		}
-		if lbls := labelsMetaText(pr.Labels); lbls != "" {
-			parts = append(parts, lbls)
 		}
 	}
 	if prompt := promptPreviewSnippet(it.PromptPreview, 40); prompt != "" {
