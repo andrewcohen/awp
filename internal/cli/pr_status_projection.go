@@ -43,6 +43,7 @@ func prStatusFromGithub(s github.PRStatus, queued bool, viewer string) deckui.PR
 		ReviewRerequested: viewer != "" && containsLoginFold(s.ReviewRequests, viewer) && containsLoginFold(s.Reviewers, viewer),
 		Mine:              viewer != "" && strings.EqualFold(s.Author, viewer),
 		HasReviewComments: s.HasReviewComments,
+		Labels:            s.Labels,
 	}
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/andrewcohen/awp/internal/deckui"
@@ -19,6 +20,7 @@ func TestPrStatusFromGithubPreservesFields(t *testing.T) {
 		ReviewDecision:   github.ReviewApproved,
 		CIState:          github.CIFailing,
 		MergeStateStatus: github.MergeStateDirty,
+		Labels:           []string{"bug", "enhancement"},
 	}
 	got := prStatusFromGithub(src, true, "")
 	want := deckui.PRStatus{
@@ -33,8 +35,9 @@ func TestPrStatusFromGithubPreservesFields(t *testing.T) {
 		ReviewDecision:   deckui.PRReviewApproved,
 		CIState:          deckui.PRCIFailing,
 		MergeStateStatus: deckui.PRMergeStateDirty,
+		Labels:           []string{"bug", "enhancement"},
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("projection mismatch:\ngot  %+v\nwant %+v", got, want)
 	}
 }
