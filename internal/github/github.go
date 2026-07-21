@@ -12,6 +12,28 @@ type Runner interface {
 	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
 }
 
+// prLabel mirrors one entry of gh's `labels` JSON array. Only the name
+// is consumed — color/description are per-repo and don't route through
+// the deck's semantic palette, so the display carries names only.
+type prLabel struct {
+	Name string `json:"name"`
+}
+
+// labelNames extracts the non-empty label names from a gh labels array,
+// preserving gh's order. Returns nil when there are no labels.
+func labelNames(labels []prLabel) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(labels))
+	for _, l := range labels {
+		if n := strings.TrimSpace(l.Name); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 type PRInfo struct {
 	Number  int    `json:"number"`
 	HeadRef string `json:"headRefName"`
@@ -40,6 +62,8 @@ type PRInfo struct {
 	ReviewDecision   ReviewDecision
 	CIState          CIState
 	MergeStateStatus MergeStateStatus
+	// Labels are the PR's GitHub label names (order preserved).
+	Labels []string `json:"-"`
 }
 
 // prViewResponse mirrors `gh pr view --json` output. PRInfo flattens it
@@ -68,6 +92,7 @@ type prViewResponse struct {
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
 	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
 	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
+	Labels            []prLabel        `json:"labels"`
 }
 
 type Client struct {
@@ -85,14 +110,18 @@ type PRSummary struct {
 	Author  struct {
 		Login string `json:"login"`
 	} `json:"author"`
-	IsDraft bool `json:"isDraft"`
+	IsDraft bool      `json:"isDraft"`
+	Labels  []prLabel `json:"labels"`
 }
+
+// LabelNames returns the PR's GitHub label names, in gh's order.
+func (s PRSummary) LabelNames() []string { return labelNames(s.Labels) }
 
 func (c *Client) ListPRs() ([]PRSummary, error) {
 	out, err := c.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "list",
-		"--json", "number,title,headRefName,author,isDraft",
+		"--json", "number,title,headRefName,author,isDraft,labels",
 		"--limit", "100",
 	)
 	if err != nil {
@@ -189,6 +218,8 @@ type PRStatus struct {
 	// catches review feedback the author should look at even when no
 	// formal "request changes" was submitted.
 	HasReviewComments bool
+	// Labels are the PR's GitHub label names (order preserved).
+	Labels []string
 }
 
 // rawCheck is the (partial) shape of an entry in statusCheckRollup. gh returns
@@ -240,6 +271,7 @@ type rawPRStatus struct {
 	Reviews []struct {
 		State string `json:"state"`
 	} `json:"reviews"`
+	Labels []prLabel `json:"labels"`
 }
 
 // hasReviewComments reports whether any review carries actionable
@@ -298,7 +330,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 		"gh", "pr", "list",
 		"--state", "open",
 		"--limit", "100",
-		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
+		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews,labels",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh pr list: %w: %s", err, out)
@@ -325,6 +357,7 @@ func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
 			ReviewRequests:    r.requestedLogins(),
 			Reviewers:         r.reviewerLogins(),
 			HasReviewComments: r.hasReviewComments(),
+			Labels:            labelNames(r.Labels),
 		}
 	}
 	return statuses, nil
@@ -348,6 +381,7 @@ func PRStatusFromInfo(p PRInfo) PRStatus {
 		ReviewDecision:   p.ReviewDecision,
 		CIState:          p.CIState,
 		MergeStateStatus: p.MergeStateStatus,
+		Labels:           p.Labels,
 	}
 }
 
@@ -503,7 +537,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	out, err := c.runner.Run(
 		context.Background(), repoDir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
-		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews",
+		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews,labels",
 	)
 	if err != nil {
 		return PRStatus{}, fmt.Errorf("gh pr view %d: %w: %s", n, err, out)
@@ -528,6 +562,7 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 		ReviewRequests:    r.requestedLogins(),
 		Reviewers:         r.reviewerLogins(),
 		HasReviewComments: r.hasReviewComments(),
+		Labels:            labelNames(r.Labels),
 	}, nil
 }
 
@@ -692,7 +727,7 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 	out, err := c.runner.Run(
 		context.Background(), "",
 		"gh", "pr", "view", strconv.Itoa(num),
-		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus",
+		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,labels",
 	)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
@@ -719,6 +754,7 @@ func (c *Client) FetchPR(num int) (PRInfo, error) {
 		ReviewDecision:   raw.ReviewDecision,
 		CIState:          rollupCIState(raw.StatusCheckRollup),
 		MergeStateStatus: raw.MergeStateStatus,
+		Labels:           labelNames(raw.Labels),
 	}
 	// gh's default `headRepository` payload doesn't include `url`,
 	// so the field above is usually empty. Synthesize it from

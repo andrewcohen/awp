@@ -2603,6 +2603,29 @@ func TestPRStatusLabelForItemAppendsStaleSuffix(t *testing.T) {
 	}
 }
 
+func TestMetaLineRendersPRLabels(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {
+			Number: 42, State: PRStateOpen, Author: "andrewcohen",
+			Labels: []string{"bug", "enhancement"},
+		}},
+	}, nil)
+	meta := model.metaLine(item)
+	want := glyphTag + " bug, enhancement"
+	if !strings.Contains(meta, want) {
+		t.Errorf("meta line missing label segment %q; got %q", want, meta)
+	}
+
+	// No labels → no tag segment.
+	model2 := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
+		"/r": {"feat": {Number: 42, State: PRStateOpen, Author: "andrewcohen"}},
+	}, nil)
+	if meta2 := model2.metaLine(item); strings.Contains(meta2, glyphTag) {
+		t.Errorf("unlabeled PR should render no tag glyph; got %q", meta2)
+	}
+}
+
 func TestPRStatusLabelHonorsPROverride(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "missing", PRNumber: 99}
 	model := New([]Item{item}, nil).WithPRStatusSeed(map[string]map[string]PRStatus{
@@ -3418,6 +3441,7 @@ func TestMetaSegStyle(t *testing.T) {
 		{glyphKeyboard + ` "do the thing"`, colMuted},
 		{":5173", colInfo},
 		{glyphReturn + "  to review", colMuted},
+		{glyphTag + " bug, chore", colMuted},
 	}
 	for _, c := range cases {
 		if got := m.metaSegStyle(c.seg).GetForeground(); got != lipgloss.Color(c.want) {
