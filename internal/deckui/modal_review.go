@@ -65,6 +65,16 @@ func (p *reviewPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	filtering := p.list.FilterState() == list.Filtering
+	// Typing a digit while unfiltered jumps straight into filter mode with
+	// that digit — the usual flow is `r` then the PR number, so we skip the
+	// explicit `/`.
+	if p.list.FilterState() == list.Unfiltered && isDigitKey(key) {
+		var startCmd tea.Cmd
+		p.list, startCmd = p.list.Update(filterStartMsg(p.list))
+		var typeCmd tea.Cmd
+		p.list, typeCmd = p.list.Update(msg)
+		return batchCmds(startCmd, typeCmd)
+	}
 	switch key.String() {
 	case "enter":
 		// enter during filter commits the filter; a second enter picks.
@@ -104,6 +114,25 @@ func (p *reviewPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	p.list, cmd = p.list.Update(msg)
 	return cmd
+}
+
+// isDigitKey reports whether the key press is a single 0-9 digit rune.
+func isDigitKey(k tea.KeyMsg) bool {
+	if k.Type != tea.KeyRunes || len(k.Runes) != 1 {
+		return false
+	}
+	r := k.Runes[0]
+	return r >= '0' && r <= '9'
+}
+
+// filterStartMsg builds the key press that puts a bubbles list into its
+// filtering state, derived from the list's own Filter binding so it stays
+// correct if the binding is ever rethemed.
+func filterStartMsg(l list.Model) tea.KeyMsg {
+	if keys := l.KeyMap.Filter.Keys(); len(keys) > 0 {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keys[0])}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
 }
 
 func (p *reviewPicker) view(m *Model) (left, right string) {
