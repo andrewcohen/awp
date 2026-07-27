@@ -41,9 +41,11 @@ func (p requireTaskPayload) editPath() string {
 
 // runRequireTask implements `awp internal require-task --hook`: the
 // PreToolUse(Edit|Write|NotebookEdit) hook that denies editing a non-markdown
-// file unless the session has a task in_progress. It mirrors `gate check
-// --hook`: a denial is a stderr reason + ErrTaskRequired (→ exit 2, which
-// Claude treats as "block this tool call"); every other path returns nil
+// file unless the session has a task in_progress. It only enforces on repos
+// with a dev_loop configured (see taskGateActive) — matching the gate hooks
+// and preamble injection, all keyed off watch.IsConfigured. It mirrors `gate
+// check --hook`: a denial is a stderr reason + ErrTaskRequired (→ exit 2,
+// which Claude treats as "block this tool call"); every other path returns nil
 // (allow). It FAILS OPEN — an unreadable payload or missing task state allows
 // the edit so a hook error can never wedge editing.
 func runRequireTask(args []string, errOut io.Writer) error {
@@ -72,6 +74,10 @@ func runRequireTask(args []string, errOut io.Writer) error {
 		return nil // markdown / no path → exempt
 	}
 
+	if !taskGateActive() {
+		return nil // repo has no dev_loop configured → don't enforce
+	}
+
 	if payload.SessionID == "" {
 		return nil // can't locate task state → fail open
 	}
@@ -82,6 +88,19 @@ func runRequireTask(args []string, errOut io.Writer) error {
 
 	_, _ = fmt.Fprintln(errOut, requireTaskDenyReason(path))
 	return ErrTaskRequired
+}
+
+// taskGateActive reports whether the task gate should enforce for this
+// session's repo. Like the dev-loop gate hooks, require-task only enforces on
+// repos that opted in with an explicit dev_loop — it shares resolveGateLoop as
+// the single chokepoint, so the same predicate (watch.IsConfigured) governs
+// preamble injection, the gate hooks, and the edit block. resolveGateLoop
+// returns ok=false both when the workspace can't be resolved and when the repo
+// has no dev_loop, so a session outside an awp-managed workspace (or in a repo
+// that hasn't configured a dev loop) is never blocked.
+func taskGateActive() bool {
+	_, _, _, ok := resolveGateLoop()
+	return ok
 }
 
 // isMarkdownPath reports whether p is a markdown document, which is always

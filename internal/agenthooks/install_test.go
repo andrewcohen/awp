@@ -273,7 +273,10 @@ func TestRequireTaskHookCommandPreservesExit(t *testing.T) {
 	if strings.Contains(cmd, "|| true") {
 		t.Errorf("require-task command must not mask the exit code with || true: %q", cmd)
 	}
-	// It must NOT be tmux-gated — it enforces in every session.
+	// It must NOT be tmux-gated at the shell level — the command self-gates in
+	// Go on a configured dev_loop, and that resolution works from
+	// $AWP_WORKSPACE env as well as tmux, so a shell $TMUX guard would wrongly
+	// suppress it in non-tmux awp sessions.
 	if strings.Contains(cmd, "$TMUX") {
 		t.Errorf("require-task command must not gate on $TMUX: %q", cmd)
 	}

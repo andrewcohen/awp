@@ -31,6 +31,9 @@ func seedTasks(t *testing.T, statuses map[string]string) string {
 
 func TestRequireTaskDeniesEditWithoutInProgress(t *testing.T) {
 	session := seedTasks(t, map[string]string{"1": "completed", "2": "pending"})
+	root := t.TempDir()
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	withGateRepo(t, root, gateConfigJSON)
 	withStdin(t, `{"session_id":"`+session+`","tool_name":"Edit","tool_input":{"file_path":"/x/foo.go"}}`)
 	var errBuf strings.Builder
 	err := runRequireTask([]string{"--hook"}, &errBuf)
@@ -47,9 +50,26 @@ func TestRequireTaskDeniesEditWithoutInProgress(t *testing.T) {
 
 func TestRequireTaskAllowsEditWithInProgress(t *testing.T) {
 	session := seedTasks(t, map[string]string{"1": "completed", "2": "in_progress"})
+	root := t.TempDir()
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	withGateRepo(t, root, gateConfigJSON)
 	withStdin(t, `{"session_id":"`+session+`","tool_name":"Write","tool_input":{"file_path":"/x/foo.go"}}`)
 	if err := runRequireTask([]string{"--hook"}, io.Discard); err != nil {
 		t.Fatalf("expected allow (nil), got %v", err)
+	}
+}
+
+// A repo with no dev_loop configured must not block edits, even without an
+// in_progress task — the task gate only enforces on repos that opted in, the
+// same predicate (watch.IsConfigured) the gate hooks use.
+func TestRequireTaskAllowsWithoutDevLoop(t *testing.T) {
+	session := seedTasks(t, map[string]string{"1": "completed"}) // no in_progress
+	root := t.TempDir()
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate global config; no project dev_loop
+	withStdin(t, `{"session_id":"`+session+`","tool_name":"Edit","tool_input":{"file_path":"/x/foo.go"}}`)
+	if err := runRequireTask([]string{"--hook"}, io.Discard); err != nil {
+		t.Fatalf("no dev_loop configured should allow the edit, got %v", err)
 	}
 }
 
@@ -73,6 +93,9 @@ func TestRequireTaskIgnoresNonEditTools(t *testing.T) {
 
 func TestRequireTaskDeniesNotebookEdit(t *testing.T) {
 	session := seedTasks(t, map[string]string{"1": "completed"})
+	root := t.TempDir()
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	withGateRepo(t, root, gateConfigJSON)
 	withStdin(t, `{"session_id":"`+session+`","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/x/n.ipynb"}}`)
 	if err := runRequireTask([]string{"--hook"}, io.Discard); !errors.Is(err, ErrTaskRequired) {
 		t.Fatalf("expected ErrTaskRequired for notebook edit, got %v", err)
