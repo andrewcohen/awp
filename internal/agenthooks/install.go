@@ -76,10 +76,11 @@ func GateCheckHookCommand() string {
 // (`awp internal require-task --hook`). Like gate check it must NOT swallow
 // stderr or the exit code — a block is signalled by exit code 2 with the
 // reason on stderr, which Claude feeds back to the agent. Unlike the other
-// hooks it is NOT gated on $TMUX: the check reads the session's task list
-// (~/.claude/tasks/<session>), which is meaningful in every session, not just
-// awp-managed tmux ones. It guards on awp being resolvable so a session
-// without awp on PATH fails open (exit 0) rather than emitting a hook error.
+// hooks it is NOT gated on $TMUX at the shell level: the command self-gates in
+// Go on the repo having a dev_loop configured (see taskGateActive), and that
+// resolution works from $AWP_WORKSPACE env as well as tmux. It guards on awp
+// being resolvable so a session without awp on PATH fails open (exit 0) rather
+// than emitting a hook error.
 func RequireTaskHookCommand() string {
 	return `command -v "${AWP_BIN:-awp}" >/dev/null 2>&1 || exit 0; "${AWP_BIN:-awp}" internal require-task --hook`
 }
@@ -130,8 +131,9 @@ func gateHookSpecs() []hookSpec {
 
 // taskHookSpecs are the task-discipline enforcement hooks. Today just one: a
 // PreToolUse(Edit|Write|NotebookEdit) hook that denies editing a non-markdown
-// file unless a task is in_progress. Unlike the gate hooks it is not gated on
-// a dev_loop or on tmux — it enforces in every session.
+// file unless a task is in_progress. Like the gate hooks, the command
+// self-gates on the repo having a dev_loop configured, so installing it
+// globally is a no-op in repos that haven't opted in.
 func taskHookSpecs() []hookSpec {
 	return []hookSpec{
 		{event: "PreToolUse", matcher: "Edit|Write|NotebookEdit", id: "require-task", command: RequireTaskHookCommand()},
