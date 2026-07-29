@@ -5717,6 +5717,7 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 		label string
 		fix   string // owner action — used when mine == true
 		look  string // review action — used when mine == false
+		gated bool   // owner tone: propose solutions and wait for approval before acting
 	}
 	var issues []issue
 	if s.MergeStateStatus == PRMergeStateDirty {
@@ -5744,9 +5745,12 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 	// the `p r` repair prompt never disagree: formal changes-requested OR
 	// plain review comments (which leave reviewDecision at REVIEW_REQUIRED),
 	// dropped once the PR is approved. The label adapts because "changes
-	// requested" misreads a COMMENTED review; the fix/look text is the
-	// same — read the feedback, address it, and (owner tone) re-request
-	// review once the comments are addressed.
+	// requested" misreads a COMMENTED review. Owner tone gates this issue
+	// (gated: true): the fix text only asks the agent to read and
+	// understand the feedback — proposing solutions, then acting (address /
+	// push / reply / re-request) after approval is driven by the
+	// approval-gated owner template below, so the fix text deliberately
+	// stops short of "push" / "re-request".
 	if s.ReviewDecision != PRReviewApproved &&
 		(s.ReviewDecision == PRReviewChangesRequested || s.HasReviewComments) {
 		label := "review comments from a reviewer"
@@ -5755,8 +5759,9 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 		}
 		issues = append(issues, issue{
 			label: label,
-			fix:   "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads), address each point, push, and re-request review from the reviewer who left it",
+			fix:   "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads) and understand each point",
 			look:  "summarize what the reviewers asked for and which points look unaddressed at the current head",
+			gated: true,
 		})
 	}
 	if !mine && s.ReviewRequested {
@@ -5816,6 +5821,32 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 			fmt.Fprintf(&b, "- %s — please %s.\n", it.label, it.look)
 		}
 		b.WriteString("You are reviewing this PR — the author is not you. Do NOT modify files, run jj/git mutations on the branch, or push. Report what you find in chat.")
+		return b.String()
+	}
+	// Owner tone, approval-gated path: when review feedback is one of the
+	// detected issues, don't let the agent mutate the branch and push
+	// unprompted — have it propose the problem + fix for each point and
+	// wait for the user's OK, then act (address / push / reply /
+	// re-request). If other issues (CI, conflicts, …) share the prompt the
+	// whole prompt is gated so it reads consistently: the bullets describe
+	// the work, the trailing wrapper controls when it happens.
+	gated := false
+	for _, it := range issues {
+		if it.gated {
+			gated = true
+			break
+		}
+	}
+	if gated {
+		if len(issues) == 1 {
+			return fmt.Sprintf("%s has %s. Please %s. Before changing anything, report back in chat with the problem and your proposed solution(s) for each point, and wait for my approval. Once I approve, address each point, push, reply to the review threads, and re-request review from the reviewer(s) who left it if needed.", ref, issues[0].label, issues[0].fix)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s has multiple issues:\n", ref)
+		for _, it := range issues {
+			fmt.Fprintf(&b, "- %s — %s.\n", it.label, it.fix)
+		}
+		b.WriteString("Before changing anything, report back in chat with the problem and your proposed solution(s) for each item, and wait for my approval. Once I approve, apply the fixes, push, reply to any review threads, and re-request review from the affected reviewer(s) if needed.")
 		return b.String()
 	}
 	// Owner tone: any of these fixes pushes new commits, which under

@@ -2468,13 +2468,17 @@ func TestPRRepairPrompt(t *testing.T) {
 		{"composite with stale", PRStatus{Number: 14, HeadRefName: "andrew/baz", HeadRefOid: "abc", State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean}, "def", true, "",
 			[]string{"PR #14 has multiple issues to address:", "failing CI checks", "new commits on origin"}},
 
-		{"changes requested only", PRStatus{Number: 15, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true, "",
-			[]string{"PR #15 has changes requested by a reviewer", "gh pr view --comments", "re-request review", "push"}},
-		{"composite with changes requested", PRStatus{Number: 16, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true, "",
-			[]string{"PR #16 has multiple issues to address:", "failing CI checks", "changes requested by a reviewer"}},
+		// Owner tone + review feedback is approval-gated: propose problem +
+		// solutions, wait for approval, then act. The fix text stops at
+		// "understand each point"; push / reply / re-request live in the
+		// post-approval wrapper (so "push" and "re-request" appear once).
+		{"changes requested only — gated", PRStatus{Number: 15, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true,
+			"PR #15 has changes requested by a reviewer. Please read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads) and understand each point. Before changing anything, report back in chat with the problem and your proposed solution(s) for each point, and wait for my approval. Once I approve, address each point, push, reply to the review threads, and re-request review from the reviewer(s) who left it if needed.", nil},
+		{"composite with changes requested — whole prompt gated", PRStatus{Number: 16, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", true, "",
+			[]string{"PR #16 has multiple issues:", "failing CI checks", "changes requested by a reviewer", "Before changing anything, report back in chat", "wait for my approval", "Once I approve, apply the fixes"}},
 		{"approved — no review repair", PRStatus{Number: 17, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved}, "", true, "", nil},
-		{"review comments only (no formal verdict)", PRStatus{Number: 18, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewRequired, HasReviewComments: true}, "", true, "",
-			[]string{"PR #18 has review comments from a reviewer", "gh pr view --comments", "re-request review", "push"}},
+		{"review comments only (no formal verdict) — gated", PRStatus{Number: 18, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewRequired, HasReviewComments: true}, "", true, "",
+			[]string{"PR #18 has review comments from a reviewer", "understand each point", "wait for my approval", "Once I approve", "re-request review"}},
 		{"review comments but approved — suppressed", PRStatus{Number: 19, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved, HasReviewComments: true}, "", true, "", nil},
 
 		// Review tone (mine=false): investigate + report, no mutations.
