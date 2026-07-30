@@ -91,7 +91,14 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 
 	lead := ruleStyle.Render(strings.Repeat(fileRuleGlyph, fileRuleLead) + " ")
 	badge := statusBadge(f.Status, current)
-	meta := styleMuted.Render(fmt.Sprintf(" (%d hunk%s)", len(f.Hunks), plural(len(f.Hunks))))
+	summary := fmt.Sprintf(" (%d hunk%s)", len(f.Hunks), plural(len(f.Hunks)))
+	if r.collapsed {
+		// A collapsed file still has to say what is inside it, or the divider
+		// becomes a wall you have to open to see past.
+		summary = fmt.Sprintf(" ✓ reviewed · %d hunk%s, %d line%s hidden",
+			len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
+	}
+	meta := styleMuted.Render(summary)
 	reserved := lipgloss.Width(lead) + lipgloss.Width(badge) + 1 + lipgloss.Width(meta)
 	label := renderPathWith(diff.DisplayPath(f), max(10, width-reserved), ruleStyle, baseStyle)
 
@@ -200,4 +207,18 @@ func (m Model) renderStreamPanel(width, height int) string {
 		rows = append(rows, "")
 	}
 	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
+}
+
+// countChangedLines is how many added or removed lines a file's diff holds, for
+// the collapsed divider's summary.
+func countChangedLines(f diff.FileDiff) int {
+	n := 0
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			if l.Type == '+' || l.Type == '-' {
+				n++
+			}
+		}
+	}
+	return n
 }

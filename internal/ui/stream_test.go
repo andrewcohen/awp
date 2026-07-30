@@ -53,7 +53,7 @@ func pressTimes(m Model, s string, n int) Model {
 // ---- geometry ----
 
 func TestBuildStreamRowLayout(t *testing.T) {
-	idx := buildStream(twoFiles(), 80, false)
+	idx := buildStream(twoFiles(), 80, false, nil)
 	// file a: header + (hunk header + 4 lines) + (hunk header + 2 lines) = 9
 	// spacer (1) + file b: header + hunk header + 2 lines = 4
 	if got := len(idx.rows); got != 14 {
@@ -83,7 +83,7 @@ func TestBuildStreamRowLayout(t *testing.T) {
 }
 
 func TestBuildStreamIndexesEveryHunkAcrossFiles(t *testing.T) {
-	idx := buildStream(twoFiles(), 80, false)
+	idx := buildStream(twoFiles(), 80, false, nil)
 	if len(idx.hunkStart) != 3 {
 		t.Fatalf("expected 3 hunk headers across both files, got %d", len(idx.hunkStart))
 	}
@@ -105,7 +105,7 @@ func TestBuildStreamAssignsLineNumbers(t *testing.T) {
 			{Type: '+', Content: "added"},
 		},
 	}}}}
-	idx := buildStream(files, 80, false)
+	idx := buildStream(files, 80, false, nil)
 	var lines []rowRef
 	for _, r := range idx.rows {
 		if r.kind == rowLine {
@@ -161,8 +161,8 @@ func TestWrapAddsRowsForLongLines(t *testing.T) {
 	files := []diff.FileDiff{{NewPath: "a.go", Status: "M", Hunks: []diff.Hunk{{
 		OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{{Type: '+', Content: long}},
 	}}}}
-	unwrapped := buildStream(files, 80, false)
-	wrapped := buildStream(files, 80, true)
+	unwrapped := buildStream(files, 80, false, nil)
+	wrapped := buildStream(files, 80, true, nil)
 	if len(unwrapped.rows) != 3 { // header + hunk header + 1 line
 		t.Fatalf("expected 3 unwrapped rows, got %d", len(unwrapped.rows))
 	}

@@ -119,9 +119,16 @@ type Model struct {
 	SendComment CommentSink
 	editing     bool
 	editor      commentEditor
-	status      string
-	statusErr   bool
-	refreshing  bool
+	// ReviewedFiles maps a path to the content hash it had when marked
+	// reviewed, and MarkReviewed persists a change to that. Hash rather than a
+	// bare flag so a later edit resurfaces the file: marking something reviewed
+	// and then having the agent silently change it is the worst failure a review
+	// tool has, and awp's agent edits while you review.
+	ReviewedFiles map[string]string
+	MarkReviewed  func(path, hash string) error
+	status        string
+	statusErr     bool
+	refreshing    bool
 }
 
 // SetSize sizes the viewer for a host that owns its own chrome: width is
@@ -145,7 +152,7 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // file set, width or wrap must go through here — it is the only place the
 // index is built, so it cannot silently go stale.
 func (m *Model) rebuildStream() {
-	m.stream = withComments(buildStream(m.filtered, m.hunkWidth, m.wrap), m.placeComments)
+	m.stream = withComments(buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed), m.placeComments)
 	m.clampCursor()
 	m.followCursor()
 	m.syncFileCursorToCursor()
@@ -308,8 +315,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "r":
+		// `r` marked a manual refresh until live refresh made that redundant
+		// (phase 2). It now marks the file at the cursor reviewed, which is the
+		// gesture used most while working through a change.
+		return m.toggleReviewed()
+	case "ctrl+r":
 		m.refreshing = true
-		m.status = "refreshing..."
+		m.status = "refreshing…"
 		return m, loadDiffCmd(m.LoadDiff)
 	case "/":
 		m.focus = FocusFilter
@@ -760,7 +772,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:scroll  {/}:hunk  g/G:ends  h/l/0/$:pan  tab:pane  e:open  w:wrap  r:refresh  /:filter  q:quit"
+	hint := "j/k:scroll  c:comment  r:reviewed  {/}:hunk  g/G:ends  h/l/0/$:pan  tab:pane  e:$EDITOR  w:wrap  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"

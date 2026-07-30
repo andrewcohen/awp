@@ -26,11 +26,21 @@ func TestModelInitReturnsCmd(t *testing.T) {
 	}
 }
 
-func TestModelRefreshKey(t *testing.T) {
+// `r` marks a file reviewed now that live refresh made manual refresh redundant;
+// ctrl+r is the explicit refresh that remains.
+func TestCtrlRForcesARefresh(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if cmd == nil {
+		t.Fatal("expected ctrl+r to issue a refresh command")
+	}
+}
+
+func TestRDoesNotRefresh(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	if cmd == nil {
-		t.Fatal("expected refresh command")
+	if cmd != nil {
+		t.Fatal("expected r to mark reviewed, not refresh")
 	}
 }
 

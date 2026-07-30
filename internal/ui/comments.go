@@ -1,8 +1,14 @@
 package ui
 
 import (
+	"fmt"
+	"hash/fnv"
+	"strconv"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -229,4 +235,99 @@ func commentLines(c review.Comment, width int) []string {
 		out = append(out, styleCommentBody.Render(truncate("  ▌ "+line, max(1, width))))
 	}
 	return out
+}
+
+// Reviewed files collapse out of the way.
+//
+// The flag is keyed to the file's *content*, not just its path: an edit after
+// you marked it reviewed must bring it back. That matters far more here than in
+// a conventional review tool, because the agent is editing while you read — a
+// change hidden behind a stale reviewed flag is the one outcome this surface
+// must never produce.
+
+// fileContentHash fingerprints a file's diff body, so a reviewed mark can tell
+// "unchanged since I looked" from "edited since I looked".
+func fileContentHash(f diff.FileDiff) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(f.Status))
+	for _, hunk := range f.Hunks {
+		_, _ = fmt.Fprintf(h, "@%d,%d,%d,%d;", hunk.OldStart, hunk.OldCount, hunk.NewStart, hunk.NewCount)
+		for _, l := range hunk.Lines {
+			_, _ = h.Write([]byte{l.Type})
+			_, _ = h.Write([]byte(l.Content))
+			_, _ = h.Write([]byte{'\n'})
+		}
+	}
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+// isCollapsed reports whether a file is currently hidden: reviewed, and
+// unchanged since it was reviewed.
+func (m Model) isCollapsed(path string) bool {
+	want, ok := m.ReviewedFiles[path]
+	if !ok {
+		return false
+	}
+	for _, f := range m.filtered {
+		if pathOf(f) == path {
+			return fileContentHash(f) == want
+		}
+	}
+	return false
+}
+
+// toggleReviewed marks the file at the cursor reviewed, or un-marks it.
+func (m Model) toggleReviewed() (tea.Model, tea.Cmd) {
+	f, ok := m.cursorFile()
+	if !ok {
+		m.status = "no file at the cursor"
+		return m, nil
+	}
+	path := pathOf(f)
+	if m.ReviewedFiles == nil {
+		m.ReviewedFiles = map[string]string{}
+	}
+	hash := ""
+	if !m.isCollapsed(path) {
+		hash = fileContentHash(f)
+	}
+	if hash == "" {
+		delete(m.ReviewedFiles, path)
+		m.status = path + ": unreviewed"
+	} else {
+		m.ReviewedFiles[path] = hash
+		m.status = path + ": reviewed"
+	}
+	if m.MarkReviewed != nil {
+		if err := m.MarkReviewed(path, hash); err != nil {
+			m.status = "reviewed: " + err.Error()
+			m.statusErr = true
+			return m, nil
+		}
+	}
+	// Collapsing changes the row count, so the geometry has to be rebuilt and
+	// the cursor re-clamped against it.
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
+	return m, nil
+}
+
+// cursorFile is the file the cursor is in.
+func (m Model) cursorFile() (diff.FileDiff, bool) {
+	if len(m.stream.rows) == 0 || m.cursorRow >= len(m.stream.rows) {
+		return diff.FileDiff{}, false
+	}
+	fi := m.stream.rows[m.cursorRow].file
+	if fi < 0 || fi >= len(m.filtered) {
+		return diff.FileDiff{}, false
+	}
+	return m.filtered[fi], true
+}
+
+// SetReviewed installs the reviewed-file marks loaded from the store.
+func (m *Model) SetReviewed(marks map[string]string) {
+	m.ReviewedFiles = marks
+	m.rebuildStream()
 }
