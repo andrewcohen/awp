@@ -289,11 +289,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		// j/k scroll the pane a line at a time, like ctrl+d/ctrl+u scroll it
 		// a half-page at a time. Moving the hunk cursor instead would leave
-		// a file with a single large hunk unscrollable.
+		// a file with a single large hunk unscrollable. At the pane's edges
+		// they step to the adjacent file instead of doing nothing.
 		case "j", "down":
-			m.scrollHunks(1)
+			m.scrollHunksOrCrossFile(1)
 		case "k", "up":
-			m.scrollHunks(-1)
+			m.scrollHunksOrCrossFile(-1)
 		case "l", "right":
 			m.scrollHunksHorizontally(hScrollStep)
 		case "h", "left":
@@ -334,7 +335,7 @@ func (m *Model) applyFilter() {
 func (m *Model) pageDown() {
 	step := m.pageStep()
 	if m.focus == FocusHunks {
-		m.scrollHunks(step)
+		m.scrollHunksOrCrossFile(step)
 		return
 	}
 	if len(m.filtered) == 0 {
@@ -347,7 +348,7 @@ func (m *Model) pageDown() {
 func (m *Model) pageUp() {
 	step := m.pageStep()
 	if m.focus == FocusHunks {
-		m.scrollHunks(-step)
+		m.scrollHunksOrCrossFile(-step)
 		return
 	}
 	m.filesCursor = max(0, m.filesCursor-step)
@@ -463,13 +464,54 @@ func (m Model) currentFile() (diff.FileDiff, bool) {
 }
 
 func (m *Model) clampHunkScroll() {
+	m.hunkScroll = min(m.maxHunkScroll(), max(0, m.hunkScroll))
+}
+
+// maxHunkScroll is the furthest the hunk pane can scroll down: enough to put
+// the last content row on the bottom line. Shared by the clamp and the
+// file-boundary check so they can't disagree about where "the bottom" is.
+func (m Model) maxHunkScroll() int {
 	layout, ok := m.hunkLayout()
 	if !ok {
-		m.hunkScroll = 0
-		return
+		return 0
 	}
-	maxScroll := max(0, len(layout.rows)-m.hunkContentHeight())
-	m.hunkScroll = min(maxScroll, max(0, m.hunkScroll))
+	return max(0, len(layout.rows)-m.hunkContentHeight())
+}
+
+// advanceFile moves the file selection by delta from inside the hunk pane,
+// landing at the top of the next file or the bottom of the previous one so
+// reading carries across the boundary. Reports whether it moved.
+func (m *Model) advanceFile(delta int) bool {
+	next := m.filesCursor + delta
+	if next < 0 || next >= len(m.filtered) {
+		return false
+	}
+	m.filesCursor = next
+	m.resetHunkView()
+	if delta < 0 {
+		// Arriving from below — start at the end of this file.
+		m.hunkScroll = m.maxHunkScroll()
+		m.syncHunkCursorToScroll()
+	}
+	return true
+}
+
+// scrollHunksOrCrossFile scrolls the hunk pane, or — when it is already
+// pinned at the edge the key is pushing against — moves to the adjacent file
+// instead. The press that reaches the edge lands there; the next one crosses,
+// so nothing changes file unexpectedly mid-read.
+func (m *Model) scrollHunksOrCrossFile(delta int) {
+	switch {
+	case delta > 0 && m.hunkScroll >= m.maxHunkScroll():
+		if m.advanceFile(1) {
+			return
+		}
+	case delta < 0 && m.hunkScroll <= 0:
+		if m.advanceFile(-1) {
+			return
+		}
+	}
+	m.scrollHunks(delta)
 }
 
 func (m Model) hunkContentHeight() int {
