@@ -55,6 +55,12 @@ type Model struct {
 	// from the terminal height; embedded (the deck's `c` modal) the host
 	// sets it directly via SetSize, since the host owns the chrome.
 	bodyHeight int
+	// hunkWidth is the hunk pane's content width, cached so the update path
+	// (scroll clamping, cursor sync) can lay out rows at the same width the
+	// renderer will use. Wrapped lines occupy more than one row, so that
+	// geometry is width-dependent.
+	hunkWidth  int
+	wrap       bool
 	status     string
 	statusErr  bool
 	refreshing bool
@@ -67,7 +73,17 @@ type Model struct {
 func (m *Model) SetSize(width, bodyHeight int) {
 	m.width = width
 	m.bodyHeight = max(minBodyHeight, bodyHeight)
+	_, right := paneWidths(width)
+	m.hunkWidth = right - 4
 	m.clampHunkScroll()
+}
+
+// paneWidths splits the body between the file list and the hunk pane. Both
+// View and SetSize go through this so the cached hunkWidth matches what the
+// renderer actually uses.
+func paneWidths(width int) (left, right int) {
+	left = max(24, width/3)
+	return left, max(30, width-left)
 }
 
 // Status returns the viewer's status text and whether it is an error, so a
@@ -198,6 +214,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusFilter
 		m.filterInput.Focus()
 		return m, nil
+	case "w":
+		// Toggling changes how many rows each line occupies, so the scroll
+		// offset and hunk cursor have to be re-derived against the new
+		// geometry.
+		m.wrap = !m.wrap
+		m.clampHunkScroll()
+		m.syncHunkCursorToScroll()
+		return m, nil
 	case "tab", "l", "right":
 		if m.focus == FocusFiles {
 			m.focus = FocusHunks
@@ -314,37 +338,27 @@ func (m *Model) scrollHunks(delta int) {
 // visible row, so the highlighted header — and the line `e` opens — track
 // what's actually on screen rather than a cursor the user can no longer see.
 func (m *Model) syncHunkCursorToScroll() {
-	f, ok := m.currentFile()
+	layout, ok := m.hunkLayout()
 	if !ok {
 		return
 	}
-	row := 0
-	for i, h := range f.Hunks {
-		row += 1 + len(h.Lines)
-		if m.hunkScroll < row {
-			m.hunksCursor = i
-			return
-		}
-	}
-	if n := len(f.Hunks); n > 0 {
-		m.hunksCursor = n - 1
-	}
+	m.hunksCursor = layout.hunkAtRow(m.hunkScroll)
 }
 
 // jumpHunk moves the hunk cursor by delta hunks and scrolls that hunk's
 // header to the top of the pane — the gesture j/k used to serve before it
 // became a line scroll.
 func (m *Model) jumpHunk(delta int) {
-	f, ok := m.currentFile()
+	layout, ok := m.hunkLayout()
 	if !ok {
 		return
 	}
 	next := m.hunksCursor + delta
-	if next < 0 || next >= len(f.Hunks) {
+	if next < 0 || next >= len(layout.starts) {
 		return
 	}
 	m.hunksCursor = next
-	m.hunkScroll = hunkStartRow(f, next)
+	m.hunkScroll = layout.starts[next]
 	m.clampHunkScroll()
 }
 
@@ -356,37 +370,18 @@ func (m Model) currentFile() (diff.FileDiff, bool) {
 	return m.filtered[m.filesCursor], true
 }
 
-// hunkStartRow is the pane row idx's hunk header renders on.
-func hunkStartRow(f diff.FileDiff, idx int) int {
-	row := 0
-	for i, h := range f.Hunks {
-		if i == idx {
-			return row
-		}
-		row += 1 + len(h.Lines)
-	}
-	return row
-}
-
 func (m *Model) clampHunkScroll() {
-	if len(m.filtered) == 0 || m.filesCursor >= len(m.filtered) {
+	layout, ok := m.hunkLayout()
+	if !ok {
 		m.hunkScroll = 0
 		return
 	}
-	maxScroll := max(0, m.totalHunkRows(m.filtered[m.filesCursor])-m.hunkContentHeight())
+	maxScroll := max(0, len(layout.rows)-m.hunkContentHeight())
 	m.hunkScroll = min(maxScroll, max(0, m.hunkScroll))
 }
 
 func (m Model) hunkContentHeight() int {
 	return max(1, m.bodyHeight-1)
-}
-
-func (m Model) totalHunkRows(f diff.FileDiff) int {
-	rows := 0
-	for _, h := range f.Hunks {
-		rows += 1 + len(h.Lines)
-	}
-	return rows
 }
 
 func (m Model) pageStep() int {
@@ -445,8 +440,7 @@ func (m Model) Body(width, height int) string {
 		return ""
 	}
 	height = max(minBodyHeight, height)
-	leftWidth := max(24, width/3)
-	rightWidth := max(30, width-leftWidth)
+	leftWidth, rightWidth := paneWidths(width)
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderFileList(leftWidth, height),
 		m.renderHunkPanel(rightWidth, height),
@@ -492,7 +486,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:move  {/}:hunk  ctrl+u/d:page  h/l:switch  e:open  r:refresh  /:filter  q:quit"
+	hint := "j/k:move  {/}:hunk  ctrl+u/d:page  h/l:switch  e:open  w:wrap  r:refresh  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
@@ -543,15 +537,7 @@ func (m Model) renderHunkPanel(width, height int) string {
 		return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
 	}
 
-	contentRows := make([]string, 0, m.totalHunkRows(f))
-	for i, h := range f.Hunks {
-		hdrStyle := styleHunkHeader
-		if i == m.hunksCursor && m.focus == FocusHunks {
-			hdrStyle = styleSelectedHunkHeader
-		}
-		contentRows = append(contentRows, hdrStyle.Width(width-4).Render(fmt.Sprintf(" @@ -%d,%d +%d,%d @@", h.OldStart, h.OldCount, h.NewStart, h.NewCount)))
-		contentRows = append(contentRows, renderHunkLines(h, width-4)...)
-	}
+	contentRows := layoutHunks(f, width-4, m.wrap, m.selectedHunkStyler()).rows
 
 	visibleHeight := max(1, height-1)
 	scroll := min(max(0, m.hunkScroll), max(0, len(contentRows)-visibleHeight))
@@ -561,6 +547,69 @@ func (m Model) renderHunkPanel(width, height int) string {
 		rows = append(rows, "")
 	}
 	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
+}
+
+// hunkLayout is the rendered geometry of the hunk pane for one file: every
+// content row, plus the row index each hunk's header landed on.
+//
+// It exists because a wrapped line occupies more than one row, so nothing
+// can assume "one row per hunk line" — scroll clamping, the cursor sync and
+// `{`/`}` all have to agree with what was actually rendered. Deriving them
+// from one layout pass keeps that impossible to get out of sync.
+type hunkLayout struct {
+	rows   []string
+	starts []int
+}
+
+// hunkAtRow is the index of the hunk owning a given content row.
+func (l hunkLayout) hunkAtRow(row int) int {
+	found := 0
+	for i, start := range l.starts {
+		if start > row {
+			break
+		}
+		found = i
+	}
+	return found
+}
+
+// layoutHunks renders a file's hunks into content rows. styleHeader picks the
+// style for each hunk header, letting the caller mark the selected one.
+func layoutHunks(f diff.FileDiff, width int, wrap bool, styleHeader func(int) lipgloss.Style) hunkLayout {
+	// Row *counts* must stay correct even before the first size message, or
+	// scrolling is dead until a resize. At width 1 every line still occupies
+	// one row (nothing wraps into a single column), so the geometry is right
+	// and only the text is unreadable — which is moot, since nothing is being
+	// displayed at that size anyway.
+	width = max(1, width)
+	layout := hunkLayout{starts: make([]int, 0, len(f.Hunks))}
+	for i, h := range f.Hunks {
+		layout.starts = append(layout.starts, len(layout.rows))
+		header := fmt.Sprintf(" @@ -%d,%d +%d,%d @@", h.OldStart, h.OldCount, h.NewStart, h.NewCount)
+		layout.rows = append(layout.rows, styleHeader(i).Width(width).Render(header))
+		layout.rows = append(layout.rows, renderHunkLines(h, width, wrap)...)
+	}
+	return layout
+}
+
+// hunkLayout lays out the file under the cursor at the current pane width.
+func (m Model) hunkLayout() (hunkLayout, bool) {
+	f, ok := m.currentFile()
+	if !ok || len(f.Hunks) == 0 {
+		return hunkLayout{}, false
+	}
+	return layoutHunks(f, m.hunkWidth, m.wrap, m.selectedHunkStyler()), true
+}
+
+// selectedHunkStyler returns the per-hunk header styler, highlighting the
+// cursor's hunk only while the pane has focus.
+func (m Model) selectedHunkStyler() func(int) lipgloss.Style {
+	return func(i int) lipgloss.Style {
+		if i == m.hunksCursor && m.focus == FocusHunks {
+			return styleSelectedHunkHeader
+		}
+		return styleHunkHeader
+	}
 }
 
 func (m Model) renderFileRow(f diff.FileDiff, width int, selected bool) string {
@@ -626,7 +675,7 @@ func renderSinglePath(path string, width int, selected bool) string {
 	return dirStyle.Render(dir+"/") + baseStyle.Render(base)
 }
 
-func renderHunkLines(h diff.Hunk, width int) []string {
+func renderHunkLines(h diff.Hunk, width int, wrap bool) []string {
 	if width <= 0 {
 		return nil
 	}
@@ -636,13 +685,13 @@ func renderHunkLines(h diff.Hunk, width int) []string {
 	for _, l := range h.Lines {
 		switch l.Type {
 		case '+':
-			lines = append(lines, renderDecoratedLine('+', 0, newLine, oldWidth, newWidth, styleAdded.Render(l.Content), width, false))
+			lines = append(lines, renderDecoratedLine('+', 0, newLine, oldWidth, newWidth, styleAdded.Render(l.Content), width, wrap, false)...)
 			newLine++
 		case '-':
-			lines = append(lines, renderDecoratedLine('-', oldLine, 0, oldWidth, newWidth, styleDeleted.Render(l.Content), width, false))
+			lines = append(lines, renderDecoratedLine('-', oldLine, 0, oldWidth, newWidth, styleDeleted.Render(l.Content), width, wrap, false)...)
 			oldLine++
 		default:
-			lines = append(lines, renderDecoratedLine(' ', oldLine, newLine, oldWidth, newWidth, styleContext.Render(l.Content), width, false))
+			lines = append(lines, renderDecoratedLine(' ', oldLine, newLine, oldWidth, newWidth, styleContext.Render(l.Content), width, wrap, false)...)
 			oldLine++
 			newLine++
 		}
@@ -671,7 +720,11 @@ func hunkLineNumberWidths(h diff.Hunk) (int, int) {
 	return oldWidth, newWidth
 }
 
-func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int, content string, width int, selected bool) string {
+// renderDecoratedLine renders one diff line as one or more pane rows: a
+// single truncated row normally, or — when wrap is on — the line soft-wrapped
+// across rows, with continuations indented under the code so the gutter
+// column stays clean.
+func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int, content string, width int, wrap, selected bool) []string {
 	oldText := lineNoText(oldLine)
 	newText := lineNoText(newLine)
 	lineStyle := styleLineNo
@@ -689,8 +742,28 @@ func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int
 	case '-':
 		gutterStyle = styleDeleted
 	}
-	prefix := lineStyle.Render(fmt.Sprintf("%*s %*s ", oldWidth, oldText, newWidth, newText)) + gutterStyle.Render(gutter+" ")
-	return truncateStyled(prefix+content, width)
+	numbers := fmt.Sprintf("%*s %*s ", oldWidth, oldText, newWidth, newText)
+	prefix := lineStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
+	if !wrap {
+		return []string{truncateStyled(prefix+content, width)}
+	}
+
+	prefixWidth := len(numbers) + 2 // gutter glyph + space
+	avail := width - prefixWidth
+	if avail < 1 {
+		return []string{truncateStyled(prefix+content, width)}
+	}
+	wrapped := strings.Split(lipgloss.NewStyle().Width(avail).Render(content), "\n")
+	rows := make([]string, 0, len(wrapped))
+	indent := strings.Repeat(" ", prefixWidth)
+	for i, part := range wrapped {
+		if i == 0 {
+			rows = append(rows, prefix+part)
+			continue
+		}
+		rows = append(rows, indent+part)
+	}
+	return rows
 }
 
 func lineNoText(n int) string {

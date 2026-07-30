@@ -66,7 +66,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · {/} hunk · h/l pane · e open in $EDITOR · r refresh · / filter · esc close"
+	hint := " · j/k scroll · {/} hunk · h/l pane · e open in $EDITOR · w wrap · r refresh · / filter · esc close"
 	return style.Render(dm.label + " · " + status + hint)
 }
 

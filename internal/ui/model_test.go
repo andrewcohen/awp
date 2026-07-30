@@ -310,7 +310,7 @@ func TestRenderHunkLinesUsesMinimalLineNumberGutterWidth(t *testing.T) {
 		NewStart: 1,
 		Lines:    []diff.HunkLine{{Type: ' ', Content: "one"}, {Type: '+', Content: "two"}},
 	}
-	lines := renderHunkLines(h, 80)
+	lines := renderHunkLines(h, 80, false)
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 rendered lines, got %d", len(lines))
 	}
@@ -328,4 +328,106 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string {
 	return ansiPattern.ReplaceAllString(s, "")
+}
+
+// wrapModel is one file with a single long line, wider than the pane.
+func wrapModel(t *testing.T) Model {
+	t.Helper()
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.SetSize(120, 8)
+	long := strings.Repeat("abcdefghij ", 80) // ~880 cols, wraps to many rows
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks: []diff.Hunk{{OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{
+			{Type: ' ', Content: "short"},
+			{Type: '+', Content: long},
+		}}},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	return got
+}
+
+func TestWrapOffTruncatesToOneRowPerLine(t *testing.T) {
+	m := wrapModel(t)
+	if m.wrap {
+		t.Fatal("expected wrap off by default")
+	}
+	layout, ok := m.hunkLayout()
+	if !ok {
+		t.Fatal("expected a layout")
+	}
+	// 1 header + 2 lines.
+	if got := len(layout.rows); got != 3 {
+		t.Fatalf("expected 3 rows unwrapped, got %d", got)
+	}
+}
+
+func TestWrapToggleExpandsRows(t *testing.T) {
+	m := wrapModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got := updated.(Model)
+	if !got.wrap {
+		t.Fatal("expected w to enable wrap")
+	}
+	layout, ok := got.hunkLayout()
+	if !ok {
+		t.Fatal("expected a layout")
+	}
+	if len(layout.rows) <= 3 {
+		t.Fatalf("expected the long line to wrap onto extra rows, got %d", len(layout.rows))
+	}
+	// Toggling back restores the compact geometry.
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	back := updated.(Model)
+	layout, _ = back.hunkLayout()
+	if len(layout.rows) != 3 {
+		t.Fatalf("expected 3 rows after toggling wrap off, got %d", len(layout.rows))
+	}
+}
+
+// With wrap on there is more content than pane, so scrolling must be able to
+// reach the end — the bug this refactor prevents is a clamp computed from
+// unwrapped row counts.
+func TestWrapScrollReachesEnd(t *testing.T) {
+	m := wrapModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got := updated.(Model)
+	layout, _ := got.hunkLayout()
+	want := max(0, len(layout.rows)-got.hunkContentHeight())
+	if want == 0 {
+		t.Fatal("fixture should produce more rows than the pane holds")
+	}
+	for i := 0; i < len(layout.rows)+5; i++ {
+		updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		got = updated.(Model)
+	}
+	if got.hunkScroll != want {
+		t.Fatalf("expected scroll to reach %d, stopped at %d", want, got.hunkScroll)
+	}
+}
+
+// Continuation rows must not repeat the gutter — only the first row carries
+// the line numbers and +/- marker.
+func TestWrappedContinuationRowsAreIndented(t *testing.T) {
+	h := diff.Hunk{OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{
+		{Type: '+', Content: strings.Repeat("x", 200)},
+	}}
+	rows := renderHunkLines(h, 40, true)
+	if len(rows) < 2 {
+		t.Fatalf("expected the line to wrap, got %d rows", len(rows))
+	}
+	if plain := stripANSI(rows[0]); !strings.Contains(plain, "+") {
+		t.Fatalf("expected the first row to carry the gutter, got %q", plain)
+	}
+	for i, r := range rows[1:] {
+		plain := stripANSI(r)
+		if strings.Contains(plain, "+") {
+			t.Fatalf("continuation row %d repeated the gutter: %q", i+1, plain)
+		}
+		if !strings.HasPrefix(plain, " ") {
+			t.Fatalf("continuation row %d not indented: %q", i+1, plain)
+		}
+	}
 }
