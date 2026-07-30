@@ -197,25 +197,49 @@ func TestScrollRunsContinuouslyIntoTheNextFile(t *testing.T) {
 	}
 }
 
-func TestScrollClampsAtBothEnds(t *testing.T) {
+// cursorVisible is the invariant the viewport must maintain: wherever the
+// cursor goes, it is on screen.
+func cursorVisible(m Model) bool {
+	return m.cursorRow >= m.streamScroll && m.cursorRow < m.streamScroll+m.streamContentHeight()
+}
+
+func TestCursorClampsAtBothEnds(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
 	m = pressTimes(m, "k", 3)
+	if m.cursorRow != 0 {
+		t.Fatalf("expected the cursor to clamp at 0, got %d", m.cursorRow)
+	}
 	if m.streamScroll != 0 {
-		t.Fatalf("expected scroll to clamp at 0, got %d", m.streamScroll)
+		t.Fatalf("expected scroll to sit at 0 with the cursor there, got %d", m.streamScroll)
 	}
 	m = pressTimes(m, "j", len(m.stream.rows)+10)
-	if want := m.maxStreamScroll(); m.streamScroll != want {
-		t.Fatalf("expected scroll to clamp at %d, got %d", want, m.streamScroll)
+	if want := len(m.stream.rows) - 1; m.cursorRow != want {
+		t.Fatalf("expected the cursor to clamp at the last row %d, got %d", want, m.cursorRow)
+	}
+	if !cursorVisible(m) {
+		t.Fatalf("cursor %d not visible at scroll %d (height %d)", m.cursorRow, m.streamScroll, m.streamContentHeight())
 	}
 }
 
-// The file list follows the scroll.
-func TestFileCursorFollowsScroll(t *testing.T) {
+// The viewport follows the cursor rather than the reverse, so the cursor stays
+// on screen through every kind of movement.
+func TestViewportKeepsCursorVisible(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
-	m.streamScroll = m.stream.fileStart[1]
-	m.syncFileCursorToScroll()
+	for _, key := range []string{"j", "j", "j", "j", "j", "G", "g", "}", "}", "{"} {
+		m = press(m, key)
+		if !cursorVisible(m) {
+			t.Fatalf("after %q: cursor %d not visible at scroll %d", key, m.cursorRow, m.streamScroll)
+		}
+	}
+}
+
+// The file list follows the cursor.
+func TestFileCursorFollowsCursorRow(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m.cursorRow = m.stream.fileStart[1]
+	m.syncFileCursorToCursor()
 	if m.filesCursor != 1 {
-		t.Fatalf("expected the file cursor to follow the scroll, got %d", m.filesCursor)
+		t.Fatalf("expected the file cursor to follow the cursor row, got %d", m.filesCursor)
 	}
 }
 
@@ -227,12 +251,15 @@ func TestFileListSeeksTheStream(t *testing.T) {
 	if m.filesCursor != 1 {
 		t.Fatalf("expected the file cursor to advance, got %d", m.filesCursor)
 	}
-	if m.streamScroll != m.stream.fileStart[1] {
-		t.Fatalf("expected to seek to row %d, got %d", m.stream.fileStart[1], m.streamScroll)
+	if m.cursorRow != m.stream.fileStart[1] {
+		t.Fatalf("expected to seek the cursor to row %d, got %d", m.stream.fileStart[1], m.cursorRow)
+	}
+	if !cursorVisible(m) {
+		t.Fatalf("cursor %d not visible after seek at scroll %d", m.cursorRow, m.streamScroll)
 	}
 	m = press(m, "k")
-	if m.filesCursor != 0 || m.streamScroll != m.stream.fileStart[0] {
-		t.Fatalf("expected to seek back to the first file, got cursor=%d scroll=%d", m.filesCursor, m.streamScroll)
+	if m.filesCursor != 0 || m.cursorRow != m.stream.fileStart[0] {
+		t.Fatalf("expected to seek back to the first file, got file=%d cursor=%d", m.filesCursor, m.cursorRow)
 	}
 }
 
@@ -260,30 +287,30 @@ func TestJumpHunkCrossesFiles(t *testing.T) {
 	// lives in the second file.
 	for i, want := range starts {
 		m = press(m, "}")
-		if m.streamScroll != want {
-			t.Fatalf("press %d: expected row %d, got %d", i+1, want, m.streamScroll)
+		if m.cursorRow != want {
+			t.Fatalf("press %d: expected cursor at row %d, got %d", i+1, want, m.cursorRow)
 		}
 	}
 	if m.filesCursor != 1 {
 		t.Fatalf("expected the file cursor to follow across the file, got %d", m.filesCursor)
 	}
 	m = press(m, "{")
-	if m.streamScroll != starts[1] {
-		t.Fatalf("expected { to go back to row %d, got %d", starts[1], m.streamScroll)
+	if m.cursorRow != starts[1] {
+		t.Fatalf("expected { to go back to row %d, got %d", starts[1], m.cursorRow)
 	}
 }
 
 func TestJumpHunkStopsAtEnds(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
 	m = press(m, "{")
-	if m.streamScroll != 0 {
-		t.Fatalf("expected { at the top to stay put, got %d", m.streamScroll)
+	if m.cursorRow != 0 {
+		t.Fatalf("expected { at the top to stay put, got %d", m.cursorRow)
 	}
 	m = pressTimes(m, "}", 10)
-	last := m.streamScroll
+	last := m.cursorRow
 	m = press(m, "}")
-	if m.streamScroll != last {
-		t.Fatalf("expected } past the last hunk to stay put, got %d", m.streamScroll)
+	if m.cursorRow != last {
+		t.Fatalf("expected } past the last hunk to stay put, got %d", m.cursorRow)
 	}
 }
 
@@ -291,12 +318,15 @@ func TestGAndShiftGGoToStreamEnds(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
 	m = pressTimes(m, "j", 3)
 	m = press(m, "g")
-	if m.streamScroll != 0 {
-		t.Fatalf("expected g to go to the top, got %d", m.streamScroll)
+	if m.cursorRow != 0 || m.streamScroll != 0 {
+		t.Fatalf("expected g to go to the top, got cursor=%d scroll=%d", m.cursorRow, m.streamScroll)
 	}
 	m = press(m, "G")
-	if want := m.maxStreamScroll(); m.streamScroll != want {
-		t.Fatalf("expected G to go to the bottom (%d), got %d", want, m.streamScroll)
+	if want := len(m.stream.rows) - 1; m.cursorRow != want {
+		t.Fatalf("expected G to reach the last row %d, got %d", want, m.cursorRow)
+	}
+	if !cursorVisible(m) {
+		t.Fatalf("cursor %d not visible after G at scroll %d", m.cursorRow, m.streamScroll)
 	}
 }
 
@@ -314,7 +344,7 @@ func TestStreamPanelRendersOnlyTheVisibleWindow(t *testing.T) {
 
 func TestStreamFileHeaderShowsPath(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
-	row := stripANSI(m.renderStreamRow(m.stream.rows[m.stream.fileStart[1]], 60))
+	row := stripANSI(m.renderStreamRow(m.stream.rows[m.stream.fileStart[1]], 60, false))
 	if !strings.Contains(row, "b.go") {
 		t.Fatalf("expected the file header to name the file, got %q", row)
 	}
@@ -328,7 +358,7 @@ func TestStreamFileHeaderShowsPath(t *testing.T) {
 func TestStreamFileHeaderDrawsARuleAcrossThePane(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
 	for _, width := range []int{40, 60, 100} {
-		row := stripANSI(m.renderStreamRow(m.stream.rows[m.stream.fileStart[0]], width))
+		row := stripANSI(m.renderStreamRow(m.stream.rows[m.stream.fileStart[0]], width, false))
 		if got := lipgloss.Width(row); got != width {
 			t.Fatalf("width %d: divider spans %d columns, want %d (%q)", width, got, width, row)
 		}
@@ -348,7 +378,7 @@ func TestStreamFileHeaderDrawsARuleAcrossThePane(t *testing.T) {
 func TestStreamFileHeaderTruncatesLongPaths(t *testing.T) {
 	long := "internal/" + strings.Repeat("deeply/nested/", 8) + "file.go"
 	m := streamModel(t, diff.FileDiff{NewPath: long, Status: "M", Hunks: []diff.Hunk{hunkOf(1, " ", "x")}})
-	row := stripANSI(m.renderStreamRow(m.stream.rows[0], 50))
+	row := stripANSI(m.renderStreamRow(m.stream.rows[0], 50, false))
 	if got := lipgloss.Width(row); got > 50 {
 		t.Fatalf("divider overflowed: %d columns (%q)", got, row)
 	}
@@ -388,8 +418,8 @@ func TestWrappedContinuationRowsOmitTheGutter(t *testing.T) {
 	if len(segs) < 2 {
 		t.Fatalf("expected the line to wrap, got %d rows", len(segs))
 	}
-	first := stripANSI(m.renderStreamRow(segs[0], 60))
-	cont := stripANSI(m.renderStreamRow(segs[1], 60))
+	first := stripANSI(m.renderStreamRow(segs[0], 60, false))
+	cont := stripANSI(m.renderStreamRow(segs[1], 60, false))
 	if !strings.Contains(first, "+") {
 		t.Fatalf("expected the first row to carry the + marker, got %q", first)
 	}
@@ -414,9 +444,9 @@ func TestPanShiftsContentNotGutter(t *testing.T) {
 			break
 		}
 	}
-	base := stripANSI(m.renderStreamRow(line, 60))
+	base := stripANSI(m.renderStreamRow(line, 60, false))
 	m.hunkHScroll = 10
-	panned := stripANSI(m.renderStreamRow(line, 60))
+	panned := stripANSI(m.renderStreamRow(line, 60, false))
 	if !strings.Contains(base, "0123456789") {
 		t.Fatalf("unpanned row missing the line start: %q", base)
 	}
@@ -497,13 +527,80 @@ func TestSeekingToAFileResetsPan(t *testing.T) {
 
 // ---- editor jump ----
 
-func TestOpenAtCursorUsesTheRowUnderTheViewportTop(t *testing.T) {
+// ---- line cursor ----
+
+func TestCursorMovesARowAtATime(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m = press(m, "j")
+	if m.cursorRow != 1 {
+		t.Fatalf("expected j to move the cursor one row, got %d", m.cursorRow)
+	}
+	m = press(m, "k")
+	if m.cursorRow != 0 {
+		t.Fatalf("expected k to move back, got %d", m.cursorRow)
+	}
+}
+
+// The cursor row carries the app-wide selection bar; every other row reserves
+// the same columns so content stays aligned.
+func TestCursorRowCarriesSelectionBar(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m = pressTimes(m, "j", 2)
+	cursor := stripANSI(m.renderStreamRowAt(m.cursorRow, 60))
+	other := stripANSI(m.renderStreamRowAt(m.cursorRow+1, 60))
+	if !strings.HasPrefix(cursor, selectionPrefixBar) {
+		t.Fatalf("expected the cursor row to start with the bar, got %q", cursor)
+	}
+	if !strings.HasPrefix(other, selectionPrefixBlank) {
+		t.Fatalf("expected other rows to reserve the bar width, got %q", other)
+	}
+}
+
+// Reserving the prefix narrows content width; the wrap geometry must agree with
+// it or wrapped rows won't line up with what's rendered.
+func TestWrapWidthAccountsForTheCursorPrefix(t *testing.T) {
+	m := streamModel(t, longLineFile("a.go"))
+	_, right := paneWidths(120)
+	if want := right - 4 - lipgloss.Width(selectionPrefixBlank); m.hunkWidth != want {
+		t.Fatalf("expected hunkWidth %d to reserve the prefix, got %d", want, m.hunkWidth)
+	}
+}
+
+// Paging moves the cursor, not just the viewport.
+func TestPagingMovesTheCursor(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = updated.(Model)
+	if m.cursorRow == 0 {
+		t.Fatal("expected ctrl+d to move the cursor")
+	}
+	if !cursorVisible(m) {
+		t.Fatalf("cursor %d not visible after paging at scroll %d", m.cursorRow, m.streamScroll)
+	}
+}
+
+// A rebuild (resize, wrap toggle, reload) must not leave the cursor past the
+// end of the new geometry.
+func TestCursorSurvivesRebuild(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m = press(m, "G")
+	m.SetSize(60, 6)
+	if m.cursorRow > len(m.stream.rows)-1 {
+		t.Fatalf("cursor %d past the end of %d rows", m.cursorRow, len(m.stream.rows))
+	}
+	if !cursorVisible(m) {
+		t.Fatalf("cursor %d not visible after resize at scroll %d", m.cursorRow, m.streamScroll)
+	}
+}
+
+// The editor jump follows the cursor, not the top of the viewport.
+func TestOpenAtCursorFollowsTheCursorRow(t *testing.T) {
 	var gotLine int
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(_ string, line int) tea.Cmd {
 		gotLine = line
 		return nil
 	})
-	m.SetSize(120, 8)
+	m.SetSize(120, 20) // tall enough that scroll stays 0 while the cursor moves
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
 		NewPath: "a.go", Status: "M",
 		Hunks: []diff.Hunk{{OldStart: 40, NewStart: 40, Lines: []diff.HunkLine{
@@ -513,10 +610,48 @@ func TestOpenAtCursorUsesTheRowUnderTheViewportTop(t *testing.T) {
 	}}})
 	m = updated.(Model)
 	m.focus = FocusHunks
-	// Rows: file header, hunk header, ctx (40), added (41).
+	// Rows: divider, hunk header, ctx (40), added (41).
 	m = pressTimes(m, "j", 3)
+	if m.streamScroll != 0 {
+		t.Fatalf("fixture should not have scrolled, got %d", m.streamScroll)
+	}
 	m = press(m, "e")
 	if gotLine != 41 {
-		t.Fatalf("expected to open at line 41, got %d", gotLine)
+		t.Fatalf("expected to open at the cursor's line 41, got %d", gotLine)
+	}
+}
+
+// The cursorline spans the full pane width, vim-style, rather than only
+// highlighting the text on the row.
+func TestCursorlineSpansTheFullWidth(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m = pressTimes(m, "j", 2) // land on a diff line, not the divider
+	if m.stream.rows[m.cursorRow].kind != rowLine {
+		t.Fatalf("fixture should put the cursor on a line row, got %v", m.stream.rows[m.cursorRow].kind)
+	}
+	const width = 60
+	row := m.renderStreamRowAt(m.cursorRow, width)
+	if got := lipgloss.Width(row); got != width {
+		t.Fatalf("cursorline spans %d columns, want %d", got, width)
+	}
+	// A non-cursor row is not padded out.
+	other := m.renderStreamRowAt(m.cursorRow+1, width)
+	if lipgloss.Width(other) == width {
+		t.Fatalf("non-cursor rows should not be padded to full width: %q", stripANSI(other))
+	}
+}
+
+// Moving the cursor moves the cursorline with it.
+func TestCursorlineFollowsTheCursor(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m = pressTimes(m, "j", 2)
+	first := m.cursorRow
+	wide := m.renderStreamRowAt(first, 60)
+	m = press(m, "j")
+	if m.cursorRow == first {
+		t.Fatal("expected the cursor to move")
+	}
+	if narrow := m.renderStreamRowAt(first, 60); narrow == wide {
+		t.Fatal("expected the previous row to stop being the cursorline")
 	}
 }
