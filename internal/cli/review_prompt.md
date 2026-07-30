@@ -39,7 +39,8 @@ which ones to publish.
 ### File findings with `awp review add`
 
     awp review add --file <path> --line <n> [--side new|old] \
-      --author agent --text "<the line's exact text>" \
+      --author agent --type <comment|suggestion|question> \
+      --text "<the line's exact text>" \
       --body ":robot: <your finding>"
 
 There is no session to locate and no path to pass: the review is resolved
@@ -73,15 +74,25 @@ from anything they might type by hand.
 
 ### Comment types
 
-- `issue` — a concrete failure mode you can name (bug, security, broken
-  invariant, regression). Don't reach for `issue` to look thorough; if
-  you can't state what specifically goes wrong and when, it's a
-  `suggestion` or `note`.
-- `suggestion` — an improvement worth considering. Reviewer can take it
-  or explain why not.
-- `note` — observation or context with no required action.
-- `praise` — explicit positive callout. Use sparingly; one or two per
-  review at most.
+Pass `--type` on every finding. It is what the reader is expected to *do*
+about the comment, and it drives the colour the comment renders in — so
+choosing it deliberately is how a triager tells a blocker from an aside
+without reading every body.
+
+- `suggestion` — you are proposing a change. Covers both concrete failure
+  modes you can name (bug, security, broken invariant, regression) and
+  improvements worth considering. Lead with what specifically goes wrong
+  and when; if you cannot state that, it is not a suggestion.
+- `question` — you need an answer before you can judge the code. Use it
+  when the right call depends on intent you do not have, not as a softened
+  way to assert something.
+- `comment` — observation, context, or a positive callout, with no action
+  required. The default. Use it sparingly for praise: one or two per review
+  at most.
+
+`--type` defaults to `comment`, which claims the least. An unrecognised
+value also falls back to `comment` rather than failing, so a typo does not
+lose the finding — but it does lose the signal, so get it right.
 
 ### Writing the comment
 
@@ -122,8 +133,8 @@ a buried lead or a prose-formatted list; restructure before posting.
 ### Example
 
     awp review add --file internal/foo/bar.go --line 42 --side new \
-      --author agent --text "\treturn baz.Field" \
-      --body ":robot: issue — Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
+      --author agent --type suggestion --text "\treturn baz.Field" \
+      --body ":robot: Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
 
 ### Closing summary
 
@@ -132,8 +143,8 @@ reviewed, areas you intentionally skipped, and confidence level. Anchor it
 to the first line of the most relevant file. Example:
 
     awp review add --file internal/cli/review.go --line 1 \
-      --author agent \
-      --body ":robot: note — Reviewed internal/cli and internal/github. Skipped UI
+      --author agent --type comment \
+      --body ":robot: Reviewed internal/cli and internal/github. Skipped UI
        changes in internal/deckui (out of my depth on lipgloss conventions).
        Read the diff against {{diff_range}}."
 
@@ -147,6 +158,11 @@ in the order you filed them. The user will reply with which numbers to
 publish.
 
 ### Fixing a filed finding
+
+When the user replies to one of your findings they send you its id; answer
+on that thread rather than filing a second comment beside it:
+
+    awp review reply --to <id> --author agent --type <type> --body "<your reply>"
 
 Use `awp review list` to see what you have filed. Each finding is a single
 JSON file in the review store, so a mistake (typo, wrong line, duplicate)

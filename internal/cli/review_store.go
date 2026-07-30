@@ -123,6 +123,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 		body   = fs.String("body", "", "the comment text")
 		author = fs.String("author", "", "who is filing this (defaults to the agent name, or 'agent')")
 		text   = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
+		kind   = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -148,6 +149,9 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	c, err := store.AddComment(r, review.Comment{
 		Author: who,
 		Body:   *body,
+		// An unrecognised type falls back to a plain comment rather than failing:
+		// a finding is worth keeping even when the label on it is wrong.
+		Kind: review.ParseKind(*kind),
 		Anchor: review.Anchor{
 			Path:     strings.TrimSpace(*path),
 			Side:     anchorSide,
@@ -158,7 +162,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "added finding %s on %s:%d\n", c.ID, c.Anchor.Path, c.Anchor.LineHint)
+	_, _ = fmt.Fprintf(out, "added %s %s on %s:%d\n", c.Kind.OrDefault(), c.ID, c.Anchor.Path, c.Anchor.LineHint)
 	return nil
 }
 
@@ -169,6 +173,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 		to     = fs.String("to", "", "id of the comment being replied to")
 		body   = fs.String("body", "", "the reply text")
 		author = fs.String("author", "", "who is replying (defaults to 'agent')")
+		kind   = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, or question")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -184,7 +189,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 	if who == "" {
 		who = "agent"
 	}
-	c, err := store.Reply(r, *to, review.Comment{Author: who, Body: *body})
+	c, err := store.Reply(r, *to, review.Comment{Author: who, Body: *body, Kind: review.ParseKind(*kind)})
 	if err != nil {
 		return err
 	}
@@ -217,7 +222,7 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 		return nil
 	}
 	for _, c := range comments {
-		_, _ = fmt.Fprintf(out, "%s\t%s\t%s:%d\t%s\n", c.ID, c.State, c.Anchor.Path, c.Anchor.LineHint, oneLine(c.Body))
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s:%d\t%s\n", c.ID, c.Kind.OrDefault(), c.State, c.Anchor.Path, c.Anchor.LineHint, oneLine(c.Body))
 	}
 	return nil
 }
