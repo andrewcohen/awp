@@ -247,3 +247,100 @@ func TestHasUnpublished(t *testing.T) {
 		t.Fatal("no comments is nothing to lose")
 	}
 }
+
+// ---- reply threads ----
+
+func TestReplyThreadsUnderItsParentAndReopensIt(t *testing.T) {
+	s := testStore(t)
+	r, _ := s.Open("/repo/proj", Target{Kind: TargetWorking, Workspace: "ws"})
+	parent, err := s.AddComment(r, Comment{
+		Body:   "this drops the error",
+		Anchor: Anchor{Path: "a.go", LineHint: 12, Text: "_ = do()"},
+	})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// Handing it to the agent moves it out of open.
+	parent.State = Sent
+	if err := s.UpdateComment(r, parent); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	reply, err := s.Reply(r, parent.ID, Comment{Author: "agent", Body: "agreed, wrapping it"})
+	if err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if reply.ReplyTo != parent.ID {
+		t.Fatalf("expected the reply to point at its parent, got %q", reply.ReplyTo)
+	}
+	// A reply inherits the parent's anchor so the thread stays together.
+	if reply.Anchor.Path != "a.go" || reply.Anchor.LineHint != 12 {
+		t.Fatalf("expected the parent's anchor inherited, got %+v", reply.Anchor)
+	}
+
+	got, _ := s.Comments(r)
+	var reloaded Comment
+	for _, c := range got {
+		if c.ID == parent.ID {
+			reloaded = c
+		}
+	}
+	// The exchange needs the reviewer again, so the parent reopens.
+	if reloaded.State != Open {
+		t.Fatalf("expected the reply to reopen its parent, got %q", reloaded.State)
+	}
+}
+
+// One exchange is one thing awaiting triage, not one per message.
+func TestOpenCountCountsThreadsNotMessages(t *testing.T) {
+	comments := []Comment{
+		{ID: "p1", State: Open},
+		{ID: "r1", State: Open, ReplyTo: "p1"},
+		{ID: "r2", State: Open, ReplyTo: "p1"},
+		{ID: "p2", State: Sent},
+	}
+	if got := OpenCount(comments); got != 1 {
+		t.Fatalf("expected 1 open thread, got %d", got)
+	}
+}
+
+func TestReplyRejectsAMissingParent(t *testing.T) {
+	s := testStore(t)
+	r, _ := s.Open("/repo/proj", Target{Kind: TargetWorking, Workspace: "ws"})
+	if _, err := s.Reply(r, "nope", Comment{Body: "hi"}); err == nil {
+		t.Fatal("expected a reply to an unknown comment to be rejected")
+	}
+	if _, err := s.Reply(r, "  ", Comment{Body: "hi"}); err == nil {
+		t.Fatal("expected an empty parent id to be rejected")
+	}
+}
+
+func TestThreadsGroupsRepliesInOrder(t *testing.T) {
+	threads := Threads([]Comment{
+		{ID: "p1", Body: "first"},
+		{ID: "p2", Body: "second"},
+		{ID: "r1", Body: "reply a", ReplyTo: "p1"},
+		{ID: "r2", Body: "reply b", ReplyTo: "p1"},
+	})
+	if len(threads) != 2 {
+		t.Fatalf("expected 2 threads, got %d", len(threads))
+	}
+	if threads[0].Parent.ID != "p1" || len(threads[0].Replies) != 2 {
+		t.Fatalf("unexpected first thread: %+v", threads[0])
+	}
+	if threads[0].Replies[0].ID != "r1" || threads[0].Replies[1].ID != "r2" {
+		t.Fatalf("expected replies in order, got %+v", threads[0].Replies)
+	}
+	if len(threads[1].Replies) != 0 {
+		t.Fatalf("expected the second thread childless, got %+v", threads[1])
+	}
+}
+
+// A reply whose parent is gone is promoted rather than dropped: showing it out of
+// place beats losing it.
+func TestThreadsPromotesAnOrphanedReply(t *testing.T) {
+	threads := Threads([]Comment{{ID: "r1", Body: "dangling", ReplyTo: "vanished"}})
+	if len(threads) != 1 || threads[0].Parent.ID != "r1" {
+		t.Fatalf("expected the orphaned reply promoted, got %+v", threads)
+	}
+}

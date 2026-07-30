@@ -739,3 +739,73 @@ func TestCursorlineWinsOnACommentRow(t *testing.T) {
 		t.Fatalf("expected the cursor bar on a commented cursor row, got %q", stripANSI(on))
 	}
 }
+
+// ---- reply threads in the stream ----
+
+// A reply renders under its parent, not wherever its own anchor would resolve,
+// so an exchange reads as one block.
+func TestReplyRendersUnderItsParent(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	parent := commentOn("a.go", 1, "alpha", "this drops the error")
+	reply := review.Comment{
+		ID: "r1", Author: "agent", Body: "agreed, wrapping it", State: review.Open,
+		ReplyTo: parent.ID,
+		// Deliberately a different anchor: the reply must follow the parent.
+		Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 2, Text: "beta"},
+	}
+	m.SetComments([]review.Comment{parent, reply})
+
+	rows := m.stream.rows
+	// Find the parent's row, then expect its reply immediately after.
+	seen := []string{}
+	for _, r := range rows {
+		if r.kind != rowComment {
+			continue
+		}
+		seen = append(seen, m.stream.comments[r.comment].ID)
+	}
+	if len(seen) == 0 {
+		t.Fatal("expected comment rows")
+	}
+	first, second := "", ""
+	for _, id := range seen {
+		if first == "" {
+			first = id
+			continue
+		}
+		if id != first && second == "" {
+			second = id
+		}
+	}
+	if first != parent.ID || second != reply.ID {
+		t.Fatalf("expected parent then reply, got %v", seen)
+	}
+}
+
+// Replies are visually one level in, so the block reads as a conversation.
+func TestReplyIsIndented(t *testing.T) {
+	parent := commentLines(commentOn("a.go", 1, "alpha", "top"), 60, false)
+	reply := commentLines(review.Comment{
+		ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open,
+	}, 60, false)
+	p, r := stripANSI(parent[0]), stripANSI(reply[0])
+	if len(r)-len(strings.TrimLeft(r, " ")) <= len(p)-len(strings.TrimLeft(p, " ")) {
+		t.Fatalf("expected the reply indented past its parent:\n%q\n%q", p, r)
+	}
+	if !strings.Contains(r, "↳") {
+		t.Fatalf("expected a reply marker, got %q", r)
+	}
+}
+
+// An orphaned reply must still be shown rather than dropped.
+func TestOrphanedReplyIsShown(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SetComments([]review.Comment{{
+		ID: "r1", Author: "agent", Body: "dangling", State: review.Open, ReplyTo: "gone",
+		Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 1, Text: "alpha"},
+	}})
+	view := stripANSI(m.renderStreamPanel(80, 12))
+	if !strings.Contains(view, "dangling") {
+		t.Fatalf("expected an orphaned reply to still be shown:\n%s", view)
+	}
+}

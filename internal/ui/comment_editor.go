@@ -185,6 +185,13 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusErr = true
 				return m, nil
 			}
+			// SaveComment assigns the id; without reading it back the prompt has
+			// no id to name and the agent cannot reply on the thread.
+			if m.LastSavedComment != nil {
+				if saved, ok := m.LastSavedComment(); ok {
+					c = saved
+				}
+			}
 			m.comments = append(m.comments, c)
 			m.rebuildStream()
 			m.status = "comment saved"

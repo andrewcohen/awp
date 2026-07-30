@@ -26,6 +26,12 @@ import (
 func commentPromptFor(c review.Comment) string {
 	var b strings.Builder
 	b.WriteString("A reviewer left a comment on your change.\n\n")
+	if c.ID != "" {
+		// The id is what makes a reply possible. Without it the agent can only
+		// file a fresh comment beside this one, which is two records rather than
+		// a conversation.
+		fmt.Fprintf(&b, "Comment id: %s\n", c.ID)
+	}
 	fmt.Fprintf(&b, "File: %s\n", c.Anchor.Path)
 	if c.Anchor.LineHint > 0 {
 		side := "new"
@@ -52,15 +58,19 @@ Before changing anything: read the code around that line, decide whether you
 agree, and reply with (a) your understanding of the problem and (b) the fix you
 propose — or why you think no change is warranted. Wait for approval.
 
-Once approved, make the change, then record your reply on the comment so the
-reviewer sees it in the diff:
-
-    awp review add --file `)
-	b.WriteString(c.Anchor.Path)
-	if c.Anchor.LineHint > 0 {
-		fmt.Fprintf(&b, " --line %d", c.Anchor.LineHint)
+Reply on the thread so the reviewer reads it in the diff rather than scrolling
+back through this pane:
+`)
+	if c.ID != "" {
+		fmt.Fprintf(&b, "\n    awp review reply --to %s --body \"<your reply>\"\n", c.ID)
+		b.WriteString("\nThat threads under the comment and flags it for the reviewer again. Reply\nfirst, then make the change once approved.\n")
+	} else {
+		b.WriteString("\n    awp review add --file " + c.Anchor.Path)
+		if c.Anchor.LineHint > 0 {
+			fmt.Fprintf(&b, " --line %d", c.Anchor.LineHint)
+		}
+		b.WriteString(" --author agent --body \"<your reply>\"\n")
 	}
-	b.WriteString(" --author agent --body \"<your reply>\"\n")
 	return b.String()
 }
 
