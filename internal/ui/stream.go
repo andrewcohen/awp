@@ -44,6 +44,9 @@ const (
 	// showing it out of place.
 	rowOrphanHeader
 	rowOrphan
+	// rowEditor is one display line of the open compose box, spliced in beneath
+	// whatever it is attached to (see withEditor).
+	rowEditor
 )
 
 // rowRef says what a single stream row shows. Line numbers are resolved
@@ -161,6 +164,46 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	out.fileStart = remap(idx.fileStart, shift)
 	out.hunkStart = remap(idx.hunkStart, shift)
 	return out
+}
+
+// withEditor splices the compose box into the stream as `rows` display lines
+// directly beneath row `at`.
+//
+// The box is part of the geometry rather than an overlay or a docked panel, so
+// it appears where the remark will: under the line, or at the foot of the thread
+// it answers. That costs the splice below, but the alternative — floating the box
+// over the stream — hides the code being commented on, which is the one thing
+// that has to stay visible while writing about it.
+//
+// Its height must be a constant (commentEditorRows), because geometry runs before
+// anything is rendered. commentEditor.view guarantees that by truncating rather
+// than wrapping its header and hint.
+func withEditor(idx streamIndex, at, rows int) streamIndex {
+	if rows <= 0 || at < 0 || at >= len(idx.rows) {
+		return idx
+	}
+	out := make([]rowRef, 0, len(idx.rows)+rows)
+	shift := make([]int, len(idx.rows))
+	for i, r := range idx.rows {
+		shift[i] = len(out)
+		out = append(out, r)
+		if i != at {
+			continue
+		}
+		for line := 0; line < rows; line++ {
+			// The box inherits the anchor row's file so the file list keeps
+			// pointing at the file being commented on.
+			out = append(out, rowRef{
+				kind: rowEditor, file: r.file, hunk: -1, line: -1,
+				comment: -1, commentLine: line,
+			})
+		}
+	}
+	res := idx
+	res.rows = out
+	res.fileStart = remap(idx.fileStart, shift)
+	res.hunkStart = remap(idx.hunkStart, shift)
+	return res
 }
 
 func remap(offsets []int, shift []int) []int {

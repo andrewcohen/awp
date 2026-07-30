@@ -47,7 +47,12 @@ func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	ta := textarea.New()
 	ta.Placeholder = "comment…"
 	ta.ShowLineNumbers = false
-	ta.SetWidth(max(20, width-4))
+	// textarea's default prompt is `┃ `, which is this app's selection marker
+	// (see the design system in CLAUDE.md). Inside a bordered box it reads as a
+	// selected row rather than as a line of the thing you are typing, so the
+	// prompt is a plain space aligning the text with the box's header.
+	ta.Prompt = " "
+	ta.SetWidth(editorAreaWidth(width))
 	ta.SetHeight(commentEditorHeight)
 	ta.CharLimit = 0
 	ta.SetValue(c.Body)
@@ -56,9 +61,18 @@ func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	return commentEditor{area: ta, anchor: c.Anchor, editing: c.ID}
 }
 
-// commentEditorHeight is how many rows the compose box gets. Enough for a real
+// commentEditorHeight is how many rows the text area gets. Enough for a real
 // remark, small enough that the code being commented on stays visible.
 const commentEditorHeight = 4
+
+// commentEditorRows is the box's total height in the stream: the text area plus
+// a header, a key hint, and the two border rows.
+//
+// It has to be a constant, because the stream's geometry is computed before
+// anything is rendered — a box that turned out taller than this would leave the
+// row count disagreeing with what is drawn. view() holds up its end by
+// truncating its header and hint rather than letting them wrap.
+const commentEditorRows = commentEditorHeight + 4
 
 // editorAction is what the editor wants the host to do next.
 type editorAction int
@@ -101,8 +115,18 @@ func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction
 	return e, cmd, editorContinue
 }
 
+// view renders the box at exactly commentEditorRows rows. Both the header and
+// the hint are truncated to the inner width rather than allowed to wrap: a wrap
+// would add a row the stream's geometry did not account for, and every row index
+// after the box would then be off by one.
 func (e commentEditor) view(width int) string {
-	hint := styleDim.Render("enter save · ctrl+s save & send to agent · alt+enter newline · esc cancel")
+	inner := max(20, width-2) - 2
+	// Leading space on both the header and the hint so they line up with the text
+	// area's own one-column prompt.
+	hint := " enter save · ctrl+s save & send to agent · alt+enter newline · esc cancel"
+	if lipgloss.Width(hint) > inner {
+		hint = " enter save · ctrl+s send · esc cancel"
+	}
 	verb := " comment on "
 	switch {
 	case e.replyTo != "":
@@ -110,12 +134,99 @@ func (e commentEditor) view(width int) string {
 	case e.editing != "":
 		verb = " editing comment on "
 	}
-	head := styleCommentHead.Render(verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint))
+	head := verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(charm.Info)).
 		Width(max(20, width-2)).
-		Render(lipgloss.JoinVertical(lipgloss.Left, head, e.area.View(), hint))
+		Render(lipgloss.JoinVertical(lipgloss.Left,
+			styleCommentHead.Render(truncate(head, inner)),
+			e.area.View(),
+			styleDim.Render(truncate(hint, inner)),
+		))
+}
+
+// lines is the box's display rows, for the stream to draw one at a time.
+func (e commentEditor) lines(width int) []string {
+	return strings.Split(e.view(width), "\n")
+}
+
+// setWidth re-lays the text area for a new pane width.
+//
+// The area's width has to track the width the box is rendered at. Left behind
+// after a resize, an area wider than the box wraps inside it — which makes the
+// box taller than commentEditorRows and desyncs every row index after it.
+func (e *commentEditor) setWidth(width int) {
+	e.area.SetWidth(editorAreaWidth(width))
+}
+
+// editorAreaWidth is the text area's width inside a box rendered at width:
+// two columns of border, and the area's own two-column prompt/padding.
+func editorAreaWidth(width int) int {
+	return max(4, max(20, width-2)-2-2)
+}
+
+// editorAnchorRow is the stream row the compose box hangs under, resolved
+// against the given rows by content rather than remembered as an index — the
+// diff reloads on a timer, so an index recorded when the box opened may point at
+// different code by the next frame.
+//
+// Attaching to the *last* row of a conversation rather than its first is what
+// makes a reply read as appended to the exchange instead of wedged into the
+// middle of it.
+func (m Model) editorAnchorRow(idx streamIndex) int {
+	if target := m.editor.replyTo; target != "" {
+		if row := lastRowOfThread(idx, target); row >= 0 {
+			return row
+		}
+	}
+	if target := m.editor.editing; target != "" {
+		if row := lastRowOfComment(idx, target); row >= 0 {
+			return row
+		}
+	}
+	// A new comment attaches under the line it is about, found the same way a
+	// saved comment's own anchor is (see locateComment) so the box opens exactly
+	// where the comment will end up.
+	if row, ok := m.locateComment(idx.rows, review.Comment{Anchor: m.editor.anchor}); ok {
+		return row
+	}
+	// Nothing resolved — the code may have been edited out from under the box
+	// mid-sentence. Fall back to the cursor, which is where the box was opened
+	// from, so it stays on screen and keeps taking input.
+	return m.cursorRow
+}
+
+// lastRowOfComment is the final display row of one comment.
+func lastRowOfComment(idx streamIndex, id string) int {
+	found := -1
+	for i, r := range idx.rows {
+		if r.kind != rowComment && r.kind != rowOrphan {
+			continue
+		}
+		if r.comment >= 0 && r.comment < len(idx.comments) && idx.comments[r.comment].ID == id {
+			found = i
+		}
+	}
+	return found
+}
+
+// lastRowOfThread is the final display row of a whole conversation — the parent
+// and every reply beneath it.
+func lastRowOfThread(idx streamIndex, parentID string) int {
+	found := -1
+	for i, r := range idx.rows {
+		if r.kind != rowComment && r.kind != rowOrphan {
+			continue
+		}
+		if r.comment < 0 || r.comment >= len(idx.comments) {
+			continue
+		}
+		if c := idx.comments[r.comment]; c.ID == parentID || c.ReplyTo == parentID {
+			found = i
+		}
+	}
+	return found
 }
 
 // comment builds the record from the editor's contents.
@@ -152,6 +263,8 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 		}
 		m.editing = true
 		m.editor = newReplyEditor(parent, c.Anchor, m.hunkWidth)
+		// The box is a run of stream rows, so opening it changes the row count.
+		m.rebuildStream()
 		return m, textarea.Blink
 	}
 	if _, isThread := m.threadAtCursor(); isThread {
@@ -165,6 +278,7 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 	}
 	m.editing = true
 	m.editor = newCommentEditor(a, m.hunkWidth)
+	m.rebuildStream()
 	return m, textarea.Blink
 }
 
@@ -181,6 +295,7 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 	}
 	m.editing = true
 	m.editor = newCommentEditorFor(c, m.hunkWidth)
+	m.rebuildStream()
 	return m, textarea.Blink
 }
 
@@ -191,10 +306,16 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch action {
 	case editorCancel:
 		m.editing = false
+		// Closing the box removes its rows from the stream.
+		m.rebuildStream()
 		// Cancellation is self-evident — the box is gone — so it prints nothing.
 		return m, nil
 	case editorSave, editorSaveAndSend:
 		m.editing = false
+		// Every exit below either rebuilds after mutating the comment set or
+		// returns on an error; rebuild up front so the box's rows are gone on
+		// every path rather than only the successful ones.
+		m.rebuildStream()
 		c := m.editor.comment()
 		if parent := m.editor.replyTo; parent != "" {
 			if err := m.ReplyComment(parent, c); err != nil {
