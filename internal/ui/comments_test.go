@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -896,13 +897,137 @@ func TestReplyStylingDiffersAndIndentsOneLevel(t *testing.T) {
 
 	p, r := stripANSI(parent[0]), stripANSI(reply[0])
 	indentOf := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
-	if indentOf(r) != indentOf(p)+2 {
-		t.Fatalf("expected one level of extra indent, got %d vs %d", indentOf(r), indentOf(p))
+	if indentOf(r) != indentOf(p)+1 {
+		t.Fatalf("expected one space of extra indent, got %d vs %d", indentOf(r), indentOf(p))
 	}
 	if strings.Contains(r, "↳") {
 		t.Fatalf("expected no return marker, got %q", r)
 	}
 	if !strings.Contains(r, "▌") {
 		t.Fatalf("expected the same bar as the parent, got %q", r)
+	}
+}
+
+// ---- live comment reload ----
+
+// A reply filed while the view is open must appear without reopening it —
+// otherwise watching an agent answer does not work, which is the point.
+func TestCommentsReloadOnTheRefreshTick(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	parent := commentOn("a.go", 1, "alpha", "this drops the error")
+	m.SetComments([]review.Comment{parent})
+
+	stored := []review.Comment{parent, {
+		ID: "r1", Author: "agent", Body: "agreed", State: review.Open,
+		ReplyTo: parent.ID, Anchor: parent.Anchor,
+	}}
+	m.LoadComments = func() ([]review.Comment, error) { return stored, nil }
+
+	if rowsOfKind(m, rowComment) != 2 { // header + one body line
+		t.Fatalf("expected only the parent before the tick, got %d rows", rowsOfKind(m, rowComment))
+	}
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+	if len(m.comments) != 2 {
+		t.Fatalf("expected the reply picked up on the tick, got %d", len(m.comments))
+	}
+	view := stripANSI(m.renderStreamPanel(80, 14))
+	if !strings.Contains(view, "agreed") {
+		t.Fatalf("expected the reply visible after the tick:\n%s", view)
+	}
+}
+
+// The tick fires constantly, so an unchanged set must cost nothing and must not
+// disturb the cursor.
+func TestUnchangedCommentReloadLeavesTheViewAlone(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "a", "b", "c", "d", "e"))
+	set := []review.Comment{commentOn("a.go", 1, "a", "note")}
+	m.SetComments(set)
+	m.LoadComments = func() ([]review.Comment, error) { return set, nil }
+	m = pressTimes(m, "j", 3)
+	cursor, scroll := m.cursorRow, m.streamScroll
+
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+	if m.cursorRow != cursor || m.streamScroll != scroll {
+		t.Fatalf("unchanged reload moved the view: cursor %d→%d scroll %d→%d",
+			cursor, m.cursorRow, scroll, m.streamScroll)
+	}
+}
+
+// A store read failure must not interrupt a review; the next tick retries.
+func TestCommentReloadFailureIsSilent(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	set := []review.Comment{commentOn("a.go", 1, "alpha", "note")}
+	m.SetComments(set)
+	m.LoadComments = func() ([]review.Comment, error) { return nil, errors.New("gone") }
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+	if len(m.comments) != 1 {
+		t.Fatalf("expected the existing comments kept on a read failure, got %d", len(m.comments))
+	}
+	if m.statusErr {
+		t.Fatal("expected a background read failure not to raise an error status")
+	}
+}
+
+// Picking up a new comment must not scroll the reader away from where they were.
+func TestCommentReloadKeepsTheReadingPosition(t *testing.T) {
+	lines := make([]string, 0, 30)
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "line"+strconv.Itoa(i))
+	}
+	m := commentModel(t, fileWith("a.go", 1, lines...))
+	m = pressTimes(m, "j", 20)
+	before := cursorText(m)
+	offset := m.cursorRow - m.streamScroll
+
+	// A comment lands near the top, shifting every row below it.
+	m.LoadComments = func() ([]review.Comment, error) {
+		return []review.Comment{commentOn("a.go", 2, "line1", "up here")}, nil
+	}
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+
+	if got := cursorText(m); got != before {
+		t.Fatalf("expected the cursor to stay on %q, got %q", before, got)
+	}
+	if got := m.cursorRow - m.streamScroll; got != offset {
+		t.Fatalf("expected the screen position preserved, %d → %d", offset, got)
+	}
+}
+
+// Your own words are always your colour, wherever they sit in a thread — a reply
+// you write must not take the agent's hue just for being a reply. Asserted on the
+// style choice, since lipgloss strips colour with no TTY.
+func TestColourFollowsAuthorNotReplyDepth(t *testing.T) {
+	mineHead, mineBody, _ := commentStyles(true, false)
+	theirHead, theirBody, _ := commentStyles(false, false)
+
+	if mineHead.GetForeground() == theirHead.GetForeground() {
+		t.Fatal("expected your comments and the agent's to differ in hue")
+	}
+	if mineBody.GetForeground() == theirBody.GetForeground() {
+		t.Fatal("expected bodies to differ in hue too")
+	}
+	// Nesting is not part of the choice — only authorship is, which is what makes
+	// a reply you wrote keep your colour.
+	cursorMine, _, _ := commentStyles(true, true)
+	if cursorMine.GetForeground() != mineHead.GetForeground() {
+		t.Fatal("expected the cursorline to change the background, not the hue")
+	}
+}
+
+// The reply indent is one space — the least that still reads as nested.
+func TestReplyIndentIsOneSpace(t *testing.T) {
+	parent := stripANSI(commentLines(review.Comment{
+		ID: "c1", Author: review.AuthorHuman, Body: "top", State: review.Open,
+	}, 60, false)[0])
+	reply := stripANSI(commentLines(review.Comment{
+		ID: "c2", Author: "agent", Body: "under", State: review.Open, ReplyTo: "c1",
+	}, 60, false)[0])
+	indentOf := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+	if got := indentOf(reply) - indentOf(parent); got != 1 {
+		t.Fatalf("expected exactly one space of extra indent, got %d", got)
 	}
 }

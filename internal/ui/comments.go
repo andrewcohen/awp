@@ -462,6 +462,26 @@ func (m Model) AnchorAtCursor() (review.Anchor, bool) {
 // invalidate the anchor.
 const anchorContextLines = 3
 
+// commentStyles picks the styling for a comment row.
+//
+// Keyed off the author, not off whether the comment is a reply: your own words
+// are always your colour wherever they sit in a thread, and anything not yours —
+// the agent, or a mirrored GitHub thread — takes the other hue. Factored out so
+// the choice is assertable; lipgloss strips colour with no TTY, so it cannot be
+// observed in rendered output.
+func commentStyles(mine, cursor bool) (head, body, fill lipgloss.Style) {
+	switch {
+	case mine && cursor:
+		return styleCommentHead.Background(cursorlineBg), styleCommentBody.Background(cursorlineBg), styleCursorFill
+	case mine:
+		return styleCommentHeadFill, styleCommentBodyFill, styleCommentFill
+	case cursor:
+		return styleReplyHead.Background(cursorlineBg), styleReplyBody.Background(cursorlineBg), styleCursorFill
+	default:
+		return styleReplyHeadFill, styleReplyBodyFill, styleCommentFill
+	}
+}
+
 // commentLines renders a comment into display rows, painted across the full
 // width. Each style carries the background itself — an enclosing style cannot
 // supply it, since every inner style ends with a reset that would clear it
@@ -470,25 +490,16 @@ const anchorContextLines = 3
 // On the cursor's row the cursorline wins: knowing where the cursor is matters
 // more than knowing this row is a comment, and the ▌ marker still says the latter.
 func commentLines(c review.Comment, width int, cursor bool) []string {
-	head, body, fill := styleCommentHeadFill, styleCommentBodyFill, styleCommentFill
-	if c.ReplyTo != "" {
-		head, body = styleReplyHeadFill, styleReplyBodyFill
-	}
-	if cursor {
-		head, body, fill = styleCommentHead.Background(cursorlineBg), styleCommentBody.Background(cursorlineBg), styleCursorFill
-		if c.ReplyTo != "" {
-			head, body = styleReplyHead.Background(cursorlineBg), styleReplyBody.Background(cursorlineBg)
-		}
-	}
+	head, body, fill := commentStyles(c.Author == review.AuthorHuman, cursor)
 	label := c.Author
 	if label == review.AuthorHuman {
 		label = "you"
 	}
-	// Replies sit one level in, same bar as the parent — the indent alone carries
-	// the nesting, so no extra marker is needed.
+	// A reply sits one space in — the least that reads as nested. The bar is the
+	// same as the parent's, so the indent alone carries the nesting.
 	gutter := "  ▌ "
 	if c.ReplyTo != "" {
-		gutter = "    ▌ "
+		gutter = "   ▌ "
 	}
 	title := gutter + label
 	if c.State != review.Open {
@@ -602,4 +613,56 @@ func (m Model) cursorFile() (diff.FileDiff, bool) {
 func (m *Model) SetReviewed(marks map[string]string) {
 	m.ReviewedFiles = marks
 	m.rebuildStream()
+}
+
+// reloadComments re-reads the store and rebuilds only when something actually
+// changed. Called on every refresh tick, so the unchanged case has to be cheap
+// and has to leave the cursor exactly where it was.
+func (m *Model) reloadComments() {
+	if m.LoadComments == nil {
+		return
+	}
+	fresh, err := m.LoadComments()
+	if err != nil {
+		// A store read failure is not worth interrupting a review over; the next
+		// tick tries again.
+		return
+	}
+	if sameComments(m.comments, fresh) {
+		return
+	}
+	// Rebuilding changes the row count, so the cursor is re-anchored by content
+	// the same way a diff reload does rather than by index.
+	anchor, hadAnchor := m.captureAnchor()
+	offset := m.cursorRow - m.streamScroll
+	m.comments = fresh
+	if hadAnchor {
+		m.restoreAnchor(anchor, offset)
+		return
+	}
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+}
+
+// sameComments reports whether two comment sets are equivalent for display.
+// Compares the fields that affect rendering or placement — a timestamp bump on
+// its own must not cost a rebuild.
+func sameComments(a, b []review.Comment) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID ||
+			a[i].Body != b[i].Body ||
+			a[i].State != b[i].State ||
+			a[i].Author != b[i].Author ||
+			a[i].ReplyTo != b[i].ReplyTo ||
+			a[i].Anchor.Path != b[i].Anchor.Path ||
+			a[i].Anchor.LineHint != b[i].Anchor.LineHint ||
+			a[i].Anchor.Side != b[i].Anchor.Side {
+			return false
+		}
+	}
+	return true
 }
