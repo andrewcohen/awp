@@ -48,6 +48,69 @@ func (v ThreadVisibility) String() string {
 	}
 }
 
+// ThreadResolver toggles a remote thread's resolved state on GitHub. Nil leaves
+// resolving unavailable, which the viewer reports rather than silently ignoring.
+type ThreadResolver func(threadID string, resolve bool) error
+
+// threadAtCursor is the remote thread the cursor is on, if any. Resolving acts on
+// the thread under the cursor rather than a separate selection, so there is only
+// ever one notion of "this one".
+func (m Model) threadAtCursor() (review.Thread, bool) {
+	if len(m.stream.rows) == 0 || m.cursorRow >= len(m.stream.rows) {
+		return review.Thread{}, false
+	}
+	r := m.stream.rows[m.cursorRow]
+	if r.kind != rowComment && r.kind != rowOrphan {
+		return review.Thread{}, false
+	}
+	if r.comment < 0 || r.comment >= len(m.stream.comments) {
+		return review.Thread{}, false
+	}
+	id := strings.TrimPrefix(m.stream.comments[r.comment].ID, "thread-")
+	if id == m.stream.comments[r.comment].ID {
+		return review.Thread{}, false // a local comment, not a remote thread
+	}
+	for _, t := range m.threads {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return review.Thread{}, false
+}
+
+// toggleResolved resolves or unresolves the thread under the cursor.
+func (m Model) toggleResolved() (tea.Model, tea.Cmd) {
+	t, ok := m.threadAtCursor()
+	if !ok {
+		m.status = "put the cursor on a GitHub thread to resolve it"
+		return m, nil
+	}
+	if m.ResolveThread == nil {
+		m.status = "resolving unavailable here"
+		return m, nil
+	}
+	want := !t.Resolved
+	if err := m.ResolveThread(t.ID, want); err != nil {
+		m.status = "resolve: " + err.Error()
+		m.statusErr = true
+		return m, nil
+	}
+	for i := range m.threads {
+		if m.threads[i].ID == t.ID {
+			m.threads[i].Resolved = want
+		}
+	}
+	if want {
+		m.status = "thread resolved"
+	} else {
+		m.status = "thread reopened"
+	}
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+	return m, nil
+}
+
 // SetThreads installs the mirrored remote threads.
 func (m *Model) SetThreads(ts []review.Thread) {
 	m.threads = ts

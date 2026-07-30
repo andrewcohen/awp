@@ -624,6 +624,16 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Phase 7 landed — the spec's finish line. `awp review publish` posts
+  unpublished findings to a PR as inline comments, and `R` resolves/unresolves the
+  thread under the cursor. Two decisions worth recording: comments are posted
+  **individually rather than as one batched review submission**, because a partial
+  failure inside a batch is unrecoverable — you cannot tell which comments landed,
+  so a retry either duplicates everything or drops everything; and each comment's
+  publish record is written **at the moment it succeeds**, not batched to the end,
+  so a crash mid-run cannot leave posted comments looking unpublished. An
+  unparseable post response counts as success with an unknown id, since reporting
+  an error there would invite a duplicate. `--dry-run` reports what would go up.
 - 2026-07-30: Phase 6 landed, and **tuicr is no longer invoked anywhere in
   `internal/`**. `C` opens the stack-base diff in-deck via a `DiffScope` on the
   loader rather than a tuicr window; `awp review` no longer opens a review window

@@ -67,6 +67,8 @@ func runReviewSubcommand(runner Runner, svc workspace.Service, args []string, ou
 		return runReviewAdd(runner, svc, args[1:], out)
 	case "list":
 		return runReviewList(runner, svc, args[1:], out)
+	case "publish":
+		return runReviewPublish(runner, svc, args[1:], out)
 	}
 	return fmt.Errorf("unknown review subcommand %q", args[0])
 }
@@ -78,7 +80,7 @@ func isReviewSubcommand(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "add", "list":
+	case "add", "list", "publish":
 		return true
 	}
 	return false
@@ -241,6 +243,7 @@ func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.S
 	cs := reviewStoreFor(runner)
 	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
+	cs.LoadThreads, cs.Resolve = threadActionsFor(runner)
 	return cs
 }
 
@@ -306,4 +309,49 @@ func mirrorReviewThreads(repoRoot, workspaceName string, threads []github.Review
 		out = append(out, mirrored)
 	}
 	return store.SaveThreads(r, out)
+}
+
+// threadActionsFor wires thread loading and resolution into the diff modal.
+func threadActionsFor(runner Runner) (
+	load func(deckui.Item) ([]review.Thread, error),
+	resolve func(deckui.Item, string, bool) error,
+) {
+	open := func(item deckui.Item) (review.Store, review.Review, error) {
+		store := review.Store{}
+		r, err := store.Open(item.RepoRoot, review.Target{
+			Kind:      review.TargetWorking,
+			Workspace: item.WorkspaceName,
+		})
+		return store, r, err
+	}
+	load = func(item deckui.Item) ([]review.Thread, error) {
+		store, r, err := open(item)
+		if err != nil {
+			return nil, err
+		}
+		return store.Threads(r), nil
+	}
+	resolve = func(item deckui.Item, threadID string, want bool) error {
+		gh := github.New(runner)
+		if want {
+			if err := gh.ResolveReviewThread(threadID); err != nil {
+				return err
+			}
+		} else if err := gh.UnresolveReviewThread(threadID); err != nil {
+			return err
+		}
+		// Mirror the new state locally so the diff reflects it without a refetch.
+		store, r, err := open(item)
+		if err != nil {
+			return nil
+		}
+		threads := store.Threads(r)
+		for i := range threads {
+			if threads[i].ID == threadID {
+				threads[i].Resolved = want
+			}
+		}
+		return store.SaveThreads(r, threads)
+	}
+	return load, resolve
 }

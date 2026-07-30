@@ -115,6 +115,8 @@ type Model struct {
 	// rendered alongside local comments.
 	threads          []review.Thread
 	threadVisibility ThreadVisibility
+	// ResolveThread toggles a GitHub thread's resolved state.
+	ResolveThread ThreadResolver
 	// SaveComment persists a comment the user wrote. Nil disables commenting, so
 	// the standalone viewer works with no store configured.
 	SaveComment CommentSink
@@ -406,6 +408,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncFileCursorToCursor()
 		case "c":
 			return m.startComment()
+		case "R":
+			return m.toggleResolved()
 		case "T":
 			m.threadVisibility = (m.threadVisibility + 1) % 3
 			m.status = m.threadVisibility.String()

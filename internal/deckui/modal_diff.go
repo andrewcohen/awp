@@ -48,6 +48,10 @@ type CommentStore struct {
 	LoadReviewed func(item Item) (map[string]string, error)
 	// SaveReviewed persists one mark; an empty hash clears it.
 	SaveReviewed func(item Item, path, hash string) error
+	// Resolve toggles a GitHub review thread's resolved state.
+	Resolve func(item Item, threadID string, resolve bool) error
+	// LoadThreads returns the mirrored PR threads for this workspace's review.
+	LoadThreads func(item Item) ([]review.Thread, error)
 	// Send hands a saved comment to the workspace's agent. Nil leaves the
 	// send-to-agent exit unavailable, which the editor reports rather than
 	// silently doing nothing.
@@ -106,6 +110,14 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 			inner.SetReviewed(marks)
 		}
 	}
+	if comments.Resolve != nil {
+		inner.ResolveThread = func(id string, resolve bool) error { return comments.Resolve(item, id, resolve) }
+	}
+	if comments.LoadThreads != nil {
+		if threads, err := comments.LoadThreads(item); err == nil && len(threads) > 0 {
+			inner.SetThreads(threads)
+		}
+	}
 	if comments.Load != nil {
 		// Best-effort: a review that cannot be read should still open as a
 		// readable diff rather than refusing to open at all.
@@ -130,7 +142,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · c comment · r reviewed · {/} hunk · g/G ends · h/l/0/$ pan · tab pane · e $EDITOR · w wrap · / filter · esc close"
+	hint := " · j/k scroll · c comment · r reviewed · R resolve · T threads · {/} hunk · h/l pan · tab pane · e $EDITOR · w wrap · esc close"
 	return style.Render(dm.label + " · " + dm.scope.String() + " · " + status + hint)
 }
 
