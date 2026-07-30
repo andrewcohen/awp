@@ -61,7 +61,7 @@ func drain(m Model, cmd tea.Cmd) Model {
 }
 
 func TestDiffModalOpensOnC(t *testing.T) {
-	m := diffModalModel(t, func(Item) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	if _, ok := m.active.(*diffModal); !ok {
 		t.Fatalf("expected diff modal active, got %T", m.active)
@@ -95,7 +95,7 @@ func TestDiffModalFallsBackToReviewWindowWhenUnwired(t *testing.T) {
 func TestDiffModalFallsBackForVirtualRow(t *testing.T) {
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "pr-1", Virtual: true, PRNumber: 1}},
 		func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item) (string, error) { return diffModalSample, nil }, nil)
+		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil)
 	m.width, m.height = 120, 40
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
@@ -106,7 +106,7 @@ func TestDiffModalFallsBackForVirtualRow(t *testing.T) {
 
 func TestDiffModalClosesOnEscAndC(t *testing.T) {
 	for _, key := range []string{"esc", "q", "c"} {
-		m := diffModalModel(t, func(Item) (string, error) { return diffModalSample, nil })
+		m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 		m, _ = pressKey(m, "c")
 		if m.active == nil {
 			t.Fatalf("%s: expected modal open before close", key)
@@ -126,7 +126,7 @@ func TestDiffModalClosesOnEscAndC(t *testing.T) {
 // While the viewer's filter has focus, keys belong to the filter — `q` and
 // `c` must type into it rather than close the modal.
 func TestDiffModalFilterSwallowsCloseKeys(t *testing.T) {
-	m := diffModalModel(t, func(Item) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	m, _ = pressKey(m, "c")
 	m, _ = pressKey(m, "/")
 	dm, ok := m.active.(*diffModal)
@@ -145,7 +145,7 @@ func TestDiffModalFilterSwallowsCloseKeys(t *testing.T) {
 // The modal renders through the deck's body/footer composition, so its
 // frame must fit the viewport — otherwise the footer scrolls off.
 func TestDiffModalViewFitsViewport(t *testing.T) {
-	m := diffModalModel(t, func(Item) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	// Run the load command and feed the result back, so the modal renders
 	// a populated diff rather than the loading state.
@@ -160,7 +160,7 @@ func TestDiffModalViewFitsViewport(t *testing.T) {
 }
 
 func TestDiffModalSurfacesLoadError(t *testing.T) {
-	m := diffModalModel(t, func(Item) (string, error) { return "", errors.New("boom") })
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return "", errors.New("boom") })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	dm, ok := m.active.(*diffModal)

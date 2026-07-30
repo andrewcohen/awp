@@ -134,6 +134,60 @@ type Review struct {
 	ReviewedFile map[string]string `json:"reviewed_files,omitempty"`
 }
 
+// Thread is a GitHub review thread, mirrored locally so the diff can show a
+// PR's existing conversation without a network round trip per frame.
+//
+// Read-only: these are GitHub's records, not ours. A reply the reviewer writes is
+// a normal Comment carrying ReplyTo, so authored content stays in one place with
+// one lifecycle.
+//
+// Note the vocabulary split, kept deliberately: our comments have a State, a
+// remote thread has Resolved. A local draft cannot be "resolved" and a remote
+// thread cannot be "addressed"; blurring them would make the UI lie about what a
+// keystroke just did.
+type Thread struct {
+	ID        string          `json:"id"`
+	Path      string          `json:"path"`
+	Side      Side            `json:"side"`
+	Line      int             `json:"line"`
+	StartLine int             `json:"start_line,omitempty"`
+	Resolved  bool            `json:"resolved"`
+	Outdated  bool            `json:"outdated"`
+	Comments  []ThreadComment `json:"comments"`
+}
+
+// ThreadComment is one message in a remote thread.
+type ThreadComment struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+}
+
+// SaveThreads mirrors a PR's threads into the review. Cached rather than fetched
+// per render so opening the diff — and the deck's first paint — stay off the
+// network.
+func (s Store) SaveThreads(r Review, threads []Thread) error {
+	dir := s.dir(r.Repo, r.ID)
+	if dir == "" {
+		return errors.New("review: cannot resolve store path")
+	}
+	return writeJSON(filepath.Join(dir, "remote", "threads.json"), threads)
+}
+
+// Threads reads the mirrored threads. A missing or unreadable mirror yields none
+// rather than an error: remote conversation is context, and its absence must not
+// stop a diff from opening.
+func (s Store) Threads(r Review) []Thread {
+	b, err := os.ReadFile(filepath.Join(s.dir(r.Repo, r.ID), "remote", "threads.json"))
+	if err != nil {
+		return nil
+	}
+	var out []Thread
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
 // Counts is the per-repo summary the deck reads on its fast first paint, so
 // rendering a row never means walking a comments directory.
 type Counts struct {

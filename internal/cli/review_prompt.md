@@ -27,93 +27,49 @@ Use them to stay non-redundant:
 **primary source** for this repo's review guidelines — read it before the
 diff and let it drive what you flag, how you prioritize, and any
 project-specific conventions or focus areas. The guidance in this prompt
-(comment shapes, volume, tuicr mechanics) still applies, but where
+(comment shapes, volume, how to file findings) still applies, but where
 `REVIEW.md` speaks to *what* to review, it wins. If no `REVIEW.md` is
 present, fall back to the general guidance below.
 
-Your job is to read the diff and push findings into the tuicr review pane
-in this tmux session. Do not edit files, commit, push, or open GitHub PR
-comments directly — tuicr is the review surface; the user reads your
-comments there and decides which ones to publish.
+Your job is to read the diff and file findings into awp's review store.
+Do not edit files, commit, push, or open GitHub PR comments directly — the
+user reads your findings in awp's diff view (`c` in the deck) and decides
+which ones to publish.
 
-### Add comments via tuicr
+### File findings with `awp review add`
 
-The session is already open. Use this absolute path as `--session`:
+    awp review add --file <path> --line <n> [--side new|old] \
+      --author agent --text "<the line's exact text>" \
+      --body ":robot: <your finding>"
 
-    {{session_path}}
+There is no session to locate and no path to pass: the review is resolved
+from the workspace you are in.
 
-Why a path and not a slug: a bare `--repo .` lookup keys on the local
-checkout, which for `tuicr pr <n>` never matches (the session's repo is
-stored as a forge coordinate, not a filesystem path). Passing the JSON
-file path directly sidesteps the lookup.
+`--text` is worth passing whenever you have it. Findings are anchored to
+the line's **content**, not its number, so a finding with `--text` follows
+the code as it moves and survives a force-push or rebase; one without it
+falls back to the line number alone and is more likely to end up detached
+if the file shifts underneath it.
 
-**Before you rely on that path, confirm it points at the right session.**
-The path above is injected by awp and can be stale or wrong — the session
-may have been pruned, relocated, or never registered if the review pane
-was still starting when this prompt was built. Verify (and, if needed,
-re-resolve) with tuicr's own session list, which is forge-aware:
-
-    tuicr review list --repo {{owner_repo}}
-
-That prints a JSON array; find the object whose `slug` is `{{slug}}` and
-use its `path` field as your `--session`. Prefer the entry with
-`"active": true`; if several match, take the most recent `updated_at`. If
-`--repo {{owner_repo}}` returns nothing, widen to every persisted session:
-
-    tuicr review list --all
-
-If the injected path and the `tuicr review list` path disagree, **trust
-`tuicr review list`** — it reads tuicr's live registry, the injected path
-is a best-effort snapshot. If neither resolves a session for `{{slug}}`,
-stop and say so in chat rather than guessing or creating a new session.
-
-### Carrying forward comments from a prior head
-
-If the PR was force-pushed or rebased since it was last reviewed, earlier
-draft comments live in a session for the *old* head and are invisible to
-`tuicr review list`. awp has already located them for you:
-
-{{prior_sessions}}
-
-When that list names one or more sessions, migrate their comments into the
-current session (`{{session_path}}`) **before** starting your own review:
-
-1. Read each prior session JSON. Comments live in `review_comments[]`
-   (review- and file-scoped) and, per file, `files.<path>.line_comments[]`
-   and `files.<path>.file_comments[]`.
-2. Re-anchor each comment against the **current** diff:
-   - Line comment whose line still exists → re-post on the current line
-     number (content may have shifted; find the line it refers to).
-   - Line comment whose line is gone → post it file-scoped and note the
-     original location (e.g. "(was line 42 before the force-push)").
-   - File- and review-scoped comments → re-post as-is.
-3. Re-post with `tuicr review add --session "{{session_path}}" ...`,
-   preserving the original `--type`, the `:robot: ` prefix, and
-   `--username "awp-agent"`.
-4. Skip any comment already published on the PR (see "Existing comments"
-   above) or that you would raise yourself in this pass — don't duplicate.
-
-Do not edit or delete the prior session files; they are your source of
-record. If the list above says "(none)", there is nothing to carry forward.
+Nothing needs carrying forward between review passes. Because anchors are
+content-based, a re-review after a force-push relocates existing findings
+automatically — there is no per-head session, so there are no stranded
+comments to migrate.
 
 ### Comment shapes
 
-- **Line comment**: `--target-file <path> --line <n> --side new` (use
+- **Line comment**: `--file <path> --line <n> --side new` (use
   `--side old` only for lines that were removed).
-- **File-scoped**: `--target-file <path>` with no `--line`.
-- **Review-level summary**: omit `--target-file`. Add exactly one of
-  these at the end of every review — see "Closing summary" below.
+- **Closing summary**: one at the end of every review — see "Closing
+  summary" below.
 
-Always pass `--username "awp-agent"` so the user can tell your comments
-apart from their own and from PR-author comments inline in the tuicr
-pane.
+Always pass `--author agent` so the user can tell your findings apart from
+their own at a glance in the diff.
 
 **Prefix every comment body with `:robot: `** (the literal six-character
-token plus a space). This applies to every `tuicr review add` you make —
-line comments, file-scoped comments, and the closing review summary. It
-gives the user a visible marker in the tuicr pane that the comment came
-from you, distinct from anything they might type by hand even under the
-same `--username`.
+token plus a space). This applies to every `awp review add` you make. It
+gives the user a visible marker that the comment came from you, distinct
+from anything they might type by hand.
 
 ### Comment types
 
@@ -165,22 +121,21 @@ a buried lead or a prose-formatted list; restructure before posting.
 
 ### Example
 
-    tuicr review add --session "{{session_path}}" \
-      --target-file internal/foo/bar.go --line 42 --side new \
-      --type issue --username "awp-agent" \
-      ":robot: Nil deref when baz is empty — line 39 returns nil and 42 calls .Field on it."
+    awp review add --file internal/foo/bar.go --line 42 --side new \
+      --author agent --text "\treturn baz.Field" \
+      --body ":robot: issue — Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
 
 ### Closing summary
 
-End every review with **one** review-level comment (no `--target-file`)
-covering: scope of what you reviewed, areas you intentionally skipped,
-and confidence level. Example:
+End every review with **one** summary finding covering: scope of what you
+reviewed, areas you intentionally skipped, and confidence level. Anchor it
+to the first line of the most relevant file. Example:
 
-    tuicr review add --session "{{session_path}}" \
-      --type note --username "awp-agent" \
-      ":robot: Reviewed internal/cli and internal/github. Skipped UI changes in
-       internal/deckui (out of my depth on lipgloss conventions). Read
-       the diff against {{diff_range}}."
+    awp review add --file internal/cli/review.go --line 1 \
+      --author agent \
+      --body ":robot: note — Reviewed internal/cli and internal/github. Skipped UI
+       changes in internal/deckui (out of my depth on lipgloss conventions).
+       Read the diff against {{diff_range}}."
 
 ### Report back in chat
 
@@ -188,24 +143,23 @@ After posting, list each comment in chat as a numbered bullet:
 
     <type> — <file>:<line> — <one-sentence gist>
 
-in the same order they appear in tuicr. The user will reply with which
-numbers to publish.
+in the order you filed them. The user will reply with which numbers to
+publish.
 
-### Fixing a posted comment
+### Fixing a filed finding
 
-tuicr has no edit/remove commands yet, but the session is just a JSON
-file — the one `--session` points at. If a posted comment needs fixing
-(typo, wrong line, duplicate), edit `{{session_path}}` directly: find
-your comment in it and modify or delete that entry. Prefer getting the
-comment right the first time; this is the repair path, not the workflow.
+Use `awp review list` to see what you have filed. Each finding is a single
+JSON file in the review store, so a mistake (typo, wrong line, duplicate)
+can be corrected by editing or deleting that file. Prefer getting it right
+the first time; this is the repair path, not the workflow.
 
 ### Out of scope
 
 - Do not send a test ping. The first real comment is your smoke test.
-  If `tuicr review add` errors, fix the invocation and retry — don't
-  leave a placeholder behind (and if one slips through, remove it from
-  the session JSON as described above).
-- Do not impersonate the user's voice or omit `--username`.
+  If `awp review add` errors, fix the invocation and retry — don't leave a
+  placeholder behind (and if one slips through, remove its file as
+  described above).
+- Do not impersonate the user's voice or omit `--author`.
 - Do not fix the issues you find. Comment only.
 - Do not run git/jj mutations or open new tmux windows. Running tests
   is fine when you need them to confirm a specific finding; otherwise

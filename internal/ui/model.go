@@ -111,6 +111,10 @@ type Model struct {
 	// comments are the findings anchored into this diff, placed during the
 	// geometry pass (see comments.go).
 	comments []review.Comment
+	// threads are the PR's existing conversation, mirrored from GitHub and
+	// rendered alongside local comments.
+	threads          []review.Thread
+	threadVisibility ThreadVisibility
 	// SaveComment persists a comment the user wrote. Nil disables commenting, so
 	// the standalone viewer works with no store configured.
 	SaveComment CommentSink
@@ -402,6 +406,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncFileCursorToCursor()
 		case "c":
 			return m.startComment()
+		case "T":
+			m.threadVisibility = (m.threadVisibility + 1) % 3
+			m.status = m.threadVisibility.String()
+			m.rebuildStream()
+			m.clampCursor()
+			m.followCursor()
 		case "e":
 			return m, m.openAtCursor()
 		}

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/review"
 	"github.com/andrewcohen/awp/internal/tmux"
@@ -279,4 +280,30 @@ func reviewedMarksFor() (
 		return store.Save(r)
 	}
 	return load, save
+}
+
+// mirrorReviewThreads caches a PR's review threads into the workspace's review,
+// converting GitHub's diff-side vocabulary into ours.
+func mirrorReviewThreads(repoRoot, workspaceName string, threads []github.ReviewThread) error {
+	store := review.Store{}
+	r, err := store.Open(repoRoot, review.Target{Kind: review.TargetWorking, Workspace: workspaceName})
+	if err != nil {
+		return err
+	}
+	out := make([]review.Thread, 0, len(threads))
+	for _, t := range threads {
+		side := review.SideNew
+		if strings.EqualFold(t.Side, "LEFT") {
+			side = review.SideOld
+		}
+		mirrored := review.Thread{
+			ID: t.ID, Path: t.Path, Side: side, Line: t.Line, StartLine: t.StartLine,
+			Resolved: t.Resolved, Outdated: t.Outdated,
+		}
+		for _, c := range t.Comments {
+			mirrored.Comments = append(mirrored.Comments, review.ThreadComment{Author: c.Author, Body: c.Body})
+		}
+		out = append(out, mirrored)
+	}
+	return store.SaveThreads(r, out)
 }

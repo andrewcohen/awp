@@ -429,7 +429,7 @@ func TestDefaultWindowCommand(t *testing.T) {
 
 	cases := map[string]string{
 		"editor": "$EDITOR",
-		"review": "tuicr -r @",
+		"review": "awp diff",
 		"vcs":    "jjui",
 		"agent":  "pi",
 	}

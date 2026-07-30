@@ -26,6 +26,78 @@ import (
 // storage decision stays in one place.
 type CommentSink func(review.Comment) error
 
+// ThreadVisibility controls which remote threads are shown. Resolved threads are
+// hidden by default: they are settled conversation, and showing them by default
+// buries the ones that still need attention.
+type ThreadVisibility int
+
+const (
+	ThreadsUnresolved ThreadVisibility = iota
+	ThreadsAll
+	ThreadsNone
+)
+
+func (v ThreadVisibility) String() string {
+	switch v {
+	case ThreadsAll:
+		return "all threads"
+	case ThreadsNone:
+		return "threads hidden"
+	default:
+		return "unresolved threads"
+	}
+}
+
+// SetThreads installs the mirrored remote threads.
+func (m *Model) SetThreads(ts []review.Thread) {
+	m.threads = ts
+	m.rebuildStream()
+}
+
+// visibleThreads is the thread set the current visibility admits.
+func (m Model) visibleThreads() []review.Thread {
+	if m.threadVisibility == ThreadsNone || len(m.threads) == 0 {
+		return nil
+	}
+	if m.threadVisibility == ThreadsAll {
+		return m.threads
+	}
+	out := make([]review.Thread, 0, len(m.threads))
+	for _, t := range m.threads {
+		if !t.Resolved {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// threadAsComment adapts a remote thread into the same display shape local
+// comments use, so one renderer covers both. The distinction the reader needs —
+// this is already on GitHub — is carried in the author label rather than by a
+// separate row kind.
+func threadAsComment(t review.Thread) review.Comment {
+	var b strings.Builder
+	for i, c := range t.Comments {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(c.Author + ": " + c.Body)
+	}
+	author := "github"
+	if t.Resolved {
+		author = "github · resolved"
+	} else if t.Outdated {
+		author = "github · outdated"
+	}
+	return review.Comment{
+		ID:     "thread-" + t.ID,
+		Author: author,
+		Body:   b.String(),
+		State:  review.Published,
+		Anchor: review.Anchor{Path: t.Path, Side: t.Side, LineHint: t.Line},
+	}
+}
+
 // SetComments replaces the comment set and rebuilds the stream so they appear
 // in place.
 func (m *Model) SetComments(cs []review.Comment) {
@@ -42,12 +114,20 @@ func (m Model) Comments() []review.Comment { return m.comments }
 //
 // Called during the geometry pass, so it must not render anything.
 func (m Model) placeComments(rows []rowRef) (map[int][]review.Comment, []review.Comment) {
-	if len(m.comments) == 0 {
+	// Remote threads render through the same path as local comments; they differ
+	// in their label, not in how they are placed or anchored. Their line numbers
+	// are GitHub's, against a particular commit, so they drift exactly the way
+	// ours do and want the same relocation ladder.
+	all := m.comments
+	for _, t := range m.visibleThreads() {
+		all = append(all, threadAsComment(t))
+	}
+	if len(all) == 0 {
 		return nil, nil
 	}
-	placed := make(map[int][]review.Comment, len(m.comments))
+	placed := make(map[int][]review.Comment, len(all))
 	var orphans []review.Comment
-	for _, c := range m.comments {
+	for _, c := range all {
 		if row, ok := m.locateComment(rows, c); ok {
 			placed[row] = append(placed[row], c)
 			continue
