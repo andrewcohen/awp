@@ -51,6 +51,8 @@ type CommentStore struct {
 	// Update revises an existing comment; Delete removes one.
 	Update func(item Item, c review.Comment) error
 	Delete func(item Item, id string) error
+	// Reply files a reply against a parent comment.
+	Reply func(item Item, parentID string, c review.Comment) error
 	// LastSaved returns the record Save just wrote, id included.
 	LastSaved func() (review.Comment, bool)
 	// Resolve toggles a GitHub review thread's resolved state.
@@ -104,6 +106,11 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	if comments.Save != nil {
 		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
 	}
+	if comments.Reply != nil {
+		inner.ReplyComment = func(parentID string, c review.Comment) error {
+			return comments.Reply(item, parentID, c)
+		}
+	}
 	if comments.LastSaved != nil {
 		inner.LastSavedComment = comments.LastSaved
 	}
@@ -156,7 +163,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · c comment/edit · D delete · r reviewed · R resolve · T threads · {/} hunk · h/l pan · e $EDITOR · esc close"
+	hint := " · j/k scroll · c comment/reply · i edit · D delete · r reviewed · R resolve · T threads · {/} hunk · e $EDITOR · esc close"
 	return style.Render(dm.label + " · " + dm.scope.String() + " · " + status + hint)
 }
 

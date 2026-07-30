@@ -624,6 +624,15 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Comment gestures split by what they do rather than by what the
+  cursor is on: `c` on a comment **replies** to it (answering a remark is the
+  common action), `i` **edits** your own, `D` deletes. Replying to a reply threads
+  under the conversation's top rather than nesting further — one exchange, one
+  thread. Replies dropped the `↳` marker for the same `▌` bar at one level of
+  indent, and take `Accent` rather than `Info`, so authorship reads without
+  labels; no palette token was added, since a full-width teal divider is not
+  confusable with an indented comment block. A reply written in the UI reopens its
+  parent in the view as well as in the store — the two must not disagree.
 - 2026-07-30: **Local reply threads.** An agent's reply used to arrive as a new
   comment anchored to the same line — two independent records that happened to sit
   adjacent, not a conversation. `awp review reply --to <id>` now threads under a

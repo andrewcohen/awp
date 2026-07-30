@@ -280,6 +280,16 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			}
 			return store.UpdateComment(r, c)
 		},
+		Reply: func(item deckui.Item, parentID string, c review.Comment) error {
+			store, r, err := open(item)
+			if err != nil {
+				return err
+			}
+			// store.Reply reopens the parent, so the badge counts the thread as
+			// needing attention again.
+			_, err = store.Reply(r, parentID, c)
+			return err
+		},
 		Delete: func(item deckui.Item, id string) error {
 			store, r, err := open(item)
 			if err != nil {
