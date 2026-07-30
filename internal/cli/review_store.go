@@ -12,6 +12,7 @@ import (
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/review"
+	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -210,4 +211,33 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			return err
 		},
 	}
+}
+
+// sendCommentToAgentFor wires the diff modal's send-to-agent exit. The comment
+// is already saved by the time this runs, so a send failure leaves a durable
+// record rather than losing what the reviewer wrote.
+func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentSender {
+	return func(item deckui.Item, c review.Comment) error {
+		if err := sendPromptToAgent(tmuxClient, svc, item, commentPromptFor(c), nil); err != nil {
+			return err
+		}
+		store := review.Store{}
+		r, err := store.Open(item.RepoRoot, review.Target{
+			Kind:      review.TargetWorking,
+			Workspace: item.WorkspaceName,
+		})
+		if err != nil {
+			// The prompt went out; failing to update the record would be
+			// misleading but is not worth undoing the send.
+			return nil
+		}
+		return markCommentSent(store, r, c)
+	}
+}
+
+// reviewStoreWithSend is the full store seam: load, save, and hand to the agent.
+func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentStore {
+	cs := reviewStoreFor(runner)
+	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
+	return cs
 }

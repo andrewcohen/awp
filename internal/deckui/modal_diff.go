@@ -24,7 +24,14 @@ type CommentStore struct {
 	Load func(item Item) ([]review.Comment, error)
 	// Save persists a newly written comment.
 	Save func(item Item, c review.Comment) error
+	// Send hands a saved comment to the workspace's agent. Nil leaves the
+	// send-to-agent exit unavailable, which the editor reports rather than
+	// silently doing nothing.
+	Send CommentSender
 }
+
+// CommentSender delivers a comment to a workspace's agent.
+type CommentSender func(item Item, c review.Comment) error
 
 // diffModalChrome is the rows the deck's own chrome takes around a body
 // modal: the panel's Padding(1, 1, 1, 1) plus the footer block.
@@ -62,6 +69,9 @@ func newDiffModal(item Item, load DiffLoader, open DiffOpener, comments CommentS
 	)
 	if comments.Save != nil {
 		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
+	}
+	if comments.Send != nil {
+		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
 	}
 	if comments.Load != nil {
 		// Best-effort: a review that cannot be read should still open as a
