@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -104,5 +105,30 @@ func TestMarkCommentSentSetsSentNotAddressed(t *testing.T) {
 	}
 	if review.OpenCount(got) != 0 {
 		t.Fatal("a sent comment should no longer count as awaiting triage")
+	}
+}
+
+// sendPromptToAgent reports progress on every path, so a caller with no progress
+// UI passing nil used to panic on the nil interface — taking the deck down
+// instead of sending the comment. Absorbed in the function rather than trusting
+// every call site to remember.
+func TestSendPromptToAgentToleratesANilReporter(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("a nil reporter must not panic, got %v", r)
+		}
+	}()
+	// An empty workspace name fails early, which is enough to prove the reporter
+	// guard runs before anything dereferences it.
+	err := sendPromptToAgent(nil, nil, deckui.Item{}, "a prompt", nil)
+	if err == nil {
+		t.Fatal("expected an error for a workspace-less item")
+	}
+}
+
+// And an empty prompt is rejected before any tmux work.
+func TestSendPromptToAgentRejectsEmptyPrompt(t *testing.T) {
+	if err := sendPromptToAgent(nil, nil, deckui.Item{WorkspaceName: "ws"}, "   ", nil); err == nil {
+		t.Fatal("expected an empty prompt to be rejected")
 	}
 }
