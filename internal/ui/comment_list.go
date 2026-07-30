@@ -80,12 +80,23 @@ func (idx streamIndex) commentEntries() []commentEntry {
 			line:     c.Anchor.LineHint,
 			author:   c.Author,
 			kind:     c.Kind.OrDefault(),
-			summary:  firstLine(c.Body),
+			summary:  entrySummary(c),
 			state:    c.State,
 			detached: r.kind == rowOrphan,
 		})
 	}
 	return out
+}
+
+// entrySummary is an index row's one-line body preview, carrying the robot
+// marker so a glance down the list shows which conversations an agent started
+// rather than requiring you to open each one.
+func entrySummary(c review.Comment) string {
+	summary := firstLine(c.Body)
+	if robotAuthored(c) && summary != "" {
+		return review.RobotMarker + " " + summary
+	}
+	return summary
 }
 
 // firstLine is the first line of a body with anything to show, for the index's

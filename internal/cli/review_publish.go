@@ -73,7 +73,9 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	if *dryRun {
 		_, _ = fmt.Fprintf(out, "would post %d comment(s) to PR #%d (%d already published)\n", len(pending), prNumber, skipped)
 		for _, c := range pending {
-			_, _ = fmt.Fprintf(out, "  %s:%d\t%s\n", c.Anchor.Path, c.Anchor.LineHint, oneLine(c.Body))
+			// The composed body, not the stored one: a dry run is only useful if it
+			// shows what will actually land on GitHub, prefixes included.
+			_, _ = fmt.Fprintf(out, "  %s:%d\t%s\n", c.Anchor.Path, c.Anchor.LineHint, oneLine(c.PublishBody()))
 		}
 		return nil
 	}
@@ -91,10 +93,13 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	var failures []error
 	for _, c := range pending {
 		threadID, perr := gh.PostReviewComment(prNumber, github.NewComment{
-			Path:      c.Anchor.Path,
-			Line:      c.Anchor.LineHint,
-			Side:      githubSide(c.Anchor.Side),
-			Body:      c.Body,
+			Path: c.Anchor.Path,
+			Line: c.Anchor.LineHint,
+			Side: githubSide(c.Anchor.Side),
+			// Kind and the robot marker are composed at publish time, not stored:
+			// the stored body is what the author typed, so baking prefixes in
+			// would double them on a re-publish.
+			Body:      c.PublishBody(),
 			CommitID:  head,
 			InReplyTo: c.ReplyTo,
 		})

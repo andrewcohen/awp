@@ -32,6 +32,18 @@ type CommentSink func(review.Comment) error
 // CommentDeleter removes a comment by id.
 type CommentDeleter func(id string) error
 
+// remoteThreadPrefix marks a display comment adapted from a mirrored GitHub
+// thread (see threadAsComment). Those are GitHub's records — other people's
+// words — so they are excluded from anything that treats a comment as ours:
+// editing, deleting, and the robot marker.
+const remoteThreadPrefix = "thread-"
+
+// isRemoteThread reports whether a display comment came from GitHub rather than
+// from our own store.
+func isRemoteThread(c review.Comment) bool {
+	return strings.HasPrefix(c.ID, remoteThreadPrefix)
+}
+
 // localCommentAtCursor is the comment under the cursor, if it is one of ours.
 // Remote GitHub threads are excluded: they are GitHub's records, and editing or
 // deleting them from here would be a lie about what happened.
@@ -47,7 +59,7 @@ func (m Model) localCommentAtCursor() (review.Comment, bool) {
 		return review.Comment{}, false
 	}
 	c := m.stream.comments[r.comment]
-	if strings.HasPrefix(c.ID, "thread-") {
+	if isRemoteThread(c) {
 		return review.Comment{}, false
 	}
 	// Resolve against the live set: the placed copy is a snapshot.
@@ -135,7 +147,7 @@ func (m Model) threadAtCursor() (review.Thread, bool) {
 	if r.comment < 0 || r.comment >= len(m.stream.comments) {
 		return review.Thread{}, false
 	}
-	id := strings.TrimPrefix(m.stream.comments[r.comment].ID, "thread-")
+	id := strings.TrimPrefix(m.stream.comments[r.comment].ID, remoteThreadPrefix)
 	if id == m.stream.comments[r.comment].ID {
 		return review.Thread{}, false // a local comment, not a remote thread
 	}
@@ -222,7 +234,7 @@ func threadAsComment(t review.Thread) review.Comment {
 		author = "github · outdated"
 	}
 	return review.Comment{
-		ID:     "thread-" + t.ID,
+		ID:     remoteThreadPrefix + t.ID,
 		Author: author,
 		Body:   b.String(),
 		State:  review.Published,
@@ -502,7 +514,14 @@ func commentRows(c review.Comment, width int) []string {
 
 	avail := width - len([]rune(gutter))
 	out := []string{truncate(title, max(1, width))}
-	for _, line := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
+	// A robot's words are marked wherever they appear, so an agent's finding is
+	// never mistaken for something the reviewer wrote. Prefixed at render time
+	// rather than stored, so the marker cannot end up doubled or edited away.
+	body := strings.TrimRight(c.Body, "\n")
+	if robotAuthored(c) {
+		body = review.RobotMarker + " " + body
+	}
+	for _, line := range strings.Split(body, "\n") {
 		if avail < 1 {
 			out = append(out, truncate(gutter+line, max(1, width)))
 			continue
@@ -518,6 +537,14 @@ func commentRows(c review.Comment, width int) []string {
 		}
 	}
 	return out
+}
+
+// robotAuthored reports whether the marker belongs on a comment: a robot wrote
+// it, and it is ours rather than a mirrored GitHub thread. A thread's synthetic
+// author ("github") is not AuthorHuman, so ByRobot alone would mark other
+// people's comments as an agent's.
+func robotAuthored(c review.Comment) bool {
+	return c.ByRobot() && !isRemoteThread(c)
 }
 
 // commentStyles picks the styling for a comment row.

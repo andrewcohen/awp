@@ -41,7 +41,7 @@ which ones to publish.
     awp review add --file <path> --line <n> [--side new|old] \
       --author agent --type <comment|suggestion|question> \
       --text "<the line's exact text>" \
-      --body ":robot: <your finding>"
+      --body "<your finding>"
 
 There is no session to locate and no path to pass: the review is resolved
 from the workspace you are in.
@@ -67,10 +67,10 @@ comments to migrate.
 Always pass `--author agent` so the user can tell your findings apart from
 their own at a glance in the diff.
 
-**Prefix every comment body with `:robot: `** (the literal six-character
-token plus a space). This applies to every `awp review add` you make. It
-gives the user a visible marker that the comment came from you, distinct
-from anything they might type by hand.
+Do **not** prefix your bodies with a robot marker by hand. awp adds one
+automatically to anything filed under an author other than the reviewer —
+in the diff view and in the body it posts to GitHub — so a hand-written
+prefix only doubles it.
 
 ### Comment types
 
@@ -134,7 +134,7 @@ a buried lead or a prose-formatted list; restructure before posting.
 
     awp review add --file internal/foo/bar.go --line 42 --side new \
       --author agent --type suggestion --text "\treturn baz.Field" \
-      --body ":robot: Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
+      --body "Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
 
 ### Closing summary
 
@@ -144,7 +144,7 @@ to the first line of the most relevant file. Example:
 
     awp review add --file internal/cli/review.go --line 1 \
       --author agent --type comment \
-      --body ":robot: Reviewed internal/cli and internal/github. Skipped UI
+      --body "Reviewed internal/cli and internal/github. Skipped UI
        changes in internal/deckui (out of my depth on lipgloss conventions).
        Read the diff against {{diff_range}}."
 
