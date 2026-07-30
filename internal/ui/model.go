@@ -464,6 +464,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// the diff so replying and resolving work.
 		case "enter":
 			m.focus = FocusHunks
+		// Delete acts through the cursor, which the index keeps parked on the
+		// selected conversation — so this is the same gesture as `D` in the diff,
+		// reachable from the list you are already scanning.
+		case "D":
+			return m.deleteFromIndex()
 		}
 	}
 
@@ -858,26 +863,26 @@ var (
 	cursorlineBg      = charm.Cursorline
 	styleCursorLineNo = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Background(cursorlineBg)
 	styleCursorFill   = lipgloss.NewStyle().Background(cursorlineBg)
-	// Comments are Info-hued so they read as annotation rather than as diff
-	// content — nothing in a diff line is ever blue.
-	styleCommentHead = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
-	styleCommentBody = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info))
+	// A comment's hue says what kind of remark it is — what the reader is expected
+	// to do about it. Authorship is carried by the 🤖 marker on the body instead,
+	// which frees the colour for the thing a label cannot convey at a glance.
+	//
+	// A plain comment is Info-hued so it reads as annotation rather than as diff
+	// content — nothing in a diff line is ever blue. A suggestion proposes a
+	// change, so it takes Danger, the hue the app already uses for "this needs
+	// doing". A question is waiting on an answer, which is Warning's role.
+	styleCommentHead    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
+	styleCommentBody    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info))
+	styleSuggestionHead = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true)
+	styleSuggestionBody = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
+	styleQuestionHead   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleQuestionBody   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
 	// Comments are painted across the full width so they read as blocks set into
 	// the diff rather than as loose text between code lines. BgPanel is the
 	// palette's chip background — a comment box is exactly that — which keeps
 	// charm.Cursorline the only non-ANSI-16 value in the palette.
-	commentBg            = lipgloss.Color(charm.BgPanel)
-	styleCommentHeadFill = styleCommentHead.Background(commentBg)
-	styleCommentBodyFill = styleCommentBody.Background(commentBg)
-	styleCommentFill     = lipgloss.NewStyle().Background(commentBg)
-	// A reply from someone else — usually the agent — takes a different hue, so
-	// who wrote it is visible without reading the label. Accent rather than a new
-	// token: a full-width teal divider is not confusable with an indented comment
-	// block, so the palette stays as it is.
-	styleReplyHead        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
-	styleReplyBody        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent))
-	styleReplyHeadFill    = styleReplyHead.Background(commentBg)
-	styleReplyBodyFill    = styleReplyBody.Background(commentBg)
+	commentBg             = lipgloss.Color(charm.BgPanel)
+	styleCommentFill      = lipgloss.NewStyle().Background(commentBg)
 	styleOrphanHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
@@ -912,7 +917,7 @@ func (m Model) renderHeader() string {
 func (m Model) renderFooter() string {
 	hint := "j/k:scroll  c:comment  r:reviewed  {/}:hunk  g/G:ends  h/l/0/$:pan  tab:pane  e:$EDITOR  w:wrap  /:filter  q:quit"
 	if m.focus == FocusComments {
-		hint = "j/k:jump to comment  enter:into the diff  tab:pane  q:quit"
+		hint = "j/k:jump to comment  enter:into the diff  D:delete  tab:pane  q:quit"
 	}
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {

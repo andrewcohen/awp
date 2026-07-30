@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/review"
@@ -36,6 +37,7 @@ type commentEntry struct {
 	path    string
 	line    int
 	author  string
+	kind    review.Kind
 	summary string
 	replies int
 	state   review.State
@@ -77,6 +79,7 @@ func (idx streamIndex) commentEntries() []commentEntry {
 			path:     c.Anchor.Path,
 			line:     c.Anchor.LineHint,
 			author:   c.Author,
+			kind:     c.Kind.OrDefault(),
 			summary:  firstLine(c.Body),
 			state:    c.State,
 			detached: r.kind == rowOrphan,
@@ -154,20 +157,18 @@ func (m Model) renderCommentList(width, height int) string {
 // commentEntryStyles picks an index row's hues: one for the location, one for
 // the summary text.
 //
-// Keyed off the author the same way the comment blocks in the stream are, so a
-// conversation is the same colour in the index as it is in the diff. Factored
-// out for the same reason commentStyles is — lipgloss strips colour with no
-// TTY, so the choice cannot be observed in rendered output.
-func commentEntryStyles(mine, selected bool) (loc, text lipgloss.Style) {
+// Keyed off the kind the same way the blocks in the stream are, so a conversation
+// is the same colour in the index as it is in the diff. Factored out for the same
+// reason commentStyles is — lipgloss strips colour with no TTY, so the choice
+// cannot be observed in rendered output.
+func commentEntryStyles(kind review.Kind, selected bool) (loc, text lipgloss.Style) {
 	if selected {
-		// Selection wins over authorship: the app-wide marker has to read as the
+		// Selection wins over kind: the app-wide marker has to read as the
 		// selection wherever it lands.
 		return styleSelected, styleSelected
 	}
-	if mine {
-		return styleCommentHead, styleMuted
-	}
-	return styleReplyHead, styleMuted
+	head, _ := kindStyles(kind)
+	return head, styleMuted
 }
 
 func renderCommentEntry(e commentEntry, width int, selected bool) string {
@@ -177,7 +178,7 @@ func renderCommentEntry(e commentEntry, width int, selected bool) string {
 	if selected {
 		prefix = styleSelected.Render(selectionPrefixBar)
 	}
-	loc, text := commentEntryStyles(e.author == review.AuthorHuman, selected)
+	loc, text := commentEntryStyles(e.kind, selected)
 
 	head := entryLocation(e)
 	avail := max(1, width-lipgloss.Width(selectionPrefixBlank))
@@ -240,6 +241,22 @@ func (m *Model) seekToComment(i int) {
 	m.syncFileCursorToCursor()
 }
 
+// deleteFromIndex removes the selected conversation and re-seeks, so the cursor
+// lands on whatever took its place rather than on a row that just shifted under
+// it. Deleting a parent deletes its replies with it, which is what the store
+// does — the list and the record must not disagree about what is left.
+func (m Model) deleteFromIndex() (tea.Model, tea.Cmd) {
+	updated, cmd := m.deleteCommentAtCursor()
+	next, ok := updated.(Model)
+	if !ok {
+		return updated, cmd
+	}
+	// clampCommentsCursor has already pulled the selection into range (and handed
+	// focus back if the index emptied); this points the diff at it.
+	next.seekToComment(next.commentsCursor)
+	return next, cmd
+}
+
 // cycleFocus rotates focus files → comments → diff, and back the other way.
 func (m *Model) cycleFocus(forward bool) {
 	order := []Focus{FocusFiles, FocusHunks}
@@ -258,4 +275,10 @@ func (m *Model) cycleFocus(forward bool) {
 		at = (at - 1 + len(order)) % len(order)
 	}
 	m.focus = order[at]
+	if m.focus == FocusComments {
+		// Land with the diff cursor already on the selected conversation. Anything
+		// acting from the index acts through the cursor, so the two have to agree
+		// the moment focus arrives — not only after the first j/k.
+		m.seekToComment(m.commentsCursor)
+	}
 }

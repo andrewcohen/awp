@@ -344,3 +344,77 @@ func TestThreadsPromotesAnOrphanedReply(t *testing.T) {
 		t.Fatalf("expected the orphaned reply promoted, got %+v", threads)
 	}
 }
+
+// An unset kind reads as a plain comment. Records written before kinds existed
+// have an empty one, and every reader has to resolve it the same way — the
+// default is the one that claims the least about what the reader should do.
+func TestKindDefaultsToComment(t *testing.T) {
+	if got := Kind("").OrDefault(); got != KindComment {
+		t.Fatalf("expected an unset kind to be a comment, got %q", got)
+	}
+	if got := ParseKind(""); got != KindComment {
+		t.Fatalf("expected empty input to parse as a comment, got %q", got)
+	}
+	// A label we do not recognise is not worth rejecting the comment over.
+	if got := ParseKind("nitpick"); got != KindComment {
+		t.Fatalf("expected an unknown kind to fall back to comment, got %q", got)
+	}
+	if got := ParseKind("  SUGGESTION "); got != KindSuggestion {
+		t.Fatalf("expected case and space tolerance, got %q", got)
+	}
+}
+
+// tab's cycle has to visit every kind and return to the start, or a kind becomes
+// unreachable from the compose box.
+func TestKindCycleIsComplete(t *testing.T) {
+	seen := map[Kind]bool{}
+	k := KindComment
+	for range Kinds() {
+		seen[k] = true
+		k = k.Next()
+	}
+	if k != KindComment {
+		t.Fatalf("expected the cycle to close, ended on %q", k)
+	}
+	for _, want := range Kinds() {
+		if !seen[want] {
+			t.Fatalf("%q is unreachable by cycling", want)
+		}
+	}
+	// An unset kind still advances rather than sticking.
+	if got := Kind("").Next(); got == KindComment {
+		t.Fatal("expected an unset kind to advance off the default")
+	}
+}
+
+// The kind survives a write and read back, and an agent's comment is recognised
+// as a robot's wherever it renders or publishes.
+func TestKindPersistsAndRobotAuthorshipIsDetectable(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	r, err := store.Open("/repo/proj", Target{Kind: TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := store.AddComment(r, Comment{
+		Author: "agent", Body: "this leaks", Kind: KindSuggestion,
+		Anchor: Anchor{Path: "a.go", LineHint: 3},
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	got, err := store.Comments(r)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected one comment, got %d", len(got))
+	}
+	if got[0].Kind != KindSuggestion {
+		t.Fatalf("expected the kind persisted, got %q", got[0].Kind)
+	}
+	if !got[0].ByRobot() {
+		t.Fatal("expected an agent's comment to count as a robot's")
+	}
+	if (Comment{Author: AuthorHuman}).ByRobot() {
+		t.Fatal("expected your own comment not to count as a robot's")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -492,6 +493,9 @@ func commentRows(c review.Comment, width int) []string {
 		label = "you"
 	}
 	title := gutter + label
+	if k := c.Kind.OrDefault(); k != review.KindComment {
+		title += " · " + string(k)
+	}
 	if c.State != review.Open {
 		title += " · " + string(c.State)
 	}
@@ -518,21 +522,49 @@ func commentRows(c review.Comment, width int) []string {
 
 // commentStyles picks the styling for a comment row.
 //
-// Keyed off the author, not off whether the comment is a reply: your own words
-// are always your colour wherever they sit in a thread, and anything not yours —
-// the agent, or a mirrored GitHub thread — takes the other hue. Factored out so
-// the choice is assertable; lipgloss strips colour with no TTY, so it cannot be
-// observed in rendered output.
-func commentStyles(mine, cursor bool) (head, body, fill lipgloss.Style) {
-	switch {
-	case mine && cursor:
-		return styleCommentHead.Background(cursorlineBg), styleCommentBody.Background(cursorlineBg), styleCursorFill
-	case mine:
-		return styleCommentHeadFill, styleCommentBodyFill, styleCommentFill
-	case cursor:
-		return styleReplyHead.Background(cursorlineBg), styleReplyBody.Background(cursorlineBg), styleCursorFill
+// Keyed off the *kind* — what the remark is asking for — rather than off its
+// author or whether it is a reply. Authorship is carried by the 🤖 marker on the
+// body instead, which leaves the hue free to say the thing you cannot get from
+// reading a label at a glance: whether this wants a change, an answer, or
+// nothing.
+//
+// Factored out so the choice is assertable; lipgloss strips colour with no TTY,
+// so it cannot be observed in rendered output.
+func commentStyles(kind review.Kind, cursor bool) (head, body, fill lipgloss.Style) {
+	head, body = kindStyles(kind)
+	if cursor {
+		// The cursorline has to be carried by every style on the row — an
+		// enclosing style cannot supply it, since each inner style ends with a
+		// reset that would clear it mid-row.
+		return head.Background(cursorlineBg), body.Background(cursorlineBg), styleCursorFill
+	}
+	return head.Background(commentBg), body.Background(commentBg), styleCommentFill
+}
+
+// kindColor is the palette token for a kind, for surfaces that need the colour
+// rather than a style — the compose box's border, which is how tab's effect is
+// visible before there is any saved comment to look at.
+func kindColor(kind review.Kind) string {
+	switch kind.OrDefault() {
+	case review.KindSuggestion:
+		return charm.Danger
+	case review.KindQuestion:
+		return charm.Warning
 	default:
-		return styleReplyHeadFill, styleReplyBodyFill, styleCommentFill
+		return charm.Info
+	}
+}
+
+// kindStyles is the unfilled head/body pair for a kind. Separate from
+// commentStyles so the index can reuse the hue without the block's background.
+func kindStyles(kind review.Kind) (head, body lipgloss.Style) {
+	switch kind.OrDefault() {
+	case review.KindSuggestion:
+		return styleSuggestionHead, styleSuggestionBody
+	case review.KindQuestion:
+		return styleQuestionHead, styleQuestionBody
+	default:
+		return styleCommentHead, styleCommentBody
 	}
 }
 
@@ -541,7 +573,7 @@ func commentStyles(mine, cursor bool) (head, body, fill lipgloss.Style) {
 // background itself — an enclosing style cannot supply it, since every inner
 // style ends with a reset that would clear it mid-row.
 func commentLines(c review.Comment, width int, cursor bool) []string {
-	head, body, fill := commentStyles(c.Author == review.AuthorHuman, cursor)
+	head, body, fill := commentStyles(c.Kind, cursor)
 	rows := commentRows(c, width)
 	out := make([]string, 0, len(rows))
 	for i, text := range rows {
@@ -693,6 +725,7 @@ func sameComments(a, b []review.Comment) bool {
 	for i := range a {
 		if a[i].ID != b[i].ID ||
 			a[i].Body != b[i].Body ||
+			a[i].Kind != b[i].Kind ||
 			a[i].State != b[i].State ||
 			a[i].Author != b[i].Author ||
 			a[i].ReplyTo != b[i].ReplyTo ||
