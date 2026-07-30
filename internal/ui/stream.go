@@ -20,6 +20,13 @@ import (
 // change. Notably the horizontal pan is NOT an input: it's applied to the
 // visible window at render time, so panning never invalidates geometry.
 
+// The file divider's rule: a short lead-in before the filename, then a fill
+// to the pane's right edge.
+const (
+	fileRuleGlyph = "═"
+	fileRuleLead  = 2
+)
+
 type rowKind uint8
 
 const (

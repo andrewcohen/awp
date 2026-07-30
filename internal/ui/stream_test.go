@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/diff"
 )
@@ -319,6 +320,54 @@ func TestStreamFileHeaderShowsPath(t *testing.T) {
 	}
 	if !strings.Contains(row, "1 hunk") {
 		t.Fatalf("expected the file header to count hunks, got %q", row)
+	}
+}
+
+// The divider has to be unmissable in a continuous scroll, so it spans the
+// full pane width with the filename set into it.
+func TestStreamFileHeaderDrawsARuleAcrossThePane(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	for _, width := range []int{40, 60, 100} {
+		row := stripANSI(m.renderStreamRow(m.stream.rows[m.stream.fileStart[0]], width))
+		if got := lipgloss.Width(row); got != width {
+			t.Fatalf("width %d: divider spans %d columns, want %d (%q)", width, got, width, row)
+		}
+		if !strings.HasPrefix(row, strings.Repeat(fileRuleGlyph, fileRuleLead)) {
+			t.Fatalf("width %d: expected a rule lead-in, got %q", width, row)
+		}
+		if !strings.HasSuffix(row, fileRuleGlyph) {
+			t.Fatalf("width %d: expected the rule to reach the right edge, got %q", width, row)
+		}
+		if !strings.Contains(row, "a.go") {
+			t.Fatalf("width %d: filename lost in the rule: %q", width, row)
+		}
+	}
+}
+
+// A very long path must not push the rule past the pane edge.
+func TestStreamFileHeaderTruncatesLongPaths(t *testing.T) {
+	long := "internal/" + strings.Repeat("deeply/nested/", 8) + "file.go"
+	m := streamModel(t, diff.FileDiff{NewPath: long, Status: "M", Hunks: []diff.Hunk{hunkOf(1, " ", "x")}})
+	row := stripANSI(m.renderStreamRow(m.stream.rows[0], 50))
+	if got := lipgloss.Width(row); got > 50 {
+		t.Fatalf("divider overflowed: %d columns (%q)", got, row)
+	}
+}
+
+// The file the cursor is in is styled differently, so scrolling tells you
+// where you are without consulting the file list. Asserted on the style
+// choice rather than rendered output — lipgloss strips colour under test.
+func TestStreamFileHeaderMarksTheCurrentFile(t *testing.T) {
+	rule, base := fileRuleStyles(false)
+	curRule, curBase := fileRuleStyles(true)
+	if rule.GetForeground() == curRule.GetForeground() {
+		t.Fatal("expected the current file's rule to use a different hue")
+	}
+	if base.GetForeground() == curBase.GetForeground() {
+		t.Fatal("expected the current file's name to use a different hue")
+	}
+	if !base.GetBold() || !curBase.GetBold() {
+		t.Fatal("expected the filename to be bold in both states")
 	}
 }
 
