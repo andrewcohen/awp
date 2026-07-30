@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -462,6 +463,24 @@ func TestRemoteThreadsRenderInline(t *testing.T) {
 	if !strings.Contains(view, "github") {
 		t.Fatalf("expected the thread labelled as remote, got:\n%s", view)
 	}
+	// Inline means placed under its line, not swept into the detached section —
+	// GitHub gives a line number but no line text, so this is exactly the case
+	// that used to orphan every thread.
+	if rowsOfKind(m, rowOrphanHeader) != 0 {
+		t.Fatal("expected the thread placed inline, not detached")
+	}
+	placedUnderLine := false
+	for i, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		if i > 0 && m.stream.rows[i-1].kind == rowLine {
+			placedUnderLine = true
+		}
+	}
+	if !placedUnderLine {
+		t.Fatal("expected the thread to sit directly below a diff line")
+	}
 }
 
 // Resolved threads are settled conversation; showing them by default buries the
@@ -546,5 +565,177 @@ func TestOpensSafelyWithNoLines(t *testing.T) {
 	m := commentModel(t, diff.FileDiff{OldPath: "a.go", NewPath: "b.go", Status: "R"})
 	if m.cursorRow < 0 || (len(m.stream.rows) > 0 && m.cursorRow >= len(m.stream.rows)) {
 		t.Fatalf("cursor %d out of range for %d rows", m.cursorRow, len(m.stream.rows))
+	}
+}
+
+// ---- edit / delete ----
+
+// `c` on your own comment revises it rather than starting a second one beside it.
+func TestCOnACommentEditsItInPlace(t *testing.T) {
+	var updated []review.Comment
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.UpdateComment = func(c review.Comment) error {
+		updated = append(updated, c)
+		return nil
+	}
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "original")})
+
+	// Land on the comment row.
+	for m.stream.rows[m.cursorRow].kind != rowComment {
+		before := m.cursorRow
+		m = press(m, "j")
+		if m.cursorRow == before {
+			t.Fatal("never reached the comment row")
+		}
+	}
+	m = press(m, "c")
+	if !m.editing {
+		t.Fatal("expected c on a comment to open it for editing")
+	}
+	if got := m.editor.area.Value(); got != "original" {
+		t.Fatalf("expected the editor pre-filled, got %q", got)
+	}
+	if m.editor.editing != "c1" {
+		t.Fatalf("expected the editor to carry the comment id, got %q", m.editor.editing)
+	}
+
+	updatedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'!'}})
+	updatedModel, _ = updatedModel.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updatedModel.(Model)
+	if len(updated) != 1 || updated[0].ID != "c1" {
+		t.Fatalf("expected an update carrying the id, got %+v", updated)
+	}
+	if len(m.comments) != 1 {
+		t.Fatalf("expected editing not to add a comment, got %d", len(m.comments))
+	}
+	if m.comments[0].Body != "original!" {
+		t.Fatalf("expected the body revised, got %q", m.comments[0].Body)
+	}
+}
+
+func TestDDeletesTheCommentAtTheCursor(t *testing.T) {
+	var deleted []string
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.DeleteComment = func(id string) error {
+		deleted = append(deleted, id)
+		return nil
+	}
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "remove me")})
+	for m.stream.rows[m.cursorRow].kind != rowComment {
+		m = press(m, "j")
+	}
+	m = press(m, "D")
+	if len(deleted) != 1 || deleted[0] != "c1" {
+		t.Fatalf("expected the comment deleted, got %+v", deleted)
+	}
+	if len(m.comments) != 0 {
+		t.Fatalf("expected the comment gone from the view, got %d", len(m.comments))
+	}
+	if rowsOfKind(m, rowComment) != 0 {
+		t.Fatal("expected no comment rows after delete")
+	}
+	// Removing rows must not leave the cursor dangling.
+	if m.cursorRow >= len(m.stream.rows) || !cursorVisible(m) {
+		t.Fatalf("cursor %d invalid for %d rows", m.cursorRow, len(m.stream.rows))
+	}
+}
+
+func TestDOnACodeLineDoesNothing(t *testing.T) {
+	called := 0
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.DeleteComment = func(string) error { called++; return nil }
+	m = press(m, "D")
+	if called != 0 {
+		t.Fatal("expected D on a code line to be a no-op")
+	}
+}
+
+// Remote threads are GitHub's records: editing or deleting them from here would
+// misrepresent what happened.
+func TestRemoteThreadsCannotBeEditedOrDeleted(t *testing.T) {
+	deleted, updated := 0, 0
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.DeleteComment = func(string) error { deleted++; return nil }
+	m.UpdateComment = func(review.Comment) error { updated++; return nil }
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 1, false, "from github")})
+	for m.stream.rows[m.cursorRow].kind != rowComment {
+		before := m.cursorRow
+		m = press(m, "j")
+		if m.cursorRow == before {
+			t.Fatal("never reached the thread row")
+		}
+	}
+	m = press(m, "D")
+	m = press(m, "c")
+	if deleted != 0 || updated != 0 {
+		t.Fatalf("expected a remote thread to refuse edit/delete, got delete=%d update=%d", deleted, updated)
+	}
+	if m.editing {
+		t.Fatal("expected no editor for a remote thread")
+	}
+}
+
+func TestDeleteFailureIsReported(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.DeleteComment = func(string) error { return errors.New("read-only fs") }
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "x")})
+	for m.stream.rows[m.cursorRow].kind != rowComment {
+		m = press(m, "j")
+	}
+	m = press(m, "D")
+	if !m.statusErr || !strings.Contains(m.status, "read-only fs") {
+		t.Fatalf("expected the delete error reported, got %q", m.status)
+	}
+	if len(m.comments) != 1 {
+		t.Fatal("a failed delete must not remove the comment from the view")
+	}
+}
+
+// Comments read as blocks set into the diff, so every row of one spans the full
+// pane width rather than trailing off after the text.
+func TestCommentRowsSpanTheFullWidth(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "short\nand a rather longer second line")})
+
+	const width = 70
+	found := 0
+	for i, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		found++
+		row := m.renderStreamRowAt(i, width)
+		if got := lipgloss.Width(row); got != width {
+			t.Fatalf("comment row %d spans %d columns, want %d (%q)", i, got, width, stripANSI(row))
+		}
+	}
+	if found < 2 {
+		t.Fatalf("expected a header row plus body rows, got %d", found)
+	}
+}
+
+// On the cursor's row the cursorline wins over the comment fill: where the cursor
+// is matters more than what kind of row it is, and the ▌ marker still says the latter.
+func TestCursorlineWinsOnACommentRow(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "note")})
+	target := -1
+	for i, r := range m.stream.rows {
+		if r.kind == rowComment {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatal("no comment row")
+	}
+	off := m.renderStreamRowAt(target, 60)
+	m.cursorRow = target
+	on := m.renderStreamRowAt(target, 60)
+	if off == on {
+		t.Fatal("expected the cursor row to render differently from a plain comment row")
+	}
+	if !strings.HasPrefix(stripANSI(on), selectionPrefixBar) {
+		t.Fatalf("expected the cursor bar on a commented cursor row, got %q", stripANSI(on))
 	}
 }

@@ -18,9 +18,15 @@ import (
 // cursor, so content stays aligned down the pane.
 func (m Model) renderStreamRowAt(i, width int) string {
 	cursor := i == m.cursorRow
+	kind := m.stream.rows[i].kind
 	prefix := selectionPrefixBlank
-	if cursor {
+	switch {
+	case cursor:
 		prefix = styleSelectedCursor.Render(selectionPrefixBar)
+	case kind == rowComment || kind == rowOrphan:
+		// Paint the reserved columns too: an unpainted gap on the left would
+		// break the block the comment is meant to read as.
+		prefix = styleCommentFill.Render(selectionPrefixBlank)
 	}
 	body := m.renderStreamRow(m.stream.rows[i], width-lipgloss.Width(selectionPrefixBlank), cursor)
 	row := prefix + body
@@ -63,7 +69,7 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 		if r.comment < 0 || r.comment >= len(m.stream.comments) {
 			return ""
 		}
-		lines := commentLines(m.stream.comments[r.comment], width)
+		lines := commentLines(m.stream.comments[r.comment], width, cursor)
 		if r.commentLine < 0 || r.commentLine >= len(lines) {
 			return ""
 		}

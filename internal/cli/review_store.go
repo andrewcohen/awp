@@ -213,6 +213,32 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			_, err = store.AddComment(r, c)
 			return err
 		},
+		Update: func(item deckui.Item, c review.Comment) error {
+			store, r, err := open(item)
+			if err != nil {
+				return err
+			}
+			// Read the stored record first so a revise keeps everything the
+			// editor does not own — state, timestamps, publish record.
+			existing, err := store.Comments(r)
+			if err != nil {
+				return err
+			}
+			for _, e := range existing {
+				if e.ID == c.ID {
+					e.Body = c.Body
+					return store.UpdateComment(r, e)
+				}
+			}
+			return store.UpdateComment(r, c)
+		},
+		Delete: func(item deckui.Item, id string) error {
+			store, r, err := open(item)
+			if err != nil {
+				return err
+			}
+			return store.DeleteComment(r, id)
+		},
 	}
 }
 

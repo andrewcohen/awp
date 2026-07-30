@@ -48,6 +48,9 @@ type CommentStore struct {
 	LoadReviewed func(item Item) (map[string]string, error)
 	// SaveReviewed persists one mark; an empty hash clears it.
 	SaveReviewed func(item Item, path, hash string) error
+	// Update revises an existing comment; Delete removes one.
+	Update func(item Item, c review.Comment) error
+	Delete func(item Item, id string) error
 	// Resolve toggles a GitHub review thread's resolved state.
 	Resolve func(item Item, threadID string, resolve bool) error
 	// LoadThreads returns the mirrored PR threads for this workspace's review.
@@ -99,6 +102,12 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	if comments.Save != nil {
 		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
 	}
+	if comments.Update != nil {
+		inner.UpdateComment = func(c review.Comment) error { return comments.Update(item, c) }
+	}
+	if comments.Delete != nil {
+		inner.DeleteComment = func(id string) error { return comments.Delete(item, id) }
+	}
 	if comments.Send != nil {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
 	}
@@ -142,7 +151,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · c comment · r reviewed · R resolve · T threads · {/} hunk · h/l pan · tab pane · e $EDITOR · w wrap · esc close"
+	hint := " · j/k scroll · c comment/edit · D delete · r reviewed · R resolve · T threads · {/} hunk · h/l pan · e $EDITOR · esc close"
 	return style.Render(dm.label + " · " + dm.scope.String() + " · " + status + hint)
 }
 
