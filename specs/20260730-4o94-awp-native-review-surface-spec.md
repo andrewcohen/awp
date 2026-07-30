@@ -456,10 +456,15 @@ Each phase is independently landable and independently useful.
    behavior beyond a visible cursor — deliberately isolated, because it is the
    design risk for both commenting and expansion. Reconsider `bubbles/viewport`
    here per the component conventions.
-2. **Live refresh.** `fsnotify` on the workspace + jj op log; refresh in place,
-   re-anchoring the cursor by path and content hash rather than by index. This
-   is what made auto-refresh unusable in April; fixing it properly is a
-   prerequisite, not a nicety. Frees `r`.
+2. **Live refresh.** Refresh in place, re-anchoring the cursor by path and
+   content rather than by index. This is what made auto-refresh unusable in
+   April; fixing it properly is a prerequisite, not a nicety. Frees `r`.
+   **Implemented 2026-07-30 as a 2s poll, not fsnotify** — `jj diff` already
+   costs a subprocess and snapshots the working copy, an unchanged diff is
+   dropped by fingerprint before touching view state, and watching a tree on
+   macOS means per-directory kqueue watches with no recursive option. The
+   anchoring ladder built here (`internal/ui/anchor.go`) is the one phase 3
+   reuses for comments.
 3. **Findings store + `awp review add` + inline display.** The store, the
    anchoring ladder, the `c` gesture, inline rendering, deck counts, and the
    cleanup hooks from D6 wired alongside the existing review-prompt deletion
@@ -619,6 +624,10 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Phase 2 landed. Trigger deviates from the fsnotify line above: a
+  2s poll with a raw-diff fingerprint to drop no-op reloads. Anchoring by
+  content (with occurrence-ordinal disambiguation for duplicate lines) is shared
+  with phase 3's comment anchoring rather than implemented twice.
 - 2026-07-30: Q1 settled — store under `~/.awp/reviews/` with event-driven
   cleanup on workspace delete, PruneOrphans, PR merge/close and successful
   publish, reusing the hooks that already delete `~/.awp/review-prompts/`

@@ -110,6 +110,7 @@ func TestModelErrorStatus(t *testing.T) {
 func TestScheduleRefreshDisabledWhenZero(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	m.RefreshInterval = 0
+	m.loaded = true
 	updated, cmd := m.Update(diffLoadedMsg{})
 	_ = updated
 	if cmd != nil {
@@ -168,13 +169,17 @@ func TestFilterFooterIsStableHeight(t *testing.T) {
 	}
 }
 
-func TestDefaultRefreshIntervalSet(t *testing.T) {
+// Live refresh is on by default now that reloads preserve the reading position.
+func TestLiveRefreshOnByDefault(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	if m.RefreshInterval != DefaultRefreshInterval {
 		t.Fatalf("got %v want %v", m.RefreshInterval, DefaultRefreshInterval)
 	}
-	if m.RefreshInterval != 0 {
-		t.Fatalf("expected auto-refresh disabled by default, got %v", m.RefreshInterval)
+	if m.RefreshInterval <= 0 {
+		t.Fatalf("expected live refresh enabled, got %v", m.RefreshInterval)
+	}
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("expected Init to schedule a refresh")
 	}
 }
 
