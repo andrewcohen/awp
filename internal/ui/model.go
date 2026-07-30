@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,7 +24,16 @@ const (
 	FocusFilter
 )
 
-const DefaultRefreshInterval = 0
+// DefaultRefreshInterval is how often the viewer re-reads the diff. Live
+// refresh is only safe now that a reload preserves the reading position (see
+// anchor.go); it was disabled in April 2026 precisely because it did not.
+//
+// A poll rather than a filesystem watch, deliberately: `jj diff` snapshots the
+// working copy, so this already costs a subprocess, and an unchanged diff is
+// dropped by fingerprint before it touches any view state. Watching the tree
+// with fsnotify means per-directory watches on macOS (kqueue, no recursive
+// watch) — worth doing only if this interval proves too costly in practice.
+const DefaultRefreshInterval = 2 * time.Second
 
 // minBodyHeight is the smallest two-pane body we will render into. Below
 // this the panes have no room for content and the borders collide.
@@ -93,6 +103,10 @@ type Model struct {
 	// left. Only meaningful when wrap is off — wrapped lines have no
 	// horizontal overflow.
 	hunkHScroll int
+	// fingerprint is the identity of the currently loaded diff text; a reload
+	// matching it is a no-op.
+	fingerprint uint64
+	loaded      bool
 	status      string
 	statusErr   bool
 	refreshing  bool
@@ -144,7 +158,11 @@ func (m Model) Filtering() bool { return m.focus == FocusFilter }
 
 type diffLoadedMsg struct {
 	files []diff.FileDiff
-	err   error
+	// fingerprint identifies the raw diff text this message was built from, so
+	// a reload that changed nothing can be dropped before it touches any view
+	// state. Live refresh polls far more often than the diff actually changes.
+	fingerprint uint64
+	err         error
 }
 
 type autoRefreshTickMsg struct{}
@@ -183,7 +201,9 @@ func loadDiffCmd(fn func() (string, error)) tea.Cmd {
 		if err != nil {
 			return diffLoadedMsg{err: err}
 		}
-		return diffLoadedMsg{files: diff.ParseGitDiff(raw)}
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(raw))
+		return diffLoadedMsg{files: diff.ParseGitDiff(raw), fingerprint: h.Sum64()}
 	}
 }
 
@@ -199,16 +219,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusErr = true
 			return m, scheduleRefresh(m.RefreshInterval)
 		}
+		// Unchanged diff: leave every bit of view state alone. Live refresh
+		// polls on a timer, so most reloads land here, and doing nothing is
+		// what makes the polling invisible.
+		if m.loaded && msg.fingerprint == m.fingerprint {
+			m.statusErr = false
+			return m, scheduleRefresh(m.RefreshInterval)
+		}
+		anchor, hadAnchor := m.captureAnchor()
+		screenOffset := m.cursorRow - m.streamScroll
+
+		first := !m.loaded
+		m.loaded = true
+		m.fingerprint = msg.fingerprint
 		m.files = msg.files
 		m.applyFilter()
-		if m.filesCursor >= len(m.filtered) {
-			m.filesCursor = max(0, len(m.filtered)-1)
+		if first || !hadAnchor {
+			m.resetStreamView()
+			m.rebuildStream()
+		} else {
+			m.restoreAnchor(anchor, screenOffset)
 		}
-		m.resetStreamView()
 		if len(m.filtered) == 0 {
 			m.status = "no changes"
 		} else {
-			m.status = fmt.Sprintf("%d file(s) changed — manual refresh (r)", len(m.filtered))
+			m.status = fmt.Sprintf("%d file(s) changed", len(m.filtered))
 		}
 		m.statusErr = false
 		return m, scheduleRefresh(m.RefreshInterval)
