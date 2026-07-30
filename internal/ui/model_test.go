@@ -48,17 +48,38 @@ func TestModelFilterMode(t *testing.T) {
 	}
 }
 
-// enter is deliberately not an open binding — `e` is the only one.
-func TestModelEnterDoesNotOpenFile(t *testing.T) {
+// enter is deliberately not an open binding — `e` is the only one. On a file
+// row it drills into the hunk pane instead.
+func TestModelEnterFocusesHunkPaneWithoutOpening(t *testing.T) {
 	opened := false
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(string, int) tea.Cmd {
 		opened = true
 		return nil
 	})
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M", Hunks: []diff.Hunk{{NewStart: 5}}}}})
-	_, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
 	if opened {
 		t.Fatal("expected enter not to open a file")
+	}
+	if got.focus != FocusHunks {
+		t.Fatalf("expected enter to focus the hunk pane, got %v", got.focus)
+	}
+}
+
+// Filter-mode enter still confirms the filter rather than changing panes.
+func TestFilterEnterConfirmsAndReturnsToFiles(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+	if got.focus != FocusFiles {
+		t.Fatalf("expected filter enter to return to the file list, got %v", got.focus)
+	}
+	if got.filterInput.Value() != "f" {
+		t.Fatalf("expected the filter to be kept on confirm, got %q", got.filterInput.Value())
 	}
 }
 
