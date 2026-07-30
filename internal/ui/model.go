@@ -582,11 +582,18 @@ func (m Model) Body(width, height int) string {
 }
 
 var (
-	styleHeader           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Padding(0, 1)
-	styleSelected         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
-	styleDim              = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	styleMuted            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	stylePathDir          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleHeader   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Padding(0, 1)
+	styleSelected = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleMuted    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	stylePathDir  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	// The stream's file divider is a structural header, so it carries the
+	// accent hue (see the design system in CLAUDE.md) — or the selection hue
+	// when it is the file the cursor is in.
+	styleFileRule         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent))
+	styleFileRuleBase     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	styleFileRuleCurrent  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	styleFileRuleCurBase  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	stylePathBase         = lipgloss.NewStyle().Bold(true)
 	styleAdded            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success))
 	styleDeleted          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
@@ -686,30 +693,35 @@ func statusBadge(status string, selected bool) string {
 }
 
 func renderPath(path string, width int, selected bool) string {
+	dirStyle, baseStyle := stylePathDir, stylePathBase
+	if selected {
+		dirStyle, baseStyle = styleSelectedPathDir, styleSelectedPathBase
+	}
+	return renderPathWith(path, width, dirStyle, baseStyle)
+}
+
+// renderPathWith renders a path with caller-chosen styles for its directory
+// and basename, so surfaces needing a different hue (the stream's file
+// divider) don't re-implement rename-arrow splitting and truncation.
+func renderPathWith(path string, width int, dirStyle, baseStyle lipgloss.Style) string {
 	if width <= 0 {
 		return ""
 	}
 	if strings.Contains(path, " → ") {
 		parts := strings.SplitN(path, " → ", 2)
-		left := renderSinglePath(parts[0], max(1, (width-3)/2), selected)
-		right := renderSinglePath(parts[1], max(1, width-lipgloss.Width(left)-3), selected)
+		left := renderSinglePathWith(parts[0], max(1, (width-3)/2), dirStyle, baseStyle)
+		right := renderSinglePathWith(parts[1], max(1, width-lipgloss.Width(left)-3), dirStyle, baseStyle)
 		return truncateStyled(left+styleMuted.Render(" → ")+right, width)
 	}
-	return renderSinglePath(path, width, selected)
+	return renderSinglePathWith(path, width, dirStyle, baseStyle)
 }
 
-func renderSinglePath(path string, width int, selected bool) string {
+func renderSinglePathWith(path string, width int, dirStyle, baseStyle lipgloss.Style) string {
 	path = truncate(path, width)
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	if dir == "." || dir == string(filepath.Separator) {
 		dir = ""
-	}
-	dirStyle := stylePathDir
-	baseStyle := stylePathBase
-	if selected {
-		dirStyle = styleSelectedPathDir
-		baseStyle = styleSelectedPathBase
 	}
 	if dir == "" {
 		return baseStyle.Render(base)
