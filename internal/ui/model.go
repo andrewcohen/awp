@@ -23,6 +23,9 @@ const (
 	FocusFiles Focus = iota
 	FocusHunks
 	FocusFilter
+	// FocusComments is the comment index below the file list — a jump index over
+	// the change's conversations (see comment_list.go).
+	FocusComments
 )
 
 // DefaultRefreshInterval is how often the viewer re-reads the diff. Live
@@ -111,6 +114,12 @@ type Model struct {
 	// comments are the findings anchored into this diff, placed during the
 	// geometry pass (see comments.go).
 	comments []review.Comment
+	// commentIndex is the left column's jump index over those conversations,
+	// derived from the placed stream. Cached rather than recomputed per frame:
+	// building it walks every row, which is exactly the per-frame cost the
+	// geometry/render split exists to avoid.
+	commentIndex   []commentEntry
+	commentsCursor int
 	// threads are the PR's existing conversation, mirrored from GitHub and
 	// rendered alongside local comments.
 	threads          []review.Thread
@@ -171,6 +180,8 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // index is built, so it cannot silently go stale.
 func (m *Model) rebuildStream() {
 	m.stream = withComments(buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed), m.placeComments)
+	m.commentIndex = m.stream.commentEntries()
+	m.clampCommentsCursor()
 	m.clampCursor()
 	m.followCursor()
 	m.syncFileCursorToCursor()
@@ -362,11 +373,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.rebuildStream()
 		return m, nil
 	case "tab", "shift+tab":
-		if m.focus == FocusFiles {
-			m.focus = FocusHunks
-		} else {
-			m.focus = FocusFiles
-		}
+		m.cycleFocus(key == "tab")
 		return m, nil
 	case "ctrl+d":
 		m.pageDown()
@@ -389,6 +396,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = FocusHunks
 		case "e":
 			return m, m.openCurrentFile()
+		}
+	}
+
+	if m.focus == FocusComments {
+		switch key {
+		// Same as the file list: moving the selection seeks the diff, so the
+		// conversation is already on screen by the time you get there.
+		case "j", "down":
+			m.seekToComment(m.commentsCursor + 1)
+		case "k", "up":
+			m.seekToComment(m.commentsCursor - 1)
+		// The cursor is already on the comment; enter just hands the keyboard to
+		// the diff so replying and resolving work.
+		case "enter":
+			m.focus = FocusHunks
 		}
 	}
 
@@ -468,23 +490,28 @@ func (m *Model) applyFilter() {
 
 func (m *Model) pageDown() {
 	step := m.pageStep()
-	if m.focus == FocusHunks {
+	switch m.focus {
+	case FocusHunks:
 		m.moveCursor(step)
-		return
+	case FocusComments:
+		m.seekToComment(min(len(m.commentIndex)-1, m.commentsCursor+step))
+	default:
+		if len(m.filtered) > 0 {
+			m.seekToFile(min(len(m.filtered)-1, m.filesCursor+step))
+		}
 	}
-	if len(m.filtered) == 0 {
-		return
-	}
-	m.seekToFile(min(len(m.filtered)-1, m.filesCursor+step))
 }
 
 func (m *Model) pageUp() {
 	step := m.pageStep()
-	if m.focus == FocusHunks {
+	switch m.focus {
+	case FocusHunks:
 		m.moveCursor(-step)
-		return
+	case FocusComments:
+		m.seekToComment(max(0, m.commentsCursor-step))
+	default:
+		m.seekToFile(max(0, m.filesCursor-step))
 	}
-	m.seekToFile(max(0, m.filesCursor-step))
 }
 
 // resetStreamView returns the stream to its start. Used when the diff
@@ -748,7 +775,7 @@ func (m Model) Body(width, height int) string {
 		height = max(minBodyHeight, height-lipgloss.Height(editorView))
 	}
 	panes := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderFileList(leftWidth, height),
+		m.renderLeftColumn(leftWidth, height),
 		m.renderStreamPanel(rightWidth, height),
 	)
 	if editorView == "" {
@@ -839,6 +866,9 @@ func (m Model) renderHeader() string {
 
 func (m Model) renderFooter() string {
 	hint := "j/k:scroll  c:comment  r:reviewed  {/}:hunk  g/G:ends  h/l/0/$:pan  tab:pane  e:$EDITOR  w:wrap  /:filter  q:quit"
+	if m.focus == FocusComments {
+		hint = "j/k:jump to comment  enter:into the diff  tab:pane  q:quit"
+	}
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
