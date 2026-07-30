@@ -44,6 +44,13 @@ const hScrollStep = 8
 // panning can't leave the pane blank.
 const minVisibleColumns = 16
 
+// The app-wide selection marker: a left bar on the selected row, and an
+// equally wide blank on every other row so labels line up.
+const (
+	selectionPrefixBar   = "┃ "
+	selectionPrefixBlank = "  "
+)
+
 type OpenFunc func(filePath string, line int) tea.Cmd
 
 type Model struct {
@@ -291,6 +298,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.scrollHunksHorizontally(hScrollStep)
 		case "h", "left":
 			m.scrollHunksHorizontally(-hScrollStep)
+		case "0", "home":
+			m.panToLineStart()
+		case "$", "end":
+			m.panToLineEnd()
 		case "}", "]":
 			m.jumpHunk(1)
 		case "{", "[":
@@ -362,15 +373,36 @@ func (m *Model) scrollHunksHorizontally(delta int) {
 	m.clampHunkHScroll()
 }
 
+// panToLineStart returns the pane to the left edge (vim's `0`).
+func (m *Model) panToLineStart() {
+	if m.wrap {
+		return
+	}
+	m.hunkHScroll = 0
+}
+
+// panToLineEnd pans as far right as the clamp allows (vim's `$`).
+func (m *Model) panToLineEnd() {
+	if m.wrap {
+		return
+	}
+	m.hunkHScroll = m.maxHunkHScroll()
+}
+
 // clampHunkHScroll stops the pan before the longest line has scrolled
 // entirely out of view, so the pane can't be panned into empty space.
 func (m *Model) clampHunkHScroll() {
+	m.hunkHScroll = min(m.hunkHScroll, m.maxHunkHScroll())
+}
+
+// maxHunkHScroll is the furthest the pane may pan: enough to reach the end of
+// the longest line while keeping minVisibleColumns of it on screen.
+func (m Model) maxHunkHScroll() int {
 	f, ok := m.currentFile()
 	if !ok {
-		m.hunkHScroll = 0
-		return
+		return 0
 	}
-	m.hunkHScroll = min(m.hunkHScroll, max(0, maxContentWidth(f)-minVisibleColumns))
+	return max(0, maxContentWidth(f)-minVisibleColumns)
 }
 
 // maxContentWidth is the display width of the longest line in a file's
@@ -528,8 +560,8 @@ var (
 	styleModifiedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
 	styleRenameBadge        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true).Padding(0, 1)
 	styleSelectedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
-	styleSelectedPathDir    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
-	styleSelectedPathBase   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	styleSelectedPathDir    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleSelectedPathBase   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleSelectedLineNo     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
 	styleSelectedHunkHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 )
@@ -546,7 +578,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:move  h/l:pan  {/}:hunk  ctrl+u/d:page  tab/enter:pane  e:open  w:wrap  r:refresh  /:filter  q:quit"
+	hint := "j/k:move  h/l/0/$:pan  {/}:hunk  ctrl+u/d:page  tab/enter:pane  e:open  w:wrap  r:refresh  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
@@ -570,11 +602,10 @@ func (m Model) renderFileList(width, height int) string {
 	start, end := visibleRange(m.filesCursor, max(1, height-2), len(m.filtered))
 	contentWidth := width - 4
 	for i := start; i < end; i++ {
-		row := m.renderFileRow(m.filtered[i], contentWidth, i == m.filesCursor)
-		if i == m.filesCursor {
-			row = styleSelected.Width(contentWidth).Render(row)
-		}
-		rows = append(rows, row)
+		// No outer selected-row wrap: renderFileRow already emits per-segment
+		// ANSI attributes, so an enclosing style can't add bold to text that
+		// has already declared its own.
+		rows = append(rows, m.renderFileRow(m.filtered[i], contentWidth, i == m.filesCursor))
 	}
 	for len(rows) < height {
 		rows = append(rows, "")
@@ -673,9 +704,17 @@ func (m Model) selectedHunkStyler() func(int) lipgloss.Style {
 }
 
 func (m Model) renderFileRow(f diff.FileDiff, width int, selected bool) string {
+	// The `┃ ` bar is the app-wide selection marker (see the design system in
+	// CLAUDE.md). Unselected rows reserve the same two columns so labels stay
+	// aligned down the list.
+	prefix := selectionPrefixBlank
+	if selected {
+		prefix = styleSelected.Render(selectionPrefixBar)
+	}
 	badge := statusBadge(f.Status, selected)
-	path := renderPath(diff.DisplayPath(f), width-lipgloss.Width(badge)-1, selected)
-	return badge + " " + path
+	avail := width - lipgloss.Width(selectionPrefixBlank) - lipgloss.Width(badge) - 1
+	path := renderPath(diff.DisplayPath(f), avail, selected)
+	return prefix + badge + " " + path
 }
 
 func (m Model) renderHunkTitle(f diff.FileDiff, width int) string {
