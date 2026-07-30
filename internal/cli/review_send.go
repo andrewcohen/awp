@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/review"
@@ -36,18 +37,8 @@ func commentPromptFor(c review.Comment) string {
 	if strings.TrimSpace(c.Anchor.Text) != "" {
 		fmt.Fprintf(&b, "The line reads: %s\n", strings.TrimSpace(c.Anchor.Text))
 	}
-	if len(c.Anchor.ContextBefore) > 0 || len(c.Anchor.ContextAfter) > 0 {
-		b.WriteString("\nSurrounding context:\n")
-		for _, l := range c.Anchor.ContextBefore {
-			b.WriteString("    " + l + "\n")
-		}
-		if strings.TrimSpace(c.Anchor.Text) != "" {
-			b.WriteString("  > " + c.Anchor.Text + "\n")
-		}
-		for _, l := range c.Anchor.ContextAfter {
-			b.WriteString("    " + l + "\n")
-		}
-	}
+	b.WriteString("\nSurrounding context:\n")
+	b.WriteString(renderAnchorContext(c.Anchor))
 	b.WriteString("\nThe comment:\n")
 	for _, l := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
 		b.WriteString("  " + l + "\n")
@@ -70,6 +61,38 @@ reviewer sees it in the diff:
 		fmt.Fprintf(&b, " --line %d", c.Anchor.LineHint)
 	}
 	b.WriteString(" --author agent --body \"<your reply>\"\n")
+	return b.String()
+}
+
+// renderAnchorContext renders the anchored line with its neighbours, numbered,
+// and marks the anchored line with ">".
+//
+// Numbering rather than indentation alone, because indentation cannot say *which*
+// line is meant when the anchored line is blank — and a comment on a blank line
+// ("add a test here") is perfectly ordinary. The marker is drawn whether or not
+// the line has text, so the position is always explicit.
+func renderAnchorContext(a review.Anchor) string {
+	first := a.LineHint - len(a.ContextBefore)
+	if first < 1 {
+		first = 1
+	}
+	// Width the largest number needs, so the gutter lines up.
+	last := first + len(a.ContextBefore) + len(a.ContextAfter)
+	width := len(strconv.Itoa(last))
+
+	var b strings.Builder
+	n := first
+	write := func(marker, text string) {
+		fmt.Fprintf(&b, "  %*d %s %s\n", width, n, marker, text)
+		n++
+	}
+	for _, l := range a.ContextBefore {
+		write("|", l)
+	}
+	write(">", a.Anchor())
+	for _, l := range a.ContextAfter {
+		write("|", l)
+	}
 	return b.String()
 }
 

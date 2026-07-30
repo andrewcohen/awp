@@ -132,3 +132,73 @@ func TestSendPromptToAgentRejectsEmptyPrompt(t *testing.T) {
 		t.Fatal("expected an empty prompt to be rejected")
 	}
 }
+
+// A comment on a blank line is ordinary ("add a test here"), and the prompt has
+// to say which line is meant. Indentation alone cannot: with no text to show, the
+// anchored line would render as nothing and read as a comment on the line above.
+func TestPromptMarksABlankAnchoredLine(t *testing.T) {
+	c := review.Comment{
+		Body: "add a test here",
+		Anchor: review.Anchor{
+			Path: "a_test.go", Side: review.SideNew, LineHint: 10,
+			Text:          "",
+			ContextBefore: []string{"import (", ")"},
+			ContextAfter:  []string{"func TestX(t *testing.T) {"},
+		},
+	}
+	got := commentPromptFor(c)
+	if !strings.Contains(got, "10 > (blank line)") {
+		t.Fatalf("expected the blank anchored line marked at its number:\n%s", got)
+	}
+	// Its neighbours must be numbered around it, not just indented.
+	for _, want := range []string{"8 | import (", "9 | )", "11 | func TestX"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected numbered context %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPromptNumbersAlignWithTheLineHint(t *testing.T) {
+	c := review.Comment{
+		Body: "x",
+		Anchor: review.Anchor{
+			Path: "a.go", LineHint: 100,
+			Text:          "target",
+			ContextBefore: []string{"before"},
+			ContextAfter:  []string{"after"},
+		},
+	}
+	got := commentPromptFor(c)
+	for _, want := range []string{" 99 | before", "100 > target", "101 | after"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q with aligned numbering:\n%s", want, got)
+		}
+	}
+}
+
+// An anchor with no surrounding context still marks its line.
+func TestPromptWithNoContextStillMarksTheLine(t *testing.T) {
+	c := review.Comment{
+		Body:   "x",
+		Anchor: review.Anchor{Path: "a.go", LineHint: 3, Text: "only"},
+	}
+	got := commentPromptFor(c)
+	if !strings.Contains(got, "3 > only") {
+		t.Fatalf("expected the anchored line marked:\n%s", got)
+	}
+}
+
+// Numbering must not run below line 1 when the anchor sits near the top.
+func TestPromptNumberingClampsAtTheFileStart(t *testing.T) {
+	c := review.Comment{
+		Body: "x",
+		Anchor: review.Anchor{
+			Path: "a.go", LineHint: 2, Text: "second",
+			ContextBefore: []string{"first", "phantom", "phantom"},
+		},
+	}
+	got := commentPromptFor(c)
+	if strings.Contains(got, " 0 |") || strings.Contains(got, "-1 |") {
+		t.Fatalf("expected numbering clamped at 1:\n%s", got)
+	}
+}
