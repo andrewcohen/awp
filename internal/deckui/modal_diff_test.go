@@ -104,8 +104,8 @@ func TestDiffModalFallsBackForVirtualRow(t *testing.T) {
 	}
 }
 
-func TestDiffModalClosesOnEscAndC(t *testing.T) {
-	for _, key := range []string{"esc", "q", "c"} {
+func TestDiffModalClosesOnEscAndQ(t *testing.T) {
+	for _, key := range []string{"esc", "q"} {
 		m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 		m, _ = pressKey(m, "c")
 		if m.active == nil {
@@ -170,5 +170,20 @@ func TestDiffModalSurfacesLoadError(t *testing.T) {
 	status, isErr := dm.inner.Status()
 	if !isErr || !strings.Contains(status, "boom") {
 		t.Fatalf("expected the load error in status, got %q (isErr=%v)", status, isErr)
+	}
+}
+
+// `c` opened the modal from the row list, but inside it the key belongs to the
+// viewer's comment gesture — intercepting it here made commenting unreachable.
+func TestDiffModalDoesNotCloseOnC(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	if _, ok := m.active.(*diffModal); !ok {
+		t.Fatalf("expected the modal open, got %T", m.active)
+	}
+	m, _ = pressKey(m, "c")
+	if _, ok := m.active.(*diffModal); !ok {
+		t.Fatal("expected c to reach the viewer rather than closing the modal")
 	}
 }

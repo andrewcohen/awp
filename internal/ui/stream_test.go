@@ -180,7 +180,8 @@ func TestScrollRunsContinuouslyIntoTheNextFile(t *testing.T) {
 	if m.filesCursor != 0 {
 		t.Fatalf("expected to start in the first file, got %d", m.filesCursor)
 	}
-	// Scroll until the top row belongs to the second file.
+	// Count from the very top, since the viewer opens on the first code line.
+	m = press(m, "g")
 	crossed := -1
 	for i := 1; i <= len(m.stream.rows); i++ {
 		m = press(m, "j")
@@ -283,8 +284,9 @@ func TestJumpHunkCrossesFiles(t *testing.T) {
 	if len(starts) != 3 {
 		t.Fatalf("expected 3 hunks, got %d", len(starts))
 	}
-	// From the top, } steps through every hunk in the change — the third one
-	// lives in the second file.
+	// From the very top, } steps through every hunk in the change — the third
+	// one lives in the second file.
+	m = press(m, "g")
 	for i, want := range starts {
 		m = press(m, "}")
 		if m.cursorRow != want {
@@ -302,6 +304,8 @@ func TestJumpHunkCrossesFiles(t *testing.T) {
 
 func TestJumpHunkStopsAtEnds(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
+	// The viewer opens on the first line of code, so go to the very top first.
+	m = press(m, "g")
 	m = press(m, "{")
 	if m.cursorRow != 0 {
 		t.Fatalf("expected { at the top to stay put, got %d", m.cursorRow)
@@ -531,13 +535,14 @@ func TestSeekingToAFileResetsPan(t *testing.T) {
 
 func TestCursorMovesARowAtATime(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
+	start := m.cursorRow
 	m = press(m, "j")
-	if m.cursorRow != 1 {
-		t.Fatalf("expected j to move the cursor one row, got %d", m.cursorRow)
+	if m.cursorRow != start+1 {
+		t.Fatalf("expected j to move the cursor one row from %d, got %d", start, m.cursorRow)
 	}
 	m = press(m, "k")
-	if m.cursorRow != 0 {
-		t.Fatalf("expected k to move back, got %d", m.cursorRow)
+	if m.cursorRow != start {
+		t.Fatalf("expected k to move back to %d, got %d", start, m.cursorRow)
 	}
 }
 

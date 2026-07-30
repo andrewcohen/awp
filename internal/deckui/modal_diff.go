@@ -151,7 +151,10 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	// including the ones that would otherwise close the modal.
 	if key, ok := msg.(tea.KeyMsg); ok && !dm.inner.Filtering() {
 		switch key.String() {
-		case "c", "esc", "q", "ctrl+c":
+		// Deliberately not `c`: that opens the comment box inside the viewer.
+		// `c` opened this modal from the row list, but once it is up the key
+		// belongs to the surface, not to closing it.
+		case "esc", "q", "ctrl+c":
 			m.active = nil
 			return tea.ClearScreen
 		}
