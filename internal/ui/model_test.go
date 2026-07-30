@@ -117,30 +117,39 @@ func TestScheduleRefreshDisabledWhenZero(t *testing.T) {
 	}
 }
 
+// The viewer opens on the diff pane, so tab's first press goes to the file list.
+func TestOpensOnTheDiffPane(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	if m.focus != FocusHunks {
+		t.Fatalf("expected the diff pane focused on open, got %v", m.focus)
+	}
+}
+
 func TestTabTogglesPaneFocusBothWays(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got := updated.(Model)
-	if got.focus != FocusHunks {
-		t.Fatalf("expected hunk focus after tab, got %v", got.focus)
+	if got.focus != FocusFiles {
+		t.Fatalf("expected tab to move to the file list, got %v", got.focus)
 	}
 	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got = updated.(Model)
-	if got.focus != FocusFiles {
-		t.Fatalf("expected tab to toggle back to files, got %v", got.focus)
+	if got.focus != FocusHunks {
+		t.Fatalf("expected tab to toggle back to the diff, got %v", got.focus)
 	}
 	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	if got := updated.(Model).focus; got != FocusHunks {
+	if got := updated.(Model).focus; got != FocusFiles {
 		t.Fatalf("expected shift+tab to switch pane, got %v", got)
 	}
 }
 
-// h/l no longer switch panes — they pan the hunk pane.
+// h/l no longer switch panes — they pan the diff.
 func TestHAndLDoNotSwitchPanes(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.focus = FocusFiles
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if got := updated.(Model).focus; got != FocusFiles {
-		t.Fatalf("expected l to leave focus on files, got %v", got)
+		t.Fatalf("expected l to leave focus on the file list, got %v", got)
 	}
 }
 

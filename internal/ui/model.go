@@ -50,6 +50,11 @@ const (
 	selectionPrefixBlank = "  "
 )
 
+// cursorScrollMargin keeps this many rows visible beyond the cursor when the
+// viewport follows it, so you can see what is coming rather than reading from
+// the very edge of the pane. Collapses near the stream's ends.
+const cursorScrollMargin = 2
+
 type OpenFunc func(filePath string, line int) tea.Cmd
 
 type Model struct {
@@ -66,9 +71,13 @@ type Model struct {
 	stream streamIndex
 	// streamScroll is the index of the top visible stream row.
 	streamScroll int
-	focus        Focus
-	filterInput  textinput.Model
-	width        int
+	// cursorRow is the stream row the cursor is on. The viewport follows it;
+	// it is what "the line you are on" means for opening an editor, and
+	// later for anchoring a comment.
+	cursorRow   int
+	focus       Focus
+	filterInput textinput.Model
+	width       int
 	// bodyHeight is the height of the two-pane body (file list + hunks),
 	// excluding this model's own header/footer. Standalone it is derived
 	// from the terminal height; embedded (the deck's `c` modal) the host
@@ -97,7 +106,11 @@ func (m *Model) SetSize(width, bodyHeight int) {
 	m.width = width
 	m.bodyHeight = max(minBodyHeight, bodyHeight)
 	_, right := paneWidths(width)
-	m.hunkWidth = right - 4
+	// Every stream row reserves the selection-prefix columns, so the width
+	// available to content — and therefore the wrap geometry — is narrower
+	// than the pane. Getting this wrong makes wrapped row counts disagree
+	// with what is rendered.
+	m.hunkWidth = right - 4 - lipgloss.Width(selectionPrefixBlank)
 	m.rebuildStream()
 }
 
@@ -107,8 +120,9 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // index is built, so it cannot silently go stale.
 func (m *Model) rebuildStream() {
 	m.stream = buildStream(m.filtered, m.hunkWidth, m.wrap)
-	m.clampStreamScroll()
-	m.syncFileCursorToScroll()
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
 }
 
 // paneWidths splits the body between the file list and the hunk pane. Both
@@ -146,6 +160,9 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 		OpenFile:        openFn,
 		filterInput:     ti,
 		status:          "loading...",
+		// Open on the diff itself. Reading the change is what you came for;
+		// the file list is a jump index you reach for second.
+		focus: FocusHunks,
 	}
 }
 
@@ -296,9 +313,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// One continuous scroll over the whole diff — there is no file
 		// boundary to stop at.
 		case "j", "down":
-			m.scrollStream(1)
+			m.moveCursor(1)
 		case "k", "up":
-			m.scrollStream(-1)
+			m.moveCursor(-1)
 		case "l", "right":
 			m.scrollHunksHorizontally(hScrollStep)
 		case "h", "left":
@@ -312,11 +329,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "{", "[":
 			m.jumpHunk(-1)
 		case "g":
-			m.streamScroll = 0
-			m.syncFileCursorToScroll()
+			m.cursorRow = 0
+			m.followCursor()
+			m.syncFileCursorToCursor()
 		case "G":
-			m.streamScroll = m.maxStreamScroll()
-			m.syncFileCursorToScroll()
+			m.cursorRow = max(0, len(m.stream.rows)-1)
+			m.followCursor()
+			m.syncFileCursorToCursor()
 		case "e":
 			return m, m.openAtCursor()
 		}
@@ -349,7 +368,7 @@ func (m *Model) applyFilter() {
 func (m *Model) pageDown() {
 	step := m.pageStep()
 	if m.focus == FocusHunks {
-		m.scrollStream(step)
+		m.moveCursor(step)
 		return
 	}
 	if len(m.filtered) == 0 {
@@ -361,7 +380,7 @@ func (m *Model) pageDown() {
 func (m *Model) pageUp() {
 	step := m.pageStep()
 	if m.focus == FocusHunks {
-		m.scrollStream(-step)
+		m.moveCursor(-step)
 		return
 	}
 	m.seekToFile(max(0, m.filesCursor-step))
@@ -371,6 +390,7 @@ func (m *Model) pageUp() {
 // reloads or the filter changes the file set out from under the scroll.
 func (m *Model) resetStreamView() {
 	m.streamScroll = 0
+	m.cursorRow = 0
 	m.hunkHScroll = 0
 }
 
@@ -430,12 +450,36 @@ func maxContentWidth(f diff.FileDiff) int {
 	return widest
 }
 
-// scrollStream moves the viewport by delta rows and re-derives which file the
-// cursor is in.
-func (m *Model) scrollStream(delta int) {
-	m.streamScroll += delta
+// moveCursor moves the line cursor by delta rows and lets the viewport follow.
+func (m *Model) moveCursor(delta int) {
+	m.cursorRow += delta
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
+}
+
+func (m *Model) clampCursor() {
+	m.cursorRow = min(max(m.cursorRow, 0), max(0, len(m.stream.rows)-1))
+}
+
+// followCursor scrolls the viewport the minimum needed to keep the cursor
+// visible, holding cursorScrollMargin rows of lookahead where the stream is
+// long enough to afford it.
+func (m *Model) followCursor() {
+	height := m.streamContentHeight()
+	margin := cursorScrollMargin
+	// A margin only makes sense if it fits: on a short pane, insisting on
+	// lookahead would fight the clamp forever.
+	if height <= 2*margin+1 {
+		margin = 0
+	}
+	if top := m.cursorRow - margin; top < m.streamScroll {
+		m.streamScroll = top
+	}
+	if bottom := m.cursorRow + margin; bottom > m.streamScroll+height-1 {
+		m.streamScroll = bottom - height + 1
+	}
 	m.clampStreamScroll()
-	m.syncFileCursorToScroll()
 }
 
 func (m *Model) clampStreamScroll() {
@@ -448,50 +492,56 @@ func (m *Model) clampStreamScroll() {
 // Stopping earlier (when the final row reaches the *bottom*) would avoid the
 // blank space below the end, but it also makes a late file's header
 // unreachable: seeking to the last file would clamp short of it, leaving the
-// file list pointing at one file while the top row belongs to another. Vim
-// scrolls this way for the same reason.
+// file list pointing at one file while the cursor sits in another. Vim scrolls
+// this way for the same reason.
 func (m Model) maxStreamScroll() int {
 	return max(0, len(m.stream.rows)-1)
 }
 
-// syncFileCursorToScroll points the file list at whichever file owns the top
-// visible row. The two directions are deliberately one-way each — seeking
-// sets the scroll, scrolling sets the cursor — so they can't feed back into
-// each other.
-func (m *Model) syncFileCursorToScroll() {
+func (m Model) streamContentHeight() int {
+	return max(1, m.bodyHeight)
+}
+
+// syncFileCursorToCursor points the file list at whichever file the cursor is
+// in. The two directions are deliberately one-way each — seeking moves the
+// cursor, moving the cursor updates the file list — so they cannot feed back
+// into each other.
+func (m *Model) syncFileCursorToCursor() {
 	if len(m.stream.rows) == 0 {
 		m.filesCursor = 0
 		return
 	}
-	m.filesCursor = m.stream.fileAt(m.streamScroll)
+	m.filesCursor = m.stream.fileAt(m.cursorRow)
 }
 
-// seekToFile scrolls the stream to a file's header row.
+// seekToFile puts the cursor on a file's divider row.
 func (m *Model) seekToFile(i int) {
 	if i < 0 || i >= len(m.stream.fileStart) {
 		return
 	}
 	m.filesCursor = i
-	m.streamScroll = m.stream.fileStart[i]
+	m.cursorRow = m.stream.fileStart[i]
 	m.hunkHScroll = 0
-	m.clampStreamScroll()
+	m.clampCursor()
+	m.followCursor()
 }
 
-// jumpHunk scrolls to the next or previous hunk header anywhere in the diff —
-// with one continuous stream, hunk hops are no longer confined to a file.
+// jumpHunk moves the cursor to the next or previous hunk header anywhere in the
+// diff — with one continuous stream, hunk hops are not confined to a file.
 func (m *Model) jumpHunk(delta int) {
 	var target int
 	if delta > 0 {
-		target = m.stream.nextHunkStart(m.streamScroll)
+		target = m.stream.nextHunkStart(m.cursorRow)
 	} else {
-		target = m.stream.prevHunkStart(m.streamScroll)
+		target = m.stream.prevHunkStart(m.cursorRow)
 	}
 	if target < 0 {
 		return
 	}
-	m.streamScroll = target
-	m.clampStreamScroll()
-	m.syncFileCursorToScroll()
+	m.cursorRow = target
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
 }
 
 // currentFile is the file the cursor is on, if any.
@@ -514,14 +564,13 @@ func (m Model) openCurrentFile() tea.Cmd {
 	return m.OpenFile(m.resolveFilePath(f), diff.FirstChangedLine(f))
 }
 
-// openAtCursor opens the file for the row at the top of the viewport, at the
-// line that row shows. With one continuous stream, "the file you are looking
-// at" is a property of the scroll position rather than a separate selection.
+// openAtCursor opens the file for the row the cursor is on, at the line that
+// row shows.
 func (m Model) openAtCursor() tea.Cmd {
 	if len(m.stream.rows) == 0 || m.OpenFile == nil {
 		return nil
 	}
-	r := m.stream.rows[min(max(m.streamScroll, 0), len(m.stream.rows)-1)]
+	r := m.stream.rows[min(max(m.cursorRow, 0), len(m.stream.rows)-1)]
 	if r.file < 0 || r.file >= len(m.filtered) {
 		return nil
 	}
@@ -590,15 +639,31 @@ var (
 	// The stream's file divider is a structural header, so it carries the
 	// accent hue (see the design system in CLAUDE.md) — or the selection hue
 	// when it is the file the cursor is in.
-	styleFileRule         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent))
-	styleFileRuleBase     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
-	styleFileRuleCurrent  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
-	styleFileRuleCurBase  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
-	stylePathBase         = lipgloss.NewStyle().Bold(true)
-	styleAdded            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success))
-	styleDeleted          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
-	styleContext          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	styleLineNo           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleFileRule        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent))
+	styleFileRuleBase    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	styleFileRuleCurrent = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	styleFileRuleCurBase = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	stylePathBase        = lipgloss.NewStyle().Bold(true)
+	styleAdded           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success))
+	styleDeleted         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
+	styleContext         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleLineNo          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	// Cursorline: the row the cursor is on takes a subtle background across the
+	// full pane width, vim-style. Every style used on that row has to carry the
+	// background itself — an enclosing style can't provide it, because the
+	// inner styles each end with a reset that would clear it mid-row.
+	//
+	// charm.Cursorline is an adaptive colour a hair off the terminal
+	// background. BgPanel (ANSI 0) was tried first and reads far too strong:
+	// it is sized for chip fills, where contrast is the point.
+	cursorlineBg          = charm.Cursorline
+	styleCursorLineNo     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Background(cursorlineBg)
+	styleCursorFill       = lipgloss.NewStyle().Background(cursorlineBg)
+	styleAddedCursor      = styleAdded.Background(cursorlineBg)
+	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
+	styleContextCursor    = styleContext.Background(cursorlineBg)
+	styleHunkHeaderCursor = styleHunkHeader.Background(cursorlineBg)
+	styleSelectedCursor   = styleSelected.Background(cursorlineBg)
 	styleStatus           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Padding(0, 1)
 	styleStatusErr        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Padding(0, 1)
 	styleHunkHeader       = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)

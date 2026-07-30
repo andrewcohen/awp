@@ -13,7 +13,29 @@ import (
 // renderStreamRow styles one row of the diff stream. Called only for rows
 // currently on screen — see the note in stream.go on why geometry and
 // rendering are separate.
-func (m Model) renderStreamRow(r rowRef, width int) string {
+// renderStreamRowAt renders the stream row at index i, including the selection
+// prefix slot. Every row reserves the prefix columns whether or not it is the
+// cursor, so content stays aligned down the pane.
+func (m Model) renderStreamRowAt(i, width int) string {
+	cursor := i == m.cursorRow
+	prefix := selectionPrefixBlank
+	if cursor {
+		prefix = styleSelectedCursor.Render(selectionPrefixBar)
+	}
+	body := m.renderStreamRow(m.stream.rows[i], width-lipgloss.Width(selectionPrefixBlank), cursor)
+	row := prefix + body
+	if !cursor {
+		return row
+	}
+	// Extend the cursorline to the full pane width so it reads as a band
+	// rather than as highlighting only the text.
+	if pad := width - lipgloss.Width(row); pad > 0 {
+		row += styleCursorFill.Render(strings.Repeat(" ", pad))
+	}
+	return row
+}
+
+func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 	if width <= 0 {
 		return ""
 	}
@@ -21,6 +43,8 @@ func (m Model) renderStreamRow(r rowRef, width int) string {
 	case rowSpacer:
 		return ""
 	case rowFileHeader:
+		// The divider is already a full-width band, so a cursorline behind it
+		// would add nothing; the bar marks it.
 		return m.renderStreamFileHeader(r, width)
 	case rowHunkHeader:
 		h, _, ok := m.stream.hunkAt(m.filtered, r)
@@ -28,9 +52,13 @@ func (m Model) renderStreamRow(r rowRef, width int) string {
 			return ""
 		}
 		header := fmt.Sprintf(" @@ -%d,%d +%d,%d @@", h.OldStart, h.OldCount, h.NewStart, h.NewCount)
-		return styleHunkHeader.Width(width).Render(header)
+		style := styleHunkHeader
+		if cursor {
+			style = styleHunkHeaderCursor
+		}
+		return style.Width(width).Render(header)
 	case rowLine:
-		return m.renderStreamLine(r, width)
+		return m.renderStreamLine(r, width, cursor)
 	}
 	return ""
 }
@@ -79,7 +107,7 @@ func fileRuleStyles(current bool) (rule, base lipgloss.Style) {
 // first row, so continuations sit under the code and the gutter column stays
 // readable. The horizontal pan applies here, to the visible row, rather than
 // during layout.
-func (m Model) renderStreamLine(r rowRef, width int) string {
+func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	h, meta, ok := m.stream.hunkAt(m.filtered, r)
 	if !ok || r.line < 0 || r.line >= len(h.Lines) {
 		return ""
@@ -94,32 +122,47 @@ func (m Model) renderStreamLine(r rowRef, width int) string {
 		text = ansi.TruncateLeft(text, m.hunkHScroll, "")
 	}
 
+	added, deleted, context := styleAdded, styleDeleted, styleContext
+	if cursor {
+		added, deleted, context = styleAddedCursor, styleDeletedCursor, styleContextCursor
+	}
 	var content string
 	switch l.Type {
 	case '+':
-		content = styleAdded.Render(text)
+		content = added.Render(text)
 	case '-':
-		content = styleDeleted.Render(text)
+		content = deleted.Render(text)
 	default:
-		content = styleContext.Render(text)
+		content = context.Render(text)
 	}
 
 	// Continuation rows carry no gutter, just its width as padding.
 	if r.seg > 0 {
-		return truncateStyled(strings.Repeat(" ", meta.prefixWidth)+content, width)
+		pad := strings.Repeat(" ", meta.prefixWidth)
+		if cursor {
+			pad = styleCursorFill.Render(pad)
+		}
+		return truncateStyled(pad+content, width)
 	}
 	numbers := fmt.Sprintf("%*s %*s ", meta.oldWidth, lineNoText(r.oldNo), meta.newWidth, lineNoText(r.newNo))
+	numberStyle := styleLineNo
+	if cursor {
+		// The bar marks the row; tinting the numbers too makes the cursor
+		// readable when the bar is at the edge of vision. No background fill,
+		// per the design system.
+		numberStyle = styleCursorLineNo
+	}
 	gutter := string(l.Type)
-	gutterStyle := styleContext
+	gutterStyle := context
 	switch l.Type {
 	case '+':
-		gutterStyle = styleAdded
+		gutterStyle = added
 	case '-':
-		gutterStyle = styleDeleted
+		gutterStyle = deleted
 	default:
 		gutter = "│"
 	}
-	prefix := styleLineNo.Render(numbers) + gutterStyle.Render(gutter+" ")
+	prefix := numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
 	return truncateStyled(prefix+content, width)
 }
 
@@ -140,7 +183,7 @@ func (m Model) renderStreamPanel(width, height int) string {
 	rows := make([]string, 0, height)
 	end := min(len(m.stream.rows), m.streamScroll+height)
 	for i := max(0, m.streamScroll); i < end; i++ {
-		rows = append(rows, m.renderStreamRow(m.stream.rows[i], contentWidth))
+		rows = append(rows, m.renderStreamRowAt(i, contentWidth))
 	}
 	for len(rows) < height {
 		rows = append(rows, "")

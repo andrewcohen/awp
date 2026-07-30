@@ -1,5 +1,7 @@
 package charm
 
+import "github.com/charmbracelet/lipgloss"
+
 // Semantic color palette for every TUI surface in the app.
 //
 // All values are ANSI 16 slot indices ("0"-"15") that lipgloss.Color
@@ -26,3 +28,17 @@ const (
 	// underlined hyperlinks without disturbing PR numbers.
 	Link = Info
 )
+
+// Cursorline is the background behind the row a line cursor is on.
+//
+// This is the one deliberate exception to the ANSI-16-only rule above, and
+// the reason is structural rather than aesthetic: a cursorline has to sit a
+// *hair* off the terminal background, and the 16-slot palette has no such
+// slot. BgPanel ("0", surface) is the closest and reads as far too strong —
+// it is sized for chip and badge fills, where the contrast is the point.
+//
+// Adaptive so it works against a light or dark terminal: lipgloss picks the
+// variant from the detected background. Keep this the only non-ANSI-16 value
+// in the palette; if a second one shows up, that is a signal the 16-slot
+// constraint needs revisiting wholesale rather than eroding case by case.
+var Cursorline = lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
