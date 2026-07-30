@@ -97,7 +97,11 @@ func openReviewForCwd(runner Runner, svc workspace.Service) (review.Store, revie
 	if runner == nil {
 		runner = NewExecRunner()
 	}
-	repoRoot, err := jj.New(runner).RepoRoot()
+	// SourceRepoRoot, not RepoRoot: inside a jj workspace `jj root` returns the
+	// *workspace* root, while the deck keys reviews by the source repo. Using the
+	// workspace path here filed an agent's findings into a directory the deck
+	// never reads — both sides reporting success while nothing showed up.
+	repoRoot, err := jj.New(runner).SourceRepoRoot()
 	if err != nil {
 		return review.Store{}, review.Review{}, fmt.Errorf("not a jj repository: %w", err)
 	}
