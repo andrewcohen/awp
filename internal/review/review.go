@@ -98,6 +98,16 @@ type Anchor struct {
 	ContextAfter  []string `json:"context_after,omitempty"`
 }
 
+// Anchor's text as it should be shown to a reader. A blank line has no text to
+// quote, so it is labelled rather than rendered as nothing — otherwise a comment
+// on a blank line looks like a comment on whatever happens to be above it.
+func (a Anchor) Anchor() string {
+	if strings.TrimSpace(a.Text) == "" {
+		return "(blank line)"
+	}
+	return a.Text
+}
+
 // PublishRecord is what GitHub gave back. Retained after the body is dropped so
 // a re-publish is idempotent rather than duplicating the comment.
 type PublishRecord struct {
