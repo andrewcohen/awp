@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/review"
@@ -22,86 +21,44 @@ import (
 // open.
 
 // commentPromptFor renders the prompt sent to a workspace's agent for one
-// comment.
-func commentPromptFor(c review.Comment) string {
-	var b strings.Builder
-	b.WriteString("A reviewer left a comment on your change.\n\n")
-	if c.ID != "" {
-		// The id is what makes a reply possible. Without it the agent can only
-		// file a fresh comment beside this one, which is two records rather than
-		// a conversation.
-		fmt.Fprintf(&b, "Comment id: %s\n", c.ID)
-	}
-	fmt.Fprintf(&b, "File: %s\n", c.Anchor.Path)
-	if c.Anchor.LineHint > 0 {
-		side := "new"
-		if c.Anchor.Side == review.SideOld {
-			side = "old (removed line)"
-		}
-		fmt.Fprintf(&b, "Line: %d (%s side)\n", c.Anchor.LineHint, side)
-	}
-	if strings.TrimSpace(c.Anchor.Text) != "" {
-		fmt.Fprintf(&b, "The line reads: %s\n", strings.TrimSpace(c.Anchor.Text))
-	}
-	b.WriteString("\nSurrounding context:\n")
-	b.WriteString(renderAnchorContext(c.Anchor))
-	b.WriteString("\nThe comment:\n")
-	for _, l := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
-		b.WriteString("  " + l + "\n")
-	}
-
-	// How to reply is part of the prompt, not left to the agent's judgement —
-	// otherwise the response scrolls past in the agent pane and the reviewer
-	// never sees it.
-	b.WriteString(`
-Before changing anything: read the code around that line, decide whether you
-agree, and reply with (a) your understanding of the problem and (b) the fix you
-propose — or why you think no change is warranted. Wait for approval.
-
-Reply on the thread so the reviewer reads it in the diff rather than scrolling
-back through this pane:
-`)
-	if c.ID != "" {
-		fmt.Fprintf(&b, "\n    awp review reply --to %s --body \"<your reply>\"\n", c.ID)
-		b.WriteString("\nThat threads under the comment and flags it for the reviewer again. Reply\nfirst, then make the change once approved.\n")
-	} else {
-		b.WriteString("\n    awp review add --file " + c.Anchor.Path)
-		if c.Anchor.LineHint > 0 {
-			fmt.Fprintf(&b, " --line %d", c.Anchor.LineHint)
-		}
-		b.WriteString(" --author agent --body \"<your reply>\"\n")
-	}
-	return b.String()
-}
-
-// renderAnchorContext renders the anchored line with its neighbours, numbered,
-// and marks the anchored line with ">".
+// comment. revision names the change under review, empty when unresolved.
 //
-// Numbering rather than indentation alone, because indentation cannot say *which*
-// line is meant when the anchored line is blank — and a comment on a blank line
-// ("add a test here") is perfectly ordinary. The marker is drawn whether or not
-// the line has text, so the position is always explicit.
-func renderAnchorContext(a review.Anchor) string {
-	first := a.LineHint - len(a.ContextBefore)
-	if first < 1 {
-		first = 1
-	}
-	// Width the largest number needs, so the gutter lines up.
-	last := first + len(a.ContextBefore) + len(a.ContextAfter)
-	width := len(strconv.Itoa(last))
-
+// Deliberately terse, and deliberately a *location* rather than a transcript.
+// Two earlier versions were worse: one pasted the surrounding code, which is
+// redundant (the agent can read the file, and is sitting in the workspace that
+// holds it) and occasionally enormous — a comment beside a long README table row
+// turned a one-line remark into a multi-kilobyte message. The other wrapped it in
+// explanatory prose the agent does not need. What is left is the address, the
+// remark, and the two rules that matter: read it yourself, reply before changing.
+func commentPromptFor(c review.Comment, revision string) string {
 	var b strings.Builder
-	n := first
-	write := func(marker, text string) {
-		fmt.Fprintf(&b, "  %*d %s %s\n", width, n, marker, text)
-		n++
+
+	where := c.Anchor.Path
+	if c.Anchor.LineHint > 0 {
+		where += fmt.Sprintf(":%d", c.Anchor.LineHint)
 	}
-	for _, l := range a.ContextBefore {
-		write("|", l)
+	if c.Anchor.Side == review.SideOld {
+		where += " (removed line, old side)"
 	}
-	write(">", a.Anchor())
-	for _, l := range a.ContextAfter {
-		write("|", l)
+	fmt.Fprintf(&b, "Review comment on %s\n", where)
+	if strings.TrimSpace(revision) != "" {
+		fmt.Fprintf(&b, "at %s\n", strings.TrimSpace(revision))
+	}
+	if c.ID != "" {
+		fmt.Fprintf(&b, "id %s\n", c.ID)
+	}
+
+	b.WriteString("\n")
+	for _, l := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
+		b.WriteString(l + "\n")
+	}
+
+	b.WriteString("\nRead the file yourself; this is a pointer, not a paste.\n")
+	if c.ID != "" {
+		fmt.Fprintf(&b, "Reply before changing anything:\n  awp review reply --to %s --body \"...\"\n", c.ID)
+		b.WriteString("Then wait for approval.\n")
+	} else {
+		b.WriteString("Reply before changing anything, then wait for approval.\n")
 	}
 	return b.String()
 }

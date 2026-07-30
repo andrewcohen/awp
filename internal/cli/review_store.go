@@ -289,11 +289,24 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 // sendCommentToAgentFor wires the diff modal's send-to-agent exit. The comment
 // is already saved by the time this runs, so a send failure leaves a durable
 // record rather than losing what the reviewer wrote.
+// runnerOrExec defaults a nil runner to the real one.
+func runnerOrExec(r Runner) Runner {
+	if r == nil {
+		return NewExecRunner()
+	}
+	return r
+}
+
 func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentSender {
 	return func(item deckui.Item, c review.Comment) error {
 		// noopReporter, not nil: sendPromptToAgent calls reporter.Step on every
 		// path, so a nil interface panics rather than sending anything.
-		if err := sendPromptToAgent(tmuxClient, svc, item, commentPromptFor(c), noopReporter{}); err != nil {
+		// Name the revision so the agent knows which version of the file the
+		// comment was written against. Best-effort: an unresolvable change id
+		// falls back to "your working copy", which is correct for a
+		// workspace-scoped review anyway.
+		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(item.Path)
+		if err := sendPromptToAgent(tmuxClient, svc, item, commentPromptFor(c, revision), noopReporter{}); err != nil {
 			return err
 		}
 		store := review.Store{}
