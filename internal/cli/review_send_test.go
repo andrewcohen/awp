@@ -10,6 +10,9 @@ import (
 
 func sampleComment() review.Comment {
 	return review.Comment{
+		// A stored comment always carries an id; the prompt needs it to offer a
+		// reply command.
+		ID:     "1700000000-human",
 		Author: review.AuthorHuman,
 		Body:   "this drops the error",
 		State:  review.Open,
@@ -24,62 +27,9 @@ func sampleComment() review.Comment {
 	}
 }
 
-func TestCommentPromptCarriesLocationAndBody(t *testing.T) {
-	got := commentPromptFor(sampleComment())
-	for _, want := range []string{
-		"internal/cli/deck.go",
-		"Line: 42",
-		"new side",
-		"this drops the error",
-		"_ = doThing()",
-		"func run() {",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, got)
-		}
-	}
-}
-
 // The prompt must be approval-gated: a review comment is a judgement call, and
 // an agent that silently rewrites code in response removes the reviewer from the
 // loop the comment was meant to open.
-func TestCommentPromptIsApprovalGated(t *testing.T) {
-	got := commentPromptFor(sampleComment())
-	for _, want := range []string{"Before changing anything", "Wait for approval"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("prompt is not approval-gated, missing %q:\n%s", want, got)
-		}
-	}
-	// It must also say how to reply, or the response scrolls past in the agent
-	// pane and the reviewer never sees it.
-	if !strings.Contains(got, "awp review add") {
-		t.Fatalf("prompt does not tell the agent how to reply:\n%s", got)
-	}
-	if !strings.Contains(got, "--author agent") {
-		t.Fatalf("reply instruction should attribute the reply to the agent:\n%s", got)
-	}
-}
-
-func TestCommentPromptMarksRemovedLineSide(t *testing.T) {
-	c := sampleComment()
-	c.Anchor.Side = review.SideOld
-	got := commentPromptFor(c)
-	if !strings.Contains(got, "old (removed line)") {
-		t.Fatalf("expected the old side to be spelled out:\n%s", got)
-	}
-}
-
-func TestCommentPromptSurvivesAThinAnchor(t *testing.T) {
-	c := review.Comment{Body: "why?", Anchor: review.Anchor{Path: "a.go"}}
-	got := commentPromptFor(c)
-	if !strings.Contains(got, "a.go") || !strings.Contains(got, "why?") {
-		t.Fatalf("expected path and body with no line or context:\n%s", got)
-	}
-	if strings.Contains(got, "Line: 0") {
-		t.Fatalf("a missing line should be omitted, not printed as zero:\n%s", got)
-	}
-}
-
 // Sending moves the comment out of the open state so the deck's count stops
 // counting it — but not to addressed, which is inferred from the code changing
 // rather than taken on the agent's word.
@@ -136,69 +86,76 @@ func TestSendPromptToAgentRejectsEmptyPrompt(t *testing.T) {
 // A comment on a blank line is ordinary ("add a test here"), and the prompt has
 // to say which line is meant. Indentation alone cannot: with no text to show, the
 // anchored line would render as nothing and read as a comment on the line above.
-func TestPromptMarksABlankAnchoredLine(t *testing.T) {
-	c := review.Comment{
-		Body: "add a test here",
-		Anchor: review.Anchor{
-			Path: "a_test.go", Side: review.SideNew, LineHint: 10,
-			Text:          "",
-			ContextBefore: []string{"import (", ")"},
-			ContextAfter:  []string{"func TestX(t *testing.T) {"},
-		},
-	}
-	got := commentPromptFor(c)
-	if !strings.Contains(got, "10 > (blank line)") {
-		t.Fatalf("expected the blank anchored line marked at its number:\n%s", got)
-	}
-	// Its neighbours must be numbered around it, not just indented.
-	for _, want := range []string{"8 | import (", "9 | )", "11 | func TestX"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected numbered context %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestPromptNumbersAlignWithTheLineHint(t *testing.T) {
-	c := review.Comment{
-		Body: "x",
-		Anchor: review.Anchor{
-			Path: "a.go", LineHint: 100,
-			Text:          "target",
-			ContextBefore: []string{"before"},
-			ContextAfter:  []string{"after"},
-		},
-	}
-	got := commentPromptFor(c)
-	for _, want := range []string{" 99 | before", "100 > target", "101 | after"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected %q with aligned numbering:\n%s", want, got)
-		}
-	}
-}
-
 // An anchor with no surrounding context still marks its line.
-func TestPromptWithNoContextStillMarksTheLine(t *testing.T) {
-	c := review.Comment{
-		Body:   "x",
-		Anchor: review.Anchor{Path: "a.go", LineHint: 3, Text: "only"},
+// Numbering must not run below line 1 when the anchor sits near the top.
+// A comment beside a very long line must not paste that whole line into the
+// prompt — a one-line remark should not become a multi-kilobyte message.
+// Truncation is display-only: the stored anchor keeps its full text, because that
+// is what relocation matches on.
+// The numbered block already marks the anchored line, so the separate
+// "The line reads:" line was duplicated noise.
+
+// The envelope is a pointer, not a transcript: address, remark, and the two rules
+// that matter. Everything else was noise the agent does not need.
+func TestCommentPromptIsAPointerNotAPaste(t *testing.T) {
+	c := sampleComment()
+	got := commentPromptFor(c, "abcdef")
+
+	for _, want := range []string{
+		"internal/cli/deck.go:42",
+		"at abcdef",
+		"id ",
+		"this drops the error",
+		"Read the file yourself",
+		"awp review reply --to",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, got)
+		}
 	}
-	got := commentPromptFor(c)
-	if !strings.Contains(got, "3 > only") {
-		t.Fatalf("expected the anchored line marked:\n%s", got)
+	// The surrounding code must not be pasted — that is what made a comment beside
+	// a long line produce a multi-kilobyte message.
+	if strings.Contains(got, "func run() {") {
+		t.Fatalf("expected no pasted context:\n%s", got)
+	}
+	if len(got) > 600 {
+		t.Fatalf("expected a compact envelope, got %d bytes:\n%s", len(got), got)
 	}
 }
 
-// Numbering must not run below line 1 when the anchor sits near the top.
-func TestPromptNumberingClampsAtTheFileStart(t *testing.T) {
-	c := review.Comment{
-		Body: "x",
-		Anchor: review.Anchor{
-			Path: "a.go", LineHint: 2, Text: "second",
-			ContextBefore: []string{"first", "phantom", "phantom"},
-		},
+// A long anchored line cannot blow up the envelope either.
+func TestCommentPromptStaysSmallForALongLine(t *testing.T) {
+	c := sampleComment()
+	c.Anchor.Text = strings.Repeat("x", 5000)
+	if got := commentPromptFor(c, ""); len(got) > 600 {
+		t.Fatalf("expected the envelope bounded, got %d bytes", len(got))
 	}
-	got := commentPromptFor(c)
-	if strings.Contains(got, " 0 |") || strings.Contains(got, "-1 |") {
-		t.Fatalf("expected numbering clamped at 1:\n%s", got)
+}
+
+// Replying must be gated on approval, and a removed line must say so — that is
+// the difference between commenting on code and on its deletion.
+func TestCommentPromptKeepsTheApprovalGateAndSide(t *testing.T) {
+	got := commentPromptFor(sampleComment(), "")
+	if !strings.Contains(got, "Reply before changing anything") || !strings.Contains(got, "wait for approval") && !strings.Contains(got, "Then wait for approval") {
+		t.Fatalf("expected the approval gate:\n%s", got)
+	}
+	c := sampleComment()
+	c.Anchor.Side = review.SideOld
+	if got := commentPromptFor(c, ""); !strings.Contains(got, "removed line") {
+		t.Fatalf("expected the removed side spelled out:\n%s", got)
+	}
+}
+
+// With no id there is nothing to thread against, so the prompt must not print a
+// reply command that cannot work.
+func TestCommentPromptWithoutAnIDOmitsTheReplyCommand(t *testing.T) {
+	c := sampleComment()
+	c.ID = ""
+	got := commentPromptFor(c, "")
+	if strings.Contains(got, "awp review reply") {
+		t.Fatalf("expected no reply command without an id:\n%s", got)
+	}
+	if !strings.Contains(got, "Reply before changing anything") {
+		t.Fatalf("expected the gate to survive:\n%s", got)
 	}
 }
