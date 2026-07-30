@@ -462,6 +462,46 @@ func (m Model) AnchorAtCursor() (review.Anchor, bool) {
 // invalidate the anchor.
 const anchorContextLines = 3
 
+// commentRows is the plain text of every row a comment occupies, gutter included
+// and wrapped to width.
+//
+// Geometry and rendering both go through this, which is what keeps them in
+// agreement: a comment's row count depends on the width it wraps at, and if the
+// counter and the renderer disagreed the stream's row indices would stop matching
+// what is drawn — the same desync the diff's own wrap accounting avoids.
+//
+// Comments wrap rather than truncate. A review remark is prose written to be
+// read; clipping it at the pane edge hides the half that explains the point.
+func commentRows(c review.Comment, width int) []string {
+	// A reply sits one space in — the least that reads as nested. The bar matches
+	// the parent's, so the indent alone carries the nesting.
+	gutter := "  ▌ "
+	if c.ReplyTo != "" {
+		gutter = "   ▌ "
+	}
+	label := c.Author
+	if label == review.AuthorHuman {
+		label = "you"
+	}
+	title := gutter + label
+	if c.State != review.Open {
+		title += " · " + string(c.State)
+	}
+
+	avail := width - len([]rune(gutter))
+	out := []string{truncate(title, max(1, width))}
+	for _, line := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
+		if avail < 1 {
+			out = append(out, truncate(gutter+line, max(1, width)))
+			continue
+		}
+		for seg := 0; seg < wrappedSegments(line, avail); seg++ {
+			out = append(out, gutter+segmentText(line, seg, avail))
+		}
+	}
+	return out
+}
+
 // commentStyles picks the styling for a comment row.
 //
 // Keyed off the author, not off whether the comment is a reply: your own words
@@ -482,40 +522,24 @@ func commentStyles(mine, cursor bool) (head, body, fill lipgloss.Style) {
 	}
 }
 
-// commentLines renders a comment into display rows, painted across the full
-// width. Each style carries the background itself — an enclosing style cannot
-// supply it, since every inner style ends with a reset that would clear it
-// mid-row (the same constraint the cursorline has).
-//
-// On the cursor's row the cursorline wins: knowing where the cursor is matters
-// more than knowing this row is a comment, and the ▌ marker still says the latter.
+// commentLines renders a comment into styled display rows, painted across the
+// full width so it reads as a block set into the diff. Each style carries the
+// background itself — an enclosing style cannot supply it, since every inner
+// style ends with a reset that would clear it mid-row.
 func commentLines(c review.Comment, width int, cursor bool) []string {
 	head, body, fill := commentStyles(c.Author == review.AuthorHuman, cursor)
-	label := c.Author
-	if label == review.AuthorHuman {
-		label = "you"
-	}
-	// A reply sits one space in — the least that reads as nested. The bar is the
-	// same as the parent's, so the indent alone carries the nesting.
-	gutter := "  ▌ "
-	if c.ReplyTo != "" {
-		gutter = "   ▌ "
-	}
-	title := gutter + label
-	if c.State != review.Open {
-		title += " · " + string(c.State)
-	}
-	pad := func(styled, plain string) string {
-		if n := width - lipgloss.Width(plain); n > 0 {
-			return styled + fill.Render(strings.Repeat(" ", n))
+	rows := commentRows(c, width)
+	out := make([]string, 0, len(rows))
+	for i, text := range rows {
+		style := body
+		if i == 0 {
+			style = head
 		}
-		return styled
-	}
-	title = truncate(title, max(1, width))
-	out := []string{pad(head.Render(title), title)}
-	for _, line := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
-		text := truncate(gutter+line, max(1, width))
-		out = append(out, pad(body.Render(text), text))
+		rendered := style.Render(text)
+		if n := width - lipgloss.Width(text); n > 0 {
+			rendered += fill.Render(strings.Repeat(" ", n))
+		}
+		out = append(out, rendered)
 	}
 	return out
 }
