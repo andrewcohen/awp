@@ -343,3 +343,54 @@ func TestFirstLineSkipsBlanks(t *testing.T) {
 		t.Fatalf("expected empty for a blank body, got %q", got)
 	}
 }
+
+// A robot's words are marked wherever they appear, so an agent's finding is never
+// mistaken for something the reviewer wrote.
+func TestRobotCommentsAreMarked(t *testing.T) {
+	agent := review.Comment{ID: "a1", Author: "agent", Body: "nil deref here", State: review.Open}
+	rows := commentRows(agent, 60)
+	if len(rows) < 2 || !strings.Contains(rows[1], review.RobotMarker) {
+		t.Fatalf("expected the robot marker on an agent's body, got %q", rows)
+	}
+	mine := review.Comment{ID: "h1", Author: review.AuthorHuman, Body: "nil deref here", State: review.Open}
+	for _, r := range commentRows(mine, 60) {
+		if strings.Contains(r, review.RobotMarker) {
+			t.Fatalf("expected no marker on your own comment, got %q", r)
+		}
+	}
+}
+
+// A mirrored GitHub thread's synthetic author is not AuthorHuman, so ByRobot
+// alone would stamp other people's comments as an agent's. Those are real
+// people's words on GitHub and must stay unmarked.
+func TestMirroredGitHubThreadsAreNotMarkedAsRobots(t *testing.T) {
+	c := threadAsComment(review.Thread{
+		ID: "T1", Path: "a.go", Line: 3,
+		Comments: []review.ThreadComment{{Author: "someone", Body: "why here?"}},
+	})
+	if robotAuthored(c) {
+		t.Fatal("a mirrored GitHub thread must not count as robot-authored")
+	}
+	for _, r := range commentRows(c, 60) {
+		if strings.Contains(r, review.RobotMarker) {
+			t.Fatalf("expected no marker on a mirrored thread, got %q", r)
+		}
+	}
+}
+
+// The marker also shows in the index, so scanning the list tells you which
+// conversations an agent started.
+func TestIndexSummaryCarriesTheRobotMarker(t *testing.T) {
+	got := entrySummary(review.Comment{ID: "a1", Author: "agent", Body: "nil deref"})
+	if !strings.HasPrefix(got, review.RobotMarker) {
+		t.Fatalf("expected the marker in the index summary, got %q", got)
+	}
+	mine := entrySummary(review.Comment{ID: "h1", Author: review.AuthorHuman, Body: "nil deref"})
+	if strings.Contains(mine, review.RobotMarker) {
+		t.Fatalf("expected no marker for your own comment, got %q", mine)
+	}
+	// An empty body must not become a bare marker with nothing after it.
+	if got := entrySummary(review.Comment{ID: "a2", Author: "agent", Body: "  \n "}); got != "" {
+		t.Fatalf("expected an empty summary to stay empty, got %q", got)
+	}
+}

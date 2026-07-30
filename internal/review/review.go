@@ -197,6 +197,34 @@ const AuthorHuman = "human"
 // agent's words are never mistaken for a reviewer's.
 func (c Comment) ByRobot() bool { return c.Author != AuthorHuman }
 
+// RobotMarker prefixes anything a robot wrote. On GitHub especially, an agent's
+// comment is otherwise indistinguishable from a person's — it posts under the
+// authenticated user's account.
+const RobotMarker = "🤖"
+
+// PublishBody is the body as it should appear on GitHub: the kind, then the
+// robot marker if a robot wrote it, then the text.
+//
+// Composed here rather than at each call site, and applied at publish time
+// rather than baked into the stored body, because the stored body is what the
+// author typed. Baking the prefixes in would double them on a re-publish, and
+// would put them in front of the reviewer while they are still editing.
+//
+// The kind is spelled out rather than left to colour: GitHub has no notion of
+// our palette, and "(suggestion) - " is the whole signal a reader gets there.
+func (c Comment) PublishBody() string {
+	body := strings.TrimSpace(c.Body)
+	if c.ByRobot() {
+		body = RobotMarker + " " + body
+	}
+	// A reply joins a thread whose first comment already carries the kind;
+	// repeating it on every message would be noise.
+	if c.ReplyTo != "" {
+		return body
+	}
+	return "(" + string(c.Kind.OrDefault()) + ") - " + body
+}
+
 // Review is the container: what is under review, and the per-review state the
 // deck owns.
 type Review struct {

@@ -3,6 +3,7 @@ package review
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -416,5 +417,54 @@ func TestKindPersistsAndRobotAuthorshipIsDetectable(t *testing.T) {
 	}
 	if (Comment{Author: AuthorHuman}).ByRobot() {
 		t.Fatal("expected your own comment not to count as a robot's")
+	}
+}
+
+// The kind and the robot marker are composed at publish time, never stored. The
+// stored body is what the author typed; baking prefixes in would double them on a
+// re-publish and would show them to the reviewer mid-edit.
+func TestPublishBodyPrefixesKindAndRobot(t *testing.T) {
+	human := Comment{Author: AuthorHuman, Body: "this drops the error", Kind: KindSuggestion}
+	if got := human.PublishBody(); got != "(suggestion) - this drops the error" {
+		t.Fatalf("got %q", got)
+	}
+	// A robot's comment is marked. On GitHub it posts under the authenticated
+	// user's account, so nothing else distinguishes it from a person's.
+	robot := Comment{Author: "agent", Body: "nil deref here", Kind: KindSuggestion}
+	want := "(suggestion) - " + RobotMarker + " nil deref here"
+	if got := robot.PublishBody(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	// An unset kind still gets a label, since GitHub has no colour to fall back on.
+	plain := Comment{Author: AuthorHuman, Body: "reads fine"}
+	if got := plain.PublishBody(); got != "(comment) - reads fine" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// A reply joins a thread whose first comment already carries the kind, so
+// repeating it on every message is noise. The robot marker still applies —
+// authorship changes per message, the kind does not.
+func TestPublishBodyOmitsKindOnReplies(t *testing.T) {
+	reply := Comment{Author: "agent", Body: "fixed", Kind: KindSuggestion, ReplyTo: "parent-1"}
+	if got := reply.PublishBody(); got != RobotMarker+" fixed" {
+		t.Fatalf("got %q", got)
+	}
+	humanReply := Comment{Author: AuthorHuman, Body: "thanks", ReplyTo: "parent-1"}
+	if got := humanReply.PublishBody(); got != "thanks" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// Publishing twice must produce the same body. It would not if the prefixes were
+// written back into the stored record.
+func TestPublishBodyIsIdempotent(t *testing.T) {
+	c := Comment{Author: "agent", Body: "leaks", Kind: KindQuestion}
+	first := c.PublishBody()
+	if second := c.PublishBody(); second != first {
+		t.Fatalf("composing twice differed: %q then %q", first, second)
+	}
+	if strings.Contains(c.Body, RobotMarker) || strings.Contains(c.Body, "(") {
+		t.Fatalf("expected the stored body untouched, got %q", c.Body)
 	}
 }
