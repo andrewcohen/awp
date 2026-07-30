@@ -129,8 +129,11 @@ type Model struct {
 	// LastSavedComment returns the record the store just wrote, including the id
 	// it assigned. The id is what lets the agent reply on the thread.
 	LastSavedComment func() (review.Comment, bool)
-	editing          bool
-	editor           commentEditor
+	// ReplyComment files a reply against a parent comment, which also reopens
+	// that parent — an answered remark needs the reviewer again.
+	ReplyComment func(parentID string, c review.Comment) error
+	editing      bool
+	editor       commentEditor
 	// ReviewedFiles maps a path to the content hash it had when marked
 	// reviewed, and MarkReviewed persists a change to that. Hash rather than a
 	// bare flag so a later edit resurfaces the file: marking something reviewed
@@ -415,6 +418,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncFileCursorToCursor()
 		case "c":
 			return m.startComment()
+		case "i":
+			return m.startEdit()
 		case "D":
 			return m.deleteCommentAtCursor()
 		case "R":
@@ -782,10 +787,18 @@ var (
 	// the diff rather than as loose text between code lines. BgPanel is the
 	// palette's chip background — a comment box is exactly that — which keeps
 	// charm.Cursorline the only non-ANSI-16 value in the palette.
-	commentBg             = lipgloss.Color(charm.BgPanel)
-	styleCommentHeadFill  = styleCommentHead.Background(commentBg)
-	styleCommentBodyFill  = styleCommentBody.Background(commentBg)
-	styleCommentFill      = lipgloss.NewStyle().Background(commentBg)
+	commentBg            = lipgloss.Color(charm.BgPanel)
+	styleCommentHeadFill = styleCommentHead.Background(commentBg)
+	styleCommentBodyFill = styleCommentBody.Background(commentBg)
+	styleCommentFill     = lipgloss.NewStyle().Background(commentBg)
+	// A reply from someone else — usually the agent — takes a different hue, so
+	// who wrote it is visible without reading the label. Accent rather than a new
+	// token: a full-width teal divider is not confusable with an indented comment
+	// block, so the palette stays as it is.
+	styleReplyHead        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	styleReplyBody        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent))
+	styleReplyHeadFill    = styleReplyHead.Background(commentBg)
+	styleReplyBodyFill    = styleReplyBody.Background(commentBg)
 	styleOrphanHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)

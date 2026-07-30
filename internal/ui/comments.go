@@ -471,18 +471,24 @@ const anchorContextLines = 3
 // more than knowing this row is a comment, and the ▌ marker still says the latter.
 func commentLines(c review.Comment, width int, cursor bool) []string {
 	head, body, fill := styleCommentHeadFill, styleCommentBodyFill, styleCommentFill
+	if c.ReplyTo != "" {
+		head, body = styleReplyHeadFill, styleReplyBodyFill
+	}
 	if cursor {
 		head, body, fill = styleCommentHead.Background(cursorlineBg), styleCommentBody.Background(cursorlineBg), styleCursorFill
+		if c.ReplyTo != "" {
+			head, body = styleReplyHead.Background(cursorlineBg), styleReplyBody.Background(cursorlineBg)
+		}
 	}
 	label := c.Author
 	if label == review.AuthorHuman {
 		label = "you"
 	}
-	// Replies sit one level in, so a conversation reads as a block rather than as
-	// two unrelated comments that happen to be adjacent.
+	// Replies sit one level in, same bar as the parent — the indent alone carries
+	// the nesting, so no extra marker is needed.
 	gutter := "  ▌ "
 	if c.ReplyTo != "" {
-		gutter = "     ↳ "
+		gutter = "    ▌ "
 	}
 	title := gutter + label
 	if c.State != review.Open {

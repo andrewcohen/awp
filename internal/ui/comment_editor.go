@@ -27,10 +27,19 @@ type commentEditor struct {
 	// one. Carried here so saving updates that record instead of appending a
 	// near-duplicate.
 	editing string
+	// replyTo is the id of the comment being replied to, empty otherwise.
+	replyTo string
 }
 
 func newCommentEditor(a review.Anchor, width int) commentEditor {
 	return newCommentEditorFor(review.Comment{Anchor: a}, width)
+}
+
+// newReplyEditor opens an empty box that will thread under parentID.
+func newReplyEditor(parentID string, a review.Anchor, width int) commentEditor {
+	e := newCommentEditor(a, width)
+	e.replyTo = parentID
+	return e
 }
 
 // newCommentEditorFor opens the box on an existing comment, pre-filled.
@@ -95,7 +104,10 @@ func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction
 func (e commentEditor) view(width int) string {
 	hint := styleDim.Render("enter save · ctrl+s save & send to agent · alt+enter newline · esc cancel")
 	verb := " comment on "
-	if e.editing != "" {
+	switch {
+	case e.replyTo != "":
+		verb = " reply on "
+	case e.editing != "":
 		verb = " editing comment on "
 	}
 	head := styleCommentHead.Render(verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint))
@@ -125,19 +137,25 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 		m.status = "commenting unavailable: no review store"
 		return m, nil
 	}
-	// On one of your own comments, `c` revises it rather than starting a new one
-	// beside it. Same key, meaning taken from what the cursor is on.
+	// On a comment, `c` replies to it — the common thing to do with a remark is
+	// answer it. Revising your own wording is `i`.
 	if c, ok := m.localCommentAtCursor(); ok {
-		if m.UpdateComment == nil {
-			m.status = "editing unavailable here"
+		if m.ReplyComment == nil {
+			m.status = "replying unavailable here"
 			return m, nil
 		}
+		// A reply threads under the top of the conversation, not under another
+		// reply: one exchange, one thread.
+		parent := c.ID
+		if c.ReplyTo != "" {
+			parent = c.ReplyTo
+		}
 		m.editing = true
-		m.editor = newCommentEditorFor(c, m.hunkWidth)
+		m.editor = newReplyEditor(parent, c.Anchor, m.hunkWidth)
 		return m, textarea.Blink
 	}
 	if _, isThread := m.threadAtCursor(); isThread {
-		m.status = "that is a GitHub thread — reply by commenting on the line"
+		m.status = "that is a GitHub thread — resolve it with R"
 		return m, nil
 	}
 	a, ok := m.AnchorAtCursor()
@@ -147,6 +165,22 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 	}
 	m.editing = true
 	m.editor = newCommentEditor(a, m.hunkWidth)
+	return m, textarea.Blink
+}
+
+// startEdit opens your own comment for revision.
+func (m Model) startEdit() (tea.Model, tea.Cmd) {
+	c, ok := m.localCommentAtCursor()
+	if !ok {
+		m.status = "put the cursor on one of your comments to edit it"
+		return m, nil
+	}
+	if m.UpdateComment == nil {
+		m.status = "editing unavailable here"
+		return m, nil
+	}
+	m.editing = true
+	m.editor = newCommentEditorFor(c, m.hunkWidth)
 	return m, textarea.Blink
 }
 
@@ -162,6 +196,25 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case editorSave, editorSaveAndSend:
 		m.editing = false
 		c := m.editor.comment()
+		if parent := m.editor.replyTo; parent != "" {
+			if err := m.ReplyComment(parent, c); err != nil {
+				m.status = "reply: " + err.Error()
+				m.statusErr = true
+				return m, nil
+			}
+			c.ReplyTo = parent
+			// A reply reopens the thread for its author too, matching what the
+			// store does — the record and the view must not disagree.
+			for i := range m.comments {
+				if m.comments[i].ID == parent {
+					m.comments[i].State = review.Open
+				}
+			}
+			m.comments = append(m.comments, c)
+			m.rebuildStream()
+			m.status = "reply saved"
+			return m, nil
+		}
 		if c.ID != "" {
 			// Revising: update in place rather than appending a near-duplicate.
 			if err := m.UpdateComment(c); err != nil {

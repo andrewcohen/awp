@@ -571,7 +571,7 @@ func TestOpensSafelyWithNoLines(t *testing.T) {
 // ---- edit / delete ----
 
 // `c` on your own comment revises it rather than starting a second one beside it.
-func TestCOnACommentEditsItInPlace(t *testing.T) {
+func TestIOnACommentEditsItInPlace(t *testing.T) {
 	var updated []review.Comment
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
 	m.UpdateComment = func(c review.Comment) error {
@@ -588,9 +588,9 @@ func TestCOnACommentEditsItInPlace(t *testing.T) {
 			t.Fatal("never reached the comment row")
 		}
 	}
-	m = press(m, "c")
+	m = press(m, "i")
 	if !m.editing {
-		t.Fatal("expected c on a comment to open it for editing")
+		t.Fatal("expected i on a comment to open it for editing")
 	}
 	if got := m.editor.area.Value(); got != "original" {
 		t.Fatalf("expected the editor pre-filled, got %q", got)
@@ -782,21 +782,6 @@ func TestReplyRendersUnderItsParent(t *testing.T) {
 	}
 }
 
-// Replies are visually one level in, so the block reads as a conversation.
-func TestReplyIsIndented(t *testing.T) {
-	parent := commentLines(commentOn("a.go", 1, "alpha", "top"), 60, false)
-	reply := commentLines(review.Comment{
-		ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open,
-	}, 60, false)
-	p, r := stripANSI(parent[0]), stripANSI(reply[0])
-	if len(r)-len(strings.TrimLeft(r, " ")) <= len(p)-len(strings.TrimLeft(p, " ")) {
-		t.Fatalf("expected the reply indented past its parent:\n%q\n%q", p, r)
-	}
-	if !strings.Contains(r, "↳") {
-		t.Fatalf("expected a reply marker, got %q", r)
-	}
-}
-
 // An orphaned reply must still be shown rather than dropped.
 func TestOrphanedReplyIsShown(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha"))
@@ -807,5 +792,117 @@ func TestOrphanedReplyIsShown(t *testing.T) {
 	view := stripANSI(m.renderStreamPanel(80, 12))
 	if !strings.Contains(view, "dangling") {
 		t.Fatalf("expected an orphaned reply to still be shown:\n%s", view)
+	}
+}
+
+// `c` on a comment replies to it — answering a remark is the common action, and
+// revising your own wording is `i`.
+func TestCOnACommentRepliesToIt(t *testing.T) {
+	var replies []struct {
+		parent string
+		body   string
+	}
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.ReplyComment = func(parentID string, c review.Comment) error {
+		replies = append(replies, struct {
+			parent string
+			body   string
+		}{parentID, c.Body})
+		return nil
+	}
+	parent := commentOn("a.go", 1, "alpha", "this drops the error")
+	parent.State = review.Sent
+	m.SetComments([]review.Comment{parent})
+
+	for m.stream.rows[m.cursorRow].kind != rowComment {
+		before := m.cursorRow
+		m = press(m, "j")
+		if m.cursorRow == before {
+			t.Fatal("never reached the comment row")
+		}
+	}
+	m = press(m, "c")
+	if !m.editing {
+		t.Fatal("expected c on a comment to open a reply box")
+	}
+	if m.editor.replyTo != parent.ID {
+		t.Fatalf("expected the reply aimed at %q, got %q", parent.ID, m.editor.replyTo)
+	}
+	if got := m.editor.area.Value(); got != "" {
+		t.Fatalf("expected an empty reply box, got %q", got)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}, Alt: false})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if len(replies) != 1 || replies[0].parent != parent.ID || replies[0].body != "ok" {
+		t.Fatalf("expected one reply to the parent, got %+v", replies)
+	}
+	// The view must agree with the store: a reply reopens its parent.
+	for _, c := range m.comments {
+		if c.ID == parent.ID && c.State != review.Open {
+			t.Fatalf("expected the parent reopened, got %q", c.State)
+		}
+	}
+}
+
+// Replying to a reply threads under the conversation's top, not under the reply —
+// one exchange, one thread.
+func TestReplyingToAReplyThreadsUnderTheParent(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.ReplyComment = func(string, review.Comment) error { return nil }
+	parent := commentOn("a.go", 1, "alpha", "top")
+	reply := review.Comment{
+		ID: "r1", Author: "agent", Body: "mid", State: review.Open, ReplyTo: parent.ID,
+		Anchor: parent.Anchor,
+	}
+	m.SetComments([]review.Comment{parent, reply})
+
+	// Land on the reply row (the second comment row).
+	seen := 0
+	for i, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		if m.stream.comments[r.comment].ID == reply.ID {
+			m.cursorRow = i
+			seen++
+			break
+		}
+	}
+	if seen == 0 {
+		t.Fatal("never found the reply row")
+	}
+	m, _ = pressKeyUI(m, "c")
+	if m.editor.replyTo != parent.ID {
+		t.Fatalf("expected the reply aimed at the thread's top %q, got %q", parent.ID, m.editor.replyTo)
+	}
+}
+
+func pressKeyUI(m Model, s string) (Model, tea.Cmd) {
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+	return updated.(Model), cmd
+}
+
+// Authorship is visible without reading the label, and a reply is indented one
+// level with the same bar rather than a separate marker.
+func TestReplyStylingDiffersAndIndentsOneLevel(t *testing.T) {
+	parent := commentLines(commentOn("a.go", 1, "alpha", "top"), 60, false)
+	reply := commentLines(review.Comment{
+		ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open,
+	}, 60, false)
+
+	p, r := stripANSI(parent[0]), stripANSI(reply[0])
+	indentOf := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
+	if indentOf(r) != indentOf(p)+2 {
+		t.Fatalf("expected one level of extra indent, got %d vs %d", indentOf(r), indentOf(p))
+	}
+	if strings.Contains(r, "↳") {
+		t.Fatalf("expected no return marker, got %q", r)
+	}
+	if !strings.Contains(r, "▌") {
+		t.Fatalf("expected the same bar as the parent, got %q", r)
 	}
 }
