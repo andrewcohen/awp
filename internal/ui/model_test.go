@@ -661,3 +661,134 @@ func TestSelectedFileRowCarriesSelectionBar(t *testing.T) {
 		t.Fatalf("unselected row lost its path: %q", unselected)
 	}
 }
+
+// twoFileModel gives two files, each with a hunk taller than the pane, with
+// the hunk pane focused on the first.
+func twoFileModel(t *testing.T) Model {
+	t.Helper()
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.SetSize(120, 8)
+	lines := make([]diff.HunkLine, 20)
+	for i := range lines {
+		// Wide enough that horizontal panning is actually possible, so the
+		// pan-reset assertion isn't vacuous.
+		lines[i] = diff.HunkLine{Type: ' ', Content: strings.Repeat("x", 200)}
+	}
+	file := func(name string) diff.FileDiff {
+		return diff.FileDiff{NewPath: name, Status: "M", Hunks: []diff.Hunk{
+			{OldStart: 1, NewStart: 1, Lines: lines},
+		}}
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{file("a.go"), file("b.go")}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	return got
+}
+
+func pressN(m Model, r rune, n int) Model {
+	for i := 0; i < n; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(Model)
+	}
+	return m
+}
+
+// At the bottom of a file, the next j moves to the following file's top.
+func TestScrollPastBottomCrossesToNextFile(t *testing.T) {
+	m := twoFileModel(t)
+	// Land exactly on the bottom edge.
+	m = pressN(m, 'j', m.maxHunkScroll())
+	if m.filesCursor != 0 {
+		t.Fatalf("expected to still be on the first file at its bottom, got %d", m.filesCursor)
+	}
+	if m.hunkScroll != m.maxHunkScroll() {
+		t.Fatalf("expected to be pinned at the bottom, got %d", m.hunkScroll)
+	}
+	// The next press crosses.
+	m = pressN(m, 'j', 1)
+	if m.filesCursor != 1 {
+		t.Fatalf("expected to cross to the second file, got %d", m.filesCursor)
+	}
+	if m.hunkScroll != 0 {
+		t.Fatalf("expected to land at the top of the next file, got %d", m.hunkScroll)
+	}
+}
+
+// Going back lands at the bottom of the previous file, so reading is
+// continuous across the boundary.
+func TestScrollPastTopCrossesToPreviousFileBottom(t *testing.T) {
+	m := twoFileModel(t)
+	// Scroll to the bottom, then one more press to cross into file 2.
+	m = pressN(m, 'j', m.maxHunkScroll()+1)
+	if m.filesCursor != 1 {
+		t.Fatalf("expected to be on the second file, got %d", m.filesCursor)
+	}
+	m = pressN(m, 'k', 1)
+	if m.filesCursor != 0 {
+		t.Fatalf("expected to cross back to the first file, got %d", m.filesCursor)
+	}
+	if m.hunkScroll != m.maxHunkScroll() {
+		t.Fatalf("expected to land at the previous file's bottom, got %d want %d", m.hunkScroll, m.maxHunkScroll())
+	}
+}
+
+func TestScrollDoesNotCrossAtTheEnds(t *testing.T) {
+	m := twoFileModel(t)
+	// Top of the first file: k must not move.
+	m = pressN(m, 'k', 3)
+	if m.filesCursor != 0 || m.hunkScroll != 0 {
+		t.Fatalf("expected no movement above the first file, got cursor=%d scroll=%d", m.filesCursor, m.hunkScroll)
+	}
+	// Bottom of the last file: j must not move.
+	m = pressN(m, 'j', 200)
+	if m.filesCursor != 1 {
+		t.Fatalf("expected to end on the last file, got %d", m.filesCursor)
+	}
+	want := m.maxHunkScroll()
+	m = pressN(m, 'j', 3)
+	if m.filesCursor != 1 || m.hunkScroll != want {
+		t.Fatalf("expected to stay pinned at the last file's bottom, got cursor=%d scroll=%d", m.filesCursor, m.hunkScroll)
+	}
+}
+
+// Mid-file navigation must not change file.
+func TestScrollMidFileDoesNotCross(t *testing.T) {
+	m := twoFileModel(t)
+	m = pressN(m, 'j', 2)
+	if m.filesCursor != 0 {
+		t.Fatalf("expected to stay on the first file mid-scroll, got %d", m.filesCursor)
+	}
+	if m.hunkScroll != 2 {
+		t.Fatalf("expected scroll 2, got %d", m.hunkScroll)
+	}
+}
+
+// Paging crosses the same way j/k does.
+func TestPagingCrossesFileBoundary(t *testing.T) {
+	m := twoFileModel(t)
+	for i := 0; i < 20; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+		m = updated.(Model)
+	}
+	if m.filesCursor != 1 {
+		t.Fatalf("expected ctrl+d to eventually cross to the second file, got %d", m.filesCursor)
+	}
+}
+
+// Crossing resets the horizontal pan — the next file starts at column 0.
+func TestCrossingFileResetsPan(t *testing.T) {
+	m := twoFileModel(t)
+	m = pressN(m, 'j', m.maxHunkScroll())
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m = updated.(Model)
+	if m.hunkHScroll == 0 {
+		t.Fatal("fixture should allow a pan before crossing")
+	}
+	m = pressN(m, 'j', 1)
+	if m.filesCursor != 1 {
+		t.Fatalf("expected to cross files, got %d", m.filesCursor)
+	}
+	if m.hunkHScroll != 0 {
+		t.Fatalf("expected the pan to reset on the next file, got %d", m.hunkHScroll)
+	}
+}
