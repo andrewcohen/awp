@@ -440,3 +440,90 @@ func TestCursorSurvivesCollapsing(t *testing.T) {
 		t.Fatalf("cursor %d not visible at scroll %d", m.cursorRow, m.streamScroll)
 	}
 }
+
+// ---- remote threads ----
+
+func remoteThread(id, path string, line int, resolved bool, body string) review.Thread {
+	return review.Thread{
+		ID: id, Path: path, Side: review.SideNew, Line: line, Resolved: resolved,
+		Comments: []review.ThreadComment{{Author: "alice", Body: body}},
+	}
+}
+
+func TestRemoteThreadsRenderInline(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 2, false, "this leaks")})
+
+	view := stripANSI(m.renderStreamPanel(90, 12))
+	if !strings.Contains(view, "this leaks") {
+		t.Fatalf("expected the thread body inline, got:\n%s", view)
+	}
+	// It must be identifiable as already on GitHub, not as a local draft.
+	if !strings.Contains(view, "github") {
+		t.Fatalf("expected the thread labelled as remote, got:\n%s", view)
+	}
+}
+
+// Resolved threads are settled conversation; showing them by default buries the
+// ones still needing attention.
+func TestResolvedThreadsHiddenUntilToggled(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetThreads([]review.Thread{
+		remoteThread("T1", "a.go", 1, false, "open point"),
+		remoteThread("T2", "a.go", 2, true, "settled point"),
+	})
+	view := stripANSI(m.renderStreamPanel(90, 14))
+	if !strings.Contains(view, "open point") {
+		t.Fatalf("expected the unresolved thread shown:\n%s", view)
+	}
+	if strings.Contains(view, "settled point") {
+		t.Fatalf("expected the resolved thread hidden by default:\n%s", view)
+	}
+
+	m = press(m, "T") // → all
+	view = stripANSI(m.renderStreamPanel(90, 14))
+	if !strings.Contains(view, "settled point") {
+		t.Fatalf("expected T to reveal resolved threads:\n%s", view)
+	}
+
+	m = press(m, "T") // → none
+	view = stripANSI(m.renderStreamPanel(90, 14))
+	if strings.Contains(view, "open point") || strings.Contains(view, "settled point") {
+		t.Fatalf("expected T again to hide all threads:\n%s", view)
+	}
+
+	m = press(m, "T") // → unresolved again
+	if m.threadVisibility != ThreadsUnresolved {
+		t.Fatalf("expected the toggle to cycle back, got %v", m.threadVisibility)
+	}
+}
+
+// Threads use the same relocation ladder as local comments, because their line
+// numbers are GitHub's against a particular commit and drift the same way.
+func TestRemoteThreadsRelocateWithContent(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	th := remoteThread("T1", "a.go", 2, false, "about beta")
+	// Anchor text is what actually locates it; give it the line's content.
+	m.SetThreads([]review.Thread{th})
+	m.threads[0].Comments[0].Body = "about beta"
+	m.rebuildStream()
+
+	// A thread whose path is unknown must not vanish silently.
+	m.SetThreads([]review.Thread{remoteThread("T9", "gone.go", 1, false, "orphan thread")})
+	view := stripANSI(m.renderStreamPanel(90, 14))
+	if !strings.Contains(view, "detached") || !strings.Contains(view, "orphan thread") {
+		t.Fatalf("expected an unplaceable thread in the detached section:\n%s", view)
+	}
+}
+
+// Local comments and remote threads keep separate vocabularies, so the UI cannot
+// claim a draft was "resolved" or a thread "addressed".
+func TestThreadStateIsPublishedNotOpen(t *testing.T) {
+	c := threadAsComment(remoteThread("T1", "a.go", 3, false, "hi"))
+	if c.State != review.Published {
+		t.Fatalf("expected a remote thread to present as published, got %q", c.State)
+	}
+	if review.OpenCount([]review.Comment{c}) != 0 {
+		t.Fatal("a remote thread must not count as a local finding awaiting triage")
+	}
+}

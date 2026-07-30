@@ -17,11 +17,19 @@ import (
 // diffLoaderFor backs the deck's in-deck diff modal (`c`): the git-format
 // diff of a workspace's working change, the same source `awp diff` reads.
 func diffLoaderFor(runner Runner) deckui.DiffLoader {
-	return func(item deckui.Item) (string, error) {
+	return func(item deckui.Item, scope deckui.DiffScope) (string, error) {
 		if runner == nil {
 			runner = NewExecRunner()
 		}
-		return jj.New(runner).DiffGit(item.Path, "")
+		revision := ""
+		if scope == deckui.ScopeStackBase {
+			// The whole change against its stack base — the diff `C` used to
+			// open a tuicr window for. Base resolution is unchanged: nearest
+			// stacked-parent bookmark, falling back to trunk().
+			base := resolveReviewStackBase(runner, item.Path, item.Bookmark)
+			revision = base + "..@"
+		}
+		return jj.New(runner).DiffGit(item.Path, revision)
 	}
 }
 

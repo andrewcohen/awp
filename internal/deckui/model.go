@@ -106,7 +106,8 @@ const (
 )
 
 // ReviewStackArg is the ActionOpenWindow arg the C (stack review) action
-// emits. The handler resolves it to `tuicr -r '<base>..@'`, where <base> is
+// emits. Retained for the unwired fallback path; the stack-base diff now
+// opens in-deck via ScopeStackBase, where <base> is
 // the workspace's nearest stacked-parent bookmark (or trunk() when nothing is
 // stacked). It's a sentinel rather than a built command because resolving the
 // base runs jj, which belongs in the action handler, not the TUI.
@@ -1059,8 +1060,8 @@ func (m Model) WithReviewReloader(r ReviewReloader) Model {
 }
 
 // WithDiffViewer installs the callbacks backing the in-deck diff modal
-// (`c`). Without a loader, `c` falls back to opening the tuicr review
-// window in tmux — the pre-modal behavior.
+// (`c` / `C`). Without a loader, those keys fall back to opening a named
+// review window in tmux.
 func (m Model) WithDiffViewer(load DiffLoader, open DiffOpener) Model {
 	m.diffLoad = load
 	m.diffOpen = open
@@ -2557,9 +2558,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		case key.Matches(msg, km.EditorWindow):
 			return m.trigger(ActionOpenWindow, "editor")
 		case key.Matches(msg, km.ReviewWindow):
-			return m.openDiffModal()
+			return m.openDiffModal(ScopeWorking)
 		case key.Matches(msg, km.ReviewMainWin):
-			return m.trigger(ActionOpenWindow, ReviewStackArg)
+			return m.openDiffModal(ScopeStackBase)
 		case key.Matches(msg, km.VCSWindow):
 			return m.trigger(ActionOpenWindow, "vcs")
 		case key.Matches(msg, km.ShellWindow):
@@ -3259,11 +3260,12 @@ func (m Model) blockIfSettingUp(item Item) (Model, bool) {
 	return m, true
 }
 
-// openDiffModal opens awp's own diff viewer over the selected workspace's
-// working change (`c`). Falls back to the tuicr review window when the
-// viewer isn't wired, or when the row has no local working copy to diff —
-// a virtual inbox row, or one still being set up.
-func (m Model) openDiffModal() (tea.Model, tea.Cmd) {
+// openDiffModal opens awp's own diff viewer over the selected workspace at the
+// given scope (`c` for the working change, `C` for the change against its stack
+// base). Falls back to the named review window when the viewer isn't wired, or
+// when the row has no local working copy to diff — a virtual inbox row, or one
+// still being set up.
+func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	if m.diffLoad == nil {
 		return m.trigger(ActionOpenWindow, "review")
 	}
@@ -3277,9 +3279,9 @@ func (m Model) openDiffModal() (tea.Model, tea.Cmd) {
 	if m2, blocked := m.blockIfSettingUp(item); blocked {
 		return m2, nil
 	}
-	dm, loadCmd := newDiffModal(item, m.diffLoad, m.diffOpen, m.diffComments)
+	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffComments)
 	m.active = dm
-	m.status = "diff: loading…"
+	m.status = "diff (" + scope.String() + "): loading…"
 	// tea.ClearScreen on modal entry — same rationale as the other modals
 	// (see doc.go).
 	return m, batchCmds(loadCmd, tea.ClearScreen)
@@ -4895,7 +4897,7 @@ func deckKeyGroups() []keyGroup {
 				{"a", "agent window (re-attach without re-prompting)"},
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
-				{"c / C", "diff viewer: working change (in-deck)  /  tuicr window vs stack base (tuicr -r '<base>..@')"},
+				{"c / C", "diff viewer: working change  /  whole change vs its stack base"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},

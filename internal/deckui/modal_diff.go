@@ -8,10 +8,30 @@ import (
 	"github.com/andrewcohen/awp/internal/ui"
 )
 
-// DiffLoader returns git-format diff text for a workspace's working change
-// (`jj diff --git` in the workspace). Installed by the CLI layer via
+// DiffScope is what a review is of. The surface is the same either way; only the
+// revision range the diff comes from differs.
+type DiffScope int
+
+const (
+	// ScopeWorking is the workspace's uncommitted change — what `c` shows.
+	ScopeWorking DiffScope = iota
+	// ScopeStackBase is the whole change against its stack base — what `C`
+	// shows. Previously this opened a tuicr window; it is the same diff, read on
+	// the same surface.
+	ScopeStackBase
+)
+
+func (s DiffScope) String() string {
+	if s == ScopeStackBase {
+		return "vs stack base"
+	}
+	return "working copy"
+}
+
+// DiffLoader returns git-format diff text for a workspace at the given scope
+// (`jj diff --git` with the matching revision). Installed by the CLI layer via
 // WithDiffViewer so the deck package doesn't shell out itself.
-type DiffLoader func(item Item) (string, error)
+type DiffLoader func(item Item, scope DiffScope) (string, error)
 
 // DiffOpener returns the command that opens filePath at line for a
 // workspace — an external $EDITOR process, which tea.ExecProcess handles.
@@ -52,6 +72,7 @@ const diffModalChrome = 8
 type diffModal struct {
 	inner ui.Model
 	label string
+	scope DiffScope
 	// Styles are cached here rather than built per frame — view and
 	// footerHelp are render paths.
 	muted  lipgloss.Style
@@ -61,9 +82,9 @@ type diffModal struct {
 
 // newDiffModal builds the modal and returns the command that loads the
 // first diff.
-func newDiffModal(item Item, load DiffLoader, open DiffOpener, comments CommentStore) (*diffModal, tea.Cmd) {
+func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, comments CommentStore) (*diffModal, tea.Cmd) {
 	inner := ui.New(item.Path,
-		func() (string, error) { return load(item) },
+		func() (string, error) { return load(item, scope) },
 		func(filePath string, line int) tea.Cmd {
 			if open == nil {
 				return nil
@@ -95,6 +116,7 @@ func newDiffModal(item Item, load DiffLoader, open DiffOpener, comments CommentS
 	dm := &diffModal{
 		inner:  inner,
 		label:  item.ProjectName + "/" + item.WorkspaceName,
+		scope:  scope,
 		muted:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
 		danger: lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)),
 		panel:  lipgloss.NewStyle().Padding(1, 1, 1, 1),
@@ -109,7 +131,7 @@ func (dm *diffModal) footerHelp() string {
 		style = dm.danger
 	}
 	hint := " · j/k scroll · c comment · r reviewed · {/} hunk · g/G ends · h/l/0/$ pan · tab pane · e $EDITOR · w wrap · / filter · esc close"
-	return style.Render(dm.label + " · " + status + hint)
+	return style.Render(dm.label + " · " + dm.scope.String() + " · " + status + hint)
 }
 
 func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {

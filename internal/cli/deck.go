@@ -564,19 +564,6 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 		return handleDeckAction(tmuxClient, actionSvc, runner, req, reporter)
 	}
-	reviewReloader := func(item deckui.Item, prNumber int, prHeadSHA, prURL, prompt string) tea.Cmd {
-		return func() tea.Msg {
-			dir := strings.TrimSpace(item.RepoRoot)
-			if dir == "" {
-				dir = repoRoot
-			}
-			deckDebugLogf("REPAIR-RELOAD closure entered ws=%q proj=%q pr=%d head=%q url=%q promptLen=%d", item.WorkspaceName, item.ProjectName, prNumber, prHeadSHA, prURL, len(prompt))
-			reloadSvc := newDeckActionServiceWithIO(runner, dir, nil, io.Discard)
-			reloaded, shortHead, err := runRepairReviewReload(reloadSvc, tmuxClient, item, prNumber, prHeadSHA, prURL, prompt, noopReporter{})
-			deckDebugLogf("REPAIR-RELOAD closure done reloaded=%v shortHead=%q err=%v", reloaded, shortHead, err)
-			return deckui.ReviewReloadedMsg{Item: item, Reloaded: reloaded, ShortHead: shortHead, Err: err}
-		}
-	}
 	bookmarkFetcher := func(itemRepoRoot string) tea.Cmd {
 		return func() tea.Msg {
 			dir := strings.TrimSpace(itemRepoRoot)
@@ -840,7 +827,6 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
-		WithReviewReloader(reviewReloader).
 		WithDiffViewer(diffLoaderFor(runner), openDiffFileInEditor).
 		WithReviewStore(reviewStoreWithSend(runner, tmuxClient, svc)).
 		WithTrunkResolver(func(repo string) string {
@@ -1639,14 +1625,10 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 	case deckui.ActionSummon:
 		return summonWorkspaceSession(tmuxClient, svc, item, reporter)
 	case deckui.ActionOpenWindow:
-		arg := req.Arg
-		if arg == deckui.ReviewStackArg {
-			base := resolveReviewStackBase(runner, resolvePath(svc, item), item.Bookmark)
-			// Single-quote the range: the trunk() fallback contains parens
-			// the pane shell would otherwise treat as a subshell.
-			arg = "review:tuicr -r '" + base + "..@'"
-		}
-		return openNamedWindow(tmuxClient, svc, item, arg, reporter)
+		// `C` no longer routes here: the change-vs-stack-base diff opens on
+		// awp's own surface (deckui.ScopeStackBase) rather than in a tuicr
+		// window, so there is no review revset to splice into a shell command.
+		return openNamedWindow(tmuxClient, svc, item, req.Arg, reporter)
 	case deckui.ActionCI:
 		return openCIWindow(tmuxClient, svc, runner, item, reporter)
 	case deckui.ActionLastSession:
@@ -2090,7 +2072,7 @@ func defaultWindowCommandWithRepo(windowName, repoRoot string) string {
 	case "editor":
 		return "$EDITOR"
 	case "review":
-		return "tuicr -r @"
+		return "awp diff"
 	case "vcs":
 		return "jjui"
 	case "agent":

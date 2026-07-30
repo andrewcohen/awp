@@ -624,6 +624,19 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Phase 6 landed, and **tuicr is no longer invoked anywhere in
+  `internal/`**. `C` opens the stack-base diff in-deck via a `DiffScope` on the
+  loader rather than a tuicr window; `awp review` no longer opens a review window
+  at all, and its agent prompt files findings with `awp review add` instead of
+  `tuicr review add --session <abs-path>`. Deleted: `internal/cli/tuicr_session.go`
+  (372 lines of reading another tool's private state), `runRepairReviewReload`,
+  `renderTuicrSessionBlock`, `formatPriorSessions`, the session-discovery timeout,
+  and the stale-head reset. The prior-head draft migration is gone as a *concept*,
+  not just as code — content anchoring relocates findings across a force-push, so
+  there is nothing to carry forward. Remote PR threads are fetched via GraphQL
+  (`FetchReviewThreads`, plus `Resolve`/`UnresolveReviewThread` for phase 7 — REST
+  cannot express either), mirrored read-only into the review, and rendered inline
+  alongside local comments with `T` cycling visibility.
 - 2026-07-30: Phases 4 and 5 landed. Phase 4: `ctrl+s` in the compose box saves
   and hands the comment to the agent, with an approval-gated prompt carrying the
   anchor's file/line/side/text/context and explicit reply instructions
