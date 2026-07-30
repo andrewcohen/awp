@@ -179,7 +179,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · c comment/reply · i edit · D delete · r reviewed · R resolve · T threads · {/} hunk · e $EDITOR · esc close"
+	hint := " · j/k scroll · c comment/reply · i edit · D delete · r reviewed · R resolve · T threads · {/} hunk · tab pane · e $EDITOR · esc close"
 	return style.Render(dm.label + " · " + dm.scope.String() + " · " + status + hint)
 }
 
