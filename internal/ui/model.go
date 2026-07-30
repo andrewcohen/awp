@@ -171,6 +171,12 @@ func (m *Model) SetSize(width, bodyHeight int) {
 	// than the pane. Getting this wrong makes wrapped row counts disagree
 	// with what is rendered.
 	m.hunkWidth = right - 4 - lipgloss.Width(selectionPrefixBlank)
+	if m.editing {
+		// The box lives in the stream, so a resize has to re-lay its text area
+		// too — an area left at the old width wraps inside the new box and makes
+		// it taller than the geometry reserved.
+		m.editor.setWidth(m.hunkWidth)
+	}
 	m.rebuildStream()
 }
 
@@ -179,12 +185,52 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // file set, width or wrap must go through here — it is the only place the
 // index is built, so it cannot silently go stale.
 func (m *Model) rebuildStream() {
-	m.stream = withComments(buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed), m.placeComments)
-	m.commentIndex = m.stream.commentEntries()
+	idx := withComments(buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed), m.placeComments)
+	// The index is built before the compose box is spliced in, so a half-written
+	// comment never shows up as a listed conversation.
+	m.stream = idx
+	m.commentIndex = idx.commentEntries()
+	if m.editing {
+		m.stream = withEditor(idx, m.editorAnchorRow(idx), commentEditorRows)
+	}
 	m.clampCommentsCursor()
 	m.clampCursor()
 	m.followCursor()
+	m.followEditor()
 	m.syncFileCursorToCursor()
+}
+
+// followEditor scrolls the compose box into view. Called after any rebuild while
+// editing, because the box's rows move whenever the diff or the comment set does.
+//
+// It aims for the row *above* the box — the line being commented on — so the code
+// under discussion stays visible. When the box is too tall for the pane the top
+// wins, since that is where the text is being typed.
+func (m *Model) followEditor() {
+	if !m.editing {
+		return
+	}
+	first, last := -1, -1
+	for i, r := range m.stream.rows {
+		if r.kind != rowEditor {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		last = i
+	}
+	if first < 0 {
+		return
+	}
+	height := m.streamContentHeight()
+	if last > m.streamScroll+height-1 {
+		m.streamScroll = last - height + 1
+	}
+	if top := max(0, first-1); top < m.streamScroll {
+		m.streamScroll = top
+	}
+	m.clampStreamScroll()
 }
 
 // paneWidths splits the body between the file list and the hunk pane. Both
@@ -308,6 +354,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, scheduleRefresh(m.RefreshInterval)
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	}
+	// Non-key messages the compose box needs — the cursor blink, chiefly. Without
+	// this the box renders a static cursor, since nothing else routes them.
+	if m.editing {
+		editor, cmd, _ := m.editor.update(msg)
+		m.editor = editor
+		return m, cmd
 	}
 	if m.focus == FocusFilter {
 		var cmd tea.Cmd
@@ -767,21 +820,13 @@ func (m Model) Body(width, height int) string {
 	}
 	height = max(minBodyHeight, height)
 	leftWidth, rightWidth := paneWidths(width)
-	// The compose box takes rows from the panes rather than overlaying them, so
-	// the line being commented on stays visible above it.
-	editorView := ""
-	if m.editing {
-		editorView = m.editor.view(width)
-		height = max(minBodyHeight, height-lipgloss.Height(editorView))
-	}
-	panes := lipgloss.JoinHorizontal(lipgloss.Top,
+	// The compose box is a run of rows inside the stream (see withEditor), not a
+	// panel docked below it, so the body's size never changes while writing a
+	// comment and the box sits against the code it is about.
+	return lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderLeftColumn(leftWidth, height),
 		m.renderStreamPanel(rightWidth, height),
 	)
-	if editorView == "" {
-		return panes
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, panes, editorView)
 }
 
 var (

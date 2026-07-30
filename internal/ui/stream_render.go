@@ -76,6 +76,12 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 		return lines[r.commentLine]
 	case rowOrphanHeader:
 		return styleOrphanHeader.Width(width).Render(" detached comments — their anchor could not be found")
+	case rowEditor:
+		lines := m.editor.lines(width)
+		if r.commentLine < 0 || r.commentLine >= len(lines) {
+			return ""
+		}
+		return lines[r.commentLine]
 	}
 	return ""
 }
