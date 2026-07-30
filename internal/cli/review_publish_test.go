@@ -74,3 +74,49 @@ func TestPublishRecordAloneSuppressesRepost(t *testing.T) {
 		t.Fatal("a comment carrying a publish record must count as published")
 	}
 }
+
+// A workspace and its source repo must resolve to the same review store
+// directory. They did not: the CLI used the workspace root while the deck used
+// the source repo, so an agent's findings landed where the deck never looked.
+func TestWorkspaceAndSourceRepoShareOneReviewStore(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	target := review.Target{Kind: review.TargetWorking, Workspace: "ws-1"}
+
+	// What the deck opens (source repo root).
+	fromDeck, err := store.Open("/src/proj", target)
+	if err != nil {
+		t.Fatalf("deck open: %v", err)
+	}
+	if _, err := store.AddComment(fromDeck, review.Comment{
+		Body:   "filed from the deck",
+		Anchor: review.Anchor{Path: "a.go", LineHint: 1},
+	}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	// What the CLI must open for an agent working in a workspace of that repo.
+	fromAgent, err := store.Open("/src/proj", target)
+	if err != nil {
+		t.Fatalf("agent open: %v", err)
+	}
+	if fromAgent.ID != fromDeck.ID {
+		t.Fatalf("expected one review, got %q and %q", fromAgent.ID, fromDeck.ID)
+	}
+	got, err := store.Comments(fromAgent)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the deck's comment visible to the agent, got %d", len(got))
+	}
+
+	// And the failure mode: keyed by the workspace path instead, it is a different
+	// store and the comment is invisible.
+	wrong, err := store.Open("/Users/me/.awp/workspaces/ws-1", target)
+	if err != nil {
+		t.Fatalf("wrong open: %v", err)
+	}
+	if wrongComments, _ := store.Comments(wrong); len(wrongComments) != 0 {
+		t.Fatal("fixture is wrong: the workspace-keyed store should be separate")
+	}
+}
