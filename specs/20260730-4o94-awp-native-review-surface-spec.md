@@ -624,6 +624,19 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Comments can now be edited and deleted, which the phases had left
+  out entirely. `c` is context-sensitive — on a code line it creates, on one of
+  your own comments it revises that comment in place, so there is no second key
+  to learn. `D` deletes. Remote GitHub threads refuse both and say why: they are
+  GitHub's records, and editing them locally would misrepresent what happened.
+  A revise reads the stored record first so it keeps everything the editor does
+  not own (state, timestamps, publish record).
+  Fixed while testing it: an anchor with **no recorded text** could never be
+  placed, so every remote thread landed in the detached section despite pointing
+  at code right there on screen — GitHub gives a line number, not the line's
+  content. Text-less anchors now place by line number. The earlier
+  "threads render inline" test passed only because it searched the whole panel,
+  detached section included; it now asserts placement under a diff line.
 - 2026-07-30: Phase 7 landed — the spec's finish line. `awp review publish` posts
   unpublished findings to a PR as inline comments, and `R` resolves/unresolves the
   thread under the cursor. Two decisions worth recording: comments are posted

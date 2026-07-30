@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -25,6 +26,72 @@ import (
 // viewer never touches the filesystem itself, so it stays testable and the
 // storage decision stays in one place.
 type CommentSink func(review.Comment) error
+
+// CommentDeleter removes a comment by id.
+type CommentDeleter func(id string) error
+
+// localCommentAtCursor is the comment under the cursor, if it is one of ours.
+// Remote GitHub threads are excluded: they are GitHub's records, and editing or
+// deleting them from here would be a lie about what happened.
+func (m Model) localCommentAtCursor() (review.Comment, bool) {
+	if len(m.stream.rows) == 0 || m.cursorRow >= len(m.stream.rows) {
+		return review.Comment{}, false
+	}
+	r := m.stream.rows[m.cursorRow]
+	if r.kind != rowComment && r.kind != rowOrphan {
+		return review.Comment{}, false
+	}
+	if r.comment < 0 || r.comment >= len(m.stream.comments) {
+		return review.Comment{}, false
+	}
+	c := m.stream.comments[r.comment]
+	if strings.HasPrefix(c.ID, "thread-") {
+		return review.Comment{}, false
+	}
+	// Resolve against the live set: the placed copy is a snapshot.
+	for _, own := range m.comments {
+		if own.ID == c.ID {
+			return own, true
+		}
+	}
+	return review.Comment{}, false
+}
+
+// deleteCommentAtCursor removes the comment under the cursor.
+func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
+	if _, isThread := m.threadAtCursor(); isThread {
+		m.status = "that is a GitHub thread — resolve it with R instead"
+		return m, nil
+	}
+	c, ok := m.localCommentAtCursor()
+	if !ok {
+		m.status = "put the cursor on one of your comments to delete it"
+		return m, nil
+	}
+	if m.DeleteComment == nil {
+		m.status = "deleting unavailable here"
+		return m, nil
+	}
+	if err := m.DeleteComment(c.ID); err != nil {
+		m.status = "delete: " + err.Error()
+		m.statusErr = true
+		return m, nil
+	}
+	kept := make([]review.Comment, 0, len(m.comments))
+	for _, own := range m.comments {
+		if own.ID != c.ID {
+			kept = append(kept, own)
+		}
+	}
+	m.comments = kept
+	// Removing rows can leave the cursor past the end.
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
+	m.status = "comment deleted"
+	return m, nil
+}
 
 // ThreadVisibility controls which remote threads are shown. Resolved threads are
 // hidden by default: they are settled conversation, and showing them by default
@@ -224,6 +291,19 @@ func (m Model) locateComment(rows []rowRef, c review.Comment) (int, bool) {
 		return r.newNo
 	}
 
+	// An anchor with no recorded text can only be placed by line number. Remote
+	// GitHub threads arrive this way — GitHub gives a line, not the line's
+	// content — so without this they would all land in the detached section
+	// despite pointing at code that is right there.
+	if c.Anchor.Text == "" {
+		for _, i := range inFile {
+			if r := rows[i]; r.seg == 0 && lineNo(r) == c.Anchor.LineHint {
+				return i, true
+			}
+		}
+		return 0, false
+	}
+
 	// The line is where it was, with the text it had.
 	for _, i := range inFile {
 		r := rows[i]
@@ -363,19 +443,37 @@ func (m Model) AnchorAtCursor() (review.Anchor, bool) {
 // invalidate the anchor.
 const anchorContextLines = 3
 
-// commentLines renders a comment into display rows.
-func commentLines(c review.Comment, width int) []string {
+// commentLines renders a comment into display rows, painted across the full
+// width. Each style carries the background itself — an enclosing style cannot
+// supply it, since every inner style ends with a reset that would clear it
+// mid-row (the same constraint the cursorline has).
+//
+// On the cursor's row the cursorline wins: knowing where the cursor is matters
+// more than knowing this row is a comment, and the ▌ marker still says the latter.
+func commentLines(c review.Comment, width int, cursor bool) []string {
+	head, body, fill := styleCommentHeadFill, styleCommentBodyFill, styleCommentFill
+	if cursor {
+		head, body, fill = styleCommentHead.Background(cursorlineBg), styleCommentBody.Background(cursorlineBg), styleCursorFill
+	}
 	label := c.Author
 	if label == review.AuthorHuman {
 		label = "you"
 	}
-	head := "  ▌ " + label
+	title := "  ▌ " + label
 	if c.State != review.Open {
-		head += " · " + string(c.State)
+		title += " · " + string(c.State)
 	}
-	out := []string{styleCommentHead.Render(truncate(head, max(1, width)))}
+	pad := func(styled, plain string) string {
+		if n := width - lipgloss.Width(plain); n > 0 {
+			return styled + fill.Render(strings.Repeat(" ", n))
+		}
+		return styled
+	}
+	title = truncate(title, max(1, width))
+	out := []string{pad(head.Render(title), title)}
 	for _, line := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
-		out = append(out, styleCommentBody.Render(truncate("  ▌ "+line, max(1, width))))
+		text := truncate("  ▌ "+line, max(1, width))
+		out = append(out, pad(body.Render(text), text))
 	}
 	return out
 }

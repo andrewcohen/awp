@@ -123,8 +123,11 @@ type Model struct {
 	// SendComment additionally hands a comment to the workspace's agent. Nil
 	// leaves the send exit unavailable.
 	SendComment CommentSink
-	editing     bool
-	editor      commentEditor
+	// UpdateComment revises an existing comment; DeleteComment removes one.
+	UpdateComment CommentSink
+	DeleteComment CommentDeleter
+	editing       bool
+	editor        commentEditor
 	// ReviewedFiles maps a path to the content hash it had when marked
 	// reviewed, and MarkReviewed persists a change to that. Hash rather than a
 	// bare flag so a later edit resurfaces the file: marking something reviewed
@@ -409,6 +412,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncFileCursorToCursor()
 		case "c":
 			return m.startComment()
+		case "D":
+			return m.deleteCommentAtCursor()
 		case "R":
 			return m.toggleResolved()
 		case "T":
@@ -768,8 +773,16 @@ var (
 	styleCursorFill   = lipgloss.NewStyle().Background(cursorlineBg)
 	// Comments are Info-hued so they read as annotation rather than as diff
 	// content — nothing in a diff line is ever blue.
-	styleCommentHead      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
-	styleCommentBody      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info))
+	styleCommentHead = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
+	styleCommentBody = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info))
+	// Comments are painted across the full width so they read as blocks set into
+	// the diff rather than as loose text between code lines. BgPanel is the
+	// palette's chip background — a comment box is exactly that — which keeps
+	// charm.Cursorline the only non-ANSI-16 value in the palette.
+	commentBg             = lipgloss.Color(charm.BgPanel)
+	styleCommentHeadFill  = styleCommentHead.Background(commentBg)
+	styleCommentBodyFill  = styleCommentBody.Background(commentBg)
+	styleCommentFill      = lipgloss.NewStyle().Background(commentBg)
 	styleOrphanHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)

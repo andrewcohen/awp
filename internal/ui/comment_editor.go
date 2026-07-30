@@ -23,17 +23,28 @@ import (
 type commentEditor struct {
 	area   textarea.Model
 	anchor review.Anchor
+	// editing is the id of the comment being revised, empty when composing a new
+	// one. Carried here so saving updates that record instead of appending a
+	// near-duplicate.
+	editing string
 }
 
 func newCommentEditor(a review.Anchor, width int) commentEditor {
+	return newCommentEditorFor(review.Comment{Anchor: a}, width)
+}
+
+// newCommentEditorFor opens the box on an existing comment, pre-filled.
+func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	ta := textarea.New()
 	ta.Placeholder = "comment…"
 	ta.ShowLineNumbers = false
 	ta.SetWidth(max(20, width-4))
 	ta.SetHeight(commentEditorHeight)
 	ta.CharLimit = 0
+	ta.SetValue(c.Body)
 	ta.Focus()
-	return commentEditor{area: ta, anchor: a}
+	ta.CursorEnd()
+	return commentEditor{area: ta, anchor: c.Anchor, editing: c.ID}
 }
 
 // commentEditorHeight is how many rows the compose box gets. Enough for a real
@@ -83,7 +94,11 @@ func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction
 
 func (e commentEditor) view(width int) string {
 	hint := styleDim.Render("enter save · ctrl+s save & send to agent · alt+enter newline · esc cancel")
-	head := styleCommentHead.Render(" comment on " + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint))
+	verb := " comment on "
+	if e.editing != "" {
+		verb = " editing comment on "
+	}
+	head := styleCommentHead.Render(verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint))
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(charm.Info)).
@@ -94,6 +109,7 @@ func (e commentEditor) view(width int) string {
 // comment builds the record from the editor's contents.
 func (e commentEditor) comment() review.Comment {
 	return review.Comment{
+		ID:     e.editing,
 		Author: review.AuthorHuman,
 		Body:   strings.TrimRight(e.area.Value(), "\n"),
 		State:  review.Open,
@@ -107,6 +123,21 @@ func (e commentEditor) comment() review.Comment {
 func (m Model) startComment() (tea.Model, tea.Cmd) {
 	if m.SaveComment == nil {
 		m.status = "commenting unavailable: no review store"
+		return m, nil
+	}
+	// On one of your own comments, `c` revises it rather than starting a new one
+	// beside it. Same key, meaning taken from what the cursor is on.
+	if c, ok := m.localCommentAtCursor(); ok {
+		if m.UpdateComment == nil {
+			m.status = "editing unavailable here"
+			return m, nil
+		}
+		m.editing = true
+		m.editor = newCommentEditorFor(c, m.hunkWidth)
+		return m, textarea.Blink
+	}
+	if _, isThread := m.threadAtCursor(); isThread {
+		m.status = "that is a GitHub thread — reply by commenting on the line"
 		return m, nil
 	}
 	a, ok := m.AnchorAtCursor()
@@ -131,14 +162,33 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case editorSave, editorSaveAndSend:
 		m.editing = false
 		c := m.editor.comment()
-		if err := m.SaveComment(c); err != nil {
-			m.status = "comment: " + err.Error()
-			m.statusErr = true
-			return m, nil
+		if c.ID != "" {
+			// Revising: update in place rather than appending a near-duplicate.
+			if err := m.UpdateComment(c); err != nil {
+				m.status = "comment: " + err.Error()
+				m.statusErr = true
+				return m, nil
+			}
+			for i := range m.comments {
+				if m.comments[i].ID == c.ID {
+					m.comments[i].Body = c.Body
+				}
+			}
+			m.rebuildStream()
+			m.status = "comment updated"
+			if action == editorSave {
+				return m, nil
+			}
+		} else {
+			if err := m.SaveComment(c); err != nil {
+				m.status = "comment: " + err.Error()
+				m.statusErr = true
+				return m, nil
+			}
+			m.comments = append(m.comments, c)
+			m.rebuildStream()
+			m.status = "comment saved"
 		}
-		m.comments = append(m.comments, c)
-		m.rebuildStream()
-		m.status = "comment saved"
 		if action == editorSaveAndSend {
 			if m.SendComment == nil {
 				m.status = "comment saved (sending unavailable here)"
