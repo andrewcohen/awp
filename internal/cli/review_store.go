@@ -239,5 +239,44 @@ func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) decku
 func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentStore {
 	cs := reviewStoreFor(runner)
 	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
+	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
 	return cs
+}
+
+// reviewedMarksFor wires the reviewed-file marks to the store's review.json.
+func reviewedMarksFor() (
+	load func(deckui.Item) (map[string]string, error),
+	save func(deckui.Item, string, string) error,
+) {
+	open := func(item deckui.Item) (review.Store, review.Review, error) {
+		store := review.Store{}
+		r, err := store.Open(item.RepoRoot, review.Target{
+			Kind:      review.TargetWorking,
+			Workspace: item.WorkspaceName,
+		})
+		return store, r, err
+	}
+	load = func(item deckui.Item) (map[string]string, error) {
+		_, r, err := open(item)
+		if err != nil {
+			return nil, err
+		}
+		return r.ReviewedFile, nil
+	}
+	save = func(item deckui.Item, path, hash string) error {
+		store, r, err := open(item)
+		if err != nil {
+			return err
+		}
+		if r.ReviewedFile == nil {
+			r.ReviewedFile = map[string]string{}
+		}
+		if hash == "" {
+			delete(r.ReviewedFile, path)
+		} else {
+			r.ReviewedFile[path] = hash
+		}
+		return store.Save(r)
+	}
+	return load, save
 }

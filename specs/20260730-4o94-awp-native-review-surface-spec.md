@@ -624,6 +624,14 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Phases 4 and 5 landed. Phase 4: `ctrl+s` in the compose box saves
+  and hands the comment to the agent, with an approval-gated prompt carrying the
+  anchor's file/line/side/text/context and explicit reply instructions
+  (`awp review add --author agent`), moving the comment to `sent` — not
+  `addressed`, which stays inferred. Phase 5: `r` marks the file at the cursor
+  reviewed and collapses it to its divider, keyed to a content hash so a later
+  edit resurfaces it; collapse is a `buildStream` input rather than a render-time
+  skip. `r` was freed by phase 2; explicit refresh moved to `ctrl+r`.
 - 2026-07-30: Phase 3 landed. `internal/review` owns the store (one file per
   comment, atomic writes, per-repo counts index); `internal/ui/comments.go` places
   comments into the stream geometry and renders them inline, with unplaceable

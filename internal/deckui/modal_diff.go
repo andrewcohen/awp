@@ -24,6 +24,10 @@ type CommentStore struct {
 	Load func(item Item) ([]review.Comment, error)
 	// Save persists a newly written comment.
 	Save func(item Item, c review.Comment) error
+	// LoadReviewed returns the reviewed-file marks (path → content hash).
+	LoadReviewed func(item Item) (map[string]string, error)
+	// SaveReviewed persists one mark; an empty hash clears it.
+	SaveReviewed func(item Item, path, hash string) error
 	// Send hands a saved comment to the workspace's agent. Nil leaves the
 	// send-to-agent exit unavailable, which the editor reports rather than
 	// silently doing nothing.
@@ -73,6 +77,14 @@ func newDiffModal(item Item, load DiffLoader, open DiffOpener, comments CommentS
 	if comments.Send != nil {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
 	}
+	if comments.SaveReviewed != nil {
+		inner.MarkReviewed = func(path, hash string) error { return comments.SaveReviewed(item, path, hash) }
+	}
+	if comments.LoadReviewed != nil {
+		if marks, err := comments.LoadReviewed(item); err == nil {
+			inner.SetReviewed(marks)
+		}
+	}
 	if comments.Load != nil {
 		// Best-effort: a review that cannot be read should still open as a
 		// readable diff rather than refusing to open at all.
@@ -96,7 +108,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · c comment · {/} hunk · g/G ends · h/l/0/$ pan · tab pane · e $EDITOR · w wrap · r refresh · / filter · esc close"
+	hint := " · j/k scroll · c comment · r reviewed · {/} hunk · g/G ends · h/l/0/$ pan · tab pane · e $EDITOR · w wrap · / filter · esc close"
 	return style.Render(dm.label + " · " + status + hint)
 }
 

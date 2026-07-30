@@ -304,3 +304,139 @@ func TestCommentRowsRemapFileAndHunkOffsets(t *testing.T) {
 		}
 	}
 }
+
+// ---- reviewed / collapse ----
+
+func TestReviewedFileCollapsesToItsDivider(t *testing.T) {
+	m := commentModel(t,
+		fileWith("a.go", 1, "alpha", "beta"),
+		fileWith("b.go", 1, "one", "two"),
+	)
+	before := len(m.stream.rows)
+	// Cursor into the first file, then mark it reviewed.
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+
+	if len(m.stream.rows) >= before {
+		t.Fatalf("expected collapsing to shrink the stream, %d → %d", before, len(m.stream.rows))
+	}
+	// a.go's divider survives; its body does not.
+	sawDivider, sawLine := false, false
+	for _, r := range m.stream.rows {
+		if r.file < 0 || r.file >= len(m.filtered) || pathOf(m.filtered[r.file]) != "a.go" {
+			continue
+		}
+		switch r.kind {
+		case rowFileHeader:
+			sawDivider = true
+			if !r.collapsed {
+				t.Fatal("expected the divider to be marked collapsed")
+			}
+		case rowLine:
+			sawLine = true
+		}
+	}
+	if !sawDivider || sawLine {
+		t.Fatalf("expected divider only, got divider=%v line=%v", sawDivider, sawLine)
+	}
+}
+
+// The collapsed divider must still report what it is hiding.
+func TestCollapsedDividerSummarisesWhatIsHidden(t *testing.T) {
+	m := commentModel(t, diff.FileDiff{NewPath: "a.go", Status: "M", Hunks: []diff.Hunk{{
+		OldStart: 1, NewStart: 1,
+		Lines: []diff.HunkLine{{Type: '+', Content: "added"}, {Type: '-', Content: "gone"}, {Type: ' ', Content: "ctx"}},
+	}}})
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+	row := stripANSI(m.renderStreamRowAt(m.stream.fileStart[0], 90))
+	for _, want := range []string{"reviewed", "1 hunk", "2 line"} {
+		if !strings.Contains(row, want) {
+			t.Fatalf("collapsed divider missing %q: %q", want, row)
+		}
+	}
+}
+
+func TestReviewedTogglesOff(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	full := len(m.stream.rows)
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+	collapsed := len(m.stream.rows)
+	m = press(m, "r")
+	if len(m.stream.rows) != full {
+		t.Fatalf("expected toggling back to restore the body: %d → %d → %d", full, collapsed, len(m.stream.rows))
+	}
+}
+
+// The mark is keyed to content, so an edit after reviewing brings the file back.
+// This is the failure that matters most: a change hidden behind a stale reviewed
+// flag is a change nobody looked at.
+func TestEditAfterReviewingResurfacesTheFile(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+	if !m.isCollapsed("a.go") {
+		t.Fatal("expected the file to be collapsed after review")
+	}
+
+	// The agent edits the file.
+	m = loadWith(m, 2, fileWith("a.go", 1, "alpha", "beta", "gamma"))
+	if m.isCollapsed("a.go") {
+		t.Fatal("expected an edit after reviewing to resurface the file")
+	}
+	sawLine := false
+	for _, r := range m.stream.rows {
+		if r.kind == rowLine {
+			sawLine = true
+		}
+	}
+	if !sawLine {
+		t.Fatal("expected the file's body to be visible again")
+	}
+}
+
+func TestMarkReviewedPersistsThroughTheSink(t *testing.T) {
+	saved := map[string]string{}
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.MarkReviewed = func(path, hash string) error {
+		if hash == "" {
+			delete(saved, path)
+		} else {
+			saved[path] = hash
+		}
+		return nil
+	}
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+	if saved["a.go"] == "" {
+		t.Fatalf("expected the mark to be persisted, got %+v", saved)
+	}
+	m = press(m, "r")
+	if _, ok := saved["a.go"]; ok {
+		t.Fatalf("expected un-reviewing to clear the mark, got %+v", saved)
+	}
+}
+
+// A cursor inside a file that collapses must end up somewhere valid.
+func TestCursorSurvivesCollapsing(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "a", "b", "c", "d", "e", "f"))
+	m = press(m, "G")
+	m = press(m, "r")
+	if m.cursorRow < 0 || m.cursorRow >= len(m.stream.rows) {
+		t.Fatalf("cursor %d out of range for %d rows", m.cursorRow, len(m.stream.rows))
+	}
+	if !cursorVisible(m) {
+		t.Fatalf("cursor %d not visible at scroll %d", m.cursorRow, m.streamScroll)
+	}
+}

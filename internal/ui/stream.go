@@ -67,6 +67,8 @@ type rowRef struct {
 	// rows, and commentLine is which display line of that comment this row is.
 	comment     int
 	commentLine int
+	// collapsed marks a file divider whose body is hidden.
+	collapsed bool
 }
 
 // hunkMeta is the gutter geometry for one hunk: how wide its line-number
@@ -176,7 +178,13 @@ func remap(offsets []int, shift []int) []int {
 	return out
 }
 
-func buildStream(files []diff.FileDiff, width int, wrap bool) streamIndex {
+// collapsedSet reports whether a file's body is hidden. Collapse is a geometry
+// input rather than a render-time skip: skipping rows at render would leave the
+// row count disagreeing with what is drawn, which is exactly the desync the
+// geometry/render split exists to prevent.
+type collapsedSet func(path string) bool
+
+func buildStream(files []diff.FileDiff, width int, wrap bool, collapsed collapsedSet) streamIndex {
 	// Row counts must be right even before the first size message, or
 	// scrolling is dead until a resize. At width 1 nothing wraps, so the
 	// geometry is one row per line — correct, just unreadable, which is moot
@@ -196,9 +204,15 @@ func buildStream(files []diff.FileDiff, width int, wrap bool) streamIndex {
 			idx.rows = append(idx.rows, rowRef{kind: rowSpacer, file: fi - 1, hunk: -1, line: -1})
 		}
 		idx.fileStart = append(idx.fileStart, len(idx.rows))
-		idx.rows = append(idx.rows, rowRef{kind: rowFileHeader, file: fi, hunk: -1, line: -1})
+		hidden := collapsed != nil && collapsed(pathOf(f))
+		idx.rows = append(idx.rows, rowRef{kind: rowFileHeader, file: fi, hunk: -1, line: -1, collapsed: hidden})
 
 		idx.meta[fi] = make([]hunkMeta, len(f.Hunks))
+		if hidden {
+			// The divider stays — it is the handle for un-collapsing, and it
+			// still reports what is inside.
+			continue
+		}
 		for hi, h := range f.Hunks {
 			oldWidth, newWidth := hunkLineNumberWidths(h)
 			meta := hunkMeta{
