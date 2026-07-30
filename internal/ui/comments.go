@@ -248,7 +248,14 @@ func (m Model) placeComments(rows []rowRef) (map[int][]review.Comment, []review.
 	// in their label, not in how they are placed or anchored. Their line numbers
 	// are GitHub's, against a particular commit, so they drift exactly the way
 	// ours do and want the same relocation ladder.
-	all := m.comments
+	// Group into conversations first, then place each parent followed by its
+	// replies. Placing replies independently would scatter an exchange across the
+	// diff wherever each message's anchor happened to resolve.
+	all := make([]review.Comment, 0, len(m.comments))
+	for _, th := range review.Threads(m.comments) {
+		all = append(all, th.Parent)
+		all = append(all, th.Replies...)
+	}
 	for _, t := range m.visibleThreads() {
 		all = append(all, threadAsComment(t))
 	}
@@ -257,9 +264,21 @@ func (m Model) placeComments(rows []rowRef) (map[int][]review.Comment, []review.
 	}
 	placed := make(map[int][]review.Comment, len(all))
 	var orphans []review.Comment
+	// A reply goes wherever its parent went, so a thread stays intact even if the
+	// reply's own anchor would resolve elsewhere (or nowhere).
+	parentRow := make(map[string]int, len(all))
 	for _, c := range all {
+		if c.ReplyTo != "" {
+			if row, ok := parentRow[c.ReplyTo]; ok {
+				placed[row] = append(placed[row], c)
+				continue
+			}
+			orphans = append(orphans, c)
+			continue
+		}
 		if row, ok := m.locateComment(rows, c); ok {
 			placed[row] = append(placed[row], c)
+			parentRow[c.ID] = row
 			continue
 		}
 		orphans = append(orphans, c)
@@ -459,7 +478,13 @@ func commentLines(c review.Comment, width int, cursor bool) []string {
 	if label == review.AuthorHuman {
 		label = "you"
 	}
-	title := "  ▌ " + label
+	// Replies sit one level in, so a conversation reads as a block rather than as
+	// two unrelated comments that happen to be adjacent.
+	gutter := "  ▌ "
+	if c.ReplyTo != "" {
+		gutter = "     ↳ "
+	}
+	title := gutter + label
 	if c.State != review.Open {
 		title += " · " + string(c.State)
 	}
@@ -472,7 +497,7 @@ func commentLines(c review.Comment, width int, cursor bool) []string {
 	title = truncate(title, max(1, width))
 	out := []string{pad(head.Render(title), title)}
 	for _, line := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
-		text := truncate("  ▌ "+line, max(1, width))
+		text := truncate(gutter+line, max(1, width))
 		out = append(out, pad(body.Render(text), text))
 	}
 	return out

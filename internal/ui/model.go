@@ -126,8 +126,11 @@ type Model struct {
 	// UpdateComment revises an existing comment; DeleteComment removes one.
 	UpdateComment CommentSink
 	DeleteComment CommentDeleter
-	editing       bool
-	editor        commentEditor
+	// LastSavedComment returns the record the store just wrote, including the id
+	// it assigned. The id is what lets the agent reply on the thread.
+	LastSavedComment func() (review.Comment, bool)
+	editing          bool
+	editor           commentEditor
 	// ReviewedFiles maps a path to the content hash it had when marked
 	// reviewed, and MarkReviewed persists a change to that. Hash rather than a
 	// bare flag so a later edit resurfaces the file: marking something reviewed

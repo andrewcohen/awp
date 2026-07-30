@@ -413,15 +413,95 @@ func (s Store) Comments(r Review) ([]Comment, error) {
 	return out, nil
 }
 
-// OpenCount is how many comments still need triage — what the deck badge shows.
+// OpenCount is how many findings still need triage — what the deck badge shows.
+//
+// Replies are excluded: one exchange is one thing awaiting your attention, not
+// one per message. A reply's significance is carried by reopening its parent (see
+// Reply), so a conversation that needs you still counts exactly once.
 func OpenCount(comments []Comment) int {
 	n := 0
 	for _, c := range comments {
+		if c.ReplyTo != "" {
+			continue
+		}
 		if c.State == Open {
 			n++
 		}
 	}
 	return n
+}
+
+// Reply files a reply against a parent comment and reopens that parent.
+//
+// Reopening is the point: an exchange the agent has responded to needs the
+// reviewer again, and the badge counts parents. Without it, a reply would land
+// silently on a comment still marked `sent`.
+func (s Store) Reply(r Review, parentID string, c Comment) (Comment, error) {
+	if strings.TrimSpace(parentID) == "" {
+		return Comment{}, errors.New("review: reply needs a parent comment id")
+	}
+	existing, err := s.Comments(r)
+	if err != nil {
+		return Comment{}, err
+	}
+	var parent *Comment
+	for i := range existing {
+		if existing[i].ID == parentID {
+			parent = &existing[i]
+			break
+		}
+	}
+	if parent == nil {
+		return Comment{}, fmt.Errorf("review: no comment %q to reply to", parentID)
+	}
+	// A reply inherits the parent's anchor, so the thread stays together even if
+	// the caller knows only the id.
+	c.ReplyTo = parentID
+	if c.Anchor.Path == "" {
+		c.Anchor = parent.Anchor
+	}
+	saved, err := s.AddComment(r, c)
+	if err != nil {
+		return Comment{}, err
+	}
+	if parent.State != Open {
+		parent.State = Open
+		if err := s.UpdateComment(r, *parent); err != nil {
+			return saved, err
+		}
+	}
+	return saved, nil
+}
+
+// Thread groups a top-level comment with its replies, oldest first.
+type CommentThread struct {
+	Parent  Comment
+	Replies []Comment
+}
+
+// Threads groups comments into conversations, preserving order. A reply whose
+// parent is missing is promoted to a top-level entry rather than dropped —
+// showing it out of place beats losing it.
+func Threads(comments []Comment) []CommentThread {
+	byID := make(map[string]int, len(comments))
+	out := make([]CommentThread, 0, len(comments))
+	for _, c := range comments {
+		if c.ReplyTo == "" {
+			byID[c.ID] = len(out)
+			out = append(out, CommentThread{Parent: c})
+		}
+	}
+	for _, c := range comments {
+		if c.ReplyTo == "" {
+			continue
+		}
+		if i, ok := byID[c.ReplyTo]; ok {
+			out[i].Replies = append(out[i].Replies, c)
+			continue
+		}
+		out = append(out, CommentThread{Parent: c})
+	}
+	return out
 }
 
 // WriteCounts refreshes the per-repo index the deck reads on first paint.

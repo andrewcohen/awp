@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
@@ -69,6 +70,8 @@ func runReviewSubcommand(runner Runner, svc workspace.Service, args []string, ou
 		return runReviewList(runner, svc, args[1:], out)
 	case "publish":
 		return runReviewPublish(runner, svc, args[1:], out)
+	case "reply":
+		return runReviewReply(runner, svc, args[1:], out)
 	}
 	return fmt.Errorf("unknown review subcommand %q", args[0])
 }
@@ -80,7 +83,7 @@ func isReviewSubcommand(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "add", "list", "publish":
+	case "add", "list", "publish", "reply":
 		return true
 	}
 	return false
@@ -155,6 +158,36 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	return nil
 }
 
+func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("review reply", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var (
+		to     = fs.String("to", "", "id of the comment being replied to")
+		body   = fs.String("body", "", "the reply text")
+		author = fs.String("author", "", "who is replying (defaults to 'agent')")
+	)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*to) == "" || strings.TrimSpace(*body) == "" {
+		return errors.New("review reply requires --to and --body")
+	}
+	store, r, err := openReviewForCwd(runner, svc)
+	if err != nil {
+		return err
+	}
+	who := strings.TrimSpace(*author)
+	if who == "" {
+		who = "agent"
+	}
+	c, err := store.Reply(r, *to, review.Comment{Author: who, Body: *body})
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "replied to %s (%s)\n", *to, c.ID)
+	return nil
+}
+
 func runReviewList(runner Runner, svc workspace.Service, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("review list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -188,6 +221,10 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 // reviewStoreFor wires the deck's diff modal to the review store. Load and Save
 // resolve the review from the workspace the row points at, so the deck never
 // needs to know a review id.
+// lastSaved carries the most recently written comment back to the send path,
+// which needs the store-assigned id.
+var lastSaved atomic.Pointer[review.Comment]
+
 func reviewStoreFor(runner Runner) deckui.CommentStore {
 	open := func(item deckui.Item) (review.Store, review.Review, error) {
 		store := review.Store{}
@@ -210,8 +247,15 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			if err != nil {
 				return err
 			}
-			_, err = store.AddComment(r, c)
-			return err
+			saved, err := store.AddComment(r, c)
+			if err != nil {
+				return err
+			}
+			// Remember what was written, id included: the send-to-agent prompt
+			// needs it so the agent can reply on this thread rather than filing a
+			// second comment beside it.
+			lastSaved.Store(&saved)
+			return nil
 		},
 		Update: func(item deckui.Item, c review.Comment) error {
 			store, r, err := open(item)
@@ -272,6 +316,7 @@ func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.S
 	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
 	cs.LoadThreads, cs.Resolve = threadActionsFor(runner)
+	cs.LastSaved = lastSavedComment
 	return cs
 }
 
@@ -382,4 +427,13 @@ func threadActionsFor(runner Runner) (
 		return store.SaveThreads(r, threads)
 	}
 	return load, resolve
+}
+
+// lastSavedComment reports the most recently written comment, so the send path
+// can name its id in the agent prompt.
+func lastSavedComment() (review.Comment, bool) {
+	if c := lastSaved.Load(); c != nil {
+		return *c, true
+	}
+	return review.Comment{}, false
 }

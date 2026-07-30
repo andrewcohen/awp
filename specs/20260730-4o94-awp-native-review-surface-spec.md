@@ -624,6 +624,18 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: **Local reply threads.** An agent's reply used to arrive as a new
+  comment anchored to the same line — two independent records that happened to sit
+  adjacent, not a conversation. `awp review reply --to <id>` now threads under a
+  parent, and the prompt the agent receives names the comment id, which was the
+  actual blocker: without an id there was nothing to point at.
+  Three consequences worth recording. A reply **reopens its parent**, because an
+  exchange the agent has responded to needs the reviewer again. `OpenCount` counts
+  **top-level comments only**, so one exchange is one thing awaiting triage rather
+  than one per message. And a reply is placed **wherever its parent was placed**,
+  not by its own anchor — otherwise a thread would scatter across the diff
+  wherever each message's anchor happened to resolve. An orphaned reply is
+  promoted to top level rather than dropped.
 - 2026-07-30: Comments can now be edited and deleted, which the phases had left
   out entirely. `c` is context-sensitive — on a code line it creates, on one of
   your own comments it revises that comment in place, so there is no second key

@@ -51,6 +51,8 @@ type CommentStore struct {
 	// Update revises an existing comment; Delete removes one.
 	Update func(item Item, c review.Comment) error
 	Delete func(item Item, id string) error
+	// LastSaved returns the record Save just wrote, id included.
+	LastSaved func() (review.Comment, bool)
 	// Resolve toggles a GitHub review thread's resolved state.
 	Resolve func(item Item, threadID string, resolve bool) error
 	// LoadThreads returns the mirrored PR threads for this workspace's review.
@@ -101,6 +103,9 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	)
 	if comments.Save != nil {
 		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
+	}
+	if comments.LastSaved != nil {
+		inner.LastSavedComment = comments.LastSaved
 	}
 	if comments.Update != nil {
 		inner.UpdateComment = func(c review.Comment) error { return comments.Update(item, c) }
