@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -470,8 +471,15 @@ const anchorContextLines = 3
 // counter and the renderer disagreed the stream's row indices would stop matching
 // what is drawn — the same desync the diff's own wrap accounting avoids.
 //
-// Comments wrap rather than truncate. A review remark is prose written to be
-// read; clipping it at the pane edge hides the half that explains the point.
+// Comments wrap rather than truncate, and always — independent of the `w` wrap
+// mode, which governs code. A review remark is prose written to be read; clipping
+// it at the pane edge hides the half that explains the point, and there is no
+// reason to make the reader ask for that.
+//
+// Word wrap, not the hard character wrap code uses. Breaking mid-word is right for
+// code — reflowing at spaces misrepresents where a token ends — and wrong for
+// prose, where it just makes sentences hard to read. ansi.Wrap still hard-breaks a
+// word longer than the line, so a URL or a long identifier cannot overflow.
 func commentRows(c review.Comment, width int) []string {
 	// A reply sits one space in — the least that reads as nested. The bar matches
 	// the parent's, so the indent alone carries the nesting.
@@ -495,8 +503,14 @@ func commentRows(c review.Comment, width int) []string {
 			out = append(out, truncate(gutter+line, max(1, width)))
 			continue
 		}
-		for seg := 0; seg < wrappedSegments(line, avail); seg++ {
-			out = append(out, gutter+segmentText(line, seg, avail))
+		if strings.TrimSpace(line) == "" {
+			// A deliberate blank line in a comment is a paragraph break; wrapping
+			// would swallow it.
+			out = append(out, gutter)
+			continue
+		}
+		for _, wrapped := range strings.Split(ansi.Wrap(line, avail, ""), "\n") {
+			out = append(out, gutter+wrapped)
 		}
 	}
 	return out
