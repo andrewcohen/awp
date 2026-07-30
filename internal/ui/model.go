@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/diff"
@@ -33,6 +34,15 @@ const minBodyHeight = 6
 // runs standalone (`awp diff`). Embedded, the host owns the chrome and
 // calls SetSize with the body budget directly.
 const chromeHeight = 4
+
+// hScrollStep is how many columns h/l pan the hunk pane. Single columns make
+// reading the tail of a long line tedious; a tab-ish step gets there in a
+// few presses while still landing predictably.
+const hScrollStep = 8
+
+// minVisibleColumns is how much of the longest line must stay on screen, so
+// panning can't leave the pane blank.
+const minVisibleColumns = 16
 
 type OpenFunc func(filePath string, line int) tea.Cmd
 
@@ -59,11 +69,15 @@ type Model struct {
 	// (scroll clamping, cursor sync) can lay out rows at the same width the
 	// renderer will use. Wrapped lines occupy more than one row, so that
 	// geometry is width-dependent.
-	hunkWidth  int
-	wrap       bool
-	status     string
-	statusErr  bool
-	refreshing bool
+	hunkWidth int
+	wrap      bool
+	// hunkHScroll is how many columns the hunk pane's line content is panned
+	// left. Only meaningful when wrap is off — wrapped lines have no
+	// horizontal overflow.
+	hunkHScroll int
+	status      string
+	statusErr   bool
+	refreshing  bool
 }
 
 // SetSize sizes the viewer for a host that owns its own chrome: width is
@@ -154,8 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filesCursor >= len(m.filtered) {
 			m.filesCursor = max(0, len(m.filtered)-1)
 		}
-		m.hunksCursor = 0
-		m.hunkScroll = 0
+		m.resetHunkView()
 		if len(m.filtered) == 0 {
 			m.status = "no changes"
 		} else {
@@ -217,18 +230,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "w":
 		// Toggling changes how many rows each line occupies, so the scroll
 		// offset and hunk cursor have to be re-derived against the new
-		// geometry.
+		// geometry. Wrapped lines have no horizontal overflow left to pan
+		// over, so the column offset is dropped rather than kept hidden.
 		m.wrap = !m.wrap
+		if m.wrap {
+			m.hunkHScroll = 0
+		}
 		m.clampHunkScroll()
 		m.syncHunkCursorToScroll()
 		return m, nil
-	case "tab", "l", "right":
+	case "tab", "shift+tab":
 		if m.focus == FocusFiles {
 			m.focus = FocusHunks
-		}
-		return m, nil
-	case "h", "left":
-		if m.focus == FocusHunks {
+		} else {
 			m.focus = FocusFiles
 		}
 		return m, nil
@@ -245,14 +259,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "j", "down":
 			if m.filesCursor < len(m.filtered)-1 {
 				m.filesCursor++
-				m.hunksCursor = 0
-				m.hunkScroll = 0
+				m.resetHunkView()
 			}
 		case "k", "up":
 			if m.filesCursor > 0 {
 				m.filesCursor--
-				m.hunksCursor = 0
-				m.hunkScroll = 0
+				m.resetHunkView()
 			}
 		case "e":
 			return m, m.openCurrentFile()
@@ -271,6 +283,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.scrollHunks(1)
 		case "k", "up":
 			m.scrollHunks(-1)
+		case "l", "right":
+			m.scrollHunksHorizontally(hScrollStep)
+		case "h", "left":
+			m.scrollHunksHorizontally(-hScrollStep)
 		case "}", "]":
 			m.jumpHunk(1)
 		case "{", "[":
@@ -296,8 +312,7 @@ func (m *Model) applyFilter() {
 	}
 	if m.filesCursor >= len(m.filtered) {
 		m.filesCursor = max(0, len(m.filtered)-1)
-		m.hunksCursor = 0
-		m.hunkScroll = 0
+		m.resetHunkView()
 	}
 }
 
@@ -311,8 +326,7 @@ func (m *Model) pageDown() {
 		return
 	}
 	m.filesCursor = min(len(m.filtered)-1, m.filesCursor+step)
-	m.hunksCursor = 0
-	m.hunkScroll = 0
+	m.resetHunkView()
 }
 
 func (m *Model) pageUp() {
@@ -322,8 +336,50 @@ func (m *Model) pageUp() {
 		return
 	}
 	m.filesCursor = max(0, m.filesCursor-step)
+	m.resetHunkView()
+}
+
+// resetHunkView returns the hunk pane to the top-left. Called whenever the
+// selected file changes — carrying scroll or pan across files would open the
+// next one mid-line.
+func (m *Model) resetHunkView() {
 	m.hunksCursor = 0
 	m.hunkScroll = 0
+	m.hunkHScroll = 0
+}
+
+// scrollHunksHorizontally pans the hunk pane's line content by delta
+// columns. No-op under wrap, where nothing overflows the pane.
+func (m *Model) scrollHunksHorizontally(delta int) {
+	if m.wrap {
+		return
+	}
+	m.hunkHScroll = max(0, m.hunkHScroll+delta)
+	m.clampHunkHScroll()
+}
+
+// clampHunkHScroll stops the pan before the longest line has scrolled
+// entirely out of view, so the pane can't be panned into empty space.
+func (m *Model) clampHunkHScroll() {
+	f, ok := m.currentFile()
+	if !ok {
+		m.hunkHScroll = 0
+		return
+	}
+	m.hunkHScroll = min(m.hunkHScroll, max(0, maxContentWidth(f)-minVisibleColumns))
+}
+
+// maxContentWidth is the display width of the longest line in a file's
+// hunks. Measured on the raw content (no styling applied yet), so it needs
+// no ANSI handling.
+func maxContentWidth(f diff.FileDiff) int {
+	widest := 0
+	for _, h := range f.Hunks {
+		for _, l := range h.Lines {
+			widest = max(widest, lipgloss.Width(l.Content))
+		}
+	}
+	return widest
 }
 
 // scrollHunks scrolls the hunk pane by delta rows and re-points the hunk
@@ -486,7 +542,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:move  {/}:hunk  ctrl+u/d:page  h/l:switch  e:open  w:wrap  r:refresh  /:filter  q:quit"
+	hint := "j/k:move  h/l:pan  {/}:hunk  ctrl+u/d:page  tab:pane  e:open  w:wrap  r:refresh  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
@@ -537,7 +593,7 @@ func (m Model) renderHunkPanel(width, height int) string {
 		return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
 	}
 
-	contentRows := layoutHunks(f, width-4, m.wrap, m.selectedHunkStyler()).rows
+	contentRows := layoutHunks(f, width-4, m.wrap, m.hunkHScroll, m.selectedHunkStyler()).rows
 
 	visibleHeight := max(1, height-1)
 	scroll := min(max(0, m.hunkScroll), max(0, len(contentRows)-visibleHeight))
@@ -575,7 +631,7 @@ func (l hunkLayout) hunkAtRow(row int) int {
 
 // layoutHunks renders a file's hunks into content rows. styleHeader picks the
 // style for each hunk header, letting the caller mark the selected one.
-func layoutHunks(f diff.FileDiff, width int, wrap bool, styleHeader func(int) lipgloss.Style) hunkLayout {
+func layoutHunks(f diff.FileDiff, width int, wrap bool, hScroll int, styleHeader func(int) lipgloss.Style) hunkLayout {
 	// Row *counts* must stay correct even before the first size message, or
 	// scrolling is dead until a resize. At width 1 every line still occupies
 	// one row (nothing wraps into a single column), so the geometry is right
@@ -587,7 +643,7 @@ func layoutHunks(f diff.FileDiff, width int, wrap bool, styleHeader func(int) li
 		layout.starts = append(layout.starts, len(layout.rows))
 		header := fmt.Sprintf(" @@ -%d,%d +%d,%d @@", h.OldStart, h.OldCount, h.NewStart, h.NewCount)
 		layout.rows = append(layout.rows, styleHeader(i).Width(width).Render(header))
-		layout.rows = append(layout.rows, renderHunkLines(h, width, wrap)...)
+		layout.rows = append(layout.rows, renderHunkLines(h, width, wrap, hScroll)...)
 	}
 	return layout
 }
@@ -598,7 +654,7 @@ func (m Model) hunkLayout() (hunkLayout, bool) {
 	if !ok || len(f.Hunks) == 0 {
 		return hunkLayout{}, false
 	}
-	return layoutHunks(f, m.hunkWidth, m.wrap, m.selectedHunkStyler()), true
+	return layoutHunks(f, m.hunkWidth, m.wrap, m.hunkHScroll, m.selectedHunkStyler()), true
 }
 
 // selectedHunkStyler returns the per-hunk header styler, highlighting the
@@ -675,7 +731,7 @@ func renderSinglePath(path string, width int, selected bool) string {
 	return dirStyle.Render(dir+"/") + baseStyle.Render(base)
 }
 
-func renderHunkLines(h diff.Hunk, width int, wrap bool) []string {
+func renderHunkLines(h diff.Hunk, width int, wrap bool, hScroll int) []string {
 	if width <= 0 {
 		return nil
 	}
@@ -685,13 +741,13 @@ func renderHunkLines(h diff.Hunk, width int, wrap bool) []string {
 	for _, l := range h.Lines {
 		switch l.Type {
 		case '+':
-			lines = append(lines, renderDecoratedLine('+', 0, newLine, oldWidth, newWidth, styleAdded.Render(l.Content), width, wrap, false)...)
+			lines = append(lines, renderDecoratedLine('+', 0, newLine, oldWidth, newWidth, styleAdded.Render(l.Content), width, wrap, hScroll, false)...)
 			newLine++
 		case '-':
-			lines = append(lines, renderDecoratedLine('-', oldLine, 0, oldWidth, newWidth, styleDeleted.Render(l.Content), width, wrap, false)...)
+			lines = append(lines, renderDecoratedLine('-', oldLine, 0, oldWidth, newWidth, styleDeleted.Render(l.Content), width, wrap, hScroll, false)...)
 			oldLine++
 		default:
-			lines = append(lines, renderDecoratedLine(' ', oldLine, newLine, oldWidth, newWidth, styleContext.Render(l.Content), width, wrap, false)...)
+			lines = append(lines, renderDecoratedLine(' ', oldLine, newLine, oldWidth, newWidth, styleContext.Render(l.Content), width, wrap, hScroll, false)...)
 			oldLine++
 			newLine++
 		}
@@ -724,7 +780,7 @@ func hunkLineNumberWidths(h diff.Hunk) (int, int) {
 // single truncated row normally, or — when wrap is on — the line soft-wrapped
 // across rows, with continuations indented under the code so the gutter
 // column stays clean.
-func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int, content string, width int, wrap, selected bool) []string {
+func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int, content string, width int, wrap bool, hScroll int, selected bool) []string {
 	oldText := lineNoText(oldLine)
 	newText := lineNoText(newLine)
 	lineStyle := styleLineNo
@@ -745,6 +801,13 @@ func renderDecoratedLine(kind byte, oldLine, newLine int, oldWidth, newWidth int
 	numbers := fmt.Sprintf("%*s %*s ", oldWidth, oldText, newWidth, newText)
 	prefix := lineStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
 	if !wrap {
+		// Pan the code only — line numbers and the +/- marker stay pinned,
+		// so a panned line is still identifiable. TruncateLeft is
+		// ANSI-aware, so dropping columns doesn't strip the styling of
+		// what's left.
+		if hScroll > 0 {
+			content = ansi.TruncateLeft(content, hScroll, "")
+		}
 		return []string{truncateStyled(prefix+content, width)}
 	}
 

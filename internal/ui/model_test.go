@@ -96,17 +96,30 @@ func TestScheduleRefreshDisabledWhenZero(t *testing.T) {
 	}
 }
 
-func TestHAndLMoveBetweenPanels(t *testing.T) {
+func TestTabTogglesPaneFocusBothWays(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got := updated.(Model)
 	if got.focus != FocusHunks {
-		t.Fatalf("expected hunk focus after l, got %v", got.focus)
+		t.Fatalf("expected hunk focus after tab, got %v", got.focus)
 	}
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got = updated.(Model)
 	if got.focus != FocusFiles {
-		t.Fatalf("expected file focus after h, got %v", got.focus)
+		t.Fatalf("expected tab to toggle back to files, got %v", got.focus)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if got := updated.(Model).focus; got != FocusHunks {
+		t.Fatalf("expected shift+tab to switch pane, got %v", got)
+	}
+}
+
+// h/l no longer switch panes — they pan the hunk pane.
+func TestHAndLDoNotSwitchPanes(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if got := updated.(Model).focus; got != FocusFiles {
+		t.Fatalf("expected l to leave focus on files, got %v", got)
 	}
 }
 
@@ -310,7 +323,7 @@ func TestRenderHunkLinesUsesMinimalLineNumberGutterWidth(t *testing.T) {
 		NewStart: 1,
 		Lines:    []diff.HunkLine{{Type: ' ', Content: "one"}, {Type: '+', Content: "two"}},
 	}
-	lines := renderHunkLines(h, 80, false)
+	lines := renderHunkLines(h, 80, false, 0)
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 rendered lines, got %d", len(lines))
 	}
@@ -414,7 +427,7 @@ func TestWrappedContinuationRowsAreIndented(t *testing.T) {
 	h := diff.Hunk{OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{
 		{Type: '+', Content: strings.Repeat("x", 200)},
 	}}
-	rows := renderHunkLines(h, 40, true)
+	rows := renderHunkLines(h, 40, true, 0)
 	if len(rows) < 2 {
 		t.Fatalf("expected the line to wrap, got %d rows", len(rows))
 	}
@@ -429,5 +442,130 @@ func TestWrappedContinuationRowsAreIndented(t *testing.T) {
 		if !strings.HasPrefix(plain, " ") {
 			t.Fatalf("continuation row %d not indented: %q", i+1, plain)
 		}
+	}
+}
+
+// longLineModel is one file whose single hunk holds a line far wider than
+// the pane — the case h/l exists for.
+func longLineModel(t *testing.T) Model {
+	t.Helper()
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.SetSize(120, 12)
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks: []diff.Hunk{{OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{
+			{Type: '+', Content: strings.Repeat("abcdefghij", 40)}, // 400 cols
+		}}},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	return got
+}
+
+func TestLAndHPanHunkPane(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	got := updated.(Model)
+	if got.hunkHScroll != hScrollStep {
+		t.Fatalf("expected l to pan by %d, got %d", hScrollStep, got.hunkHScroll)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected h to pan back to 0, got %d", got)
+	}
+}
+
+func TestPanClampsAtZero(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected pan to clamp at 0, got %d", got)
+	}
+}
+
+// Panning must stop before the longest line leaves the pane entirely.
+func TestPanClampsAtLineEnd(t *testing.T) {
+	m := longLineModel(t)
+	for i := 0; i < 200; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+		m = updated.(Model)
+	}
+	want := 400 - minVisibleColumns
+	if m.hunkHScroll != want {
+		t.Fatalf("expected pan to clamp at %d, got %d", want, m.hunkHScroll)
+	}
+}
+
+// The gutter stays pinned while the code shifts left.
+func TestPanShiftsContentButNotGutter(t *testing.T) {
+	h := diff.Hunk{OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{
+		{Type: '+', Content: "0123456789abcdefghij"},
+	}}
+	base := stripANSI(renderHunkLines(h, 60, false, 0)[0])
+	panned := stripANSI(renderHunkLines(h, 60, false, 10)[0])
+	if !strings.Contains(base, "0123456789") {
+		t.Fatalf("unpanned row missing the line start: %q", base)
+	}
+	if strings.Contains(panned, "0123456789") {
+		t.Fatalf("panned row should have dropped the first 10 columns: %q", panned)
+	}
+	if !strings.Contains(panned, "abcdefghij") {
+		t.Fatalf("panned row missing the tail: %q", panned)
+	}
+	// Both rows keep the same gutter prefix.
+	if base[:4] != panned[:4] {
+		t.Fatalf("gutter moved: %q vs %q", base[:4], panned[:4])
+	}
+}
+
+func TestPanIsNoOpUnderWrap(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got := updated.(Model)
+	if !got.wrap {
+		t.Fatal("expected wrap on")
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected l to no-op under wrap, got %d", got)
+	}
+}
+
+func TestEnablingWrapResetsPan(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	got := updated.(Model)
+	if got.hunkHScroll == 0 {
+		t.Fatal("expected a pan to reset")
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected enabling wrap to reset the pan, got %d", got)
+	}
+}
+
+// Moving to another file must not carry the pan across.
+func TestChangingFileResetsPan(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.SetSize(120, 12)
+	line := diff.HunkLine{Type: '+', Content: strings.Repeat("x", 300)}
+	file := func(name string) diff.FileDiff {
+		return diff.FileDiff{NewPath: name, Status: "M", Hunks: []diff.Hunk{
+			{OldStart: 1, NewStart: 1, Lines: []diff.HunkLine{line}},
+		}}
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{file("a.go"), file("b.go")}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	got = updated.(Model)
+	if got.hunkHScroll == 0 {
+		t.Fatal("expected a pan before switching files")
+	}
+	got.focus = FocusFiles
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected the pan to reset on the next file, got %d", got)
 	}
 }
