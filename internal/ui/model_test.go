@@ -590,3 +590,74 @@ func TestChangingFileResetsPan(t *testing.T) {
 		t.Fatalf("expected the pan to reset on the next file, got %d", got)
 	}
 }
+
+func TestZeroPansToLineStart(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'$'}})
+	got := updated.(Model)
+	if got.hunkHScroll == 0 {
+		t.Fatal("expected $ to pan away from the start")
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected 0 to return to the line start, got %d", got)
+	}
+}
+
+func TestDollarPansToLineEnd(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'$'}})
+	got := updated.(Model)
+	want := 400 - minVisibleColumns
+	if got.hunkHScroll != want {
+		t.Fatalf("expected $ to pan to %d, got %d", want, got.hunkHScroll)
+	}
+	// Already at the end — pressing again must not overshoot.
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'$'}})
+	if got := updated.(Model).hunkHScroll; got != want {
+		t.Fatalf("expected $ to stay at %d, got %d", want, got)
+	}
+}
+
+func TestZeroAndDollarNoOpUnderWrap(t *testing.T) {
+	m := longLineModel(t)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	got := updated.(Model)
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'$'}})
+	if got := updated.(Model).hunkHScroll; got != 0 {
+		t.Fatalf("expected $ to no-op under wrap, got %d", got)
+	}
+}
+
+// The selected file row must be the most emphasized row, not the least: it
+// carries the app-wide `┃ ` bar, and unselected rows reserve the same width
+// so labels stay aligned.
+func TestSelectedFileRowCarriesSelectionBar(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.SetSize(120, 12)
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{
+		{NewPath: "internal/ui/model.go", Status: "M"},
+		{NewPath: "internal/ui/other.go", Status: "A"},
+	}})
+	got := updated.(Model)
+
+	selected := stripANSI(got.renderFileRow(got.filtered[0], 60, true))
+	unselected := stripANSI(got.renderFileRow(got.filtered[1], 60, false))
+
+	if !strings.HasPrefix(selected, selectionPrefixBar) {
+		t.Fatalf("expected the selected row to start with the bar, got %q", selected)
+	}
+	if !strings.HasPrefix(unselected, selectionPrefixBlank) {
+		t.Fatalf("expected unselected rows to reserve the bar width, got %q", unselected)
+	}
+	// Same offset for the badge on both rows.
+	if len(selected)-len(strings.TrimLeft(selected, "┃ ")) == 0 {
+		t.Fatalf("selected row lost its prefix: %q", selected)
+	}
+	if !strings.Contains(selected, "model.go") {
+		t.Fatalf("selected row lost its path: %q", selected)
+	}
+	if !strings.Contains(unselected, "other.go") {
+		t.Fatalf("unselected row lost its path: %q", unselected)
+	}
+}
