@@ -8,10 +8,35 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/editor"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/ui"
 )
+
+// diffLoaderFor backs the deck's in-deck diff modal (`c`): the git-format
+// diff of a workspace's working change, the same source `awp diff` reads.
+func diffLoaderFor(runner Runner) deckui.DiffLoader {
+	return func(item deckui.Item) (string, error) {
+		if runner == nil {
+			runner = NewExecRunner()
+		}
+		return jj.New(runner).DiffGit(item.Path, "")
+	}
+}
+
+// openDiffFileInEditor opens a file at a line from the diff modal.
+// tea.ExecProcess
+// is the right tool here — $EDITOR is an external program, not a nested
+// Bubble Tea program (see the deckui package doc).
+func openDiffFileInEditor(_ deckui.Item, filePath string, line int) tea.Cmd {
+	return tea.ExecProcess(editor.OpenExecCmd("", filePath, line), func(err error) tea.Msg {
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
 
 func runDiffWithCharm(runner Runner, in io.Reader, out io.Writer) error {
 	if charm.IsDumbTerminal() {

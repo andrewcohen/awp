@@ -1058,6 +1058,15 @@ func (m Model) WithReviewReloader(r ReviewReloader) Model {
 	return m
 }
 
+// WithDiffViewer installs the callbacks backing the in-deck diff modal
+// (`c`). Without a loader, `c` falls back to opening the tuicr review
+// window in tmux — the pre-modal behavior.
+func (m Model) WithDiffViewer(load DiffLoader, open DiffOpener) Model {
+	m.diffLoad = load
+	m.diffOpen = open
+	return m
+}
+
 // WithPRStatusFetcher installs the async fetcher used to populate the per-row
 // PR glyph. Without it, no PR glyph is rendered.
 func (m Model) WithPRStatusFetcher(f PRStatusFetcher) Model {
@@ -2541,7 +2550,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		case key.Matches(msg, km.EditorWindow):
 			return m.trigger(ActionOpenWindow, "editor")
 		case key.Matches(msg, km.ReviewWindow):
-			return m.trigger(ActionOpenWindow, "review")
+			return m.openDiffModal()
 		case key.Matches(msg, km.ReviewMainWin):
 			return m.trigger(ActionOpenWindow, ReviewStackArg)
 		case key.Matches(msg, km.VCSWindow):
@@ -3241,6 +3250,32 @@ func (m Model) blockIfSettingUp(item Item) (Model, bool) {
 		m.status = fmt.Sprintf("%s is still setting up…", item.WorkspaceName)
 	}
 	return m, true
+}
+
+// openDiffModal opens awp's own diff viewer over the selected workspace's
+// working change (`c`). Falls back to the tuicr review window when the
+// viewer isn't wired, or when the row has no local working copy to diff —
+// a virtual inbox row, or one still being set up.
+func (m Model) openDiffModal() (tea.Model, tea.Cmd) {
+	if m.diffLoad == nil {
+		return m.trigger(ActionOpenWindow, "review")
+	}
+	item, ok := m.selected()
+	if !ok {
+		return m, nil
+	}
+	if item.Virtual || strings.TrimSpace(item.Path) == "" {
+		return m.trigger(ActionOpenWindow, "review")
+	}
+	if m2, blocked := m.blockIfSettingUp(item); blocked {
+		return m2, nil
+	}
+	dm, loadCmd := newDiffModal(item, m.diffLoad, m.diffOpen)
+	m.active = dm
+	m.status = "diff: loading…"
+	// tea.ClearScreen on modal entry — same rationale as the other modals
+	// (see doc.go).
+	return m, batchCmds(loadCmd, tea.ClearScreen)
 }
 
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
@@ -4853,7 +4888,7 @@ func deckKeyGroups() []keyGroup {
 				{"a", "agent window (re-attach without re-prompting)"},
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
-				{"c / C", "review window: working change (tuicr -r @)  /  change vs stack base (tuicr -r '<base>..@')"},
+				{"c / C", "diff viewer: working change (in-deck)  /  tuicr window vs stack base (tuicr -r '<base>..@')"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},

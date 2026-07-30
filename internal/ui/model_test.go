@@ -48,18 +48,17 @@ func TestModelFilterMode(t *testing.T) {
 	}
 }
 
-func TestModelOpenCurrentFile(t *testing.T) {
-	openedPath := ""
-	openedLine := 0
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(path string, line int) tea.Cmd {
-		openedPath = path
-		openedLine = line
+// enter is deliberately not an open binding — `e` is the only one.
+func TestModelEnterDoesNotOpenFile(t *testing.T) {
+	opened := false
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(string, int) tea.Cmd {
+		opened = true
 		return nil
 	})
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M", Hunks: []diff.Hunk{{NewStart: 5}}}}})
 	_, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if openedPath == "" || openedLine != 5 {
-		t.Fatalf("unexpected open: %q:%d", openedPath, openedLine)
+	if opened {
+		t.Fatal("expected enter not to open a file")
 	}
 }
 
@@ -114,7 +113,7 @@ func TestHAndLMoveBetweenPanels(t *testing.T) {
 func TestFilterFooterIsStableHeight(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	m.width = 100
-	m.height = 20
+	m.bodyHeight = 16
 	base := m.renderFooter()
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	withFilter := updated.(Model).renderFooter()
@@ -138,7 +137,7 @@ func TestDefaultRefreshIntervalSet(t *testing.T) {
 
 func TestCtrlDPagesFileList(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	m.height = 20
+	m.bodyHeight = 16
 	files := []diff.FileDiff{
 		{NewPath: "a.go", Status: "M"},
 		{NewPath: "b.go", Status: "M"},
@@ -159,7 +158,7 @@ func TestCtrlDPagesFileList(t *testing.T) {
 
 func TestCtrlUPagesHunks(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	m.height = 20
+	m.bodyHeight = 16
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
 		NewPath: "foo.go",
 		Status:  "M",
@@ -177,7 +176,7 @@ func TestCtrlUPagesHunks(t *testing.T) {
 
 func TestCtrlDScrollsSingleLargeHunk(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	m.height = 12
+	m.bodyHeight = 8
 	lines := make([]diff.HunkLine, 12)
 	for i := range lines {
 		lines[i] = diff.HunkLine{Type: ' ', Content: "line"}
@@ -193,6 +192,115 @@ func TestCtrlDScrollsSingleLargeHunk(t *testing.T) {
 	got = updated.(Model)
 	if got.hunkScroll == 0 {
 		t.Fatal("expected ctrl+d to scroll a single large hunk")
+	}
+}
+
+// singleHunkModel is a file with one hunk taller than the pane — the case
+// that used to be unscrollable with j/k.
+func singleHunkModel(t *testing.T, lineCount int) Model {
+	t.Helper()
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.bodyHeight = 8
+	lines := make([]diff.HunkLine, lineCount)
+	for i := range lines {
+		lines[i] = diff.HunkLine{Type: ' ', Content: "line"}
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks:   []diff.Hunk{{OldStart: 1, NewStart: 1, Lines: lines}},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	return got
+}
+
+func TestJScrollsSingleLargeHunk(t *testing.T) {
+	m := singleHunkModel(t, 20)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	got := updated.(Model)
+	if got.hunkScroll != 1 {
+		t.Fatalf("expected j to scroll one line, got hunkScroll=%d", got.hunkScroll)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := updated.(Model).hunkScroll; got != 0 {
+		t.Fatalf("expected k to scroll back, got hunkScroll=%d", got)
+	}
+}
+
+func TestKStopsAtTopOfHunkPane(t *testing.T) {
+	m := singleHunkModel(t, 20)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := updated.(Model).hunkScroll; got != 0 {
+		t.Fatalf("expected scroll to clamp at 0, got %d", got)
+	}
+}
+
+// Scrolling past a hunk boundary must move the cursor with it, so the
+// highlighted header and `e`'s target line match what's on screen.
+func TestScrollSyncsHunkCursor(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	// A short pane, so 9 rows of content actually have room to scroll.
+	m.bodyHeight = 4
+	hunk := func(start int) diff.Hunk {
+		return diff.Hunk{OldStart: start, NewStart: start, Lines: []diff.HunkLine{
+			{Type: ' ', Content: "a"}, {Type: '+', Content: "b"},
+		}}
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks:   []diff.Hunk{hunk(1), hunk(10), hunk(20)},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	// Each hunk renders as 1 header + 2 lines = 3 rows, so row 3 is the
+	// second hunk's header.
+	for i := 0; i < 3; i++ {
+		updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		got = updated.(Model)
+	}
+	if got.hunksCursor != 1 {
+		t.Fatalf("expected the cursor to follow the scroll to hunk 1, got %d", got.hunksCursor)
+	}
+}
+
+func TestJumpHunkMovesToNextHeader(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.bodyHeight = 4
+	hunk := func(start int) diff.Hunk {
+		return diff.Hunk{OldStart: start, NewStart: start, Lines: []diff.HunkLine{
+			{Type: ' ', Content: "a"}, {Type: '+', Content: "b"},
+		}}
+	}
+	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{
+		NewPath: "foo.go",
+		Status:  "M",
+		Hunks:   []diff.Hunk{hunk(1), hunk(10), hunk(20)},
+	}}})
+	got := updated.(Model)
+	got.focus = FocusHunks
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'}'}})
+	got = updated.(Model)
+	if got.hunksCursor != 1 {
+		t.Fatalf("expected } to move to hunk 1, got %d", got.hunksCursor)
+	}
+	if got.hunkScroll != 3 {
+		t.Fatalf("expected } to put hunk 1's header on top (row 3), got %d", got.hunkScroll)
+	}
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'{'}})
+	got = updated.(Model)
+	if got.hunksCursor != 0 || got.hunkScroll != 0 {
+		t.Fatalf("expected { to return to hunk 0 at row 0, got cursor=%d scroll=%d", got.hunksCursor, got.hunkScroll)
+	}
+}
+
+func TestJumpHunkStopsAtEnds(t *testing.T) {
+	m := singleHunkModel(t, 20)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'}'}})
+	got := updated.(Model)
+	if got.hunksCursor != 0 || got.hunkScroll != 0 {
+		t.Fatalf("expected } to be a no-op with one hunk, got cursor=%d scroll=%d", got.hunksCursor, got.hunkScroll)
 	}
 }
 

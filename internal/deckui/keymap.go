@@ -66,7 +66,7 @@ func newDeckKeyMap() deckKeyMap {
 		Enter:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "summon (create or focus the workspace tmux session)")),
 		AgentWindow:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),
 		EditorWindow:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "editor window ($EDITOR)")),
-		ReviewWindow:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "review window: tuicr -r @")),
+		ReviewWindow:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "diff viewer: this workspace's working change")),
 		ReviewMainWin: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "review window: this change vs its stack base (tuicr -r '<base>..@')")),
 		VCSWindow:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "vcs window (jjui)")),
 		ShellWindow:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shell window")),

@@ -25,6 +25,15 @@ const (
 
 const DefaultRefreshInterval = 0
 
+// minBodyHeight is the smallest two-pane body we will render into. Below
+// this the panes have no room for content and the borders collide.
+const minBodyHeight = 6
+
+// chromeHeight is the rows this model's own header + footer occupy when it
+// runs standalone (`awp diff`). Embedded, the host owns the chrome and
+// calls SetSize with the body budget directly.
+const chromeHeight = 4
+
 type OpenFunc func(filePath string, line int) tea.Cmd
 
 type Model struct {
@@ -41,11 +50,34 @@ type Model struct {
 	focus       Focus
 	filterInput textinput.Model
 	width       int
-	height      int
-	status      string
-	statusErr   bool
-	refreshing  bool
+	// bodyHeight is the height of the two-pane body (file list + hunks),
+	// excluding this model's own header/footer. Standalone it is derived
+	// from the terminal height; embedded (the deck's `c` modal) the host
+	// sets it directly via SetSize, since the host owns the chrome.
+	bodyHeight int
+	status     string
+	statusErr  bool
+	refreshing bool
 }
+
+// SetSize sizes the viewer for a host that owns its own chrome: width is
+// the full width available to the body, bodyHeight the number of rows the
+// two panes may occupy. Standalone use goes through tea.WindowSizeMsg
+// instead.
+func (m *Model) SetSize(width, bodyHeight int) {
+	m.width = width
+	m.bodyHeight = max(minBodyHeight, bodyHeight)
+	m.clampHunkScroll()
+}
+
+// Status returns the viewer's status text and whether it is an error, so a
+// host can surface it in its own footer.
+func (m Model) Status() (string, bool) { return m.status, m.statusErr }
+
+// Filtering reports whether the filter input has focus. A host must not
+// treat keys as its own bindings while this is true — they belong to the
+// filter.
+func (m Model) Filtering() bool { return m.focus == FocusFilter }
 
 type diffLoadedMsg struct {
 	files []diff.FileDiff
@@ -92,8 +124,7 @@ func loadDiffCmd(fn func() (string, error)) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.SetSize(msg.Width, msg.Height-chromeHeight)
 		return m, nil
 	case diffLoadedMsg:
 		m.refreshing = false
@@ -199,7 +230,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.hunksCursor = 0
 				m.hunkScroll = 0
 			}
-		case "enter", "e":
+		case "e":
 			return m, m.openCurrentFile()
 		}
 	}
@@ -208,19 +239,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.filtered) == 0 {
 			return m, nil
 		}
-		current := m.filtered[m.filesCursor]
 		switch key {
+		// j/k scroll the pane a line at a time, like ctrl+d/ctrl+u scroll it
+		// a half-page at a time. Moving the hunk cursor instead would leave
+		// a file with a single large hunk unscrollable.
 		case "j", "down":
-			if m.hunksCursor < len(current.Hunks)-1 {
-				m.hunksCursor++
-				m.ensureSelectedHunkVisible()
-			}
+			m.scrollHunks(1)
 		case "k", "up":
-			if m.hunksCursor > 0 {
-				m.hunksCursor--
-				m.ensureSelectedHunkVisible()
-			}
-		case "enter", "e":
+			m.scrollHunks(-1)
+		case "}", "]":
+			m.jumpHunk(1)
+		case "{", "[":
+			m.jumpHunk(-1)
+		case "e":
 			return m, m.openAtHunk()
 		}
 	}
@@ -249,8 +280,7 @@ func (m *Model) applyFilter() {
 func (m *Model) pageDown() {
 	step := m.pageStep()
 	if m.focus == FocusHunks {
-		m.hunkScroll += step
-		m.clampHunkScroll()
+		m.scrollHunks(step)
 		return
 	}
 	if len(m.filtered) == 0 {
@@ -264,7 +294,7 @@ func (m *Model) pageDown() {
 func (m *Model) pageUp() {
 	step := m.pageStep()
 	if m.focus == FocusHunks {
-		m.hunkScroll = max(0, m.hunkScroll-step)
+		m.scrollHunks(-step)
 		return
 	}
 	m.filesCursor = max(0, m.filesCursor-step)
@@ -272,24 +302,70 @@ func (m *Model) pageUp() {
 	m.hunkScroll = 0
 }
 
-func (m *Model) ensureSelectedHunkVisible() {
-	if len(m.filtered) == 0 || m.filesCursor >= len(m.filtered) {
-		m.hunkScroll = 0
-		return
-	}
-	visibleHeight := m.hunkContentHeight()
-	if visibleHeight <= 0 {
-		return
-	}
-	start, end := m.selectedHunkRowRange(m.filtered[m.filesCursor])
-	if start < m.hunkScroll {
-		m.hunkScroll = start
-		return
-	}
-	if end > m.hunkScroll+visibleHeight {
-		m.hunkScroll = end - visibleHeight
-	}
+// scrollHunks scrolls the hunk pane by delta rows and re-points the hunk
+// cursor at whatever is now on top.
+func (m *Model) scrollHunks(delta int) {
+	m.hunkScroll += delta
 	m.clampHunkScroll()
+	m.syncHunkCursorToScroll()
+}
+
+// syncHunkCursorToScroll points the hunk cursor at the hunk owning the top
+// visible row, so the highlighted header — and the line `e` opens — track
+// what's actually on screen rather than a cursor the user can no longer see.
+func (m *Model) syncHunkCursorToScroll() {
+	f, ok := m.currentFile()
+	if !ok {
+		return
+	}
+	row := 0
+	for i, h := range f.Hunks {
+		row += 1 + len(h.Lines)
+		if m.hunkScroll < row {
+			m.hunksCursor = i
+			return
+		}
+	}
+	if n := len(f.Hunks); n > 0 {
+		m.hunksCursor = n - 1
+	}
+}
+
+// jumpHunk moves the hunk cursor by delta hunks and scrolls that hunk's
+// header to the top of the pane — the gesture j/k used to serve before it
+// became a line scroll.
+func (m *Model) jumpHunk(delta int) {
+	f, ok := m.currentFile()
+	if !ok {
+		return
+	}
+	next := m.hunksCursor + delta
+	if next < 0 || next >= len(f.Hunks) {
+		return
+	}
+	m.hunksCursor = next
+	m.hunkScroll = hunkStartRow(f, next)
+	m.clampHunkScroll()
+}
+
+// currentFile is the file the cursor is on, if any.
+func (m Model) currentFile() (diff.FileDiff, bool) {
+	if len(m.filtered) == 0 || m.filesCursor >= len(m.filtered) {
+		return diff.FileDiff{}, false
+	}
+	return m.filtered[m.filesCursor], true
+}
+
+// hunkStartRow is the pane row idx's hunk header renders on.
+func hunkStartRow(f diff.FileDiff, idx int) int {
+	row := 0
+	for i, h := range f.Hunks {
+		if i == idx {
+			return row
+		}
+		row += 1 + len(h.Lines)
+	}
+	return row
 }
 
 func (m *Model) clampHunkScroll() {
@@ -302,7 +378,7 @@ func (m *Model) clampHunkScroll() {
 }
 
 func (m Model) hunkContentHeight() int {
-	return max(1, max(0, m.height-4)-1)
+	return max(1, m.bodyHeight-1)
 }
 
 func (m Model) totalHunkRows(f diff.FileDiff) int {
@@ -313,24 +389,8 @@ func (m Model) totalHunkRows(f diff.FileDiff) int {
 	return rows
 }
 
-func (m Model) selectedHunkRowRange(f diff.FileDiff) (int, int) {
-	start := 0
-	for i, h := range f.Hunks {
-		end := start + 1 + len(h.Lines)
-		if i == m.hunksCursor {
-			return start, end
-		}
-		start = end
-	}
-	return 0, 0
-}
-
 func (m Model) pageStep() int {
-	step := max(1, (m.height-4)/2)
-	if step < 1 {
-		return 1
-	}
-	return step
+	return max(1, m.bodyHeight/2)
 }
 
 func (m Model) openCurrentFile() tea.Cmd {
@@ -370,15 +430,27 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return "loading..."
 	}
-	leftWidth := max(24, m.width/3)
-	rightWidth := max(30, m.width-leftWidth)
-	contentHeight := max(6, m.height-4)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderFileList(leftWidth, contentHeight),
-		m.renderHunkPanel(rightWidth, contentHeight),
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.renderHeader(),
+		m.Body(m.width, m.bodyHeight),
+		m.renderFooter(),
 	)
-	return lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), body, m.renderFooter())
+}
+
+// Body renders just the two panes — file list and hunks — at the given
+// size, without this model's header or footer. A host that owns its own
+// chrome (the deck's `c` modal) renders this instead of View.
+func (m Model) Body(width, height int) string {
+	if width <= 0 {
+		return ""
+	}
+	height = max(minBodyHeight, height)
+	leftWidth := max(24, width/3)
+	rightWidth := max(30, width-leftWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		m.renderFileList(leftWidth, height),
+		m.renderHunkPanel(rightWidth, height),
+	)
 }
 
 var (
@@ -420,7 +492,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:move  ctrl+u/d:page  h/l:switch  e/enter:open  r:refresh  /:filter  q:quit"
+	hint := "j/k:move  {/}:hunk  ctrl+u/d:page  h/l:switch  e:open  r:refresh  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
