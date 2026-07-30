@@ -4,6 +4,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/andrewcohen/awp/internal/review"
 	"github.com/andrewcohen/awp/internal/ui"
 )
 
@@ -15,6 +16,15 @@ type DiffLoader func(item Item) (string, error)
 // DiffOpener returns the command that opens filePath at line for a
 // workspace — an external $EDITOR process, which tea.ExecProcess handles.
 type DiffOpener func(item Item, filePath string, line int) tea.Cmd
+
+// CommentStore is the review store seam. The deck package neither knows nor
+// cares where findings live; the CLI layer supplies these.
+type CommentStore struct {
+	// Load returns the findings already anchored in this workspace's review.
+	Load func(item Item) ([]review.Comment, error)
+	// Save persists a newly written comment.
+	Save func(item Item, c review.Comment) error
+}
 
 // diffModalChrome is the rows the deck's own chrome takes around a body
 // modal: the panel's Padding(1, 1, 1, 1) plus the footer block.
@@ -40,7 +50,7 @@ type diffModal struct {
 
 // newDiffModal builds the modal and returns the command that loads the
 // first diff.
-func newDiffModal(item Item, load DiffLoader, open DiffOpener) (*diffModal, tea.Cmd) {
+func newDiffModal(item Item, load DiffLoader, open DiffOpener, comments CommentStore) (*diffModal, tea.Cmd) {
 	inner := ui.New(item.Path,
 		func() (string, error) { return load(item) },
 		func(filePath string, line int) tea.Cmd {
@@ -50,6 +60,16 @@ func newDiffModal(item Item, load DiffLoader, open DiffOpener) (*diffModal, tea.
 			return open(item, filePath, line)
 		},
 	)
+	if comments.Save != nil {
+		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
+	}
+	if comments.Load != nil {
+		// Best-effort: a review that cannot be read should still open as a
+		// readable diff rather than refusing to open at all.
+		if existing, err := comments.Load(item); err == nil {
+			inner.SetComments(existing)
+		}
+	}
 	dm := &diffModal{
 		inner:  inner,
 		label:  item.ProjectName + "/" + item.WorkspaceName,
@@ -66,7 +86,7 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · {/} hunk · g/G ends · h/l/0/$ pan · tab pane · e open in $EDITOR · w wrap · r refresh · / filter · esc close"
+	hint := " · j/k scroll · c comment · {/} hunk · g/G ends · h/l/0/$ pan · tab pane · e $EDITOR · w wrap · r refresh · / filter · esc close"
 	return style.Render(dm.label + " · " + status + hint)
 }
 

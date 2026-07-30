@@ -745,8 +745,11 @@ func (a *App) runMiniDeck(args []string) error {
 
 func (a *App) runReview(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\nWith no argument, opens an interactive picker over `gh pr list`.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\n       awp review add --file <path> --line <n> [--side new|old] [--text <line>] --body <text>\n       awp review list [--json]\n\nWith no argument, opens an interactive picker over `gh pr list`.")
 		return nil
+	}
+	if isReviewSubcommand(args) {
+		return runReviewSubcommand(a.runner, a.svc, args, a.out)
 	}
 	if len(args) > 1 {
 		return errors.New("review takes at most one PR number")

@@ -14,6 +14,7 @@ import (
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/diff"
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 type Focus int
@@ -107,6 +108,17 @@ type Model struct {
 	// matching it is a no-op.
 	fingerprint uint64
 	loaded      bool
+	// comments are the findings anchored into this diff, placed during the
+	// geometry pass (see comments.go).
+	comments []review.Comment
+	// SaveComment persists a comment the user wrote. Nil disables commenting, so
+	// the standalone viewer works with no store configured.
+	SaveComment CommentSink
+	// SendComment additionally hands a comment to the workspace's agent. Nil
+	// leaves the send exit unavailable.
+	SendComment CommentSink
+	editing     bool
+	editor      commentEditor
 	status      string
 	statusErr   bool
 	refreshing  bool
@@ -133,7 +145,7 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // file set, width or wrap must go through here — it is the only place the
 // index is built, so it cannot silently go stale.
 func (m *Model) rebuildStream() {
-	m.stream = buildStream(m.filtered, m.hunkWidth, m.wrap)
+	m.stream = withComments(buildStream(m.filtered, m.hunkWidth, m.wrap), m.placeComments)
 	m.clampCursor()
 	m.followCursor()
 	m.syncFileCursorToCursor()
@@ -151,10 +163,10 @@ func paneWidths(width int) (left, right int) {
 // host can surface it in its own footer.
 func (m Model) Status() (string, bool) { return m.status, m.statusErr }
 
-// Filtering reports whether the filter input has focus. A host must not
-// treat keys as its own bindings while this is true — they belong to the
-// filter.
-func (m Model) Filtering() bool { return m.focus == FocusFilter }
+// Filtering reports whether a text input owns the keyboard — the file filter or
+// the comment compose box. A host must not treat keys as its own bindings while
+// this is true; `q` and `esc` in particular belong to the input.
+func (m Model) Filtering() bool { return m.focus == FocusFilter || m.editing }
 
 type diffLoadedMsg struct {
 	files []diff.FileDiff
@@ -266,6 +278,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The compose box owns every key while it is up, including the ones that
+	// would otherwise navigate or close.
+	if m.editing {
+		return m.handleEditorKey(msg)
+	}
 	key := msg.String()
 	if m.focus == FocusFilter {
 		switch key {
@@ -371,6 +388,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursorRow = max(0, len(m.stream.rows)-1)
 			m.followCursor()
 			m.syncFileCursorToCursor()
+		case "c":
+			return m.startComment()
 		case "e":
 			return m, m.openAtCursor()
 		}
@@ -659,10 +678,21 @@ func (m Model) Body(width, height int) string {
 	}
 	height = max(minBodyHeight, height)
 	leftWidth, rightWidth := paneWidths(width)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
+	// The compose box takes rows from the panes rather than overlaying them, so
+	// the line being commented on stays visible above it.
+	editorView := ""
+	if m.editing {
+		editorView = m.editor.view(width)
+		height = max(minBodyHeight, height-lipgloss.Height(editorView))
+	}
+	panes := lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderFileList(leftWidth, height),
 		m.renderStreamPanel(rightWidth, height),
 	)
+	if editorView == "" {
+		return panes
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, panes, editorView)
 }
 
 var (
@@ -691,9 +721,14 @@ var (
 	// charm.Cursorline is an adaptive colour a hair off the terminal
 	// background. BgPanel (ANSI 0) was tried first and reads far too strong:
 	// it is sized for chip fills, where contrast is the point.
-	cursorlineBg          = charm.Cursorline
-	styleCursorLineNo     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Background(cursorlineBg)
-	styleCursorFill       = lipgloss.NewStyle().Background(cursorlineBg)
+	cursorlineBg      = charm.Cursorline
+	styleCursorLineNo = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Background(cursorlineBg)
+	styleCursorFill   = lipgloss.NewStyle().Background(cursorlineBg)
+	// Comments are Info-hued so they read as annotation rather than as diff
+	// content — nothing in a diff line is ever blue.
+	styleCommentHead      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
+	styleCommentBody      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info))
+	styleOrphanHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
 	styleContextCursor    = styleContext.Background(cursorlineBg)

@@ -624,6 +624,18 @@ Resolved questions move into *Decisions*.
 - 2026-07-30: Follow mode moved out of the main sequence to phase 8, after
   publish — wanted, but a nice idea rather than a current need, and nothing
   about retiring tuicr depends on it. The finish line is now phase 7.
+- 2026-07-30: Phase 3 landed. `internal/review` owns the store (one file per
+  comment, atomic writes, per-repo counts index); `internal/ui/comments.go` places
+  comments into the stream geometry and renders them inline, with unplaceable
+  ones in a detached section; `c` opens a compose box; `awp review add` / `awp
+  review list` are the agent-facing CLI; workspace delete and PruneOrphans now
+  remove a workspace's review unless it holds unpublished comments.
+  Deviation: reviews are keyed by **workspace** rather than by PR for now.
+  `PRNumber` lives on the state-file entry, which `workspace.Service` does not
+  expose for reading, and `awp review <pr>` already creates a dedicated workspace
+  per PR — so a workspace-keyed review is effectively the PR's review until PR
+  mode lands in phase 6. Safe to re-key later precisely because comments anchor
+  to content and nothing depends on the review's identity (D1).
 - 2026-07-30: Phase 2 landed. Trigger deviates from the fsnotify line above: a
   2s poll with a raw-diff fingerprint to drop no-op reloads. Anchoring by
   content (with occurrence-ordinal disambiguation for duplicate lines) is shared
