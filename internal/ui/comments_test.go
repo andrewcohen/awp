@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -997,24 +998,97 @@ func TestCommentReloadKeepsTheReadingPosition(t *testing.T) {
 	}
 }
 
-// Your own words are always your colour, wherever they sit in a thread — a reply
-// you write must not take the agent's hue just for being a reply. Asserted on the
-// style choice, since lipgloss strips colour with no TTY.
-func TestColourFollowsAuthorNotReplyDepth(t *testing.T) {
-	mineHead, mineBody, _ := commentStyles(true, false)
-	theirHead, theirBody, _ := commentStyles(false, false)
-
-	if mineHead.GetForeground() == theirHead.GetForeground() {
-		t.Fatal("expected your comments and the agent's to differ in hue")
+// Hue says what the remark is asking for, not who wrote it.
+//
+// It used to key off the author (yours one colour, the agent's another), which
+// spent the only pre-attentive channel available on something a label already
+// says. Authorship moved to the 🤖 marker on the body, freeing the hue for the
+// distinction you cannot get from skimming: change wanted, answer wanted, or
+// neither. Asserted on the style choice, since lipgloss strips colour with no TTY.
+func TestColourFollowsKindNotAuthor(t *testing.T) {
+	kinds := []review.Kind{review.KindComment, review.KindSuggestion, review.KindQuestion}
+	seen := map[string]review.Kind{}
+	for _, k := range kinds {
+		head, body, _ := commentStyles(k, false)
+		hue := fmt.Sprint(head.GetForeground())
+		if other, dup := seen[hue]; dup {
+			t.Fatalf("%q and %q share a hue — the kinds must be distinguishable", k, other)
+		}
+		seen[hue] = k
+		if body.GetForeground() != head.GetForeground() {
+			t.Fatalf("%q: head and body should share the kind's hue", k)
+		}
 	}
-	if mineBody.GetForeground() == theirBody.GetForeground() {
-		t.Fatal("expected bodies to differ in hue too")
+	// An unset kind is a comment: records written before kinds existed have to
+	// render as something, and the default is the one claiming the least.
+	unsetHead, _, _ := commentStyles("", false)
+	defaultHead, _, _ := commentStyles(review.KindComment, false)
+	if unsetHead.GetForeground() != defaultHead.GetForeground() {
+		t.Fatal("expected an unset kind to render as a plain comment")
 	}
-	// Nesting is not part of the choice — only authorship is, which is what makes
-	// a reply you wrote keep your colour.
-	cursorMine, _, _ := commentStyles(true, true)
-	if cursorMine.GetForeground() != mineHead.GetForeground() {
+	// The cursorline changes the background, never the hue.
+	cursorHead, _, _ := commentStyles(review.KindSuggestion, true)
+	plainHead, _, _ := commentStyles(review.KindSuggestion, false)
+	if cursorHead.GetForeground() != plainHead.GetForeground() {
 		t.Fatal("expected the cursorline to change the background, not the hue")
+	}
+}
+
+// tab cycles the kind while composing, and lands back where it started. The box
+// owns every key while it is open, so tab is free here — it is the pane switch
+// only out in the diff.
+func TestTabCyclesTheKindInTheComposeBox(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
+	m.cursorRow = rowOfLine(m, "beta")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	m = updated.(Model)
+	if got := m.editor.kind.OrDefault(); got != review.KindComment {
+		t.Fatalf("expected a new box to start as a plain comment, got %q", got)
+	}
+
+	var order []review.Kind
+	for i := 0; i < len(review.Kinds()); i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = updated.(Model)
+		order = append(order, m.editor.kind)
+	}
+	if order[len(order)-1] != review.KindComment {
+		t.Fatalf("expected the cycle to wrap back to comment, got %v", order)
+	}
+	if order[0] == review.KindComment {
+		t.Fatalf("expected the first tab to change the kind, got %v", order)
+	}
+
+	// And the saved record carries whatever the box was showing.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	want := m.editor.kind
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if len(m.comments) != 1 {
+		t.Fatalf("expected the comment saved, got %d", len(m.comments))
+	}
+	if got := m.comments[0].Kind; got != want {
+		t.Fatalf("expected the saved kind %q, got %q", want, got)
+	}
+}
+
+// Editing reopens the box on the kind the comment already has, so revising the
+// wording does not silently reset it to the default.
+func TestEditingKeepsTheExistingKind(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
+	m.UpdateComment = func(review.Comment) error { return nil }
+	c := commentOn("a.go", 2, "beta", "needs a guard")
+	c.Kind = review.KindSuggestion
+	m.SetComments([]review.Comment{c})
+	m.cursorRow = firstRowOfComment(m, c.ID)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m = updated.(Model)
+	if got := m.editor.kind; got != review.KindSuggestion {
+		t.Fatalf("expected the box to open on the existing kind, got %q", got)
 	}
 }
 

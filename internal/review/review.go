@@ -115,12 +115,71 @@ type PublishRecord struct {
 	At       time.Time `json:"at"`
 }
 
+// Kind is what a comment is asking for. It changes what the reader is expected
+// to do about it, which is worth distinguishing: a suggestion wants a change, a
+// question wants an answer, and a plain comment wants neither.
+//
+// It is a property of the remark rather than of its author, so an agent's
+// findings carry it too — that is how a reviewer can tell "this is broken" from
+// "why is this here" without reading every body.
+type Kind string
+
+const (
+	// KindComment is a remark with no implied action — the default, and what an
+	// empty Kind means on a record written before kinds existed.
+	KindComment Kind = "comment"
+	// KindSuggestion proposes a change.
+	KindSuggestion Kind = "suggestion"
+	// KindQuestion asks for an answer.
+	KindQuestion Kind = "question"
+)
+
+// Kinds is every kind, in the order the compose box cycles them.
+func Kinds() []Kind { return []Kind{KindComment, KindSuggestion, KindQuestion} }
+
+// ParseKind reads a kind from user or agent input, falling back to KindComment.
+// An unrecognised value is not an error: a comment is worth keeping even when the
+// label on it is wrong, and the default is the one that claims the least.
+func ParseKind(s string) Kind {
+	switch Kind(strings.ToLower(strings.TrimSpace(s))) {
+	case KindSuggestion:
+		return KindSuggestion
+	case KindQuestion:
+		return KindQuestion
+	default:
+		return KindComment
+	}
+}
+
+// Next is the kind after this one, wrapping — what tab does in the compose box.
+func (k Kind) Next() Kind {
+	all := Kinds()
+	for i, c := range all {
+		if c == k.OrDefault() {
+			return all[(i+1)%len(all)]
+		}
+	}
+	return KindComment
+}
+
+// OrDefault resolves an unset kind. Records written before kinds existed have an
+// empty one, and every reader has to see the same thing for them.
+func (k Kind) OrDefault() Kind {
+	if k == "" {
+		return KindComment
+	}
+	return k
+}
+
 // Comment is one finding. Author distinguishes a human's note from an agent's
 // finding; nothing else about the record differs between the two directions.
 type Comment struct {
-	ID        string         `json:"id"`
-	Author    string         `json:"author"`
-	Body      string         `json:"body"`
+	ID     string `json:"id"`
+	Author string `json:"author"`
+	Body   string `json:"body"`
+	// Kind is what the comment is asking for. Empty means KindComment, so records
+	// written before kinds existed read correctly.
+	Kind      Kind           `json:"kind,omitempty"`
 	State     State          `json:"state"`
 	Anchor    Anchor         `json:"anchor"`
 	ReplyTo   string         `json:"reply_to,omitempty"`
@@ -131,6 +190,12 @@ type Comment struct {
 
 // AuthorHuman marks a comment written by the person at the keyboard.
 const AuthorHuman = "human"
+
+// ByRobot reports whether a comment was written by something other than the
+// person at the keyboard — an agent, or anything else filing findings through
+// the CLI. Everything that renders or publishes a comment marks these, so an
+// agent's words are never mistaken for a reviewer's.
+func (c Comment) ByRobot() bool { return c.Author != AuthorHuman }
 
 // Review is the container: what is under review, and the per-review state the
 // deck owns.

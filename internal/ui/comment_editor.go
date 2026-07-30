@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -29,6 +28,8 @@ type commentEditor struct {
 	editing string
 	// replyTo is the id of the comment being replied to, empty otherwise.
 	replyTo string
+	// kind is what the remark is asking for, cycled with tab while composing.
+	kind review.Kind
 }
 
 func newCommentEditor(a review.Anchor, width int) commentEditor {
@@ -58,7 +59,7 @@ func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	ta.SetValue(c.Body)
 	ta.Focus()
 	ta.CursorEnd()
-	return commentEditor{area: ta, anchor: c.Anchor, editing: c.ID}
+	return commentEditor{area: ta, anchor: c.Anchor, editing: c.ID, kind: c.Kind.OrDefault()}
 }
 
 // commentEditorHeight is how many rows the text area gets. Enough for a real
@@ -109,6 +110,12 @@ func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction
 	case "alt+enter":
 		e.area.InsertString("\n")
 		return e, nil, editorContinue
+	case "tab":
+		// The box owns every key while it is open, so tab is free here — it is the
+		// pane switch only in the diff. Cycling rather than three separate keys
+		// keeps the gesture next to the label it changes.
+		e.kind = e.kind.Next()
+		return e, nil, editorContinue
 	}
 	var cmd tea.Cmd
 	e.area, cmd = e.area.Update(msg)
@@ -123,24 +130,27 @@ func (e commentEditor) view(width int) string {
 	inner := max(20, width-2) - 2
 	// Leading space on both the header and the hint so they line up with the text
 	// area's own one-column prompt.
-	hint := " enter save · ctrl+s save & send to agent · alt+enter newline · esc cancel"
+	hint := " enter save · tab kind · ctrl+s save & send to agent · alt+enter newline · esc cancel"
 	if lipgloss.Width(hint) > inner {
-		hint = " enter save · ctrl+s send · esc cancel"
+		hint = " enter save · tab kind · ctrl+s send · esc cancel"
 	}
-	verb := " comment on "
+	verb := " " + string(e.kind.OrDefault()) + " on "
 	switch {
 	case e.replyTo != "":
-		verb = " reply on "
+		verb = " reply (" + string(e.kind.OrDefault()) + ") on "
 	case e.editing != "":
-		verb = " editing comment on "
+		verb = " editing " + string(e.kind.OrDefault()) + " on "
 	}
 	head := verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint)
+	// Border and header take the kind's hue, so tab's effect is visible
+	// immediately rather than only once the comment is saved.
+	headStyle, _ := kindStyles(e.kind)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(charm.Info)).
+		BorderForeground(lipgloss.Color(kindColor(e.kind))).
 		Width(max(20, width-2)).
 		Render(lipgloss.JoinVertical(lipgloss.Left,
-			styleCommentHead.Render(truncate(head, inner)),
+			headStyle.Render(truncate(head, inner)),
 			e.area.View(),
 			styleDim.Render(truncate(hint, inner)),
 		))
@@ -235,6 +245,7 @@ func (e commentEditor) comment() review.Comment {
 		ID:     e.editing,
 		Author: review.AuthorHuman,
 		Body:   strings.TrimRight(e.area.Value(), "\n"),
+		Kind:   e.kind.OrDefault(),
 		State:  review.Open,
 		Anchor: e.anchor,
 	}

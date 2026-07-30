@@ -164,6 +164,76 @@ func TestTabSkipsTheIndexWhenItIsNotShown(t *testing.T) {
 	}
 }
 
+// Delete has to work from the index, which means the diff cursor must already be
+// parked on the selected conversation the moment focus arrives — not only after
+// the first j/k, since D acts through the cursor.
+func TestTabbingIntoTheIndexParksTheCursorOnTheSelection(t *testing.T) {
+	m := indexModel(t)
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "beta", "first", review.AuthorHuman),
+		comment("c2", "pkg/b.go", 2, "epsilon", "second", review.AuthorHuman),
+	})
+	m.commentsCursor = 1
+	m.cursorRow = 0 // deliberately elsewhere
+	m.focus = FocusFiles
+	m.cycleFocus(true)
+	if m.focus != FocusComments {
+		t.Fatalf("expected the index focused, got %v", m.focus)
+	}
+	got, ok := m.localCommentAtCursor()
+	if !ok {
+		t.Fatal("expected the cursor on a comment after tabbing into the index")
+	}
+	if got.ID != "c2" {
+		t.Fatalf("expected the cursor on the selected conversation c2, got %q", got.ID)
+	}
+}
+
+func TestDeleteFromTheIndexRemovesTheSelection(t *testing.T) {
+	m := indexModel(t)
+	var deleted []string
+	m.DeleteComment = func(id string) error { deleted = append(deleted, id); return nil }
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "beta", "first", review.AuthorHuman),
+		comment("c2", "pkg/b.go", 2, "epsilon", "second", review.AuthorHuman),
+	})
+	m.focus = FocusFiles
+	m.cycleFocus(true) // into the index, on c1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	m = updated.(Model)
+	if len(deleted) != 1 || deleted[0] != "c1" {
+		t.Fatalf("expected c1 deleted through the store, got %v", deleted)
+	}
+	if len(m.commentIndex) != 1 || m.commentIndex[0].id != "c2" {
+		t.Fatalf("expected only c2 left in the index, got %+v", m.commentIndex)
+	}
+	// And the cursor followed to what took its place, rather than sitting on a row
+	// that shifted underneath it.
+	got, ok := m.localCommentAtCursor()
+	if !ok || got.ID != "c2" {
+		t.Fatalf("expected the cursor on c2 after the delete, got %+v (ok=%v)", got, ok)
+	}
+}
+
+// Deleting the last one takes the pane away, so focus has to leave with it.
+func TestDeletingTheLastCommentFromTheIndexReleasesFocus(t *testing.T) {
+	m := indexModel(t)
+	m.DeleteComment = func(string) error { return nil }
+	m.SetComments([]review.Comment{comment("c1", "a.go", 2, "beta", "only", review.AuthorHuman)})
+	m.focus = FocusFiles
+	m.cycleFocus(true)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	m = updated.(Model)
+	if len(m.commentIndex) != 0 {
+		t.Fatalf("expected an empty index, got %+v", m.commentIndex)
+	}
+	if m.focus == FocusComments {
+		t.Fatal("expected focus to leave the index once it emptied")
+	}
+}
+
 // Focus must not be left on a pane that has gone away — deleting the last
 // comment, or filtering its file out, removes the index from under it.
 func TestFocusLeavesTheIndexWhenItEmpties(t *testing.T) {
@@ -222,19 +292,22 @@ func TestLeftColumnKeepsTheSameHeightWithTheIndex(t *testing.T) {
 	}
 }
 
-// Selection wins over authorship: the app-wide marker has to read as the
-// selection wherever it lands. lipgloss strips colour with no TTY, so the choice
-// is asserted rather than the rendered output.
-func TestCommentEntryStylesPutSelectionFirst(t *testing.T) {
-	mineLoc, _ := commentEntryStyles(true, false)
-	theirsLoc, _ := commentEntryStyles(false, false)
-	if mineLoc.GetForeground() == theirsLoc.GetForeground() {
-		t.Fatal("expected your conversations to take a different hue from everyone else's")
+// An index row carries the same hue the conversation has in the diff, so the two
+// views of one comment are recognisably the same thing. Selection overrides it:
+// the app-wide marker has to read as the selection wherever it lands. lipgloss
+// strips colour with no TTY, so the choice is asserted rather than the output.
+func TestCommentEntryStylesFollowKindThenSelection(t *testing.T) {
+	for _, k := range review.Kinds() {
+		entryLoc, _ := commentEntryStyles(k, false)
+		blockHead, _, _ := commentStyles(k, false)
+		if entryLoc.GetForeground() != blockHead.GetForeground() {
+			t.Fatalf("%q: index row and diff block disagree on hue", k)
+		}
 	}
-	selLoc, selText := commentEntryStyles(true, true)
-	otherSel, _ := commentEntryStyles(false, true)
+	selLoc, selText := commentEntryStyles(review.KindSuggestion, true)
+	otherSel, _ := commentEntryStyles(review.KindQuestion, true)
 	if selLoc.GetForeground() != otherSel.GetForeground() {
-		t.Fatal("a selected row must look the same whoever wrote it")
+		t.Fatal("a selected row must look the same whatever kind it is")
 	}
 	if selLoc.GetForeground() != styleSelected.GetForeground() || selText.GetForeground() != styleSelected.GetForeground() {
 		t.Fatal("expected the selected row in the app-wide selection hue")
