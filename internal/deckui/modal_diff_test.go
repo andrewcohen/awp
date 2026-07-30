@@ -159,6 +159,42 @@ func TestDiffModalViewFitsViewport(t *testing.T) {
 	}
 }
 
+// blankRowsAboveFooter counts the blank rows between the last row carrying
+// content and the footer bar.
+func blankRowsAboveFooter(view string) int {
+	lines := strings.Split(view, "\n")
+	footer := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			footer = i
+			break
+		}
+	}
+	n := 0
+	for i := footer - 1; i >= 0 && strings.TrimSpace(lines[i]) == ""; i-- {
+		n++
+	}
+	return n
+}
+
+// The viewer fills its height budget, so any row diffModalChrome over-reserves
+// shows up as a blank band above the status line rather than as a smaller frame.
+// One row of separation is the intent; three was the bug.
+func TestDiffModalLeavesOneRowAboveTheFooter(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	view := m.View()
+	if got := blankRowsAboveFooter(view); got != 1 {
+		t.Fatalf("expected 1 blank row above the footer, got %d:\n%s", got, view)
+	}
+	// And the frame must still fit — the fix takes the reclaimed rows as diff
+	// content, so an off-by-one the other way would push the footer off screen.
+	if h := lipgloss.Height(view); h > m.height {
+		t.Fatalf("view is %d rows, viewport is %d", h, m.height)
+	}
+}
+
 func TestDiffModalSurfacesLoadError(t *testing.T) {
 	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return "", errors.New("boom") })
 	m, cmd := pressKey(m, "c")

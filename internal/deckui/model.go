@@ -3877,16 +3877,20 @@ func (m Model) View() string {
 	// blending property of the inline-mode design is also moot.
 	// Keeping the rendering as plain spaces (no SGR) so it stays cheap
 	// and the alt-screen canvas's default bg shows through unpainted.
-	padBlock := ""
-	if pad > 0 {
-		blanks := make([]string, pad)
-		blank := strings.Repeat(" ", m.width)
-		for i := range blanks {
-			blanks[i] = blank
-		}
-		padBlock = strings.Join(blanks, "\n")
+	if pad == 0 {
+		// JoinVertical counts an empty string as a row, so passing an empty pad
+		// block costs the very row it is meant to represent the absence of. A body
+		// that exactly fills its budget — which is every body modal, since they
+		// size themselves from m.height — would overflow the viewport by one and
+		// push the footer's bottom padding off screen.
+		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, body, padBlock, footer)
+	blanks := make([]string, pad)
+	blank := strings.Repeat(" ", m.width)
+	for i := range blanks {
+		blanks[i] = blank
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, body, strings.Join(blanks, "\n"), footer)
 }
 
 // helpBoxDims returns the help popover's outer box width and the inner
