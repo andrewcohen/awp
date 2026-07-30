@@ -132,6 +132,9 @@ type Model struct {
 	// ReplyComment files a reply against a parent comment, which also reopens
 	// that parent — an answered remark needs the reviewer again.
 	ReplyComment func(parentID string, c review.Comment) error
+	// LoadComments re-reads the review's comments, so findings filed while the
+	// view is open appear without reopening it.
+	LoadComments func() ([]review.Comment, error)
 	editing      bool
 	editor       commentEditor
 	// ReviewedFiles maps a path to the content hash it had when marked
@@ -283,6 +286,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusErr = false
 		return m, scheduleRefresh(m.RefreshInterval)
 	case autoRefreshTickMsg:
+		// Comments are re-read on the tick, not gated on the diff changing: an
+		// agent replying edits no files, so a fingerprint-gated reload would
+		// never fire and a reply would sit invisible until the view was reopened.
+		m.reloadComments()
 		if !m.refreshing {
 			m.refreshing = true
 			return m, loadDiffCmd(m.LoadDiff)

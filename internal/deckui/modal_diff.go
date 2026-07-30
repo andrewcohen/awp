@@ -145,6 +145,10 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 		if existing, err := comments.Load(item); err == nil {
 			inner.SetComments(existing)
 		}
+		// And re-read on every refresh tick, so a finding filed while the view is
+		// open — by an agent replying, most importantly — shows up without
+		// closing and reopening.
+		inner.LoadComments = func() ([]review.Comment, error) { return comments.Load(item) }
 	}
 	dm := &diffModal{
 		inner:  inner,
