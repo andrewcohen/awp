@@ -1096,3 +1096,82 @@ func TestWrappedCommentOccupiesItsRowsInTheStream(t *testing.T) {
 		}
 	}
 }
+
+// Prose breaks at spaces. Mid-word breaking is right for code, where reflowing at
+// spaces misrepresents where a token ends, and wrong for a sentence.
+func TestCommentBodyWordWraps(t *testing.T) {
+	c := review.Comment{
+		ID: "c1", Author: review.AuthorHuman, State: review.Open,
+		Body: "the quick brown fox jumps over the lazy dog and keeps running",
+	}
+	rows := commentRows(c, 30)
+	for i, r := range rows[1:] {
+		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r), "▌"))
+		if text == "" {
+			continue
+		}
+		// No row may start or end mid-word: every row's edges land on whole words.
+		if strings.HasPrefix(text, " ") {
+			t.Fatalf("row %d starts with padding: %q", i, r)
+		}
+		for _, word := range strings.Fields(text) {
+			if !strings.Contains(c.Body, word) {
+				t.Fatalf("row %d contains a broken word %q: %q", i, word, r)
+			}
+		}
+	}
+}
+
+// A word longer than the line still has to break, or it overflows the pane.
+func TestCommentWrapBreaksAnOverlongWord(t *testing.T) {
+	c := review.Comment{
+		ID: "c1", Author: review.AuthorHuman, State: review.Open,
+		Body: "see " + strings.Repeat("x", 120),
+	}
+	rows := commentRows(c, 30)
+	for i, r := range rows {
+		if lipgloss.Width(r) > 30 {
+			t.Fatalf("row %d overflows: %d cells (%q)", i, lipgloss.Width(r), r)
+		}
+	}
+	if len(rows) < 4 {
+		t.Fatalf("expected the long word broken across rows, got %d", len(rows))
+	}
+}
+
+// Comments wrap whether or not code does — `w` governs code, not prose.
+func TestCommentsWrapIndependentlyOfWrapMode(t *testing.T) {
+	long := strings.Repeat("a wordy remark ", 12)
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", long)})
+	wrapOff := rowsOfKind(m, rowComment)
+
+	m = press(m, "w") // code wrap on
+	if !m.wrap {
+		t.Fatal("expected code wrap enabled")
+	}
+	if got := rowsOfKind(m, rowComment); got != wrapOff {
+		t.Fatalf("expected comment rows unaffected by code wrap mode, %d → %d", wrapOff, got)
+	}
+	if wrapOff < 3 {
+		t.Fatalf("expected the comment wrapped even with code wrap off, got %d rows", wrapOff)
+	}
+}
+
+// A blank line inside a comment is a paragraph break and must survive wrapping.
+func TestCommentPreservesBlankLines(t *testing.T) {
+	c := review.Comment{
+		ID: "c1", Author: review.AuthorHuman, State: review.Open,
+		Body: "first para\n\nsecond para",
+	}
+	rows := commentRows(c, 40)
+	blank := 0
+	for _, r := range rows[1:] {
+		if strings.TrimSpace(strings.ReplaceAll(r, "▌", "")) == "" {
+			blank++
+		}
+	}
+	if blank != 1 {
+		t.Fatalf("expected the paragraph break preserved, got %d blank rows in %q", blank, rows)
+	}
+}
