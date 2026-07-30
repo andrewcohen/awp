@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"strings"
-
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/diff"
@@ -100,10 +98,10 @@ type streamIndex struct {
 // the geometry pass stays a pure function of its inputs.
 type commentPlacer func(rows []rowRef) (placed map[int][]review.Comment, orphans []review.Comment)
 
-// commentRowCount is how many display rows a comment occupies: a header line
-// plus one per line of body.
-func commentRowCount(c review.Comment) int {
-	return 1 + len(strings.Split(strings.TrimRight(c.Body, "\n"), "\n"))
+// commentRowCount is how many display rows a comment occupies at this width.
+// Delegates to commentRows so the count cannot drift from what is rendered.
+func commentRowCount(c review.Comment, width int) int {
+	return len(commentRows(c, width))
 }
 
 // withComments interleaves comment rows beneath the lines they anchor to, and
@@ -136,7 +134,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 		rows = append(rows, r)
 		for _, c := range placed[i] {
 			ci := index(c)
-			for line := 0; line < commentRowCount(c); line++ {
+			for line := 0; line < commentRowCount(c, idx.width); line++ {
 				rows = append(rows, rowRef{
 					kind: rowComment, file: r.file, hunk: -1, line: -1,
 					comment: ci, commentLine: line,
@@ -148,7 +146,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 		rows = append(rows, rowRef{kind: rowOrphanHeader, file: -1, hunk: -1, line: -1})
 		for _, c := range orphans {
 			ci := index(c)
-			for line := 0; line < commentRowCount(c); line++ {
+			for line := 0; line < commentRowCount(c, idx.width); line++ {
 				rows = append(rows, rowRef{
 					kind: rowOrphan, file: -1, hunk: -1, line: -1,
 					comment: ci, commentLine: line,

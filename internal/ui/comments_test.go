@@ -1031,3 +1031,68 @@ func TestReplyIndentIsOneSpace(t *testing.T) {
 		t.Fatalf("expected exactly one space of extra indent, got %d", got)
 	}
 }
+
+// A review remark is prose; clipping it at the pane edge hides the half that
+// explains the point. It wraps instead.
+func TestCommentBodyWrapsRatherThanTruncating(t *testing.T) {
+	long := "this is a long remark that will not fit on one row of a narrow pane and therefore has to wrap"
+	c := review.Comment{ID: "c1", Author: review.AuthorHuman, Body: long, State: review.Open}
+
+	rows := commentRows(c, 40)
+	if len(rows) < 3 {
+		t.Fatalf("expected the body wrapped over several rows, got %d: %q", len(rows), rows)
+	}
+	// Nothing may be lost to the wrap.
+	var joined string
+	for _, r := range rows[1:] {
+		joined += strings.TrimLeft(strings.TrimPrefix(strings.TrimLeft(r, " "), "▌ "), " ")
+	}
+	if !strings.Contains(joined, "therefore has to wrap") {
+		t.Fatalf("expected the tail preserved, got %q", joined)
+	}
+	for i, r := range rows {
+		if lipgloss.Width(r) > 40 {
+			t.Fatalf("row %d exceeds the width: %q", i, r)
+		}
+	}
+}
+
+// The row counter and the renderer must agree, or the stream's indices stop
+// matching what is drawn.
+func TestCommentRowCountMatchesRenderedRows(t *testing.T) {
+	cases := []review.Comment{
+		{ID: "a", Author: review.AuthorHuman, Body: "short", State: review.Open},
+		{ID: "b", Author: "agent", Body: strings.Repeat("wrap me ", 30), State: review.Open, ReplyTo: "a"},
+		{ID: "c", Author: review.AuthorHuman, Body: "one\ntwo\nthree", State: review.Sent},
+	}
+	for _, width := range []int{30, 60, 120} {
+		for _, c := range cases {
+			want := commentRowCount(c, width)
+			got := len(commentLines(c, width, false))
+			if want != got {
+				t.Fatalf("width %d, comment %q: counted %d rows, rendered %d", width, c.ID, want, got)
+			}
+		}
+	}
+}
+
+// A wrapped comment still occupies the rows the geometry allotted it.
+func TestWrappedCommentOccupiesItsRowsInTheStream(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{
+		commentOn("a.go", 1, "alpha", strings.Repeat("a long remark ", 20)),
+	})
+	rows := rowsOfKind(m, rowComment)
+	if rows < 3 {
+		t.Fatalf("expected a wrapped comment to occupy several rows, got %d", rows)
+	}
+	// Every allotted row must render something, or the geometry over-counted.
+	for i, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		if got := stripANSI(m.renderStreamRowAt(i, 60)); strings.TrimSpace(got) == "" {
+			t.Fatalf("row %d was allotted but renders empty", i)
+		}
+	}
+}
