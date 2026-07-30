@@ -175,6 +175,32 @@ func ReviewPromptDir() string {
 	return filepath.Join(awpHome(), "review-prompts")
 }
 
+// ReviewStoreDir is where review findings live: ~/.awp/reviews. Outside the
+// workspace tree for the same reason prompts are (see ReviewPromptDir) plus one
+// more: anything written inside a workspace shows up in `jj st` and `jj diff` —
+// that is, inside the very diff the review surface renders. Findings also need
+// to outlive workspace pruning, since an unpublished draft is the one thing here
+// that cannot be regenerated.
+func ReviewStoreDir() string {
+	return filepath.Join(awpHome(), "reviews")
+}
+
+// ReviewStorePath is the directory holding one review's state:
+// ~/.awp/reviews/<repo>/<review-id>. Callers on the write, read and cleanup
+// sides all resolve through here so they cannot disagree about the location.
+func ReviewStorePath(repoRoot, reviewID string) string {
+	if strings.TrimSpace(reviewID) == "" {
+		return ""
+	}
+	return filepath.Join(ReviewStoreDir(), reviewPromptComponent(filepath.Base(repoRoot)), reviewPromptComponent(reviewID))
+}
+
+// ReviewStoreRepoDir is the per-repo directory holding every review for a repo,
+// plus the counts index the deck reads on its fast first paint.
+func ReviewStoreRepoDir(repoRoot string) string {
+	return filepath.Join(ReviewStoreDir(), reviewPromptComponent(filepath.Base(repoRoot)))
+}
+
 var reviewPromptUnsafe = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // reviewPromptComponent sanitizes a path component to the same [a-z0-9-]

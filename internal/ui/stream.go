@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/diff"
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 // The diff is presented as one continuous stream of rows spanning every
@@ -35,6 +38,14 @@ const (
 	rowFileHeader
 	rowHunkHeader
 	rowLine
+	// rowComment is one display line of a comment anchored to the line above it.
+	rowComment
+	// rowOrphanHeader and rowOrphan are the detached section at the end of the
+	// stream, holding comments whose anchor could no longer be located. They are
+	// shown rather than dropped: quietly losing a reviewer's note is worse than
+	// showing it out of place.
+	rowOrphanHeader
+	rowOrphan
 )
 
 // rowRef says what a single stream row shows. Line numbers are resolved
@@ -52,6 +63,10 @@ type rowRef struct {
 	// (an added line has no old number, a removed line no new one).
 	oldNo int
 	newNo int
+	// comment indexes into the placed comment set for rowComment / rowOrphan
+	// rows, and commentLine is which display line of that comment this row is.
+	comment     int
+	commentLine int
 }
 
 // hunkMeta is the gutter geometry for one hunk: how wide its line-number
@@ -71,12 +86,96 @@ type streamIndex struct {
 	hunkStart []int
 	// meta[file][hunk] is that hunk's gutter geometry.
 	meta [][]hunkMeta
+	// comments is the comment set this index placed, indexed by rowRef.comment.
+	comments []review.Comment
 	// width and wrap are the inputs this index was built for.
 	width int
 	wrap  bool
 }
 
 // buildStream indexes every row of the diff at the given content width.
+// commentPlacer resolves comments to the row they attach under. Passed in so
+// the geometry pass stays a pure function of its inputs.
+type commentPlacer func(rows []rowRef) (placed map[int][]review.Comment, orphans []review.Comment)
+
+// commentRowCount is how many display rows a comment occupies: a header line
+// plus one per line of body.
+func commentRowCount(c review.Comment) int {
+	return 1 + len(strings.Split(strings.TrimRight(c.Body, "\n"), "\n"))
+}
+
+// withComments interleaves comment rows beneath the lines they anchor to, and
+// appends any that could not be placed as a detached section.
+//
+// Two passes rather than one: comments are located against the *diff* rows, so
+// the diff geometry has to exist before placement can run. Inserting the comment
+// rows afterwards keeps the placement logic ignorant of row offsets.
+func withComments(idx streamIndex, place commentPlacer) streamIndex {
+	if place == nil {
+		return idx
+	}
+	placed, orphans := place(idx.rows)
+	if len(placed) == 0 && len(orphans) == 0 {
+		return idx
+	}
+
+	all := make([]review.Comment, 0, len(placed)+len(orphans))
+	index := func(c review.Comment) int {
+		all = append(all, c)
+		return len(all) - 1
+	}
+
+	rows := make([]rowRef, 0, len(idx.rows))
+	// Row indices shift as comment rows are inserted, so every recorded offset
+	// has to be remapped rather than reused.
+	shift := make([]int, len(idx.rows))
+	for i, r := range idx.rows {
+		shift[i] = len(rows)
+		rows = append(rows, r)
+		for _, c := range placed[i] {
+			ci := index(c)
+			for line := 0; line < commentRowCount(c); line++ {
+				rows = append(rows, rowRef{
+					kind: rowComment, file: r.file, hunk: -1, line: -1,
+					comment: ci, commentLine: line,
+				})
+			}
+		}
+	}
+	if len(orphans) > 0 {
+		rows = append(rows, rowRef{kind: rowOrphanHeader, file: -1, hunk: -1, line: -1})
+		for _, c := range orphans {
+			ci := index(c)
+			for line := 0; line < commentRowCount(c); line++ {
+				rows = append(rows, rowRef{
+					kind: rowOrphan, file: -1, hunk: -1, line: -1,
+					comment: ci, commentLine: line,
+				})
+			}
+		}
+	}
+
+	out := idx
+	out.rows = rows
+	out.comments = all
+	out.fileStart = remap(idx.fileStart, shift)
+	out.hunkStart = remap(idx.hunkStart, shift)
+	return out
+}
+
+func remap(offsets []int, shift []int) []int {
+	if offsets == nil {
+		return nil
+	}
+	out := make([]int, 0, len(offsets))
+	for _, o := range offsets {
+		if o >= 0 && o < len(shift) {
+			out = append(out, shift[o])
+		}
+	}
+	return out
+}
+
 func buildStream(files []diff.FileDiff, width int, wrap bool) streamIndex {
 	// Row counts must be right even before the first size message, or
 	// scrolling is dead until a resize. At width 1 nothing wraps, so the

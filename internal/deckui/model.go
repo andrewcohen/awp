@@ -1067,6 +1067,13 @@ func (m Model) WithDiffViewer(load DiffLoader, open DiffOpener) Model {
 	return m
 }
 
+// WithReviewStore installs the review-store seam behind the diff modal's
+// commenting. Without it the diff is read-only.
+func (m Model) WithReviewStore(cs CommentStore) Model {
+	m.diffComments = cs
+	return m
+}
+
 // WithPRStatusFetcher installs the async fetcher used to populate the per-row
 // PR glyph. Without it, no PR glyph is rendered.
 func (m Model) WithPRStatusFetcher(f PRStatusFetcher) Model {
@@ -3270,7 +3277,7 @@ func (m Model) openDiffModal() (tea.Model, tea.Cmd) {
 	if m2, blocked := m.blockIfSettingUp(item); blocked {
 		return m2, nil
 	}
-	dm, loadCmd := newDiffModal(item, m.diffLoad, m.diffOpen)
+	dm, loadCmd := newDiffModal(item, m.diffLoad, m.diffOpen, m.diffComments)
 	m.active = dm
 	m.status = "diff: loading…"
 	// tea.ClearScreen on modal entry — same rationale as the other modals

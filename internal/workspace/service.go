@@ -14,6 +14,7 @@ import (
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/config"
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 // StaleWorkspaceError marks a PrepareWorkspace failure where the jj
@@ -1208,6 +1209,7 @@ func (s *service) DeleteWithOptions(name string, opts DeleteOptions) error {
 	// since the in-workspace .awp is a symlink to the shared source .awp).
 	// Remove it here so prompts don't accumulate after the workspace is gone.
 	s.removeReviewPrompt(repoRoot, normalized)
+	s.removeReviewFindings(repoRoot, normalized)
 
 	abandoned, err := s.cleanupEmptyRevision(revision)
 	if err != nil {
@@ -1619,6 +1621,23 @@ func (s *service) removeReviewPrompt(repoRoot, name string) {
 	_ = os.Remove(filepath.Dir(path))
 }
 
+// removeReviewFindings deletes a workspace's review — unless it still holds
+// comments that exist only locally.
+//
+// A prompt file is regenerable, so deleting it unconditionally is right. An
+// unpublished draft comment is not: it is the one artifact in the review store
+// that cannot be recovered, so a review holding one survives its workspace and
+// says so rather than being cleaned up silently.
+func (s *service) removeReviewFindings(repoRoot, name string) {
+	removed, err := (review.Store{}).DeleteWorkspaceReview(repoRoot, name)
+	switch {
+	case err != nil:
+		s.logf("⚠️ Could not remove review findings for %q: %v", name, err)
+	case removed:
+		s.logf("✅ Removed review findings for %q", name)
+	}
+}
+
 func (s *service) cleanupWorkspaceBookmarks(workspaceName, storedBookmark, revision string) (int, error) {
 	forgotten := 0
 	seen := map[string]struct{}{}
@@ -1824,6 +1843,7 @@ func (s *service) PruneOrphans(dryRun bool) ([]string, error) {
 				// they resolve to the same review-prompts path the review
 				// flow wrote (see config.ReviewPromptPath).
 				s.removeReviewPrompt(repoDir.Name(), wsDir.Name())
+				s.removeReviewFindings(repoDir.Name(), wsDir.Name())
 			}
 		}
 		if !dryRun {

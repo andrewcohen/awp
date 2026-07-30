@@ -842,6 +842,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithBookmarkFetcher(bookmarkFetcher).
 		WithReviewReloader(reviewReloader).
 		WithDiffViewer(diffLoaderFor(runner), openDiffFileInEditor).
+		WithReviewStore(reviewStoreFor(runner)).
 		WithTrunkResolver(func(repo string) string {
 			fr := fixedDirRunner{base: runner, dir: repo}
 			name, _ := jj.New(fr).Trunk()
