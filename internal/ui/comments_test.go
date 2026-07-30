@@ -527,3 +527,24 @@ func TestThreadStateIsPublishedNotOpen(t *testing.T) {
 		t.Fatal("a remote thread must not count as a local finding awaiting triage")
 	}
 }
+
+// Opening a diff should land on code, not on the file divider — otherwise the
+// first thing `c` does is tell you to move.
+func TestOpensWithCursorOnFirstLine(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	if got := m.stream.rows[m.cursorRow].kind; got != rowLine {
+		t.Fatalf("expected the cursor on a diff line at open, got %v", got)
+	}
+	if _, ok := m.AnchorAtCursor(); !ok {
+		t.Fatal("expected commenting to be possible immediately after opening")
+	}
+}
+
+// A diff with no line content at all (rename-only) must not leave the cursor
+// somewhere invalid.
+func TestOpensSafelyWithNoLines(t *testing.T) {
+	m := commentModel(t, diff.FileDiff{OldPath: "a.go", NewPath: "b.go", Status: "R"})
+	if m.cursorRow < 0 || (len(m.stream.rows) > 0 && m.cursorRow >= len(m.stream.rows)) {
+		t.Fatalf("cursor %d out of range for %d rows", m.cursorRow, len(m.stream.rows))
+	}
+}

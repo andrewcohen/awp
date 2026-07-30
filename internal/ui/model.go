@@ -262,6 +262,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if first || !hadAnchor {
 			m.resetStreamView()
 			m.rebuildStream()
+			m.cursorToFirstLine()
 		} else {
 			m.restoreAnchor(anchor, screenOffset)
 		}
@@ -472,6 +473,21 @@ func (m *Model) resetStreamView() {
 	m.streamScroll = 0
 	m.cursorRow = 0
 	m.hunkHScroll = 0
+}
+
+// cursorToFirstLine puts the cursor on the first row of actual diff content,
+// skipping the leading file divider and hunk header. You open a diff to read
+// code, and every gesture that acts on the cursor — commenting especially —
+// needs a line rather than a header.
+func (m *Model) cursorToFirstLine() {
+	for i, r := range m.stream.rows {
+		if r.kind == rowLine {
+			m.cursorRow = i
+			m.followCursor()
+			m.syncFileCursorToCursor()
+			return
+		}
+	}
 }
 
 // scrollHunksHorizontally pans the stream's line content by delta columns.
