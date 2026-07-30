@@ -1747,6 +1747,12 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 // user message. Never switches the tmux client — the deck stays in
 // focus by design.
 func sendPromptToAgent(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, prompt string, reporter deckui.Reporter) error {
+	// Callers that have no progress UI pass nil; every Step below would then
+	// panic on a nil interface, taking the deck down instead of sending. Cheaper
+	// to absorb it here than to rely on every call site remembering.
+	if reporter == nil {
+		reporter = noopReporter{}
+	}
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return errors.New("prompt is empty")

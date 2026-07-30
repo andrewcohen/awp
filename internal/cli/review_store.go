@@ -247,7 +247,9 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 // record rather than losing what the reviewer wrote.
 func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentSender {
 	return func(item deckui.Item, c review.Comment) error {
-		if err := sendPromptToAgent(tmuxClient, svc, item, commentPromptFor(c), nil); err != nil {
+		// noopReporter, not nil: sendPromptToAgent calls reporter.Step on every
+		// path, so a nil interface panics rather than sending anything.
+		if err := sendPromptToAgent(tmuxClient, svc, item, commentPromptFor(c), noopReporter{}); err != nil {
 			return err
 		}
 		store := review.Store{}
