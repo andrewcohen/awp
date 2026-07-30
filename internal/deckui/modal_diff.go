@@ -68,9 +68,15 @@ type CommentStore struct {
 // CommentSender delivers a comment to a workspace's agent.
 type CommentSender func(item Item, c review.Comment) error
 
-// diffModalChrome is the rows the deck's own chrome takes around a body
-// modal: the panel's Padding(1, 1, 1, 1) plus the footer block.
-const diffModalChrome = 8
+// diffModalChrome is the rows the deck's chrome takes around the viewer's
+// body: 1 for the panel's top padding, 2 for the pane borders, 3 for the
+// footer block (its own Padding(1, 1, 1, 1) around a one-line status bar).
+//
+// It has to be exact. Over-reserving does not shrink the frame — the deck pads
+// whatever is left over to pin the footer to the bottom — it just converts the
+// rows into a blank band above the footer. This was 8, two rows too many, which
+// is what put a visible gap under the diff.
+const diffModalChrome = 6
 
 // diffModal is the `c` overlay: awp's own diff viewer (internal/ui, the
 // same one `awp diff` runs) rendered in place of the row list, scoped to
@@ -156,7 +162,13 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 		scope:  scope,
 		muted:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
 		danger: lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)),
-		panel:  lipgloss.NewStyle().Padding(1, 1, 1, 1),
+		// Padding(1, 1, 0, 1) rather than the body panel's usual 1 on every
+		// side: the footer block already contributes a row of top padding, and
+		// this is the one body panel that fills its whole height budget, so the
+		// two paddings stack into a 2-row gap instead of being absorbed by the
+		// pad block. Dropping ours leaves exactly the 1 row of breathing room
+		// the convention is after.
+		panel: lipgloss.NewStyle().Padding(1, 1, 0, 1),
 	}
 	return dm, dm.inner.Init()
 }
