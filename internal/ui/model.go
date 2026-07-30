@@ -266,6 +266,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.filesCursor--
 				m.resetHunkView()
 			}
+		// Drill into the selected file. tab does the same thing, but enter is
+		// what a two-pane layout invites you to press on a list row.
+		case "enter":
+			m.focus = FocusHunks
 		case "e":
 			return m, m.openCurrentFile()
 		}
@@ -542,7 +546,7 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:move  h/l:pan  {/}:hunk  ctrl+u/d:page  tab:pane  e:open  w:wrap  r:refresh  /:filter  q:quit"
+	hint := "j/k:move  h/l:pan  {/}:hunk  ctrl+u/d:page  tab/enter:pane  e:open  w:wrap  r:refresh  /:filter  q:quit"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
 		hint = "type to filter — enter:confirm  esc:clear"
