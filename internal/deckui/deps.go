@@ -22,6 +22,9 @@ type deckDeps struct {
 	trunkResolver   TrunkResolver
 	stateEditor     StateEditorLauncher
 
+	diffLoad DiffLoader
+	diffOpen DiffOpener
+
 	prNumberLinkHandler  PRNumberLinkHandler
 	pinGroupHandler      PinGroupHandler
 	pinGroupAliasHandler PinGroupAliasHandler
