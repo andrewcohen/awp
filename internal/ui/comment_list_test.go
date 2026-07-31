@@ -351,19 +351,105 @@ func TestLeftColumnKeepsTheSameHeightWithTheIndex(t *testing.T) {
 // strips colour with no TTY, so the choice is asserted rather than the output.
 func TestCommentEntryStylesFollowKindThenSelection(t *testing.T) {
 	for _, k := range review.Kinds() {
-		entryLoc, _ := commentEntryStyles(k, false)
+		entryLoc, _ := commentEntryStyles(k, false, false)
 		_, blockHead, _, _ := commentStyles(k, false)
 		if entryLoc.GetForeground() != blockHead.GetForeground() {
 			t.Fatalf("%q: index row and diff block disagree on hue", k)
 		}
 	}
-	selLoc, selText := commentEntryStyles(review.KindSuggestion, true)
-	otherSel, _ := commentEntryStyles(review.KindQuestion, true)
+	selLoc, selText := commentEntryStyles(review.KindSuggestion, true, false)
+	otherSel, _ := commentEntryStyles(review.KindQuestion, true, false)
 	if selLoc.GetForeground() != otherSel.GetForeground() {
 		t.Fatal("a selected row must look the same whatever kind it is")
 	}
 	if selLoc.GetForeground() != styleSelected.GetForeground() || selText.GetForeground() != styleSelected.GetForeground() {
 		t.Fatal("expected the selected row in the app-wide selection hue")
+	}
+	// Banded, the row keeps the selection hue and gains the cursorline
+	// background — every style on the row has to carry it, or the band breaks
+	// wherever one segment ends and the next begins.
+	bandLoc, bandText := commentEntryStyles(review.KindSuggestion, true, true)
+	if bandLoc.GetForeground() != styleSelected.GetForeground() {
+		t.Fatal("a banded row must keep the selection hue")
+	}
+	for _, s := range []lipgloss.Style{bandLoc, bandText} {
+		if s.GetBackground() != cursorlineBg {
+			t.Fatalf("expected the cursorline background, got %v", s.GetBackground())
+		}
+	}
+}
+
+// cursorlineSeq is the escape run that turns the cursorline background on, so a
+// test can ask whether a rendered row actually carries the band rather than
+// inferring it from style values. Colour is forced on for this package's tests
+// (see bench_test.go's init), which is what makes this observable at all.
+func cursorlineSeq(t *testing.T) string {
+	t.Helper()
+	rendered := styleCursorFill.Render("@")
+	at := strings.Index(rendered, "@")
+	if at <= 0 {
+		t.Fatalf("no background escape in %q — is the colour profile set?", rendered)
+	}
+	return rendered[:at]
+}
+
+// bandedRows counts how many rows of a rendered block carry the cursorline.
+func bandedRows(t *testing.T, block string) int {
+	t.Helper()
+	seq := cursorlineSeq(t)
+	n := 0
+	for _, line := range strings.Split(block, "\n") {
+		if strings.Contains(line, seq) {
+			n++
+		}
+	}
+	return n
+}
+
+// The band says which selection the keys are driving. Two at once would leave
+// that ambiguous, so only the pane holding the keyboard paints one — the rule
+// the diff pane already followed, now that the left column has a band too.
+func TestOnlyTheFocusedPanePaintsACursorline(t *testing.T) {
+	m := indexModel(t)
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "beta", "first", review.AuthorHuman),
+		comment("c2", "pkg/b.go", 2, "epsilon", "second", review.AuthorHuman),
+	})
+
+	for _, tc := range []struct {
+		focus Focus
+		want  int
+	}{
+		{FocusFiles, 1},
+		{FocusComments, 1},
+		// The diff holds the keyboard, so neither list may claim it.
+		{FocusHunks, 0},
+	} {
+		m.focus = tc.focus
+		// The left column caches per (focus, selection, size) — drop it so each
+		// case renders rather than reusing the previous focus's output.
+		m.cache.drop()
+		if got := bandedRows(t, m.renderLeftColumn(34, 20)); got != tc.want {
+			t.Fatalf("focus %v: expected %d banded rows in the left column, got %d",
+				tc.focus, tc.want, got)
+		}
+	}
+}
+
+// A band that stops where the text does reads as highlighted text, not as a
+// cursorline. It has to span the pane, and never past it.
+func TestTheBandSpansThePaneWidth(t *testing.T) {
+	m := indexModel(t)
+	m.SetComments([]review.Comment{comment("c1", "a.go", 2, "beta", "short", review.AuthorHuman)})
+	inner := 30
+
+	file := bandRow(m.renderFileRow(m.filtered[0], inner-2, true, true), inner)
+	if got := lipgloss.Width(file); got != inner {
+		t.Fatalf("banded file row is %d cells, want %d", got, inner)
+	}
+	entry := bandRow(renderCommentEntry(m.commentIndex[0], inner-2, true, true), inner)
+	if got := lipgloss.Width(entry); got != inner {
+		t.Fatalf("banded index row is %d cells, want %d", got, inner)
 	}
 }
 
@@ -379,8 +465,12 @@ func TestCommentEntryRowFitsItsWidth(t *testing.T) {
 	}
 	for _, width := range []int{12, 24, 40} {
 		for _, selected := range []bool{false, true} {
-			if got := lipgloss.Width(renderCommentEntry(e, width, selected)); got > width {
-				t.Fatalf("width %d selected=%v: row is %d cells", width, selected, got)
+			for _, band := range []bool{false, true} {
+				got := lipgloss.Width(renderCommentEntry(e, width, selected, band))
+				if got > width {
+					t.Fatalf("width %d selected=%v band=%v: row is %d cells",
+						width, selected, band, got)
+				}
 			}
 		}
 	}
