@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -210,4 +211,57 @@ func TestSubmitReviewRejectsAnUnknownEvent(t *testing.T) {
 	if len(r.calls) != 0 {
 		t.Fatalf("expected no API call, got %v", r.calls)
 	}
+}
+
+// Which repository a call is about comes from where gh runs, so a client told to
+// work In a directory has to use it for every call — the repo lookup included.
+//
+// This is the bug that made publishing 404: the deck is a tmux popup launched from
+// wherever you happen to be, so resolving the repo from the process's own directory
+// addressed whatever repo *that* belonged to. A 404 was the lucky outcome; had the
+// launch directory's repo had a PR with the same number, the comments would have
+// posted to it.
+func TestClientInRunsEveryCallInThatDirectory(t *testing.T) {
+	r := &dirRunner{outs: []string{repoViewJSON, `{"node_id":"PRRC_abc"}`}}
+	if _, err := New(r).In("/repos/theirs").PostReviewComment(54, NewComment{
+		Path: "a.go", Line: 1, Body: "x",
+	}); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if len(r.dirs) != 2 {
+		t.Fatalf("expected two calls (repo lookup, then the post), got %v", r.dirs)
+	}
+	for i, dir := range r.dirs {
+		if dir != "/repos/theirs" {
+			t.Fatalf("call %d ran in %q, not the directory it was given", i, dir)
+		}
+	}
+	// And without In, the dir is empty — the process's own, which is right only for a
+	// command the user typed in the repo they meant.
+	plain := &dirRunner{outs: []string{repoViewJSON, `{"node_id":"x"}`}}
+	if _, err := New(plain).PostReviewComment(1, NewComment{Path: "a.go", Line: 1, Body: "x"}); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	for i, dir := range plain.dirs {
+		if dir != "" {
+			t.Fatalf("call %d ran in %q, expected the process's own directory", i, dir)
+		}
+	}
+}
+
+// dirRunner records the directory each call was made in.
+type dirRunner struct {
+	outs []string
+	dirs []string
+	n    int
+}
+
+func (r *dirRunner) Run(_ context.Context, dir string, _ string, _ ...string) (string, error) {
+	r.dirs = append(r.dirs, dir)
+	out := ""
+	if r.n < len(r.outs) {
+		out = r.outs[r.n]
+	}
+	r.n++
+	return out, nil
 }

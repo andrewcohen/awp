@@ -97,10 +97,27 @@ type prViewResponse struct {
 
 type Client struct {
 	runner Runner
+	// dir is the directory gh runs in, which is what decides *which repository*
+	// every call is about. Empty means the process's own working directory.
+	//
+	// That default is only safe for a command the user typed in the repo they meant.
+	// It is not safe for the deck or the diff viewer: the deck is a tmux popup
+	// launched from wherever you happen to be standing, so a review of one repo's PR
+	// resolved whatever repo the launch directory belonged to. Publishing then
+	// addressed repos/<that repo>/pulls/54/comments — 404 if no such PR existed
+	// there, and a silent write to the wrong PR if one did. Anything acting on a
+	// review passes the review's own repo root (see In).
+	dir string
 }
 
 func New(runner Runner) *Client {
 	return &Client{runner: runner}
+}
+
+// In returns a client whose calls run in dir, so which repository they address
+// comes from the caller rather than from where the process was started.
+func (c *Client) In(dir string) *Client {
+	return &Client{runner: c.runner, dir: dir}
 }
 
 type PRSummary struct {

@@ -60,10 +60,12 @@ const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!){
   }
 }`
 
-// repoOwnerName resolves the repo from the cwd. GraphQL takes owner and name
-// explicitly, unlike the REST wrappers where gh infers them.
+// repoOwnerName resolves which repository the client is acting on, from the
+// directory it runs gh in (see Client.dir — anything acting on a review has to set
+// it, or the answer comes from wherever the process was started). GraphQL takes
+// owner and name explicitly, unlike the REST wrappers where gh infers them.
 func (c *Client) repoOwnerName() (string, string, error) {
-	out, err := c.runner.Run(context.Background(), "", "gh", "repo", "view", "--json", "owner,name")
+	out, err := c.runner.Run(context.Background(), c.dir, "gh", "repo", "view", "--json", "owner,name")
 	if err != nil {
 		return "", "", fmt.Errorf("gh repo view: %w: %s", err, out)
 	}
@@ -89,7 +91,7 @@ func (c *Client) FetchReviewThreads(num int) ([]ReviewThread, error) {
 		return nil, err
 	}
 	raw, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "api", "graphql",
 		"-f", "query="+reviewThreadsQuery,
 		"-F", "owner="+owner,
@@ -175,7 +177,7 @@ func (c *Client) mutateThread(mutation, threadID string) error {
 		return fmt.Errorf("review thread id is required")
 	}
 	raw, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "api", "graphql",
 		"-f", "query="+mutation,
 		"-F", "id="+threadID,
