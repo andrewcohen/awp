@@ -758,13 +758,25 @@ func (m Model) toggleReviewed() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	// Collapsing changes the row count, so the geometry has to be rebuilt and
-	// the cursor re-clamped against it.
+	// Collapsing changes the row count, so the geometry has to be rebuilt.
+	at := m.fileIndexOf(path)
 	m.rebuildStream()
-	m.clampCursor()
-	m.followCursor()
-	m.syncFileCursorToCursor()
+	// Land on a diff line rather than wherever the clamp happened to leave the
+	// cursor. Marking a file reviewed collapses it to one row, so a plain clamp
+	// parks you on a divider and the next thing you do is always press `j` a
+	// couple of times to get into the file you were sent to.
+	m.cursorToFileFirstLine(at)
 	return m, nil
+}
+
+// fileIndexOf is a path's position in the filtered set, or -1.
+func (m Model) fileIndexOf(path string) int {
+	for i, f := range m.filtered {
+		if pathOf(f) == path {
+			return i
+		}
+	}
+	return -1
 }
 
 // cursorFile is the file the cursor is in.
