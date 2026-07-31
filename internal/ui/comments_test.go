@@ -485,6 +485,107 @@ func remoteThread(id, path string, line int, resolved bool, body string) review.
 	}
 }
 
+// fileWithDeletion is a diff that removes a line, which is what makes an
+// outdated thread's line 0 dangerous: a deleted row carries no new-side number,
+// so its line number is also 0.
+func fileWithDeletion(name string, kept, removed string) diff.FileDiff {
+	return diff.FileDiff{NewPath: name, Status: "M", Hunks: []diff.Hunk{{
+		OldStart: 1, NewStart: 1, OldCount: 2, NewCount: 1,
+		Lines: []diff.HunkLine{
+			{Type: '-', Content: removed},
+			{Type: ' ', Content: kept},
+		},
+	}}}
+}
+
+// GitHub reports line: null for a thread whose line the change removed, which
+// decodes to 0. Lines are 1-based, so 0 means "unknown" — but a deleted row has
+// no new-side number, so its line number is 0 too. Matching one against the
+// other pinned every outdated thread to the first removed line in its file,
+// presenting a settled remark as though it were about that code.
+func TestOutdatedThreadsAreNotPinnedToDeletedLines(t *testing.T) {
+	m := commentModel(t, fileWithDeletion("a.go", "kept", "gone"))
+	outdated := remoteThread("T1", "a.go", 0, true, "settled long ago")
+	outdated.Outdated = true
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{outdated})
+
+	for i, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		// Placed against a line: the row above it is diff content.
+		if i > 0 && m.stream.rows[i-1].kind == rowLine {
+			t.Fatalf("outdated thread placed against %q, which it was never written against",
+				m.lineText(m.stream.rows[i-1]))
+		}
+	}
+	// It must still be reachable — detached, not dropped.
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected the outdated thread still listed, got %+v", m.commentIndex)
+	}
+	if !m.commentIndex[0].detached {
+		t.Fatal("expected the outdated thread in the detached section")
+	}
+}
+
+// A thread whose line GitHub still knows must keep placing normally — the guard
+// is on the unknown line, not on outdated threads as a class.
+func TestOutdatedThreadWithAKnownLineStillPlaces(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	th := remoteThread("T1", "a.go", 2, false, "still points somewhere")
+	th.Outdated = true
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{th})
+
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected one entry, got %+v", m.commentIndex)
+	}
+	if m.commentIndex[0].detached {
+		t.Fatal("expected a thread with a real line to place against it")
+	}
+}
+
+// Settled and stale are independent, and usually both: resolving a point is
+// often what precedes the code moving out from under it. The label was an
+// if/else, so a resolved thread never admitted to being outdated.
+func TestThreadLabelNamesBothStates(t *testing.T) {
+	both := review.Thread{Resolved: true, Outdated: true}
+	if got := remoteThreadLabel(both); got != "github · resolved · outdated" {
+		t.Fatalf("expected both states named, got %q", got)
+	}
+	if got := remoteThreadLabel(review.Thread{Outdated: true}); got != "github · outdated" {
+		t.Fatalf("expected outdated named alone, got %q", got)
+	}
+	if got := remoteThreadLabel(review.Thread{Resolved: true}); got != "github · resolved" {
+		t.Fatalf("expected resolved named alone, got %q", got)
+	}
+	if got := remoteThreadLabel(review.Thread{}); got != "github" {
+		t.Fatalf("expected a plain label, got %q", got)
+	}
+}
+
+// In the index, "outdated" replaces the ⚠ rather than joining it: GitHub's word
+// says everything the glyph would and more, so both would state it twice.
+func TestIndexSaysOutdatedInsteadOfTheWarning(t *testing.T) {
+	m := commentModel(t, fileWithDeletion("a.go", "kept", "gone"))
+	outdated := remoteThread("T1", "a.go", 0, true, "settled long ago")
+	outdated.Outdated = true
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{outdated})
+
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected one entry, got %+v", m.commentIndex)
+	}
+	loc := entryLocation(m.commentIndex[0])
+	if !strings.Contains(loc, "outdated") {
+		t.Fatalf("expected the row to say outdated, got %q", loc)
+	}
+	if strings.Contains(loc, "⚠") {
+		t.Fatalf("expected no warning glyph beside the word, got %q", loc)
+	}
+}
+
 func TestRemoteThreadsRenderInline(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
 	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 2, false, "this leaks")})

@@ -47,12 +47,19 @@ type commentEntry struct {
 	// changeWide marks a review-level conversation — about the change as a whole,
 	// anchored to no file — which leads the stream instead of sitting in it.
 	changeWide bool
+	// outdated marks a mirrored GitHub thread whose line no longer exists in the
+	// diff. GitHub's own word for it, and the reason such a thread is detached —
+	// so it is worth more than the generic "anchor could not be found".
+	outdated bool
 }
 
 // commentEntries walks the placed rows in stream order and returns one entry
 // per conversation. Stream order rather than sorted, so the index reads top to
 // bottom the same way the diff does.
-func (idx streamIndex) commentEntries() []commentEntry {
+//
+// A Model method rather than a streamIndex one because a remote conversation's
+// state lives on the thread, not on the comment the stream adapted it into.
+func (m Model) commentEntries(idx streamIndex) []commentEntry {
 	var out []commentEntry
 	// slot maps a conversation's id to its entry, so a reply can find its
 	// parent and be counted rather than listed.
@@ -76,7 +83,7 @@ func (idx streamIndex) commentEntries() []commentEntry {
 			// only way to reach it.
 		}
 		slot[c.ID] = len(out)
-		out = append(out, commentEntry{
+		e := commentEntry{
 			id:         c.ID,
 			row:        row,
 			path:       c.Anchor.Path,
@@ -87,7 +94,11 @@ func (idx streamIndex) commentEntries() []commentEntry {
 			state:      c.State,
 			detached:   r.kind == rowOrphan,
 			changeWide: r.kind == rowReview,
-		})
+		}
+		if t, ok := m.threadFor(c.ID); ok {
+			e.outdated = t.Outdated
+		}
+		out = append(out, e)
 	}
 	return out
 }
@@ -251,13 +262,20 @@ func entryLocation(e commentEntry) string {
 	if e.line > 0 {
 		loc += ":" + fmt.Sprint(e.line)
 	}
-	if e.detached {
+	if e.detached && !e.outdated {
 		// The line number is where it used to be, so say the anchor is gone
-		// rather than presenting a stale position as current.
+		// rather than presenting a stale position as current. Not for an outdated
+		// thread: the chip below is GitHub's own word for the same situation and
+		// says more than the glyph, so both would be saying it twice.
 		loc = "⚠ " + loc
 	}
 	if e.replies > 0 {
 		loc += fmt.Sprintf("·%d", e.replies)
+	}
+	if e.outdated {
+		// Last, after the conversation is identified: this is a fact about the
+		// thread's line, not part of naming where it is.
+		loc += " · " + chipOutdated
 	}
 	return loc
 }
