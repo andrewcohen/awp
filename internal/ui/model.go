@@ -158,8 +158,13 @@ type Model struct {
 	// LoadComments re-reads the review's comments, so findings filed while the
 	// view is open appear without reopening it.
 	LoadComments func() ([]review.Comment, error)
-	editing      bool
-	editor       commentEditor
+	// LoadThreads re-reads the mirrored remote threads, for the same reason. It
+	// is a local store read, not a fetch: something else — the pr-status job —
+	// owns refreshing the mirror from GitHub, so a review tick never waits on
+	// the network.
+	LoadThreads func() ([]review.Thread, error)
+	editing     bool
+	editor      commentEditor
 	// showHelp is the `?` key reference, drawn in place of the panes. helpVP
 	// scrolls it — there are more bindings than fit a short terminal.
 	showHelp bool
@@ -425,7 +430,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Comments are re-read on the tick, not gated on the diff changing: an
 		// agent replying edits no files, so a fingerprint-gated reload would
 		// never fire and a reply would sit invisible until the view was reopened.
+		// The mirrored PR threads come along for the ride — a reviewer's comment
+		// changes no files either.
 		m.reloadComments()
+		m.reloadThreads()
 		if !m.refreshing {
 			m.refreshing = true
 			return m, loadDiffCmd(m.LoadDiff)

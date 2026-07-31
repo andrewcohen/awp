@@ -827,6 +827,66 @@ func (m *Model) reloadComments() {
 	m.followCursor()
 }
 
+// reloadThreads re-reads the mirrored remote threads, on the same tick and with
+// the same discipline as reloadComments: rebuild only on a real change, and
+// re-anchor the cursor by content when there is one, since a thread's rows shift
+// every row below it.
+//
+// What makes this cheap enough for a 2-second tick is that the mirror is a local
+// file the pr-status job maintains — the viewer never talks to GitHub itself.
+func (m *Model) reloadThreads() {
+	if m.LoadThreads == nil {
+		return
+	}
+	fresh, err := m.LoadThreads()
+	if err != nil {
+		// Same as a failed comment read: not worth interrupting a review over,
+		// and the mirror we already have stays on screen.
+		return
+	}
+	if sameThreads(m.threads, fresh) {
+		return
+	}
+	anchor, hadAnchor := m.captureAnchor()
+	offset := m.cursorRow - m.streamScroll
+	m.threads = fresh
+	if hadAnchor {
+		m.restoreAnchor(anchor, offset)
+		return
+	}
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+}
+
+// sameThreads reports whether two mirrored thread sets are equivalent for
+// display — the counterpart of sameComments, and for the same reason: the
+// unchanged case is the common one on a tick and has to cost nothing.
+func sameThreads(a, b []review.Thread) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID ||
+			a[i].Path != b[i].Path ||
+			a[i].Side != b[i].Side ||
+			a[i].Line != b[i].Line ||
+			a[i].StartLine != b[i].StartLine ||
+			a[i].Resolved != b[i].Resolved ||
+			a[i].Outdated != b[i].Outdated ||
+			len(a[i].Comments) != len(b[i].Comments) {
+			return false
+		}
+		for j := range a[i].Comments {
+			if a[i].Comments[j].Author != b[i].Comments[j].Author ||
+				a[i].Comments[j].Body != b[i].Comments[j].Body {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // sameComments reports whether two comment sets are equivalent for display.
 // Compares the fields that affect rendering or placement — a timestamp bump on
 // its own must not cost a rebuild.
