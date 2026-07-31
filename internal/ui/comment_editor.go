@@ -191,8 +191,12 @@ func (m Model) editorAnchorRow(idx streamIndex) int {
 		}
 	}
 	if target := m.editor.editing; target != "" {
-		if row := lastRowOfComment(idx, target); row >= 0 {
-			return row
+		// The last of the comment's rows. withEditor drops the whole span and puts
+		// the box at the first of them, so this only has to resolve to *somewhere*
+		// in the comment; it stays the last row so the fallthrough below — reached
+		// when the span cannot be found — behaves like a reply.
+		if _, last := rowsOfComment(idx, target); last >= 0 {
+			return last
 		}
 	}
 	// A new comment attaches under the line it is about, found the same way a
@@ -205,20 +209,6 @@ func (m Model) editorAnchorRow(idx streamIndex) int {
 	// mid-sentence. Fall back to the cursor, which is where the box was opened
 	// from, so it stays on screen and keeps taking input.
 	return m.cursorRow
-}
-
-// lastRowOfComment is the final display row of one comment.
-func lastRowOfComment(idx streamIndex, id string) int {
-	found := -1
-	for i, r := range idx.rows {
-		if r.kind != rowComment && r.kind != rowOrphan {
-			continue
-		}
-		if r.comment >= 0 && r.comment < len(idx.comments) && idx.comments[r.comment].ID == id {
-			found = i
-		}
-	}
-	return found
 }
 
 // lastRowOfThread is the final display row of a whole conversation — the parent

@@ -191,7 +191,9 @@ func (m *Model) rebuildStream() {
 	m.stream = idx
 	m.commentIndex = idx.commentEntries()
 	if m.editing {
-		m.stream = withEditor(idx, m.editorAnchorRow(idx), commentEditorRows)
+		// editing names the comment the box replaces; empty for a new comment or a
+		// reply, which append instead.
+		m.stream = withEditor(idx, m.editorAnchorRow(idx), commentEditorRows, m.editor.editing)
 	}
 	m.clampCommentsCursor()
 	m.clampCursor()
