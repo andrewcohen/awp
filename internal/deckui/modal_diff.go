@@ -1,6 +1,8 @@
 package deckui
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -178,14 +180,23 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
-	hint := " · j/k scroll · c comment/reply · i edit · D delete · r reviewed · R resolve · T threads · {/} hunk · tab pane · e $EDITOR · esc close"
-	return style.Render(dm.label + " · " + dm.scope.String() + " · " + status + hint)
+	// `? help` rather than a legend: the viewer owns the full keymap behind `?`,
+	// and listing a chosen dozen bindings here spent the whole footer on an
+	// answer to a question asked once.
+	segs := []string{dm.label, dm.scope.String()}
+	if status != "" {
+		segs = append(segs, status)
+	}
+	segs = append(segs, "? help")
+	return style.Render(strings.Join(segs, " · "))
 }
 
 func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	// While the viewer's filter has focus every key belongs to it —
-	// including the ones that would otherwise close the modal.
-	if key, ok := msg.(tea.KeyMsg); ok && !dm.inner.Filtering() {
+	// While the viewer's filter has focus, or its `?` overlay is up, every key
+	// belongs to it — including the ones that would otherwise close the modal.
+	// Grabbing esc/q with the help open would close the diff instead of the help,
+	// so the only way out of the reference would be out of the view.
+	if key, ok := msg.(tea.KeyMsg); ok && !dm.inner.Filtering() && !dm.inner.HelpVisible() {
 		switch key.String() {
 		// Deliberately not `c`: that opens the comment box inside the viewer.
 		// `c` opened this modal from the row list, but once it is up the key
