@@ -159,15 +159,22 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	}
 	if len(orphans) > 0 {
 		rows = append(rows, rowRef{kind: rowOrphanHeader, file: -1, hunk: -1, line: -1})
-		// The detached section is a flat list, so only its final entry closes it.
-		for n, c := range orphans {
-			ci := index(c)
-			last := n == len(orphans)-1
-			for line := 0; line < commentRowCount(c, idx.width, last); line++ {
-				rows = append(rows, rowRef{
-					kind: rowOrphan, file: -1, hunk: -1, line: -1,
-					comment: ci, commentLine: line, lastComment: last,
-				})
+		// Grouped into conversations rather than emitted flat: closing only the
+		// section's final entry ran every detached thread into the next one, and
+		// an orphaned reply is not necessarily adjacent to its orphaned parent in
+		// the comment set. review.Threads answers both — parents in order with
+		// their replies gathered, a reply whose parent is absent standing alone.
+		for _, th := range review.Threads(orphans) {
+			group := append([]review.Comment{th.Parent}, th.Replies...)
+			for n, c := range group {
+				ci := index(c)
+				last := n == len(group)-1
+				for line := 0; line < commentRowCount(c, idx.width, last); line++ {
+					rows = append(rows, rowRef{
+						kind: rowOrphan, file: -1, hunk: -1, line: -1,
+						comment: ci, commentLine: line, lastComment: last,
+					})
+				}
 			}
 		}
 	}

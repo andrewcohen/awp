@@ -1,6 +1,7 @@
 package deckui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -99,6 +100,10 @@ const diffModalChrome = 6
 type diffModal struct {
 	inner ui.Model
 	label string
+	// pr is the workspace's pinned PR as `repo#number` — "awp#1234" — or empty
+	// when no PR was detected. Reading a change and knowing which PR it is are
+	// the same question often enough that the footer should answer both.
+	pr    string
 	scope DiffScope
 	// Styles are cached here rather than built per frame — view and
 	// footerHelp are render paths.
@@ -176,6 +181,7 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	dm := &diffModal{
 		inner:  inner,
 		label:  item.ProjectName + "/" + item.WorkspaceName,
+		pr:     prLabel(item),
 		scope:  scope,
 		muted:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
 		danger: lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)),
@@ -188,6 +194,24 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 		panel: lipgloss.NewStyle().Padding(1, 1, 0, 1),
 	}
 	return dm, dm.inner.Init()
+}
+
+// prLabel is the item's PR in `repo#number` form, or empty when the workspace
+// isn't pinned to one. The repo half is the project name — the same name the
+// deck groups rows under, so "awp#1234" reads the way you would say it.
+//
+// Rendered muted with the rest of the footer rather than in the palette's PR
+// blue: the footer is styled as one line (the whole thing turns red on an error
+// status), so a per-segment hue would have to fight that.
+func prLabel(item Item) string {
+	if item.PRNumber <= 0 {
+		return ""
+	}
+	project := strings.TrimSpace(item.ProjectName)
+	if project == "" {
+		return fmt.Sprintf("#%d", item.PRNumber)
+	}
+	return fmt.Sprintf("%s#%d", project, item.PRNumber)
 }
 
 func (dm *diffModal) footerHelp() string {
@@ -207,7 +231,12 @@ func (dm *diffModal) footerHelp() string {
 	// `? help` rather than a legend: the viewer owns the full keymap behind `?`,
 	// and listing a chosen dozen bindings here spent the whole footer on an
 	// answer to a question asked once.
-	segs := []string{dm.label, against}
+	segs := []string{dm.label}
+	if dm.pr != "" {
+		// Beside the workspace rather than at the end: it names the same thing.
+		segs = append(segs, dm.pr)
+	}
+	segs = append(segs, against)
 	if status != "" {
 		segs = append(segs, status)
 	}

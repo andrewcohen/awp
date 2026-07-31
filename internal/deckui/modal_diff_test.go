@@ -296,3 +296,65 @@ func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
 		t.Fatalf("expected the working-copy wording:\n%s", footer)
 	}
 }
+
+// The footer names the PR when the workspace is pinned to one. Reading a change
+// and knowing which PR it is are the same question often enough to answer both.
+func TestDiffModalFooterNamesThePR(t *testing.T) {
+	m := New([]Item{{
+		ProjectName:   "awp",
+		WorkspaceName: "ws",
+		RepoRoot:      "/repo",
+		Path:          "/repo/ws",
+		PRNumber:      1234,
+	}}, func(ActionRequest) error { return nil }).
+		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil)
+	m.width, m.height = 120, 40
+
+	// Not drained: the label comes from the item, so it is there from the frame
+	// the modal opens on, with no command having run.
+	m, _ = pressKey(m, "c")
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	if footer := ansi.Strip(dm.footerHelp()); !strings.Contains(footer, "awp#1234") {
+		t.Fatalf("expected the PR named as awp#1234:\n%s", footer)
+	}
+}
+
+// And says nothing when there is no PR — an empty segment would leave a stray
+// separator in the footer.
+func TestDiffModalFooterOmitsAnAbsentPR(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, _ = pressKey(m, "c")
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	footer := ansi.Strip(dm.footerHelp())
+	if strings.Contains(footer, "#") {
+		t.Fatalf("expected no PR segment for an unpinned workspace:\n%s", footer)
+	}
+	if strings.Contains(footer, " ·  · ") {
+		t.Fatalf("footer has an empty segment:\n%s", footer)
+	}
+}
+
+// The project name is the repo half, and a row with no project still names the
+// PR rather than dropping it.
+func TestPRLabelFormat(t *testing.T) {
+	cases := []struct {
+		item Item
+		want string
+	}{
+		{Item{ProjectName: "awp", PRNumber: 1234}, "awp#1234"},
+		{Item{ProjectName: "", PRNumber: 7}, "#7"},
+		{Item{ProjectName: "awp", PRNumber: 0}, ""},
+		{Item{ProjectName: "awp", PRNumber: -1}, ""},
+	}
+	for _, c := range cases {
+		if got := prLabel(c.item); got != c.want {
+			t.Errorf("prLabel(%+v) = %q, want %q", c.item, got, c.want)
+		}
+	}
+}
