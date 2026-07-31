@@ -253,8 +253,8 @@ func (m *Model) seekToComment(i int) {
 
 // deleteFromIndex removes the selected conversation and re-seeks, so the cursor
 // lands on whatever took its place rather than on a row that just shifted under
-// it. Deleting a parent deletes its replies with it, which is what the store
-// does — the list and the record must not disagree about what is left.
+// it. An index row is a whole conversation, so deleting one takes its replies too
+// (see review.DeleteComment).
 func (m Model) deleteFromIndex() (tea.Model, tea.Cmd) {
 	updated, cmd := m.deleteCommentAtCursor()
 	next, ok := updated.(Model)
