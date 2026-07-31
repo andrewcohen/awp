@@ -268,7 +268,16 @@ func (m Model) placeComments(rows []rowRef) (map[int][]review.Comment, []review.
 	all := make([]review.Comment, 0, len(m.comments))
 	for _, th := range review.Threads(m.comments) {
 		all = append(all, th.Parent)
-		all = append(all, th.Replies...)
+		for _, reply := range th.Replies {
+			// A reply displays in the thread's kind, not its own. The whole
+			// conversation renders as one card sharing one left bar, and a reply
+			// with a different kind would break that edge into two colours
+			// mid-block. The kind describes what the exchange is about, which is
+			// set by the remark that opened it — the same reason a published reply
+			// omits the "(kind) - " prefix its parent carries.
+			reply.Kind = th.Parent.Kind
+			all = append(all, reply)
+		}
 	}
 	for _, t := range m.visibleThreads() {
 		all = append(all, threadAsComment(t))
@@ -476,8 +485,24 @@ func (m Model) AnchorAtCursor() (review.Anchor, bool) {
 // invalidate the anchor.
 const anchorContextLines = 3
 
-// commentRows is the plain text of every row a comment occupies, gutter included
-// and wrapped to width.
+// commentGutter is the left bar every message in a conversation shares.
+//
+// One bar at one indent for the whole thread, rather than a deeper indent per
+// reply level. Stepping right per level stair-stepped a long exchange across the
+// pane and left a ragged left edge; a shared bar plus a blank row between
+// messages reads as one block, and the author label on each message already says
+// where one ends and the next begins.
+const commentGutter = "  ▌ "
+
+// commentRow is one display line of a comment: its text, and whether it is the
+// header line. The header carries the kind's hue; the body stays readable.
+type commentRow struct {
+	text   string
+	header bool
+}
+
+// commentRows is every row a comment occupies, gutter included and wrapped to
+// width.
 //
 // Geometry and rendering both go through this, which is what keeps them in
 // agreement: a comment's row count depends on the width it wraps at, and if the
@@ -493,27 +518,30 @@ const anchorContextLines = 3
 // code — reflowing at spaces misrepresents where a token ends — and wrong for
 // prose, where it just makes sentences hard to read. ansi.Wrap still hard-breaks a
 // word longer than the line, so a URL or a long identifier cannot overflow.
-func commentRows(c review.Comment, width int) []string {
-	// A reply sits one space in — the least that reads as nested. The bar matches
-	// the parent's, so the indent alone carries the nesting.
-	gutter := "  ▌ "
-	if c.ReplyTo != "" {
-		gutter = "   ▌ "
-	}
+func commentRows(c review.Comment, width int) []commentRow {
+	// Every message opens with a bar-only row: top padding for the first one,
+	// and the separator between messages after that. Uniform, so a thread reads
+	// as one card with air around its content — the same Padding(1, ...) breathing
+	// room every other panel in the app gets.
+	out := []commentRow{{text: commentGutter}}
+
 	label := c.Author
 	if label == review.AuthorHuman {
 		label = "you"
 	}
-	title := gutter + label
-	if k := c.Kind.OrDefault(); k != review.KindComment {
+	title := commentGutter + label
+	// The kind is named once per conversation, on the remark that opened it. A
+	// reply already renders in the thread's hue, so repeating the word on every
+	// message is noise — the same reason a published reply omits it. A plain
+	// comment is the default and claims nothing, so it goes unlabelled too.
+	if k := c.Kind.OrDefault(); k != review.KindComment && c.ReplyTo == "" {
 		title += " · " + string(k)
 	}
 	if c.State != review.Open {
 		title += " · " + string(c.State)
 	}
+	out = append(out, commentRow{text: truncate(title, max(1, width)), header: true})
 
-	avail := width - len([]rune(gutter))
-	out := []string{truncate(title, max(1, width))}
 	// A robot's words are marked wherever they appear, so an agent's finding is
 	// never mistaken for something the reviewer wrote. Prefixed at render time
 	// rather than stored, so the marker cannot end up doubled or edited away.
@@ -521,19 +549,20 @@ func commentRows(c review.Comment, width int) []string {
 	if robotAuthored(c) {
 		body = review.RobotMarker + " " + body
 	}
+	avail := width - len([]rune(commentGutter))
 	for _, line := range strings.Split(body, "\n") {
 		if avail < 1 {
-			out = append(out, truncate(gutter+line, max(1, width)))
+			out = append(out, commentRow{text: truncate(commentGutter+line, max(1, width))})
 			continue
 		}
 		if strings.TrimSpace(line) == "" {
 			// A deliberate blank line in a comment is a paragraph break; wrapping
 			// would swallow it.
-			out = append(out, gutter)
+			out = append(out, commentRow{text: commentGutter})
 			continue
 		}
 		for _, wrapped := range strings.Split(ansi.Wrap(line, avail, ""), "\n") {
-			out = append(out, gutter+wrapped)
+			out = append(out, commentRow{text: commentGutter + wrapped})
 		}
 	}
 	return out
@@ -557,15 +586,23 @@ func robotAuthored(c review.Comment) bool {
 //
 // Factored out so the choice is assertable; lipgloss strips colour with no TTY,
 // so it cannot be observed in rendered output.
-func commentStyles(kind review.Kind, cursor bool) (head, body, fill lipgloss.Style) {
-	head, body = kindStyles(kind)
+// The kind's hue lands on the left bar and the header, not on the prose. Tinting
+// the body blue made it noticeably harder to read against the block's fill, and a
+// whole paragraph of colour is not more informative than a coloured edge — the
+// signal is fully carried by the bar and the label.
+func commentStyles(kind review.Kind, cursor bool) (bar, head, body, fill lipgloss.Style) {
+	bar = kindStyles(kind)
+	head = bar
+	body = styleCommentText
 	if cursor {
 		// The cursorline has to be carried by every style on the row — an
 		// enclosing style cannot supply it, since each inner style ends with a
 		// reset that would clear it mid-row.
-		return head.Background(cursorlineBg), body.Background(cursorlineBg), styleCursorFill
+		return bar.Background(cursorlineBg), head.Background(cursorlineBg),
+			body.Background(cursorlineBg), styleCursorFill
 	}
-	return head.Background(commentBg), body.Background(commentBg), styleCommentFill
+	return bar.Background(commentBg), head.Background(commentBg),
+		body.Background(commentBg), styleCommentFill
 }
 
 // kindColor is the palette token for a kind, for surfaces that need the colour
@@ -582,16 +619,16 @@ func kindColor(kind review.Kind) string {
 	}
 }
 
-// kindStyles is the unfilled head/body pair for a kind. Separate from
-// commentStyles so the index can reuse the hue without the block's background.
-func kindStyles(kind review.Kind) (head, body lipgloss.Style) {
+// kindStyles is the unfilled hue for a kind — the left bar and the header. The
+// index reuses it so a conversation looks the same in both places.
+func kindStyles(kind review.Kind) lipgloss.Style {
 	switch kind.OrDefault() {
 	case review.KindSuggestion:
-		return styleSuggestionHead, styleSuggestionBody
+		return styleSuggestionHead
 	case review.KindQuestion:
-		return styleQuestionHead, styleQuestionBody
+		return styleQuestionHead
 	default:
-		return styleCommentHead, styleCommentBody
+		return styleCommentHead
 	}
 }
 
@@ -599,22 +636,37 @@ func kindStyles(kind review.Kind) (head, body lipgloss.Style) {
 // full width so it reads as a block set into the diff. Each style carries the
 // background itself — an enclosing style cannot supply it, since every inner
 // style ends with a reset that would clear it mid-row.
+//
+// The gutter is styled separately from the text so the bar can carry the kind's
+// hue while the prose stays readable.
 func commentLines(c review.Comment, width int, cursor bool) []string {
-	head, body, fill := commentStyles(c.Kind, cursor)
+	bar, head, body, fill := commentStyles(c.Kind, cursor)
 	rows := commentRows(c, width)
 	out := make([]string, 0, len(rows))
-	for i, text := range rows {
+	for _, row := range rows {
 		style := body
-		if i == 0 {
+		if row.header {
 			style = head
 		}
-		rendered := style.Render(text)
-		if n := width - lipgloss.Width(text); n > 0 {
+		gutter, rest := splitGutter(row.text)
+		rendered := bar.Render(gutter) + style.Render(rest)
+		if n := width - lipgloss.Width(row.text); n > 0 {
 			rendered += fill.Render(strings.Repeat(" ", n))
 		}
 		out = append(out, rendered)
 	}
 	return out
+}
+
+// splitGutter separates a comment row's left bar from its text, so the two can
+// take different styles. A bar-only row (padding, or a paragraph break) has no
+// text after it.
+func splitGutter(row string) (gutter, rest string) {
+	if strings.HasPrefix(row, commentGutter) {
+		return commentGutter, row[len(commentGutter):]
+	}
+	// A row narrower than the gutter itself — only reachable at absurd widths.
+	return row, ""
 }
 
 // Reviewed files collapse out of the way.

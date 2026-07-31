@@ -864,19 +864,23 @@ var (
 	styleCursorLineNo = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Background(cursorlineBg)
 	styleCursorFill   = lipgloss.NewStyle().Background(cursorlineBg)
 	// A comment's hue says what kind of remark it is — what the reader is expected
-	// to do about it. Authorship is carried by the 🤖 marker on the body instead,
-	// which frees the colour for the thing a label cannot convey at a glance.
+	// to do about it. It lands on the left bar and the header only. Authorship is
+	// carried by the 🤖 marker on the body instead, which frees the colour for the
+	// thing a label cannot convey at a glance.
 	//
 	// A plain comment is Info-hued so it reads as annotation rather than as diff
 	// content — nothing in a diff line is ever blue. A suggestion proposes a
 	// change, so it takes Danger, the hue the app already uses for "this needs
 	// doing". A question is waiting on an answer, which is Warning's role.
 	styleCommentHead    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
-	styleCommentBody    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info))
 	styleSuggestionHead = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true)
-	styleSuggestionBody = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
 	styleQuestionHead   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
-	styleQuestionBody   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning))
+	// The prose itself is not tinted. A whole paragraph in the kind's hue was
+	// harder to read against the block's fill and no more informative than a
+	// coloured edge, so the signal lives on the bar and the label while the body
+	// takes the palette's emphasized-text token — which needs to be explicit
+	// rather than terminal-default, since these cells carry a background.
+	styleCommentText = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Strong))
 	// Comments are painted across the full width so they read as blocks set into
 	// the diff rather than as loose text between code lines. BgPanel is the
 	// palette's chip background — a comment box is exactly that — which keeps

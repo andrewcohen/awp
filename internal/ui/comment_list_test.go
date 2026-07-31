@@ -299,7 +299,7 @@ func TestLeftColumnKeepsTheSameHeightWithTheIndex(t *testing.T) {
 func TestCommentEntryStylesFollowKindThenSelection(t *testing.T) {
 	for _, k := range review.Kinds() {
 		entryLoc, _ := commentEntryStyles(k, false)
-		blockHead, _, _ := commentStyles(k, false)
+		_, blockHead, _, _ := commentStyles(k, false)
 		if entryLoc.GetForeground() != blockHead.GetForeground() {
 			t.Fatalf("%q: index row and diff block disagree on hue", k)
 		}
@@ -348,14 +348,14 @@ func TestFirstLineSkipsBlanks(t *testing.T) {
 // mistaken for something the reviewer wrote.
 func TestRobotCommentsAreMarked(t *testing.T) {
 	agent := review.Comment{ID: "a1", Author: "agent", Body: "nil deref here", State: review.Open}
-	rows := commentRows(agent, 60)
-	if len(rows) < 2 || !strings.Contains(rows[1], review.RobotMarker) {
-		t.Fatalf("expected the robot marker on an agent's body, got %q", rows)
+	body := commentBodyText(agent, 60)
+	if len(body) == 0 || !strings.Contains(body[0], review.RobotMarker) {
+		t.Fatalf("expected the robot marker on an agent's body, got %q", body)
 	}
 	mine := review.Comment{ID: "h1", Author: review.AuthorHuman, Body: "nil deref here", State: review.Open}
-	for _, r := range commentRows(mine, 60) {
-		if strings.Contains(r, review.RobotMarker) {
-			t.Fatalf("expected no marker on your own comment, got %q", r)
+	for _, text := range commentBodyText(mine, 60) {
+		if strings.Contains(text, review.RobotMarker) {
+			t.Fatalf("expected no marker on your own comment, got %q", text)
 		}
 	}
 }
@@ -371,9 +371,9 @@ func TestMirroredGitHubThreadsAreNotMarkedAsRobots(t *testing.T) {
 	if robotAuthored(c) {
 		t.Fatal("a mirrored GitHub thread must not count as robot-authored")
 	}
-	for _, r := range commentRows(c, 60) {
-		if strings.Contains(r, review.RobotMarker) {
-			t.Fatalf("expected no marker on a mirrored thread, got %q", r)
+	for _, text := range commentBodyText(c, 60) {
+		if strings.Contains(text, review.RobotMarker) {
+			t.Fatalf("expected no marker on a mirrored thread, got %q", text)
 		}
 	}
 }

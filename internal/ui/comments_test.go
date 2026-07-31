@@ -30,6 +30,35 @@ func commentOn(path string, line int, text, body string) review.Comment {
 	}
 }
 
+// commentBodyText is a comment's body rows with the gutter stripped — everything
+// after the header. What the wrapping tests actually care about.
+func commentBodyText(c review.Comment, width int) []string {
+	var out []string
+	past := false
+	for _, r := range commentRows(c, width) {
+		if r.header {
+			past = true
+			continue
+		}
+		if !past {
+			continue // the leading pad row
+		}
+		_, text := splitGutter(r.text)
+		out = append(out, text)
+	}
+	return out
+}
+
+// commentRowStrings is every row's raw text, for width assertions.
+func commentRowStrings(c review.Comment, width int) []string {
+	rows := commentRows(c, width)
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.text)
+	}
+	return out
+}
+
 // rowsOfKind counts stream rows of a kind, for asserting placement.
 func rowsOfKind(m Model, k rowKind) int {
 	n := 0
@@ -888,24 +917,57 @@ func pressKeyUI(m Model, s string) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
-// Authorship is visible without reading the label, and a reply is indented one
-// level with the same bar rather than a separate marker.
-func TestReplyStylingDiffersAndIndentsOneLevel(t *testing.T) {
-	parent := commentLines(commentOn("a.go", 1, "alpha", "top"), 60, false)
-	reply := commentLines(review.Comment{
+// A whole conversation shares one left bar at one indent.
+//
+// Replies used to step a space further right per level, which stair-stepped a
+// long exchange across the pane and left a ragged left edge. The author label on
+// each message already says where one ends and the next begins, so the nesting
+// does not need to be spatial.
+func TestThreadSharesOneBarWithoutIndenting(t *testing.T) {
+	parent := commentRowStrings(commentOn("a.go", 1, "alpha", "top"), 60)
+	reply := commentRowStrings(review.Comment{
 		ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open,
-	}, 60, false)
+	}, 60)
 
-	p, r := stripANSI(parent[0]), stripANSI(reply[0])
 	indentOf := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
-	if indentOf(r) != indentOf(p)+1 {
-		t.Fatalf("expected one space of extra indent, got %d vs %d", indentOf(r), indentOf(p))
+	// Every row of both messages sits at the same indent — the shared bar's.
+	want := indentOf(parent[0])
+	for _, rows := range [][]string{parent, reply} {
+		for i, r := range rows {
+			if got := indentOf(r); got != want {
+				t.Fatalf("row %d sits at indent %d, expected the shared %d: %q", i, got, want, r)
+			}
+		}
 	}
-	if strings.Contains(r, "↳") {
-		t.Fatalf("expected no return marker, got %q", r)
+	if !strings.Contains(reply[1], "▌") {
+		t.Fatalf("expected the same bar as the parent, got %q", reply[1])
 	}
-	if !strings.Contains(r, "▌") {
-		t.Fatalf("expected the same bar as the parent, got %q", r)
+	if strings.Contains(reply[1], "↳") {
+		t.Fatalf("expected no return marker, got %q", reply[1])
+	}
+}
+
+// Every message opens with a bar-only row: top padding for the first, and the
+// separator between messages after that. That blank row is what replaces the
+// indent as the signal that a new message has started.
+func TestEveryMessageOpensWithABarOnlyRow(t *testing.T) {
+	for _, c := range []review.Comment{
+		{ID: "c1", Author: review.AuthorHuman, Body: "top", State: review.Open},
+		{ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open},
+	} {
+		rows := commentRows(c, 60)
+		if len(rows) < 2 {
+			t.Fatalf("%s: expected at least a pad row and a header, got %d", c.ID, len(rows))
+		}
+		if rows[0].header {
+			t.Fatalf("%s: expected the first row to be padding, not the header", c.ID)
+		}
+		if _, text := splitGutter(rows[0].text); strings.TrimSpace(text) != "" {
+			t.Fatalf("%s: expected a bar-only pad row, got %q", c.ID, rows[0].text)
+		}
+		if !rows[1].header {
+			t.Fatalf("%s: expected the header directly after the pad row", c.ID)
+		}
 	}
 }
 
@@ -924,7 +986,7 @@ func TestCommentsReloadOnTheRefreshTick(t *testing.T) {
 	}}
 	m.LoadComments = func() ([]review.Comment, error) { return stored, nil }
 
-	if rowsOfKind(m, rowComment) != 2 { // header + one body line
+	if rowsOfKind(m, rowComment) != 3 { // pad + header + one body line
 		t.Fatalf("expected only the parent before the tick, got %d rows", rowsOfKind(m, rowComment))
 	}
 	updated, _ := m.Update(autoRefreshTickMsg{})
@@ -998,7 +1060,8 @@ func TestCommentReloadKeepsTheReadingPosition(t *testing.T) {
 	}
 }
 
-// Hue says what the remark is asking for, not who wrote it.
+// Hue says what the remark is asking for, not who wrote it — and it lands on the
+// left bar and the header, never on the prose.
 //
 // It used to key off the author (yours one colour, the agent's another), which
 // spent the only pre-attentive channel available on something a label already
@@ -1008,27 +1071,43 @@ func TestCommentReloadKeepsTheReadingPosition(t *testing.T) {
 func TestColourFollowsKindNotAuthor(t *testing.T) {
 	kinds := []review.Kind{review.KindComment, review.KindSuggestion, review.KindQuestion}
 	seen := map[string]review.Kind{}
+	var bodyHues []string
 	for _, k := range kinds {
-		head, body, _ := commentStyles(k, false)
+		bar, head, body, _ := commentStyles(k, false)
 		hue := fmt.Sprint(head.GetForeground())
 		if other, dup := seen[hue]; dup {
 			t.Fatalf("%q and %q share a hue — the kinds must be distinguishable", k, other)
 		}
 		seen[hue] = k
-		if body.GetForeground() != head.GetForeground() {
-			t.Fatalf("%q: head and body should share the kind's hue", k)
+		// The bar carries the same hue as the header: together they are the whole
+		// colour signal.
+		if bar.GetForeground() != head.GetForeground() {
+			t.Fatalf("%q: the left bar must carry the kind's hue", k)
 		}
+		bodyHues = append(bodyHues, fmt.Sprint(body.GetForeground()))
+	}
+	// The prose is deliberately NOT tinted. Blue body text was hard to read
+	// against the block's fill, and a coloured paragraph says nothing a coloured
+	// edge does not — so every kind's body is the same readable colour.
+	for i, hue := range bodyHues {
+		if hue != bodyHues[0] {
+			t.Fatalf("%q tints its body (%s) — the hue belongs on the bar and header only",
+				kinds[i], hue)
+		}
+	}
+	if bodyHues[0] == fmt.Sprint(styleCommentHead.GetForeground()) {
+		t.Fatal("expected the body in a readable colour, not the comment kind's hue")
 	}
 	// An unset kind is a comment: records written before kinds existed have to
 	// render as something, and the default is the one claiming the least.
-	unsetHead, _, _ := commentStyles("", false)
-	defaultHead, _, _ := commentStyles(review.KindComment, false)
+	_, unsetHead, _, _ := commentStyles("", false)
+	_, defaultHead, _, _ := commentStyles(review.KindComment, false)
 	if unsetHead.GetForeground() != defaultHead.GetForeground() {
 		t.Fatal("expected an unset kind to render as a plain comment")
 	}
 	// The cursorline changes the background, never the hue.
-	cursorHead, _, _ := commentStyles(review.KindSuggestion, true)
-	plainHead, _, _ := commentStyles(review.KindSuggestion, false)
+	_, cursorHead, _, _ := commentStyles(review.KindSuggestion, true)
+	_, plainHead, _, _ := commentStyles(review.KindSuggestion, false)
 	if cursorHead.GetForeground() != plainHead.GetForeground() {
 		t.Fatal("expected the cursorline to change the background, not the hue")
 	}
@@ -1092,39 +1171,21 @@ func TestEditingKeepsTheExistingKind(t *testing.T) {
 	}
 }
 
-// The reply indent is one space — the least that still reads as nested.
-func TestReplyIndentIsOneSpace(t *testing.T) {
-	parent := stripANSI(commentLines(review.Comment{
-		ID: "c1", Author: review.AuthorHuman, Body: "top", State: review.Open,
-	}, 60, false)[0])
-	reply := stripANSI(commentLines(review.Comment{
-		ID: "c2", Author: "agent", Body: "under", State: review.Open, ReplyTo: "c1",
-	}, 60, false)[0])
-	indentOf := func(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
-	if got := indentOf(reply) - indentOf(parent); got != 1 {
-		t.Fatalf("expected exactly one space of extra indent, got %d", got)
-	}
-}
-
 // A review remark is prose; clipping it at the pane edge hides the half that
 // explains the point. It wraps instead.
 func TestCommentBodyWrapsRatherThanTruncating(t *testing.T) {
 	long := "this is a long remark that will not fit on one row of a narrow pane and therefore has to wrap"
 	c := review.Comment{ID: "c1", Author: review.AuthorHuman, Body: long, State: review.Open}
 
-	rows := commentRows(c, 40)
-	if len(rows) < 3 {
-		t.Fatalf("expected the body wrapped over several rows, got %d: %q", len(rows), rows)
+	body := commentBodyText(c, 40)
+	if len(body) < 2 {
+		t.Fatalf("expected the body wrapped over several rows, got %d: %q", len(body), body)
 	}
 	// Nothing may be lost to the wrap.
-	var joined string
-	for _, r := range rows[1:] {
-		joined += strings.TrimLeft(strings.TrimPrefix(strings.TrimLeft(r, " "), "▌ "), " ")
-	}
-	if !strings.Contains(joined, "therefore has to wrap") {
+	if joined := strings.Join(body, ""); !strings.Contains(joined, "therefore has to wrap") {
 		t.Fatalf("expected the tail preserved, got %q", joined)
 	}
-	for i, r := range rows {
+	for i, r := range commentRowStrings(c, 40) {
 		if lipgloss.Width(r) > 40 {
 			t.Fatalf("row %d exceeds the width: %q", i, r)
 		}
@@ -1178,19 +1239,17 @@ func TestCommentBodyWordWraps(t *testing.T) {
 		ID: "c1", Author: review.AuthorHuman, State: review.Open,
 		Body: "the quick brown fox jumps over the lazy dog and keeps running",
 	}
-	rows := commentRows(c, 30)
-	for i, r := range rows[1:] {
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r), "▌"))
-		if text == "" {
+	for i, text := range commentBodyText(c, 30) {
+		if strings.TrimSpace(text) == "" {
 			continue
 		}
 		// No row may start or end mid-word: every row's edges land on whole words.
 		if strings.HasPrefix(text, " ") {
-			t.Fatalf("row %d starts with padding: %q", i, r)
+			t.Fatalf("row %d starts with padding: %q", i, text)
 		}
 		for _, word := range strings.Fields(text) {
 			if !strings.Contains(c.Body, word) {
-				t.Fatalf("row %d contains a broken word %q: %q", i, word, r)
+				t.Fatalf("row %d contains a broken word %q: %q", i, word, text)
 			}
 		}
 	}
@@ -1202,13 +1261,13 @@ func TestCommentWrapBreaksAnOverlongWord(t *testing.T) {
 		ID: "c1", Author: review.AuthorHuman, State: review.Open,
 		Body: "see " + strings.Repeat("x", 120),
 	}
-	rows := commentRows(c, 30)
+	rows := commentRowStrings(c, 30)
 	for i, r := range rows {
 		if lipgloss.Width(r) > 30 {
 			t.Fatalf("row %d overflows: %d cells (%q)", i, lipgloss.Width(r), r)
 		}
 	}
-	if len(rows) < 4 {
+	if len(rows) < 5 {
 		t.Fatalf("expected the long word broken across rows, got %d", len(rows))
 	}
 }
@@ -1238,14 +1297,81 @@ func TestCommentPreservesBlankLines(t *testing.T) {
 		ID: "c1", Author: review.AuthorHuman, State: review.Open,
 		Body: "first para\n\nsecond para",
 	}
-	rows := commentRows(c, 40)
+	body := commentBodyText(c, 40)
 	blank := 0
-	for _, r := range rows[1:] {
-		if strings.TrimSpace(strings.ReplaceAll(r, "▌", "")) == "" {
+	for _, text := range body {
+		if strings.TrimSpace(text) == "" {
 			blank++
 		}
 	}
 	if blank != 1 {
-		t.Fatalf("expected the paragraph break preserved, got %d blank rows in %q", blank, rows)
+		t.Fatalf("expected the paragraph break preserved, got %d blank rows in %q", blank, body)
+	}
+}
+
+// A conversation renders as one card with one left bar, so every message in it
+// takes the thread's hue. A reply carrying its own kind would break that edge
+// into two colours mid-block.
+func TestRepliesTakeTheThreadsKind(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	parent := commentOn("a.go", 1, "alpha", "this drops the error")
+	parent.Kind = review.KindSuggestion
+	reply := review.Comment{
+		ID: "r1", Author: "agent", Body: "agreed", State: review.Open,
+		// Filed as a plain comment, which is what `awp review reply` defaults to.
+		Kind: review.KindComment, ReplyTo: parent.ID, Anchor: parent.Anchor,
+	}
+	m.SetComments([]review.Comment{parent, reply})
+
+	var kinds []review.Kind
+	for _, c := range m.stream.comments {
+		kinds = append(kinds, c.Kind)
+	}
+	if len(kinds) != 2 {
+		t.Fatalf("expected the parent and its reply placed, got %d", len(kinds))
+	}
+	for i, k := range kinds {
+		if k != review.KindSuggestion {
+			t.Fatalf("message %d renders as %q; the whole thread should take the parent's kind", i, k)
+		}
+	}
+	// The stored record is untouched — only the display copy is normalised.
+	for _, c := range m.comments {
+		if c.ID == "r1" && c.Kind != review.KindComment {
+			t.Fatalf("expected the stored reply's own kind preserved, got %q", c.Kind)
+		}
+	}
+}
+
+// The kind is named once per conversation, on the remark that opened it. A reply
+// already renders in the thread's hue, so repeating the word on every message is
+// noise.
+func TestOnlyTheThreadsFirstMessageNamesTheKind(t *testing.T) {
+	parent := review.Comment{
+		ID: "c1", Author: review.AuthorHuman, Body: "top",
+		Kind: review.KindSuggestion, State: review.Open,
+	}
+	reply := review.Comment{
+		ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1",
+		Kind: review.KindSuggestion, State: review.Open,
+	}
+	head := func(c review.Comment) string {
+		for _, r := range commentRows(c, 60) {
+			if r.header {
+				return r.text
+			}
+		}
+		return ""
+	}
+	if got := head(parent); !strings.Contains(got, "suggestion") {
+		t.Fatalf("expected the opening message to name its kind, got %q", got)
+	}
+	if got := head(reply); strings.Contains(got, "suggestion") {
+		t.Fatalf("expected a reply not to repeat the kind, got %q", got)
+	}
+	// A plain comment claims nothing, so it goes unlabelled either way.
+	plain := review.Comment{ID: "c2", Author: review.AuthorHuman, Body: "x", State: review.Open}
+	if got := head(plain); strings.Contains(got, "comment") {
+		t.Fatalf("expected the default kind unlabelled, got %q", got)
 	}
 }
