@@ -26,7 +26,9 @@ type doctorService interface {
 	RunRepo(fix bool) error
 }
 
-type diffWorkflow func(runner Runner, in io.Reader, out io.Writer) error
+// diffWorkflow runs the standalone diff viewer. revset is empty for the working
+// copy, or any jj revset from `-r`.
+type diffWorkflow func(runner Runner, svc workspace.Service, revset string, in io.Reader, out io.Writer) error
 type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope) error
 type miniDeckWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
@@ -679,16 +681,56 @@ func (a *App) runDoctor(args []string) error {
 
 func (a *App) runDiff(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp diff")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp diff [-r <revset>]")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "With no -r, shows the working copy. -r takes any jj revset:")
+		_, _ = fmt.Fprintln(a.out, "  awp diff -r @-           the change before this one")
+		_, _ = fmt.Fprintln(a.out, "  awp diff -r 'main..@'    the whole stack against main")
+		_, _ = fmt.Fprintln(a.out, "  awp diff -r andrew/thing a bookmark")
 		return nil
 	}
-	if len(args) != 0 {
-		return errors.New("diff takes no arguments")
+	revset, err := parseDiffRevset(args)
+	if err != nil {
+		return err
 	}
 	if a.diff == nil {
 		return errors.New("diff is not configured")
 	}
-	return a.diff(a.runner, a.in, a.out)
+	return a.diff(a.runner, a.svc, revset, a.in, a.out)
+}
+
+// parseDiffRevset reads `-r <revset>` (or `-r=<revset>`, and the --revision
+// spellings) off `awp diff`'s arguments.
+//
+// Hand-parsed rather than through a FlagSet because a revset routinely starts
+// with a character the flag package treats as its own: `-r -3` is a real thing to
+// ask for, and `awp diff -r @-` is the common case. Reading the value as the next
+// argument whatever it looks like is what makes those work.
+func parseDiffRevset(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	// Only the first argument is examined, because every accepted form consumes
+	// the whole line: `awp diff` takes one revset and nothing else, so anything
+	// left over is a mistake rather than a second flag to look for.
+	arg := args[0]
+	switch {
+	case arg == "-r" || arg == "--revision" || arg == "--revisions":
+		if len(args) < 2 {
+			return "", errors.New("diff: -r needs a revset")
+		}
+		if rest := args[2:]; len(rest) > 0 {
+			return "", fmt.Errorf("diff: unexpected argument %q", rest[0])
+		}
+		return strings.TrimSpace(args[1]), nil
+	case strings.HasPrefix(arg, "-r="), strings.HasPrefix(arg, "--revision="), strings.HasPrefix(arg, "--revisions="):
+		_, value, _ := strings.Cut(arg, "=")
+		if rest := args[1:]; len(rest) > 0 {
+			return "", fmt.Errorf("diff: unexpected argument %q", rest[0])
+		}
+		return strings.TrimSpace(value), nil
+	}
+	return "", fmt.Errorf("diff: unexpected argument %q (did you mean -r %s?)", arg, arg)
 }
 
 func (a *App) runDeck(args []string) error {

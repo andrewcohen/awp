@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -11,7 +13,9 @@ import (
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/editor"
 	"github.com/andrewcohen/awp/internal/jj"
+	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/ui"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // diffLoaderFor backs the deck's in-deck diff modal (`c`): the git-format
@@ -65,7 +69,38 @@ func openDiffFileInEditor(_ deckui.Item, filePath string, line int) tea.Cmd {
 	})
 }
 
-func runDiffWithCharm(runner Runner, in io.Reader, out io.Writer) error {
+// diffSubjectFor resolves what a standalone `awp diff` is a review of: the
+// workspace the working directory is in, its repo, and the PR it is pinned to.
+//
+// The deck knows all of this from the row you selected. Standalone there is no
+// row, so it comes from the same lookups `awp review add` and
+// `awp review publish` use — which is the point: a comment filed from the viewer
+// and a comment filed by an agent in the same directory have to land in the same
+// review.
+//
+// A directory that is not a tracked workspace still yields a subject. Its
+// workspace name is empty, which is the review the CLI would resolve there too,
+// so reading a plain repo with `awp diff` still gets a working review rather than
+// no commenting at all.
+func diffSubjectFor(svc workspace.Service, repoRoot, cwd string) deckui.Item {
+	item := deckui.Item{
+		RepoRoot:    repoRoot,
+		Path:        cwd,
+		ProjectName: filepath.Base(repoRoot),
+	}
+	if e, ok := workspaceEntryForPath(svc, cwd); ok {
+		item.WorkspaceName = e.Name
+		item.PRNumber = e.PRNumber
+		if strings.TrimSpace(e.Path) != "" {
+			// The workspace's own root, not wherever in it you happen to be standing:
+			// send-to-agent and the review both key off the workspace, not the cwd.
+			item.Path = e.Path
+		}
+	}
+	return item
+}
+
+func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io.Reader, out io.Writer) error {
 	if charm.IsDumbTerminal() {
 		return fmt.Errorf("diff ui not available in dumb terminal")
 	}
@@ -81,8 +116,12 @@ func runDiffWithCharm(runner Runner, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	revset = strings.TrimSpace(revset)
 	model := ui.New(repoRoot,
-		func() (string, error) { return j.DiffGit(cwd, "") },
+		// Read on every refresh tick, so the revset is resolved by jj each time
+		// rather than pinned to a commit id here: `-r @-` should keep meaning "the
+		// change before this one" as the stack moves under it.
+		func() (string, error) { return j.DiffGit(cwd, revset) },
 		func(filePath string, line int) tea.Cmd {
 			return tea.ExecProcess(editor.OpenExecCmd("", filePath, line), func(err error) tea.Msg {
 				if err != nil {
@@ -92,6 +131,21 @@ func runDiffWithCharm(runner Runner, in io.Reader, out io.Writer) error {
 			})
 		},
 	)
+	if revset != "" {
+		// The chrome says what it is showing. Named as the revset the user typed,
+		// not as a resolved commit — that is what they will recognise, and it is
+		// still true after the change is rewritten.
+		model.ResolveBase = func() string { return revset }
+	}
+	// The same review seams the deck's modal gets. Without them this was a diff
+	// you could only read: no commenting, no comment index, no mirrored GitHub
+	// threads, no reviewed marks, no send-to-agent, no publish — which is most of
+	// what the surface is for.
+	//
+	// One wiring function shared with the deck (deckui.ApplyCommentStore), so a
+	// seam cannot be present in one surface and quietly missing in the other.
+	deckui.ApplyCommentStore(&model, diffSubjectFor(svc, repoRoot, cwd),
+		reviewStoreWithSend(runner, tmux.New(runner), svc))
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err

@@ -353,7 +353,10 @@ func TestRunInfoOutputsDetails(t *testing.T) {
 func TestRunDiffRejectsArgs(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
-	if err := app.Run([]string{"diff", "extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
+	// A bare word is a mistake, and the message guesses what was meant: the thing
+	// people type is the revset without its flag.
+	err := app.Run([]string{"diff", "extra"})
+	if err == nil || !strings.Contains(err.Error(), "did you mean -r extra?") {
 		t.Fatalf("expected diff arg error, got %v", err)
 	}
 }
@@ -361,16 +364,57 @@ func TestRunDiffRejectsArgs(t *testing.T) {
 func TestRunDiffCallsWorkflow(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
-	called := false
-	app.diff = func(runner Runner, in io.Reader, out io.Writer) error {
-		called = true
+	got := "unset"
+	app.diff = func(runner Runner, svc workspace.Service, revset string, in io.Reader, out io.Writer) error {
+		got = revset
 		return nil
 	}
 	if err := app.Run([]string{"diff"}); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if !called {
-		t.Fatal("expected diff workflow to be called")
+	if got != "" {
+		t.Fatalf("expected no revset for a bare `awp diff`, got %q", got)
+	}
+	if err := app.Run([]string{"diff", "-r", "main..@"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got != "main..@" {
+		t.Fatalf("expected the revset passed through, got %q", got)
+	}
+}
+
+// A revset routinely starts with a character a flag parser would claim, which is
+// why this is hand-parsed: `-r @-` and `-r -3` are both things to ask for.
+func TestParseDiffRevset(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"-r", "@-"}, "@-"},
+		{[]string{"-r", "-3"}, "-3"},
+		{[]string{"-r", " main..@ "}, "main..@"},
+		{[]string{"-r=@-"}, "@-"},
+		{[]string{"--revision", "@-"}, "@-"},
+		{[]string{"--revisions=main..@"}, "main..@"},
+	} {
+		got, err := parseDiffRevset(tc.args)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%v: got %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	for _, args := range [][]string{
+		{"-r"},               // no value
+		{"-r", "@", "extra"}, // trailing junk
+		{"-r=@", "extra"},    // trailing junk after the = form
+		{"bare"},             // a revset without its flag
+	} {
+		if _, err := parseDiffRevset(args); err == nil {
+			t.Fatalf("%v: expected an error", args)
+		}
 	}
 }
 
