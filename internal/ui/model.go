@@ -125,6 +125,9 @@ type Model struct {
 	publishStage  publishStage
 	publishReport []string
 	publishScroll int
+	// summaryEditor is the review-body box inside that flow — the same compose box
+	// the stream uses, so a summary is written with the keys already learnt here.
+	summaryEditor commentEditor
 	focus         Focus
 	filterInput   textinput.Model
 	// searchInput and searchQuery are the diff's content search (see search.go).
@@ -531,15 +534,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, scheduleRefresh(m.RefreshInterval)
 	case composeEditedMsg:
-		// Back from $EDITOR. Ignored if the box has since closed — the editor was
-		// suspending the program, so nothing could have closed it, but a stale
-		// message must not resurrect one.
-		if !m.editing {
+		// Back from $EDITOR. Ignored if no box is open — the editor was suspending
+		// the program, so nothing could have closed one, but a stale message must not
+		// resurrect it.
+		//
+		// Two boxes can want this: the stream's comment box and the publish flow's
+		// review-summary box. They are never open at once — with the stream box up
+		// every key belongs to it, so `P` types a P — so which one is on screen is
+		// enough to say where the body belongs.
+		summary := m.publishing && m.publishStage == publishSummary
+		if !m.editing && !summary {
 			return m, nil
 		}
 		if msg.err != nil {
 			m.status = "editor: " + msg.err.Error()
 			m.statusErr = true
+			return m, nil
+		}
+		if summary {
+			m.summaryEditor.setBody(msg.body)
 			return m, nil
 		}
 		m.editor.setBody(msg.body)
@@ -550,7 +563,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 	// Non-key messages the compose box needs — the cursor blink, chiefly. Without
-	// this the box renders a static cursor, since nothing else routes them.
+	// this the box renders a static cursor, since nothing else routes them. The
+	// review-summary box is a compose box too, and it is the one on screen when the
+	// publish flow is at that stage.
+	if m.publishing && m.publishStage == publishSummary {
+		editor, cmd, _ := m.summaryEditor.update(msg)
+		m.summaryEditor = editor
+		return m, cmd
+	}
 	if m.editing {
 		editor, cmd, _ := m.editor.update(msg)
 		m.editor = editor

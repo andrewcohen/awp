@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -58,6 +60,11 @@ type publishStage int
 const (
 	// publishChoosing is the verdict menu.
 	publishChoosing publishStage = iota
+	// publishSummary is the review body — a remark about the change as a whole,
+	// which `request changes` and `comment` require and an approval may want. It
+	// lives here because this is where the need arises: the flow used to dead-end on
+	// its own requirement, since nothing in the viewer could write one.
+	publishSummary
 	// publishPreviewing is the list of calls, awaiting confirmation.
 	publishPreviewing
 	// publishReporting is what happened, awaiting dismissal.
@@ -100,13 +107,15 @@ func (m Model) handlePublishKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	switch m.publishStage {
+	case publishSummary:
+		return m.handlePublishSummaryKey(msg)
 	case publishPreviewing:
 		switch key {
 		case "esc":
-			// Back to the choices rather than out: the usual reason to reject a
-			// preview is that it is the wrong verdict, not that you have changed your
-			// mind about publishing.
-			m.publishStage = publishChoosing
+			// Back one step rather than out: the usual reason to reject a preview is
+			// that something in it is wrong — most often the verdict, sometimes the
+			// summary — not that you have changed your mind about publishing.
+			m.publishStage = publishSummary
 			m.publishReport = nil
 			return m, nil
 		case "q", "P":
@@ -144,14 +153,115 @@ func (m Model) handlePublishKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		m.publishCursor = max(0, m.publishCursor-1)
 	case "enter":
-		// Not the publish: the preview is. Nothing here reaches GitHub.
-		m.publishStage = publishPreviewing
-		m.publishReport = []string{"reading the review…"}
-		m.status = ""
-		m.statusErr = false
-		return m, publishCmd(m.PublishReview, m.publishVerdict(), true)
+		// The summary next. Nothing in this stage reaches GitHub.
+		return m.beginPublishSummary()
 	}
 	return m, nil
+}
+
+// beginPublishSummary opens the review-body box.
+func (m Model) beginPublishSummary() (tea.Model, tea.Cmd) {
+	m.publishStage = publishSummary
+	// An empty anchor is what makes a comment review-level: about the change as a
+	// whole rather than about a line of it (see review.Anchor).
+	m.summaryEditor = newCommentEditor(review.Anchor{}, m.hunkWidth)
+	m.status = ""
+	m.statusErr = false
+	return m, textarea.Blink
+}
+
+// handlePublishSummaryKey routes keys to the review-body box.
+//
+// The compose box rather than a bespoke field, so the conventions are the ones
+// already learnt in this view: enter accepts, alt+enter is a newline, ctrl+g goes
+// out to $EDITOR — which a summary, being the longest thing anyone writes in a
+// review, wants more than a line comment does.
+func (m Model) handlePublishSummaryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The two exits are handled here rather than read off the editor's action,
+	// because one of them means something different in this flow: the compose box
+	// treats enter-on-an-empty-box as "never mind", and here an empty box is a skip
+	// — there is a next step to go to. Everything else (typing, tab, ctrl+g, the
+	// cursor blink) is the editor's.
+	switch msg.String() {
+	case "enter":
+		return m.saveSummaryThenPreview()
+	case "esc":
+		// Back to the verdicts, not out. The way out of publishing is from the menu.
+		m.publishStage = publishChoosing
+		return m, nil
+	}
+	editor, cmd, action := m.summaryEditor.update(msg)
+	m.summaryEditor = editor
+	if action == editorSave || action == editorSaveAndSend {
+		// ctrl+s. There is no agent to send a review summary to, so it means the same
+		// thing as enter rather than nothing at all.
+		return m.saveSummaryThenPreview()
+	}
+	return m, cmd
+}
+
+// saveSummaryThenPreview files what was typed as a review-level comment, then asks
+// for the plan.
+//
+// Saved as a record rather than passed straight into the submission: a remark about
+// the change as a whole *is* a review-level comment, which the store, the stream's
+// review section and the publish path already understand. Special-casing it here
+// would make the one remark that summarises a review the only one that leaves no
+// trace in it.
+func (m Model) saveSummaryThenPreview() (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(m.summaryEditor.area.Value()) == "" {
+		// A skip — publishing an approval stays two keystrokes.
+		return m.previewPublish()
+	}
+	if m.SaveComment == nil {
+		m.status = "commenting unavailable: no review store"
+		m.statusErr = true
+		return m, nil
+	}
+	c := m.summaryEditor.comment()
+	if err := m.SaveComment(c); err != nil {
+		// Stay in the box. The text is still in it, and losing a written summary to a
+		// failed write would be the worst outcome available here.
+		m.status = "summary: " + err.Error()
+		m.statusErr = true
+		return m, nil
+	}
+	if m.LastSavedComment != nil {
+		if saved, ok := m.LastSavedComment(); ok {
+			c = saved
+		}
+	}
+	m.comments = append(m.comments, c)
+	// It belongs in the review section from now on, not only in this submission.
+	m.rebuildStream()
+	return m.previewPublish()
+}
+
+// previewPublish asks for the plan without making any of its calls.
+func (m Model) previewPublish() (tea.Model, tea.Cmd) {
+	m.publishStage = publishPreviewing
+	m.publishReport = []string{"reading the review…"}
+	m.status = ""
+	m.statusErr = false
+	return m, publishCmd(m.PublishReview, m.publishVerdict(), true)
+}
+
+// verdictEvent maps a choice's verdict word onto GitHub's event constant, empty
+// for "post the comments only".
+//
+// The viewer needs this to know whether a summary is required, which is a fact
+// about GitHub rather than about awp — so it reads the same constants the publish
+// path does instead of keeping its own list of which verdicts need a body.
+func verdictEvent(verdict string) string {
+	switch verdict {
+	case "approve":
+		return github.EventApprove
+	case "comment":
+		return github.EventComment
+	case "request-changes":
+		return github.EventRequestChanges
+	}
+	return ""
 }
 
 // publishVerdict is the selected choice's verdict.
@@ -309,6 +419,21 @@ func (m Model) renderPublishOverlay(width, height int) string {
 	inner := max(20, width-helpBoxHOverhead)
 	title, rows := "Publish review", []string{}
 	switch m.publishStage {
+	case publishSummary:
+		title = "Publish review — say something about the change as a whole"
+		note := "Optional. Left empty, only the comments go up."
+		if github.EventNeedsBody(verdictEvent(m.publishVerdict())) {
+			// GitHub's rule, and its own UI's: a verdict that asks for something has to
+			// say what. Said here rather than left for the plan to refuse over.
+			note = m.publishVerdict() + " needs one — GitHub rejects a verdict with no summary."
+		}
+		rows = append(rows,
+			styleDim.Render(truncate(note, inner)),
+			"",
+			m.summaryEditor.view(inner),
+			"",
+			styleDim.Render(truncate(" enter continue · alt+enter newline · tab kind · ctrl+g $EDITOR · esc back", inner)),
+		)
 	case publishPreviewing:
 		// Named for what the reviewer is about to authorise, not for the feature.
 		title = "Publish review — this is what will be sent"
