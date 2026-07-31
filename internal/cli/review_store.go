@@ -141,11 +141,18 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*path) == "" || strings.TrimSpace(*body) == "" {
-		return errors.New("review add requires --file and --body")
+	if strings.TrimSpace(*body) == "" {
+		return errors.New("review add requires --body")
 	}
-	if *line <= 0 {
-		return errors.New("review add requires --line")
+	// No --file is a review-level remark: something about the change as a whole,
+	// which the diff shows in its own section above the first file rather than
+	// pinned to a line. A line without a file is a mistake, though — there is
+	// nothing for the number to mean.
+	if strings.TrimSpace(*path) == "" && *line > 0 {
+		return errors.New("review add: --line needs --file")
+	}
+	if strings.TrimSpace(*path) != "" && *line <= 0 {
+		return errors.New("review add requires --line with --file")
 	}
 	anchorSide := review.SideNew
 	if *side == string(review.SideOld) {
@@ -174,6 +181,10 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	})
 	if err != nil {
 		return err
+	}
+	if c.Anchor.Path == "" {
+		_, _ = fmt.Fprintf(out, "added %s %s on the review\n", c.Kind.OrDefault(), c.ID)
+		return nil
 	}
 	_, _ = fmt.Fprintf(out, "added %s %s on %s:%d\n", c.Kind.OrDefault(), c.ID, c.Anchor.Path, c.Anchor.LineHint)
 	return nil

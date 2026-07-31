@@ -44,6 +44,9 @@ type commentEntry struct {
 	// detached marks a conversation whose anchor could not be located, so it
 	// lives in the stream's trailing section instead of beside code.
 	detached bool
+	// changeWide marks a review-level conversation — about the change as a whole,
+	// anchored to no file — which leads the stream instead of sitting in it.
+	changeWide bool
 }
 
 // commentEntries walks the placed rows in stream order and returns one entry
@@ -55,7 +58,7 @@ func (idx streamIndex) commentEntries() []commentEntry {
 	// parent and be counted rather than listed.
 	slot := make(map[string]int, len(idx.comments))
 	for row, r := range idx.rows {
-		if r.kind != rowComment && r.kind != rowOrphan {
+		if !isCommentRow(r.kind) {
 			continue
 		}
 		// One entry per comment, anchored at its first display row.
@@ -74,15 +77,16 @@ func (idx streamIndex) commentEntries() []commentEntry {
 		}
 		slot[c.ID] = len(out)
 		out = append(out, commentEntry{
-			id:       c.ID,
-			row:      row,
-			path:     c.Anchor.Path,
-			line:     c.Anchor.LineHint,
-			author:   c.Author,
-			kind:     c.Kind.OrDefault(),
-			summary:  entrySummary(c),
-			state:    c.State,
-			detached: r.kind == rowOrphan,
+			id:         c.ID,
+			row:        row,
+			path:       c.Anchor.Path,
+			line:       c.Anchor.LineHint,
+			author:     c.Author,
+			kind:       c.Kind.OrDefault(),
+			summary:    entrySummary(c),
+			state:      c.State,
+			detached:   r.kind == rowOrphan,
+			changeWide: r.kind == rowReview,
 		})
 	}
 	return out
@@ -206,6 +210,15 @@ func renderCommentEntry(e commentEntry, width int, selected bool) string {
 // the full path: the column is a third of the body and the file list above
 // already shows paths, so spending the width here buys nothing.
 func entryLocation(e commentEntry) string {
+	if e.changeWide {
+		// No file to name. "review" is what the section it lives in is called, so
+		// the index row and the stream agree on where selecting it will take you.
+		loc := "review"
+		if e.replies > 0 {
+			loc += fmt.Sprintf("·%d", e.replies)
+		}
+		return loc
+	}
 	name := filepath.Base(e.path)
 	if name == "." || name == string(filepath.Separator) {
 		name = e.path

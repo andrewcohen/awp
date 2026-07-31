@@ -120,3 +120,23 @@ func TestWorkspaceAndSourceRepoShareOneReviewStore(t *testing.T) {
 		t.Fatal("fixture is wrong: the workspace-keyed store should be separate")
 	}
 }
+
+// A review-level remark has no line for a review comment to hang on, so publish
+// holds it back and says so rather than sending an empty path GitHub will reject.
+func TestPublishHoldsBackReviewLevelComments(t *testing.T) {
+	pending, skipped, unanchored := partitionForPublish([]review.Comment{
+		{ID: "a", Body: "on a line", Anchor: review.Anchor{Path: "a.go", LineHint: 3, Side: review.SideNew}},
+		{ID: "b", Body: "about the change as a whole"},
+		{ID: "c", Body: "already up", State: review.Published, Anchor: review.Anchor{Path: "b.go", LineHint: 1}},
+		{ID: "d", Body: "   ", Anchor: review.Anchor{Path: "c.go", LineHint: 2}},
+	})
+	if len(pending) != 1 || pending[0].ID != "a" {
+		t.Fatalf("expected only the anchored comment pending, got %+v", pending)
+	}
+	if unanchored != 1 {
+		t.Fatalf("expected 1 held back, got %d", unanchored)
+	}
+	if skipped != 2 {
+		t.Fatalf("expected the published and the empty one skipped, got %d", skipped)
+	}
+}

@@ -30,7 +30,7 @@ func (m Model) renderStreamRowAt(i, width int) string {
 		prefix = styleSelectedCursor.Render(selectionPrefixBar)
 	case atCursor:
 		prefix = styleSelected.Render(selectionPrefixBar)
-	case kind == rowComment || kind == rowOrphan:
+	case isCommentRow(kind):
 		// Paint the reserved columns too: an unpainted gap on the left would
 		// break the block the comment is meant to read as.
 		prefix = styleCommentFill.Render(selectionPrefixBlank)
@@ -72,7 +72,7 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 		return style.Width(width).Render(header)
 	case rowLine:
 		return m.renderStreamLine(r, width, cursor)
-	case rowComment, rowOrphan:
+	case rowComment, rowReview, rowOrphan:
 		if r.comment < 0 || r.comment >= len(m.stream.comments) {
 			return ""
 		}
@@ -81,6 +81,10 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 			return ""
 		}
 		return lines[r.commentLine]
+	case rowReviewHeader:
+		// Accent rather than the detached section's warning yellow: a remark about
+		// the change as a whole is ordinary, where a lost anchor wants attention.
+		return styleReviewHeader.Width(width).Render(" review — about the change as a whole")
 	case rowOrphanHeader:
 		return styleOrphanHeader.Width(width).Render(" detached comments — their anchor could not be found")
 	case rowEditor:

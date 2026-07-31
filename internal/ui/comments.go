@@ -52,7 +52,7 @@ func (m Model) localCommentAtCursor() (review.Comment, bool) {
 		return review.Comment{}, false
 	}
 	r := m.stream.rows[m.cursorRow]
-	if r.kind != rowComment && r.kind != rowOrphan {
+	if !isCommentRow(r.kind) {
 		return review.Comment{}, false
 	}
 	if r.comment < 0 || r.comment >= len(m.stream.comments) {
@@ -155,7 +155,7 @@ func (m Model) threadAtCursor() (review.Thread, bool) {
 		return review.Thread{}, false
 	}
 	r := m.stream.rows[m.cursorRow]
-	if r.kind != rowComment && r.kind != rowOrphan {
+	if !isCommentRow(r.kind) {
 		return review.Thread{}, false
 	}
 	if r.comment < 0 || r.comment >= len(m.stream.comments) {
@@ -266,12 +266,12 @@ func (m *Model) SetComments(cs []review.Comment) {
 // Comments returns the current comment set.
 func (m Model) Comments() []review.Comment { return m.comments }
 
-// placeComments resolves each comment to the stream row it belongs under,
-// returning a row-index → comments map plus the comments that could not be
-// placed at all.
+// placeComments resolves each comment to the stream row it belongs under, and
+// sorts the rest into the two sections that stand apart from the diff: remarks
+// about the change as a whole, and remarks whose anchor is gone.
 //
 // Called during the geometry pass, so it must not render anything.
-func (m Model) placeComments(rows []rowRef) (map[int][]review.Comment, []review.Comment) {
+func (m Model) placeComments(rows []rowRef) commentPlacement {
 	// Remote threads render through the same path as local comments; they differ
 	// in their label, not in how they are placed or anchored. Their line numbers
 	// are GitHub's, against a particular commit, so they drift exactly the way
@@ -297,30 +297,51 @@ func (m Model) placeComments(rows []rowRef) (map[int][]review.Comment, []review.
 		all = append(all, threadAsComment(t))
 	}
 	if len(all) == 0 {
-		return nil, nil
+		return commentPlacement{}
 	}
-	placed := make(map[int][]review.Comment, len(all))
-	var orphans []review.Comment
+	out := commentPlacement{byRow: make(map[int][]review.Comment, len(all))}
 	// A reply goes wherever its parent went, so a thread stays intact even if the
-	// reply's own anchor would resolve elsewhere (or nowhere).
+	// reply's own anchor would resolve elsewhere (or nowhere). Review-level parents
+	// need their own set: they have no row for parentRow to record.
 	parentRow := make(map[string]int, len(all))
+	reviewParent := make(map[string]bool)
 	for _, c := range all {
 		if c.ReplyTo != "" {
 			if row, ok := parentRow[c.ReplyTo]; ok {
-				placed[row] = append(placed[row], c)
+				out.byRow[row] = append(out.byRow[row], c)
 				continue
 			}
-			orphans = append(orphans, c)
+			if reviewParent[c.ReplyTo] {
+				out.review = append(out.review, c)
+				continue
+			}
+			out.orphans = append(out.orphans, c)
+			continue
+		}
+		if reviewLevel(c) {
+			reviewParent[c.ID] = true
+			out.review = append(out.review, c)
 			continue
 		}
 		if row, ok := m.locateComment(rows, c); ok {
-			placed[row] = append(placed[row], c)
+			out.byRow[row] = append(out.byRow[row], c)
 			parentRow[c.ID] = row
 			continue
 		}
-		orphans = append(orphans, c)
+		out.orphans = append(out.orphans, c)
 	}
-	return placed, orphans
+	return out
+}
+
+// reviewLevel reports whether a comment is about the change as a whole rather
+// than about a line: it names no file at all.
+//
+// Distinct from an unplaceable comment, which names a file that no longer holds
+// it. Conflating the two would file a deliberate summary remark under "their
+// anchor could not be found", which reads as a failure rather than as the thing
+// the author meant.
+func reviewLevel(c review.Comment) bool {
+	return strings.TrimSpace(c.Anchor.Path) == ""
 }
 
 // locateComment finds the row a comment attaches to, weakening the match the
