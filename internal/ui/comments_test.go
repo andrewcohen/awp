@@ -1809,3 +1809,98 @@ func TestThreadReloadKeepsTheReadingPosition(t *testing.T) {
 		t.Fatalf("expected the screen position preserved, %d → %d", offset, got)
 	}
 }
+
+// ---- the detached section ----
+
+// Two detached conversations must not butt into each other. The section used to
+// be emitted flat — only its last entry closed a block — so a reader saw one
+// undifferentiated wall of remarks with no way to tell where one ended.
+func TestDetachedThreadsAreSeparated(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	first := review.Comment{
+		ID: "d1", Author: review.AuthorHuman, Body: "first detached", State: review.Open,
+		Anchor: review.Anchor{Path: "gone.go", Side: review.SideNew, LineHint: 1, Text: "vanished"},
+	}
+	second := review.Comment{
+		ID: "d2", Author: review.AuthorHuman, Body: "second detached", State: review.Open,
+		Anchor: review.Anchor{Path: "gone.go", Side: review.SideNew, LineHint: 2, Text: "also gone"},
+	}
+	m.SetComments([]review.Comment{first, second})
+
+	rows := orphanRows(m)
+	if len(rows) == 0 {
+		t.Fatal("fixture is wrong: expected a detached section")
+	}
+	// Each conversation now closes its own block, so between the two bodies there
+	// are two bar-only rows — the first thread's closing pad and the second's
+	// opening one. Flat emission gave only the opening pad, which read as a
+	// separator inside one long block rather than a break between two.
+	firstEnd := -1
+	for i, r := range rows {
+		if strings.Contains(r, "first detached") {
+			firstEnd = i
+		}
+	}
+	if firstEnd < 0 || firstEnd+2 >= len(rows) {
+		t.Fatalf("expected rows after the first remark, got:\n%s", strings.Join(rows, "\n"))
+	}
+	for _, at := range []int{firstEnd + 1, firstEnd + 2} {
+		if !barOnly(rows[at]) {
+			t.Fatalf("expected row %d to be a bar-only pad, got %q in:\n%s",
+				at, rows[at], strings.Join(rows, "\n"))
+		}
+	}
+	if !strings.Contains(rows[firstEnd+3], "you") {
+		t.Fatalf("expected the second thread's header after the pads:\n%s", strings.Join(rows, "\n"))
+	}
+}
+
+// barOnly reports whether a comment row carries the block's left bar and nothing
+// else — the padding and separator rows.
+func barOnly(row string) bool {
+	return strings.TrimSpace(row) == strings.TrimSpace(commentGutter)
+}
+
+// An orphaned reply belongs with its orphaned parent, not wherever the comment
+// set happened to put it: the whole conversation fell off together.
+func TestDetachedRepliesStayWithTheirParent(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	parent := review.Comment{
+		ID: "d1", Author: review.AuthorHuman, Body: "parent remark", State: review.Open,
+		Anchor: review.Anchor{Path: "gone.go", Side: review.SideNew, LineHint: 1, Text: "vanished"},
+	}
+	other := review.Comment{
+		ID: "d2", Author: review.AuthorHuman, Body: "unrelated remark", State: review.Open,
+		Anchor: review.Anchor{Path: "gone.go", Side: review.SideNew, LineHint: 2, Text: "also gone"},
+	}
+	reply := review.Comment{
+		ID: "d3", Author: "agent", Body: "the answer", State: review.Open,
+		ReplyTo: parent.ID, Anchor: parent.Anchor,
+	}
+	// Deliberately out of order: the reply arrives after an unrelated remark.
+	m.SetComments([]review.Comment{parent, other, reply})
+
+	rows := strings.Join(orphanRows(m), "\n")
+	parentAt := strings.Index(rows, "parent remark")
+	replyAt := strings.Index(rows, "the answer")
+	otherAt := strings.Index(rows, "unrelated remark")
+	if parentAt < 0 || replyAt < 0 || otherAt < 0 {
+		t.Fatalf("expected all three detached remarks:\n%s", rows)
+	}
+	if parentAt >= replyAt || replyAt >= otherAt {
+		t.Fatalf("expected the reply beneath its parent, before the unrelated remark:\n%s", rows)
+	}
+}
+
+// orphanRows is the rendered detached section, one string per row, header
+// excluded.
+func orphanRows(m Model) []string {
+	var out []string
+	for i, r := range m.stream.rows {
+		if r.kind != rowOrphan {
+			continue
+		}
+		out = append(out, stripANSI(m.renderStreamRow(m.stream.rows[i], 80, false)))
+	}
+	return out
+}
