@@ -3,6 +3,7 @@ package deckui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -245,6 +246,9 @@ func (dm *diffModal) footerHelp() string {
 }
 
 func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
+	if Trace != nil {
+		defer traceSince(time.Now(), "diff.update %T", msg)
+	}
 	// While the viewer's filter has focus, or its `?` overlay is up, every key
 	// belongs to it — including the ones that would otherwise close the modal.
 	// Grabbing esc/q with the help open would close the diff instead of the help,
@@ -275,5 +279,17 @@ func (dm *diffModal) view(m *Model) (string, string) {
 	}
 	bodyHeight := m.height - diffModalChrome
 	dm.inner.SetSize(innerWidth, bodyHeight)
-	return dm.panel.Render(dm.inner.Body(innerWidth, bodyHeight)), ""
+	if Trace == nil {
+		return dm.panel.Render(dm.inner.Body(innerWidth, bodyHeight)), ""
+	}
+	// Timed in two halves: the viewer building its body, and the deck's panel
+	// Render over the result. The second is a lipgloss pass over the whole frame,
+	// so it is worth knowing separately from the first.
+	bodyStart := time.Now()
+	body := dm.inner.Body(innerWidth, bodyHeight)
+	bodyMS := sinceMS(bodyStart)
+	padStart := time.Now()
+	out := dm.panel.Render(body)
+	Trace("diff.body %.1fms pad %.1fms bytes %d→%d", bodyMS, sinceMS(padStart), len(body), len(out))
+	return out, ""
 }

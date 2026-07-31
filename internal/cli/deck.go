@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -854,9 +855,51 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithJobLogOpener(asyncLog).
 		WithJobRetryHandler(asyncRetry).
 		WithJobDeleteWorkspaceRetryHandler(asyncDeleteRetry)
+	if stop, perr := startDeckProfile(); perr != nil {
+		// Diagnostics must never stop the deck opening.
+		deckDebugLogf("pprof: %v", perr)
+	} else if stop != nil {
+		defer stop()
+	}
+	if os.Getenv("AWP_TRACE") != "" {
+		// One line per frame into /tmp/awp-deck.log: what our code cost, and the
+		// gap since the previous frame. See internal/deckui/trace.go.
+		deckui.Trace = deckDebugLogf
+		deckDebugLogf("trace on — frame timings follow")
+		defer func() { deckui.Trace = nil }()
+	}
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
+}
+
+// startDeckProfile writes a CPU profile of the whole deck session when
+// AWP_PPROF names a path, and returns the func that closes it.
+//
+//	AWP_PPROF=/tmp/deck.out awp deck    # do the slow thing, then quit
+//	go tool pprof -top -nodecount=30 /tmp/deck.out
+//
+// It exists because measuring a component in isolation kept saying the frame was
+// cheap while the running deck was not. A profile of the real session answers
+// that without a theory — including the answer "the process was barely busy",
+// which would move the search out of Go and into the terminal.
+func startDeckProfile() (func(), error) {
+	path := strings.TrimSpace(os.Getenv("AWP_PPROF"))
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Create(path) //nolint:gosec // the path is the operator's own choice
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		_ = f.Close()
+	}, nil
 }
 
 // buildAsyncJobs returns the deck-side glue to the jobs subsystem:
