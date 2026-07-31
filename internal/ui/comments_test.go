@@ -691,6 +691,62 @@ func TestHidingThreadsReleasesFocusFromTheEmptiedIndex(t *testing.T) {
 	}
 }
 
+// Folding a file you have reviewed hides its lines, not its conversations. A
+// collapsed file emits only its divider row, and placement read that absence as
+// "this anchor cannot be found" — so marking a file reviewed relabelled every
+// comment on it as detached, which says the comment lost its place when nothing
+// of the sort happened.
+func TestCommentsOnAFoldedFileAreNotDetached(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"), fileWith("b.go", 1, "delta"))
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "beta", "needs a guard", review.AuthorHuman),
+	})
+	if m.commentIndex[0].detached {
+		t.Fatal("precondition: the comment should start placed on its line")
+	}
+
+	m.ReviewedFiles = map[string]string{"a.go": fileContentHash(m.filtered[0])}
+	m.rebuildStream()
+
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected the comment still listed, got %+v", m.commentIndex)
+	}
+	if m.commentIndex[0].detached {
+		t.Fatal("a comment on a folded file is not detached — its anchor is fine, the code is hidden")
+	}
+	// It hangs off the divider, the one row the folded file still has.
+	if got := m.stream.rows[m.commentIndex[0].row-1]; got.kind != rowFileHeader || !got.collapsed {
+		t.Fatalf("expected the comment under the collapsed divider, got %v (collapsed=%v)",
+			got.kind, got.collapsed)
+	}
+
+	// Unfolding puts it back on its line: placement is resolved from scratch on
+	// every rebuild, so nothing has to be undone.
+	m.ReviewedFiles = nil
+	m.rebuildStream()
+	if got := m.stream.rows[m.commentIndex[0].row-1]; got.kind != rowLine {
+		t.Fatalf("expected the comment back under its line, got %v", got.kind)
+	}
+	if got := m.lineText(m.stream.rows[m.commentIndex[0].row-1]); got != "beta" {
+		t.Fatalf("expected it back on beta, got %q", got)
+	}
+}
+
+// A comment naming a file the change no longer holds is still detached — the
+// folded case must not swallow the real one.
+func TestCommentsOnAMissingFileStayDetached(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SetComments([]review.Comment{
+		comment("c1", "vanished.go", 2, "beta", "about a file that is gone", review.AuthorHuman),
+	})
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected the comment listed, got %+v", m.commentIndex)
+	}
+	if !m.commentIndex[0].detached {
+		t.Fatal("expected a comment on an absent file to be detached")
+	}
+}
+
 // Threads use the same relocation ladder as local comments, because their line
 // numbers are GitHub's against a particular commit and drift the same way.
 func TestRemoteThreadsRelocateWithContent(t *testing.T) {

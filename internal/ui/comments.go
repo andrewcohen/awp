@@ -390,6 +390,21 @@ func reviewLevel(c review.Comment) bool {
 	return strings.TrimSpace(c.Anchor.Path) == ""
 }
 
+// collapsedFileRow is the divider row of a folded file at the given path, if the
+// change still holds that file and it is folded. The handle a comment attaches to
+// while the lines it was written against are hidden.
+func collapsedFileRow(rows []rowRef, files []diff.FileDiff, path string) (int, bool) {
+	for i, r := range rows {
+		if r.kind != rowFileHeader || !r.collapsed {
+			continue
+		}
+		if r.file >= 0 && r.file < len(files) && pathOf(files[r.file]) == path {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 // locateComment finds the row a comment attaches to, weakening the match the
 // same way findAnchor does: exact line, then same text elsewhere in the file,
 // then the same text with matching context.
@@ -405,6 +420,19 @@ func (m Model) locateComment(rows []rowRef, c review.Comment) (int, bool) {
 		inFile = append(inFile, i)
 	}
 	if len(inFile) == 0 {
+		// No line rows for this file. That means one of two very different
+		// things, and treating them alike is what made a comment on a *folded*
+		// file read as detached: either the file is gone from the change, or it
+		// is simply collapsed and its lines are not being emitted right now.
+		//
+		// Folding a file you have reviewed must not relabel its conversations as
+		// remarks whose anchor could not be found — the anchor is fine, the code
+		// is just hidden — so they attach to the divider, which is the one row
+		// the file still has. Unfolding re-places them on their lines, since
+		// every rebuild resolves placement from scratch.
+		if row, ok := collapsedFileRow(rows, m.filtered, c.Anchor.Path); ok {
+			return row, true
+		}
 		return 0, false
 	}
 	lineNo := func(r rowRef) int {
