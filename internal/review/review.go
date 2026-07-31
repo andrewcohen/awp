@@ -244,7 +244,7 @@ const RobotMarker = "🤖"
 // would put them in front of the reviewer while they are still editing.
 //
 // The kind is spelled out rather than left to colour: GitHub has no notion of
-// our palette, and "(suggestion) - " is the whole signal a reader gets there.
+// our palette, and "suggestion: " is the whole signal a reader gets there.
 func (c Comment) PublishBody() string {
 	body := strings.TrimSpace(c.Body)
 	if c.ByRobot() {
@@ -255,7 +255,14 @@ func (c Comment) PublishBody() string {
 	if c.ReplyTo != "" {
 		return body
 	}
-	return "(" + string(c.Kind.OrDefault()) + ") - " + body
+	// A plain comment says nothing about what it is asking for — that is what makes
+	// it the default — so labelling it labels every remark that had nothing special
+	// to say. The other two are worth announcing, and read as a sentence: "question:
+	// why is this here" rather than "(question) - why is this here".
+	if kind := c.Kind.OrDefault(); kind != KindComment {
+		return string(kind) + ": " + body
+	}
+	return body
 }
 
 // Review is the container: what is under review, and the per-review state the

@@ -425,19 +425,21 @@ func TestKindPersistsAndRobotAuthorshipIsDetectable(t *testing.T) {
 // re-publish and would show them to the reviewer mid-edit.
 func TestPublishBodyPrefixesKindAndRobot(t *testing.T) {
 	human := Comment{Author: AuthorHuman, Body: "this drops the error", Kind: KindSuggestion}
-	if got := human.PublishBody(); got != "(suggestion) - this drops the error" {
+	if got := human.PublishBody(); got != "suggestion: this drops the error" {
 		t.Fatalf("got %q", got)
 	}
 	// A robot's comment is marked. On GitHub it posts under the authenticated
 	// user's account, so nothing else distinguishes it from a person's.
 	robot := Comment{Author: "agent", Body: "nil deref here", Kind: KindSuggestion}
-	want := "(suggestion) - " + RobotMarker + " nil deref here"
+	want := "suggestion: " + RobotMarker + " nil deref here"
 	if got := robot.PublishBody(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	// An unset kind still gets a label, since GitHub has no colour to fall back on.
 	plain := Comment{Author: AuthorHuman, Body: "reads fine"}
-	if got := plain.PublishBody(); got != "(comment) - reads fine" {
+	// A plain comment carries no label at all: it is the default, so labelling it
+	// labels every remark that had nothing special to say.
+	if got := plain.PublishBody(); got != "reads fine" {
 		t.Fatalf("got %q", got)
 	}
 }
