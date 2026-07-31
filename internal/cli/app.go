@@ -745,7 +745,7 @@ func (a *App) runMiniDeck(args []string) error {
 
 func (a *App) runReview(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\n       awp review add --file <path> --line <n> [--side new|old] [--text <line>] --body <text>\n       awp review list [--json]\n       awp review publish [--pr <n>] [--dry-run]\n\nWith no argument, opens an interactive picker over `gh pr list`.")
+		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\n       awp review add [--file <path> --line <n>] [--side new|old] [--text <line>] --body <text>\n       awp review list [--json]\n       awp review publish [--pr <n>] [--dry-run]\n\nWith no argument, opens an interactive picker over `gh pr list`.")
 		return nil
 	}
 	if isReviewSubcommand(args) {

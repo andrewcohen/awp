@@ -216,7 +216,7 @@ func (m Model) editorAnchorRow(idx streamIndex) int {
 func lastRowOfThread(idx streamIndex, parentID string) int {
 	found := -1
 	for i, r := range idx.rows {
-		if r.kind != rowComment && r.kind != rowOrphan {
+		if !isCommentRow(r.kind) {
 			continue
 		}
 		if r.comment < 0 || r.comment >= len(idx.comments) {

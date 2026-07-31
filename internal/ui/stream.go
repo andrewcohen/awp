@@ -38,6 +38,12 @@ const (
 	rowLine
 	// rowComment is one display line of a comment anchored to the line above it.
 	rowComment
+	// rowReviewHeader and rowReview are the review-level section at the top of
+	// the stream: remarks about the change as a whole, which anchor to no file.
+	// Distinct from the detached section below, which means something else —
+	// these are deliberately unanchored, those lost their anchor.
+	rowReviewHeader
+	rowReview
 	// rowOrphanHeader and rowOrphan are the detached section at the end of the
 	// stream, holding comments whose anchor could no longer be located. They are
 	// shown rather than dropped: quietly losing a reviewer's note is worse than
@@ -64,8 +70,9 @@ type rowRef struct {
 	// (an added line has no old number, a removed line no new one).
 	oldNo int
 	newNo int
-	// comment indexes into the placed comment set for rowComment / rowOrphan
-	// rows, and commentLine is which display line of that comment this row is.
+	// comment indexes into the placed comment set for comment rows of any
+	// section (see isCommentRow), and commentLine is which display line of that
+	// comment this row is.
 	comment     int
 	commentLine int
 	// lastComment marks the rows of the final message in a conversation. That
@@ -104,7 +111,36 @@ type streamIndex struct {
 // buildStream indexes every row of the diff at the given content width.
 // commentPlacer resolves comments to the row they attach under. Passed in so
 // the geometry pass stays a pure function of its inputs.
-type commentPlacer func(rows []rowRef) (placed map[int][]review.Comment, orphans []review.Comment)
+type commentPlacer func(rows []rowRef) commentPlacement
+
+// commentPlacement is where each comment in the set ended up. A struct rather
+// than a tuple of return values: the three destinations are one answer, and
+// every consumer wants all of them.
+type commentPlacement struct {
+	// byRow maps a diff row to the conversation annotating the line it shows.
+	byRow map[int][]review.Comment
+	// review are remarks about the change as a whole — no file anchor at all —
+	// shown in their own section above the first file.
+	review []review.Comment
+	// orphans are remarks that name a file but could no longer be located in it,
+	// shown in the detached section at the foot.
+	orphans []review.Comment
+}
+
+func (p commentPlacement) empty() bool {
+	return len(p.byRow) == 0 && len(p.review) == 0 && len(p.orphans) == 0
+}
+
+// isCommentRow reports whether a row is part of a comment block, wherever that
+// block sits: beneath the line it annotates, in the review-level section at the
+// top, or in the detached section at the foot.
+//
+// Everything acting on "the comment at the cursor" — the index, reply, edit,
+// delete, the cursorline's fill — has to accept all three, or a whole section
+// becomes something you can look at but not touch.
+func isCommentRow(k rowKind) bool {
+	return k == rowComment || k == rowReview || k == rowOrphan
+}
 
 // commentRowCount is how many display rows a comment occupies at this width.
 // Delegates to commentRows so the count cannot drift from what is rendered.
@@ -115,8 +151,9 @@ func commentRowCount(c review.Comment, width int, last bool) int {
 	return len(commentRows(c, width, last))
 }
 
-// withComments interleaves comment rows beneath the lines they anchor to, and
-// appends any that could not be placed as a detached section.
+// withComments interleaves comment rows beneath the lines they anchor to, with
+// the review-level remarks in a section above the first file and the ones that
+// could not be placed in a section below the last.
 //
 // Two passes rather than one: comments are located against the *diff* rows, so
 // the diff geometry has to exist before placement can run. Inserting the comment
@@ -125,27 +162,31 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	if place == nil {
 		return idx
 	}
-	placed, orphans := place(idx.rows)
-	if len(placed) == 0 && len(orphans) == 0 {
+	p := place(idx.rows)
+	if p.empty() {
 		return idx
 	}
 
-	all := make([]review.Comment, 0, len(placed)+len(orphans))
+	all := make([]review.Comment, 0, len(p.byRow)+len(p.review)+len(p.orphans))
 	index := func(c review.Comment) int {
 		all = append(all, c)
 		return len(all) - 1
 	}
 
 	rows := make([]rowRef, 0, len(idx.rows))
+	// Review-level remarks lead the stream: they are about the change as a whole,
+	// so they belong before the first thing they are about rather than after
+	// everything.
+	rows = appendCommentSection(rows, p.review, rowReviewHeader, rowReview, idx.width, index)
 	// Row indices shift as comment rows are inserted, so every recorded offset
 	// has to be remapped rather than reused.
 	shift := make([]int, len(idx.rows))
 	for i, r := range idx.rows {
 		shift[i] = len(rows)
 		rows = append(rows, r)
-		// placed[i] is a whole conversation — the parent followed by its replies —
+		// byRow[i] is a whole conversation — the parent followed by its replies —
 		// so the last entry is the one that closes the block.
-		group := placed[i]
+		group := p.byRow[i]
 		for n, c := range group {
 			ci := index(c)
 			last := n == len(group)-1
@@ -157,27 +198,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 			}
 		}
 	}
-	if len(orphans) > 0 {
-		rows = append(rows, rowRef{kind: rowOrphanHeader, file: -1, hunk: -1, line: -1})
-		// Grouped into conversations rather than emitted flat: closing only the
-		// section's final entry ran every detached thread into the next one, and
-		// an orphaned reply is not necessarily adjacent to its orphaned parent in
-		// the comment set. review.Threads answers both — parents in order with
-		// their replies gathered, a reply whose parent is absent standing alone.
-		for _, th := range review.Threads(orphans) {
-			group := append([]review.Comment{th.Parent}, th.Replies...)
-			for n, c := range group {
-				ci := index(c)
-				last := n == len(group)-1
-				for line := 0; line < commentRowCount(c, idx.width, last); line++ {
-					rows = append(rows, rowRef{
-						kind: rowOrphan, file: -1, hunk: -1, line: -1,
-						comment: ci, commentLine: line, lastComment: last,
-					})
-				}
-			}
-		}
-	}
+	rows = appendCommentSection(rows, p.orphans, rowOrphanHeader, rowOrphan, idx.width, index)
 
 	out := idx
 	out.rows = rows
@@ -185,6 +206,42 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	out.fileStart = remap(idx.fileStart, shift)
 	out.hunkStart = remap(idx.hunkStart, shift)
 	return out
+}
+
+// appendCommentSection emits a headed run of conversations — the review-level
+// section and the detached section are the same shape, differing only in their
+// header and row kind.
+//
+// Grouped through review.Threads rather than emitted flat: closing only the
+// section's final entry runs every thread in it into the next one, and a reply
+// whose parent is in the same section is not necessarily adjacent to it in the
+// comment set. Threads answers both — parents in order with their replies
+// gathered, a reply whose parent is absent standing alone.
+func appendCommentSection(
+	rows []rowRef,
+	cs []review.Comment,
+	header, body rowKind,
+	width int,
+	index func(review.Comment) int,
+) []rowRef {
+	if len(cs) == 0 {
+		return rows
+	}
+	rows = append(rows, rowRef{kind: header, file: -1, hunk: -1, line: -1})
+	for _, th := range review.Threads(cs) {
+		group := append([]review.Comment{th.Parent}, th.Replies...)
+		for n, c := range group {
+			ci := index(c)
+			last := n == len(group)-1
+			for line := 0; line < commentRowCount(c, width, last); line++ {
+				rows = append(rows, rowRef{
+					kind: body, file: -1, hunk: -1, line: -1,
+					comment: ci, commentLine: line, lastComment: last,
+				})
+			}
+		}
+	}
+	return rows
 }
 
 // withEditor splices the compose box into the stream as `rows` display lines.
@@ -255,7 +312,7 @@ func rowsOfComment(idx streamIndex, id string) (first, last int) {
 		return first, last
 	}
 	for i, r := range idx.rows {
-		if r.kind != rowComment && r.kind != rowOrphan {
+		if !isCommentRow(r.kind) {
 			continue
 		}
 		if r.comment < 0 || r.comment >= len(idx.comments) || idx.comments[r.comment].ID != id {

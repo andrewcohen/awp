@@ -50,6 +50,37 @@ func resolvePublishPR(flagPR int, target review.Target, pinned int) int {
 	return pinned
 }
 
+// partitionForPublish sorts a review's comments into the ones to post now, a
+// count already on GitHub (or empty, which there is nothing to post), and a count
+// held back for having no line to attach to.
+//
+// Its own function so the rules are testable without a GitHub round-trip: what
+// gets reposted is the one thing here that must never be wrong.
+func partitionForPublish(comments []review.Comment) (pending []review.Comment, skipped, unanchored int) {
+	pending = make([]review.Comment, 0, len(comments))
+	for _, c := range comments {
+		// Already on GitHub: skip rather than repost. This is what makes a retry
+		// after a partial failure safe.
+		if c.State == review.Published || c.Publish != nil {
+			skipped++
+			continue
+		}
+		if strings.TrimSpace(c.Body) == "" {
+			skipped++
+			continue
+		}
+		// A review-level remark has no line to hang a review comment on. Held back
+		// explicitly rather than sent with an empty path, which GitHub rejects and
+		// which would report as a failure the user cannot act on.
+		if strings.TrimSpace(c.Anchor.Path) == "" {
+			unanchored++
+			continue
+		}
+		pending = append(pending, c)
+	}
+	return pending, skipped, unanchored
+}
+
 // runReviewPublish implements `awp review publish`.
 func runReviewPublish(runner Runner, svc workspace.Service, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("review publish", flag.ContinueOnError)
@@ -76,20 +107,9 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		return errors.New("review publish: this workspace isn't pinned to a PR; pass --pr")
 	}
 
-	pending := make([]review.Comment, 0, len(comments))
-	skipped := 0
-	for _, c := range comments {
-		// Already on GitHub: skip rather than repost. This is what makes a retry
-		// after a partial failure safe.
-		if c.State == review.Published || c.Publish != nil {
-			skipped++
-			continue
-		}
-		if strings.TrimSpace(c.Body) == "" {
-			skipped++
-			continue
-		}
-		pending = append(pending, c)
+	pending, skipped, unanchored := partitionForPublish(comments)
+	if unanchored > 0 {
+		_, _ = fmt.Fprintf(out, "holding back %d review-level comment(s): no line to attach them to\n", unanchored)
 	}
 
 	if *dryRun {

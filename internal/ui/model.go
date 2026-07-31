@@ -1060,6 +1060,7 @@ var (
 	commentBg             = lipgloss.Color(charm.BgPanel)
 	styleCommentFill      = lipgloss.NewStyle().Background(commentBg)
 	styleOrphanHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleReviewHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
 	styleContextCursor    = styleContext.Background(cursorlineBg)
