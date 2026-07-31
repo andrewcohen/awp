@@ -660,3 +660,52 @@ func TestCursorlineFollowsTheCursor(t *testing.T) {
 		t.Fatal("expected the previous row to stop being the cursorline")
 	}
 }
+
+// banded reports whether the cursor row is painted as a full-width cursorline.
+// Detected by width rather than by the background escape: tests render with no
+// TTY, so lipgloss strips colour and every row's SGR codes come out empty. Only
+// a banded row is padded out to the pane's full width.
+func banded(m Model, width int) bool {
+	return lipgloss.Width(m.renderStreamRowAt(m.cursorRow, width)) == width
+}
+
+// The cursorline is the diff pane's "you are here". Painted while another pane
+// holds the keyboard it competes with that pane's own selection, and neither
+// one tells you which keys go where.
+func TestCursorlineOnlyPaintsWhenTheDiffIsFocused(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
+	m.focus = FocusHunks
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	if !banded(m, 60) {
+		t.Fatal("expected the focused diff pane to paint a cursorline")
+	}
+	for _, focus := range []Focus{FocusFiles, FocusComments, FocusFilter} {
+		m.focus = focus
+		if banded(m, 60) {
+			t.Fatalf("focus %v: expected no cursorline on the cursor row", focus)
+		}
+	}
+	// Returning focus brings it back.
+	m.focus = FocusHunks
+	if !banded(m, 60) {
+		t.Fatal("expected the cursorline back once the diff is focused again")
+	}
+}
+
+// The ┃ bar is not the band: it stays in every focus so the row you will return
+// to is still findable.
+func TestSelectionBarSurvivesLosingFocus(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	for _, focus := range []Focus{FocusHunks, FocusFiles, FocusComments} {
+		m.focus = focus
+		view := stripANSI(m.renderStreamPanel(120, 12))
+		if !strings.Contains(view, strings.TrimSpace(selectionPrefixBar)) {
+			t.Fatalf("focus %v: expected the selection bar to stay:\n%s", focus, view)
+		}
+	}
+}

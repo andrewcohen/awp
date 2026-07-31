@@ -17,20 +17,27 @@ import (
 // prefix slot. Every row reserves the prefix columns whether or not it is the
 // cursor, so content stays aligned down the pane.
 func (m Model) renderStreamRowAt(i, width int) string {
-	cursor := i == m.cursorRow
+	atCursor := i == m.cursorRow
+	// The cursorline band is painted only while this pane has the keyboard. Two
+	// full-width bands at once — one here, one in the file list or comment index —
+	// leaves no way to tell which selection the keys are actually driving. The ┃
+	// bar stays either way, so the row you will come back to is still marked.
+	band := atCursor && m.focus == FocusHunks
 	kind := m.stream.rows[i].kind
 	prefix := selectionPrefixBlank
 	switch {
-	case cursor:
+	case band:
 		prefix = styleSelectedCursor.Render(selectionPrefixBar)
+	case atCursor:
+		prefix = styleSelected.Render(selectionPrefixBar)
 	case kind == rowComment || kind == rowOrphan:
 		// Paint the reserved columns too: an unpainted gap on the left would
 		// break the block the comment is meant to read as.
 		prefix = styleCommentFill.Render(selectionPrefixBlank)
 	}
-	body := m.renderStreamRow(m.stream.rows[i], width-lipgloss.Width(selectionPrefixBlank), cursor)
+	body := m.renderStreamRow(m.stream.rows[i], width-lipgloss.Width(selectionPrefixBlank), band)
 	row := prefix + body
-	if !cursor {
+	if !band {
 		return row
 	}
 	// Extend the cursorline to the full pane width so it reads as a band
