@@ -3894,37 +3894,10 @@ func helpColumns(innerWidth int) string {
 		strings.Join(prLines, "\n") + "\n\n" +
 		strings.Join(activityLines, "\n")
 
-	// Right block: key bindings rendered via bubbles/help. Each group
-	// from deckKeyGroups becomes a section with its own title; within
-	// the section the bindings flow through help.ShortHelpView so key
-	// + description styling stays consistent with every other place
-	// that uses charm.NewHelp().
-	helpModel := charm.NewHelp()
-	helpModel.ShowAll = true
-	helpModel.Styles.FullKey = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true)
-	helpModel.Styles.FullDesc = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	helpModel.Styles.FullSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
-	keyLines := []string{lipgloss.NewStyle().Bold(true).Render("Keys")}
-	for i, g := range deckKeyGroups() {
-		if i > 0 {
-			keyLines = append(keyLines, "")
-		}
-		keyLines = append(keyLines, headerStyle.Render(g.Title))
-		bindings := make([]key.Binding, 0, len(g.Keys))
-		for _, kr := range g.Keys {
-			bindings = append(bindings, key.NewBinding(
-				key.WithKeys(kr[0]),
-				key.WithHelp(kr[0], kr[1]),
-			))
-		}
-		// FullHelpView lays each binding on its own line. Passing a
-		// single column ([]key.Binding wrapped in [][]) keeps the
-		// previous "key   description" stacked layout.
-		section := helpModel.FullHelpView([][]key.Binding{bindings})
-		keyLines = append(keyLines, lipgloss.NewStyle().Padding(0, 0, 0, 2).Render(section))
-	}
-	rightBlock := strings.Join(keyLines, "\n")
+	// Right block: key bindings, rendered by the shared help renderer so this
+	// overlay and the diff viewer's look like the same application.
+	rightBlock := lipgloss.NewStyle().Bold(true).Render("Keys") + "\n" +
+		charm.KeyHelpView(deckKeyGroups())
 
 	// Two-column layout: status legend (with activity-bar legend) on the
 	// left, key bindings on the right; falls back to a single stacked block
@@ -4805,10 +4778,10 @@ func deckBodyHeaderRowForCursor(rows []deckBodyRow, cursor int) int {
 // keyGroup is a labeled group of (key, description) rows shown in both the
 // right details panel and the `?` help overlay. One source of truth so the
 // two surfaces never drift.
-type keyGroup struct {
-	Title string
-	Keys  [][2]string
-}
+//
+// An alias rather than its own struct: charm.KeyHelpView renders it, and the
+// diff viewer declares its bindings in the same shape.
+type keyGroup = charm.KeyGroup
 
 func deckKeyGroups() []keyGroup {
 	return []keyGroup{
