@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -108,6 +109,58 @@ func TestSeekingTheIndexMovesTheDiffCursor(t *testing.T) {
 	// And the file list follows, so all three panes agree on where you are.
 	if got := diffPathAt(m, m.filesCursor); got != "pkg/b.go" {
 		t.Fatalf("expected the file list on pkg/b.go, got %q", got)
+	}
+}
+
+// longFileModel is a viewer over one file long enough that a row can be
+// centred with room on both sides — the minimum-scroll behaviour and the
+// centred one are indistinguishable on a diff that fits the pane.
+func longFileModel(t *testing.T, lines int) Model {
+	t.Helper()
+	body := make([]string, 0, lines)
+	for i := range lines {
+		body = append(body, fmt.Sprintf("line %d", i))
+	}
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.SetSize(120, 24)
+	m.focus = FocusHunks
+	return loadWith(m, 1, fileWith("a.go", 1, body...))
+}
+
+// A conversation reached from the index is the thing you asked to read, so it
+// gets the middle of the pane. Scrolling it just barely into view puts its first
+// line on the last row with the rest of it below the fold.
+func TestSeekingTheIndexCentersTheConversation(t *testing.T) {
+	m := longFileModel(t, 200)
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 150, "line 149", "down here", review.AuthorHuman),
+	})
+	m.focus = FocusComments
+	m.seekToComment(0)
+
+	if m.stream.rows[m.cursorRow].kind != rowComment {
+		t.Fatalf("expected the cursor on the comment, got %v", m.stream.rows[m.cursorRow].kind)
+	}
+	want := m.streamContentHeight() / 2
+	if got := m.cursorRow - m.streamScroll; got != want {
+		t.Fatalf("expected the comment %d rows down a %d-row pane, got %d",
+			want, m.streamContentHeight(), got)
+	}
+}
+
+// Centring is an aim, not a demand: there is nothing above the first rows to
+// scroll away, so a conversation near the top sits where it falls rather than
+// being dragged down to the middle over blank space.
+func TestCenteringDoesNotScrollPastTheTop(t *testing.T) {
+	m := longFileModel(t, 200)
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "line 1", "up here", review.AuthorHuman),
+	})
+	m.focus = FocusComments
+	m.seekToComment(0)
+
+	if m.streamScroll != 0 {
+		t.Fatalf("expected the stream still at the top, got scroll %d", m.streamScroll)
 	}
 }
 

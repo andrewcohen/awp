@@ -882,6 +882,24 @@ func (m *Model) followCursor() {
 	m.clampStreamScroll()
 }
 
+// centerCursor scrolls so the cursor's row sits in the middle of the pane,
+// rather than the minimum distance followCursor would move.
+//
+// Used when the cursor *arrives* somewhere it was sent — selecting a
+// conversation from the index — because a minimal scroll puts the thing you
+// asked for on the last row of the pane, showing its first line and nothing
+// else. Centering gives it the bottom half of the pane to open into and keeps
+// the code it is about in view above it.
+//
+// Not used when the cursor *moves* under j/k: re-centering on every row would
+// scroll the text under a stationary cursor, which reads as the page sliding
+// rather than the cursor walking. The clamp handles both ends — near the top
+// there is nothing to scroll away, so the row simply sits where it falls.
+func (m *Model) centerCursor() {
+	m.streamScroll = m.cursorRow - m.streamContentHeight()/2
+	m.clampStreamScroll()
+}
+
 func (m *Model) clampStreamScroll() {
 	m.streamScroll = min(m.maxStreamScroll(), max(0, m.streamScroll))
 }

@@ -284,7 +284,10 @@ func (m *Model) seekToComment(i int) {
 	m.cursorRow = m.commentIndex[i].row
 	m.hunkHScroll = 0
 	m.clampCursor()
-	m.followCursor()
+	// Centred rather than merely scrolled into view: a conversation reached from
+	// the index is what you want to read, and the minimum scroll would leave it
+	// on the pane's last row.
+	m.centerCursor()
 	m.syncFileCursorToCursor()
 }
 
