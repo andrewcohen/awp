@@ -3770,7 +3770,15 @@ func (m Model) view() string {
 	// frame's right-edge content lingers in those columns. No bg paint
 	// — the padding spaces inherit terminal default cell bg, which is
 	// what blends with the surrounding tmux pane.
-	body = lipgloss.NewStyle().Width(m.width).Render(body)
+	//
+	// Done by hand rather than through lipgloss, which is where a
+	// surprising share of the deck's allocation used to go: every
+	// Style.Render builds an ansi parser whose buffer is sized to its
+	// input, so one Render over the *whole frame* is one of the largest
+	// single allocations in it — and this runs on every frame. padToWidth
+	// measures each line and appends spaces, which needs no parser and no
+	// second copy of the frame.
+	body = padToWidth(body, m.width)
 	step("widthpad")
 
 	statusText := m.status
@@ -3843,7 +3851,12 @@ func (m Model) view() string {
 		// that exactly fills its budget — which is every body modal, since they
 		// size themselves from m.height — would overflow the viewport by one and
 		// push the footer's bottom padding off screen.
-		out := lipgloss.JoinVertical(lipgloss.Left, body, footer)
+		// strings.Join rather than lipgloss.JoinVertical: both blocks are already
+		// m.width wide (the body was just padded, and the footer is composed at
+		// m.width-2 inside Padding(1, 1, 1, 1)), so there is no alignment left to
+		// do — and JoinVertical would re-measure every line of the frame to work
+		// that out, at another whole-frame parser buffer.
+		out := strings.Join([]string{body, footer}, "\n")
 		step("join")
 		return out
 	}
@@ -3852,9 +3865,36 @@ func (m Model) view() string {
 	for i := range blanks {
 		blanks[i] = blank
 	}
-	out := lipgloss.JoinVertical(lipgloss.Left, body, strings.Join(blanks, "\n"), footer)
+	out := strings.Join([]string{body, strings.Join(blanks, "\n"), footer}, "\n")
 	step("join")
 	return out
+}
+
+// padToWidth right-pads every line of a block to width with spaces, leaving lines
+// already at or past it alone.
+//
+// The lipgloss equivalent (Style.Width(w).Render) allocates an ansi parser buffer
+// sized to the whole block, and the deck did that to the entire frame on every
+// frame — one of its largest single allocations. This measures each line and
+// appends, which needs neither the parser nor a second copy.
+func padToWidth(block string, width int) string {
+	if width <= 0 {
+		return block
+	}
+	lines := strings.Split(block, "\n")
+	var b strings.Builder
+	// One allocation for the result: the block plus at most width per line.
+	b.Grow(len(block) + len(lines))
+	for i, ln := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(ln)
+		if n := width - ansi.StringWidth(ln); n > 0 {
+			b.WriteString(strings.Repeat(" ", n))
+		}
+	}
+	return b.String()
 }
 
 // helpBoxDims returns the help popover's outer box width and the inner

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/andrewcohen/awp/internal/diff"
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 const sampleDiff = `diff --git a/foo.go b/foo.go
@@ -297,5 +298,57 @@ func TestInitWithoutAResolverIsSafe(t *testing.T) {
 	}
 	if m.Init() == nil {
 		t.Fatal("expected Init to still load the diff")
+	}
+}
+
+// The host calls SetSize once per frame — it cannot know whether the terminal
+// changed — so SetSize must be free when the layout has not moved. It used to end
+// in an unconditional rebuildStream, which made every frame a full geometry and
+// placement pass: about a millisecond on a change with no comments, twenty on one
+// with many, since placement is O(comments × rows).
+//
+// Observed through commentIndex, which only a rebuild repopulates.
+func TestSetSizeIsFreeWhenTheLayoutHasNotMoved(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "a finding")})
+	m.SetSize(120, 20)
+	if len(m.commentIndex) == 0 {
+		t.Fatal("fixture is wrong: expected a comment in the index")
+	}
+
+	m.commentIndex = nil
+	m.SetSize(120, 20)
+	if m.commentIndex != nil {
+		t.Fatal("SetSize rebuilt the stream when nothing about the layout changed")
+	}
+
+	// A real resize still rebuilds: wrap geometry depends on the width.
+	m.SetSize(90, 20)
+	if len(m.commentIndex) == 0 {
+		t.Fatal("expected a width change to rebuild")
+	}
+
+	// And so does a height change, which the comment pane's own height depends on.
+	m.commentIndex = nil
+	m.SetSize(90, 30)
+	if len(m.commentIndex) == 0 {
+		t.Fatal("expected a height change to rebuild")
+	}
+}
+
+// `\` changes the pane split without changing the terminal size, so the guard has
+// to compare the derived geometry rather than the arguments it was handed.
+func TestHidingTheColumnStillRebuilds(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "a finding")})
+	m.SetSize(120, 20)
+
+	m.commentIndex = nil
+	m = press(m, `\`)
+	if len(m.commentIndex) == 0 {
+		t.Fatal("hiding the left column must rebuild: the stream is wider now")
+	}
+	if m.hunkWidth <= 0 {
+		t.Fatalf("unexpected hunk width %d", m.hunkWidth)
 	}
 }

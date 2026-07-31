@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -55,6 +56,19 @@ func benchInt(tb testing.TB, name string, def int) int {
 		tb.Fatalf("%s=%s: %v", name, v, err)
 	}
 	return n
+}
+
+// Benchmarks run without a TTY, where lipgloss strips every colour — so an
+// uninstrumented frame here contains no escape sequences at all and is nothing
+// like the one the terminal actually receives. Every Render in the chain has to
+// parse those sequences, and comment rows carry far more of them than code rows
+// (a full-width background fill, several style runs each), so measuring without
+// colour measures the wrong thing entirely.
+//
+// ANSI256 rather than TrueColor: the palette is ANSI 16 plus one 256-colour
+// cursorline, which is what the app emits.
+func init() {
+	lipgloss.SetColorProfile(termenv.ANSI256)
 }
 
 // benchFiles is the fixture: the captured diff when one is named, otherwise a
@@ -175,8 +189,8 @@ func benchModel(tb testing.TB, comments []review.Comment) Model {
 	m.comments = comments
 	if os.Getenv(benchNoCacheEnv) != "" {
 		// Reproduce the pre-cache behaviour, for before/after on the same fixture:
-		// with no cache installed, a comment block is rebuilt per row of itself.
-		m.blocks = nil
+		// with no cache installed, every row is rendered from scratch every frame.
+		m.cache = nil
 	}
 	m.rebuildStream()
 	return m

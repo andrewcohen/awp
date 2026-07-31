@@ -169,10 +169,10 @@ type Model struct {
 	// scrolls it — there are more bindings than fit a short terminal.
 	showHelp bool
 	helpVP   viewport.Model
-	// blocks memoizes rendered comment blocks for the duration of one frame (see
-	// stream_render.go). A pointer because the render path takes Model by value;
-	// it is scratch space shared by those copies, not state.
-	blocks *commentBlockCache
+	// cache holds rendered fragments between frames (see stream_render.go). A
+	// pointer because the render path takes Model by value; it is scratch space
+	// shared by those copies, not state.
+	cache *renderCache
 	// hideLeft drops the left column (`\`), giving the stream the full width.
 	// The file and comment cursors keep their state while it is hidden, so
 	// unhiding returns you to where you were rather than to the top.
@@ -194,14 +194,32 @@ type Model struct {
 // two panes may occupy. Standalone use goes through tea.WindowSizeMsg
 // instead.
 func (m *Model) SetSize(width, bodyHeight int) {
-	m.width = width
-	m.bodyHeight = max(minBodyHeight, bodyHeight)
+	height := max(minBodyHeight, bodyHeight)
 	_, right := m.paneWidthsFor(width)
 	// Every stream row reserves the selection-prefix columns, so the width
 	// available to content — and therefore the wrap geometry — is narrower
 	// than the pane. Getting this wrong makes wrapped row counts disagree
 	// with what is rendered.
-	m.hunkWidth = right - 4 - lipgloss.Width(selectionPrefixBlank)
+	hunkWidth := right - 4 - lipgloss.Width(selectionPrefixBlank)
+	// Nothing about the layout moved, so there is nothing to re-lay.
+	//
+	// This early return is the difference between a frame costing a millisecond
+	// and costing twenty. The deck calls SetSize once per frame — it has no way to
+	// know whether the terminal changed — and the rebuild at the bottom of this
+	// function is a full geometry and placement pass over every row of the diff.
+	// Paying that per frame is invisible on a change with no comments (placement
+	// has nothing to do) and crippling on one with many, because placement is
+	// O(comments × rows).
+	//
+	// Compared on the *derived* geometry rather than on the arguments, because
+	// `\` (hide the left column) changes the pane split without changing the
+	// terminal size and does need the rebuild.
+	if m.width == width && m.bodyHeight == height && m.hunkWidth == hunkWidth {
+		return
+	}
+	m.width = width
+	m.bodyHeight = height
+	m.hunkWidth = hunkWidth
 	if m.editing {
 		// The box lives in the stream, so a resize has to re-lay its text area
 		// too — an area left at the old width wraps inside the new box and makes
@@ -229,6 +247,10 @@ func (m *Model) resizeHelp() {
 // file set, width or wrap must go through here — it is the only place the
 // index is built, so it cannot silently go stale.
 func (m *Model) rebuildStream() {
+	// Every cached fragment was rendered from the stream this is about to replace,
+	// so they all die with it. This is the only place that happens, which is what
+	// lets the cache outlive a frame at all — see renderCache in stream_render.go.
+	m.cache.drop()
 	idx := withComments(buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed), m.placeComments)
 	// The index is built before the compose box is spliced in, so a half-written
 	// comment never shows up as a listed conversation.
@@ -328,14 +350,13 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.CharLimit = 128
-	blocks := commentBlockCache{}
 	return Model{
 		RepoRoot:        repoRoot,
 		RefreshInterval: DefaultRefreshInterval,
 		LoadDiff:        loadFn,
 		OpenFile:        openFn,
 		filterInput:     ti,
-		blocks:          &blocks,
+		cache:           newRenderCache(),
 		status:          "loading...",
 		// Open on the diff itself. Reading the change is what you came for;
 		// the file list is a jump index you reach for second.

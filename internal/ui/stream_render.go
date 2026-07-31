@@ -16,6 +16,32 @@ import (
 // renderStreamRowAt renders the stream row at index i, including the selection
 // prefix slot. Every row reserves the prefix columns whether or not it is the
 // cursor, so content stays aligned down the pane.
+// cachedStreamRow is renderStreamRowAt with the result kept between frames.
+//
+// This is what makes scrolling cheap: a keypress changes which rows are on
+// screen, but the rows themselves are identical to the ones the last frame drew —
+// only the two that gained and lost the cursorline are actually new work.
+func (m Model) cachedStreamRow(i, width int) string {
+	if m.cache == nil {
+		return m.renderStreamRowAt(i, width)
+	}
+	key := rowKey{
+		row:   i,
+		width: width,
+		// The band, not merely "is the cursor here": whether it is painted depends
+		// on the focus too, and a row rendered with the band must not be served to a
+		// frame that wants it without.
+		band:    i == m.cursorRow && m.focus == FocusHunks,
+		hscroll: m.hunkHScroll,
+	}
+	if out, ok := m.cache.rows[key]; ok {
+		return out
+	}
+	out := m.renderStreamRowAt(i, width)
+	m.cache.rows[key] = out
+	return out
+}
+
 func (m Model) renderStreamRowAt(i, width int) string {
 	atCursor := i == m.cursorRow
 	// The cursorline band is painted only while this pane has the keyboard. Two
@@ -207,21 +233,27 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	return truncateStyled(prefix+content, width)
 }
 
-// A comment block is rendered once per frame, not once per row of it.
+// A comment block is rendered once, not once per row of it and not once per
+// frame.
 //
 // commentLines styles a conversation's *whole* block and the caller keeps one
-// line, so a block H rows tall used to cost H work for each of its H visible
-// rows — quadratic in the length of the conversation, and a screen full of
-// comment rows is exactly what `T` → all threads produces. Measured at 20ms a
-// frame against 1ms over code (BenchmarkRenderBodyInsideALongThread), which is
-// felt as soon as you hold a scroll key.
+// line, so a block H rows tall costs H work for each of its H visible rows —
+// quadratic in the length of the conversation, and a screen full of comment rows
+// is exactly what `T` → all threads produces. Measured at 20ms a frame against
+// 1ms over code, felt the moment you hold a scroll key.
 //
-// Scoped to a single frame deliberately. The comment set is replaced whenever the
-// diff or the store moves, so a cache that outlived the frame would need to be
-// invalidated from every one of those paths — and a stale comment body is the
-// worst thing this surface could show. Clearing at the top of each frame makes
-// that impossible, and one build per visible conversation is already the whole
-// win: the repeat is *within* a frame, not across them.
+// The cache lives until the comment set changes, which is rebuildStream and only
+// rebuildStream: it is the one place m.stream — and with it m.stream.comments —
+// is replaced, so clearing there covers every path that can invalidate an entry.
+// A stale comment body is the worst thing this surface could show, and that
+// single choke point is what makes it impossible.
+//
+// It was originally scoped to one frame, which was safe but not enough: parked
+// inside a 205-row conversation, a frame still wrapped and styled all 205 rows to
+// display 46 of them, and 3.3MB of garbage per frame turned into GC pauses that
+// read as stutter. Surviving frames only became worthwhile once SetSize stopped
+// rebuilding on every one of them — before that, the cache was cleared per frame
+// anyway.
 type blockKey struct {
 	comment int
 	width   int
@@ -229,31 +261,86 @@ type blockKey struct {
 	last    bool
 }
 
-type commentBlockCache map[blockKey][]string
+// rowKey identifies a rendered stream row. Everything a row's appearance depends
+// on that is *not* fixed by the stream itself: the pane width, whether the
+// cursorline band is on it, and the horizontal pan. The stream's own contents are
+// covered by the cache being dropped whenever it is rebuilt.
+type rowKey struct {
+	row     int
+	width   int
+	band    bool
+	hscroll int
+}
+
+// leftKey identifies a rendered left column, which is one string because the
+// whole column is rebuilt together.
+type leftKey struct {
+	width, height   int
+	files, comments int
+	focus           Focus
+	entries         int
+	hidden          bool
+}
+
+// renderCache holds rendered fragments between frames.
+//
+// Every lipgloss Style.Render allocates an ansi parser buffer of about 20KB
+// regardless of how little text it is given, and a frame makes upwards of eighty
+// of them — one per stream row plus a handful per file-list row. That was 1.7MB of
+// garbage per frame, and at scrolling speed the GC pauses it caused are what was
+// left of the stutter after the geometry fixes.
+//
+// What makes caching safe here is that everything cached is a pure function of
+// (the stream, the width, the cursor) and the stream is replaced in exactly one
+// place — rebuildStream — which drops the whole cache. Anything that changes what
+// a row looks like either goes through there or is part of a key.
+type renderCache struct {
+	blocks map[blockKey][]string
+	rows   map[rowKey]string
+	left   struct {
+		key leftKey
+		out string
+		ok  bool
+	}
+}
+
+func newRenderCache() *renderCache {
+	return &renderCache{
+		blocks: map[blockKey][]string{},
+		rows:   map[rowKey]string{},
+	}
+}
+
+// drop forgets everything. Called from rebuildStream, the one place the stream
+// these fragments were rendered from is replaced.
+func (c *renderCache) drop() {
+	if c == nil {
+		return
+	}
+	clear(c.blocks)
+	clear(c.rows)
+	c.left.ok = false
+}
 
 // commentBlock is the rendered lines of the conversation this row belongs to.
 func (m Model) commentBlock(r rowRef, width int, cursor bool) []string {
 	c := m.stream.comments[r.comment]
-	if m.blocks == nil {
+	if m.cache == nil {
 		// No cache installed (a bare Model, or a single row rendered directly by a
 		// test): correct, just not memoized.
 		return commentLines(c, width, cursor, r.lastComment)
 	}
 	key := blockKey{comment: r.comment, width: width, cursor: cursor, last: r.lastComment}
-	if lines, ok := (*m.blocks)[key]; ok {
+	if lines, ok := m.cache.blocks[key]; ok {
 		return lines
 	}
 	lines := commentLines(c, width, cursor, r.lastComment)
-	(*m.blocks)[key] = lines
+	m.cache.blocks[key] = lines
 	return lines
 }
 
 // renderStreamPanel draws the visible window of the stream.
 func (m Model) renderStreamPanel(width, height int) string {
-	// Top of the frame: everything the last one cached is now potentially stale.
-	if m.blocks != nil {
-		clear(*m.blocks)
-	}
 	border := styleNormalBorder
 	if m.focus == FocusHunks {
 		border = styleFocusBorder
@@ -269,12 +356,9 @@ func (m Model) renderStreamPanel(width, height int) string {
 	rows := make([]string, 0, height)
 	end := min(len(m.stream.rows), m.streamScroll+height)
 	for i := max(0, m.streamScroll); i < end; i++ {
-		rows = append(rows, m.renderStreamRowAt(i, contentWidth))
+		rows = append(rows, m.cachedStreamRow(i, contentWidth))
 	}
-	for len(rows) < height {
-		rows = append(rows, "")
-	}
-	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
+	return panelBox(rows, width, height, border)
 }
 
 // countChangedLines is how many added or removed lines a file's diff holds, for
@@ -289,4 +373,52 @@ func countChangedLines(f diff.FileDiff) int {
 		}
 	}
 	return n
+}
+
+// panelBox draws a rounded border around already-sized rows, without handing the
+// whole block to lipgloss.
+//
+// The lipgloss equivalent — border.Width(w).Height(h).Render(join(rows)) — is a
+// single Render over the entire pane, and it was the largest allocation left in a
+// frame: 940KB, because every Style.Render builds an ansi parser buffer sized to
+// its input and this one is given the whole screen. Here the border pieces are
+// styled once (they are two distinct strings, whatever the pane's height) and the
+// rows are padded by measuring, so a frame's panel costs a handful of allocations
+// instead of a megabyte.
+//
+// rows are padded to inner width and truncated past it, so the right edge lands in
+// the same column on every line — which is the one thing a hand-drawn border gets
+// wrong if you let it.
+func panelBox(rows []string, width, height int, border lipgloss.Style) string {
+	inner := width - 2
+	if inner < 1 || height < 1 {
+		return ""
+	}
+	b := lipgloss.RoundedBorder()
+	// The border style carries its colour on BorderForeground, which only applies
+	// to a border lipgloss draws itself — so recolour it as a foreground here.
+	edge := lipgloss.NewStyle().Foreground(border.GetBorderTopForeground())
+	side := edge.Render(b.Left)
+	rule := strings.Repeat(b.Top, inner)
+	var out strings.Builder
+	out.Grow((width + 8) * (height + 2))
+	out.WriteString(edge.Render(b.TopLeft + rule + b.TopRight))
+	for i := 0; i < height; i++ {
+		out.WriteByte('\n')
+		out.WriteString(side)
+		var row string
+		if i < len(rows) {
+			row = rows[i]
+		}
+		if w := ansi.StringWidth(row); w > inner {
+			row = ansi.Truncate(row, inner, "")
+		} else if w < inner {
+			row += strings.Repeat(" ", inner-w)
+		}
+		out.WriteString(row)
+		out.WriteString(side)
+	}
+	out.WriteByte('\n')
+	out.WriteString(edge.Render(b.BottomLeft + rule + b.BottomRight))
+	return out.String()
 }
