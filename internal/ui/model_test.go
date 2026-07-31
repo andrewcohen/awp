@@ -45,10 +45,14 @@ func TestRDoesNotRefresh(t *testing.T) {
 	}
 }
 
+// `/` filters from the file list. (From the diff it searches the diff instead —
+// see search_test.go.)
 func TestModelFilterMode(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	withFiles := updated.(Model)
+	withFiles.focus = FocusFiles
+	updated, _ = withFiles.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	got := updated.(Model)
 	if got.focus != FocusFilter {
@@ -82,7 +86,9 @@ func TestModelEnterFocusesHunkPaneWithoutOpening(t *testing.T) {
 func TestFilterEnterConfirmsAndReturnsToFiles(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	withFiles := updated.(Model)
+	withFiles.focus = FocusFiles
+	updated, _ = withFiles.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := updated.(Model)
@@ -165,18 +171,34 @@ func TestHAndLDoNotSwitchPanes(t *testing.T) {
 	}
 }
 
-func TestFilterFooterIsStableHeight(t *testing.T) {
+// Both prompts occupy the same reserved row, so opening one never moves the
+// footer under the panes.
+func TestPromptFooterIsStableHeight(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	m.width = 100
 	m.bodyHeight = 16
 	base := m.renderFooter()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	withFilter := updated.(Model).renderFooter()
-	if len(strings.Split(base, "\n")) != len(strings.Split(withFilter, "\n")) {
-		t.Fatalf("expected stable footer height, got %d vs %d", len(strings.Split(base, "\n")), len(strings.Split(withFilter, "\n")))
-	}
-	if !strings.Contains(withFilter, "Filter files:") {
-		t.Fatalf("expected filter prompt in footer, got %q", withFilter)
+	rows := func(s string) int { return len(strings.Split(s, "\n")) }
+
+	for _, tc := range []struct {
+		name  string
+		focus Focus
+		want  string
+	}{
+		{"filter", FocusFiles, "Filter files:"},
+		{"search", FocusHunks, "Search diff:"},
+	} {
+		from := m
+		from.focus = tc.focus
+		updated, _ := from.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+		withPrompt := updated.(Model).renderFooter()
+		if rows(base) != rows(withPrompt) {
+			t.Fatalf("%s: expected stable footer height, got %d vs %d",
+				tc.name, rows(base), rows(withPrompt))
+		}
+		if !strings.Contains(withPrompt, tc.want) {
+			t.Fatalf("%s: expected %q in footer, got %q", tc.name, tc.want, withPrompt)
+		}
 	}
 }
 
