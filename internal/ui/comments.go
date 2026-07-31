@@ -718,32 +718,34 @@ type commentRow struct {
 // prose, where it just makes sentences hard to read. ansi.Wrap still hard-breaks a
 // word longer than the line, so a URL or a long identifier cannot overflow.
 func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow {
+	label := c.Author
+	if label == review.AuthorHuman {
+		label = "you"
+	}
+	if collapsed {
+		// Exactly one row — no pads. The pad rows below give a multi-message card
+		// air at both ends; a one-line marker needs neither, and they tripled the
+		// height of the thing whose whole point is being one line. Folded threads
+		// now read as a compact list of markers, each sitting against the code it
+		// annotates.
+		//
+		// The label already carries the fold glyph, where it came from, its state
+		// and its message count (see threadHeaderLabel), so all that is left is the
+		// opening remark's first line. No state suffix — the chips said it, and
+		// appending after a truncated summary would put it where nobody reads.
+		title := commentGutter + label
+		if s := firstLine(c.Body); s != "" {
+			title += " · " + s
+		}
+		return []commentRow{{text: truncate(title, max(1, width)), header: true}}
+	}
+
 	// Every message opens with a bar-only row: top padding for the first one,
 	// and the separator between messages after that. Uniform, so a thread reads
 	// as one card with air around its content — the same Padding(1, ...) breathing
 	// room every other panel in the app gets.
 	out := []commentRow{{text: commentGutter}}
-
-	label := c.Author
-	if label == review.AuthorHuman {
-		label = "you"
-	}
 	title := commentGutter + label
-	if collapsed {
-		// One line for the whole conversation. The label already carries the fold
-		// glyph, where it came from, its state and its message count (see
-		// collapsedThreadLabel), so all that is left is the opening remark's first
-		// line. No state suffix — the chips in the label said it, and appending
-		// after a truncated summary would put it where nobody reads.
-		if s := firstLine(c.Body); s != "" {
-			title += " · " + s
-		}
-		out = append(out, commentRow{text: truncate(title, max(1, width)), header: true})
-		if last {
-			out = append(out, commentRow{text: commentGutter})
-		}
-		return out
-	}
 	// The kind is named once per conversation, on the remark that opened it. A
 	// reply already renders in the thread's hue, so repeating the word on every
 	// message is noise — the same reason a published reply omits it. A plain

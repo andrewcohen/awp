@@ -778,9 +778,10 @@ func TestResolvedThreadsFoldAndOpenOnesDoNot(t *testing.T) {
 	if folded >= open {
 		t.Fatalf("expected the resolved thread shorter than the open one, got %d vs %d", folded, open)
 	}
-	// A pad row, the summary, and a closing pad — the conversation on one line.
-	if folded != 3 {
-		t.Fatalf("expected a folded thread to be 3 rows, got %d", folded)
+	// Exactly one row: no pads. A one-line marker needs no air around it, and
+	// padding it would triple the height of the thing whose point is being short.
+	if folded != 1 {
+		t.Fatalf("expected a folded thread to be a single row, got %d", folded)
 	}
 }
 
@@ -836,12 +837,14 @@ func TestEnterTogglesTheThreadFold(t *testing.T) {
 	}
 }
 
-// threadRow is the first stream row belonging to a thread.
+// threadRow is the first stream row belonging to a thread — a folded thread's
+// only row, or an expanded one's leading pad. Either is on the conversation as
+// far as the cursor is concerned.
 func threadRow(t *testing.T, m Model, id string) int {
 	t.Helper()
 	for i, r := range m.stream.rows {
 		if isCommentRow(r.kind) && r.comment >= 0 && r.comment < len(m.stream.comments) &&
-			m.stream.comments[r.comment].ID == remoteThreadPrefix+id && r.commentLine == 1 {
+			m.stream.comments[r.comment].ID == remoteThreadPrefix+id {
 			return i
 		}
 	}
