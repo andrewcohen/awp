@@ -88,7 +88,12 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	fs.SetOutput(io.Discard)
 	dryRun := fs.Bool("dry-run", false, "show what would be posted without posting it")
 	prFlag := fs.Int("pr", 0, "PR number to publish to (defaults to the review's target)")
+	verdict := fs.String("verdict", "", "submit the comments as a review: approve, comment, or request-changes")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	event, err := parseVerdict(*verdict)
+	if err != nil {
 		return err
 	}
 	store, r, err := openReviewForCwd(runner, svc)
@@ -107,10 +112,51 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	if prNumber == 0 {
 		return errors.New("review publish: this workspace isn't pinned to a PR; pass --pr")
 	}
+	return publishReview(runner, publishRequest{
+		Store:    store,
+		Review:   r,
+		Comments: comments,
+		PR:       prNumber,
+		Event:    event,
+		Verdict:  *verdict,
+		DryRun:   *dryRun,
+	}, out)
+}
 
-	inline, changeWide, skipped := partitionForPublish(comments)
+// publishRequest is one publish run, fully resolved: which review, which PR, and
+// what verdict to finish it with.
+//
+// Separated from the flag parsing so the deck's own publish key runs exactly this
+// code rather than a second implementation of it. The command resolves the review
+// from the working directory; the deck resolves it from the workspace row you are
+// reading — and neither difference belongs in the part that talks to GitHub.
+type publishRequest struct {
+	Store    review.Store
+	Review   review.Review
+	Comments []review.Comment
+	PR       int
+	// Event is GitHub's verdict constant, empty for none. Verdict is the word the
+	// user typed, for messages.
+	Event   string
+	Verdict string
+	DryRun  bool
+}
 
-	if *dryRun {
+func publishReview(runner Runner, req publishRequest, out io.Writer) error {
+	store, r, event, prNumber := req.Store, req.Review, req.Event, req.PR
+	inline, changeWide, skipped := partitionForPublish(req.Comments)
+
+	// A verdict changes where the review-level remarks go: they become the
+	// review's summary, which is what GitHub's review body is for, instead of
+	// separate comments on the PR. Checked before anything is posted — a run that
+	// published eight inline comments and then refused the verdict would leave the
+	// reviewer to work out what landed.
+	summary := reviewSummary(changeWide)
+	if github.EventNeedsBody(event) && summary == "" {
+		return fmt.Errorf("--verdict %s needs a summary; file a review-level remark and it becomes the review body", req.Verdict)
+	}
+
+	if req.DryRun {
 		total := len(inline) + len(changeWide)
 		_, _ = fmt.Fprintf(out, "would post %d comment(s) to PR #%d (%d already published)\n", total, prNumber, skipped)
 		for _, c := range inline {
@@ -119,15 +165,27 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 			_, _ = fmt.Fprintf(out, "  %s:%s\t%s\n", c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
 		}
 		for _, c := range changeWide {
-			// Named as what it will be, so a dry run does not imply these are
-			// going somewhere in the diff.
-			_, _ = fmt.Fprintf(out, "  on the PR\t%s\n", oneLine(c.PublishBody()))
+			// Named as where it will actually go, which the verdict decides: a dry
+			// run that said "on the PR" while the real run made it the review body
+			// would be describing a different command.
+			where := "on the PR"
+			if event != "" {
+				where = "review summary"
+			}
+			_, _ = fmt.Fprintf(out, "  %s\t%s\n", where, oneLine(c.PublishBody()))
+		}
+		if event != "" {
+			_, _ = fmt.Fprintf(out, "  and submit the review as %s\n", req.Verdict)
 		}
 		return nil
 	}
 	if len(inline) == 0 && len(changeWide) == 0 {
-		_, _ = fmt.Fprintf(out, "nothing to publish (%d already published)\n", skipped)
-		return nil
+		// A verdict is worth submitting on its own: approving a PR whose comments
+		// all went up on an earlier run is a normal thing to want.
+		if event == "" {
+			_, _ = fmt.Fprintf(out, "nothing to publish (%d already published)\n", skipped)
+			return nil
+		}
 	}
 
 	if runner == nil {
@@ -175,17 +233,34 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		record(c, threadID, where)
 	}
 
-	// Review-level remarks go up as comments on the PR itself. Posted after the
-	// inline ones so a closing summary lands under the specifics it refers to,
-	// which is the order a reader of the PR encounters them in.
-	for _, c := range changeWide {
-		id, perr := gh.PostPRComment(prNumber, c.PublishBody())
+	if event != "" {
+		// One review submission carrying the verdict and the summary, after the
+		// inline comments so it reads as the conclusion of what they say. The
+		// remarks that made up the summary are recorded against the review's id, so
+		// a re-publish does not send them again.
+		id, perr := gh.SubmitReview(prNumber, event, summary)
 		if perr != nil {
 			res.Failed++
-			failures = append(failures, fmt.Errorf("on the PR: %w", perr))
-			continue
+			failures = append(failures, fmt.Errorf("submitting the review: %w", perr))
+		} else {
+			for _, c := range changeWide {
+				record(c, id, "review summary")
+			}
+			_, _ = fmt.Fprintf(out, "submitted the review as %s\n", req.Verdict)
 		}
-		record(c, id, "on the PR")
+	} else {
+		// No verdict: review-level remarks go up as comments on the PR itself.
+		// Posted after the inline ones so a closing summary lands under the
+		// specifics it refers to, which is the order a reader encounters them in.
+		for _, c := range changeWide {
+			id, perr := gh.PostPRComment(prNumber, c.PublishBody())
+			if perr != nil {
+				res.Failed++
+				failures = append(failures, fmt.Errorf("on the PR: %w", perr))
+				continue
+			}
+			record(c, id, "on the PR")
+		}
 	}
 
 	_, _ = fmt.Fprintf(out, "posted %d, skipped %d, failed %d\n", res.Posted, res.Skipped, res.Failed)
@@ -195,6 +270,45 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+// parseVerdict reads the --verdict flag into GitHub's event vocabulary, empty for
+// no verdict at all.
+//
+// Spelled the way GitHub's own UI labels the three buttons rather than in its
+// API's shouting constants: the reviewer is choosing between "approve", "comment"
+// and "request changes", which is the decision, not the wire format.
+func parseVerdict(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return "", nil
+	case "approve", "approved":
+		return github.EventApprove, nil
+	case "comment":
+		return github.EventComment, nil
+	case "request-changes", "request_changes", "changes":
+		return github.EventRequestChanges, nil
+	}
+	return "", fmt.Errorf("review publish: unknown --verdict %q (approve, comment, or request-changes)", s)
+}
+
+// reviewSummary is the review body built from the change-wide remarks: their
+// composed bodies, in order, one paragraph each.
+//
+// Composed rather than stored (PublishBody), the same as any other published
+// body, so an agent's remark still carries its marker and its kind.
+func reviewSummary(changeWide []review.Comment) string {
+	parts := make([]string, 0, len(changeWide))
+	for _, c := range changeWide {
+		// Emptiness is a property of what the author wrote, not of the composed
+		// body: PublishBody prefixes the kind, so a blank remark composes to
+		// "(comment) -" and would pass a check made on the result.
+		if strings.TrimSpace(c.Body) == "" {
+			continue
+		}
+		parts = append(parts, c.PublishBody())
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // commentEndLine and rangeStartLine translate an anchor into GitHub's way of

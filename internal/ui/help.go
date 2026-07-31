@@ -72,6 +72,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 				{"R", "resolve / reopen the GitHub thread at the cursor"},
 				{"T", "cycle GitHub threads shown: unresolved → all → none"},
 				{"enter", "fold / unfold the GitHub thread at the cursor"},
+				{"P", "publish the review — asks approve / request changes / comment"},
 			},
 		},
 		{

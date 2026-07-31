@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -388,10 +389,66 @@ func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) decku
 	}
 }
 
+// publishReviewFor wires the viewer's `P` to the same publish path
+// `awp review publish` runs.
+//
+// The PR comes from the workspace row rather than from the working directory: the
+// deck runs in the source repo, so resolving it the way the command does would
+// find the wrong review — or none. Everything after that is the command's own
+// code, so a publish from the viewer and a publish from a shell cannot drift.
+func publishReviewFor(runner Runner) func(deckui.Item, string) (string, error) {
+	return func(item deckui.Item, verdict string) (string, error) {
+		event, err := parseVerdict(verdict)
+		if err != nil {
+			return "", err
+		}
+		store := review.Store{}
+		r, err := store.Open(item.RepoRoot, review.Target{
+			Kind:      review.TargetWorking,
+			Workspace: item.WorkspaceName,
+		})
+		if err != nil {
+			return "", err
+		}
+		comments, err := store.Comments(r)
+		if err != nil {
+			return "", err
+		}
+		if item.PRNumber <= 0 {
+			return "", errors.New("this workspace isn't linked to a PR (link one with `p #`)")
+		}
+		var buf bytes.Buffer
+		perr := publishReview(runner, publishRequest{
+			Store:    store,
+			Review:   r,
+			Comments: comments,
+			PR:       item.PRNumber,
+			Event:    event,
+			Verdict:  verdict,
+		}, &buf)
+		// The report is worth having even when part of the run failed — it says what
+		// did land, which is exactly what a reviewer needs in order to retry.
+		return publishStatusLine(buf.String()), perr
+	}
+}
+
+// publishStatusLine squashes the publish report into one line for the viewer's
+// status bar, which has one row to say it in.
+func publishStatusLine(report string) string {
+	var parts []string
+	for _, line := range strings.Split(report, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
 // reviewStoreWithSend is the full store seam: load, save, and hand to the agent.
 func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentStore {
 	cs := reviewStoreFor(runner)
 	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
+	cs.Publish = publishReviewFor(runner)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
 	cs.LoadThreads, cs.Resolve = threadActionsFor(runner)
 	cs.LastSaved = lastSavedComment

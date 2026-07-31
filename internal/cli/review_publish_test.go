@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -154,5 +156,93 @@ func TestPublishSkipsAlreadyPostedReviewLevelComments(t *testing.T) {
 	}
 	if skipped != 2 {
 		t.Fatalf("expected both skipped, got %d", skipped)
+	}
+}
+
+// The flag is spelled the way GitHub's own UI labels the three buttons, since
+// that is the decision the reviewer is making.
+func TestParseVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"approve", github.EventApprove},
+		{"APPROVE", github.EventApprove},
+		{" approve ", github.EventApprove},
+		{"comment", github.EventComment},
+		{"request-changes", github.EventRequestChanges},
+		{"request_changes", github.EventRequestChanges},
+	} {
+		got, err := parseVerdict(tc.in)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%q: got %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	// A typo must not silently publish without a verdict — or, worse, approve.
+	if _, err := parseVerdict("lgtm"); err == nil {
+		t.Fatal("expected an unknown verdict rejected")
+	}
+}
+
+// With a verdict, the review-level remarks become the review's summary — which is
+// what GitHub's review body is for — rather than separate comments on the PR.
+func TestReviewSummaryJoinsTheChangeWideRemarks(t *testing.T) {
+	remarks := []review.Comment{
+		{Author: review.AuthorHuman, Body: "Scope: internal/cli only.", Kind: review.KindComment},
+		{Author: "agent", Body: "Tests are missing for the publish path.", Kind: review.KindSuggestion},
+		// Empty bodies contribute nothing rather than a blank paragraph.
+		{Author: review.AuthorHuman, Body: "   "},
+	}
+	got := reviewSummary(remarks)
+	if !strings.Contains(got, "Scope: internal/cli only.") {
+		t.Fatalf("summary dropped the first remark: %q", got)
+	}
+	// Composed bodies, so an agent's remark still carries its marker and kind —
+	// the same text the no-verdict path would have posted.
+	if !strings.Contains(got, remarks[1].PublishBody()) {
+		t.Fatalf("summary did not use the composed body: %q", got)
+	}
+	if strings.Count(got, "\n\n") != 1 {
+		t.Fatalf("expected one paragraph break between two remarks: %q", got)
+	}
+	if reviewSummary(nil) != "" {
+		t.Fatal("expected no summary from no remarks")
+	}
+}
+
+// A verdict that asks for something has to say what, and the check has to happen
+// before any comment is posted — a run that published eight comments and then
+// refused the verdict would leave the reviewer guessing what landed. This asserts
+// the two halves the check is made of; the ordering is in runReviewPublish.
+func TestVerdictNeedingASummaryIsCaughtBeforePosting(t *testing.T) {
+	for _, verdict := range []string{"comment", "request-changes"} {
+		event, err := parseVerdict(verdict)
+		if err != nil {
+			t.Fatalf("%s: %v", verdict, err)
+		}
+		if !github.EventNeedsBody(event) {
+			t.Fatalf("%s should require a summary", verdict)
+		}
+	}
+	event, _ := parseVerdict("approve")
+	if github.EventNeedsBody(event) {
+		t.Fatal("approving should not require a summary")
+	}
+}
+
+// The status bar has one row, so the publish report is squashed onto it — every
+// line kept, since the part that says what failed is the part worth reading.
+func TestPublishStatusLineKeepsEveryLine(t *testing.T) {
+	got := publishStatusLine("posted 2, skipped 1, failed 1\n\nsubmitted the review as approve\n")
+	want := "posted 2, skipped 1, failed 1 · submitted the review as approve"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if publishStatusLine("") != "" {
+		t.Fatal("expected nothing from an empty report")
 	}
 }

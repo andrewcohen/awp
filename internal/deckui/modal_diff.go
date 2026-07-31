@@ -75,6 +75,10 @@ type CommentStore struct {
 	// send-to-agent exit unavailable, which the editor reports rather than
 	// silently doing nothing.
 	Send CommentSender
+	// Publish sends the review to its PR with a verdict — "approve",
+	// "request-changes", "comment", or empty for the comments alone — and returns
+	// what happened. Nil leaves the viewer's `P` unavailable.
+	Publish func(item Item, verdict string) (string, error)
 }
 
 // CommentSender delivers a comment to a workspace's agent.
@@ -147,6 +151,11 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	}
 	if comments.Send != nil {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
+	}
+	if comments.Publish != nil {
+		inner.PublishReview = func(verdict string) (string, error) {
+			return comments.Publish(item, verdict)
+		}
 	}
 	if comments.SaveReviewed != nil {
 		inner.MarkReviewed = func(path, hash string) error { return comments.SaveReviewed(item, path, hash) }
