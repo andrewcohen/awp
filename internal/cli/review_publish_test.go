@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -278,5 +280,53 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	}
 	if !strings.Contains(joined, "POST issues/54/comments") {
 		t.Fatalf("expected the PR-comment endpoint for review-level remarks:\n%s", joined)
+	}
+}
+
+// dirRecordingRunner records the directory each command ran in, and answers gh
+// well enough for a publish to complete.
+type dirRecordingRunner struct {
+	dirs []string
+}
+
+func (r *dirRecordingRunner) Run(_ context.Context, dir string, _ string, args ...string) (string, error) {
+	r.dirs = append(r.dirs, dir)
+	if len(args) > 1 && args[0] == "repo" {
+		return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
+	}
+	return `{"node_id":"PRRC_1"}`, nil
+}
+
+// Every gh call a publish makes has to run in the review's own repo. Publishing
+// used to resolve the repository from the process's working directory, so a review
+// of one repo's PR, published from a deck launched somewhere else, addressed the
+// wrong repository entirely — 404 when no PR of that number existed there, and a
+// write to a stranger's PR when one did.
+func TestPublishRunsInTheReviewsRepo(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r := review.Review{ID: "work-ws", Repo: "/repos/theirs"}
+	runner := &dirRecordingRunner{}
+	var out bytes.Buffer
+	err := publishReview(runner, publishRequest{
+		Store:  store,
+		Review: r,
+		Comments: []review.Comment{{
+			ID: "c1", Author: review.AuthorHuman, Body: "a remark", State: review.Open,
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3, Text: "x"},
+		}},
+		PR:      54,
+		Event:   github.EventApprove,
+		Verdict: "approve",
+	}, &out)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if len(runner.dirs) == 0 {
+		t.Fatal("expected the publish to make gh calls")
+	}
+	for i, dir := range runner.dirs {
+		if dir != "/repos/theirs" {
+			t.Fatalf("call %d ran in %q, not the review's repo", i, dir)
+		}
 	}
 }

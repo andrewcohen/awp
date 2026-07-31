@@ -76,7 +76,7 @@ func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
 			args = append(args, "-f", "commit_id="+nc.CommitID)
 		}
 	}
-	raw, err := c.runner.Run(context.Background(), "", "gh", args...)
+	raw, err := c.runner.Run(context.Background(), c.dir, "gh", args...)
 	if err != nil {
 		return "", fmt.Errorf("gh api post review comment on %d: %w: %s", num, err, raw)
 	}
@@ -146,7 +146,7 @@ func (c *Client) SubmitReview(num int, event, body string) (string, error) {
 	if strings.TrimSpace(body) != "" {
 		args = append(args, "-f", "body="+body)
 	}
-	raw, err := c.runner.Run(context.Background(), "", "gh", args...)
+	raw, err := c.runner.Run(context.Background(), c.dir, "gh", args...)
 	if err != nil {
 		return "", fmt.Errorf("gh api submit review on %d: %w: %s", num, err, raw)
 	}
@@ -186,7 +186,7 @@ func (c *Client) PostPRComment(num int, body string) (string, error) {
 	}
 	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, name, num)
 	raw, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "api", "--method", "POST", endpoint, "-f", "body="+body,
 	)
 	if err != nil {

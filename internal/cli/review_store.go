@@ -531,7 +531,9 @@ func threadActionsFor(runner Runner) (
 		return store.Threads(r), nil
 	}
 	resolve = func(item deckui.Item, threadID string, want bool) error {
-		gh := github.New(runner)
+		// In the workspace's repo, not in whatever directory the deck was launched
+		// from: which repository a gh call is about comes from where gh runs.
+		gh := github.New(runner).In(item.RepoRoot)
 		if want {
 			if err := gh.ResolveReviewThread(threadID); err != nil {
 				return err
