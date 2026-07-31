@@ -144,7 +144,7 @@ func (e commentEditor) view(width int) string {
 	head := verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint)
 	// Border and header take the kind's hue, so tab's effect is visible
 	// immediately rather than only once the comment is saved.
-	headStyle, _ := kindStyles(e.kind)
+	headStyle := kindStyles(e.kind)
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(kindColor(e.kind))).

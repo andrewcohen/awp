@@ -178,8 +178,7 @@ func commentEntryStyles(kind review.Kind, selected bool) (loc, text lipgloss.Sty
 		// selection wherever it lands.
 		return styleSelected, styleSelected
 	}
-	head, _ := kindStyles(kind)
-	return head, styleMuted
+	return kindStyles(kind), styleMuted
 }
 
 func renderCommentEntry(e commentEntry, width int, selected bool) string {
