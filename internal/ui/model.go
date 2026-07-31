@@ -684,6 +684,43 @@ func (m *Model) cursorToFirstLine() {
 	}
 }
 
+// cursorToFileFirstLine puts the cursor on the first diff line at or after
+// file i's divider, which is where a reader wants to be after the row count
+// changed under them.
+//
+// Searching forward from the divider rather than within the file is what makes
+// one rule cover both directions of `r`: a file just collapsed has nothing but a
+// divider, so the first line found belongs to the next file; a file just expanded
+// has its own lines, so the first line found is its own. Falls back to the
+// nearest line above when there is nothing after — collapsing the last file — and
+// leaves the cursor on the divider when the whole change has no lines left to
+// land on.
+func (m *Model) cursorToFileFirstLine(i int) {
+	if i < 0 || i >= len(m.stream.fileStart) {
+		return
+	}
+	from := m.stream.fileStart[i]
+	m.cursorRow = from
+	for r := from; r < len(m.stream.rows); r++ {
+		if m.stream.rows[r].kind == rowLine {
+			m.cursorRow = r
+			break
+		}
+	}
+	if m.stream.rows[m.cursorRow].kind != rowLine {
+		for r := from - 1; r >= 0; r-- {
+			if m.stream.rows[r].kind == rowLine {
+				m.cursorRow = r
+				break
+			}
+		}
+	}
+	m.hunkHScroll = 0
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
+}
+
 // scrollHunksHorizontally pans the stream's line content by delta columns.
 // No-op under wrap, where nothing overflows the pane.
 func (m *Model) scrollHunksHorizontally(delta int) {

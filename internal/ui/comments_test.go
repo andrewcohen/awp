@@ -1610,3 +1610,94 @@ func rowsOfCommentInModel(m Model, id string) int {
 	}
 	return last - first + 1
 }
+
+// After `r` collapses a file the cursor has to land on the next file's first
+// diff line. A plain clamp parks it on a divider, so every `r` was followed by
+// pressing `j` a couple of times to get into the file you were just sent to.
+func TestReviewedLandsOnTheNextFilesFirstLine(t *testing.T) {
+	m := commentModel(t,
+		fileWith("a.go", 1, "alpha", "beta"),
+		fileWith("b.go", 1, "gamma", "delta"),
+	)
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+
+	row := m.stream.rows[m.cursorRow]
+	if row.kind != rowLine {
+		t.Fatalf("expected the cursor on a diff line, got %v", row.kind)
+	}
+	if got := m.lineText(row); got != "gamma" {
+		t.Fatalf("expected the next file's first line, got %q", got)
+	}
+	// And the file cursor follows, so the left column agrees with the diff.
+	if got := pathOf(m.filtered[m.filesCursor]); got != "b.go" {
+		t.Fatalf("expected the file cursor on b.go, got %q", got)
+	}
+}
+
+// Un-reviewing expands the file, and the same rule puts the cursor on that
+// file's own first line — the one you just asked to see again.
+func TestUnreviewingLandsOnTheReopenedFilesFirstLine(t *testing.T) {
+	m := commentModel(t,
+		fileWith("a.go", 1, "alpha", "beta"),
+		fileWith("b.go", 1, "gamma", "delta"),
+	)
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r") // a.go collapsed, cursor now in b.go
+	m.filesCursor = 0
+	m.cursorRow = m.stream.fileStart[0]
+	m = press(m, "r") // a.go expanded again
+
+	row := m.stream.rows[m.cursorRow]
+	if row.kind != rowLine {
+		t.Fatalf("expected the cursor on a diff line, got %v", row.kind)
+	}
+	if got := m.lineText(row); got != "alpha" {
+		t.Fatalf("expected the reopened file's first line, got %q", got)
+	}
+}
+
+// Collapsing the last file has nothing after it to land on, so the cursor falls
+// back to the nearest line above rather than sitting on a divider.
+func TestReviewingTheLastFileFallsBackToALineAbove(t *testing.T) {
+	m := commentModel(t,
+		fileWith("a.go", 1, "alpha", "beta"),
+		fileWith("b.go", 1, "gamma", "delta"),
+	)
+	// Get into the last file.
+	for pathOf(m.filtered[m.filesCursor]) != "b.go" || m.stream.rows[m.cursorRow].kind != rowLine {
+		before := m.cursorRow
+		m = press(m, "j")
+		if m.cursorRow == before {
+			t.Fatal("never reached a line in b.go")
+		}
+	}
+	m = press(m, "r")
+
+	if got := m.stream.rows[m.cursorRow].kind; got != rowLine {
+		t.Fatalf("expected the cursor on a diff line, got %v", got)
+	}
+	if got := m.lineText(m.stream.rows[m.cursorRow]); got != "beta" {
+		t.Fatalf("expected the nearest line above, got %q", got)
+	}
+}
+
+// Every file reviewed leaves no line anywhere; the cursor must stay in range
+// rather than indexing off the end.
+func TestReviewingEveryFileLeavesTheCursorValid(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "r")
+	if m.cursorRow < 0 || m.cursorRow >= len(m.stream.rows) {
+		t.Fatalf("cursor %d out of range for %d rows", m.cursorRow, len(m.stream.rows))
+	}
+	if !cursorVisible(m) {
+		t.Fatal("expected the cursor on screen")
+	}
+}
