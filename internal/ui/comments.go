@@ -212,6 +212,21 @@ func (m *Model) SetThreads(ts []review.Thread) {
 	m.rebuildStream()
 }
 
+// cycleThreadVisibility steps unresolved → all → none.
+//
+// Pane-independent: which conversations the diff shows is a property of the
+// view, not of whichever list happens to hold the keyboard. Reaching it only
+// from the diff pane meant scanning the comment index — the surface the setting
+// changes most — and having to tab away to change it.
+// The rebuild covers the rest: it re-places every conversation, rebuilds the
+// index, and re-clamps both cursors — which matters here because cycling to
+// "none" can empty the index while it holds focus.
+func (m *Model) cycleThreadVisibility() {
+	m.threadVisibility = (m.threadVisibility + 1) % 3
+	m.status = m.threadVisibility.String()
+	m.rebuildStream()
+}
+
 // visibleThreads is the thread set the current visibility admits.
 func (m Model) visibleThreads() []review.Thread {
 	if m.threadVisibility == ThreadsNone || len(m.threads) == 0 {
