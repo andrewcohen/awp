@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/andrewcohen/awp/internal/github"
+	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/review"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -145,6 +146,14 @@ type publishRequest struct {
 func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	store, r, event, prNumber := req.Store, req.Review, req.Event, req.PR
 	inline, changeWide, skipped := partitionForPublish(req.Comments)
+	if runner == nil {
+		runner = NewExecRunner()
+	}
+	// In the review's own repo. The deck is a tmux popup launched from wherever you
+	// happen to be, so resolving the repository from the process's directory sent a
+	// review of one repo's PR to whatever repo that directory belonged to — 404 if it
+	// had no PR with that number, and a write to the wrong PR if it did.
+	gh := github.New(runner).In(r.Repo)
 
 	// A verdict changes where the review-level remarks go: they become the
 	// review's summary, which is what GitHub's review body is for, instead of
@@ -156,8 +165,20 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		return fmt.Errorf("--verdict %s needs a summary; file a review-level remark and it becomes the review body", req.Verdict)
 	}
 
+	// The commit every inline comment is anchored against. GitHub requires it and
+	// refuses the whole request without one, so it is resolved once, up front — a run
+	// that cannot find it says so once rather than failing per comment.
+	head := ""
+	if len(inline) > 0 {
+		resolved, herr := reviewedCommit(runner, gh, r, prNumber)
+		if herr != nil {
+			return herr
+		}
+		head = resolved
+	}
+
 	if req.DryRun {
-		for _, line := range publishPlan(req, inline, changeWide, skipped) {
+		for _, line := range publishPlan(req, inline, changeWide, skipped, head) {
 			_, _ = fmt.Fprintln(out, line)
 		}
 		return nil
@@ -171,14 +192,6 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		}
 	}
 
-	if runner == nil {
-		runner = NewExecRunner()
-	}
-	// In the review's own repo. The deck is a tmux popup launched from wherever you
-	// happen to be, so resolving the repository from the process's directory sent a
-	// review of one repo's PR to whatever repo that directory belonged to — 404 if it
-	// had no PR with that number, and a write to the wrong PR if it did.
-	gh := github.New(runner).In(r.Repo)
 	res := publishResult{Skipped: skipped}
 	var failures []error
 
@@ -209,7 +222,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			// the stored body is what the author typed, so baking prefixes in
 			// would double them on a re-publish.
 			Body:      c.PublishBody(),
-			CommitID:  r.ObservedHead,
+			CommitID:  head,
 			InReplyTo: c.ReplyTo,
 		})
 		if perr != nil {
@@ -267,7 +280,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 // target either look right or they do not. The viewer shows exactly this text
 // before posting (see the publish overlay), so a preview cannot describe a
 // different run than the one it is previewing.
-func publishPlan(req publishRequest, inline, changeWide []review.Comment, skipped int) []string {
+func publishPlan(req publishRequest, inline, changeWide []review.Comment, skipped int, head string) []string {
 	// The calls are collected first and counted afterwards, so the count cannot
 	// disagree with the list under it. Counting the inputs instead was wrong the
 	// moment a verdict folded the review-level remarks into one review body: it
@@ -284,7 +297,8 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 		// The composed body, not the stored one: a preview is only useful if it
 		// shows what will actually land on GitHub, kind prefix and robot marker
 		// included.
-		calls = append(calls, fmt.Sprintf("POST pulls/%d/comments  %s  %s", req.PR, where, oneLine(c.PublishBody())))
+		calls = append(calls, fmt.Sprintf("POST pulls/%d/comments  %s  commit=%s  %s",
+			req.PR, where, shortSHA(head), oneLine(c.PublishBody())))
 	}
 	if req.Event != "" {
 		// One call, carrying the verdict and — since a verdict makes them the review
@@ -300,8 +314,54 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 			calls = append(calls, fmt.Sprintf("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody())))
 		}
 	}
-	head := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", len(calls), req.PR, skipped)
-	return append([]string{head}, calls...)
+	summary := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", len(calls), req.PR, skipped)
+	return append([]string{summary}, calls...)
+}
+
+// reviewedCommit is the commit a review's inline comments should be anchored to:
+// the one whose diff the reviewer actually read.
+//
+// Order matters, and it is not "whatever GitHub says the head is now". A comment
+// carries line numbers, and line numbers only mean anything against the commit they
+// were read from — so anchoring them to a head that has moved since would attach
+// them to a diff nobody looked at. Newest-is-best is exactly wrong here.
+//
+//  1. What the review recorded when it started, if anything did.
+//  2. The local commit under review — `@-` in the review's own repo, which for a PR
+//     workspace is the branch head as fetched. This is the usual answer.
+//  3. The PR's current head from GitHub, as a last resort, so a review with no local
+//     workspace can still publish.
+//
+// GitHub marks a comment against an older commit as outdated, which is the honest
+// outcome: the remark was written against that code.
+func reviewedCommit(runner Runner, gh *github.Client, r review.Review, prNumber int) (string, error) {
+	if recorded := strings.TrimSpace(r.ObservedHead); recorded != "" {
+		return recorded, nil
+	}
+	if repo := strings.TrimSpace(r.Repo); repo != "" {
+		if local, err := jj.New(runnerOrExec(runner)).ReviewedCommitID(repo); err == nil {
+			if local = strings.TrimSpace(local); local != "" {
+				return local, nil
+			}
+		}
+	}
+	remote, err := gh.PRHeadSHA(prNumber)
+	if err != nil {
+		return "", fmt.Errorf("resolving the commit to anchor comments to (PR #%d): %w", prNumber, err)
+	}
+	return remote, nil
+}
+
+// shortSHA is a commit as a reader recognises it. Full length in a preview line
+// would push the body it belongs to off the edge.
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	if sha == "" {
+		return "(unresolved)"
+	}
+	return sha
 }
 
 // parseVerdict reads the --verdict flag into GitHub's event vocabulary, empty for

@@ -38,6 +38,32 @@ type NewComment struct {
 	InReplyTo string
 }
 
+// PRHeadSHA is the commit a PR's head currently points at.
+//
+// Its own call rather than FetchPR, which pulls the title, the body, the status
+// rollup and the labels to get at one field. Needed because every new review
+// comment has to name the commit it is against: GitHub rejects one without a
+// commit_id, and the answer changes whenever the author pushes.
+func (c *Client) PRHeadSHA(num int) (string, error) {
+	out, err := c.runner.Run(
+		context.Background(), c.dir,
+		"gh", "pr", "view", strconv.Itoa(num), "--json", "headRefOid",
+	)
+	if err != nil {
+		return "", fmt.Errorf("gh pr view %d: %w: %s", num, err, out)
+	}
+	var resp struct {
+		HeadRefOid string `json:"headRefOid"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", fmt.Errorf("parse gh pr view %d: %w", num, err)
+	}
+	if strings.TrimSpace(resp.HeadRefOid) == "" {
+		return "", fmt.Errorf("gh pr view %d: no head commit", num)
+	}
+	return resp.HeadRefOid, nil
+}
+
 // PostReviewComment posts a single inline comment and returns the thread ID it
 // created or replied to, so a re-publish can recognise it as already done.
 func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
@@ -52,6 +78,13 @@ func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
 	} else {
 		if strings.TrimSpace(nc.Path) == "" || nc.Line <= 0 {
 			return "", fmt.Errorf("review comment needs a path and line")
+		}
+		// GitHub requires it, and refuses the whole request without it — with an
+		// error listing every alternative shape that also did not match, which is
+		// not a readable way to learn you forgot one field. Caught here so a run
+		// says so once instead of once per comment.
+		if strings.TrimSpace(nc.CommitID) == "" {
+			return "", fmt.Errorf("review comment needs the commit it is against")
 		}
 		side := nc.Side
 		if side == "" {
@@ -72,9 +105,9 @@ func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
 				"-f", "start_side="+side,
 			)
 		}
-		if nc.CommitID != "" {
-			args = append(args, "-f", "commit_id="+nc.CommitID)
-		}
+		// Unconditional: it is required, and the guard above has already refused an
+		// empty one.
+		args = append(args, "-f", "commit_id="+nc.CommitID)
 	}
 	raw, err := c.runner.Run(context.Background(), c.dir, "gh", args...)
 	if err != nil {

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -250,11 +251,14 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 
 	// With a verdict: the remarks are the review body, and the verdict is its own
 	// call — counted as one of the things about to happen, not a footnote.
-	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2)
+	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2, "abc123def456789")
 	joined := strings.Join(plan, "\n")
 	for _, want := range []string{
 		"3 call(s) to PR #54 (2 already published)",
 		"POST pulls/54/comments  a.go:12-18",
+		// The commit the comment is anchored to is part of the call, so the preview
+		// has to name it — it is what decides which diff the line numbers mean.
+		"commit=abc123def456",
 		"in_reply_to=PRRC_x",
 		"POST pulls/54/reviews  event=APPROVE",
 		"scope was internal/cli",
@@ -273,7 +277,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// Without a verdict: no review submission, and the remarks go up as PR comments
 	// on a different endpoint — the plan has to say so, or it describes a run that
 	// is not the one about to happen.
-	plan = publishPlan(publishRequest{PR: 54}, inline, changeWide, 0)
+	plan = publishPlan(publishRequest{PR: 54}, inline, changeWide, 0, "abc123def456789")
 	joined = strings.Join(plan, "\n")
 	if strings.Contains(joined, "/reviews") {
 		t.Fatalf("a verdictless plan claims a review submission:\n%s", joined)
@@ -289,8 +293,12 @@ type dirRecordingRunner struct {
 	dirs []string
 }
 
-func (r *dirRecordingRunner) Run(_ context.Context, dir string, _ string, args ...string) (string, error) {
+func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
 	r.dirs = append(r.dirs, dir)
+	if name == "jj" {
+		// The commit under review, which is what a comment is anchored to.
+		return "abc123def4567890abc123def4567890abcdef12\n", nil
+	}
 	if len(args) > 1 && args[0] == "repo" {
 		return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
 	}
@@ -328,5 +336,75 @@ func TestPublishRunsInTheReviewsRepo(t *testing.T) {
 		if dir != "/repos/theirs" {
 			t.Fatalf("call %d ran in %q, not the review's repo", i, dir)
 		}
+	}
+}
+
+// commitRunner answers the two questions the commit lookup asks — jj for the
+// local commit, gh for the PR's head — and records what it was asked.
+type commitRunner struct {
+	jj, jjErr string
+	prView    string
+	calls     []string
+}
+
+func (r *commitRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	switch {
+	case name == "jj":
+		if r.jjErr != "" {
+			return "", errors.New(r.jjErr)
+		}
+		return r.jj, nil
+	case len(args) > 1 && args[0] == "pr" && args[1] == "view":
+		return r.prView, nil
+	case len(args) > 1 && args[0] == "repo":
+		return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
+	}
+	return `{"node_id":"PRRC_1"}`, nil
+}
+
+// A comment carries line numbers, and line numbers only mean anything against the
+// commit they were read from — so the commit under review wins over whatever
+// GitHub says the head is now. Anchoring to a newer head would attach the remark
+// to a diff nobody looked at.
+func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
+	const local = "1111111111111111111111111111111111111111"
+	const remote = "2222222222222222222222222222222222222222"
+
+	// The local commit under review, even though GitHub has moved on.
+	r := &commitRunner{jj: local + "\n", prView: `{"headRefOid":"` + remote + `"}`}
+	got, err := reviewedCommit(r, github.New(r), review.Review{Repo: "/repo"}, 7)
+	if err != nil {
+		t.Fatalf("reviewedCommit: %v", err)
+	}
+	if got != local {
+		t.Fatalf("expected the commit that was read (%s), got %s", local[:8], got[:8])
+	}
+
+	// What the review recorded beats even that: it is the review's own statement of
+	// what it was opened against.
+	r = &commitRunner{jj: local + "\n", prView: `{"headRefOid":"` + remote + `"}`}
+	got, err = reviewedCommit(r, github.New(r), review.Review{Repo: "/repo", ObservedHead: "3333333333333333"}, 7)
+	if err != nil {
+		t.Fatalf("reviewedCommit: %v", err)
+	}
+	if got != "3333333333333333" {
+		t.Fatalf("expected the recorded head, got %s", got)
+	}
+	for _, call := range r.calls {
+		if strings.HasPrefix(call, "jj") {
+			t.Fatalf("asked jj for a commit the review already knew: %q", call)
+		}
+	}
+
+	// No local repo to ask: GitHub's head is the last resort, so a review with no
+	// workspace can still publish.
+	r = &commitRunner{jjErr: "not a repo", prView: `{"headRefOid":"` + remote + `"}`}
+	got, err = reviewedCommit(r, github.New(r), review.Review{Repo: "/repo"}, 7)
+	if err != nil {
+		t.Fatalf("reviewedCommit: %v", err)
+	}
+	if got != remote {
+		t.Fatalf("expected the remote head as the fallback, got %s", got)
 	}
 }

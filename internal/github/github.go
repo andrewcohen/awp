@@ -136,7 +136,7 @@ func (s PRSummary) LabelNames() []string { return labelNames(s.Labels) }
 
 func (c *Client) ListPRs() ([]PRSummary, error) {
 	out, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "pr", "list",
 		"--json", "number,title,headRefName,author,isDraft,labels",
 		"--limit", "100",
@@ -742,7 +742,7 @@ func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
 
 func (c *Client) FetchPR(num int) (PRInfo, error) {
 	out, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "pr", "view", strconv.Itoa(num),
 		"--json", "number,headRefName,baseRefName,headRefOid,baseRefOid,title,body,url,headRepository,headRepositoryOwner,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,labels",
 	)
@@ -807,7 +807,7 @@ func (c *Client) FetchPRComments(num int) ([]PRComment, error) {
 	var out []PRComment
 
 	viewRaw, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "pr", "view", strconv.Itoa(num),
 		"--json", "comments,reviews",
 	)
@@ -843,7 +843,7 @@ func (c *Client) FetchPRComments(num int) ([]PRComment, error) {
 	}
 
 	inlineRaw, err := c.runner.Run(
-		context.Background(), "",
+		context.Background(), c.dir,
 		"gh", "api", "--paginate",
 		fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/comments", num),
 	)

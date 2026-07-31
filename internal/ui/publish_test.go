@@ -25,7 +25,7 @@ func publishModel(t *testing.T, summary string, err error) (Model, *[]publishAsk
 		asked = append(asked, publishAsk{verdict: verdict, dry: dry})
 		// A dry run reports the plan; the real run reports what happened.
 		if dry {
-			return "2 call(s) to PR #7 (0 already published)\nPOST pulls/7/comments  a.go:1  (comment) - x", nil
+			return "2 call(s) to PR #7 (0 already published)\nPOST pulls/7/comments  a.go:1  commit=abc123def456  x", nil
 		}
 		return summary, err
 	}

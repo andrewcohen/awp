@@ -255,6 +255,27 @@ func (c *Client) WorkspaceRevision(name string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// ReviewedCommitID is the full git commit id of the newest *real* commit at dir —
+// `@-`, the parent of the working-copy commit.
+//
+// `@-` rather than `@` because the working-copy commit exists only locally: jj
+// creates one on top of whatever you check out, so its git id has never been
+// pushed and GitHub would refuse a review comment anchored to it. `@-` is the
+// commit the diff was read against and the one the branch actually points at.
+//
+// Full length, not short: this goes to GitHub as a commit_id, which wants the
+// whole thing.
+func (c *Client) ReviewedCommitID(dir string) (string, error) {
+	out, err := c.runner.Run(
+		context.Background(), dir,
+		"jj", "--ignore-working-copy", "log", "-r", "@-", "--no-graph", "-T", "commit_id",
+	)
+	if err != nil {
+		return "", formatCommandError("resolve the reviewed commit", err, out)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // HeadDescription returns the working-copy commit's short change-id and
 // first description line at dir, tab-separated in the underlying jj
 // call. --ignore-working-copy skips the snapshot pass so this is safe to
