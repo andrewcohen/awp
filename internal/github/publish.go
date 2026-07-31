@@ -64,6 +64,35 @@ func (c *Client) PRHeadSHA(num int) (string, error) {
 	return resp.HeadRefOid, nil
 }
 
+// PRCommits is the SHAs of every commit on a PR.
+//
+// Needed because a comment's commit_id has to be one of these. GitHub refuses a
+// commit that is not part of the pull request, and the local repository is full of
+// commits that look plausible and are not: a workspace's parent, trunk's tip, a
+// commit that was rebased away. Checking membership before posting turns "422 on
+// every comment" into a decision the publish path can make and report.
+func (c *Client) PRCommits(num int) ([]string, error) {
+	out, err := c.runner.Run(
+		context.Background(), c.dir,
+		"gh", "api", "--paginate",
+		fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/commits", num),
+		"--jq", ".[].sha",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh api pulls/%d/commits: %w: %s", num, err, out)
+	}
+	var shas []string
+	for _, line := range strings.Split(out, "\n") {
+		if sha := strings.TrimSpace(line); sha != "" {
+			shas = append(shas, sha)
+		}
+	}
+	if len(shas) == 0 {
+		return nil, fmt.Errorf("gh api pulls/%d/commits: no commits", num)
+	}
+	return shas, nil
+}
+
 // PostReviewComment posts a single inline comment and returns the thread ID it
 // created or replied to, so a re-publish can recognise it as already done.
 func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {

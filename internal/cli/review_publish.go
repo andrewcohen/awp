@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,7 +107,11 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		return err
 	}
 	pinned := 0
-	if cwd, cerr := os.Getwd(); cerr == nil {
+	// The command is run from the workspace under review, so the process's own
+	// directory is the one whose commit the comments were read against — no lookup
+	// needed, and correct even for a workspace awp does not know about.
+	cwd, cerr := os.Getwd()
+	if cerr == nil {
 		pinned = pinnedPRForPath(svc, cwd)
 	}
 	prNumber := resolvePublishPR(*prFlag, r.Target, pinned)
@@ -121,6 +126,7 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		Event:    event,
 		Verdict:  *verdict,
 		DryRun:   *dryRun,
+		Dir:      cwd,
 	}, out)
 }
 
@@ -141,6 +147,16 @@ type publishRequest struct {
 	Event   string
 	Verdict string
 	DryRun  bool
+	// Dir is the working directory of the thing under review — a jj workspace, not
+	// the source repo it belongs to. It is where the commit the reviewer read is
+	// resolved from, and the distinction is the whole point: a workspace has its own
+	// working copy, so the source repo's answer describes a different change
+	// entirely (see reviewedCommit).
+	Dir string
+	// HeadHint is the commit under review when the caller already knows it, which
+	// saves resolving Dir at all. The deck does: it reads every workspace's bookmark
+	// commit to compare against the PR's head, so the answer is already in hand.
+	HeadHint string
 }
 
 func publishReview(runner Runner, req publishRequest, out io.Writer) error {
@@ -170,11 +186,24 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// that cannot find it says so once rather than failing per comment.
 	head := ""
 	if len(inline) > 0 {
-		resolved, herr := reviewedCommit(runner, gh, r, prNumber)
+		resolved, note, herr := reviewedCommit(runner, gh, req)
 		if herr != nil {
 			return herr
 		}
 		head = resolved
+		if note != "" {
+			_, _ = fmt.Fprintln(out, "note: "+note)
+		}
+		// Remembered so every later run — a retry, a reply into one of these threads —
+		// anchors to the same commit rather than re-deriving it from a workspace that
+		// has moved on. Best-effort: failing to record it must not stop the publish.
+		// Not on a dry run: a preview that edits the review is not a preview.
+		if r.ObservedHead != head && !req.DryRun {
+			r.ObservedHead = head
+			if serr := store.Save(r); serr != nil {
+				_, _ = fmt.Fprintf(out, "note: couldn't record the reviewed commit: %v\n", serr)
+			}
+		}
 	}
 
 	if req.DryRun {
@@ -319,37 +348,81 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 }
 
 // reviewedCommit is the commit a review's inline comments should be anchored to:
-// the one whose diff the reviewer actually read.
+// the one whose diff the reviewer actually read, provided GitHub agrees it belongs
+// to the PR.
 //
 // Order matters, and it is not "whatever GitHub says the head is now". A comment
 // carries line numbers, and line numbers only mean anything against the commit they
 // were read from — so anchoring them to a head that has moved since would attach
 // them to a diff nobody looked at. Newest-is-best is exactly wrong here.
 //
-//  1. What the review recorded when it started, if anything did.
-//  2. The local commit under review — `@-` in the review's own repo, which for a PR
-//     workspace is the branch head as fetched. This is the usual answer.
-//  3. The PR's current head from GitHub, as a last resort, so a review with no local
-//     workspace can still publish.
+//  1. What the review recorded the last time this resolved.
+//  2. The hint the caller already has. The deck knows the workspace's bookmark
+//     commit for every row it draws, so this costs no subprocess.
+//  3. `@-` in req.Dir — the *workspace* under review. Not the repo root: a jj
+//     workspace has its own working copy, so asking the source repo returns
+//     whatever the user happens to have checked out there. That bug anchored a
+//     PR review to a trunk commit and GitHub refused all of it.
+//  4. The PR's current head, so a review with no local workspace can still publish.
+//
+// Whatever comes out is then checked against the PR's own commit list, because
+// GitHub rejects a commit that is not part of the pull request and there is no
+// shortage of local commits that look right. A candidate that is not on the PR
+// falls back to its head, and says so — the comments may land on lines that have
+// moved, which is worth a sentence rather than a silent substitution.
 //
 // GitHub marks a comment against an older commit as outdated, which is the honest
 // outcome: the remark was written against that code.
-func reviewedCommit(runner Runner, gh *github.Client, r review.Review, prNumber int) (string, error) {
-	if recorded := strings.TrimSpace(r.ObservedHead); recorded != "" {
-		return recorded, nil
+func reviewedCommit(runner Runner, gh *github.Client, req publishRequest) (sha, note string, err error) {
+	onPR, listErr := gh.PRCommits(req.PR)
+	// offered counts candidates we actually had, which is what decides whether
+	// falling back to the head is a substitution worth reporting or simply the answer.
+	offered := 0
+	accept := func(candidate string) (string, bool) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return "", false
+		}
+		offered++
+		// Without the PR's commit list there is nothing to check against. Trust the
+		// candidate rather than refusing to publish: an unreachable API is not evidence
+		// against a commit that is probably right.
+		return candidate, listErr != nil || slices.Contains(onPR, candidate)
 	}
-	if repo := strings.TrimSpace(r.Repo); repo != "" {
-		if local, err := jj.New(runnerOrExec(runner)).ReviewedCommitID(repo); err == nil {
-			if local = strings.TrimSpace(local); local != "" {
-				return local, nil
+
+	// The two the caller already has, before anything that starts a subprocess.
+	for _, cheap := range []string{req.Review.ObservedHead, req.HeadHint} {
+		if got, ok := accept(cheap); ok {
+			return got, "", nil
+		}
+	}
+	if dir := strings.TrimSpace(req.Dir); dir != "" {
+		if local, lerr := jj.New(runnerOrExec(runner)).ReviewedCommitID(dir); lerr == nil {
+			if got, ok := accept(local); ok {
+				return got, "", nil
 			}
 		}
 	}
-	remote, err := gh.PRHeadSHA(prNumber)
-	if err != nil {
-		return "", fmt.Errorf("resolving the commit to anchor comments to (PR #%d): %w", prNumber, err)
+
+	if listErr != nil {
+		return "", "", fmt.Errorf("resolving the commit to anchor comments to (PR #%d): %w", req.PR, listErr)
 	}
-	return remote, nil
+	// Asked for rather than read off the end of the list above: that endpoint stops
+	// at 250 commits, so on a long PR its tail is not the head.
+	head, err := gh.PRHeadSHA(req.PR)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving the commit to anchor comments to (PR #%d): %w", req.PR, err)
+	}
+	if offered == 0 {
+		// Nothing local to compare against — a review with no workspace. The head is
+		// the answer rather than a fallback from a better one, so there is nothing to
+		// warn about.
+		return head, "", nil
+	}
+	return head, fmt.Sprintf(
+		"the commit under review isn't on PR #%d, so comments are anchored to its head %s; lines that moved since may land in the wrong place",
+		req.PR, shortSHA(head),
+	), nil
 }
 
 // shortSHA is a commit as a reader recognises it. Full length in a preview line
