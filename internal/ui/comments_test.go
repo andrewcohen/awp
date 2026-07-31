@@ -1499,3 +1499,114 @@ func TestDeletingAReplyKeepsTheConversation(t *testing.T) {
 		t.Fatalf("expected no cascade reported for a leaf reply, got %q", m.status)
 	}
 }
+
+// Editing is literally inline: the box takes the comment's place. Rendering the
+// saved text above a box holding the same words reads as a stale copy of the
+// thing you are changing.
+func TestEditingReplacesTheCommentInTheStream(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.UpdateComment = func(review.Comment) error { return nil }
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "the original body")})
+
+	before := rowsOfKind(m, rowComment)
+	if before == 0 {
+		t.Fatal("fixture is wrong: the comment should be placed")
+	}
+	m.cursorRow = firstRowOfComment(m, "c1")
+	m = press(m, "i")
+	if !m.editing {
+		t.Fatal("expected i to open the editor")
+	}
+	if got := rowsOfKind(m, rowComment); got != 0 {
+		t.Fatalf("the comment under edit still occupies %d rows next to the box", got)
+	}
+	if got := rowsOfKind(m, rowEditor); got != commentEditorRows {
+		t.Fatalf("expected %d editor rows, got %d", commentEditorRows, got)
+	}
+	// And its text is nowhere in the diff pane, only inside the box.
+	body := m.renderStreamPanel(120, 12)
+	if strings.Count(body, "the original body") > 1 {
+		t.Fatalf("the body appears more than once while editing:\n%s", body)
+	}
+
+	// Cancel restores it — the box is a view over the comment, not a deletion.
+	m = press(m, "esc")
+	if m.editing {
+		t.Fatal("expected esc to close the editor")
+	}
+	if got := rowsOfKind(m, rowComment); got != before {
+		t.Fatalf("expected the comment's %d rows back after cancel, got %d", before, got)
+	}
+}
+
+// A reply is appended, not substituted: the exchange it answers has to stay
+// readable while you write the answer.
+func TestReplyingKeepsTheCommentVisible(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.ReplyComment = func(string, review.Comment) error { return nil }
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "the original body")})
+
+	before := rowsOfKind(m, rowComment)
+	m.cursorRow = firstRowOfComment(m, "c1")
+	m = press(m, "c")
+	if !m.editing || m.editor.replyTo != "c1" {
+		t.Fatalf("expected c on a comment to open a reply, editing=%v replyTo=%q", m.editing, m.editor.replyTo)
+	}
+	if got := rowsOfKind(m, rowComment); got != before {
+		t.Fatalf("expected the comment being replied to to stay, got %d of %d rows", got, before)
+	}
+}
+
+// Only the edited comment goes; the rest of its conversation stays put.
+func TestEditingAReplyLeavesItsParentPlaced(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.UpdateComment = func(review.Comment) error { return nil }
+	parent := commentOn("a.go", 1, "alpha", "parent body")
+	reply := review.Comment{
+		ID: "r1", Author: review.AuthorHuman, Body: "reply body", State: review.Open,
+		ReplyTo: parent.ID, Anchor: parent.Anchor,
+	}
+	m.SetComments([]review.Comment{parent, reply})
+
+	parentRows := rowsOfCommentInModel(m, parent.ID)
+	m.cursorRow = firstRowOfComment(m, reply.ID)
+	m = press(m, "i")
+	if !m.editing || m.editor.editing != reply.ID {
+		t.Fatalf("expected the reply open for editing, got editing=%q", m.editor.editing)
+	}
+	if got := rowsOfCommentInModel(m, reply.ID); got != 0 {
+		t.Fatalf("expected the reply replaced by the box, got %d rows", got)
+	}
+	if got := rowsOfCommentInModel(m, parent.ID); got != parentRows {
+		t.Fatalf("expected the parent's %d rows untouched, got %d", parentRows, got)
+	}
+}
+
+// The left-column index is built before the box is spliced in, so a comment must
+// not drop out of it while being edited — the entry is how you navigate back.
+func TestEditingKeepsTheCommentInTheIndex(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.UpdateComment = func(review.Comment) error { return nil }
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "the original body")})
+
+	m.cursorRow = firstRowOfComment(m, "c1")
+	m = press(m, "i")
+	found := false
+	for _, e := range m.commentIndex {
+		if e.id == "c1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the comment left the index while being edited: %+v", m.commentIndex)
+	}
+}
+
+// rowsOfCommentInModel counts the display rows one comment occupies.
+func rowsOfCommentInModel(m Model, id string) int {
+	first, last := rowsOfComment(m.stream, id)
+	if first < 0 {
+		return 0
+	}
+	return last - first + 1
+}

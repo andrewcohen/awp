@@ -180,8 +180,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	return out
 }
 
-// withEditor splices the compose box into the stream as `rows` display lines
-// directly beneath row `at`.
+// withEditor splices the compose box into the stream as `rows` display lines.
 //
 // The box is part of the geometry rather than an overlay or a docked panel, so
 // it appears where the remark will: under the line, or at the foot of the thread
@@ -189,28 +188,48 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 // over the stream — hides the code being commented on, which is the one thing
 // that has to stay visible while writing about it.
 //
+// `replacing`, when it names a comment, is that comment being revised: the box
+// takes over its rows instead of landing beneath them. Appending would render the
+// saved text directly above a box holding the same words, which reads as a stale
+// duplicate of the thing you are in the middle of changing. A new comment and a
+// reply have nothing to stand in for, so they go under row `at`.
+//
 // Its height must be a constant (commentEditorRows), because geometry runs before
 // anything is rendered. commentEditor.view guarantees that by truncating rather
 // than wrapping its header and hint.
-func withEditor(idx streamIndex, at, rows int) streamIndex {
+func withEditor(idx streamIndex, at, rows int, replacing string) streamIndex {
 	if rows <= 0 || at < 0 || at >= len(idx.rows) {
 		return idx
 	}
+	editorRows := func(under rowRef) []rowRef {
+		out := make([]rowRef, 0, rows)
+		for line := 0; line < rows; line++ {
+			// The box inherits the row's file so the file list keeps pointing at
+			// the file being commented on.
+			out = append(out, rowRef{
+				kind: rowEditor, file: under.file, hunk: -1, line: -1,
+				comment: -1, commentLine: line,
+			})
+		}
+		return out
+	}
+	dropFirst, dropLast := rowsOfComment(idx, replacing)
 	out := make([]rowRef, 0, len(idx.rows)+rows)
 	shift := make([]int, len(idx.rows))
 	for i, r := range idx.rows {
 		shift[i] = len(out)
-		out = append(out, r)
-		if i != at {
+		if dropFirst >= 0 && i >= dropFirst && i <= dropLast {
+			// Dropped — the box stands in for these. It goes in at the first of
+			// them, so it opens where the comment was rather than wherever the
+			// cursor happens to be.
+			if i == dropFirst {
+				out = append(out, editorRows(r)...)
+			}
 			continue
 		}
-		for line := 0; line < rows; line++ {
-			// The box inherits the anchor row's file so the file list keeps
-			// pointing at the file being commented on.
-			out = append(out, rowRef{
-				kind: rowEditor, file: r.file, hunk: -1, line: -1,
-				comment: -1, commentLine: line,
-			})
+		out = append(out, r)
+		if i == at && dropFirst < 0 {
+			out = append(out, editorRows(r)...)
 		}
 	}
 	res := idx
@@ -218,6 +237,29 @@ func withEditor(idx streamIndex, at, rows int) streamIndex {
 	res.fileStart = remap(idx.fileStart, shift)
 	res.hunkStart = remap(idx.hunkStart, shift)
 	return res
+}
+
+// rowsOfComment is the span of display rows one comment occupies, or (-1, -1)
+// when it has none — an unplaceable anchor, or an id that is not in the stream.
+// A comment's rows are contiguous: withComments emits them as one run.
+func rowsOfComment(idx streamIndex, id string) (first, last int) {
+	first, last = -1, -1
+	if id == "" {
+		return first, last
+	}
+	for i, r := range idx.rows {
+		if r.kind != rowComment && r.kind != rowOrphan {
+			continue
+		}
+		if r.comment < 0 || r.comment >= len(idx.comments) || idx.comments[r.comment].ID != id {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		last = i
+	}
+	return first, last
 }
 
 func remap(offsets []int, shift []int) []int {
