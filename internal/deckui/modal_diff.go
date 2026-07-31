@@ -157,6 +157,10 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 		if threads, err := comments.LoadThreads(item); err == nil && len(threads) > 0 {
 			inner.SetThreads(threads)
 		}
+		// And on every refresh tick, the same as comments: the mirror is
+		// maintained by the pr-status job, so a reviewer's comment arrives while
+		// the diff is open rather than only on the next open.
+		inner.LoadThreads = func() ([]review.Thread, error) { return comments.LoadThreads(item) }
 	}
 	if comments.Load != nil {
 		// Best-effort: a review that cannot be read should still open as a

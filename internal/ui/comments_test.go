@@ -1701,3 +1701,111 @@ func TestReviewingEveryFileLeavesTheCursorValid(t *testing.T) {
 		t.Fatal("expected the cursor on screen")
 	}
 }
+
+// ---- live thread reload ----
+
+// The mirror is refreshed out of process (the pr-status job), so a reviewer's
+// comment lands in the store while the diff is open. It has to show up there and
+// then, the same as an agent's reply does.
+func TestThreadsReloadOnTheRefreshTick(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	mirror := []review.Thread{remoteThread("T1", "a.go", 1, false, "first pass")}
+	m.SetThreads(mirror)
+	m.LoadThreads = func() ([]review.Thread, error) { return mirror, nil }
+
+	mirror = append(mirror, remoteThread("T2", "a.go", 2, false, "and this one too"))
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+
+	if len(m.threads) != 2 {
+		t.Fatalf("expected the new thread picked up on the tick, got %d", len(m.threads))
+	}
+	if view := stripANSI(m.renderStreamPanel(80, 16)); !strings.Contains(view, "and this one too") {
+		t.Fatalf("expected the new thread visible after the tick:\n%s", view)
+	}
+}
+
+// The tick fires every couple of seconds; an unchanged mirror must cost nothing.
+func TestUnchangedThreadReloadLeavesTheViewAlone(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "a", "b", "c", "d", "e"))
+	mirror := []review.Thread{remoteThread("T1", "a.go", 1, false, "note")}
+	m.SetThreads(mirror)
+	// A fresh slice with equal content each time, the way a store read gives it:
+	// sameThreads has to compare by value, not by identity.
+	m.LoadThreads = func() ([]review.Thread, error) {
+		return []review.Thread{remoteThread("T1", "a.go", 1, false, "note")}, nil
+	}
+	m = pressTimes(m, "j", 3)
+	cursor, scroll := m.cursorRow, m.streamScroll
+
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+	if m.cursorRow != cursor || m.streamScroll != scroll {
+		t.Fatalf("unchanged reload moved the view: cursor %d→%d scroll %d→%d",
+			cursor, m.cursorRow, scroll, m.streamScroll)
+	}
+}
+
+// A read failure keeps the conversation on screen. Blanking it would turn a
+// transient failure into "the reviewers said nothing".
+func TestThreadReloadFailureKeepsTheMirror(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 1, false, "keep me")})
+	m.LoadThreads = func() ([]review.Thread, error) { return nil, errors.New("gone") }
+
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+	if len(m.threads) != 1 {
+		t.Fatalf("expected the mirror kept on a read failure, got %d", len(m.threads))
+	}
+	if m.statusErr {
+		t.Fatal("expected a background read failure not to raise an error status")
+	}
+}
+
+// Resolution moves too: a thread someone resolves on GitHub leaves the diff on
+// the next tick under the default unresolved-only visibility.
+func TestThreadResolvedUpstreamLeavesTheDiffOnTheTick(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 1, false, "please fix")})
+	if view := stripANSI(m.renderStreamPanel(80, 14)); !strings.Contains(view, "please fix") {
+		t.Fatalf("fixture is wrong: the thread should start visible:\n%s", view)
+	}
+	m.LoadThreads = func() ([]review.Thread, error) {
+		return []review.Thread{remoteThread("T1", "a.go", 1, true, "please fix")}, nil
+	}
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+	if !m.threads[0].Resolved {
+		t.Fatal("expected the resolved state picked up")
+	}
+	if view := stripANSI(m.renderStreamPanel(80, 14)); strings.Contains(view, "please fix") {
+		t.Fatalf("expected the resolved thread hidden:\n%s", view)
+	}
+}
+
+// Picking up a thread must not scroll the reader away from the line they were on.
+func TestThreadReloadKeepsTheReadingPosition(t *testing.T) {
+	lines := make([]string, 0, 30)
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "line"+strconv.Itoa(i))
+	}
+	m := commentModel(t, fileWith("a.go", 1, lines...))
+	m = pressTimes(m, "j", 20)
+	before := cursorText(m)
+	offset := m.cursorRow - m.streamScroll
+
+	// A thread lands near the top, shifting every row below it.
+	m.LoadThreads = func() ([]review.Thread, error) {
+		return []review.Thread{remoteThread("T1", "a.go", 2, false, "up here")}, nil
+	}
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+
+	if got := cursorText(m); got != before {
+		t.Fatalf("expected the cursor to stay on %q, got %q", before, got)
+	}
+	if got := m.cursorRow - m.streamScroll; got != offset {
+		t.Fatalf("expected the screen position preserved, %d → %d", offset, got)
+	}
+}
