@@ -396,8 +396,8 @@ func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) decku
 // deck runs in the source repo, so resolving it the way the command does would
 // find the wrong review — or none. Everything after that is the command's own
 // code, so a publish from the viewer and a publish from a shell cannot drift.
-func publishReviewFor(runner Runner) func(deckui.Item, string) (string, error) {
-	return func(item deckui.Item, verdict string) (string, error) {
+func publishReviewFor(runner Runner) func(deckui.Item, string, bool) (string, error) {
+	return func(item deckui.Item, verdict string, dryRun bool) (string, error) {
 		event, err := parseVerdict(verdict)
 		if err != nil {
 			return "", err
@@ -425,23 +425,14 @@ func publishReviewFor(runner Runner) func(deckui.Item, string) (string, error) {
 			PR:       item.PRNumber,
 			Event:    event,
 			Verdict:  verdict,
+			DryRun:   dryRun,
 		}, &buf)
 		// The report is worth having even when part of the run failed — it says what
-		// did land, which is exactly what a reviewer needs in order to retry.
-		return publishStatusLine(buf.String()), perr
+		// did land, which is exactly what a reviewer needs in order to retry. Handed
+		// back whole (not squashed) so the viewer can show the plan a line per call;
+		// the footer does its own squashing.
+		return buf.String(), perr
 	}
-}
-
-// publishStatusLine squashes the publish report into one line for the viewer's
-// status bar, which has one row to say it in.
-func publishStatusLine(report string) string {
-	var parts []string
-	for _, line := range strings.Split(report, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			parts = append(parts, line)
-		}
-	}
-	return strings.Join(parts, " · ")
 }
 
 // reviewStoreWithSend is the full store seam: load, save, and hand to the agent.

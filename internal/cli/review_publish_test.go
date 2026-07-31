@@ -234,15 +234,49 @@ func TestVerdictNeedingASummaryIsCaughtBeforePosting(t *testing.T) {
 	}
 }
 
-// The status bar has one row, so the publish report is squashed onto it — every
-// line kept, since the part that says what failed is the part worth reading.
-func TestPublishStatusLineKeepsEveryLine(t *testing.T) {
-	got := publishStatusLine("posted 2, skipped 1, failed 1\n\nsubmitted the review as approve\n")
-	want := "posted 2, skipped 1, failed 1 · submitted the review as approve"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
+// The plan is what the reviewer authorises, so it names the calls rather than
+// summarising them: an endpoint and a target either look right or they do not,
+// which is the only diagnostic there is when a publish appears to do nothing.
+func TestPublishPlanNamesTheCalls(t *testing.T) {
+	inline := []review.Comment{
+		{ID: "c1", Author: review.AuthorHuman, Body: "a line remark", Kind: review.KindSuggestion,
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 12, EndLineHint: 18}},
+		{ID: "c2", Author: review.AuthorHuman, Body: "answering you", ReplyTo: "PRRC_x",
+			Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 	}
-	if publishStatusLine("") != "" {
-		t.Fatal("expected nothing from an empty report")
+	changeWide := []review.Comment{{ID: "c3", Author: review.AuthorHuman, Body: "scope was internal/cli"}}
+
+	// With a verdict: the remarks are the review body, and the verdict is its own
+	// call — counted as one of the things about to happen, not a footnote.
+	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2)
+	joined := strings.Join(plan, "\n")
+	for _, want := range []string{
+		"3 call(s) to PR #54 (2 already published)",
+		"POST pulls/54/comments  a.go:12-18",
+		"in_reply_to=PRRC_x",
+		"POST pulls/54/reviews  event=APPROVE",
+		"scope was internal/cli",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("the plan does not mention %q:\n%s", want, joined)
+		}
+	}
+	// A reply has no path or line to send, so it must not claim one.
+	for _, line := range plan {
+		if strings.Contains(line, "in_reply_to") && strings.Contains(line, "a.go:3") {
+			t.Fatalf("a reply's plan line carries an anchor it will not send: %q", line)
+		}
+	}
+
+	// Without a verdict: no review submission, and the remarks go up as PR comments
+	// on a different endpoint — the plan has to say so, or it describes a run that
+	// is not the one about to happen.
+	plan = publishPlan(publishRequest{PR: 54}, inline, changeWide, 0)
+	joined = strings.Join(plan, "\n")
+	if strings.Contains(joined, "/reviews") {
+		t.Fatalf("a verdictless plan claims a review submission:\n%s", joined)
+	}
+	if !strings.Contains(joined, "POST issues/54/comments") {
+		t.Fatalf("expected the PR-comment endpoint for review-level remarks:\n%s", joined)
 	}
 }
