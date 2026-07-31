@@ -79,25 +79,45 @@ func TestPostReviewCommentSurfacesFailures(t *testing.T) {
 	}
 }
 
-func TestPostReviewSummaryRejectsEmptyBody(t *testing.T) {
+func TestPostPRCommentRejectsEmptyBody(t *testing.T) {
 	r := &threadRunner{}
-	if err := New(r).PostReviewSummary(9, "  "); err == nil {
-		t.Fatal("expected an empty summary to be rejected")
+	if _, err := New(r).PostPRComment(9, "  "); err == nil {
+		t.Fatal("expected an empty comment to be rejected")
 	}
 	if len(r.calls) != 0 {
-		t.Fatal("expected no gh call for an empty summary")
+		t.Fatal("expected no gh call for an empty comment")
 	}
 }
 
-func TestPostReviewSummaryPosts(t *testing.T) {
-	r := &threadRunner{outs: []string{"ok"}}
-	if err := New(r).PostReviewSummary(9, "reviewed internal/cli"); err != nil {
-		t.Fatalf("summary: %v", err)
+// A PR-level comment posts to the issues endpoint — that is what GitHub calls a
+// comment on the PR itself — and returns its id, so a re-publish can tell it
+// already landed.
+func TestPostPRCommentPostsAndReturnsAnID(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, `{"id":88,"node_id":"IC_kwDO88"}`}}
+	id, err := New(r).PostPRComment(9, "reviewed internal/cli")
+	if err != nil {
+		t.Fatalf("pr comment: %v", err)
 	}
-	joined := strings.Join(r.calls[0], " ")
-	for _, want := range []string{"pr", "comment", "9", "reviewed internal/cli"} {
+	if id != "IC_kwDO88" {
+		t.Fatalf("expected the node id recorded, got %q", id)
+	}
+	joined := strings.Join(r.calls[1], " ")
+	for _, want := range []string{"api", "POST", "issues/9/comments", "reviewed internal/cli"} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("summary call missing %q, got %q", want, joined)
+			t.Fatalf("pr comment call missing %q, got %q", want, joined)
 		}
+	}
+}
+
+// An unreadable response body means the comment posted but its id is unknown.
+// Reporting that as an error would invite a retry that double-posts.
+func TestPostPRCommentTreatsAnUnreadableIDAsSuccess(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, "not json"}}
+	id, err := New(r).PostPRComment(9, "body")
+	if err != nil {
+		t.Fatalf("expected success with an unknown id, got %v", err)
+	}
+	if id != "" {
+		t.Fatalf("expected no id, got %q", id)
 	}
 }

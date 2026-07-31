@@ -50,14 +50,14 @@ func resolvePublishPR(flagPR int, target review.Target, pinned int) int {
 	return pinned
 }
 
-// partitionForPublish sorts a review's comments into the ones to post now, a
-// count already on GitHub (or empty, which there is nothing to post), and a count
-// held back for having no line to attach to.
+// partitionForPublish sorts a review's comments into the ones to post inline, the
+// ones to post on the PR itself, and a count already on GitHub (or empty, which
+// there is nothing to post).
 //
 // Its own function so the rules are testable without a GitHub round-trip: what
 // gets reposted is the one thing here that must never be wrong.
-func partitionForPublish(comments []review.Comment) (pending []review.Comment, skipped, unanchored int) {
-	pending = make([]review.Comment, 0, len(comments))
+func partitionForPublish(comments []review.Comment) (inline, changeWide []review.Comment, skipped int) {
+	inline = make([]review.Comment, 0, len(comments))
 	for _, c := range comments {
 		// Already on GitHub: skip rather than repost. This is what makes a retry
 		// after a partial failure safe.
@@ -69,16 +69,17 @@ func partitionForPublish(comments []review.Comment) (pending []review.Comment, s
 			skipped++
 			continue
 		}
-		// A review-level remark has no line to hang a review comment on. Held back
-		// explicitly rather than sent with an empty path, which GitHub rejects and
-		// which would report as a failure the user cannot act on.
+		// A remark about the change as a whole has no line to hang a review
+		// comment on, so it goes up as a comment on the PR instead. Sending it
+		// inline with an empty path is what GitHub rejects, and reporting that as
+		// a failure gave the user nothing to act on.
 		if strings.TrimSpace(c.Anchor.Path) == "" {
-			unanchored++
+			changeWide = append(changeWide, c)
 			continue
 		}
-		pending = append(pending, c)
+		inline = append(inline, c)
 	}
-	return pending, skipped, unanchored
+	return inline, changeWide, skipped
 }
 
 // runReviewPublish implements `awp review publish`.
@@ -107,21 +108,24 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		return errors.New("review publish: this workspace isn't pinned to a PR; pass --pr")
 	}
 
-	pending, skipped, unanchored := partitionForPublish(comments)
-	if unanchored > 0 {
-		_, _ = fmt.Fprintf(out, "holding back %d review-level comment(s): no line to attach them to\n", unanchored)
-	}
+	inline, changeWide, skipped := partitionForPublish(comments)
 
 	if *dryRun {
-		_, _ = fmt.Fprintf(out, "would post %d comment(s) to PR #%d (%d already published)\n", len(pending), prNumber, skipped)
-		for _, c := range pending {
+		total := len(inline) + len(changeWide)
+		_, _ = fmt.Fprintf(out, "would post %d comment(s) to PR #%d (%d already published)\n", total, prNumber, skipped)
+		for _, c := range inline {
 			// The composed body, not the stored one: a dry run is only useful if it
 			// shows what will actually land on GitHub, prefixes included.
 			_, _ = fmt.Fprintf(out, "  %s:%d\t%s\n", c.Anchor.Path, c.Anchor.LineHint, oneLine(c.PublishBody()))
 		}
+		for _, c := range changeWide {
+			// Named as what it will be, so a dry run does not imply these are
+			// going somewhere in the diff.
+			_, _ = fmt.Fprintf(out, "  on the PR\t%s\n", oneLine(c.PublishBody()))
+		}
 		return nil
 	}
-	if len(pending) == 0 {
+	if len(inline) == 0 && len(changeWide) == 0 {
 		_, _ = fmt.Fprintf(out, "nothing to publish (%d already published)\n", skipped)
 		return nil
 	}
@@ -130,10 +134,24 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		runner = NewExecRunner()
 	}
 	gh := github.New(runner)
-	head := r.ObservedHead
 	res := publishResult{Skipped: skipped}
 	var failures []error
-	for _, c := range pending {
+
+	// record marks a comment published and writes it back immediately, per
+	// comment. Batching these updates until the end would mean a crash mid-run
+	// leaves posted comments looking unpublished, and the next retry would
+	// duplicate them on GitHub.
+	record := func(c review.Comment, threadID, where string) {
+		c.State = review.Published
+		c.Publish = &review.PublishRecord{ThreadID: threadID, At: time.Now()}
+		if uerr := store.UpdateComment(r, c); uerr != nil {
+			failures = append(failures, fmt.Errorf("%s posted but not recorded: %w", where, uerr))
+		}
+		res.Posted++
+	}
+
+	for _, c := range inline {
+		where := fmt.Sprintf("%s:%d", c.Anchor.Path, c.Anchor.LineHint)
 		threadID, perr := gh.PostReviewComment(prNumber, github.NewComment{
 			Path: c.Anchor.Path,
 			Line: c.Anchor.LineHint,
@@ -142,24 +160,30 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 			// the stored body is what the author typed, so baking prefixes in
 			// would double them on a re-publish.
 			Body:      c.PublishBody(),
-			CommitID:  head,
+			CommitID:  r.ObservedHead,
 			InReplyTo: c.ReplyTo,
 		})
 		if perr != nil {
 			res.Failed++
-			failures = append(failures, fmt.Errorf("%s:%d: %w", c.Anchor.Path, c.Anchor.LineHint, perr))
+			failures = append(failures, fmt.Errorf("%s: %w", where, perr))
 			continue
 		}
-		// Record immediately, per comment. Batching these updates until the end
-		// would mean a crash mid-run leaves posted comments looking unpublished,
-		// and the next retry would duplicate them on GitHub.
-		c.State = review.Published
-		c.Publish = &review.PublishRecord{ThreadID: threadID, At: time.Now()}
-		if uerr := store.UpdateComment(r, c); uerr != nil {
-			failures = append(failures, fmt.Errorf("%s:%d posted but not recorded: %w", c.Anchor.Path, c.Anchor.LineHint, uerr))
-		}
-		res.Posted++
+		record(c, threadID, where)
 	}
+
+	// Review-level remarks go up as comments on the PR itself. Posted after the
+	// inline ones so a closing summary lands under the specifics it refers to,
+	// which is the order a reader of the PR encounters them in.
+	for _, c := range changeWide {
+		id, perr := gh.PostPRComment(prNumber, c.PublishBody())
+		if perr != nil {
+			res.Failed++
+			failures = append(failures, fmt.Errorf("on the PR: %w", perr))
+			continue
+		}
+		record(c, id, "on the PR")
+	}
+
 	_, _ = fmt.Fprintf(out, "posted %d, skipped %d, failed %d\n", res.Posted, res.Skipped, res.Failed)
 	if len(failures) > 0 {
 		// Report every failure rather than the first: a run that posted 6 of 8

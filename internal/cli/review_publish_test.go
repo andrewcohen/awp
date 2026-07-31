@@ -121,22 +121,38 @@ func TestWorkspaceAndSourceRepoShareOneReviewStore(t *testing.T) {
 	}
 }
 
-// A review-level remark has no line for a review comment to hang on, so publish
-// holds it back and says so rather than sending an empty path GitHub will reject.
-func TestPublishHoldsBackReviewLevelComments(t *testing.T) {
-	pending, skipped, unanchored := partitionForPublish([]review.Comment{
+// A review-level remark has no line for a review comment to hang on, so it goes
+// up as a comment on the PR itself rather than inline — sorted into its own group
+// here, since the two take different API calls.
+func TestPublishSortsReviewLevelCommentsOntoThePR(t *testing.T) {
+	inline, changeWide, skipped := partitionForPublish([]review.Comment{
 		{ID: "a", Body: "on a line", Anchor: review.Anchor{Path: "a.go", LineHint: 3, Side: review.SideNew}},
 		{ID: "b", Body: "about the change as a whole"},
 		{ID: "c", Body: "already up", State: review.Published, Anchor: review.Anchor{Path: "b.go", LineHint: 1}},
 		{ID: "d", Body: "   ", Anchor: review.Anchor{Path: "c.go", LineHint: 2}},
 	})
-	if len(pending) != 1 || pending[0].ID != "a" {
-		t.Fatalf("expected only the anchored comment pending, got %+v", pending)
+	if len(inline) != 1 || inline[0].ID != "a" {
+		t.Fatalf("expected only the anchored comment inline, got %+v", inline)
 	}
-	if unanchored != 1 {
-		t.Fatalf("expected 1 held back, got %d", unanchored)
+	if len(changeWide) != 1 || changeWide[0].ID != "b" {
+		t.Fatalf("expected the review-level remark bound for the PR, got %+v", changeWide)
 	}
 	if skipped != 2 {
 		t.Fatalf("expected the published and the empty one skipped, got %d", skipped)
+	}
+}
+
+// A published review-level comment must not be reposted, the same way an inline
+// one is not: the record is what makes a retry after a partial failure safe.
+func TestPublishSkipsAlreadyPostedReviewLevelComments(t *testing.T) {
+	inline, changeWide, skipped := partitionForPublish([]review.Comment{
+		{ID: "a", Body: "summary", Publish: &review.PublishRecord{ThreadID: "IC_1"}},
+		{ID: "b", Body: "another summary", State: review.Published},
+	})
+	if len(inline) != 0 || len(changeWide) != 0 {
+		t.Fatalf("expected nothing to post, got inline=%+v changeWide=%+v", inline, changeWide)
+	}
+	if skipped != 2 {
+		t.Fatalf("expected both skipped, got %d", skipped)
 	}
 }

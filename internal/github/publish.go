@@ -82,18 +82,45 @@ func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
 	return "", nil
 }
 
-// PostReviewSummary adds a top-level review comment — the closing summary that
-// isn't anchored to any line.
-func (c *Client) PostReviewSummary(num int, body string) error {
+// PostPRComment adds a comment on the PR itself rather than on a line of it —
+// where a remark about the change as a whole belongs. Returns the comment's id,
+// for the same reason PostReviewComment does: a re-publish has to be able to
+// recognise what already landed.
+//
+// The REST endpoint rather than `gh pr comment`, which prints a URL and would
+// leave nothing to record. A PR-level comment is an issue comment as far as
+// GitHub's API is concerned, which is why the path says issues.
+func (c *Client) PostPRComment(num int, body string) (string, error) {
 	if strings.TrimSpace(body) == "" {
-		return fmt.Errorf("review summary is empty")
+		return "", fmt.Errorf("pr comment is empty")
 	}
+	owner, name, err := c.repoOwnerName()
+	if err != nil {
+		return "", err
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, name, num)
 	raw, err := c.runner.Run(
 		context.Background(), "",
-		"gh", "pr", "comment", strconv.Itoa(num), "--body", body,
+		"gh", "api", "--method", "POST", endpoint, "-f", "body="+body,
 	)
 	if err != nil {
-		return fmt.Errorf("gh pr comment on %d: %w: %s", num, err, raw)
+		return "", fmt.Errorf("gh api post pr comment on %d: %w: %s", num, err, raw)
 	}
-	return nil
+	var resp struct {
+		ID     int64  `json:"id"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		// Posted; only the identifier is unreadable. Same call as
+		// PostReviewComment makes — reporting an error would invite a retry that
+		// duplicates the comment.
+		return "", nil
+	}
+	if resp.NodeID != "" {
+		return resp.NodeID, nil
+	}
+	if resp.ID != 0 {
+		return strconv.FormatInt(resp.ID, 10), nil
+	}
+	return "", nil
 }
