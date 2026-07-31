@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -146,6 +147,10 @@ type Model struct {
 	LoadComments func() ([]review.Comment, error)
 	editing      bool
 	editor       commentEditor
+	// showHelp is the `?` key reference, drawn in place of the panes. helpVP
+	// scrolls it — there are more bindings than fit a short terminal.
+	showHelp bool
+	helpVP   viewport.Model
 	// ReviewedFiles maps a path to the content hash it had when marked
 	// reviewed, and MarkReviewed persists a change to that. Hash rather than a
 	// bare flag so a later edit resurfaces the file: marking something reviewed
@@ -177,7 +182,20 @@ func (m *Model) SetSize(width, bodyHeight int) {
 		// it taller than the geometry reserved.
 		m.editor.setWidth(m.hunkWidth)
 	}
+	if m.showHelp {
+		// Re-lay the reference for the new size. Its content is truncated to width,
+		// so a stale layout would either overflow the panel or leave it half empty.
+		m.resizeHelp()
+	}
 	m.rebuildStream()
+}
+
+// resizeHelp re-lays the `?` overlay for the current body size, keeping the
+// scroll position where the reader left it.
+func (m *Model) resizeHelp() {
+	at := m.helpVP.YOffset
+	m.helpVP = newHelpViewport(m.width, m.bodyHeight)
+	m.helpVP.SetYOffset(at)
 }
 
 // rebuildStream re-indexes the diff for the current width and wrap setting,
@@ -251,6 +269,12 @@ func (m Model) Status() (string, bool) { return m.status, m.statusErr }
 // the comment compose box. A host must not treat keys as its own bindings while
 // this is true; `q` and `esc` in particular belong to the input.
 func (m Model) Filtering() bool { return m.focus == FocusFilter || m.editing }
+
+// HelpVisible reports whether the `?` overlay is up. Like Filtering, it tells a
+// host to keep its hands off the keyboard: `esc` and `q` close the overlay, and a
+// host that grabbed them first would close the whole view instead — leaving no
+// way out of the help but out of the diff.
+func (m Model) HelpVisible() bool { return m.showHelp }
 
 type diffLoadedMsg struct {
 	files []diff.FileDiff
@@ -337,10 +361,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.restoreAnchor(anchor, screenOffset)
 		}
+		// No file count: the file list is headed "Files (n)", so spending footer
+		// width to say it again buys nothing. "no changes" stays, because an empty
+		// view otherwise looks like a failure to load.
+		m.status = ""
 		if len(m.filtered) == 0 {
 			m.status = "no changes"
-		} else {
-			m.status = fmt.Sprintf("%d file(s) changed", len(m.filtered))
 		}
 		m.statusErr = false
 		return m, scheduleRefresh(m.RefreshInterval)
@@ -380,6 +406,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditorKey(msg)
 	}
 	key := msg.String()
+	// The overlay owns the keyboard while it is up: nothing behind it is
+	// navigable, so forwarding keys would move a cursor nobody can see. Scroll
+	// keys go to its viewport instead.
+	if m.showHelp {
+		switch key {
+		case "?", "esc", "q", "enter":
+			m.showHelp = false
+			return m, nil
+		case "ctrl+c":
+			return m, tea.Quit
+		}
+		var cmd tea.Cmd
+		m.helpVP, cmd = m.helpVP.Update(msg)
+		return m, cmd
+	}
 	if m.focus == FocusFilter {
 		switch key {
 		case "ctrl+c":
@@ -403,6 +444,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "?":
+		m.showHelp = true
+		// Built on open rather than kept in sync: it is cheap, and it means the
+		// reference is always laid out for the size the terminal is now, and always
+		// opens at the top.
+		m.helpVP = newHelpViewport(m.width, m.bodyHeight)
+		return m, nil
 	case "r":
 		// `r` marked a manual refresh until live refresh made that redundant
 		// (phase 2). It now marks the file at the cursor reviewed, which is the
@@ -826,6 +874,11 @@ func (m Model) Body(width, height int) string {
 		return ""
 	}
 	height = max(minBodyHeight, height)
+	if m.showHelp {
+		// In place of the panes rather than over them, so the body keeps the exact
+		// height the host budgeted and the footer does not move.
+		return renderHelpOverlay(m.helpVP, width, height)
+	}
 	leftWidth, rightWidth := paneWidths(width)
 	// The compose box is a run of rows inside the stream (see withEditor), not a
 	// panel docked below it, so the body's size never changes while writing a
@@ -921,13 +974,14 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
-	hint := "j/k:scroll  c:comment  r:reviewed  {/}:hunk  g/G:ends  h/l/0/$:pan  tab:pane  e:$EDITOR  w:wrap  /:filter  q:quit"
-	if m.focus == FocusComments {
-		hint = "j/k:jump to comment  enter:into the diff  D:delete  tab:pane  q:quit"
-	}
+	// One affordance, not a legend. The full keymap lives behind `?` — see
+	// help.go for why it stopped being spelled out on every frame.
+	hint := "? help"
 	filterLine := strings.Repeat(" ", max(1, m.width))
 	if m.focus == FocusFilter {
-		hint = "type to filter — enter:confirm  esc:clear"
+		// The filter is the one mode worth spelling out: it is modal, and the keys
+		// that leave it are not the ones that work anywhere else.
+		hint = "enter:confirm  esc:clear"
 		filterLine = "  Filter files: " + m.filterInput.View()
 	}
 	statusStyle := styleStatus
