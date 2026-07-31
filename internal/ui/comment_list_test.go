@@ -443,7 +443,7 @@ func TestTheBandSpansThePaneWidth(t *testing.T) {
 	m.SetComments([]review.Comment{comment("c1", "a.go", 2, "beta", "short", review.AuthorHuman)})
 	inner := 30
 
-	file := bandRow(m.renderFileRow(m.filtered[0], inner-2, true, true), inner)
+	file := bandRow(m.renderFileRow(m.filtered[0], fileTreeRows(m.filtered)[0], inner-2, true, true), inner)
 	if got := lipgloss.Width(file); got != inner {
 		t.Fatalf("banded file row is %d cells, want %d", got, inner)
 	}
