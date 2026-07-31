@@ -159,6 +159,12 @@ func (e commentEditor) view(width int) string {
 	if lines := e.anchor.LineRange(); lines != "" {
 		head += ":" + lines
 	}
+	if strings.TrimSpace(e.anchor.Path) == "" {
+		// Nothing to name, so name the scope instead. "comment on" trailing off into
+		// blank space read as a bug in the header rather than as a deliberate absence
+		// of a file.
+		head = verb + "the whole change"
+	}
 	// Border and header take the kind's hue, so tab's effect is visible
 	// immediately rather than only once the comment is saved.
 	headStyle := kindStyles(e.kind)

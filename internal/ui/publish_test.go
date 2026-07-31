@@ -38,6 +38,13 @@ func enter(m Model) Model {
 	return run(updated.(Model), cmd)
 }
 
+// preview drives the flow from the verdict menu to the plan: choose the verdict,
+// skip the summary. Neither step touches GitHub.
+func preview(m Model) Model { return enter(enter(m)) }
+
+// sendIt drives it all the way: choose, skip the summary, confirm the plan.
+func sendIt(m Model) Model { return enter(preview(m)) }
+
 // verdicts is what the seam was asked to publish for real, ignoring previews.
 func verdicts(asked []publishAsk) []string {
 	var out []string
@@ -91,8 +98,9 @@ func TestPublishSendsTheChosenVerdict(t *testing.T) {
 	} {
 		m, asked := publishModel(t, "posted 1", nil)
 		m = pressTimes(press(m, "P"), "j", tc.down)
-		// First enter previews, second sends. The verdict has to survive the step.
-		m = enter(enter(m))
+		// Choose, skip the summary, read the plan, send. The verdict has to survive
+		// every one of those steps.
+		m = sendIt(m)
 		if got := verdicts(*asked); len(got) != 1 || got[0] != tc.want {
 			t.Fatalf("%d down: expected verdict %q posted, got %v", tc.down, tc.want, *asked)
 		}
@@ -128,7 +136,7 @@ func TestPublishOffersToFinishWithNothingPending(t *testing.T) {
 	if got := m.publishPrompt(); !strings.Contains(got, "Nothing unpublished") {
 		t.Fatalf("expected the prompt to say so, got %q", got)
 	}
-	m = enter(enter(press(m, "P")))
+	m = sendIt(press(m, "P"))
 	if got := verdicts(*asked); len(got) != 1 || got[0] != "approve" {
 		t.Fatalf("expected an approval submitted anyway, got %v", *asked)
 	}
@@ -168,7 +176,7 @@ func TestPublishPromptOwnsTheKeyboard(t *testing.T) {
 // review did not land.
 func TestPublishReportsAFailure(t *testing.T) {
 	m, _ := publishModel(t, "posted 1, failed 1", errors.New("a.go:12: 422"))
-	m = enter(enter(press(m, "P")))
+	m = sendIt(press(m, "P"))
 	if !m.statusErr {
 		t.Fatalf("expected an error status, got %q", m.status)
 	}
@@ -202,7 +210,7 @@ func TestPublishUnavailableSaysSo(t *testing.T) {
 // comment is only marked published once GitHub has answered for it.
 func TestPublishRefusesASecondRunWhileOneIsInFlight(t *testing.T) {
 	m, asked := publishModel(t, "posted 1", nil)
-	m = enter(press(m, "P")) // preview
+	m = preview(press(m, "P"))
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if !m.publishBusy {
@@ -227,7 +235,9 @@ func TestPublishRefusesASecondRunWhileOneIsInFlight(t *testing.T) {
 // The keymap and the help are one surface: a key nobody can find is a key nobody
 // has.
 func TestPublishKeyIsInTheHelp(t *testing.T) {
-	if !strings.Contains(helpContent(100), "publish the review") {
+	// The description's wording changes as the flow grows a step; that it is listed
+	// as publishing is the part that has to hold.
+	if !strings.Contains(helpContent(100), "publish:") {
 		t.Fatal("`P` is missing from the key reference")
 	}
 }
@@ -238,7 +248,7 @@ func TestPublishKeyIsInTheHelp(t *testing.T) {
 // the last thing between reading a diff and posting to someone's PR.
 func TestPublishPreviewsBeforePosting(t *testing.T) {
 	m, asked := publishModel(t, "posted 1", nil)
-	m = enter(press(m, "P"))
+	m = preview(press(m, "P"))
 	if got := verdicts(*asked); len(got) != 0 {
 		t.Fatalf("choosing a verdict posted something: %v", *asked)
 	}
@@ -262,22 +272,27 @@ func TestPublishPreviewsBeforePosting(t *testing.T) {
 	}
 }
 
-// esc on the preview goes back to the verdicts, not out: the usual reason to
-// reject a plan is that it is the wrong verdict.
-func TestPublishPreviewEscGoesBackToTheChoices(t *testing.T) {
+// esc on the preview steps back rather than out: the usual reason to reject a plan
+// is that something in it is wrong — the verdict, or the summary — not that you
+// have changed your mind about publishing.
+func TestPublishPreviewEscStepsBack(t *testing.T) {
 	m, asked := publishModel(t, "posted 1", nil)
-	m = enter(press(m, "P"))
+	m = preview(press(m, "P"))
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
-	if !m.publishing || m.publishStage != publishChoosing {
-		t.Fatalf("expected esc to return to the choices, got publishing=%v stage=%v", m.publishing, m.publishStage)
+	if !m.publishing || m.publishStage != publishSummary {
+		t.Fatalf("expected esc to return to the summary, got publishing=%v stage=%v", m.publishing, m.publishStage)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m = updated.(Model); m.publishStage != publishChoosing {
+		t.Fatalf("expected a second esc to reach the verdicts, got stage %v", m.publishStage)
 	}
 	if got := verdicts(*asked); len(got) != 0 {
 		t.Fatalf("expected nothing posted, got %v", *asked)
 	}
 	// And a different verdict can then be chosen and previewed.
-	m = enter(press(m, "j"))
-	if len(*asked) != 2 || (*asked)[1].verdict != "request-changes" {
+	m = preview(press(m, "j"))
+	if len(*asked) < 2 || (*asked)[len(*asked)-1].verdict != "request-changes" {
 		t.Fatalf("expected the second verdict previewed, got %v", *asked)
 	}
 }
@@ -286,7 +301,7 @@ func TestPublishPreviewEscGoesBackToTheChoices(t *testing.T) {
 // and submitted a review is more than one footer segment can carry.
 func TestPublishReportStaysUpUntilDismissed(t *testing.T) {
 	m, _ := publishModel(t, "posted 2, skipped 1, failed 0\nsubmitted the review as approve", nil)
-	m = enter(enter(press(m, "P")))
+	m = sendIt(press(m, "P"))
 	if m.publishStage != publishReporting || !m.publishing {
 		t.Fatalf("expected the report on screen, got publishing=%v stage=%v", m.publishing, m.publishStage)
 	}
@@ -313,11 +328,124 @@ func TestPublishRefusalIsShownInsteadOfAPlan(t *testing.T) {
 	m.PublishReview = func(verdict string, dry bool) (string, error) {
 		return "", errors.New("--verdict request-changes needs a summary")
 	}
-	m = enter(press(pressTimes(press(m, "P"), "j", 1), "")) // request changes, preview
+	m = preview(pressTimes(press(m, "P"), "j", 1)) // request changes, then the plan
 	if m.publishStage != publishReporting {
 		t.Fatalf("expected the refusal shown rather than a plan, got stage %v", m.publishStage)
 	}
 	if body := stripANSI(m.Body(80, 16)); !strings.Contains(body, "needs a summary") {
 		t.Fatalf("the refusal is not on screen:\n%s", body)
+	}
+}
+
+// typeInto feeds a body into whichever box is open.
+func typeInto(m Model, body string) Model {
+	for _, r := range body {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(Model)
+	}
+	return m
+}
+
+// The flow used to dead-end on its own requirement: `request changes` needs a
+// summary and nothing in the viewer could write one. Now the menu asks for it.
+func TestPublishAsksForASummary(t *testing.T) {
+	m, _ := publishModel(t, "posted 1", nil)
+	var saved []review.Comment
+	m.SaveComment = func(c review.Comment) error { saved = append(saved, c); return nil }
+	// request changes — the verdict that requires a body.
+	m = enter(pressTimes(press(m, "P"), "j", 1))
+	if m.publishStage != publishSummary {
+		t.Fatalf("expected the summary step, got stage %v", m.publishStage)
+	}
+	body := stripANSI(m.Body(80, 20))
+	// It says why it is asking, rather than leaving the plan to refuse later.
+	if !strings.Contains(body, "needs one") {
+		t.Fatalf("the summary step does not say the verdict requires it:\n%s", body)
+	}
+	// A textarea, so it can be edited — and headed as what it is about, since there
+	// is no file to name.
+	if !strings.Contains(body, "the whole change") {
+		t.Fatalf("expected the box headed as review-level:\n%s", body)
+	}
+	m = typeInto(m, "Scope: internal/cli only.")
+	m = enter(m)
+	// Saved as a real review-level comment — an anchor with no path — so it lives in
+	// the review afterwards rather than only in this submission.
+	if len(saved) != 1 {
+		t.Fatalf("expected the summary saved as a comment, got %d", len(saved))
+	}
+	if got := saved[0]; got.Anchor.Path != "" || got.Body != "Scope: internal/cli only." {
+		t.Fatalf("expected a review-level record, got %+v", got.Anchor)
+	}
+	if m.publishStage != publishPreviewing {
+		t.Fatalf("expected the plan after the summary, got stage %v", m.publishStage)
+	}
+}
+
+// An empty box is a skip: publishing an approval stays two keystrokes plus a
+// confirmation, not three plus a confirmation.
+func TestPublishSummaryCanBeSkipped(t *testing.T) {
+	m, asked := publishModel(t, "posted 1", nil)
+	saved := 0
+	m.SaveComment = func(review.Comment) error { saved++; return nil }
+	m = enter(enter(press(m, "P"))) // choose approve, skip the summary
+	if saved != 0 {
+		t.Fatalf("an empty summary was saved as a comment (%d)", saved)
+	}
+	if m.publishStage != publishPreviewing {
+		t.Fatalf("expected the plan, got stage %v", m.publishStage)
+	}
+	m = enter(m)
+	if got := verdicts(*asked); len(got) != 1 || got[0] != "approve" {
+		t.Fatalf("expected the approval published, got %v", *asked)
+	}
+}
+
+// The summary appears in the review afterwards, not only in the submission.
+func TestPublishSummaryShowsUpInTheReview(t *testing.T) {
+	m, _ := publishModel(t, "posted 1", nil)
+	m.SaveComment = func(review.Comment) error { return nil }
+	m = enter(press(m, "P"))
+	m = enter(typeInto(m, "Reviewed internal/cli."))
+	// Dismiss the flow and look at the stream.
+	m.publishing = false
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected the summary in the comment index, got %d entries", len(m.commentIndex))
+	}
+	if got := entryLocation(m.commentIndex[0]); !strings.Contains(got, "review") {
+		t.Fatalf("expected it listed as review-level, got %q", got)
+	}
+}
+
+// A failed write keeps the box and its text: losing a written summary is the worst
+// outcome available here.
+func TestPublishSummaryKeepsTheTextWhenSavingFails(t *testing.T) {
+	m, asked := publishModel(t, "posted 1", nil)
+	m.SaveComment = func(review.Comment) error { return errors.New("disk full") }
+	m = enter(press(m, "P"))
+	m = enter(typeInto(m, "worth keeping"))
+	if m.publishStage != publishSummary {
+		t.Fatalf("expected to stay in the box, got stage %v", m.publishStage)
+	}
+	if !strings.Contains(m.summaryEditor.area.Value(), "worth keeping") {
+		t.Fatalf("the text was lost: %q", m.summaryEditor.area.Value())
+	}
+	if !m.statusErr || !strings.Contains(m.status, "disk full") {
+		t.Fatalf("expected the reason reported, got %q", m.status)
+	}
+	if len(*asked) != 0 {
+		t.Fatalf("expected nothing published, got %v", *asked)
+	}
+}
+
+// esc from the summary goes back to the verdicts, so a wrong choice is one step
+// away rather than a restart.
+func TestPublishSummaryEscGoesBackToTheVerdicts(t *testing.T) {
+	m, _ := publishModel(t, "posted 1", nil)
+	m = enter(press(m, "P"))
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if !m.publishing || m.publishStage != publishChoosing {
+		t.Fatalf("expected the verdicts again, got publishing=%v stage=%v", m.publishing, m.publishStage)
 	}
 }
