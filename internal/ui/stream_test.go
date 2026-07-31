@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/diff"
 )
@@ -707,5 +708,96 @@ func TestSelectionBarSurvivesLosingFocus(t *testing.T) {
 		if !strings.Contains(view, strings.TrimSpace(selectionPrefixBar)) {
 			t.Fatalf("focus %v: expected the selection bar to stay:\n%s", focus, view)
 		}
+	}
+}
+
+// ---- the hand-drawn panel border ----
+
+// The border is drawn by hand rather than by lipgloss (one Render over a whole
+// pane was the largest allocation in a frame), so the alignment it used to get for
+// free is now this function's job.
+func TestPanelBoxAlignsItsRightEdge(t *testing.T) {
+	const width, height = 40, 6
+	rows := []string{
+		"short",
+		"",
+		strings.Repeat("x", width-2),          // exactly the inner width
+		strings.Repeat("y", width+10),         // over it
+		styleAdded.Render("styled and short"), // carries escape sequences
+	}
+	out := panelBox(rows, width, height, styleNormalBorder)
+	lines := strings.Split(out, "\n")
+	if len(lines) != height+2 {
+		t.Fatalf("expected %d lines (%d content + 2 border), got %d", height+2, height, len(lines))
+	}
+	for i, ln := range lines {
+		if w := ansi.StringWidth(ln); w != width {
+			t.Fatalf("line %d is %d wide, want %d: %q", i, w, width, stripANSI(ln))
+		}
+	}
+	// Corners and edges in the right places.
+	plain := stripANSI(out)
+	first := strings.Split(plain, "\n")[0]
+	last := strings.Split(plain, "\n")[height+1]
+	if !strings.HasPrefix(first, "╭") || !strings.HasSuffix(first, "╮") {
+		t.Fatalf("top border = %q", first)
+	}
+	if !strings.HasPrefix(last, "╰") || !strings.HasSuffix(last, "╯") {
+		t.Fatalf("bottom border = %q", last)
+	}
+	for _, ln := range strings.Split(plain, "\n")[1 : height+1] {
+		if !strings.HasPrefix(ln, "│") || !strings.HasSuffix(ln, "│") {
+			t.Fatalf("content row missing its sides: %q", ln)
+		}
+	}
+}
+
+// Fewer rows than the pane is the common case — a short diff, or the end of a
+// long one — and the box still has to fill its height.
+func TestPanelBoxFillsShortContent(t *testing.T) {
+	out := panelBox([]string{"one", "two"}, 30, 8, styleNormalBorder)
+	if got := strings.Count(out, "\n") + 1; got != 10 {
+		t.Fatalf("expected 10 lines for height 8, got %d", got)
+	}
+}
+
+// ---- the cross-frame row cache ----
+
+// A cached row must not be served to a frame that wants it styled differently:
+// the cursorline moves every keypress, and the row it left has to lose the band.
+func TestRowCacheTracksTheCursorline(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m.focus = FocusHunks
+	const width = 60
+	first := m.cursorRow
+	banded := m.cachedStreamRow(first, width)
+
+	m = press(m, "j")
+	if m.cursorRow == first {
+		t.Fatal("fixture is wrong: expected the cursor to move")
+	}
+	if again := m.cachedStreamRow(first, width); again == banded {
+		t.Fatal("the row the cursor left was served its banded render from the cache")
+	}
+	if now := m.cachedStreamRow(m.cursorRow, width); now == m.cachedStreamRow(first, width) {
+		t.Fatal("expected the new cursor row to differ from the one it left")
+	}
+}
+
+// And the cache must not outlive the stream it was rendered from.
+func TestRowCacheIsDroppedOnRebuild(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	const width = 60
+	before := m.cachedStreamRow(0, width)
+	if len(m.cache.rows) == 0 {
+		t.Fatal("expected the row to be cached")
+	}
+	m.rebuildStream()
+	if len(m.cache.rows) != 0 {
+		t.Fatalf("expected the cache dropped on rebuild, %d entries left", len(m.cache.rows))
+	}
+	// And it still renders the same thing afterwards.
+	if after := m.cachedStreamRow(0, width); after != before {
+		t.Fatalf("row changed across a rebuild:\n%q\n%q", stripANSI(before), stripANSI(after))
 	}
 }

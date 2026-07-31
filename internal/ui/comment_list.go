@@ -141,7 +141,31 @@ func (m Model) commentPaneVisible() bool {
 }
 
 // renderLeftColumn stacks the file list over the comment index.
+//
+// Cached as one string between frames: it changes only when a selection moves,
+// focus shifts, or the column is resized, and rebuilding it costs a lipgloss
+// Render per row — which was half the allocation in a frame while scrolling the
+// diff, where this column does not change at all.
 func (m Model) renderLeftColumn(width, height int) string {
+	if m.cache == nil {
+		return m.buildLeftColumn(width, height)
+	}
+	key := leftKey{
+		width: width, height: height,
+		files: m.filesCursor, comments: m.commentsCursor,
+		focus: m.focus, entries: len(m.commentIndex), hidden: m.hideLeft,
+	}
+	if m.cache.left.ok && m.cache.left.key == key {
+		return m.cache.left.out
+	}
+	out := m.buildLeftColumn(width, height)
+	m.cache.left.key = key
+	m.cache.left.out = out
+	m.cache.left.ok = true
+	return out
+}
+
+func (m Model) buildLeftColumn(width, height int) string {
 	h := commentPaneHeight(len(m.commentIndex), height)
 	if h <= 0 {
 		return m.renderFileList(width, height)
