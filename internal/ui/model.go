@@ -164,6 +164,10 @@ type Model struct {
 	// scrolls it — there are more bindings than fit a short terminal.
 	showHelp bool
 	helpVP   viewport.Model
+	// hideLeft drops the left column (`\`), giving the stream the full width.
+	// The file and comment cursors keep their state while it is hidden, so
+	// unhiding returns you to where you were rather than to the top.
+	hideLeft bool
 	// ReviewedFiles maps a path to the content hash it had when marked
 	// reviewed, and MarkReviewed persists a change to that. Hash rather than a
 	// bare flag so a later edit resurfaces the file: marking something reviewed
@@ -183,7 +187,7 @@ type Model struct {
 func (m *Model) SetSize(width, bodyHeight int) {
 	m.width = width
 	m.bodyHeight = max(minBodyHeight, bodyHeight)
-	_, right := paneWidths(width)
+	_, right := m.paneWidthsFor(width)
 	// Every stream row reserves the selection-prefix columns, so the width
 	// available to content — and therefore the wrap geometry — is narrower
 	// than the pane. Getting this wrong makes wrapped row counts disagree
@@ -272,6 +276,17 @@ func (m *Model) followEditor() {
 func paneWidths(width int) (left, right int) {
 	left = max(24, width/3)
 	return left, max(30, width-left)
+}
+
+// paneWidthsFor is paneWidths honouring the left column's visibility: hidden, the
+// stream gets everything. Not folded into paneWidths because the geometry pass
+// and the render pass both have to agree with it, and a caller that forgot the
+// flag would compute wrap widths for a pane that is not the size it thinks.
+func (m Model) paneWidthsFor(width int) (left, right int) {
+	if m.hideLeft {
+		return 0, width
+	}
+	return paneWidths(width)
 }
 
 // Status returns the viewer's status text and whether it is an error, so a
@@ -480,6 +495,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case `\`:
+		m.hideLeft = !m.hideLeft
+		if m.hideLeft && m.focus != FocusHunks {
+			// Focus cannot stay on a pane that is no longer drawn: the keys would
+			// move a selection nobody can see.
+			m.focus = FocusHunks
+		}
+		// The stream's width changed, so its wrap geometry has to be rebuilt —
+		// SetSize is the only thing that knows how to derive hunkWidth.
+		m.SetSize(m.width, m.bodyHeight)
+		m.followCursor()
+		return m, nil
 	case "?":
 		m.showHelp = true
 		// Built on open rather than kept in sync: it is cheap, and it means the
@@ -955,7 +982,13 @@ func (m Model) Body(width, height int) string {
 		// height the host budgeted and the footer does not move.
 		return renderHelpOverlay(m.helpVP, width, height)
 	}
-	leftWidth, rightWidth := paneWidths(width)
+	leftWidth, rightWidth := m.paneWidthsFor(width)
+	if m.hideLeft {
+		// No JoinHorizontal with an empty left block: lipgloss would still
+		// contribute its zero-width column, and the stream is already the full
+		// width, so there is nothing to join.
+		return m.renderStreamPanel(rightWidth, height)
+	}
 	// The compose box is a run of rows inside the stream (see withEditor), not a
 	// panel docked below it, so the body's size never changes while writing a
 	// comment and the box sits against the code it is about.
