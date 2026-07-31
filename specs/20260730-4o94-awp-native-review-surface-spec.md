@@ -658,6 +658,21 @@ Resolved questions move into *Decisions*.
   content. Text-less anchors now place by line number. The earlier
   "threads render inline" test passed only because it searched the whole panel,
   detached section included; it now asserts placement under a diff line.
+- 2026-07-31: **Reviews stay keyed by workspace, and PR mode is dropped as a
+  re-keying idea.** D1 left workspace-keying as a "for now" with PR-keying
+  implied later. Rejecting that: `Target` is the review's identity, and PR
+  presence is not stable across a workspace's life. A dev workspace accumulates
+  comments in `work-<ws>`; opening a PR would move its identity to `pr-<n>` and
+  split the store in half *mid-life*, which is worse than the one-time migration
+  problem it first looks like. `awp review <n>` workspaces lose the property that
+  findings survive delete-and-recreate of the workspace — accepted, since by then
+  they have been published or sent. Where the PR number is genuinely needed it is
+  read from the workspace's pin instead: `workspace.ListEntry` now carries
+  `PRNumber` (it was on `Entry` but dropped from the service's read projection,
+  which is why the CLI could not see it), and `resolvePublishPR` resolves
+  `--pr` → PR-keyed target → pin. Without the pin `awp review publish` rejected
+  every review that exists and demanded a number awp had already recorded, so it
+  was effectively unreachable.
 - 2026-07-31: **tuicr purged.** `grep -r tuicr internal/` now returns nothing, so
   the last acceptance criterion is met. Phase 6 stopped *invoking* tuicr but left
   a seam behind: `ReviewReloader` / `ReviewReloadedMsg` / `WithReviewReloader`, the

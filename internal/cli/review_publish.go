@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,26 @@ type publishResult struct {
 	Failed  int
 }
 
+// resolvePublishPR decides which PR a publish run posts to, in precedence
+// order: an explicit --pr, then the review's own target if it is PR-keyed, then
+// the workspace's pin.
+//
+// The pin is what makes publish usable. Reviews are keyed by workspace — see
+// reviewTargetFor for why that is deliberate — so no review's target names a PR,
+// and without the pin publish rejected every review and asked the user to retype
+// a number `awp review <n>` had already recorded on the workspace.
+func resolvePublishPR(flagPR int, target review.Target, pinned int) int {
+	if flagPR > 0 {
+		return flagPR
+	}
+	if target.Kind == review.TargetPR {
+		if n, err := parsePRNumber(target.Value); err == nil && n > 0 {
+			return n
+		}
+	}
+	return pinned
+}
+
 // runReviewPublish implements `awp review publish`.
 func runReviewPublish(runner Runner, svc workspace.Service, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("review publish", flag.ContinueOnError)
@@ -46,12 +67,13 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	if err != nil {
 		return err
 	}
-	prNumber := *prFlag
-	if prNumber == 0 && r.Target.Kind == review.TargetPR {
-		prNumber, _ = parsePRNumber(r.Target.Value)
+	pinned := 0
+	if cwd, cerr := os.Getwd(); cerr == nil {
+		pinned = pinnedPRForPath(svc, cwd)
 	}
+	prNumber := resolvePublishPR(*prFlag, r.Target, pinned)
 	if prNumber == 0 {
-		return errors.New("review publish: no PR for this review; pass --pr")
+		return errors.New("review publish: this workspace isn't pinned to a PR; pass --pr")
 	}
 
 	pending := make([]review.Comment, 0, len(comments))
