@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/diff"
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 // renderStreamRow styles one row of the diff stream. Called only for rows
@@ -50,7 +51,11 @@ func (m Model) cachedStreamRow(i, width int) string {
 		// "is the cursor here".
 		selected: m.rowSelected(i),
 		band:     m.rowBanded(i),
-		hscroll:  m.hunkHScroll,
+		// The ranged-comment bar and its colour. `tab` in the compose box recolours a
+		// range without moving a row, so a key without this would keep serving the
+		// old hue.
+		mark:    m.marks[i],
+		hscroll: m.hunkHScroll,
 	}
 	if out, ok := m.cache.rows[key]; ok {
 		return out
@@ -68,12 +73,19 @@ func (m Model) renderStreamRowAt(i, width int) string {
 	// bar stays either way, so the rows you will come back to are still marked.
 	selected, band := m.rowSelected(i), m.rowBanded(i)
 	kind := m.stream.rows[i].kind
+	mark, marked := m.rangeMark(i)
 	prefix := selectionPrefixBlank
 	switch {
 	case band:
 		prefix = styleSelectedCursor.Render(selectionPrefixBar)
 	case selected:
 		prefix = styleSelected.Render(selectionPrefixBar)
+	// A ranged comment's own bar, in its kind's hue — so the block a remark is
+	// about is visible while reading, not only stated in its header. Below the
+	// cursor in this switch because the cursor is one row and the range's other
+	// rows still carry the mark, which is enough to read it as continuous.
+	case marked:
+		prefix = kindStyles(mark).Render(selectionPrefixBar)
 	case isCommentRow(kind):
 		// Paint the reserved columns too: an unpainted gap on the left would
 		// break the block the comment is meant to read as.
@@ -290,7 +302,9 @@ type rowKey struct {
 	width    int
 	selected bool
 	band     bool
-	hscroll  int
+	// mark is the kind of the ranged comment marking this row, empty for none.
+	mark    review.Kind
+	hscroll int
 }
 
 // leftKey identifies a rendered left column, which is one string because the

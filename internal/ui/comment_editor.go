@@ -398,8 +398,16 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 
 // handleEditorKey routes input to the compose box and applies its outcome.
 func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	was := m.editor.kind
 	editor, cmd, action := m.editor.update(msg)
 	m.editor = editor
+	// `tab` recolours the box, and a ranged comment's bar down the lines it covers
+	// is part of that colour — so the marks are rebuilt when the kind changes. Only
+	// the marks: the rows themselves did not move, and the cache keys on the mark,
+	// so the affected rows re-render and the rest stay.
+	if m.editor.kind != was {
+		m.marks = m.buildRangeMarks(m.stream.rows)
+	}
 	switch action {
 	case editorCancel:
 		m.editing = false
