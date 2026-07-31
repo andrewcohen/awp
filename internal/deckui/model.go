@@ -3694,6 +3694,16 @@ func (m Model) actionModeStatus() string {
 }
 
 func (m Model) View() string {
+	if Trace != nil {
+		start := time.Now()
+		out := m.view()
+		traceFrame(start, len(out))
+		return out
+	}
+	return m.view()
+}
+
+func (m Model) view() string {
 	if m.width == 0 {
 		m.width = 100
 	}
@@ -3737,6 +3747,7 @@ func (m Model) View() string {
 	// terminal is wide enough, falling back to full-width below
 	// deckStackThreshold cols. Other pickers (bookmark, review) are
 	// always single-column.
+	step := traceSteps()
 	var left, right string
 	switch {
 	case m.active != nil:
@@ -3752,6 +3763,7 @@ func (m Model) View() string {
 	} else {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, "\n", right)
 	}
+	step("compose")
 	// Pad every body row out to m.width so the rightmost columns get
 	// overwritten between frames. Without this, when a tall modal (menu,
 	// picker, etc.) collapses back to the normal list, the previous
@@ -3759,6 +3771,7 @@ func (m Model) View() string {
 	// — the padding spaces inherit terminal default cell bg, which is
 	// what blends with the surrounding tmux pane.
 	body = lipgloss.NewStyle().Width(m.width).Render(body)
+	step("widthpad")
 
 	statusText := m.status
 	if m.busy {
@@ -3809,8 +3822,10 @@ func (m Model) View() string {
 	}
 	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, hint, m.width-2)
 	footer = lipgloss.NewStyle().Padding(1, 1, 1, 1).Render(footer)
+	step("footer")
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
+	step("heights")
 	pad := m.height - bodyHeight - footerHeight
 	if pad < 0 {
 		pad = 0
@@ -3828,14 +3843,18 @@ func (m Model) View() string {
 		// that exactly fills its budget — which is every body modal, since they
 		// size themselves from m.height — would overflow the viewport by one and
 		// push the footer's bottom padding off screen.
-		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+		out := lipgloss.JoinVertical(lipgloss.Left, body, footer)
+		step("join")
+		return out
 	}
 	blanks := make([]string, pad)
 	blank := strings.Repeat(" ", m.width)
 	for i := range blanks {
 		blanks[i] = blank
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, body, strings.Join(blanks, "\n"), footer)
+	out := lipgloss.JoinVertical(lipgloss.Left, body, strings.Join(blanks, "\n"), footer)
+	step("join")
+	return out
 }
 
 // helpBoxDims returns the help popover's outer box width and the inner
