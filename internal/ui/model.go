@@ -1266,10 +1266,19 @@ func (m Model) renderFileList(width, height int) string {
 		border = styleFocusBorder
 	}
 	rows := []string{styleDim.Render(fmt.Sprintf(" Files (%d)", len(m.filtered)))}
-	start, end := visibleRange(m.filesCursor, max(1, height-2), len(m.filtered))
+	// The window is over tree rows, not files: directory headings take rows of
+	// their own, so counting in files would scroll by the wrong amount and could
+	// leave the cursor's row off screen.
+	tree := fileTreeRows(m.filtered)
+	start, end := visibleRange(treeRowOf(tree, m.filesCursor), max(1, height-2), len(tree))
 	contentWidth := width - 4
 	for i := start; i < end; i++ {
-		selected := i == m.filesCursor
+		r := tree[i]
+		if r.isDir() {
+			rows = append(rows, renderTreeDir(r, contentWidth))
+			continue
+		}
+		selected := r.file == m.filesCursor
 		// The band is painted only while this pane holds the keyboard — the same
 		// rule the diff pane follows, so there is never more than one band on
 		// screen to mistake for the active selection.
@@ -1277,7 +1286,7 @@ func (m Model) renderFileList(width, height int) string {
 		// No outer selected-row wrap: renderFileRow already emits per-segment
 		// ANSI attributes, so an enclosing style can't add bold to text that
 		// has already declared its own.
-		row := m.renderFileRow(m.filtered[i], contentWidth, selected, band)
+		row := m.renderFileRow(m.filtered[r.file], r, contentWidth, selected, band)
 		if band {
 			row = bandRow(row, width-2)
 		}
@@ -1289,7 +1298,17 @@ func (m Model) renderFileList(width, height int) string {
 	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
 }
 
-func (m Model) renderFileRow(f diff.FileDiff, width int, selected, band bool) string {
+// renderTreeDir is a directory heading: structure rather than a destination, so
+// it is muted and reserves the selection columns without ever filling them.
+func renderTreeDir(r fileTreeRow, width int) string {
+	indent := treeIndent(r.depth, width)
+	avail := max(1, width-lipgloss.Width(selectionPrefixBlank)-len(indent))
+	return selectionPrefixBlank + indent + styleMuted.Render(truncate(r.label, avail))
+}
+
+// renderFileRow draws one file. The tree row supplies its indent and the name to
+// show — the basename, since the heading above it already said the rest.
+func (m Model) renderFileRow(f diff.FileDiff, r fileTreeRow, width int, selected, band bool) string {
 	// The `┃ ` bar is the app-wide selection marker (see the design system in
 	// CLAUDE.md). Unselected rows reserve the same two columns so labels stay
 	// aligned down the list.
@@ -1300,10 +1319,17 @@ func (m Model) renderFileRow(f diff.FileDiff, width int, selected, band bool) st
 	case selected:
 		prefix = styleSelected.Render(selectionPrefixBar)
 	}
+	indent := treeIndent(r.depth, width)
+	width -= lipgloss.Width(indent)
+	if band {
+		// The indent is part of the row, so it has to carry the band like
+		// everything else on it.
+		indent = styleCursorFill.Render(indent)
+	}
 	badge := statusBadge(f.Status, selected, band)
 	avail := width - lipgloss.Width(selectionPrefixBlank) - lipgloss.Width(badge) - 1
-	path := renderPath(diff.DisplayPath(f), avail, selected, band)
-	return prefix + badge + gap(band) + path
+	name := renderPath(r.label, avail, selected, band)
+	return prefix + indent + badge + gap(band) + name
 }
 
 // gap is the single space between a row's segments, painted when the row carries
