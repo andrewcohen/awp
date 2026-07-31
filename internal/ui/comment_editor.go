@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/andrewcohen/awp/internal/editor"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -116,6 +118,11 @@ func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction
 		// keeps the gesture next to the label it changes.
 		e.kind = e.kind.Next()
 		return e, nil, editorContinue
+	case "ctrl+g":
+		// Out to $EDITOR, the same binding every other multi-line field in awp
+		// uses. A comment worth sending to an agent is often longer than four rows
+		// of textarea, and this is the one text surface that had no way out.
+		return e, composeInEditorCmd(e.area.Value()), editorContinue
 	}
 	var cmd tea.Cmd
 	e.area, cmd = e.area.Update(msg)
@@ -130,9 +137,12 @@ func (e commentEditor) view(width int) string {
 	inner := max(20, width-2) - 2
 	// Leading space on both the header and the hint so they line up with the text
 	// area's own one-column prompt.
-	hint := " enter save · tab kind · ctrl+s save & send to agent · alt+enter newline · esc cancel"
+	hint := " enter save · tab kind · ctrl+s save & send to agent · ctrl+g $EDITOR · alt+enter newline · esc cancel"
 	if lipgloss.Width(hint) > inner {
-		hint = " enter save · tab kind · ctrl+s send · esc cancel"
+		hint = " enter save · tab kind · ctrl+s send · ctrl+g $EDITOR · esc cancel"
+	}
+	if lipgloss.Width(hint) > inner {
+		hint = " enter save · ctrl+g $EDITOR · esc cancel"
 	}
 	verb := " " + string(e.kind.OrDefault()) + " on "
 	switch {
@@ -159,6 +169,69 @@ func (e commentEditor) view(width int) string {
 // lines is the box's display rows, for the stream to draw one at a time.
 func (e commentEditor) lines(width int) []string {
 	return strings.Split(e.view(width), "\n")
+}
+
+// setBody replaces what is in the box, cursor at the end — what coming back from
+// $EDITOR means.
+func (e *commentEditor) setBody(body string) {
+	e.area.SetValue(body)
+	e.area.CursorEnd()
+}
+
+// composeEditedMsg carries a body back from $EDITOR. err set means the round trip
+// failed and the box keeps what it had.
+type composeEditedMsg struct {
+	body string
+	err  error
+}
+
+// composeInEditorCmd hands the box's text to $EDITOR through a temp file and
+// returns what came back.
+//
+// tea.ExecProcess rather than a goroutine: $EDITOR wants the terminal, and
+// ExecProcess is what suspends the program and restores it afterwards. It is an
+// external command, which is exactly what Exec is for (see the deckui package
+// doc) — the rule against it covers nested Bubble Tea programs.
+func composeInEditorCmd(initial string) tea.Cmd {
+	fail := func(err error) tea.Cmd {
+		return func() tea.Msg { return composeEditedMsg{err: err} }
+	}
+	// .md because a review comment is markdown — it publishes to GitHub as
+	// markdown — so the editor should treat it that way.
+	f, err := os.CreateTemp("", "awp-comment-*.md")
+	if err != nil {
+		return fail(err)
+	}
+	name := f.Name()
+	if _, err := f.WriteString(initial); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return fail(err)
+	}
+	return tea.ExecProcess(editor.OpenExecCmd("", name, 0), func(err error) tea.Msg {
+		defer func() { _ = os.Remove(name) }()
+		if err != nil {
+			return composeEditedMsg{err: err}
+		}
+		return composeBodyFrom(name)
+	})
+}
+
+// composeBodyFrom reads back what the editor left behind.
+//
+// Trailing newlines are dropped: every editor adds one, and kept it renders as a
+// blank body row — commentRows treats a blank line as a deliberate paragraph
+// break, so it would look like the author meant it.
+func composeBodyFrom(path string) tea.Msg {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return composeEditedMsg{err: err}
+	}
+	return composeEditedMsg{body: strings.TrimRight(string(body), "\n")}
 }
 
 // setWidth re-lays the text area for a new pane width.

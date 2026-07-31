@@ -439,6 +439,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, loadDiffCmd(m.LoadDiff)
 		}
 		return m, scheduleRefresh(m.RefreshInterval)
+	case composeEditedMsg:
+		// Back from $EDITOR. Ignored if the box has since closed — the editor was
+		// suspending the program, so nothing could have closed it, but a stale
+		// message must not resurrect one.
+		if !m.editing {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.status = "editor: " + msg.err.Error()
+			m.statusErr = true
+			return m, nil
+		}
+		m.editor.setBody(msg.body)
+		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}

@@ -76,6 +76,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 			Keys: [][2]string{
 				{"enter", "save"},
 				{"ctrl+s", "save and send to the workspace's agent"},
+				{"ctrl+g", "write it in $EDITOR instead"},
 				{"tab", "cycle kind: comment → suggestion → question"},
 				{"alt+enter", "newline"},
 				{"esc", "discard"},
