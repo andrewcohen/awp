@@ -287,30 +287,45 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	}
 }
 
-// dirRecordingRunner records the directory each command ran in, and answers gh
-// well enough for a publish to complete.
+// reviewedSHA is the commit under review in the directory fixtures below.
+const reviewedSHA = "abc123def4567890abc123def4567890abcdef12"
+
+// dirRecordingRunner records the directory each command ran in, per tool, and
+// answers gh well enough for a publish to complete.
 type dirRecordingRunner struct {
-	dirs []string
+	ghDirs []string
+	jjDirs []string
 }
 
 func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
-	r.dirs = append(r.dirs, dir)
 	if name == "jj" {
+		r.jjDirs = append(r.jjDirs, dir)
 		// The commit under review, which is what a comment is anchored to.
-		return "abc123def4567890abc123def4567890abcdef12\n", nil
+		return reviewedSHA + "\n", nil
 	}
-	if len(args) > 1 && args[0] == "repo" {
+	r.ghDirs = append(r.ghDirs, dir)
+	switch {
+	case len(args) > 2 && args[0] == "api" && strings.HasSuffix(args[2], "/commits"):
+		return reviewedSHA + "\n", nil
+	case len(args) > 1 && args[0] == "repo":
 		return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
 	}
 	return `{"node_id":"PRRC_1"}`, nil
 }
 
-// Every gh call a publish makes has to run in the review's own repo. Publishing
-// used to resolve the repository from the process's working directory, so a review
-// of one repo's PR, published from a deck launched somewhere else, addressed the
-// wrong repository entirely — 404 when no PR of that number existed there, and a
-// write to a stranger's PR when one did.
-func TestPublishRunsInTheReviewsRepo(t *testing.T) {
+// Two directions, one publish, and they are not the same directory.
+//
+// Every gh call has to run in the review's own repo: publishing used to resolve
+// the repository from the process's working directory, so a review of one repo's PR
+// published from a deck launched elsewhere addressed the wrong repository — 404
+// when no PR of that number existed there, and a write to a stranger's PR when one
+// did.
+//
+// The jj call has to run in the *workspace*, which is a different path. A jj
+// workspace has its own working copy, so asking the source repo for `@-` returns
+// whatever the user happens to have checked out there — a commit GitHub then
+// refuses because it is not part of the pull request.
+func TestPublishRunsEachToolInItsOwnDirectory(t *testing.T) {
 	store := review.Store{Root: t.TempDir()}
 	r := review.Review{ID: "work-ws", Repo: "/repos/theirs"}
 	runner := &dirRecordingRunner{}
@@ -325,26 +340,106 @@ func TestPublishRunsInTheReviewsRepo(t *testing.T) {
 		PR:      54,
 		Event:   github.EventApprove,
 		Verdict: "approve",
+		Dir:     "/workspaces/theirs-pr-54",
 	}, &out)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if len(runner.dirs) == 0 {
+	if len(runner.ghDirs) == 0 {
 		t.Fatal("expected the publish to make gh calls")
 	}
-	for i, dir := range runner.dirs {
+	for i, dir := range runner.ghDirs {
 		if dir != "/repos/theirs" {
-			t.Fatalf("call %d ran in %q, not the review's repo", i, dir)
+			t.Fatalf("gh call %d ran in %q, not the review's repo", i, dir)
+		}
+	}
+	if len(runner.jjDirs) == 0 {
+		t.Fatal("expected the reviewed commit to be resolved from the workspace")
+	}
+	for i, dir := range runner.jjDirs {
+		if dir != "/workspaces/theirs-pr-54" {
+			t.Fatalf("jj call %d ran in %q, not the workspace under review", i, dir)
 		}
 	}
 }
 
-// commitRunner answers the two questions the commit lookup asks — jj for the
-// local commit, gh for the PR's head — and records what it was asked.
+// Once resolved, the commit is written back onto the review — so a retry, or a
+// reply into one of these threads later, anchors to the same commit instead of
+// re-deriving it from a workspace that has moved on since.
+func TestPublishRecordsTheCommitItAnchoredTo(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r, err := store.Open("/repos/theirs", review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if r.ObservedHead != "" {
+		t.Fatalf("fixture: expected no recorded head, got %q", r.ObservedHead)
+	}
+	runner := &dirRecordingRunner{}
+	var out bytes.Buffer
+	if err := publishReview(runner, publishRequest{
+		Store:  store,
+		Review: r,
+		Comments: []review.Comment{{
+			ID: "c1", Author: review.AuthorHuman, Body: "a remark", State: review.Open,
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3, Text: "x"},
+		}},
+		PR:      54,
+		Event:   github.EventApprove,
+		Verdict: "approve",
+		Dir:     "/workspaces/theirs-pr-54",
+	}, &out); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	reopened, err := store.Open("/repos/theirs", review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reopened.ObservedHead != reviewedSHA {
+		t.Fatalf("expected the reviewed commit recorded, got %q", reopened.ObservedHead)
+	}
+}
+
+// A preview must not edit the review it is previewing.
+func TestPublishDryRunDoesNotRecordTheCommit(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r, err := store.Open("/repos/theirs", review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	runner := &dirRecordingRunner{}
+	var out bytes.Buffer
+	if err := publishReview(runner, publishRequest{
+		Store:  store,
+		Review: r,
+		Comments: []review.Comment{{
+			ID: "c1", Author: review.AuthorHuman, Body: "a remark", State: review.Open,
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3, Text: "x"},
+		}},
+		PR:     54,
+		DryRun: true,
+		Dir:    "/workspaces/theirs-pr-54",
+	}, &out); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	reopened, err := store.Open("/repos/theirs", review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reopened.ObservedHead != "" {
+		t.Fatalf("a dry run recorded %q on the review", reopened.ObservedHead)
+	}
+}
+
+// commitRunner answers the questions the commit lookup asks — jj for the local
+// commit, gh for the PR's commit list and its head — and records what it was
+// asked.
 type commitRunner struct {
 	jj, jjErr string
 	prView    string
-	calls     []string
+	// onPR is the PR's commit list, as gh --jq prints it: one SHA per line.
+	onPR  string
+	calls []string
 }
 
 func (r *commitRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
@@ -355,6 +450,8 @@ func (r *commitRunner) Run(_ context.Context, _ string, name string, args ...str
 			return "", errors.New(r.jjErr)
 		}
 		return r.jj, nil
+	case len(args) > 2 && args[0] == "api" && strings.HasSuffix(args[2], "/commits"):
+		return r.onPR, nil
 	case len(args) > 1 && args[0] == "pr" && args[1] == "view":
 		return r.prView, nil
 	case len(args) > 1 && args[0] == "repo":
@@ -368,27 +465,41 @@ func (r *commitRunner) Run(_ context.Context, _ string, name string, args ...str
 // GitHub says the head is now. Anchoring to a newer head would attach the remark
 // to a diff nobody looked at.
 func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
-	const local = "1111111111111111111111111111111111111111"
-	const remote = "2222222222222222222222222222222222222222"
+	const older = "1111111111111111111111111111111111111111"
+	const head = "2222222222222222222222222222222222222222"
+	const recorded = "3333333333333333333333333333333333333333"
+	// Every candidate below is on the PR except where a test says otherwise.
+	onPR := strings.Join([]string{older, recorded, head}, "\n") + "\n"
+	prView := `{"headRefOid":"` + head + `"}`
 
-	// The local commit under review, even though GitHub has moved on.
-	r := &commitRunner{jj: local + "\n", prView: `{"headRefOid":"` + remote + `"}`}
-	got, err := reviewedCommit(r, github.New(r), review.Review{Repo: "/repo"}, 7)
+	// The local commit under review, even though GitHub has moved on. A comment
+	// carries line numbers and they only mean anything against the commit they were
+	// read from, so anchoring to a newer head would attach the remark to a diff
+	// nobody looked at.
+	r := &commitRunner{jj: older + "\n", prView: prView, onPR: onPR}
+	got, note, err := reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
-	if got != local {
-		t.Fatalf("expected the commit that was read (%s), got %s", local[:8], got[:8])
+	if got != older {
+		t.Fatalf("expected the commit that was read (%s), got %s", older[:8], got[:8])
+	}
+	if note != "" {
+		t.Fatalf("a commit that is on the PR needs no warning, got %q", note)
 	}
 
 	// What the review recorded beats even that: it is the review's own statement of
 	// what it was opened against.
-	r = &commitRunner{jj: local + "\n", prView: `{"headRefOid":"` + remote + `"}`}
-	got, err = reviewedCommit(r, github.New(r), review.Review{Repo: "/repo", ObservedHead: "3333333333333333"}, 7)
+	r = &commitRunner{jj: older + "\n", prView: prView, onPR: onPR}
+	got, _, err = reviewedCommit(r, github.New(r), publishRequest{
+		Dir:    "/ws",
+		PR:     7,
+		Review: review.Review{Repo: "/repo", ObservedHead: recorded},
+	})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
-	if got != "3333333333333333" {
+	if got != recorded {
 		t.Fatalf("expected the recorded head, got %s", got)
 	}
 	for _, call := range r.calls {
@@ -397,14 +508,92 @@ func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
 		}
 	}
 
-	// No local repo to ask: GitHub's head is the last resort, so a review with no
-	// workspace can still publish.
-	r = &commitRunner{jjErr: "not a repo", prView: `{"headRefOid":"` + remote + `"}`}
-	got, err = reviewedCommit(r, github.New(r), review.Review{Repo: "/repo"}, 7)
+	// A hint from the caller also skips jj — the deck already knows the workspace's
+	// bookmark commit for every row it draws.
+	r = &commitRunner{jj: older + "\n", prView: prView, onPR: onPR}
+	got, _, err = reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7, HeadHint: recorded})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
-	if got != remote {
-		t.Fatalf("expected the remote head as the fallback, got %s", got)
+	if got != recorded {
+		t.Fatalf("expected the caller's hint, got %s", got)
 	}
+	for _, call := range r.calls {
+		if strings.HasPrefix(call, "jj") {
+			t.Fatalf("ran jj despite being handed the commit: %q", call)
+		}
+	}
+
+	// Nothing local to ask: the PR's head, and no warning — that is the answer for a
+	// review with no workspace, not a fallback from a better one.
+	r = &commitRunner{jjErr: "not a repo", prView: prView, onPR: onPR}
+	got, note, err = reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	if err != nil {
+		t.Fatalf("reviewedCommit: %v", err)
+	}
+	if got != head {
+		t.Fatalf("expected the PR head, got %s", got)
+	}
+	if note != "" {
+		t.Fatalf("no local commit means nothing was substituted, got %q", note)
+	}
+}
+
+// The bug this guards: reviewedCommit used to resolve `@-` in the review's SOURCE
+// repo, but a jj workspace has its own working copy — so a PR review was anchored
+// to whatever the user had checked out in the main repo, a commit GitHub refuses
+// because it is not part of the pull request. Now a candidate that isn't on the PR
+// is replaced by its head and the run says so.
+func TestReviewedCommitRejectsACommitThatIsNotOnThePR(t *testing.T) {
+	const elsewhere = "9999999999999999999999999999999999999999"
+	const head = "2222222222222222222222222222222222222222"
+
+	r := &commitRunner{
+		jj:     elsewhere + "\n",
+		prView: `{"headRefOid":"` + head + `"}`,
+		onPR:   head + "\n",
+		jjErr:  "",
+		calls:  nil,
+	}
+	got, note, err := reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	if err != nil {
+		t.Fatalf("reviewedCommit: %v", err)
+	}
+	if got != head {
+		t.Fatalf("expected the PR head instead of the off-PR commit, got %s", got)
+	}
+	if !strings.Contains(note, "isn't on PR #7") {
+		t.Fatalf("expected the substitution to be reported, got %q", note)
+	}
+}
+
+// A publish must survive an unreachable commit list rather than refusing to post.
+// The candidate is probably right; not being able to check it is not evidence
+// against it.
+func TestReviewedCommitTrustsTheLocalCommitWhenTheListIsUnavailable(t *testing.T) {
+	const local = "1111111111111111111111111111111111111111"
+	r := &listlessRunner{jj: local + "\n"}
+	got, note, err := reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	if err != nil {
+		t.Fatalf("reviewedCommit: %v", err)
+	}
+	if got != local {
+		t.Fatalf("expected the local commit, got %s", got)
+	}
+	if note != "" {
+		t.Fatalf("nothing was substituted, got %q", note)
+	}
+}
+
+// listlessRunner answers jj but fails the PR commit list.
+type listlessRunner struct{ jj string }
+
+func (r *listlessRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	if name == "jj" {
+		return r.jj, nil
+	}
+	if len(args) > 2 && args[0] == "api" && strings.HasSuffix(args[2], "/commits") {
+		return "", errors.New("network is down")
+	}
+	return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
 }

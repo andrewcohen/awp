@@ -426,6 +426,12 @@ func publishReviewFor(runner Runner) func(deckui.Item, string, bool) (string, er
 			Event:    event,
 			Verdict:  verdict,
 			DryRun:   dryRun,
+			// The workspace's own directory and the commit its bookmark points at. The
+			// deck reads the latter for every row anyway (it compares against the PR's
+			// head to spot a stale workspace), so the usual path resolves the reviewed
+			// commit without running jj at all.
+			Dir:      item.Path,
+			HeadHint: item.BookmarkCommitID,
 		}, &buf)
 		// The report is worth having even when part of the run failed — it says what
 		// did land, which is exactly what a reviewer needs in order to retry. Handed
