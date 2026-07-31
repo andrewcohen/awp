@@ -27,6 +27,10 @@ const (
 	// FocusComments is the comment index below the file list — a jump index over
 	// the change's conversations (see comment_list.go).
 	FocusComments
+	// FocusSearch is the diff's own search prompt (see search.go). Like
+	// FocusFilter it is a mode rather than a pane, so it stays out of the tab
+	// rotation.
+	FocusSearch
 )
 
 // DefaultRefreshInterval is how often the viewer re-reads the diff. Live
@@ -105,7 +109,13 @@ type Model struct {
 	cursorRow   int
 	focus       Focus
 	filterInput textinput.Model
-	width       int
+	// searchInput and searchQuery are the diff's content search (see search.go).
+	// The query outlives the prompt so n/N keep working after enter; searchOrigin
+	// is where the cursor was when the prompt opened, so esc can put it back.
+	searchInput  textinput.Model
+	searchQuery  string
+	searchOrigin int
+	width        int
 	// bodyHeight is the height of the two-pane body (file list + hunks),
 	// excluding this model's own header/footer. Standalone it is derived
 	// from the terminal height; embedded (the deck's `c` modal) the host
@@ -327,7 +337,12 @@ func (m Model) Status() (string, bool) { return m.status, m.statusErr }
 // Filtering reports whether a text input owns the keyboard — the file filter or
 // the comment compose box. A host must not treat keys as its own bindings while
 // this is true; `q` and `esc` in particular belong to the input.
-func (m Model) Filtering() bool { return m.focus == FocusFilter || m.editing }
+func (m Model) Filtering() bool {
+	// FocusSearch counts: the diff's search prompt takes the keyboard the same way
+	// the filter does, and a host that grabbed `q` or `esc` first would close the
+	// view out from under someone typing a query.
+	return m.focus == FocusFilter || m.focus == FocusSearch || m.editing
+}
 
 // HelpVisible reports whether the `?` overlay is up. Like Filtering, it tells a
 // host to keep its hands off the keyboard: `esc` and `q` close the overlay, and a
@@ -350,12 +365,16 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.CharLimit = 128
+	si := textinput.New()
+	si.Placeholder = "search..."
+	si.CharLimit = 128
 	return Model{
 		RepoRoot:        repoRoot,
 		RefreshInterval: DefaultRefreshInterval,
 		LoadDiff:        loadFn,
 		OpenFile:        openFn,
 		filterInput:     ti,
+		searchInput:     si,
 		cache:           newRenderCache(),
 		status:          "loading...",
 		// Open on the diff itself. Reading the change is what you came for;
@@ -496,6 +515,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		return m, cmd
 	}
+	if m.focus == FocusSearch {
+		// The blink, chiefly — but not applySearchInput: a non-key message cannot
+		// have changed the query, and re-seeking on every blink would fight the
+		// cursor.
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
 	return m, nil
 }
 
@@ -540,6 +567,27 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	}
+	if m.focus == FocusSearch {
+		switch key {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "enter":
+			// Keep the query: n/N after confirming is the point of having one.
+			m.endSearch(true)
+			return m, nil
+		case "esc":
+			m.endSearch(false)
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			// Previewed as you type, from where the search started — so the cursor
+			// lands on the first match of what you have typed so far rather than
+			// walking further down the file with every keystroke.
+			m.applySearchInput()
+			return m, cmd
+		}
+	}
 
 	switch key {
 	case "q", "ctrl+c":
@@ -576,6 +624,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// the base.
 		return m, tea.Batch(loadDiffCmd(m.LoadDiff), resolveBaseCmd(m.ResolveBase))
 	case "/":
+		// `/` means search to anyone who has used vim or less, and from the diff —
+		// where nearly all the time goes — it used to mean "filter the file list".
+		// It now does the thing the pane you are in makes it mean: search the
+		// content here, filter the list from the lists.
+		if m.focus == FocusHunks {
+			m.beginSearch()
+			return m, nil
+		}
 		m.focus = FocusFilter
 		m.filterInput.Focus()
 		return m, nil
@@ -671,6 +727,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursorRow = max(0, len(m.stream.rows)-1)
 			m.followCursor()
 			m.syncFileCursorToCursor()
+		// n/N step the search, wrapping at the ends. No-ops with no query rather
+		// than reporting an error — pressing them idly is not a mistake worth a
+		// message.
+		case "n":
+			if strings.TrimSpace(m.searchQuery) != "" {
+				m.seekMatch(true, false)
+			}
+		case "N":
+			if strings.TrimSpace(m.searchQuery) != "" {
+				m.seekMatch(false, false)
+			}
 		case "c":
 			return m.startComment()
 		case "i":
@@ -1161,11 +1228,15 @@ func (m Model) renderFooter() string {
 	// help.go for why it stopped being spelled out on every frame.
 	hint := "? help"
 	filterLine := strings.Repeat(" ", max(1, m.width))
-	if m.focus == FocusFilter {
-		// The filter is the one mode worth spelling out: it is modal, and the keys
-		// that leave it are not the ones that work anywhere else.
+	switch m.focus {
+	case FocusFilter:
+		// The filter is one of the two modes worth spelling out: it is modal, and
+		// the keys that leave it are not the ones that work anywhere else.
 		hint = "enter:confirm  esc:clear"
 		filterLine = "  Filter files: " + m.filterInput.View()
+	case FocusSearch:
+		hint = "enter:keep  esc:cancel  n/N:next/prev"
+		filterLine = "  Search diff: " + m.searchInput.View()
 	}
 	statusStyle := styleStatus
 	if m.statusErr {
