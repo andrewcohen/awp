@@ -132,62 +132,7 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	if base != nil {
 		inner.ResolveBase = func() string { return base(item, scope) }
 	}
-	if comments.Save != nil {
-		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
-	}
-	if comments.Reply != nil {
-		inner.ReplyComment = func(parentID string, c review.Comment) error {
-			return comments.Reply(item, parentID, c)
-		}
-	}
-	if comments.LastSaved != nil {
-		inner.LastSavedComment = comments.LastSaved
-	}
-	if comments.Update != nil {
-		inner.UpdateComment = func(c review.Comment) error { return comments.Update(item, c) }
-	}
-	if comments.Delete != nil {
-		inner.DeleteComment = func(id string) error { return comments.Delete(item, id) }
-	}
-	if comments.Send != nil {
-		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
-	}
-	if comments.Publish != nil {
-		inner.PublishReview = func(verdict string) (string, error) {
-			return comments.Publish(item, verdict)
-		}
-	}
-	if comments.SaveReviewed != nil {
-		inner.MarkReviewed = func(path, hash string) error { return comments.SaveReviewed(item, path, hash) }
-	}
-	if comments.LoadReviewed != nil {
-		if marks, err := comments.LoadReviewed(item); err == nil {
-			inner.SetReviewed(marks)
-		}
-	}
-	if comments.Resolve != nil {
-		inner.ResolveThread = func(id string, resolve bool) error { return comments.Resolve(item, id, resolve) }
-	}
-	if comments.LoadThreads != nil {
-		if threads, err := comments.LoadThreads(item); err == nil && len(threads) > 0 {
-			inner.SetThreads(threads)
-		}
-		// And on every refresh tick, the same as comments: the mirror is
-		// maintained by the pr-status job, so a reviewer's comment arrives while
-		// the diff is open rather than only on the next open.
-		inner.LoadThreads = func() ([]review.Thread, error) { return comments.LoadThreads(item) }
-	}
-	if comments.Load != nil {
-		// Best-effort: a review that cannot be read should still open as a
-		// readable diff rather than refusing to open at all.
-		if existing, err := comments.Load(item); err == nil {
-			inner.SetComments(existing)
-		}
-		// And re-read on every refresh tick, so a finding filed while the view is
-		// open — by an agent replying, most importantly — shows up without
-		// closing and reopening.
-		inner.LoadComments = func() ([]review.Comment, error) { return comments.Load(item) }
-	}
+	ApplyCommentStore(&inner, item, comments)
 	dm := &diffModal{
 		inner:  inner,
 		label:  item.ProjectName + "/" + item.WorkspaceName,
@@ -301,4 +246,75 @@ func (dm *diffModal) view(m *Model) (string, string) {
 	out := dm.panel.Render(body)
 	Trace("diff.body %.1fms pad %.1fms bytes %d→%d", bodyMS, sinceMS(padStart), len(body), len(out))
 	return out, ""
+}
+
+// ApplyCommentStore installs a review store's seams on a viewer: commenting,
+// replying, editing, deleting, sending to the agent, publishing, reviewed marks,
+// and the mirrored GitHub threads — plus the re-read closures the refresh tick
+// calls.
+//
+// Exported because the deck's modal is not the only host any more. `awp diff`
+// runs the same viewer standalone, and a second copy of this list would drift:
+// the failure mode is a seam wired in one surface and silently missing in the
+// other, which reads to the user as a key that does nothing.
+//
+// Every seam is optional. A nil one leaves the viewer's corresponding action
+// unavailable, which it reports rather than silently doing nothing.
+func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
+	if comments.Save != nil {
+		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
+	}
+	if comments.Reply != nil {
+		inner.ReplyComment = func(parentID string, c review.Comment) error {
+			return comments.Reply(item, parentID, c)
+		}
+	}
+	if comments.LastSaved != nil {
+		inner.LastSavedComment = comments.LastSaved
+	}
+	if comments.Update != nil {
+		inner.UpdateComment = func(c review.Comment) error { return comments.Update(item, c) }
+	}
+	if comments.Delete != nil {
+		inner.DeleteComment = func(id string) error { return comments.Delete(item, id) }
+	}
+	if comments.Send != nil {
+		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
+	}
+	if comments.Publish != nil {
+		inner.PublishReview = func(verdict string) (string, error) {
+			return comments.Publish(item, verdict)
+		}
+	}
+	if comments.SaveReviewed != nil {
+		inner.MarkReviewed = func(path, hash string) error { return comments.SaveReviewed(item, path, hash) }
+	}
+	if comments.LoadReviewed != nil {
+		if marks, err := comments.LoadReviewed(item); err == nil {
+			inner.SetReviewed(marks)
+		}
+	}
+	if comments.Resolve != nil {
+		inner.ResolveThread = func(id string, resolve bool) error { return comments.Resolve(item, id, resolve) }
+	}
+	if comments.LoadThreads != nil {
+		if threads, err := comments.LoadThreads(item); err == nil && len(threads) > 0 {
+			inner.SetThreads(threads)
+		}
+		// And on every refresh tick, the same as comments: the mirror is
+		// maintained by the pr-status job, so a reviewer's comment arrives while
+		// the diff is open rather than only on the next open.
+		inner.LoadThreads = func() ([]review.Thread, error) { return comments.LoadThreads(item) }
+	}
+	if comments.Load != nil {
+		// Best-effort: a review that cannot be read should still open as a
+		// readable diff rather than refusing to open at all.
+		if existing, err := comments.Load(item); err == nil {
+			inner.SetComments(existing)
+		}
+		// And re-read on every refresh tick, so a finding filed while the view is
+		// open — by an agent replying, most importantly — shows up without
+		// closing and reopening.
+		inner.LoadComments = func() ([]review.Comment, error) { return comments.Load(item) }
+	}
 }
