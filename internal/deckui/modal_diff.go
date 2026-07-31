@@ -16,8 +16,7 @@ const (
 	// ScopeWorking is the workspace's uncommitted change — what `c` shows.
 	ScopeWorking DiffScope = iota
 	// ScopeStackBase is the whole change against its stack base — what `C`
-	// shows. Previously this opened a tuicr window; it is the same diff, read on
-	// the same surface.
+	// shows.
 	ScopeStackBase
 )
 

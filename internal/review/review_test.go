@@ -37,8 +37,8 @@ func TestOpenCreatesThenReloadsTheSameReview(t *testing.T) {
 	}
 }
 
-// Identity must not include a head SHA — that is what stranded drafts in tuicr
-// on every force-push.
+// Identity must not include a head SHA — that is what stranded drafts on every
+// force-push in the external tool this store replaced.
 func TestIDIsStableAcrossHeads(t *testing.T) {
 	a := ID(Target{Kind: TargetPR, Value: "123"})
 	b := ID(Target{Kind: TargetPR, Value: "123"})

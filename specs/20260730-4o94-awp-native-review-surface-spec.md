@@ -658,6 +658,21 @@ Resolved questions move into *Decisions*.
   content. Text-less anchors now place by line number. The earlier
   "threads render inline" test passed only because it searched the whole panel,
   detached section included; it now asserts placement under a diff line.
+- 2026-07-31: **tuicr purged.** `grep -r tuicr internal/` now returns nothing, so
+  the last acceptance criterion is met. Phase 6 stopped *invoking* tuicr but left
+  a seam behind: `ReviewReloader` / `ReviewReloadedMsg` / `WithReviewReloader`, the
+  `repair` / `prNumber` / `prHeadSHA` / `prURL` fields on `promptForm`, and the
+  block in `modal_prmenu.go` that populated them. `internal/cli/deck.go` never
+  installed the callback after phase 6, so the branch was unreachable — every `p r`
+  submit already fell through to the generic `ActionSendPrompt` path. Three tests
+  covered that dead branch; one rewritten test now covers the single submit path
+  that exists. **Capability genuinely dropped:** a stale reviewer repair no longer
+  reloads a review onto the PR's current head. It hasn't since phase 6 (silently),
+  and the awp-native equivalent has no reason to exist — content anchoring
+  relocates findings across the author's push, so there is no old-head session to
+  reload. Remaining mentions of the tool in doc comments were reworded to keep the
+  rationale (why identity excludes a head SHA, why the store is ours) without
+  naming a tool the reader no longer has; `specs/` keeps the history.
 - 2026-07-30: Phase 7 landed — the spec's finish line. `awp review publish` posts
   unpublished findings to a PR as inline comments, and `R` resolves/unresolves the
   thread under the cursor. Two decisions worth recording: comments are posted

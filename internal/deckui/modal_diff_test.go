@@ -71,8 +71,8 @@ func TestDiffModalOpensOnC(t *testing.T) {
 	}
 }
 
-// Without a loader the key keeps its old meaning — opening the tuicr review
-// window — so the deck degrades to the pre-modal behavior instead of
+// Without a loader the key keeps its old meaning — opening a named review
+// window in tmux — so the deck degrades to the pre-modal behavior instead of
 // swallowing the key.
 func TestDiffModalFallsBackToReviewWindowWhenUnwired(t *testing.T) {
 	var got ActionRequest

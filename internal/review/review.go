@@ -2,9 +2,9 @@
 // leaves while reading a diff, and the findings an agent files while reviewing
 // one.
 //
-// It exists because the previous arrangement had those records living inside
-// tuicr, a store awp could only read by reverse-engineering private state files
-// (see the deleted internal/cli/tuicr_session.go and the user-problem section of
+// It exists because the previous arrangement kept those records inside an
+// external review TUI, whose store awp could only read by reverse-engineering
+// private state files (see the user-problem section of
 // specs/20260730-4o94-awp-native-review-surface-spec.md). Owning the store is
 // what lets a finding travel from "noticed while reading" to "the agent is
 // fixing it" without a human copying text between tools.
@@ -315,9 +315,9 @@ func (s Store) now() time.Time {
 }
 
 // ID derives a review's identity from its target. Deliberately not keyed on a
-// head SHA: identity that includes the head is what stranded draft comments in
-// tuicr on every force-push, and requires migration code to undo. Here the head
-// is observed metadata on the record instead.
+// head SHA: identity that includes the head is what stranded draft comments on
+// every force-push in the external tool this replaced, and requires migration
+// code to undo. Here the head is observed metadata on the record instead.
 func ID(t Target) string {
 	switch t.Kind {
 	case TargetPR:

@@ -10,8 +10,8 @@ import (
 
 // pasteSettleDelay gives the receiving TUI a beat to finish ingesting a
 // bracketed paste before the submit Enter arrives. Without it a large
-// multi-line paste — e.g. a reviewer-repair prompt with an appended tuicr
-// session block — can still be mid-ingest when Enter lands, so Claude Code
+// multi-line paste — e.g. a reviewer-repair prompt with the PR's existing
+// comments spliced in — can still be mid-ingest when Enter lands, so Claude Code
 // swallows the key as paste content instead of submitting: the text appears
 // but nothing sends. Small pastes win the race; large ones don't, which is why
 // the failure only shows up once a prompt grows past a few lines.

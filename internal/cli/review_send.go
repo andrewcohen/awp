@@ -9,9 +9,9 @@ import (
 
 // Handing a review comment to the agent.
 //
-// This is the round trip tuicr structurally cannot close: it has no idea an
-// agent exists, so a finding got from "noticed while reading" to "being fixed"
-// via a human copying text between panes.
+// This is the round trip a standalone review TUI structurally cannot close: it
+// has no idea an agent exists, so a finding got from "noticed while reading" to
+// "being fixed" via a human copying text between panes.
 //
 // The prompt deliberately reuses the propose-then-approve shape already
 // established for PR-repair prompts (see the `p r` flow): the agent reports the

@@ -20,10 +20,10 @@ import (
 
 // `awp review add` and friends: the agent-facing way to file a finding.
 //
-// This replaces shelling out to `tuicr review add --session <abs-path>`, where
-// the session path had to be reverse-engineered from tuicr's private state files
-// with a discovery timeout and a window-launch-order hack. Here the review is
-// resolved from the workspace, which awp already knows.
+// This replaces shelling out to an external review TUI, where the session path
+// had to be reverse-engineered from that tool's private state files with a
+// discovery timeout and a window-launch-order hack. Here the review is resolved
+// from the workspace, which awp already knows.
 
 // reviewTargetFor resolves which review the current directory belongs to.
 //

@@ -1625,9 +1625,10 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 	case deckui.ActionSummon:
 		return summonWorkspaceSession(tmuxClient, svc, item, reporter)
 	case deckui.ActionOpenWindow:
-		// `C` no longer routes here: the change-vs-stack-base diff opens on
-		// awp's own surface (deckui.ScopeStackBase) rather than in a tuicr
-		// window, so there is no review revset to splice into a shell command.
+		// `C` no longer routes here: the change-vs-stack-base diff opens in
+		// the deck's own diff modal (deckui.ScopeStackBase) rather than in a
+		// tmux window, so there is no review revset to splice into a shell
+		// command.
 		return openNamedWindow(tmuxClient, svc, item, req.Arg, reporter)
 	case deckui.ActionCI:
 		return openCIWindow(tmuxClient, svc, runner, item, reporter)
