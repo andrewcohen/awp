@@ -255,7 +255,7 @@ func (m *Model) rebuildStream() {
 	// The index is built before the compose box is spliced in, so a half-written
 	// comment never shows up as a listed conversation.
 	m.stream = idx
-	m.commentIndex = idx.commentEntries()
+	m.commentIndex = m.commentEntries(idx)
 	if m.editing {
 		// editing names the comment the box replaces; empty for a new comment or a
 		// reply, which append instead.

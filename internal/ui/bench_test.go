@@ -240,7 +240,7 @@ func BenchmarkCommentEntries(b *testing.B) {
 	m.rebuildStream()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = m.stream.commentEntries()
+		_ = m.commentEntries(m.stream)
 	}
 }
 

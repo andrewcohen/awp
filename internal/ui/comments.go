@@ -161,8 +161,19 @@ func (m Model) threadAtCursor() (review.Thread, bool) {
 	if r.comment < 0 || r.comment >= len(m.stream.comments) {
 		return review.Thread{}, false
 	}
-	id := strings.TrimPrefix(m.stream.comments[r.comment].ID, remoteThreadPrefix)
-	if id == m.stream.comments[r.comment].ID {
+	return m.threadFor(m.stream.comments[r.comment].ID)
+}
+
+// threadFor recovers the mirrored thread an adapted comment came from, by the id
+// threadAsComment prefixed. Returns false for a local comment.
+//
+// The stream holds remote threads as ordinary comments so one renderer covers
+// both, which means a thread's state survives only in its display label. Anything
+// that needs the state itself — resolving, and the index's chips — comes back
+// through here rather than reading that label back apart.
+func (m Model) threadFor(commentID string) (review.Thread, bool) {
+	id := strings.TrimPrefix(commentID, remoteThreadPrefix)
+	if id == commentID {
 		return review.Thread{}, false // a local comment, not a remote thread
 	}
 	for _, t := range m.threads {
@@ -244,6 +255,32 @@ func (m Model) visibleThreads() []review.Thread {
 	return out
 }
 
+// The two states GitHub reports about a thread, named the way they are shown.
+// Settled and stale are independent — a thread can be both, and usually is, since
+// resolving a point is often what precedes the code moving out from under it.
+const (
+	chipResolved = "resolved"
+	chipOutdated = "outdated"
+)
+
+// remoteThreadLabel is the author label a mirrored thread renders under: where it
+// came from, then whatever GitHub says about it.
+//
+// Both chips, not the first that applies. This was an if/else, which meant a
+// resolved thread never admitted to being outdated — so the nine settled,
+// stale threads on a real PR were indistinguishable from settled ones still
+// pointing at live code.
+func remoteThreadLabel(t review.Thread) string {
+	label := "github"
+	if t.Resolved {
+		label += " · " + chipResolved
+	}
+	if t.Outdated {
+		label += " · " + chipOutdated
+	}
+	return label
+}
+
 // threadAsComment adapts a remote thread into the same display shape local
 // comments use, so one renderer covers both. The distinction the reader needs —
 // this is already on GitHub — is carried in the author label rather than by a
@@ -256,15 +293,9 @@ func threadAsComment(t review.Thread) review.Comment {
 		}
 		b.WriteString(c.Author + ": " + c.Body)
 	}
-	author := "github"
-	if t.Resolved {
-		author = "github · resolved"
-	} else if t.Outdated {
-		author = "github · outdated"
-	}
 	return review.Comment{
 		ID:     remoteThreadPrefix + t.ID,
-		Author: author,
+		Author: remoteThreadLabel(t),
 		Body:   b.String(),
 		State:  review.Published,
 		Anchor: review.Anchor{Path: t.Path, Side: t.Side, LineHint: t.Line},
@@ -388,6 +419,18 @@ func (m Model) locateComment(rows []rowRef, c review.Comment) (int, bool) {
 	// content — so without this they would all land in the detached section
 	// despite pointing at code that is right there.
 	if c.Anchor.Text == "" {
+		// No line either, and there is nothing left to match on. Lines are
+		// 1-based, so zero means "unknown", which is what GitHub reports (as
+		// null) for a thread whose line no longer exists in the diff.
+		//
+		// This has to be checked rather than left to the comparison below: a
+		// deleted row carries no new-side number, so its lineNo is also zero —
+		// matching 0 against 0 pinned every outdated thread to the first removed
+		// line in its file, presenting it as a remark about code it was never
+		// written against.
+		if c.Anchor.LineHint <= 0 {
+			return 0, false
+		}
 		for _, i := range inFile {
 			if r := rows[i]; r.seg == 0 && lineNo(r) == c.Anchor.LineHint {
 				return i, true
