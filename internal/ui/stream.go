@@ -68,6 +68,11 @@ type rowRef struct {
 	// rows, and commentLine is which display line of that comment this row is.
 	comment     int
 	commentLine int
+	// lastComment marks the rows of the final message in a conversation. That
+	// message closes the block, so it carries the trailing pad row — the pad
+	// cannot belong to every message or a thread would get two blank rows
+	// between each pair.
+	lastComment bool
 	// collapsed marks a file divider whose body is hidden.
 	collapsed bool
 }
@@ -103,8 +108,11 @@ type commentPlacer func(rows []rowRef) (placed map[int][]review.Comment, orphans
 
 // commentRowCount is how many display rows a comment occupies at this width.
 // Delegates to commentRows so the count cannot drift from what is rendered.
-func commentRowCount(c review.Comment, width int) int {
-	return len(commentRows(c, width))
+//
+// last means this is the final message of its conversation, which adds the
+// block's closing pad row.
+func commentRowCount(c review.Comment, width int, last bool) int {
+	return len(commentRows(c, width, last))
 }
 
 // withComments interleaves comment rows beneath the lines they anchor to, and
@@ -135,24 +143,30 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	for i, r := range idx.rows {
 		shift[i] = len(rows)
 		rows = append(rows, r)
-		for _, c := range placed[i] {
+		// placed[i] is a whole conversation — the parent followed by its replies —
+		// so the last entry is the one that closes the block.
+		group := placed[i]
+		for n, c := range group {
 			ci := index(c)
-			for line := 0; line < commentRowCount(c, idx.width); line++ {
+			last := n == len(group)-1
+			for line := 0; line < commentRowCount(c, idx.width, last); line++ {
 				rows = append(rows, rowRef{
 					kind: rowComment, file: r.file, hunk: -1, line: -1,
-					comment: ci, commentLine: line,
+					comment: ci, commentLine: line, lastComment: last,
 				})
 			}
 		}
 	}
 	if len(orphans) > 0 {
 		rows = append(rows, rowRef{kind: rowOrphanHeader, file: -1, hunk: -1, line: -1})
-		for _, c := range orphans {
+		// The detached section is a flat list, so only its final entry closes it.
+		for n, c := range orphans {
 			ci := index(c)
-			for line := 0; line < commentRowCount(c, idx.width); line++ {
+			last := n == len(orphans)-1
+			for line := 0; line < commentRowCount(c, idx.width, last); line++ {
 				rows = append(rows, rowRef{
 					kind: rowOrphan, file: -1, hunk: -1, line: -1,
-					comment: ci, commentLine: line,
+					comment: ci, commentLine: line, lastComment: last,
 				})
 			}
 		}
