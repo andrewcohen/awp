@@ -99,6 +99,75 @@ func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
 	return "", nil
 }
 
+// Review verdicts, in GitHub's vocabulary for the `event` field of a review
+// submission.
+const (
+	// EventApprove approves the PR. The only verdict whose body may be empty.
+	EventApprove = "APPROVE"
+	// EventComment leaves a review without a verdict either way.
+	EventComment = "COMMENT"
+	// EventRequestChanges asks for changes before the PR can merge.
+	EventRequestChanges = "REQUEST_CHANGES"
+)
+
+// EventNeedsBody reports whether GitHub requires a summary for this verdict. It
+// rejects COMMENT and REQUEST_CHANGES without one — the same rule its own UI
+// applies, since a verdict that asks for something has to say what.
+func EventNeedsBody(event string) bool {
+	return event == EventComment || event == EventRequestChanges
+}
+
+// SubmitReview submits a review on a PR with a verdict, returning the review's
+// id so a re-publish can recognise it as already done.
+//
+// A separate call from the inline comments rather than one batched submission
+// carrying them. A batch is tidier and one round trip, but a partial failure
+// inside it is unrecoverable: you cannot tell which comments landed, so a retry
+// either duplicates everything or drops everything. Posting the comments
+// individually and then submitting the verdict keeps each comment's outcome
+// known, at the cost of the verdict arriving as its own event.
+func (c *Client) SubmitReview(num int, event, body string) (string, error) {
+	switch event {
+	case EventApprove, EventComment, EventRequestChanges:
+	default:
+		return "", fmt.Errorf("unknown review event %q", event)
+	}
+	if EventNeedsBody(event) && strings.TrimSpace(body) == "" {
+		return "", fmt.Errorf("a %s review needs a summary", strings.ToLower(event))
+	}
+	owner, name, err := c.repoOwnerName()
+	if err != nil {
+		return "", err
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, name, num)
+	args := []string{"api", "--method", "POST", endpoint, "-f", "event=" + event}
+	// Sent only when there is one: an empty body on an approval is the difference
+	// between "approved" and "approved, with an empty comment attached".
+	if strings.TrimSpace(body) != "" {
+		args = append(args, "-f", "body="+body)
+	}
+	raw, err := c.runner.Run(context.Background(), "", "gh", args...)
+	if err != nil {
+		return "", fmt.Errorf("gh api submit review on %d: %w: %s", num, err, raw)
+	}
+	var resp struct {
+		ID     int64  `json:"id"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		// Submitted; only the identifier is unreadable. Same call the comment posts
+		// make — an error here would invite a retry that submits a second review.
+		return "", nil
+	}
+	if resp.NodeID != "" {
+		return resp.NodeID, nil
+	}
+	if resp.ID != 0 {
+		return strconv.FormatInt(resp.ID, 10), nil
+	}
+	return "", nil
+}
+
 // PostPRComment adds a comment on the PR itself rather than on a line of it —
 // where a remark about the change as a whole belongs. Returns the comment's id,
 // for the same reason PostReviewComment does: a re-publish has to be able to

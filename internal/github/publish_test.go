@@ -153,3 +153,61 @@ func TestPostReviewCommentOmitsStartLineForOneLine(t *testing.T) {
 		t.Fatalf("expected no start_line for a single-line comment, got %q", joined)
 	}
 }
+
+// The verdict goes up as its own review submission, after the comments.
+func TestSubmitReviewSendsTheEventAndBody(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, `{"id":77,"node_id":"PRR_abc"}`}}
+	id, err := New(r).SubmitReview(9, EventRequestChanges, "two things to fix")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if id != "PRR_abc" {
+		t.Fatalf("expected the review's node id back, got %q", id)
+	}
+	joined := strings.Join(r.calls[1], " ")
+	for _, want := range []string{"pulls/9/reviews", "event=REQUEST_CHANGES", "body=two things to fix"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("submit call missing %q, got %q", want, joined)
+		}
+	}
+}
+
+// An approval with nothing to say sends no body at all: an empty one is the
+// difference between "approved" and "approved, with an empty comment attached".
+func TestSubmitReviewOmitsAnEmptyBody(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"PRR_abc"}`}}
+	if _, err := New(r).SubmitReview(9, EventApprove, "  "); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if joined := strings.Join(r.calls[1], " "); strings.Contains(joined, "body=") {
+		t.Fatalf("expected no body on an empty approval, got %q", joined)
+	}
+}
+
+// GitHub rejects these without a summary, so we do too — before spending a round
+// trip to be told.
+func TestSubmitReviewRequiresABodyWhereGitHubDoes(t *testing.T) {
+	for _, event := range []string{EventComment, EventRequestChanges} {
+		if !EventNeedsBody(event) {
+			t.Fatalf("%s should need a body", event)
+		}
+		r := &threadRunner{outs: []string{repoViewJSON, "{}"}}
+		if _, err := New(r).SubmitReview(9, event, ""); err == nil {
+			t.Fatalf("%s: expected a bodyless review refused", event)
+		}
+	}
+	if EventNeedsBody(EventApprove) {
+		t.Fatal("an approval should not need a body")
+	}
+}
+
+// An unknown event never reaches GitHub.
+func TestSubmitReviewRejectsAnUnknownEvent(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, "{}"}}
+	if _, err := New(r).SubmitReview(9, "LGTM", "x"); err == nil {
+		t.Fatal("expected an unknown event refused")
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("expected no API call, got %v", r.calls)
+	}
+}

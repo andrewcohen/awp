@@ -112,9 +112,16 @@ type Model struct {
 	visualAnchor int
 	// marks says which rows carry a ranged comment's left bar, and in whose kind's
 	// colour (see range_marks.go). Derived from the placed rows on every rebuild.
-	marks       rangeMarks
-	focus       Focus
-	filterInput textinput.Model
+	marks rangeMarks
+	// The publish prompt (see publish.go): publishing is the prompt being up,
+	// publishCursor which verdict is selected, publishBusy a submission in flight —
+	// which blocks a second one, since a comment is only marked published once
+	// GitHub has answered for it.
+	publishing    bool
+	publishCursor int
+	publishBusy   bool
+	focus         Focus
+	filterInput   textinput.Model
 	// searchInput and searchQuery are the diff's content search (see search.go).
 	// The query outlives the prompt so n/N keep working after enter; searchOrigin
 	// is where the cursor was when the prompt opened, so esc can put it back.
@@ -176,6 +183,12 @@ type Model struct {
 	// ReplyComment files a reply against a parent comment, which also reopens
 	// that parent — an answered remark needs the reviewer again.
 	ReplyComment func(parentID string, c review.Comment) error
+	// PublishReview sends the review to its PR, with a verdict — "approve",
+	// "request-changes", "comment", or empty to post the comments without
+	// submitting a review. It returns what happened, in the words the CLI's own
+	// publish prints. Nil leaves `P` unavailable, which it says rather than
+	// silently doing nothing.
+	PublishReview func(verdict string) (string, error)
 	// LoadComments re-reads the review's comments, so findings filed while the
 	// view is open appear without reopening it.
 	LoadComments func() ([]review.Comment, error)
@@ -364,8 +377,10 @@ func (m Model) Status() (string, bool) { return m.status, m.statusErr }
 func (m Model) Filtering() bool {
 	// FocusSearch counts: the diff's search prompt takes the keyboard the same way
 	// the filter does, and a host that grabbed `q` or `esc` first would close the
-	// view out from under someone typing a query.
-	return m.focus == FocusFilter || m.focus == FocusSearch || m.editing
+	// view out from under someone typing a query. So does the publish prompt, where
+	// `esc` and `q` mean "don't publish" and a host that took them would close the
+	// whole view on someone who was declining to.
+	return m.focus == FocusFilter || m.focus == FocusSearch || m.editing || m.publishing
 }
 
 // HelpVisible reports whether the `?` overlay is up. Like Filtering, it tells a
@@ -524,6 +539,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.editor.setBody(msg.body)
 		return m, nil
+	case publishDoneMsg:
+		return m.applyPublishDone(msg)
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -558,6 +575,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditorKey(msg)
 	}
 	key := msg.String()
+	// The publish prompt owns the keyboard while it is up, for the same reason the
+	// help overlay does: nothing behind it is navigable, and its `esc` means
+	// "don't publish".
+	if m.publishing {
+		return m.handlePublishKey(msg)
+	}
 	// The overlay owns the keyboard while it is up: nothing behind it is
 	// navigable, so forwarding keys would move a cursor nobody can see. Scroll
 	// keys go to its viewport instead.
@@ -673,6 +696,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "T":
 		m.cycleThreadVisibility()
+		return m, nil
+	// Publishing is about the review as a whole, so it works from any pane — the
+	// same reasoning as `T`. Capital, because it leaves the machine.
+	case "P":
+		m.beginPublish()
 		return m, nil
 	case "tab", "shift+tab":
 		m.cycleFocus(key == "tab")
@@ -1154,6 +1182,9 @@ func (m Model) Body(width, height int) string {
 		// In place of the panes rather than over them, so the body keeps the exact
 		// height the host budgeted and the footer does not move.
 		return renderHelpOverlay(m.helpVP, width, height)
+	}
+	if m.publishing {
+		return m.renderPublishOverlay(width, height)
 	}
 	leftWidth, rightWidth := m.paneWidthsFor(width)
 	if m.hideLeft {
