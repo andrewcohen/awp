@@ -38,7 +38,7 @@ func commentOn(path string, line int, text, body string) review.Comment {
 func commentBodyText(c review.Comment, width int) []string {
 	var out []string
 	past := false
-	for _, r := range commentRows(c, width, false) {
+	for _, r := range commentRows(c, width, false, false) {
 		if r.header {
 			past = true
 			continue
@@ -54,7 +54,7 @@ func commentBodyText(c review.Comment, width int) []string {
 
 // commentRowStrings is every row's raw text, for width assertions.
 func commentRowStrings(c review.Comment, width int) []string {
-	rows := commentRows(c, width, true)
+	rows := commentRows(c, width, true, false)
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r.text)
@@ -747,6 +747,167 @@ func TestCommentsOnAMissingFileStayDetached(t *testing.T) {
 	}
 }
 
+// commentRowsFor counts the rows a thread occupies in the stream — the measure of
+// whether it is folded.
+func commentRowsFor(m Model, id string) int {
+	n := 0
+	for _, r := range m.stream.rows {
+		if !isCommentRow(r.kind) || r.comment < 0 || r.comment >= len(m.stream.comments) {
+			continue
+		}
+		if m.stream.comments[r.comment].ID == remoteThreadPrefix+id {
+			n++
+		}
+	}
+	return n
+}
+
+// A settled conversation is reference material until you go looking at it; an
+// open one is the reason you are reading. So resolved threads fold to a line and
+// unresolved ones stay open — which is the difference between 43% of a real diff
+// being prose you had already dealt with and it being a handful of rows.
+func TestResolvedThreadsFoldAndOpenOnesDoNot(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{
+		threadOf("T1", "a.go", 1, true, "settled", "a long remark", "and a reply to it"),
+		threadOf("T2", "a.go", 2, false, "open", "a long remark", "and a reply to it"),
+	})
+
+	folded, open := commentRowsFor(m, "T1"), commentRowsFor(m, "T2")
+	if folded >= open {
+		t.Fatalf("expected the resolved thread shorter than the open one, got %d vs %d", folded, open)
+	}
+	// A pad row, the summary, and a closing pad — the conversation on one line.
+	if folded != 3 {
+		t.Fatalf("expected a folded thread to be 3 rows, got %d", folded)
+	}
+}
+
+// The folded line has to say what it is hiding: where it came from, what GitHub
+// says about it, how many messages are inside, and what the first one was about.
+func TestFoldedThreadSummarySaysWhatIsInside(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	th := threadOf("T1", "a.go", 1, true, "first message", "second", "third")
+	th.Outdated = true
+	m.SetThreads([]review.Thread{th})
+
+	var summary string
+	for _, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		for _, row := range commentRows(m.stream.comments[r.comment], 200, true, true) {
+			if row.header {
+				summary = row.text
+			}
+		}
+		break
+	}
+	for _, want := range []string{foldClosed, "github", "resolved", "outdated", "3 msgs", "first message"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("expected the summary to carry %q, got %q", want, summary)
+		}
+	}
+}
+
+// enter opens the thread under the cursor, and closes it again.
+func TestEnterTogglesTheThreadFold(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{
+		threadOf("T1", "a.go", 1, true, "settled", "a reply", "another reply"),
+	})
+	closed := commentRowsFor(m, "T1")
+
+	// Put the cursor on the thread, then open it.
+	m.cursorRow = threadRow(t, m, "T1")
+	m = press(m, "enter")
+	opened := commentRowsFor(m, "T1")
+	if opened <= closed {
+		t.Fatalf("expected enter to expand the thread, %d rows became %d", closed, opened)
+	}
+
+	m.cursorRow = threadRow(t, m, "T1")
+	m = press(m, "enter")
+	if got := commentRowsFor(m, "T1"); got != closed {
+		t.Fatalf("expected enter to fold it again, got %d rows want %d", got, closed)
+	}
+}
+
+// threadRow is the first stream row belonging to a thread.
+func threadRow(t *testing.T, m Model, id string) int {
+	t.Helper()
+	for i, r := range m.stream.rows {
+		if isCommentRow(r.kind) && r.comment >= 0 && r.comment < len(m.stream.comments) &&
+			m.stream.comments[r.comment].ID == remoteThreadPrefix+id && r.commentLine == 1 {
+			return i
+		}
+	}
+	t.Fatalf("thread %s has no rows", id)
+	return 0
+}
+
+// A fold you set by hand outlasts the thread's own state changing: resolving a
+// conversation you deliberately opened must not close it under you.
+func TestAnExplicitFoldSurvivesResolving(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	open := threadOf("T1", "a.go", 1, false, "still open", "a reply")
+	m.SetThreads([]review.Thread{open})
+
+	// Fold it by hand while it is unresolved.
+	m.cursorRow = threadRow(t, m, "T1")
+	m = press(m, "enter")
+	folded := commentRowsFor(m, "T1")
+
+	// Now it gets resolved elsewhere. The default would fold it — it already is —
+	// so check the other direction: expand by hand, then resolve.
+	m.cursorRow = threadRow(t, m, "T1")
+	m = press(m, "enter")
+	expanded := commentRowsFor(m, "T1")
+	if expanded <= folded {
+		t.Fatalf("expected the hand-expanded thread taller, got %d vs %d", expanded, folded)
+	}
+	m.threads[0].Resolved = true
+	m.rebuildStream()
+	if got := commentRowsFor(m, "T1"); got != expanded {
+		t.Fatalf("expected resolving to leave the open fold alone, got %d rows want %d", got, expanded)
+	}
+}
+
+// Local comments are the reviewer's own working set and never fold — folding what
+// you are in the middle of writing about would be perverse.
+func TestLocalCommentsNeverFold(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	c := comment("c1", "a.go", 2, "beta", "line one\nline two\nline three", review.AuthorHuman)
+	m.SetComments([]review.Comment{c})
+	if m.threadCollapsed(c) {
+		t.Fatal("expected a local comment never to fold")
+	}
+	rows := 0
+	for _, r := range m.stream.rows {
+		if isCommentRow(r.kind) {
+			rows++
+		}
+	}
+	// Three body lines plus a pad, a header and a closing pad.
+	if rows < 5 {
+		t.Fatalf("expected the local comment rendered in full, got %d rows", rows)
+	}
+}
+
+// threadOf builds a thread of several messages, for measuring folded against
+// expanded heights.
+func threadOf(id, path string, line int, resolved bool, bodies ...string) review.Thread {
+	t := review.Thread{ID: id, Path: path, Side: review.SideNew, Line: line, Resolved: resolved}
+	for _, b := range bodies {
+		t.Comments = append(t.Comments, review.ThreadComment{Author: "alice", Body: b})
+	}
+	return t
+}
+
 // Threads use the same relocation ladder as local comments, because their line
 // numbers are GitHub's against a particular commit and drift the same way.
 func TestRemoteThreadsRelocateWithContent(t *testing.T) {
@@ -768,7 +929,7 @@ func TestRemoteThreadsRelocateWithContent(t *testing.T) {
 // Local comments and remote threads keep separate vocabularies, so the UI cannot
 // claim a draft was "resolved" or a thread "addressed".
 func TestThreadStateIsPublishedNotOpen(t *testing.T) {
-	c := threadAsComment(remoteThread("T1", "a.go", 3, false, "hi"))
+	c := Model{}.threadAsComment(remoteThread("T1", "a.go", 3, false, "hi"))
 	if c.State != review.Published {
 		t.Fatalf("expected a remote thread to present as published, got %q", c.State)
 	}
@@ -1154,7 +1315,7 @@ func TestEveryMessageOpensWithABarOnlyRow(t *testing.T) {
 		{ID: "c1", Author: review.AuthorHuman, Body: "top", State: review.Open},
 		{ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open},
 	} {
-		rows := commentRows(c, 60, true)
+		rows := commentRows(c, 60, true, false)
 		if len(rows) < 2 {
 			t.Fatalf("%s: expected at least a pad row and a header, got %d", c.ID, len(rows))
 		}
@@ -1404,8 +1565,8 @@ func TestCommentRowCountMatchesRenderedRows(t *testing.T) {
 	for _, width := range []int{30, 60, 120} {
 		for _, c := range cases {
 			for _, last := range []bool{false, true} {
-				want := commentRowCount(c, width, last)
-				got := len(commentLines(c, width, false, last))
+				want := commentRowCount(c, width, last, false)
+				got := len(commentLines(c, width, false, last, false))
 				if want != got {
 					t.Fatalf("width %d, comment %q, last=%v: counted %d rows, rendered %d",
 						width, c.ID, last, want, got)
@@ -1415,7 +1576,7 @@ func TestCommentRowCountMatchesRenderedRows(t *testing.T) {
 	}
 	// And the closing message is exactly one row taller.
 	for _, c := range cases {
-		if a, b := commentRowCount(c, 60, false), commentRowCount(c, 60, true); b != a+1 {
+		if a, b := commentRowCount(c, 60, false, false), commentRowCount(c, 60, true, false); b != a+1 {
 			t.Fatalf("comment %q: closing the block added %d rows, want 1", c.ID, b-a)
 		}
 	}
@@ -1566,7 +1727,7 @@ func TestOnlyTheThreadsFirstMessageNamesTheKind(t *testing.T) {
 		Kind: review.KindSuggestion, State: review.Open,
 	}
 	head := func(c review.Comment) string {
-		for _, r := range commentRows(c, 60, true) {
+		for _, r := range commentRows(c, 60, true, false) {
 			if r.header {
 				return r.text
 			}
@@ -1605,7 +1766,7 @@ func TestOnlyTheLastMessageInAThreadClosesTheBlock(t *testing.T) {
 		if r.kind != rowComment {
 			continue
 		}
-		lines := commentLines(m.stream.comments[r.comment], m.hunkWidth, false, r.lastComment)
+		lines := commentLines(m.stream.comments[r.comment], m.hunkWidth, false, r.lastComment, false)
 		if r.commentLine < len(lines) {
 			if _, text := splitGutter(stripANSI(lines[r.commentLine])); strings.TrimSpace(text) == "" {
 				blanks = append(blanks, block)

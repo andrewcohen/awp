@@ -148,6 +148,11 @@ type Model struct {
 	// rendered alongside local comments.
 	threads          []review.Thread
 	threadVisibility ThreadVisibility
+	// threadFold overrides a mirrored thread's default fold state, by thread id.
+	// True means expanded. Absent means the default — resolved threads fold, open
+	// ones do not (see threadFolded). Not persisted: how you left a fold is a
+	// reading position, not a property of the review.
+	threadFold map[string]bool
 	// ResolveThread toggles a GitHub thread's resolved state.
 	ResolveThread ThreadResolver
 	// SaveComment persists a comment the user wrote. Nil disables commenting, so
@@ -261,7 +266,10 @@ func (m *Model) rebuildStream() {
 	// so they all die with it. This is the only place that happens, which is what
 	// lets the cache outlive a frame at all — see renderCache in stream_render.go.
 	m.cache.drop()
-	idx := withComments(buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed), m.placeComments)
+	idx := withComments(
+		buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed),
+		m.placeComments, m.threadCollapsed,
+	)
 	// The index is built before the compose box is spliced in, so a half-written
 	// comment never shows up as a listed conversation.
 	m.stream = idx
@@ -738,6 +746,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(m.searchQuery) != "" {
 				m.seekMatch(false, false)
 			}
+		// enter opens and closes the GitHub thread under the cursor. Free to bind
+		// here: in the two lists enter hands the keyboard to the diff, and in the
+		// diff it had no meaning at all.
+		case "enter":
+			return m.toggleThreadFold()
 		case "c":
 			return m.startComment()
 		case "i":

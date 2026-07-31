@@ -147,8 +147,19 @@ func isCommentRow(k rowKind) bool {
 //
 // last means this is the final message of its conversation, which adds the
 // block's closing pad row.
-func commentRowCount(c review.Comment, width int, last bool) int {
-	return len(commentRows(c, width, last))
+func commentRowCount(c review.Comment, width int, last, collapsed bool) int {
+	return len(commentRows(c, width, last, collapsed))
+}
+
+// commentFolder reports whether a comment renders folded to one line. Passed into
+// the geometry pass the same way commentPlacer is, so counting rows and drawing
+// them ask one function and cannot disagree about how tall a thread is.
+type commentFolder func(review.Comment) bool
+
+// folds is the predicate with a nil check, since a stream can be built without
+// one (nothing folds then).
+func (f commentFolder) folds(c review.Comment) bool {
+	return f != nil && f(c)
 }
 
 // withComments interleaves comment rows beneath the lines they anchor to, with
@@ -158,7 +169,7 @@ func commentRowCount(c review.Comment, width int, last bool) int {
 // Two passes rather than one: comments are located against the *diff* rows, so
 // the diff geometry has to exist before placement can run. Inserting the comment
 // rows afterwards keeps the placement logic ignorant of row offsets.
-func withComments(idx streamIndex, place commentPlacer) streamIndex {
+func withComments(idx streamIndex, place commentPlacer, folded commentFolder) streamIndex {
 	if place == nil {
 		return idx
 	}
@@ -177,7 +188,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 	// Review-level remarks lead the stream: they are about the change as a whole,
 	// so they belong before the first thing they are about rather than after
 	// everything.
-	rows = appendCommentSection(rows, p.review, rowReviewHeader, rowReview, idx.width, index)
+	rows = appendCommentSection(rows, p.review, rowReviewHeader, rowReview, idx.width, index, folded)
 	// Row indices shift as comment rows are inserted, so every recorded offset
 	// has to be remapped rather than reused.
 	shift := make([]int, len(idx.rows))
@@ -190,7 +201,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 		for n, c := range group {
 			ci := index(c)
 			last := n == len(group)-1
-			for line := 0; line < commentRowCount(c, idx.width, last); line++ {
+			for line := 0; line < commentRowCount(c, idx.width, last, folded.folds(c)); line++ {
 				rows = append(rows, rowRef{
 					kind: rowComment, file: r.file, hunk: -1, line: -1,
 					comment: ci, commentLine: line, lastComment: last,
@@ -198,7 +209,7 @@ func withComments(idx streamIndex, place commentPlacer) streamIndex {
 			}
 		}
 	}
-	rows = appendCommentSection(rows, p.orphans, rowOrphanHeader, rowOrphan, idx.width, index)
+	rows = appendCommentSection(rows, p.orphans, rowOrphanHeader, rowOrphan, idx.width, index, folded)
 
 	out := idx
 	out.rows = rows
@@ -223,6 +234,7 @@ func appendCommentSection(
 	header, body rowKind,
 	width int,
 	index func(review.Comment) int,
+	folded commentFolder,
 ) []rowRef {
 	if len(cs) == 0 {
 		return rows
@@ -233,7 +245,7 @@ func appendCommentSection(
 		for n, c := range group {
 			ci := index(c)
 			last := n == len(group)-1
-			for line := 0; line < commentRowCount(c, width, last); line++ {
+			for line := 0; line < commentRowCount(c, width, last, folded.folds(c)); line++ {
 				rows = append(rows, rowRef{
 					kind: body, file: -1, hunk: -1, line: -1,
 					comment: ci, commentLine: line, lastComment: last,

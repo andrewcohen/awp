@@ -281,11 +281,89 @@ func remoteThreadLabel(t review.Thread) string {
 	return label
 }
 
+// Fold glyphs for a mirrored thread, pointing the way the row will move.
+const (
+	foldClosed = "▶"
+	foldOpen   = "▼"
+)
+
+// threadCollapsed reports whether a mirrored thread renders as one summary line.
+//
+// Resolved threads start folded, unresolved ones open: a settled conversation is
+// reference material until you go looking at it, while an open one is the reason
+// you are reading. On a real PR that is the difference between 529 rows of
+// conversation and sixteen — 43% of that diff was prose you had already dealt
+// with, and holding j through it is what "slow scrolling" turned out to be.
+//
+// An explicit toggle wins over the default, and only for as long as the view is
+// open: how you left a fold is a reading position, not a property of the review,
+// and persisting it would mean a thread you opened once stays open forever.
+func (m Model) threadFolded(t review.Thread) bool {
+	if expanded, ok := m.threadFold[t.ID]; ok {
+		return !expanded
+	}
+	return t.Resolved
+}
+
+// threadCollapsed answers the same question about an adapted comment, which is
+// the form the row builders see.
+func (m Model) threadCollapsed(c review.Comment) bool {
+	t, ok := m.threadFor(c.ID)
+	if !ok {
+		// A local comment is the reviewer's own working set, always open. Folding
+		// what you are in the middle of writing about would be perverse.
+		return false
+	}
+	return m.threadFolded(t)
+}
+
+// threadHeaderLabel is a mirrored thread's header: which way it folds, where it
+// came from, and what GitHub says about it — plus, when folded, how much is
+// inside, since that is the one thing you lose by closing it.
+//
+// The glyph is on both states, not only the closed one: it is the affordance
+// that says enter does something here.
+//
+// The count is messages, not replies, so a thread of one reads "1 msg" rather
+// than claiming a reply it does not have.
+func threadHeaderLabel(t review.Thread, folded bool) string {
+	if !folded {
+		return foldOpen + " " + remoteThreadLabel(t)
+	}
+	return fmt.Sprintf("%s %s · %d msg%s",
+		foldClosed, remoteThreadLabel(t), len(t.Comments), plural(len(t.Comments)))
+}
+
+// toggleThreadFold opens or closes the mirrored thread under the cursor.
+func (m Model) toggleThreadFold() (tea.Model, tea.Cmd) {
+	t, ok := m.threadAtCursor()
+	if !ok {
+		// Silent: enter on a line of code is not a mistake, and the diff has no
+		// other meaning for it.
+		return m, nil
+	}
+	if m.threadFold == nil {
+		m.threadFold = map[string]bool{}
+	}
+	// Store what it is moving *to* as an explicit override, so the fold survives
+	// the thread's resolved state changing under it — resolving a thread you
+	// deliberately opened should not close it.
+	m.threadFold[t.ID] = m.threadFolded(t)
+	m.rebuildStream()
+	return m, nil
+}
+
 // threadAsComment adapts a remote thread into the same display shape local
 // comments use, so one renderer covers both. The distinction the reader needs —
 // this is already on GitHub — is carried in the author label rather than by a
 // separate row kind.
-func threadAsComment(t review.Thread) review.Comment {
+//
+// The body is the whole conversation either way. A folded thread shows only its
+// first line, but that is the row builder's business (see commentRows), which
+// keeps folding a display concern and means unfolding needs nothing rebuilt. It
+// is also what lets the comment index summarise a folded thread the same way it
+// summarises everything else.
+func (m Model) threadAsComment(t review.Thread) review.Comment {
 	var b strings.Builder
 	for i, c := range t.Comments {
 		if i > 0 {
@@ -295,7 +373,7 @@ func threadAsComment(t review.Thread) review.Comment {
 	}
 	return review.Comment{
 		ID:     remoteThreadPrefix + t.ID,
-		Author: remoteThreadLabel(t),
+		Author: threadHeaderLabel(t, m.threadFolded(t)),
 		Body:   b.String(),
 		State:  review.Published,
 		Anchor: review.Anchor{Path: t.Path, Side: t.Side, LineHint: t.Line},
@@ -340,7 +418,7 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 		}
 	}
 	for _, t := range m.visibleThreads() {
-		all = append(all, threadAsComment(t))
+		all = append(all, m.threadAsComment(t))
 	}
 	if len(all) == 0 {
 		return commentPlacement{}
@@ -639,7 +717,7 @@ type commentRow struct {
 // code — reflowing at spaces misrepresents where a token ends — and wrong for
 // prose, where it just makes sentences hard to read. ansi.Wrap still hard-breaks a
 // word longer than the line, so a URL or a long identifier cannot overflow.
-func commentRows(c review.Comment, width int, last bool) []commentRow {
+func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow {
 	// Every message opens with a bar-only row: top padding for the first one,
 	// and the separator between messages after that. Uniform, so a thread reads
 	// as one card with air around its content — the same Padding(1, ...) breathing
@@ -651,6 +729,21 @@ func commentRows(c review.Comment, width int, last bool) []commentRow {
 		label = "you"
 	}
 	title := commentGutter + label
+	if collapsed {
+		// One line for the whole conversation. The label already carries the fold
+		// glyph, where it came from, its state and its message count (see
+		// collapsedThreadLabel), so all that is left is the opening remark's first
+		// line. No state suffix — the chips in the label said it, and appending
+		// after a truncated summary would put it where nobody reads.
+		if s := firstLine(c.Body); s != "" {
+			title += " · " + s
+		}
+		out = append(out, commentRow{text: truncate(title, max(1, width)), header: true})
+		if last {
+			out = append(out, commentRow{text: commentGutter})
+		}
+		return out
+	}
 	// The kind is named once per conversation, on the remark that opened it. A
 	// reply already renders in the thread's hue, so repeating the word on every
 	// message is noise — the same reason a published reply omits it. A plain
@@ -767,9 +860,9 @@ func kindStyles(kind review.Kind) lipgloss.Style {
 //
 // The gutter is styled separately from the text so the bar can carry the kind's
 // hue while the prose stays readable.
-func commentLines(c review.Comment, width int, cursor, last bool) []string {
+func commentLines(c review.Comment, width int, cursor, last, collapsed bool) []string {
 	bar, head, body, fill := commentStyles(c.Kind, cursor)
-	rows := commentRows(c, width, last)
+	rows := commentRows(c, width, last, collapsed)
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		style := body
