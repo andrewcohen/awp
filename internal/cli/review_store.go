@@ -27,37 +27,50 @@ import (
 
 // reviewTargetFor resolves which review the current directory belongs to.
 //
-// Keyed by workspace for now. PR-targeted reviews arrive with PR mode in phase 6
-// of the review-surface spec; until then a workspace-keyed review is effectively
-// the PR's review anyway, because `awp review <pr>` creates a dedicated
-// workspace per PR. Re-keying later is safe: comments anchor to content, so
-// nothing about them depends on the review's identity (D1).
+// Keyed by workspace, deliberately, even when the workspace is pinned to a PR.
+// A review's Target is its identity, and PR presence is not stable across a
+// workspace's life: comments accumulate while you work, then opening a PR would
+// move the identity from work-<ws> to pr-<n> and split the store in half
+// mid-life. Where the PR number is actually needed — publishing — it is read
+// from the workspace entry instead (see pinnedPRForPath). Comments anchor to
+// content, so nothing about them depends on the review's identity (D1).
 func reviewTargetFor(svc workspace.Service, cwd string) review.Target {
-	return review.Target{Kind: review.TargetWorking, Workspace: workspaceNameForPath(svc, cwd)}
+	e, _ := workspaceEntryForPath(svc, cwd)
+	return review.Target{Kind: review.TargetWorking, Workspace: e.Name}
 }
 
-// workspaceNameForPath is the workspace containing cwd, longest match first so a
-// nested workspace beats its parent.
-func workspaceNameForPath(svc workspace.Service, cwd string) string {
+// pinnedPRForPath is the PR the workspace containing cwd is pinned to, or 0.
+// Set by `awp review <n>` and by the deck's `p #` link, so it is the number the
+// user already told awp about — publishing should not make them retype it.
+func pinnedPRForPath(svc workspace.Service, cwd string) int {
+	e, _ := workspaceEntryForPath(svc, cwd)
+	return e.PRNumber
+}
+
+// workspaceEntryForPath is the workspace containing cwd, longest match first so
+// a nested workspace beats its parent.
+func workspaceEntryForPath(svc workspace.Service, cwd string) (workspace.ListEntry, bool) {
 	if svc == nil {
-		return ""
+		return workspace.ListEntry{}, false
 	}
 	entries, err := svc.List()
 	if err != nil {
-		return ""
+		return workspace.ListEntry{}, false
 	}
-	best, name := "", ""
+	best := ""
+	var found workspace.ListEntry
+	ok := false
 	for _, e := range entries {
 		if e.Path == "" {
 			continue
 		}
 		if cwd == e.Path || strings.HasPrefix(cwd, e.Path+string(os.PathSeparator)) {
 			if len(e.Path) > len(best) {
-				best, name = e.Path, e.Name
+				best, found, ok = e.Path, e, true
 			}
 		}
 	}
-	return name
+	return found, ok
 }
 
 // runReviewSubcommand handles `awp review add|list`, leaving the bare

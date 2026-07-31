@@ -226,6 +226,10 @@ type ListEntry struct {
 	ActivePrompt string
 	Status       string
 	Unread       bool
+	// PRNumber is the PR this workspace is pinned to, 0 if none. Exposed so a
+	// command running inside a workspace can find its PR without re-reading the
+	// state file — `awp review publish` needs it to know where to post.
+	PRNumber int
 }
 
 type InfoEntry struct {
@@ -735,6 +739,7 @@ func (s *service) List() ([]ListEntry, error) {
 			ActivePrompt: entry.ActivePrompt,
 			Status:       entry.Status,
 			Unread:       entry.Unread,
+			PRNumber:     entry.PRNumber,
 		})
 	}
 	return out, nil
