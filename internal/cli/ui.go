@@ -32,6 +32,26 @@ func diffLoaderFor(runner Runner) deckui.DiffLoader {
 	}
 }
 
+// diffBaseResolverFor names what a stack-base diff is read against, for the
+// modal's footer. Same resolution the loader uses — the label is whatever that
+// picked, with the trunk fallback spelled out as the branch it names rather than
+// left as the literal "trunk()".
+//
+// Only ScopeStackBase has a base worth naming: the working-copy scope is diffed
+// against @ itself, which "working copy" already says.
+func diffBaseResolverFor(runner Runner) deckui.DiffBaseResolver {
+	return func(item deckui.Item, scope deckui.DiffScope) string {
+		if scope != deckui.ScopeStackBase {
+			return ""
+		}
+		if runner == nil {
+			runner = NewExecRunner()
+		}
+		_, label := resolveReviewStackBaseNamed(runner, item.Path, item.Bookmark)
+		return label
+	}
+}
+
 // openDiffFileInEditor opens a file at a line from the diff modal.
 // tea.ExecProcess
 // is the right tool here — $EDITOR is an external program, not a nested

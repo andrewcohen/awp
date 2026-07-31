@@ -38,6 +38,15 @@ type DiffLoader func(item Item, scope DiffScope) (string, error)
 // workspace — an external $EDITOR process, which tea.ExecProcess handles.
 type DiffOpener func(item Item, filePath string, line int) tea.Cmd
 
+// DiffBaseResolver names what a scope's diff is against, for the modal's footer:
+// the trunk branch, or a stacked parent's bookmark. Empty when there is nothing
+// better to say than the scope's own wording.
+//
+// Separate from DiffLoader because it shells out and the answer is chrome. The
+// viewer runs it as its own command, so a slow resolve delays the label rather
+// than the diff.
+type DiffBaseResolver func(item Item, scope DiffScope) string
+
 // CommentStore is the review store seam. The deck package neither knows nor
 // cares where findings live; the CLI layer supplies these.
 type CommentStore struct {
@@ -100,7 +109,7 @@ type diffModal struct {
 
 // newDiffModal builds the modal and returns the command that loads the
 // first diff.
-func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, comments CommentStore) (*diffModal, tea.Cmd) {
+func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, base DiffBaseResolver, comments CommentStore) (*diffModal, tea.Cmd) {
 	inner := ui.New(item.Path,
 		func() (string, error) { return load(item, scope) },
 		func(filePath string, line int) tea.Cmd {
@@ -110,6 +119,9 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 			return open(item, filePath, line)
 		},
 	)
+	if base != nil {
+		inner.ResolveBase = func() string { return base(item, scope) }
+	}
 	if comments.Save != nil {
 		inner.SaveComment = func(c review.Comment) error { return comments.Save(item, c) }
 	}
@@ -180,10 +192,18 @@ func (dm *diffModal) footerHelp() string {
 	if isErr {
 		style = dm.danger
 	}
+	// Name the base when the resolver has answered — "vs main" says what you are
+	// reading against, where "vs stack base" only says how it was picked. Falls
+	// back to the scope's own wording for the frame or two before the answer
+	// lands, and permanently when no resolver is installed.
+	against := dm.scope.String()
+	if base := dm.inner.Base(); base != "" && dm.scope == ScopeStackBase {
+		against = "vs " + base
+	}
 	// `? help` rather than a legend: the viewer owns the full keymap behind `?`,
 	// and listing a chosen dozen bindings here spent the whole footer on an
 	// answer to a question asked once.
-	segs := []string{dm.label, dm.scope.String()}
+	segs := []string{dm.label, against}
 	if status != "" {
 		segs = append(segs, status)
 	}

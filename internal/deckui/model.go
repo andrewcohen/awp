@@ -1038,6 +1038,14 @@ func (m Model) WithDiffViewer(load DiffLoader, open DiffOpener) Model {
 	return m
 }
 
+// WithDiffBaseResolver installs the callback that names what a stack-base diff
+// is read against (see DiffBaseResolver). Without it the footer says "vs stack
+// base", which describes how the base was chosen rather than what it is.
+func (m Model) WithDiffBaseResolver(r DiffBaseResolver) Model {
+	m.diffBase = r
+	return m
+}
+
 // WithReviewStore installs the review-store seam behind the diff modal's
 // commenting. Without it the diff is read-only.
 func (m Model) WithReviewStore(cs CommentStore) Model {
@@ -3216,7 +3224,7 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	if m2, blocked := m.blockIfSettingUp(item); blocked {
 		return m2, nil
 	}
-	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffComments)
+	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffBase, m.diffComments)
 	m.active = dm
 	m.status = "diff (" + scope.String() + "): loading…"
 	// tea.ClearScreen on modal entry — same rationale as the other modals
