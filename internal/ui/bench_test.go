@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -170,6 +173,11 @@ func benchModel(tb testing.TB, comments []review.Comment) Model {
 	m.files = files
 	m.applyFilter()
 	m.comments = comments
+	if os.Getenv(benchNoCacheEnv) != "" {
+		// Reproduce the pre-cache behaviour, for before/after on the same fixture:
+		// with no cache installed, a comment block is rebuilt per row of itself.
+		m.blocks = nil
+	}
 	m.rebuildStream()
 	return m
 }
@@ -385,5 +393,154 @@ func BenchmarkRenderBodyInsideALongThread(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.Body(160, 46)
+	}
+}
+
+// AWP_BENCH_THREADS names a mirrored threads.json — the real one, from
+// ~/.awp/reviews/<repo>/work-<workspace>/remote/threads.json — so a benchmark can
+// hold the conversation volume that is actually on screen.
+const (
+	benchThreadsEnv = "AWP_BENCH_THREADS"
+	// benchNoCacheEnv disables the per-frame block cache, so the same fixture can
+	// be measured with and without it.
+	benchNoCacheEnv = "AWP_BENCH_NO_CACHE"
+)
+
+func benchThreadsFromEnv(tb testing.TB) []review.Thread {
+	tb.Helper()
+	path := os.Getenv(benchThreadsEnv)
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		tb.Fatalf("read %s=%s: %v", benchThreadsEnv, path, err)
+	}
+	var out []review.Thread
+	if err := json.Unmarshal(raw, &out); err != nil {
+		tb.Fatalf("parse %s: %v", path, err)
+	}
+	return out
+}
+
+// BenchmarkFrameWithRealThreads is the reported case: the captured diff, the
+// captured threads, every one of them shown.
+//
+// It reports bytes per frame as well as time, because those are two different
+// costs and only one of them is ours. A frame that is quick to build but large to
+// write is bound by the terminal — every comment row is painted the full width, so
+// it carries a styled run whether or not it has text, and scrolling changes every
+// line on screen, which is precisely when Bubble Tea's line diffing can skip
+// nothing.
+func BenchmarkFrameWithRealThreads(b *testing.B) {
+	m := benchModel(b, nil)
+	if ts := benchThreadsFromEnv(b); len(ts) > 0 {
+		m.SetThreads(ts)
+	} else {
+		m.SetThreads(benchThreads(m.filtered, 16))
+	}
+	m.threadVisibility = ThreadsAll
+	m.rebuildStream()
+
+	comment, total := 0, 0
+	for _, r := range m.stream.rows {
+		total++
+		if isCommentRow(r.kind) {
+			comment++
+		}
+	}
+	b.ReportMetric(float64(total), "rows")
+	b.ReportMetric(float64(comment), "comment_rows")
+
+	// Park where the conversations are, which is where the scrolling hurts.
+	for i, r := range m.stream.rows {
+		if isCommentRow(r.kind) {
+			m.cursorRow = i
+			m.followCursor()
+			break
+		}
+	}
+	b.ReportMetric(float64(len(m.Body(160, 46))), "bytes/frame")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = m.Body(160, 46)
+	}
+}
+
+// BenchmarkScrollThroughRealThreads walks the cursor down through them, one
+// keypress and one frame per iteration — the gesture that is reported as slow.
+func BenchmarkScrollThroughRealThreads(b *testing.B) {
+	m := benchModel(b, nil)
+	if ts := benchThreadsFromEnv(b); len(ts) > 0 {
+		m.SetThreads(ts)
+	} else {
+		m.SetThreads(benchThreads(m.filtered, 16))
+	}
+	m.threadVisibility = ThreadsAll
+	m.rebuildStream()
+	for i, r := range m.stream.rows {
+		if isCommentRow(r.kind) {
+			m.cursorRow = i
+			m.followCursor()
+			break
+		}
+	}
+	bytes := 0
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.moveCursor(1)
+		bytes += len(m.Body(160, 46))
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(bytes)/float64(b.N), "bytes/frame")
+	}
+}
+
+// BenchmarkDeckBodyPad measures what the deck does to the viewer's body on every
+// frame: pads it out to the terminal width with lipgloss.
+//
+//	body = lipgloss.NewStyle().Width(m.width).Render(body)   // deckui/model.go
+//
+// That is a lipgloss Render over the entire frame, so it re-parses every escape
+// sequence in it. Its cost is therefore a function of how ANSI-dense the body is
+// rather than of how many rows it has — and a comment row is far denser than a
+// code row, being painted the full width with a background fill. Which is the
+// shape of the reported symptom exactly: fast on a huge diff, slow as soon as
+// conversations are on screen.
+func BenchmarkDeckBodyPad(b *testing.B) {
+	const width = 160
+	build := func(b *testing.B, withThreads bool) string {
+		m := benchModel(b, nil)
+		if withThreads {
+			if ts := benchThreadsFromEnv(b); len(ts) > 0 {
+				m.SetThreads(ts)
+			} else {
+				m.SetThreads(benchThreads(m.filtered, 16))
+			}
+			m.threadVisibility = ThreadsAll
+			m.rebuildStream()
+			for i, r := range m.stream.rows {
+				if isCommentRow(r.kind) {
+					m.cursorRow = i
+					m.followCursor()
+					break
+				}
+			}
+		}
+		return m.Body(width, 46)
+	}
+	for _, tc := range []struct {
+		name    string
+		threads bool
+	}{{"code", false}, {"threads", true}} {
+		b.Run(tc.name, func(b *testing.B) {
+			body := build(b, tc.threads)
+			b.ReportMetric(float64(len(body)), "bytes/body")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = lipgloss.NewStyle().Width(width).Render(body)
+			}
+		})
 	}
 }

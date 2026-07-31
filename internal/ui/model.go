@@ -169,6 +169,10 @@ type Model struct {
 	// scrolls it — there are more bindings than fit a short terminal.
 	showHelp bool
 	helpVP   viewport.Model
+	// blocks memoizes rendered comment blocks for the duration of one frame (see
+	// stream_render.go). A pointer because the render path takes Model by value;
+	// it is scratch space shared by those copies, not state.
+	blocks *commentBlockCache
 	// hideLeft drops the left column (`\`), giving the stream the full width.
 	// The file and comment cursors keep their state while it is hidden, so
 	// unhiding returns you to where you were rather than to the top.
@@ -324,12 +328,14 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.CharLimit = 128
+	blocks := commentBlockCache{}
 	return Model{
 		RepoRoot:        repoRoot,
 		RefreshInterval: DefaultRefreshInterval,
 		LoadDiff:        loadFn,
 		OpenFile:        openFn,
 		filterInput:     ti,
+		blocks:          &blocks,
 		status:          "loading...",
 		// Open on the diff itself. Reading the change is what you came for;
 		// the file list is a jump index you reach for second.
