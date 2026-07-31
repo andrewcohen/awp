@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -115,9 +116,13 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 		listErr  error
 		queued   map[string]bool
 		qErr     error
+		mirrored int
 	)
+	// Which workspaces pin which PR. Read from local state, so this is cheap
+	// enough to do before the network work that needs it.
+	pinnedBy := pinnedWorkspacesByPR(store, repo)
 	var fetchWG sync.WaitGroup
-	fetchWG.Add(2)
+	fetchWG.Add(3)
 	go func() {
 		defer fetchWG.Done()
 		sem <- struct{}{}
@@ -133,6 +138,15 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 		// must not lose the bulk PR status we fetch alongside it.
 		queued, qErr = gh.ListMergeQueuedHeads(repo)
 	}()
+	go func() {
+		defer fetchWG.Done()
+		// Review threads share nothing with the status fetch, so they ride
+		// alongside it rather than after. Waited on before the listErr return
+		// below: a `gh pr list` failure says nothing about the threads, and
+		// leaving the goroutine running into the subprocess's exit would drop
+		// the mirror halfway.
+		mirrored = mirrorPinnedReviewThreads(gh, repo, pinnedBy, sem)
+	}()
 	fetchWG.Wait()
 
 	if listErr != nil {
@@ -146,7 +160,7 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 
 	viewer := getViewer()
 	byHead := prStatusMapFromGithub(statuses, queued, viewer)
-	pinned := pinnedPRNumbersForRepo(store, repo)
+	pinned := prNumbersOf(pinnedBy)
 	topUps := topUpMissingOverrides(gh, repo, byHead, pinned, viewer, sem)
 	for head, status := range topUps {
 		byHead[head] = status
@@ -164,7 +178,7 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 		map[string]bool{repo: !truncated},
 		time.Now(),
 	)
-	reporter.Step(fmt.Sprintf("%s — %d PRs (+%d pinned) (%s)", repo, len(statuses), len(topUps), time.Since(started).Round(time.Millisecond)))
+	reporter.Step(fmt.Sprintf("%s — %d PRs (+%d pinned, %d threads) (%s)", repo, len(statuses), len(topUps), mirrored, time.Since(started).Round(time.Millisecond)))
 	// Diagnostic: log every PR # and head ref returned for this repo. If
 	// a PR you expect to see isn't in `numbers=[...]`, gh didn't return
 	// it — most likely the repo has more open PRs than the `gh pr list
@@ -174,26 +188,105 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 		repo, len(statuses), len(topUps), truncated, numbers)
 }
 
-// pinnedPRNumbersForRepo walks this repo's workspace state and
-// returns the set of PR numbers any entry has explicitly pinned via
-// Entry.PRNumber. Returns nil on store-load error (callers treat that
-// as "no pins"). Used twice per bulk-fetch pass: by topUpMissingOverrides
-// (to fetch pins that fell outside the bulk window) and by
-// persistPRStatusBulkMerge (to keep pinned terminal PRs from being
-// pruned).
-func pinnedPRNumbersForRepo(store *state.JSONStore, repo string) map[int]bool {
+// pinnedWorkspacesByPR walks this repo's workspace state and returns, for every
+// PR number an entry pins via Entry.PRNumber, the workspaces pinned to it.
+// Returns nil on store-load error (callers treat that as "no pins").
+//
+// Keyed by PR rather than by workspace because every consumer fetches per PR:
+// topUpMissingOverrides (to fetch pins that fell outside the bulk window),
+// persistPRStatusBulkMerge via prNumbersOf (to keep pinned terminal PRs from
+// being pruned), and mirrorPinnedReviewThreads. Two workspaces can pin the same
+// PR — a review workspace beside the author's — and that is one fetch feeding
+// two mirrors, not two fetches.
+func pinnedWorkspacesByPR(store *state.JSONStore, repo string) map[int][]string {
 	entries, err := store.Load(repo)
 	if err != nil {
 		deckDebugLogf("prStatus pinned-numbers load err repo=%s err=%v", repo, err)
 		return nil
 	}
-	pinned := map[int]bool{}
-	for _, e := range entries {
+	byPR := map[int][]string{}
+	for name, e := range entries {
 		if e.PRNumber > 0 {
-			pinned[e.PRNumber] = true
+			byPR[e.PRNumber] = append(byPR[e.PRNumber], name)
 		}
 	}
-	return pinned
+	for _, names := range byPR {
+		// Deterministic order so the mirror writes — and the logs — do not
+		// depend on map iteration.
+		sort.Strings(names)
+	}
+	return byPR
+}
+
+// prNumbersOf is the bare pinned set, for the consumers that only need to know
+// whether a PR is pinned at all.
+func prNumbersOf(byPR map[int][]string) map[int]bool {
+	if byPR == nil {
+		return nil
+	}
+	out := make(map[int]bool, len(byPR))
+	for n := range byPR {
+		out[n] = true
+	}
+	return out
+}
+
+// mirrorPinnedReviewThreads caches each pinned PR's review threads into the
+// review store of every workspace pinned to it, and returns how many threads it
+// wrote. This is what keeps the reviewers' conversation current in awp's diff
+// viewer: the viewer reads the mirror, never the network, so a `c` press stays
+// as instant as the rest of the deck.
+//
+// Every failure is per-PR and non-fatal. A failed fetch leaves that PR's
+// existing mirror exactly as it was rather than blanking it — a stale
+// conversation is worth more than none — and says nothing about its siblings.
+//
+// An empty fetch is treated as nothing to say rather than as an instruction to
+// clear: writing it would create a review store for every PR-pinned workspace
+// in every repo on every pass, most of which nobody has reviewed. The cost is
+// that threads deleted upstream (as opposed to resolved, which the fetch still
+// reports) linger in the mirror until something replaces them.
+func mirrorPinnedReviewThreads(gh *github.Client, repo string, byPR map[int][]string, sem chan struct{}) int {
+	if len(byPR) == 0 {
+		return 0
+	}
+	fetch := func(n int) ([]github.ReviewThread, error) {
+		// The slot covers the gh exec only, not the disk writes that follow.
+		sem <- struct{}{}
+		defer func() { <-sem }()
+		return gh.FetchReviewThreads(n)
+	}
+	var (
+		mu    sync.Mutex
+		total int
+		wg    sync.WaitGroup
+	)
+	for n, names := range byPR {
+		wg.Add(1)
+		go func(n int, names []string) {
+			defer wg.Done()
+			threads, err := fetch(n)
+			if err != nil {
+				deckDebugLogf("prStatus threads fetch err repo=%s pr=%d err=%v", repo, n, err)
+				return
+			}
+			if len(threads) == 0 {
+				return
+			}
+			for _, name := range names {
+				if err := mirrorReviewThreads(repo, name, threads); err != nil {
+					deckDebugLogf("prStatus threads mirror err repo=%s pr=%d ws=%s err=%v", repo, n, name, err)
+					continue
+				}
+				mu.Lock()
+				total += len(threads)
+				mu.Unlock()
+				deckDebugLogf("prStatus threads mirrored repo=%s pr=%d ws=%s count=%d", repo, n, name, len(threads))
+			}
+		}(n, names)
+	}
+	wg.Wait()
+	return total
 }
 
 // topUpMissingOverrides fetches each pinned PR (pinned ⊆ a workspace's

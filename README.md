@@ -151,6 +151,8 @@ The status is fetched once when the deck opens, with a single `gh pr list --stat
 
 The fan-out runs as a **detached job** in the same jobs subsystem that powers workspace create / delete / review. It's spawned via `Setsid`, so closing the deck (or its tmux popup) mid-fetch no longer drops in-flight work. Per-repo PRs are persisted to `~/.awp/pr-status-cache.json` atomically as each repo finishes; the job record itself lives at `~/.awp/jobs/<id>.json` and shows up in the deck's `J` overlay (you can dismiss / open the log there). The next deck open reuses an existing active pr-status job instead of spawning a duplicate.
 
+The same pass also **mirrors each pinned PR's GitHub review threads** into that workspace's review store (`~/.awp/reviews/<repo>/work-<workspace>/remote/threads.json`), which is what the diff surface reads for `T` / `R`. Doing it here rather than from the diff itself keeps the reviewers' conversation current — within the same per-repo minute as the glyphs — while leaving `c` as instant as the rest of the deck: the viewer only ever reads a local file, never the network. One fetch covers every workspace pinned to the same PR (a review workspace beside the author's own). A fetch failure leaves the previous mirror exactly as it was rather than blanking it, and a PR with no threads doesn't get a review store conjured for it. The per-repo Step in the `J` overlay reports how many threads landed.
+
 **Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
 
 ### Inbox scope (`P`)
