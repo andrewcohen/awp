@@ -518,7 +518,7 @@ type commentRow struct {
 // code — reflowing at spaces misrepresents where a token ends — and wrong for
 // prose, where it just makes sentences hard to read. ansi.Wrap still hard-breaks a
 // word longer than the line, so a URL or a long identifier cannot overflow.
-func commentRows(c review.Comment, width int) []commentRow {
+func commentRows(c review.Comment, width int, last bool) []commentRow {
 	// Every message opens with a bar-only row: top padding for the first one,
 	// and the separator between messages after that. Uniform, so a thread reads
 	// as one card with air around its content — the same Padding(1, ...) breathing
@@ -564,6 +564,13 @@ func commentRows(c review.Comment, width int) []commentRow {
 		for _, wrapped := range strings.Split(ansi.Wrap(line, avail, ""), "\n") {
 			out = append(out, commentRow{text: commentGutter + wrapped})
 		}
+	}
+	// The final message of a conversation closes the block with a matching pad
+	// row, so the card has air at both ends rather than butting straight into the
+	// next line of code. Only the last one: giving every message a trailing pad
+	// would put two blank rows between each pair.
+	if last {
+		out = append(out, commentRow{text: commentGutter})
 	}
 	return out
 }
@@ -639,9 +646,9 @@ func kindStyles(kind review.Kind) lipgloss.Style {
 //
 // The gutter is styled separately from the text so the bar can carry the kind's
 // hue while the prose stays readable.
-func commentLines(c review.Comment, width int, cursor bool) []string {
+func commentLines(c review.Comment, width int, cursor, last bool) []string {
 	bar, head, body, fill := commentStyles(c.Kind, cursor)
-	rows := commentRows(c, width)
+	rows := commentRows(c, width, last)
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
 		style := body

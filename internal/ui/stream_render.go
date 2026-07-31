@@ -69,7 +69,7 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 		if r.comment < 0 || r.comment >= len(m.stream.comments) {
 			return ""
 		}
-		lines := commentLines(m.stream.comments[r.comment], width, cursor)
+		lines := commentLines(m.stream.comments[r.comment], width, cursor, r.lastComment)
 		if r.commentLine < 0 || r.commentLine >= len(lines) {
 			return ""
 		}

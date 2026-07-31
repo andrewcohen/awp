@@ -32,10 +32,13 @@ func commentOn(path string, line int, text, body string) review.Comment {
 
 // commentBodyText is a comment's body rows with the gutter stripped — everything
 // after the header. What the wrapping tests actually care about.
+//
+// Rendered as a non-closing message so the block's trailing pad row does not show
+// up as a blank body line.
 func commentBodyText(c review.Comment, width int) []string {
 	var out []string
 	past := false
-	for _, r := range commentRows(c, width) {
+	for _, r := range commentRows(c, width, false) {
 		if r.header {
 			past = true
 			continue
@@ -51,7 +54,7 @@ func commentBodyText(c review.Comment, width int) []string {
 
 // commentRowStrings is every row's raw text, for width assertions.
 func commentRowStrings(c review.Comment, width int) []string {
-	rows := commentRows(c, width)
+	rows := commentRows(c, width, true)
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r.text)
@@ -955,7 +958,7 @@ func TestEveryMessageOpensWithABarOnlyRow(t *testing.T) {
 		{ID: "c1", Author: review.AuthorHuman, Body: "top", State: review.Open},
 		{ID: "r1", Author: "agent", Body: "under", ReplyTo: "c1", State: review.Open},
 	} {
-		rows := commentRows(c, 60)
+		rows := commentRows(c, 60, true)
 		if len(rows) < 2 {
 			t.Fatalf("%s: expected at least a pad row and a header, got %d", c.ID, len(rows))
 		}
@@ -986,7 +989,7 @@ func TestCommentsReloadOnTheRefreshTick(t *testing.T) {
 	}}
 	m.LoadComments = func() ([]review.Comment, error) { return stored, nil }
 
-	if rowsOfKind(m, rowComment) != 3 { // pad + header + one body line
+	if rowsOfKind(m, rowComment) != 4 { // pad + header + one body line + closing pad
 		t.Fatalf("expected only the parent before the tick, got %d rows", rowsOfKind(m, rowComment))
 	}
 	updated, _ := m.Update(autoRefreshTickMsg{})
@@ -1200,13 +1203,24 @@ func TestCommentRowCountMatchesRenderedRows(t *testing.T) {
 		{ID: "b", Author: "agent", Body: strings.Repeat("wrap me ", 30), State: review.Open, ReplyTo: "a"},
 		{ID: "c", Author: review.AuthorHuman, Body: "one\ntwo\nthree", State: review.Sent},
 	}
+	// Both values of `last`: the closing message carries an extra pad row, so a
+	// counter that ignored the flag would desync every row after the block.
 	for _, width := range []int{30, 60, 120} {
 		for _, c := range cases {
-			want := commentRowCount(c, width)
-			got := len(commentLines(c, width, false))
-			if want != got {
-				t.Fatalf("width %d, comment %q: counted %d rows, rendered %d", width, c.ID, want, got)
+			for _, last := range []bool{false, true} {
+				want := commentRowCount(c, width, last)
+				got := len(commentLines(c, width, false, last))
+				if want != got {
+					t.Fatalf("width %d, comment %q, last=%v: counted %d rows, rendered %d",
+						width, c.ID, last, want, got)
+				}
 			}
+		}
+	}
+	// And the closing message is exactly one row taller.
+	for _, c := range cases {
+		if a, b := commentRowCount(c, 60, false), commentRowCount(c, 60, true); b != a+1 {
+			t.Fatalf("comment %q: closing the block added %d rows, want 1", c.ID, b-a)
 		}
 	}
 }
@@ -1356,7 +1370,7 @@ func TestOnlyTheThreadsFirstMessageNamesTheKind(t *testing.T) {
 		Kind: review.KindSuggestion, State: review.Open,
 	}
 	head := func(c review.Comment) string {
-		for _, r := range commentRows(c, 60) {
+		for _, r := range commentRows(c, 60, true) {
 			if r.header {
 				return r.text
 			}
@@ -1373,5 +1387,48 @@ func TestOnlyTheThreadsFirstMessageNamesTheKind(t *testing.T) {
 	plain := review.Comment{ID: "c2", Author: review.AuthorHuman, Body: "x", State: review.Open}
 	if got := head(plain); strings.Contains(got, "comment") {
 		t.Fatalf("expected the default kind unlabelled, got %q", got)
+	}
+}
+
+// Only the last message of a conversation closes the block. Giving every message
+// a trailing pad would put two blank rows between each pair — the previous
+// message's close and the next one's open.
+func TestOnlyTheLastMessageInAThreadClosesTheBlock(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	parent := commentOn("a.go", 1, "alpha", "top")
+	m.SetComments([]review.Comment{parent, {
+		ID: "r1", Author: "agent", Body: "under", State: review.Open,
+		ReplyTo: parent.ID, Anchor: parent.Anchor,
+	}})
+
+	// Walk the block's rows and read out which are blank, so the shape is
+	// asserted rather than the row count.
+	var blanks []int
+	block := 0
+	for _, r := range m.stream.rows {
+		if r.kind != rowComment {
+			continue
+		}
+		lines := commentLines(m.stream.comments[r.comment], m.hunkWidth, false, r.lastComment)
+		if r.commentLine < len(lines) {
+			if _, text := splitGutter(stripANSI(lines[r.commentLine])); strings.TrimSpace(text) == "" {
+				blanks = append(blanks, block)
+			}
+		}
+		block++
+	}
+	// Three blanks: the block's opening pad, the separator before the reply, and
+	// the closing pad. Never two in a row.
+	if len(blanks) != 3 {
+		t.Fatalf("expected 3 blank rows in the block, got %d at %v", len(blanks), blanks)
+	}
+	for i := 1; i < len(blanks); i++ {
+		if blanks[i] == blanks[i-1]+1 {
+			t.Fatalf("two blank rows in a row at %d — only the last message closes the block", blanks[i])
+		}
+	}
+	// And the closing pad is the block's final row.
+	if blanks[len(blanks)-1] != block-1 {
+		t.Fatalf("expected the last row of the block to be its closing pad, got row %d of %d", blanks[len(blanks)-1], block)
 	}
 }
