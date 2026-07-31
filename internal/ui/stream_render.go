@@ -25,6 +25,21 @@ func (m Model) cachedStreamRow(i, width int) string {
 	if m.cache == nil {
 		return m.renderStreamRowAt(i, width)
 	}
+	// The compose box is never cached. What makes caching safe here is that a
+	// cached row is a pure function of (the stream, the width, the selection) and
+	// the stream is replaced in exactly one place, which drops the cache — but the
+	// box's content is the text being typed *right now*, and a keystroke into it
+	// rebuilds nothing. Cached, its rows were served from the first frame forever:
+	// the box kept showing its "comment…" placeholder while the textarea filled up
+	// underneath, and the text only appeared once something else forced a rebuild.
+	//
+	// Skipped rather than keyed on the body: a box is at most commentEditorRows
+	// rows and only exists while you are typing into it, so there is no frame cost
+	// worth the risk of a key that has to be remembered to include every field the
+	// box can draw.
+	if m.stream.rows[i].kind == rowEditor {
+		return m.renderStreamRowAt(i, width)
+	}
 	key := rowKey{
 		row:   i,
 		width: width,
