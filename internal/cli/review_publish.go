@@ -157,25 +157,8 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	}
 
 	if req.DryRun {
-		total := len(inline) + len(changeWide)
-		_, _ = fmt.Fprintf(out, "would post %d comment(s) to PR #%d (%d already published)\n", total, prNumber, skipped)
-		for _, c := range inline {
-			// The composed body, not the stored one: a dry run is only useful if it
-			// shows what will actually land on GitHub, prefixes included.
-			_, _ = fmt.Fprintf(out, "  %s:%s\t%s\n", c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
-		}
-		for _, c := range changeWide {
-			// Named as where it will actually go, which the verdict decides: a dry
-			// run that said "on the PR" while the real run made it the review body
-			// would be describing a different command.
-			where := "on the PR"
-			if event != "" {
-				where = "review summary"
-			}
-			_, _ = fmt.Fprintf(out, "  %s\t%s\n", where, oneLine(c.PublishBody()))
-		}
-		if event != "" {
-			_, _ = fmt.Fprintf(out, "  and submit the review as %s\n", req.Verdict)
+		for _, line := range publishPlan(req, inline, changeWide, skipped) {
+			_, _ = fmt.Fprintln(out, line)
 		}
 		return nil
 	}
@@ -270,6 +253,51 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+// publishPlan is what a run would do, one line per call it would make to GitHub.
+//
+// Written as the calls rather than as a summary because this is what a reviewer
+// checks *before* an irreversible outward action, and because it is the only
+// diagnostic there is when a publish appears to do nothing: an endpoint and a
+// target either look right or they do not. The viewer shows exactly this text
+// before posting (see the publish overlay), so a preview cannot describe a
+// different run than the one it is previewing.
+func publishPlan(req publishRequest, inline, changeWide []review.Comment, skipped int) []string {
+	// The calls are collected first and counted afterwards, so the count cannot
+	// disagree with the list under it. Counting the inputs instead was wrong the
+	// moment a verdict folded the review-level remarks into one review body: it
+	// promised four calls and listed three.
+	var calls []string
+	for _, c := range inline {
+		where := c.Anchor.Path + ":" + c.Anchor.LineRange()
+		if c.ReplyTo != "" {
+			// A reply is a different call with a different shape: no path, no line,
+			// just the thread it lands in.
+			calls = append(calls, fmt.Sprintf("POST pulls/%d/comments  in_reply_to=%s  %s", req.PR, c.ReplyTo, oneLine(c.PublishBody())))
+			continue
+		}
+		// The composed body, not the stored one: a preview is only useful if it
+		// shows what will actually land on GitHub, kind prefix and robot marker
+		// included.
+		calls = append(calls, fmt.Sprintf("POST pulls/%d/comments  %s  %s", req.PR, where, oneLine(c.PublishBody())))
+	}
+	if req.Event != "" {
+		// One call, carrying the verdict and — since a verdict makes them the review
+		// body — every review-level remark. Which is why they are not counted
+		// separately above.
+		line := fmt.Sprintf("POST pulls/%d/reviews  event=%s", req.PR, req.Event)
+		if summary := reviewSummary(changeWide); summary != "" {
+			line += "  body=" + oneLine(summary)
+		}
+		calls = append(calls, line)
+	} else {
+		for _, c := range changeWide {
+			calls = append(calls, fmt.Sprintf("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody())))
+		}
+	}
+	head := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", len(calls), req.PR, skipped)
+	return append([]string{head}, calls...)
 }
 
 // parseVerdict reads the --verdict flag into GitHub's event vocabulary, empty for

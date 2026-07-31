@@ -120,6 +120,11 @@ type Model struct {
 	publishing    bool
 	publishCursor int
 	publishBusy   bool
+	// publishStage is choose → preview → report; publishReport holds the plan or
+	// the outcome, and publishScroll reads a long one.
+	publishStage  publishStage
+	publishReport []string
+	publishScroll int
 	focus         Focus
 	filterInput   textinput.Model
 	// searchInput and searchQuery are the diff's content search (see search.go).
@@ -188,7 +193,7 @@ type Model struct {
 	// submitting a review. It returns what happened, in the words the CLI's own
 	// publish prints. Nil leaves `P` unavailable, which it says rather than
 	// silently doing nothing.
-	PublishReview func(verdict string) (string, error)
+	PublishReview func(verdict string, dryRun bool) (string, error)
 	// LoadComments re-reads the review's comments, so findings filed while the
 	// view is open appear without reopening it.
 	LoadComments func() ([]review.Comment, error)
