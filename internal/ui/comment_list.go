@@ -33,9 +33,13 @@ type commentEntry struct {
 	id string
 	// row is the stream row the conversation starts at — what selecting this
 	// entry seeks to.
-	row     int
-	path    string
-	line    int
+	row  int
+	path string
+	// lines is the anchor's line or line range as text — "12", or "12-18" for a
+	// comment covering a block. Rendered at build time from review.Anchor.LineRange
+	// so the index spells a location exactly the way the compose box, the agent
+	// prompt and the publish log do.
+	lines   string
 	author  string
 	kind    review.Kind
 	summary string
@@ -87,7 +91,7 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 			id:         c.ID,
 			row:        row,
 			path:       c.Anchor.Path,
-			line:       c.Anchor.LineHint,
+			lines:      c.Anchor.LineRange(),
 			author:     c.Author,
 			kind:       c.Kind.OrDefault(),
 			summary:    entrySummary(c),
@@ -272,8 +276,8 @@ func entryLocation(e commentEntry) string {
 		name = e.path
 	}
 	loc := name
-	if e.line > 0 {
-		loc += ":" + fmt.Sprint(e.line)
+	if e.lines != "" {
+		loc += ":" + e.lines
 	}
 	if e.detached && !e.outdated {
 		// The line number is where it used to be, so say the anchor is gone

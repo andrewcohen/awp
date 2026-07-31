@@ -596,3 +596,60 @@ func TestCommentAndRepliesIgnoresOrder(t *testing.T) {
 		t.Fatalf("expected only the comment itself, got %v", got)
 	}
 }
+
+// LineRange is the one spelling of a location every surface shares, so the
+// compose box, the index, the agent prompt and the publish log cannot disagree.
+func TestAnchorLineRange(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		a     Anchor
+		want  string
+		multi bool
+	}{
+		{"one line", Anchor{LineHint: 12}, "12", false},
+		{"a range", Anchor{LineHint: 12, EndLineHint: 18}, "12-18", true},
+		// An end at the start is one line, and an end above it is a record written
+		// wrongly; both read as "one line" rather than as a range of zero or -6.
+		{"end at the start", Anchor{LineHint: 12, EndLineHint: 12}, "12", false},
+		{"end before the start", Anchor{LineHint: 12, EndLineHint: 6}, "12", false},
+		// No line at all: a remark about the change as a whole.
+		{"no line", Anchor{}, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.a.LineRange(); got != tc.want {
+				t.Fatalf("LineRange: got %q, want %q", got, tc.want)
+			}
+			if got := tc.a.Multiline(); got != tc.multi {
+				t.Fatalf("Multiline: got %v, want %v", got, tc.multi)
+			}
+		})
+	}
+}
+
+// A range anchor survives the round trip through the store, which is what makes
+// it worth recording at all.
+func TestRangeAnchorRoundTrips(t *testing.T) {
+	store := testStore(t)
+	r, err := store.Open(t.TempDir(), Target{Kind: TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	in := Comment{Author: AuthorHuman, Body: "this block", Anchor: Anchor{
+		Path: "a.go", Side: SideNew,
+		LineHint: 12, Text: "first",
+		EndLineHint: 18, EndText: "last",
+	}}
+	if _, err := store.AddComment(r, in); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	got, err := store.Comments(r)
+	if err != nil {
+		t.Fatalf("comments: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected one comment, got %d", len(got))
+	}
+	if a := got[0].Anchor; a.EndLineHint != 18 || a.EndText != "last" {
+		t.Fatalf("expected the range preserved, got %+v", a)
+	}
+}

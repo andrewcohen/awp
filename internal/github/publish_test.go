@@ -121,3 +121,35 @@ func TestPostPRCommentTreatsAnUnreadableIDAsSuccess(t *testing.T) {
 		t.Fatalf("expected no id, got %q", id)
 	}
 }
+
+// A ranged comment goes up as GitHub describes one: `line` is its last line, with
+// `start_line` above it. start_side has to be sent too — GitHub defaults it to the
+// PR's side rather than to the side already given for the end.
+func TestPostReviewCommentSendsARange(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"PRRC_abc"}`}}
+	if _, err := New(r).PostReviewComment(9, NewComment{
+		Path: "a.go", Line: 18, StartLine: 12, Side: "LEFT", Body: "this block",
+	}); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	joined := strings.Join(r.calls[1], " ")
+	for _, want := range []string{"line=18", "start_line=12", "side=LEFT", "start_side=LEFT"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("post call missing %q, got %q", want, joined)
+		}
+	}
+}
+
+// A single-line comment sends no start_line: GitHub reads a start equal to the end
+// as a malformed range rather than as one line.
+func TestPostReviewCommentOmitsStartLineForOneLine(t *testing.T) {
+	r := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"PRRC_abc"}`}}
+	if _, err := New(r).PostReviewComment(9, NewComment{
+		Path: "a.go", Line: 12, StartLine: 12, Body: "one line",
+	}); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if joined := strings.Join(r.calls[1], " "); strings.Contains(joined, "start_line") {
+		t.Fatalf("expected no start_line for a single-line comment, got %q", joined)
+	}
+}

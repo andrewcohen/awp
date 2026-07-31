@@ -20,7 +20,14 @@ import (
 // NewComment is a comment to post on a PR.
 type NewComment struct {
 	Path string
+	// Line is the comment's last line, which is GitHub's own convention: a
+	// multi-line comment is `line` plus a `start_line` above it, not a start plus a
+	// length.
 	Line int
+	// StartLine is the first line of a multi-line comment, zero for a single-line
+	// one. GitHub requires it to be in the same diff hunk as Line and rejects the
+	// comment otherwise.
+	StartLine int
 	// Side is "RIGHT" for the new side of the diff, "LEFT" for the old.
 	Side string
 	Body string
@@ -55,6 +62,16 @@ func (c *Client) PostReviewComment(num int, nc NewComment) (string, error) {
 			"-F", "line="+strconv.Itoa(nc.Line),
 			"-f", "side="+side,
 		)
+		// A range: start_line marks the top of it. start_side is sent alongside
+		// because GitHub defaults it to the side of the *pull request*, not to the
+		// side already given for the end — a range on the old side loses its start
+		// without it.
+		if nc.StartLine > 0 && nc.StartLine < nc.Line {
+			args = append(args,
+				"-F", "start_line="+strconv.Itoa(nc.StartLine),
+				"-f", "start_side="+side,
+			)
+		}
 		if nc.CommitID != "" {
 			args = append(args, "-f", "commit_id="+nc.CommitID)
 		}

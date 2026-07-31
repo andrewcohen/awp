@@ -151,7 +151,14 @@ func (e commentEditor) view(width int) string {
 	case e.editing != "":
 		verb = " editing " + string(e.kind.OrDefault()) + " on "
 	}
-	head := verb + e.anchor.Path + ":" + lineNoText(e.anchor.LineHint)
+	head := verb + e.anchor.Path
+	// "12" or "12-18" — one spelling of a location, shared with the comment index,
+	// the agent prompt and the publish log (see review.Anchor.LineRange). Omitted
+	// rather than left as a bare colon when there is no line: a remark about the
+	// change as a whole is not attached to one.
+	if lines := e.anchor.LineRange(); lines != "" {
+		head += ":" + lines
+	}
 	// Border and header take the kind's hue, so tab's effect is visible
 	// immediately rather than only once the comment is saved.
 	headStyle := kindStyles(e.kind)
@@ -321,6 +328,22 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 	if m.SaveComment == nil {
 		m.status = "commenting unavailable: no review store"
 		return m, nil
+	}
+	// A range under selection is what the comment is about, whatever the cursor
+	// happens to be sitting on — it is only one end of the range.
+	if m.visualActive() {
+		a, err := m.rangeAnchor()
+		if err != nil {
+			// The range stays up: the message says what to change about it, and
+			// dropping it would mean re-selecting from scratch.
+			m.status = err.Error()
+			return m, nil
+		}
+		m.clearVisual()
+		m.editing = true
+		m.editor = newCommentEditor(a, m.hunkWidth)
+		m.rebuildStream()
+		return m, textarea.Blink
 	}
 	// On a comment, `c` replies to it — the common thing to do with a remark is
 	// answer it. Revising your own wording is `i`.

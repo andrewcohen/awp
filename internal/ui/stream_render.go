@@ -28,11 +28,14 @@ func (m Model) cachedStreamRow(i, width int) string {
 	key := rowKey{
 		row:   i,
 		width: width,
-		// The band, not merely "is the cursor here": whether it is painted depends
-		// on the focus too, and a row rendered with the band must not be served to a
-		// frame that wants it without.
-		band:    i == m.cursorRow && m.focus == FocusHunks,
-		hscroll: m.hunkHScroll,
+		// Both halves of the selection treatment, because both vary independently
+		// of the row's content: the bar depends on the selection, and the band on
+		// the selection *and* the focus. A row rendered with either must not be
+		// served to a frame that wants it without — which is why this is not simply
+		// "is the cursor here".
+		selected: m.rowSelected(i),
+		band:     m.rowBanded(i),
+		hscroll:  m.hunkHScroll,
 	}
 	if out, ok := m.cache.rows[key]; ok {
 		return out
@@ -43,18 +46,18 @@ func (m Model) cachedStreamRow(i, width int) string {
 }
 
 func (m Model) renderStreamRowAt(i, width int) string {
-	atCursor := i == m.cursorRow
-	// The cursorline band is painted only while this pane has the keyboard. Two
+	// The selection is the cursor row, or every row of a visual range. The
+	// cursorline band is painted only while this pane has the keyboard: two
 	// full-width bands at once — one here, one in the file list or comment index —
 	// leaves no way to tell which selection the keys are actually driving. The ┃
-	// bar stays either way, so the row you will come back to is still marked.
-	band := atCursor && m.focus == FocusHunks
+	// bar stays either way, so the rows you will come back to are still marked.
+	selected, band := m.rowSelected(i), m.rowBanded(i)
 	kind := m.stream.rows[i].kind
 	prefix := selectionPrefixBlank
 	switch {
 	case band:
 		prefix = styleSelectedCursor.Render(selectionPrefixBar)
-	case atCursor:
+	case selected:
 		prefix = styleSelected.Render(selectionPrefixBar)
 	case isCommentRow(kind):
 		// Paint the reserved columns too: an unpainted gap on the left would
@@ -268,10 +271,11 @@ type blockKey struct {
 // cursorline band is on it, and the horizontal pan. The stream's own contents are
 // covered by the cache being dropped whenever it is rebuilt.
 type rowKey struct {
-	row     int
-	width   int
-	band    bool
-	hscroll int
+	row      int
+	width    int
+	selected bool
+	band     bool
+	hscroll  int
 }
 
 // leftKey identifies a rendered left column, which is one string because the

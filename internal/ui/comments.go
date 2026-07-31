@@ -483,10 +483,70 @@ func collapsedFileRow(rows []rowRef, files []diff.FileDiff, path string) (int, b
 	return 0, false
 }
 
-// locateComment finds the row a comment attaches to, weakening the match the
-// same way findAnchor does: exact line, then same text elsewhere in the file,
-// then the same text with matching context.
+// locateComment finds the row a comment attaches to.
+//
+// A range comment hangs under the last line it covers rather than the first,
+// which is where GitHub puts one and how it reads: everything above the remark is
+// what the remark is about. Its start is what gets located — that is the end with
+// recorded context — and the end is then found forward from there.
 func (m Model) locateComment(rows []rowRef, c review.Comment) (int, bool) {
+	start, ok := m.locateAnchorStart(rows, c)
+	if !ok || !c.Anchor.Multiline() || rows[start].kind != rowLine {
+		return start, ok
+	}
+	return m.rangeEndRow(rows, c.Anchor, start), true
+}
+
+// rangeEndRow is the row showing a range anchor's last line, searching forward
+// from its located first line. Falls back to the start: a range whose end cannot
+// be found at all is better shown one line high than pushed somewhere the code
+// does not support.
+func (m Model) rangeEndRow(rows []rowRef, a review.Anchor, start int) int {
+	file := rows[start].file
+	lineNo := func(r rowRef) int {
+		if a.Side == review.SideOld {
+			return r.oldNo
+		}
+		return r.newNo
+	}
+	byText, byLine := -1, -1
+	for i := start + 1; i < len(rows); i++ {
+		r := rows[i]
+		if r.file != file && r.kind == rowLine {
+			// Out of the file the range lives in; its rows are contiguous.
+			break
+		}
+		if r.kind != rowLine || r.seg != 0 {
+			continue
+		}
+		if n := lineNo(r); n > 0 && n == a.EndLineHint {
+			// The number and the text agreeing is as certain as it gets.
+			if a.EndText == "" || m.lineTextIn(rows, i) == a.EndText {
+				return i
+			}
+			if byLine < 0 {
+				byLine = i
+			}
+		}
+		if byText < 0 && a.EndText != "" && m.lineTextIn(rows, i) == a.EndText {
+			byText = i
+		}
+	}
+	switch {
+	// Text over number, for the same reason the start prefers it: an edit above
+	// renumbers every line below it without changing what any of them say.
+	case byText >= 0:
+		return byText
+	case byLine >= 0:
+		return byLine
+	}
+	return start
+}
+
+// locateAnchorStart finds the row an anchor's first line is on, weakening the
+// match the same way findAnchor does: exact line, then same text elsewhere in the
+// file, then the same text with matching context.
+func (m Model) locateAnchorStart(rows []rowRef, c review.Comment) (int, bool) {
 	var inFile []int
 	for i, r := range rows {
 		if r.kind != rowLine || r.file < 0 || r.file >= len(m.filtered) {
@@ -644,36 +704,90 @@ func (m Model) lineTextIn(rows []rowRef, i int) string {
 // AnchorAtCursor describes the line under the cursor, for attaching a new
 // comment. Reports false when the cursor isn't on a diff line.
 func (m Model) AnchorAtCursor() (review.Anchor, bool) {
-	if len(m.stream.rows) == 0 || m.cursorRow >= len(m.stream.rows) {
+	line, ok := m.hunkLineAt(m.stream.rows, m.cursorRow)
+	if !ok {
 		return review.Anchor{}, false
 	}
-	r := m.stream.rows[m.cursorRow]
-	if r.kind != rowLine || r.file < 0 || r.file >= len(m.filtered) {
-		return review.Anchor{}, false
-	}
-	f := m.filtered[r.file]
-	h := f.Hunks[r.hunk]
-	line := h.Lines[r.line]
-
 	// New side for added and context lines; old side only for a removed line,
 	// which exists nowhere else. Keeping to the new side means relocation reads
 	// current file content, the same source live refresh uses.
-	side, hint := review.SideNew, r.newNo
+	side := review.SideNew
 	if line.Type == '-' {
-		side, hint = review.SideOld, r.oldNo
+		side = review.SideOld
+	}
+	return m.anchorSpan(m.stream.rows, m.cursorRow, m.cursorRow, side)
+}
+
+// hunkLineAt is the diff line a row shows, false for a row that isn't one (a
+// header, a comment, a spacer) or an index outside the slice.
+func (m Model) hunkLineAt(rows []rowRef, i int) (diff.HunkLine, bool) {
+	if i < 0 || i >= len(rows) {
+		return diff.HunkLine{}, false
+	}
+	r := rows[i]
+	if r.kind != rowLine || r.file < 0 || r.file >= len(m.filtered) {
+		return diff.HunkLine{}, false
+	}
+	f := m.filtered[r.file]
+	if r.hunk < 0 || r.hunk >= len(f.Hunks) {
+		return diff.HunkLine{}, false
+	}
+	h := f.Hunks[r.hunk]
+	if r.line < 0 || r.line >= len(h.Lines) {
+		return diff.HunkLine{}, false
+	}
+	return h.Lines[r.line], true
+}
+
+// anchorSpan builds an anchor covering the diff lines shown by rows start
+// through end, on the given side. start == end is the ordinary single-line case.
+//
+// Both endpoints have to be line rows in the same hunk; the caller is what
+// establishes that (see rangeAnchor). Context is recorded before the start and
+// after the end, which is what makes relocation of a range work the same way a
+// single line's does — each end is found by its own text and its own
+// surroundings.
+func (m Model) anchorSpan(rows []rowRef, start, end int, side review.Side) (review.Anchor, bool) {
+	if start < 0 || end < start || end >= len(rows) {
+		return review.Anchor{}, false
+	}
+	first, last := rows[start], rows[end]
+	if first.kind != rowLine || last.kind != rowLine || first.file != last.file || first.hunk != last.hunk {
+		return review.Anchor{}, false
+	}
+	if first.file < 0 || first.file >= len(m.filtered) {
+		return review.Anchor{}, false
+	}
+	f := m.filtered[first.file]
+	if first.hunk < 0 || first.hunk >= len(f.Hunks) {
+		return review.Anchor{}, false
+	}
+	h := f.Hunks[first.hunk]
+	if first.line < 0 || last.line >= len(h.Lines) {
+		return review.Anchor{}, false
+	}
+	lineNo := func(r rowRef) int {
+		if side == review.SideOld {
+			return r.oldNo
+		}
+		return r.newNo
 	}
 	a := review.Anchor{
 		Path:     pathOf(f),
 		Side:     side,
-		LineHint: hint,
-		Text:     line.Content,
+		LineHint: lineNo(first),
+		Text:     h.Lines[first.line].Content,
 	}
-	for i := r.line - anchorContextLines; i < r.line; i++ {
+	if end != start {
+		a.EndLineHint = lineNo(last)
+		a.EndText = h.Lines[last.line].Content
+	}
+	for i := first.line - anchorContextLines; i < first.line; i++ {
 		if i >= 0 {
 			a.ContextBefore = append(a.ContextBefore, h.Lines[i].Content)
 		}
 	}
-	for i := r.line + 1; i <= r.line+anchorContextLines && i < len(h.Lines); i++ {
+	for i := last.line + 1; i <= last.line+anchorContextLines && i < len(h.Lines); i++ {
 		a.ContextAfter = append(a.ContextAfter, h.Lines[i].Content)
 	}
 	return a, true

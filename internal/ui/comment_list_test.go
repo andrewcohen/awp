@@ -458,7 +458,7 @@ func TestTheBandSpansThePaneWidth(t *testing.T) {
 func TestCommentEntryRowFitsItsWidth(t *testing.T) {
 	e := commentEntry{
 		path:    "internal/some/deep/package/with/a/long/name.go",
-		line:    12345,
+		lines:   "12345-12360",
 		summary: strings.Repeat("very long remark ", 20),
 		author:  review.AuthorHuman,
 		replies: 3,

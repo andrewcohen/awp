@@ -123,3 +123,70 @@ func TestReviewAddRejectsAHalfAnchor(t *testing.T) {
 		}
 	}
 }
+
+// An agent can file a finding about a block, not only about a line.
+func TestReviewAddAcceptsALineRange(t *testing.T) {
+	dir := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	// Outside a repo the command fails at review resolution, past the flag
+	// parsing and validation this asserts.
+	var out bytes.Buffer
+	err = runReviewSubcommand(failingRunner{}, nil, []string{
+		"add", "--file", "a.go", "--line", "12", "--end-line", "18",
+		"--text", "for {", "--end-text", "}", "--body", "this loop",
+	}, &out)
+	if err == nil {
+		t.Fatal("expected the command to fail outside a repo")
+	}
+	for _, bad := range []string{"not defined", "--end-line"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Fatalf("the range flags are not wired: %v", err)
+		}
+	}
+}
+
+// An end before the start describes no block, and the difference between "line
+// 12" and "lines 12-18" is the whole content of the flag — so it is refused
+// rather than quietly dropped.
+func TestReviewAddRejectsABackwardsRange(t *testing.T) {
+	var out bytes.Buffer
+	err := runReviewSubcommand(failingRunner{}, nil, []string{
+		"add", "--file", "a.go", "--line", "18", "--end-line", "12", "--body", "x",
+	}, &out)
+	if err == nil || !strings.Contains(err.Error(), "--end-line") {
+		t.Fatalf("expected a backwards range rejected by name, got %v", err)
+	}
+}
+
+// rangeEnd is what decides whether a record says "range" at all: an end at or
+// before the start is one line, and Multiline() has to agree with that.
+func TestRangeEndOnlyRecordsARealRange(t *testing.T) {
+	for _, tc := range []struct{ line, end, want int }{
+		{12, 18, 18},
+		{12, 12, 0},
+		{12, 6, 0},
+		{12, 0, 0},
+	} {
+		if got := rangeEnd(tc.line, tc.end); got != tc.want {
+			t.Fatalf("rangeEnd(%d, %d) = %d, want %d", tc.line, tc.end, got, tc.want)
+		}
+	}
+}
+
+// The agent has to be told the ability exists, or it files five findings where
+// one ranged finding was the honest shape.
+func TestReviewPromptDocumentsRanges(t *testing.T) {
+	for _, want := range []string{"--end-line", "--end-text", "one hunk"} {
+		if !strings.Contains(reviewPromptTemplate, want) {
+			t.Fatalf("the review prompt never mentions %q", want)
+		}
+	}
+}
