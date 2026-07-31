@@ -325,18 +325,23 @@ func (c *renderCache) drop() {
 }
 
 // commentBlock is the rendered lines of the conversation this row belongs to.
+// Fold state is not in the cache key. It cannot change without the stream being
+// rebuilt — folding a thread and resolving one both go through rebuildStream,
+// which drops the cache — and the block's height depends on it, so a stale entry
+// would be a geometry mismatch rather than a cosmetic one.
 func (m Model) commentBlock(r rowRef, width int, cursor bool) []string {
 	c := m.stream.comments[r.comment]
+	collapsed := m.threadCollapsed(c)
 	if m.cache == nil {
 		// No cache installed (a bare Model, or a single row rendered directly by a
 		// test): correct, just not memoized.
-		return commentLines(c, width, cursor, r.lastComment)
+		return commentLines(c, width, cursor, r.lastComment, collapsed)
 	}
 	key := blockKey{comment: r.comment, width: width, cursor: cursor, last: r.lastComment}
 	if lines, ok := m.cache.blocks[key]; ok {
 		return lines
 	}
-	lines := commentLines(c, width, cursor, r.lastComment)
+	lines := commentLines(c, width, cursor, r.lastComment, collapsed)
 	m.cache.blocks[key] = lines
 	return lines
 }

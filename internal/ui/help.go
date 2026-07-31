@@ -70,6 +70,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 				{"r", "mark the file reviewed and collapse it"},
 				{"R", "resolve / reopen the GitHub thread at the cursor"},
 				{"T", "cycle GitHub threads shown: unresolved → all → none"},
+				{"enter", "fold / unfold the GitHub thread at the cursor"},
 			},
 		},
 		{

@@ -507,7 +507,7 @@ func TestRobotCommentsAreMarked(t *testing.T) {
 // alone would stamp other people's comments as an agent's. Those are real
 // people's words on GitHub and must stay unmarked.
 func TestMirroredGitHubThreadsAreNotMarkedAsRobots(t *testing.T) {
-	c := threadAsComment(review.Thread{
+	c := Model{}.threadAsComment(review.Thread{
 		ID: "T1", Path: "a.go", Line: 3,
 		Comments: []review.ThreadComment{{Author: "someone", Body: "why here?"}},
 	})
