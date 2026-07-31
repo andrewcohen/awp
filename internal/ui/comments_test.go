@@ -1904,3 +1904,106 @@ func orphanRows(m Model) []string {
 	}
 	return out
 }
+
+// ---- the per-frame comment block cache ----
+
+// The cache exists to stop a conversation being re-rendered once per row of
+// itself. It must not survive the frame: the comment set is replaced whenever the
+// diff or the store moves, and a stale body is the worst thing this surface could
+// show.
+func TestEditedCommentBodyShowsOnTheNextFrame(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	c := commentOn("a.go", 1, "alpha", "the original wording")
+	m.SetComments([]review.Comment{c})
+	if view := stripANSI(m.renderStreamPanel(90, 16)); !strings.Contains(view, "the original wording") {
+		t.Fatalf("fixture is wrong:\n%s", view)
+	}
+
+	// The store answers differently — an agent edited it, or a reload brought new
+	// text — and the tick picks it up.
+	revised := c
+	revised.Body = "completely different wording"
+	m.LoadComments = func() ([]review.Comment, error) { return []review.Comment{revised}, nil }
+	updated, _ := m.Update(autoRefreshTickMsg{})
+	m = updated.(Model)
+
+	view := stripANSI(m.renderStreamPanel(90, 16))
+	if strings.Contains(view, "the original wording") {
+		t.Fatalf("a cached block outlived its content:\n%s", view)
+	}
+	if !strings.Contains(view, "completely different wording") {
+		t.Fatalf("expected the revised body:\n%s", view)
+	}
+}
+
+// Every row of a block still renders its own line — a cache keyed too loosely
+// would repeat one line down the whole conversation.
+func TestEachRowOfABlockRendersItsOwnLine(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	c := commentOn("a.go", 1, "alpha", "first line of the remark\n\nsecond line of the remark")
+	m.SetComments([]review.Comment{c})
+
+	seen := map[string]bool{}
+	distinct := 0
+	for i, r := range m.stream.rows {
+		if !isCommentRow(r.kind) {
+			continue
+		}
+		row := strings.TrimSpace(stripANSI(m.renderStreamRowAt(i, 90)))
+		if row == "" || row == strings.TrimSpace(commentGutter) {
+			continue // padding and separator rows are legitimately identical
+		}
+		if !seen[row] {
+			seen[row] = true
+			distinct++
+		}
+	}
+	// Header, first body line, blank, second body line — the two body lines and the
+	// header are all different text.
+	if distinct < 3 {
+		t.Fatalf("expected distinct rows down the block, got %d: %v", distinct, seen)
+	}
+	if !seen["you"] && !seen["you ·"] {
+		// The header carries the author label; its exact form is asserted elsewhere.
+		found := false
+		for row := range seen {
+			if strings.Contains(row, "you") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected the author header among the rows: %v", seen)
+		}
+	}
+}
+
+// The cursorline row of a block is styled differently from its siblings, so the
+// cache has to keep those apart rather than serving one for the other.
+func TestCursorRowOfABlockKeepsItsOwnStyling(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "a remark with a couple of lines\n\nand a second paragraph")})
+	m.focus = FocusHunks
+
+	at := -1
+	for i, r := range m.stream.rows {
+		if isCommentRow(r.kind) && r.commentLine > 0 {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		t.Fatal("fixture is wrong: expected body rows in the block")
+	}
+	m.cursorRow = at
+	const width = 90
+	// Comment rows are all painted to the full width, so the band is not what
+	// separates them here — the selection bar is, and it is visible without a TTY.
+	cursorRow := stripANSI(m.renderStreamRowAt(at, width))
+	sibling := stripANSI(m.renderStreamRowAt(at+1, width))
+	if !strings.HasPrefix(cursorRow, strings.TrimSpace(selectionPrefixBar)) {
+		t.Fatalf("expected the cursor row to carry the selection bar, got %q", cursorRow)
+	}
+	if strings.HasPrefix(sibling, strings.TrimSpace(selectionPrefixBar)) {
+		t.Fatalf("a sibling row was served the cursor row's render: %q", sibling)
+	}
+}

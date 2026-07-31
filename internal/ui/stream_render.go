@@ -76,7 +76,7 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 		if r.comment < 0 || r.comment >= len(m.stream.comments) {
 			return ""
 		}
-		lines := commentLines(m.stream.comments[r.comment], width, cursor, r.lastComment)
+		lines := m.commentBlock(r, width, cursor)
 		if r.commentLine < 0 || r.commentLine >= len(lines) {
 			return ""
 		}
@@ -207,8 +207,53 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	return truncateStyled(prefix+content, width)
 }
 
+// A comment block is rendered once per frame, not once per row of it.
+//
+// commentLines styles a conversation's *whole* block and the caller keeps one
+// line, so a block H rows tall used to cost H work for each of its H visible
+// rows — quadratic in the length of the conversation, and a screen full of
+// comment rows is exactly what `T` → all threads produces. Measured at 20ms a
+// frame against 1ms over code (BenchmarkRenderBodyInsideALongThread), which is
+// felt as soon as you hold a scroll key.
+//
+// Scoped to a single frame deliberately. The comment set is replaced whenever the
+// diff or the store moves, so a cache that outlived the frame would need to be
+// invalidated from every one of those paths — and a stale comment body is the
+// worst thing this surface could show. Clearing at the top of each frame makes
+// that impossible, and one build per visible conversation is already the whole
+// win: the repeat is *within* a frame, not across them.
+type blockKey struct {
+	comment int
+	width   int
+	cursor  bool
+	last    bool
+}
+
+type commentBlockCache map[blockKey][]string
+
+// commentBlock is the rendered lines of the conversation this row belongs to.
+func (m Model) commentBlock(r rowRef, width int, cursor bool) []string {
+	c := m.stream.comments[r.comment]
+	if m.blocks == nil {
+		// No cache installed (a bare Model, or a single row rendered directly by a
+		// test): correct, just not memoized.
+		return commentLines(c, width, cursor, r.lastComment)
+	}
+	key := blockKey{comment: r.comment, width: width, cursor: cursor, last: r.lastComment}
+	if lines, ok := (*m.blocks)[key]; ok {
+		return lines
+	}
+	lines := commentLines(c, width, cursor, r.lastComment)
+	(*m.blocks)[key] = lines
+	return lines
+}
+
 // renderStreamPanel draws the visible window of the stream.
 func (m Model) renderStreamPanel(width, height int) string {
+	// Top of the frame: everything the last one cached is now potentially stale.
+	if m.blocks != nil {
+		clear(*m.blocks)
+	}
 	border := styleNormalBorder
 	if m.focus == FocusHunks {
 		border = styleFocusBorder
