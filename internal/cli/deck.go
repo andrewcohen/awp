@@ -828,6 +828,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
 		WithDiffViewer(diffLoaderFor(runner), openDiffFileInEditor).
+		WithDiffBaseResolver(diffBaseResolverFor(runner)).
 		WithReviewStore(reviewStoreWithSend(runner, tmuxClient, svc)).
 		WithTrunkResolver(func(repo string) string {
 			fr := fixedDirRunner{base: runner, dir: repo}
@@ -1958,8 +1959,20 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 // better than a hardcoded "main"). Runs jj read-only in the workspace dir;
 // any error degrades to trunk().
 func resolveReviewStackBase(runner Runner, dir, ownBookmark string) string {
+	revset, _ := resolveReviewStackBaseNamed(runner, dir, ownBookmark)
+	return revset
+}
+
+// resolveReviewStackBaseNamed is resolveReviewStackBase plus the base's display
+// name, for chrome that has to say what you are being diffed against.
+//
+// The two differ only for the trunk fallback: the revset is the literal
+// "trunk()", which jj resolves but which means nothing to a reader, so the label
+// is the branch trunk() actually names. The label is empty only when there is
+// nothing to say — no directory to ask in.
+func resolveReviewStackBaseNamed(runner Runner, dir, ownBookmark string) (revset, label string) {
 	if strings.TrimSpace(dir) == "" {
-		return "trunk()"
+		return "trunk()", ""
 	}
 	j := jj.New(fixedDirRunner{base: runner, dir: dir})
 	trunk, _ := j.Trunk()
@@ -1970,15 +1983,16 @@ func resolveReviewStackBase(runner Runner, dir, ownBookmark string) string {
 	// trunk bookmark by name — bookmarks(exact:) matches both the local and
 	// @remote forms, so a locally-ahead trunk can't masquerade as a parent —
 	// and the workspace's own bookmark.
-	revset := fmt.Sprintf(`heads((trunk()..@) & bookmarks() ~ bookmarks(exact:%q)`, trunk)
+	// query finds the parent; it is not the base being returned.
+	query := fmt.Sprintf(`heads((trunk()..@) & bookmarks() ~ bookmarks(exact:%q)`, trunk)
 	if b := strings.TrimSpace(ownBookmark); b != "" {
-		revset += fmt.Sprintf(` ~ bookmarks(exact:%q)`, b)
+		query += fmt.Sprintf(` ~ bookmarks(exact:%q)`, b)
 	}
-	revset += `)`
-	if parent, err := j.BookmarkNameAt(revset); err == nil && strings.TrimSpace(parent) != "" {
-		return parent
+	query += `)`
+	if parent, err := j.BookmarkNameAt(query); err == nil && strings.TrimSpace(parent) != "" {
+		return parent, parent
 	}
-	return "trunk()"
+	return "trunk()", trunk
 }
 
 func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, arg string, reporter deckui.Reporter) error {

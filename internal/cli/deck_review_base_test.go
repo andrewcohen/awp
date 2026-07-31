@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/andrewcohen/awp/internal/deckui"
 )
 
 // reviewBaseRunner fakes jj for resolveReviewStackBase: it answers the
@@ -88,4 +90,57 @@ func TestResolveReviewStackBaseEmptyDirIsTrunk(t *testing.T) {
 	if len(r.revs) != 0 {
 		t.Errorf("empty dir should not invoke jj, got calls %v", r.revs)
 	}
+}
+
+// The label is what a reader sees, so the trunk fallback has to name the branch
+// rather than hand back the revset that finds it.
+func TestResolveReviewStackBaseNamedSpellsOutTrunk(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: ""}
+	revset, label := resolveReviewStackBaseNamed(r, "/ws/x", "andrew/x")
+	if revset != "trunk()" {
+		t.Fatalf("revset = %q, want trunk()", revset)
+	}
+	if label != "main" {
+		t.Fatalf("label = %q, want main — %q is not something to show a reader", label, revset)
+	}
+}
+
+// A stacked change is read against its parent, and says so.
+func TestResolveReviewStackBaseNamedUsesTheParentBookmark(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent-change"}
+	revset, label := resolveReviewStackBaseNamed(r, "/ws/child", "andrew/child")
+	if revset != "andrew/parent-change" || label != "andrew/parent-change" {
+		t.Fatalf("got revset=%q label=%q, want both andrew/parent-change", revset, label)
+	}
+}
+
+// With no directory to ask in there is no honest label — the caller falls back
+// to its own wording rather than printing a guess.
+func TestResolveReviewStackBaseNamedHasNoLabelWithoutADir(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/p"}
+	revset, label := resolveReviewStackBaseNamed(r, "", "andrew/x")
+	if revset != "trunk()" {
+		t.Fatalf("revset = %q, want trunk()", revset)
+	}
+	if label != "" {
+		t.Fatalf("label = %q, want empty", label)
+	}
+}
+
+// Only the stack-base scope has a base worth naming; the working copy is diffed
+// against @ itself, which the scope's own wording already says.
+func TestDiffBaseResolverOnlyAnswersForTheStackScope(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: ""}
+	resolve := diffBaseResolverFor(r)
+	item := deckuiItemForBase("/ws/x", "andrew/x")
+	if got := resolve(item, deckui.ScopeStackBase); got != "main" {
+		t.Fatalf("stack scope label = %q, want main", got)
+	}
+	if got := resolve(item, deckui.ScopeWorking); got != "" {
+		t.Fatalf("working scope should have no base label, got %q", got)
+	}
+}
+
+func deckuiItemForBase(path, bookmark string) deckui.Item {
+	return deckui.Item{Path: path, Bookmark: bookmark}
 }

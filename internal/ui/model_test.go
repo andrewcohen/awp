@@ -255,3 +255,47 @@ func TestSelectedFileRowCarriesSelectionBar(t *testing.T) {
 // Mid-file navigation must not change file.
 // Paging crosses the same way j/k does.
 // Crossing resets the horizontal pan — the next file starts at column 0.
+
+// The base label is chrome, resolved off the open path — the host asks for it
+// and the answer arrives as its own message, so a slow jj cannot delay the
+// first frame of the diff.
+func TestBaseIsEmptyUntilResolved(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m.ResolveBase = func() string { return "andrew/parent" }
+	if got := m.Base(); got != "" {
+		t.Fatalf("expected no label before resolving, got %q", got)
+	}
+	updated, _ := m.Update(baseResolvedMsg{label: "andrew/parent"})
+	if got := updated.(Model).Base(); got != "andrew/parent" {
+		t.Fatalf("expected the resolved label, got %q", got)
+	}
+}
+
+// A resolve that comes back empty must not blank a label we already have: jj
+// failing once in a workspace that was fine a moment ago should leave the chrome
+// saying what it said.
+func TestEmptyResolveKeepsTheKnownBase(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	updated, _ := m.Update(baseResolvedMsg{label: "main"})
+	m = updated.(Model)
+	updated, _ = m.Update(baseResolvedMsg{label: ""})
+	if got := updated.(Model).Base(); got != "main" {
+		t.Fatalf("expected the known label kept, got %q", got)
+	}
+	updated, _ = m.Update(baseResolvedMsg{label: "   "})
+	if got := updated.(Model).Base(); got != "main" {
+		t.Fatalf("whitespace is not an answer either, got %q", got)
+	}
+}
+
+// No resolver means no command to run — Init must not schedule one, or a nil
+// call would panic on the first frame.
+func TestInitWithoutAResolverIsSafe(t *testing.T) {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	if cmd := resolveBaseCmd(m.ResolveBase); cmd != nil {
+		t.Fatal("expected no command without a resolver")
+	}
+	if m.Init() == nil {
+		t.Fatal("expected Init to still load the diff")
+	}
+}

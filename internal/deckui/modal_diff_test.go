@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const diffModalSample = `diff --git a/foo.go b/foo.go
@@ -221,5 +222,77 @@ func TestDiffModalDoesNotCloseOnC(t *testing.T) {
 	m, _ = pressKey(m, "c")
 	if _, ok := m.active.(*diffModal); !ok {
 		t.Fatal("expected c to reach the viewer rather than closing the modal")
+	}
+}
+
+// "vs stack base" describes how the base was picked, not what it is. Once the
+// resolver answers, the footer names the branch you are reading against.
+func TestDiffModalFooterNamesTheResolvedBase(t *testing.T) {
+	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
+		func(ActionRequest) error { return nil }).
+		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
+		WithDiffBaseResolver(func(_ Item, scope DiffScope) string {
+			if scope == ScopeStackBase {
+				return "andrew/parent-change"
+			}
+			return ""
+		})
+	m.width, m.height = 120, 40
+
+	m, cmd := pressKey(m, "C")
+	m = drain(m, cmd)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	footer := ansi.Strip(dm.footerHelp())
+	if !strings.Contains(footer, "vs andrew/parent-change") {
+		t.Fatalf("expected the footer to name the base:\n%s", footer)
+	}
+	if strings.Contains(footer, "vs stack base") {
+		t.Fatalf("expected the generic wording gone once resolved:\n%s", footer)
+	}
+}
+
+// Until the resolver answers — and forever, when none is installed — the footer
+// falls back to the scope's own wording rather than showing a blank.
+func TestDiffModalFooterFallsBackBeforeTheBaseResolves(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	// Deliberately not drained: this is the state right after open, before any
+	// command has run.
+	m, _ = pressKey(m, "C")
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	if footer := ansi.Strip(dm.footerHelp()); !strings.Contains(footer, "vs stack base") {
+		t.Fatalf("expected the fallback wording with no resolver:\n%s", footer)
+	}
+}
+
+// The working-copy scope has no base to name, so `c` keeps its own wording even
+// with a resolver wired.
+func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
+	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
+		func(ActionRequest) error { return nil }).
+		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
+		WithDiffBaseResolver(func(_ Item, scope DiffScope) string {
+			// A resolver that would answer for either scope, to prove the footer's
+			// gate is the scope and not just an empty label.
+			return "andrew/should-not-appear"
+		})
+	m.width, m.height = 120, 40
+
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	if footer := ansi.Strip(dm.footerHelp()); strings.Contains(footer, "should-not-appear") {
+		t.Fatalf("working-copy scope must not show a base label:\n%s", footer)
+	}
+	if footer := ansi.Strip(dm.footerHelp()); !strings.Contains(footer, "working copy") {
+		t.Fatalf("expected the working-copy wording:\n%s", footer)
 	}
 }

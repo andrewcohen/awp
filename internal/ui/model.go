@@ -77,6 +77,19 @@ type Model struct {
 	RefreshInterval time.Duration
 	LoadDiff        func() (string, error)
 	OpenFile        OpenFunc
+	// ResolveBase names what the diff is against — "main", "andrew/parent" —
+	// for a host that wants to say so in its chrome. Optional.
+	//
+	// Separate from LoadDiff, and resolved on its own cadence, because it is a
+	// different question: LoadDiff answers "what changed" every refresh tick,
+	// while the base changes only when you rebase. Resolving it per tick would
+	// spend a subprocess every couple of seconds to re-learn the same answer, so
+	// it runs once on open and again on an explicit refresh. It runs as its own
+	// command rather than on the open path so a slow resolve cannot delay the
+	// first frame.
+	ResolveBase func() string
+	// baseLabel is the last answer ResolveBase gave, empty until it lands.
+	baseLabel string
 
 	files       []diff.FileDiff
 	filtered    []diff.FileDiff
@@ -305,7 +318,22 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadDiffCmd(m.LoadDiff), scheduleRefresh(m.RefreshInterval))
+	return tea.Batch(loadDiffCmd(m.LoadDiff), resolveBaseCmd(m.ResolveBase), scheduleRefresh(m.RefreshInterval))
+}
+
+// Base names what the diff is against, empty until the host's resolver answers
+// (or always, when there is no resolver). A host's chrome should fall back to its
+// own wording rather than showing a blank.
+func (m Model) Base() string { return m.baseLabel }
+
+// baseResolvedMsg carries the answer back from ResolveBase.
+type baseResolvedMsg struct{ label string }
+
+func resolveBaseCmd(fn func() string) tea.Cmd {
+	if fn == nil {
+		return nil
+	}
+	return func() tea.Msg { return baseResolvedMsg{label: fn()} }
 }
 
 func scheduleRefresh(d time.Duration) tea.Cmd {
@@ -370,6 +398,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusErr = false
 		return m, scheduleRefresh(m.RefreshInterval)
+	case baseResolvedMsg:
+		// Only overwrite a known label with another known one: a resolve that comes
+		// back empty (jj erroring in a workspace that was fine a moment ago) should
+		// leave the chrome saying what it said, not blank it.
+		if strings.TrimSpace(msg.label) != "" {
+			m.baseLabel = msg.label
+		}
+		return m, nil
 	case autoRefreshTickMsg:
 		// Comments are re-read on the tick, not gated on the diff changing: an
 		// agent replying edits no files, so a fingerprint-gated reload would
@@ -459,7 +495,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+r":
 		m.refreshing = true
 		m.status = "refreshing…"
-		return m, loadDiffCmd(m.LoadDiff)
+		// An explicit refresh re-resolves the base too: a rebase is exactly the
+		// kind of thing you press this after, and it is the only thing that moves
+		// the base.
+		return m, tea.Batch(loadDiffCmd(m.LoadDiff), resolveBaseCmd(m.ResolveBase))
 	case "/":
 		m.focus = FocusFilter
 		m.filterInput.Focus()
