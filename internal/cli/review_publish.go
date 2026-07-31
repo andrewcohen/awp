@@ -116,7 +116,7 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		for _, c := range inline {
 			// The composed body, not the stored one: a dry run is only useful if it
 			// shows what will actually land on GitHub, prefixes included.
-			_, _ = fmt.Fprintf(out, "  %s:%d\t%s\n", c.Anchor.Path, c.Anchor.LineHint, oneLine(c.PublishBody()))
+			_, _ = fmt.Fprintf(out, "  %s:%s\t%s\n", c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
 		}
 		for _, c := range changeWide {
 			// Named as what it will be, so a dry run does not imply these are
@@ -151,11 +151,15 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	}
 
 	for _, c := range inline {
-		where := fmt.Sprintf("%s:%d", c.Anchor.Path, c.Anchor.LineHint)
+		where := c.Anchor.Path + ":" + c.Anchor.LineRange()
 		threadID, perr := gh.PostReviewComment(prNumber, github.NewComment{
 			Path: c.Anchor.Path,
-			Line: c.Anchor.LineHint,
-			Side: githubSide(c.Anchor.Side),
+			// GitHub's `line` is the *last* line of a comment, so a range sends its
+			// end here and its start as StartLine. A single-line anchor has no end,
+			// which is why this is not simply EndLineHint.
+			Line:      commentEndLine(c.Anchor),
+			StartLine: rangeStartLine(c.Anchor),
+			Side:      githubSide(c.Anchor.Side),
 			// Kind and the robot marker are composed at publish time, not stored:
 			// the stored body is what the author typed, so baking prefixes in
 			// would double them on a re-publish.
@@ -191,6 +195,25 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+// commentEndLine and rangeStartLine translate an anchor into GitHub's way of
+// describing the same thing: it names a comment by its last line, with a
+// start_line above that when there is a range. Ours names the first line, with an
+// end below it — the reverse — because that is the line the comment is located
+// by (see review.Anchor).
+func commentEndLine(a review.Anchor) int {
+	if a.Multiline() {
+		return a.EndLineHint
+	}
+	return a.LineHint
+}
+
+func rangeStartLine(a review.Anchor) int {
+	if a.Multiline() {
+		return a.LineHint
+	}
+	return 0
 }
 
 // githubSide maps our anchor side onto GitHub's diff-side vocabulary.

@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -89,13 +90,45 @@ const (
 // Anchor is where a comment is attached, described so it can be found again
 // after the code moves. LineHint is a hint, not an identity: the text and its
 // surrounding context are what actually locate the line.
+//
+// A comment can cover a range of lines, in which case EndLineHint and EndText
+// describe its last line the same way LineHint and Text describe its first. The
+// two ends are located independently for the same reason a single anchor records
+// text at all — the numbers move, the content is what identifies the code.
 type Anchor struct {
-	Path          string   `json:"path"`
-	Side          Side     `json:"side"`
-	LineHint      int      `json:"line_hint"`
-	Text          string   `json:"text"`
+	Path     string `json:"path"`
+	Side     Side   `json:"side"`
+	LineHint int    `json:"line_hint"`
+	Text     string `json:"text"`
+	// EndLineHint and EndText are the last line of a multi-line anchor, both zero
+	// / empty for the ordinary single-line case. Kept optional rather than always
+	// written so a single-line record reads the same as it always has.
+	EndLineHint   int      `json:"end_line_hint,omitempty"`
+	EndText       string   `json:"end_text,omitempty"`
 	ContextBefore []string `json:"context_before,omitempty"`
 	ContextAfter  []string `json:"context_after,omitempty"`
+}
+
+// Multiline reports whether the anchor covers more than one line.
+//
+// An end at or before the start is not a range: that is either a single-line
+// anchor or a record written by something that filled the field in wrongly, and
+// both are best read as "one line".
+func (a Anchor) Multiline() bool { return a.EndLineHint > a.LineHint }
+
+// LineRange is the anchor's lines as a reader should see them: "12" or "12-18",
+// and empty when there is no line at all (a comment about the change as a
+// whole). One spelling for every surface that names a location — the compose
+// box's header, the comment index, the agent prompt and the publish log all use
+// this so they cannot disagree about what a comment is attached to.
+func (a Anchor) LineRange() string {
+	if a.LineHint <= 0 {
+		return ""
+	}
+	if !a.Multiline() {
+		return strconv.Itoa(a.LineHint)
+	}
+	return strconv.Itoa(a.LineHint) + "-" + strconv.Itoa(a.EndLineHint)
 }
 
 // Anchor's text as it should be shown to a reader. A blank line has no text to

@@ -38,9 +38,9 @@ which ones to publish.
 
 ### File findings with `awp review add`
 
-    awp review add --file <path> --line <n> [--side new|old] \
+    awp review add --file <path> --line <n> [--end-line <n>] [--side new|old] \
       --author agent --type <comment|suggestion|question> \
-      --text "<the line's exact text>" \
+      --text "<the line's exact text>" [--end-text "<the last line's text>"] \
       --body "<your finding>"
 
 There is no session to locate and no path to pass: the review is resolved
@@ -52,6 +52,21 @@ the code as it moves and survives a force-push or rebase; one without it
 falls back to the line number alone and is more likely to end up detached
 if the file shifts underneath it.
 
+**Anchor a finding to the block it is about.** When your point covers
+several lines — a loop, a branch, a group of cases, a function you are
+saying too much about — pass `--end-line` and let the anchor say so
+instead of picking one line and writing "and the next four". Pass
+`--end-text` alongside it for the same reason `--text` exists: it anchors
+the last line by content, so the finding keeps covering the same block as
+the code moves. `--end-line` must be at or after `--line`; equal to it is
+just a single-line finding. The user sees `path:12-18` on the comment and
+the diff hangs it under the block's last line.
+
+A range has to stay inside **one hunk**. The lines between two hunks are
+not in the diff at all, so a range spanning them would claim code neither
+of you looked at — and GitHub rejects that shape when the finding is
+published. Two separate findings is the right answer there.
+
 Nothing needs carrying forward between review passes. Because anchors are
 content-based, a re-review after a force-push relocates existing findings
 automatically — there is no per-head session, so there are no stranded
@@ -61,6 +76,9 @@ comments to migrate.
 
 - **Line comment**: `--file <path> --line <n> --side new` (use
   `--side old` only for lines that were removed).
+- **Block comment**: add `--end-line <n>` when the point is about a range
+  rather than a line. Prefer this over a line comment that describes its
+  own scope in prose.
 - **Closing summary**: one at the end of every review — see "Closing
   summary" below.
 
@@ -136,6 +154,13 @@ a buried lead or a prose-formatted list; restructure before posting.
       --author agent --type suggestion --text "\treturn baz.Field" \
       --body "Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
 
+A finding about a block, anchored at both ends:
+
+    awp review add --file internal/foo/bar.go --line 12 --end-line 18 --side new \
+      --author agent --type suggestion \
+      --text "\tfor _, row := range rows {" --end-text "\t}" \
+      --body "This loop re-opens the file every iteration; hoist the open above it."
+
 ### Closing summary
 
 End every review with **one** summary finding covering: scope of what you
@@ -152,7 +177,7 @@ to the first line of the most relevant file. Example:
 
 After posting, list each comment in chat as a numbered bullet:
 
-    <type> — <file>:<line> — <one-sentence gist>
+    <type> — <file>:<line|start-end> — <one-sentence gist>
 
 in the order you filed them. The user will reply with which numbers to
 publish.

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -157,5 +158,37 @@ func TestCommentPromptWithoutAnIDOmitsTheReplyCommand(t *testing.T) {
 	}
 	if !strings.Contains(got, "Reply before changing anything") {
 		t.Fatalf("expected the gate to survive:\n%s", got)
+	}
+}
+
+// A remark about a block has to say so, or the agent reads a comment about five
+// lines as a comment about the first of them.
+func TestCommentPromptNamesTheRange(t *testing.T) {
+	c := sampleComment()
+	c.Anchor.EndLineHint = c.Anchor.LineHint + 4
+	got := commentPromptFor(c, "")
+	want := fmt.Sprintf("%s:%d-%d", c.Anchor.Path, c.Anchor.LineHint, c.Anchor.EndLineHint)
+	if !strings.Contains(got, want) {
+		t.Fatalf("expected %q in the prompt, got:\n%s", want, got)
+	}
+}
+
+// GitHub names a comment by its last line, with a start above it; ours names the
+// first, with an end below. The translation has to be the right way round or a
+// range publishes upside down.
+func TestPublishTranslatesARangeToGitHubsShape(t *testing.T) {
+	a := review.Anchor{Path: "a.go", LineHint: 12, EndLineHint: 18}
+	if got := commentEndLine(a); got != 18 {
+		t.Fatalf("expected GitHub's line to be the range's end, got %d", got)
+	}
+	if got := rangeStartLine(a); got != 12 {
+		t.Fatalf("expected start_line to be the range's first line, got %d", got)
+	}
+	one := review.Anchor{Path: "a.go", LineHint: 12}
+	if got := commentEndLine(one); got != 12 {
+		t.Fatalf("expected a single-line comment to send its own line, got %d", got)
+	}
+	if got := rangeStartLine(one); got != 0 {
+		t.Fatalf("expected no start_line for a single-line comment, got %d", got)
 	}
 }

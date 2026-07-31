@@ -65,6 +65,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 			Title: "Review",
 			Keys: [][2]string{
 				{"c", "comment on the line · on a comment, reply to it"},
+				{"v", "start a range — j/k extend it, c comments on it, esc cancels"},
 				{"i", "edit your own comment in place"},
 				{"D", "delete the comment and every reply beneath it"},
 				{"r", "mark the file reviewed and collapse it"},

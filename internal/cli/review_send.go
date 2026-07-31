@@ -34,8 +34,10 @@ func commentPromptFor(c review.Comment, revision string) string {
 	var b strings.Builder
 
 	where := c.Anchor.Path
-	if c.Anchor.LineHint > 0 {
-		where += fmt.Sprintf(":%d", c.Anchor.LineHint)
+	// "12" or "12-18": a remark about a block has to say so, or the agent reads a
+	// comment about five lines as a comment about the first of them.
+	if lines := c.Anchor.LineRange(); lines != "" {
+		where += ":" + lines
 	}
 	if c.Anchor.Side == review.SideOld {
 		where += " (removed line, old side)"

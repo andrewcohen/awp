@@ -126,17 +126,28 @@ func openReviewForCwd(runner Runner, svc workspace.Service) (review.Store, revie
 	return store, r, nil
 }
 
+// rangeEnd is the end line to record for a --line / --end-line pair: zero unless
+// the end is genuinely below the start.
+func rangeEnd(line, end int) int {
+	if end > line {
+		return end
+	}
+	return 0
+}
+
 func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("review add", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var (
-		path   = fs.String("file", "", "path of the file being commented on (repo-relative)")
-		line   = fs.Int("line", 0, "line number the comment attaches to")
-		side   = fs.String("side", "new", "which side of the diff the line is on: new or old")
-		body   = fs.String("body", "", "the comment text")
-		author = fs.String("author", "", "who is filing this (defaults to the agent name, or 'agent')")
-		text   = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
-		kind   = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
+		path    = fs.String("file", "", "path of the file being commented on (repo-relative)")
+		line    = fs.Int("line", 0, "line number the comment attaches to")
+		endLine = fs.Int("end-line", 0, "last line, for a comment about a block rather than a line")
+		side    = fs.String("side", "new", "which side of the diff the line is on: new or old")
+		body    = fs.String("body", "", "the comment text")
+		author  = fs.String("author", "", "who is filing this (defaults to the agent name, or 'agent')")
+		text    = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
+		endText = fs.String("end-text", "", "the last line's text, the same way --text anchors the first")
+		kind    = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -153,6 +164,12 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	}
 	if strings.TrimSpace(*path) != "" && *line <= 0 {
 		return errors.New("review add requires --line with --file")
+	}
+	// An end above the start describes no block. Rejected rather than quietly
+	// dropped, because the difference between "line 12" and "lines 12-18" is the
+	// whole content of the flag.
+	if *endLine > 0 && *endLine < *line {
+		return errors.New("review add: --end-line must be at or after --line")
 	}
 	anchorSide := review.SideNew
 	if *side == string(review.SideOld) {
@@ -177,6 +194,11 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 			Side:     anchorSide,
 			LineHint: *line,
 			Text:     *text,
+			// Equal to --line is one line, so it is left unset: Multiline() reads an
+			// end at the start as "not a range", and a record that says so twice
+			// invites the two to disagree.
+			EndLineHint: rangeEnd(*line, *endLine),
+			EndText:     *endText,
 		},
 	})
 	if err != nil {
@@ -186,7 +208,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 		_, _ = fmt.Fprintf(out, "added %s %s on the review\n", c.Kind.OrDefault(), c.ID)
 		return nil
 	}
-	_, _ = fmt.Fprintf(out, "added %s %s on %s:%d\n", c.Kind.OrDefault(), c.ID, c.Anchor.Path, c.Anchor.LineHint)
+	_, _ = fmt.Fprintf(out, "added %s %s on %s:%s\n", c.Kind.OrDefault(), c.ID, c.Anchor.Path, c.Anchor.LineRange())
 	return nil
 }
 
@@ -246,7 +268,7 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 		return nil
 	}
 	for _, c := range comments {
-		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s:%d\t%s\n", c.ID, c.Kind.OrDefault(), c.State, c.Anchor.Path, c.Anchor.LineHint, oneLine(c.Body))
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s:%s\t%s\n", c.ID, c.Kind.OrDefault(), c.State, c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.Body))
 	}
 	return nil
 }

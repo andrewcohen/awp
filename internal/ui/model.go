@@ -106,9 +106,12 @@ type Model struct {
 	// cursorRow is the stream row the cursor is on. The viewport follows it;
 	// it is what "the line you are on" means for opening an editor, and
 	// later for anchoring a comment.
-	cursorRow   int
-	focus       Focus
-	filterInput textinput.Model
+	cursorRow int
+	// visualAnchor is the fixed end of a visual range, visualNone when no range is
+	// being selected; the moving end is the cursor (see visual.go).
+	visualAnchor int
+	focus        Focus
+	filterInput  textinput.Model
 	// searchInput and searchQuery are the diff's content search (see search.go).
 	// The query outlives the prompt so n/N keep working after enter; searchOrigin
 	// is where the cursor was when the prompt opened, so esc can put it back.
@@ -281,6 +284,13 @@ func (m *Model) rebuildStream() {
 	}
 	m.clampCommentsCursor()
 	m.clampCursor()
+	// A visual range is an index into the rows this just replaced (see the note at
+	// the top of visual.go), so it does not survive them changing. Abandoned rather
+	// than clamped: the anchor row still existing does not mean it still shows the
+	// line it was put on, and losing a two-keystroke gesture is a far smaller
+	// surprise than commenting on lines you did not select. `c` consumes the range
+	// before it gets here.
+	m.clearVisual()
 	m.followCursor()
 	m.followEditor()
 	m.syncFileCursorToCursor()
@@ -383,6 +393,7 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 		OpenFile:        openFn,
 		filterInput:     ti,
 		searchInput:     si,
+		visualAnchor:    visualNone,
 		cache:           newRenderCache(),
 		status:          "loading...",
 		// Open on the diff itself. Reading the change is what you came for;
@@ -751,6 +762,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// diff it had no meaning at all.
 		case "enter":
 			return m.toggleThreadFold()
+		// `v` starts a range at the cursor and the movement keys extend it — the
+		// vim gesture, so there is one letter to learn and nothing else.
+		case "v":
+			m.toggleVisual()
+			return m, nil
+		case "esc":
+			// Only meaningful with a range up. Pressing it idly in the diff is not a
+			// mistake worth a message.
+			if m.visualActive() {
+				m.cancelVisual()
+			}
+			return m, nil
 		case "c":
 			return m.startComment()
 		case "i":
