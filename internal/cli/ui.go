@@ -23,9 +23,8 @@ func diffLoaderFor(runner Runner) deckui.DiffLoader {
 		}
 		revision := ""
 		if scope == deckui.ScopeStackBase {
-			// The whole change against its stack base — the diff `C` used to
-			// open a tuicr window for. Base resolution is unchanged: nearest
-			// stacked-parent bookmark, falling back to trunk().
+			// The whole change against its stack base. Base resolution:
+			// nearest stacked-parent bookmark, falling back to trunk().
 			base := resolveReviewStackBase(runner, item.Path, item.Bookmark)
 			revision = base + "..@"
 		}

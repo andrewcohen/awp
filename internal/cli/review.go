@@ -176,12 +176,11 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		reporter.Log(fmt.Sprintf("tmux session %s already exists; ensuring review windows", sessionName))
 	}
 
-	// Add whichever of the three review windows is missing. Necessary
-	// because the session may have been created out-of-band (e.g. an
-	// earlier `enter` on the workspace row summons a session with only
-	// an `agent` window) — without this idempotent setup, review.go
-	// would attach to that bare session and leave the user without the
-	// `pr description` and `review` windows.
+	// Add whichever review window is missing. Necessary because the session
+	// may have been created out-of-band (e.g. an earlier `enter` on the
+	// workspace row summons a session with only an `agent` window) — without
+	// this idempotent setup, review.go would attach to that bare session and
+	// leave the user without the `pr description` window.
 	windows, werr := tmuxClient.ListWindowsInSession(sessionName)
 	if werr != nil {
 		return werr
@@ -451,8 +450,8 @@ func oneLine(s string) string {
 	return strings.Join(fields, " / ")
 }
 
-// resolveDiffRange returns the commit-SHA range that mirrors what tuicr
-// shows in the review pane: <merge-base(origin/base, headSHA)>..<headSHA>.
+// resolveDiffRange returns the commit-SHA range covering the PR's own commits:
+// <merge-base(origin/base, headSHA)>..<headSHA>.
 // Pre-baking SHAs into the prompt avoids the failure mode where the
 // agent computes `<baseRef>..@` against a branch whose origin/<base>
 // has drifted far ahead, producing a diff full of unrelated upstream
@@ -466,8 +465,9 @@ func oneLine(s string) string {
 //
 // Falls back to "<baseRef>..@" when any input is missing or git errors
 // out (e.g. the workspace doesn't have origin/<base> fetched, the head
-// SHA isn't reachable locally yet). Functional but imprecise — the
-// agent's prompt will still steer it toward the right files via tuicr.
+// SHA isn't reachable locally yet). Functional but imprecise — the rest of
+// the prompt still names the PR, so the agent can find its way to the
+// right files.
 func resolveDiffRange(runner Runner, wsPath, baseRef, headSHA string) string {
 	base := strings.TrimSpace(baseRef)
 	head := strings.TrimSpace(headSHA)
