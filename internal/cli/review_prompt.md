@@ -14,10 +14,12 @@ These comments are already on the PR. Read them before reviewing.
 Use them to stay non-redundant:
 
 - **Do not restate** a point an existing comment already makes — repeating
-  it is noise in the pane.
+  it is noise in a review the user has already read once.
 - You may **agree or disagree** with any of them. If you think one is wrong,
-  say so in a `note` (cite the point you're pushing back on); the user wants
-  your independent read, not deference.
+  file a `comment` saying so and cite the point you're pushing back on; the
+  user wants your independent read, not deference. (A `comment` because you
+  are observing, not asking for a change — see "Comment types" below. There
+  are three types and no others.)
 - If a comment is partially right but misses something, add only the
   incremental insight.
 

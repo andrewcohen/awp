@@ -190,3 +190,22 @@ func TestReviewPromptDocumentsRanges(t *testing.T) {
 		}
 	}
 }
+
+// The prompt must not invent a fourth kind in prose. It told the agent to file a
+// `note` for pushing back on an existing comment, which `--type note` silently
+// turns into a plain comment — the prompt contradicting its own Comment types
+// section a few paragraphs later.
+func TestReviewPromptNamesOnlyTheRealKinds(t *testing.T) {
+	for _, kind := range review.Kinds() {
+		if !strings.Contains(reviewPromptTemplate, "`"+string(kind)+"`") {
+			t.Fatalf("the review prompt never names the %q kind", kind)
+		}
+	}
+	// Backticked, i.e. named as a type the agent could pass to --type. The word
+	// itself is fine in prose ("note that…"); it is the vocabulary that matters.
+	for _, invented := range []string{"`note`", "`nit`", "`praise`", "`issue`"} {
+		if strings.Contains(reviewPromptTemplate, invented) {
+			t.Fatalf("the review prompt offers %s, which is not a kind awp has", invented)
+		}
+	}
+}
