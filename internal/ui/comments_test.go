@@ -551,6 +551,45 @@ func TestResolvedThreadsHiddenUntilToggled(t *testing.T) {
 	}
 }
 
+// Which conversations the diff shows is a view-wide setting, so it has to be
+// reachable from whichever pane holds the keyboard — the comment index most of
+// all, since that is the list the setting empties and refills.
+func TestThreadVisibilityTogglesFromEveryPane(t *testing.T) {
+	for _, focus := range []Focus{FocusFiles, FocusComments, FocusHunks} {
+		m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+		m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 2, true, "settled point")})
+		m.focus = focus
+
+		next := press(m, "T")
+		if next.threadVisibility != ThreadsAll {
+			t.Fatalf("focus %v: expected T to cycle to all, got %v", focus, next.threadVisibility)
+		}
+		if view := stripANSI(next.renderStreamPanel(90, 14)); !strings.Contains(view, "settled point") {
+			t.Fatalf("focus %v: expected the resolved thread revealed:\n%s", focus, view)
+		}
+	}
+}
+
+// Cycling to "none" empties the comment index. The keyboard cannot stay on a
+// pane that is no longer drawn, so the toggle has to hand it back.
+func TestHidingThreadsReleasesFocusFromTheEmptiedIndex(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 2, false, "open point")})
+	m.focus = FocusComments
+	if !m.commentPaneVisible() {
+		t.Fatal("expected the index shown with one thread placed")
+	}
+
+	m = press(m, "T") // → all
+	m = press(m, "T") // → none, so the index has nothing left to list
+	if len(m.commentIndex) != 0 {
+		t.Fatalf("expected an empty index, got %d entries", len(m.commentIndex))
+	}
+	if m.focus != FocusHunks {
+		t.Fatalf("expected focus handed to the diff, got %v", m.focus)
+	}
+}
+
 // Threads use the same relocation ladder as local comments, because their line
 // numbers are GitHub's against a particular commit and drift the same way.
 func TestRemoteThreadsRelocateWithContent(t *testing.T) {

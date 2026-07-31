@@ -590,6 +590,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildStream()
 		return m, nil
+	case "T":
+		m.cycleThreadVisibility()
+		return m, nil
 	case "tab", "shift+tab":
 		m.cycleFocus(key == "tab")
 		return m, nil
@@ -676,12 +679,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.deleteCommentAtCursor()
 		case "R":
 			return m.toggleResolved()
-		case "T":
-			m.threadVisibility = (m.threadVisibility + 1) % 3
-			m.status = m.threadVisibility.String()
-			m.rebuildStream()
-			m.clampCursor()
-			m.followCursor()
 		case "e":
 			return m, m.openAtCursor()
 		}
