@@ -2367,3 +2367,28 @@ func TestCursorRowOfABlockKeepsItsOwnStyling(t *testing.T) {
 		t.Fatalf("a sibling row was served the cursor row's render: %q", sibling)
 	}
 }
+
+// Typing has to show up on the frame it happens on.
+//
+// The box's rows go through the same per-row render cache the diff does, and that
+// cache is dropped only when the stream is rebuilt — which a keystroke into the
+// box does not do. Cached, the box rendered its placeholder once and kept serving
+// it while the textarea filled up underneath.
+func TestTypingIntoTheBoxRendersEachKeystroke(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "one", "two", "three"))
+	for m.stream.rows[m.cursorRow].kind != rowLine {
+		m = press(m, "j")
+	}
+	m = press(m, "c")
+	// The first frame is what populates the cache; without it there is nothing
+	// stale to serve and the bug cannot reproduce.
+	_ = m.renderStreamPanel(80, 14)
+	for _, r := range "hello" {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(Model)
+		_ = m.renderStreamPanel(80, 14)
+	}
+	if got := stripANSI(m.renderStreamPanel(80, 14)); !strings.Contains(got, "hello") {
+		t.Fatalf("the box is rendering a stale frame:\n%s", got)
+	}
+}
