@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 func TestQuestionMarkOpensAndClosesTheHelp(t *testing.T) {
@@ -162,5 +164,111 @@ func TestEmptyDiffStillReportsNoChanges(t *testing.T) {
 	status, _ := m.Status()
 	if status != "no changes" {
 		t.Fatalf("expected \"no changes\", got %q", status)
+	}
+}
+
+// `\` gives the stream the whole width for reading wide code.
+func TestBackslashHidesAndShowsTheLeftColumn(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	const width, height = 120, 14
+	m.SetSize(width, height)
+
+	withColumn := stripANSI(m.Body(width, height))
+	if !strings.Contains(withColumn, "Files (") {
+		t.Fatal("fixture is wrong: the file list should be visible")
+	}
+	wideBefore := m.hunkWidth
+
+	m = press(m, `\`)
+	hidden := stripANSI(m.Body(width, height))
+	if strings.Contains(hidden, "Files (") {
+		t.Fatalf("expected the file list gone:\n%s", hidden)
+	}
+	if m.hunkWidth <= wideBefore {
+		t.Fatalf("expected the stream to gain width: %d → %d", wideBefore, m.hunkWidth)
+	}
+	// The body still fills its box, so the footer does not move.
+	if got, want := strings.Count(hidden, "\n"), strings.Count(withColumn, "\n"); got != want {
+		t.Fatalf("hidden body is %d lines, shown is %d", got+1, want+1)
+	}
+
+	m = press(m, `\`)
+	if shown := stripANSI(m.Body(width, height)); !strings.Contains(shown, "Files (") {
+		t.Fatalf("expected the column back:\n%s", shown)
+	}
+	if m.hunkWidth != wideBefore {
+		t.Fatalf("expected the original stream width back, got %d want %d", m.hunkWidth, wideBefore)
+	}
+}
+
+// Hiding the column while it holds the keyboard has to move focus to the diff,
+// or the keys drive a selection nobody can see.
+func TestHidingTheColumnTakesFocusToTheDiff(t *testing.T) {
+	for _, focus := range []Focus{FocusFiles, FocusComments} {
+		m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+		m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "a finding")})
+		m.focus = focus
+		m = press(m, `\`)
+		if m.focus != FocusHunks {
+			t.Fatalf("focus %v: expected the diff to take the keyboard, got %v", focus, m.focus)
+		}
+	}
+}
+
+// And tab must not cycle back into a hidden pane.
+func TestTabDoesNotReachAHiddenColumn(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{commentOn("a.go", 1, "alpha", "a finding")})
+	m = press(m, `\`)
+	for i := 0; i < 4; i++ {
+		m = press(m, "tab")
+		if m.focus != FocusHunks {
+			t.Fatalf("tab %d: focus left the diff for %v with the column hidden", i+1, m.focus)
+		}
+	}
+	m = press(m, "shift+tab")
+	if m.focus != FocusHunks {
+		t.Fatalf("shift+tab left the diff for %v with the column hidden", m.focus)
+	}
+}
+
+// Your place in the change survives hiding, so `\` is a way to look at the code
+// wider rather than a way to lose the row you were on.
+func TestHidingTheColumnKeepsYourPlace(t *testing.T) {
+	m := commentModel(t,
+		fileWith("a.go", 1, "alpha", "beta"),
+		fileWith("b.go", 1, "gamma", "delta"),
+	)
+	m.SetComments([]review.Comment{commentOn("b.go", 1, "gamma", "a finding")})
+	m.SetSize(120, 14)
+	// Walk into the second file, so there is a position worth preserving. The file
+	// cursor is derived from the diff cursor, so moving one moves both.
+	for m.cursorRow < len(m.stream.rows)-1 && cursorText(m) != "delta" {
+		m = press(m, "j")
+	}
+	wantRow, wantFile, wantText := m.cursorRow, m.filesCursor, cursorText(m)
+	if wantText != "delta" {
+		t.Fatalf("fixture is wrong: expected to reach delta, sat on %q", wantText)
+	}
+
+	m = press(m, `\`)
+	if got := cursorText(m); got != wantText {
+		t.Fatalf("hiding moved the cursor from %q to %q", wantText, got)
+	}
+	m = press(m, `\`)
+	if m.cursorRow != wantRow || m.filesCursor != wantFile {
+		t.Fatalf("expected row %d file %d back, got row %d file %d", wantRow, wantFile, m.cursorRow, m.filesCursor)
+	}
+	shown := stripANSI(m.Body(120, 14))
+	if !strings.Contains(shown, "Files (") || !strings.Contains(shown, "b.go") {
+		t.Fatalf("expected the file list back showing the file you were in:\n%s", shown)
+	}
+}
+
+// The binding has to be in the reference, which is the only place it is written
+// down now that the footer stopped listing keys.
+func TestHelpDocumentsTheColumnToggle(t *testing.T) {
+	if view := stripANSI(helpContent(120)); !strings.Contains(view, `\`) {
+		t.Fatalf("expected the column toggle documented:\n%s", view)
 	}
 }

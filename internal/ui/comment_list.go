@@ -133,7 +133,7 @@ func commentPaneHeight(entries, height int) int {
 // decides if it belongs in the tab rotation. Tabbing to a pane that isn't
 // rendered would strand the keyboard.
 func (m Model) commentPaneVisible() bool {
-	return commentPaneHeight(len(m.commentIndex), m.bodyHeight) > 0
+	return !m.hideLeft && commentPaneHeight(len(m.commentIndex), m.bodyHeight) > 0
 }
 
 // renderLeftColumn stacks the file list over the comment index.
@@ -269,6 +269,12 @@ func (m Model) deleteFromIndex() (tea.Model, tea.Cmd) {
 
 // cycleFocus rotates focus files → comments → diff, and back the other way.
 func (m *Model) cycleFocus(forward bool) {
+	if m.hideLeft {
+		// Nothing to cycle to: the diff is the only pane on screen, and cycling
+		// into a hidden one would take the keyboard somewhere invisible.
+		m.focus = FocusHunks
+		return
+	}
 	order := []Focus{FocusFiles, FocusHunks}
 	if m.commentPaneVisible() {
 		order = []Focus{FocusFiles, FocusComments, FocusHunks}

@@ -54,6 +54,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 				{"h/l ←/→", "pan horizontally (no-op under wrap)"},
 				{"0 / $", "start / end of the line"},
 				{"w", "toggle line wrap"},
+				{`\`, "show / hide the left column"},
 				{"/", "filter files · esc clears"},
 				{"e", "open the file in $EDITOR at the cursor's line"},
 				{"ctrl+r", "refresh now (the view also refreshes itself)"},
