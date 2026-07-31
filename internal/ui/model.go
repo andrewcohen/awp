@@ -1134,6 +1134,15 @@ var (
 	styleSelectedBadge    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
 	styleSelectedPathDir  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleSelectedPathBase = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	// The left column's rows carry the same cursorline band the diff's do, so
+	// every style that can land on a selected row needs a variant holding the
+	// background — including the muted ones, since a rename arrow or an index
+	// row's summary sits mid-row and an unpainted cell there is a hole in the
+	// band.
+	styleSelectedPathDirCursor  = styleSelectedPathDir.Background(cursorlineBg)
+	styleSelectedPathBaseCursor = styleSelectedPathBase.Background(cursorlineBg)
+	styleSelectedBadgeCursor    = styleSelectedBadge.Background(cursorlineBg)
+	styleMutedCursor            = styleMuted.Background(cursorlineBg)
 )
 
 func (m Model) renderHeader() string {
@@ -1176,10 +1185,19 @@ func (m Model) renderFileList(width, height int) string {
 	start, end := visibleRange(m.filesCursor, max(1, height-2), len(m.filtered))
 	contentWidth := width - 4
 	for i := start; i < end; i++ {
+		selected := i == m.filesCursor
+		// The band is painted only while this pane holds the keyboard — the same
+		// rule the diff pane follows, so there is never more than one band on
+		// screen to mistake for the active selection.
+		band := selected && m.focus == FocusFiles
 		// No outer selected-row wrap: renderFileRow already emits per-segment
 		// ANSI attributes, so an enclosing style can't add bold to text that
 		// has already declared its own.
-		rows = append(rows, m.renderFileRow(m.filtered[i], contentWidth, i == m.filesCursor))
+		row := m.renderFileRow(m.filtered[i], contentWidth, selected, band)
+		if band {
+			row = bandRow(row, width-2)
+		}
+		rows = append(rows, row)
 	}
 	for len(rows) < height {
 		rows = append(rows, "")
@@ -1187,21 +1205,46 @@ func (m Model) renderFileList(width, height int) string {
 	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
 }
 
-func (m Model) renderFileRow(f diff.FileDiff, width int, selected bool) string {
+func (m Model) renderFileRow(f diff.FileDiff, width int, selected, band bool) string {
 	// The `┃ ` bar is the app-wide selection marker (see the design system in
 	// CLAUDE.md). Unselected rows reserve the same two columns so labels stay
 	// aligned down the list.
 	prefix := selectionPrefixBlank
-	if selected {
+	switch {
+	case band:
+		prefix = styleSelectedCursor.Render(selectionPrefixBar)
+	case selected:
 		prefix = styleSelected.Render(selectionPrefixBar)
 	}
-	badge := statusBadge(f.Status, selected)
+	badge := statusBadge(f.Status, selected, band)
 	avail := width - lipgloss.Width(selectionPrefixBlank) - lipgloss.Width(badge) - 1
-	path := renderPath(diff.DisplayPath(f), avail, selected)
-	return prefix + badge + " " + path
+	path := renderPath(diff.DisplayPath(f), avail, selected, band)
+	return prefix + badge + gap(band) + path
 }
 
-func statusBadge(status string, selected bool) string {
+// gap is the single space between a row's segments, painted when the row carries
+// the band so it does not read as a notch cut out of it.
+func gap(band bool) string {
+	if band {
+		return styleCursorFill.Render(" ")
+	}
+	return " "
+}
+
+// bandRow pads a banded row out to the pane's full inner width, so the
+// cursorline reaches the border on both sides rather than stopping wherever the
+// text happened to end.
+//
+// Padded here rather than left to the bordered block's own Width: lipgloss pads
+// with unstyled spaces, which would leave the right end of the band unpainted.
+func bandRow(row string, innerWidth int) string {
+	if pad := innerWidth - lipgloss.Width(row); pad > 0 {
+		row += styleCursorFill.Render(strings.Repeat(" ", pad))
+	}
+	return row
+}
+
+func statusBadge(status string, selected, band bool) string {
 	var style lipgloss.Style
 	switch status {
 	case "A":
@@ -1213,24 +1256,34 @@ func statusBadge(status string, selected bool) string {
 	default:
 		style = styleModifiedBadge
 	}
-	if selected {
+	switch {
+	case band:
+		style = styleSelectedBadgeCursor
+	case selected:
 		style = styleSelectedBadge
 	}
 	return style.Render(status)
 }
 
-func renderPath(path string, width int, selected bool) string {
-	dirStyle, baseStyle := stylePathDir, stylePathBase
-	if selected {
+func renderPath(path string, width int, selected, band bool) string {
+	dirStyle, baseStyle, sepStyle := stylePathDir, stylePathBase, styleMuted
+	switch {
+	case band:
+		dirStyle, baseStyle, sepStyle = styleSelectedPathDirCursor, styleSelectedPathBaseCursor, styleMutedCursor
+	case selected:
 		dirStyle, baseStyle = styleSelectedPathDir, styleSelectedPathBase
 	}
-	return renderPathWith(path, width, dirStyle, baseStyle)
+	return renderPathWith(path, width, dirStyle, baseStyle, sepStyle)
 }
 
 // renderPathWith renders a path with caller-chosen styles for its directory
 // and basename, so surfaces needing a different hue (the stream's file
 // divider) don't re-implement rename-arrow splitting and truncation.
-func renderPathWith(path string, width int, dirStyle, baseStyle lipgloss.Style) string {
+//
+// sepStyle is the rename arrow's, which the caller has to choose too: it sits
+// between the two halves of the row, so a banded row needs it carrying the
+// background like everything else on that line.
+func renderPathWith(path string, width int, dirStyle, baseStyle, sepStyle lipgloss.Style) string {
 	if width <= 0 {
 		return ""
 	}
@@ -1238,7 +1291,7 @@ func renderPathWith(path string, width int, dirStyle, baseStyle lipgloss.Style) 
 		parts := strings.SplitN(path, " → ", 2)
 		left := renderSinglePathWith(parts[0], max(1, (width-3)/2), dirStyle, baseStyle)
 		right := renderSinglePathWith(parts[1], max(1, width-lipgloss.Width(left)-3), dirStyle, baseStyle)
-		return truncateStyled(left+styleMuted.Render(" → ")+right, width)
+		return truncateStyled(left+sepStyle.Render(" → ")+right, width)
 	}
 	return renderSinglePathWith(path, width, dirStyle, baseStyle)
 }

@@ -227,8 +227,8 @@ func TestSelectedFileRowCarriesSelectionBar(t *testing.T) {
 	}})
 	got := updated.(Model)
 
-	selected := stripANSI(got.renderFileRow(got.filtered[0], 60, true))
-	unselected := stripANSI(got.renderFileRow(got.filtered[1], 60, false))
+	selected := stripANSI(got.renderFileRow(got.filtered[0], 60, true, false))
+	unselected := stripANSI(got.renderFileRow(got.filtered[1], 60, false, false))
 
 	if !strings.HasPrefix(selected, selectionPrefixBar) {
 		t.Fatalf("expected the selected row to start with the bar, got %q", selected)

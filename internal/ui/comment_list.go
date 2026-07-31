@@ -196,7 +196,14 @@ func (m Model) renderCommentList(width, height int) string {
 	start, end := visibleRange(m.commentsCursor, max(1, height-1), len(m.commentIndex))
 	contentWidth := width - 4
 	for i := start; i < end; i++ {
-		rows = append(rows, renderCommentEntry(m.commentIndex[i], contentWidth, i == m.commentsCursor))
+		selected := i == m.commentsCursor
+		// Painted only with the keyboard here, as in the file list and the diff.
+		band := selected && m.focus == FocusComments
+		row := renderCommentEntry(m.commentIndex[i], contentWidth, selected, band)
+		if band {
+			row = bandRow(row, width-2)
+		}
+		rows = append(rows, row)
 	}
 	for len(rows) < height {
 		rows = append(rows, "")
@@ -211,8 +218,11 @@ func (m Model) renderCommentList(width, height int) string {
 // is the same colour in the index as it is in the diff. Factored out for the same
 // reason commentStyles is — lipgloss strips colour with no TTY, so the choice
 // cannot be observed in rendered output.
-func commentEntryStyles(kind review.Kind, selected bool) (loc, text lipgloss.Style) {
-	if selected {
+func commentEntryStyles(kind review.Kind, selected, band bool) (loc, text lipgloss.Style) {
+	switch {
+	case band:
+		return styleSelectedCursor, styleSelectedCursor
+	case selected:
 		// Selection wins over kind: the app-wide marker has to read as the
 		// selection wherever it lands.
 		return styleSelected, styleSelected
@@ -220,14 +230,17 @@ func commentEntryStyles(kind review.Kind, selected bool) (loc, text lipgloss.Sty
 	return kindStyles(kind), styleMuted
 }
 
-func renderCommentEntry(e commentEntry, width int, selected bool) string {
+func renderCommentEntry(e commentEntry, width int, selected, band bool) string {
 	// The `┃ ` bar is the app-wide selection marker; unselected rows reserve the
 	// same columns so labels line up down the list.
 	prefix := selectionPrefixBlank
-	if selected {
+	switch {
+	case band:
+		prefix = styleSelectedCursor.Render(selectionPrefixBar)
+	case selected:
 		prefix = styleSelected.Render(selectionPrefixBar)
 	}
-	loc, text := commentEntryStyles(e.kind, selected)
+	loc, text := commentEntryStyles(e.kind, selected, band)
 
 	head := entryLocation(e)
 	avail := max(1, width-lipgloss.Width(selectionPrefixBlank))
@@ -236,7 +249,7 @@ func renderCommentEntry(e commentEntry, width int, selected bool) string {
 	// The summary only gets whatever the location left, so a deep path can't
 	// push the row past the pane.
 	if rest := avail - lipgloss.Width(head) - 1; rest > 0 && e.summary != "" {
-		out += " " + text.Render(truncate(e.summary, rest))
+		out += gap(band) + text.Render(truncate(e.summary, rest))
 	}
 	return out
 }

@@ -139,7 +139,9 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 	ruleStyle, baseStyle := fileRuleStyles(current)
 
 	lead := ruleStyle.Render(strings.Repeat(fileRuleGlyph, fileRuleLead) + " ")
-	badge := statusBadge(f.Status, current)
+	// Never banded: the divider is already a full-width rule, so a cursorline
+	// behind it would add nothing (see renderStreamRow).
+	badge := statusBadge(f.Status, current, false)
 	summary := fmt.Sprintf(" (%d hunk%s)", len(f.Hunks), plural(len(f.Hunks)))
 	if r.collapsed {
 		// A collapsed file still has to say what is inside it, or the divider
@@ -149,7 +151,7 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 	}
 	meta := styleMuted.Render(summary)
 	reserved := lipgloss.Width(lead) + lipgloss.Width(badge) + 1 + lipgloss.Width(meta)
-	label := renderPathWith(diff.DisplayPath(f), max(10, width-reserved), ruleStyle, baseStyle)
+	label := renderPathWith(diff.DisplayPath(f), max(10, width-reserved), ruleStyle, baseStyle, styleMuted)
 
 	head := lead + badge + " " + label + meta
 	// Fill whatever is left with the rule, so every file divider spans the
