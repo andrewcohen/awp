@@ -110,8 +110,11 @@ type Model struct {
 	// visualAnchor is the fixed end of a visual range, visualNone when no range is
 	// being selected; the moving end is the cursor (see visual.go).
 	visualAnchor int
-	focus        Focus
-	filterInput  textinput.Model
+	// marks says which rows carry a ranged comment's left bar, and in whose kind's
+	// colour (see range_marks.go). Derived from the placed rows on every rebuild.
+	marks       rangeMarks
+	focus       Focus
+	filterInput textinput.Model
 	// searchInput and searchQuery are the diff's content search (see search.go).
 	// The query outlives the prompt so n/N keep working after enter; searchOrigin
 	// is where the cursor was when the prompt opened, so esc can put it back.
@@ -282,6 +285,9 @@ func (m *Model) rebuildStream() {
 		// reply, which append instead.
 		m.stream = withEditor(idx, m.editorAnchorRow(idx), commentEditorRows, m.editor.editing)
 	}
+	// After the splice: the box's rows shift every index after it, and a mark is a
+	// row index.
+	m.marks = m.buildRangeMarks(m.stream.rows)
 	m.clampCommentsCursor()
 	m.clampCursor()
 	// A visual range is an index into the rows this just replaced (see the note at
