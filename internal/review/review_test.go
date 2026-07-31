@@ -468,3 +468,131 @@ func TestPublishBodyIsIdempotent(t *testing.T) {
 		t.Fatalf("expected the stored body untouched, got %q", c.Body)
 	}
 }
+
+// Deleting a comment takes its replies with it. Left behind, Threads promotes each
+// orphaned reply to a conversation of its own, so the answers to a deleted remark
+// would scatter through the diff as independent findings.
+func TestDeleteCommentCascadesToReplies(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	r, err := store.Open("/repo/proj", Target{Kind: TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	parent, err := store.AddComment(r, Comment{
+		Author: AuthorHuman, Body: "needs a guard",
+		Anchor: Anchor{Path: "a.go", LineHint: 3},
+	})
+	if err != nil {
+		t.Fatalf("add parent: %v", err)
+	}
+	if _, err := store.Reply(r, parent.ID, Comment{Author: "agent", Body: "fixed"}); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	// An unrelated conversation must survive untouched.
+	other, err := store.AddComment(r, Comment{
+		Author: AuthorHuman, Body: "separate point",
+		Anchor: Anchor{Path: "b.go", LineHint: 9},
+	})
+	if err != nil {
+		t.Fatalf("add other: %v", err)
+	}
+
+	if err := store.DeleteComment(r, parent.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	left, err := store.Comments(r)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(left) != 1 || left[0].ID != other.ID {
+		t.Fatalf("expected only the unrelated comment left, got %+v", left)
+	}
+	// And nothing is left that Threads would promote to a top-level comment.
+	for _, th := range Threads(left) {
+		if th.Parent.ReplyTo != "" {
+			t.Fatalf("an orphaned reply survived as its own conversation: %+v", th.Parent)
+		}
+	}
+}
+
+// `awp review reply --to` accepts any comment's id, so a chain can be deeper than
+// one level even though the deck normalises its own replies onto the thread's top.
+// The cascade has to reach the whole chain.
+func TestDeleteCommentCascadesTransitively(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	r, err := store.Open("/repo/proj", Target{Kind: TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	parent, err := store.AddComment(r, Comment{
+		Author: AuthorHuman, Body: "top", Anchor: Anchor{Path: "a.go", LineHint: 1},
+	})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	mid, err := store.Reply(r, parent.ID, Comment{Author: "agent", Body: "middle"})
+	if err != nil {
+		t.Fatalf("reply 1: %v", err)
+	}
+	if _, err := store.Reply(r, mid.ID, Comment{Author: AuthorHuman, Body: "deep"}); err != nil {
+		t.Fatalf("reply 2: %v", err)
+	}
+	if err := store.DeleteComment(r, parent.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	left, err := store.Comments(r)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("expected the whole chain gone, got %+v", left)
+	}
+}
+
+// Deleting a reply takes only that reply — the conversation it was part of stays.
+func TestDeletingAReplyLeavesItsParent(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	r, _ := store.Open("/repo/proj", Target{Kind: TargetWorking, Workspace: "ws"})
+	parent, err := store.AddComment(r, Comment{
+		Author: AuthorHuman, Body: "top", Anchor: Anchor{Path: "a.go", LineHint: 1},
+	})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	reply, err := store.Reply(r, parent.ID, Comment{Author: "agent", Body: "answer"})
+	if err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if err := store.DeleteComment(r, reply.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	left, _ := store.Comments(r)
+	if len(left) != 1 || left[0].ID != parent.ID {
+		t.Fatalf("expected the parent to survive, got %+v", left)
+	}
+}
+
+// The closure is order-independent: a reply may be listed before the reply it
+// answers, so one pass over the set could miss the tail of a chain.
+func TestCommentAndRepliesIgnoresOrder(t *testing.T) {
+	comments := []Comment{
+		{ID: "deep", ReplyTo: "mid"},
+		{ID: "mid", ReplyTo: "top"},
+		{ID: "top"},
+		{ID: "unrelated"},
+	}
+	got := CommentAndReplies(comments, "top")
+	want := []string{"deep", "mid", "top"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v (sorted)", got, want)
+		}
+	}
+	// A comment with no replies is just itself.
+	if got := CommentAndReplies(comments, "unrelated"); len(got) != 1 || got[0] != "unrelated" {
+		t.Fatalf("expected only the comment itself, got %v", got)
+	}
+}

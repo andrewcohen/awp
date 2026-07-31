@@ -86,14 +86,22 @@ func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 		m.status = "deleting unavailable here"
 		return m, nil
 	}
+	// Resolve the closure before deleting, while the set still holds the replies.
+	doomed := make(map[string]bool)
+	for _, id := range review.CommentAndReplies(m.comments, c.ID) {
+		doomed[id] = true
+	}
 	if err := m.DeleteComment(c.ID); err != nil {
 		m.status = "delete: " + err.Error()
 		m.statusErr = true
 		return m, nil
 	}
+	// Prune the same closure the store removed. Dropping only the parent would
+	// leave its replies here until the next reload, and Threads would show each of
+	// them as a conversation in its own right in the meantime.
 	kept := make([]review.Comment, 0, len(m.comments))
 	for _, own := range m.comments {
-		if own.ID != c.ID {
+		if !doomed[own.ID] {
 			kept = append(kept, own)
 		}
 	}
@@ -103,7 +111,13 @@ func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 	m.clampCursor()
 	m.followCursor()
 	m.syncFileCursorToCursor()
-	m.status = "comment deleted"
+	if n := len(doomed) - 1; n > 0 {
+		// Say how many replies went with it: a cascade that deleted more than the
+		// reviewer pointed at has to report what it took.
+		m.status = fmt.Sprintf("comment and %d repl%s deleted", n, map[bool]string{true: "y", false: "ies"}[n == 1])
+	} else {
+		m.status = "comment deleted"
+	}
 	return m, nil
 }
 

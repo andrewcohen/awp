@@ -1432,3 +1432,70 @@ func TestOnlyTheLastMessageInAThreadClosesTheBlock(t *testing.T) {
 		t.Fatalf("expected the last row of the block to be its closing pad, got row %d of %d", blanks[len(blanks)-1], block)
 	}
 }
+
+// Deleting a conversation prunes its replies from the viewer's own set too, not
+// just from the store. Dropping only the parent would leave the replies on screen
+// until the next reload — and placeComments would show each as a conversation of
+// its own in the meantime.
+func TestDeletingAParentPrunesItsRepliesFromTheView(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	var deleted []string
+	m.DeleteComment = func(id string) error { deleted = append(deleted, id); return nil }
+	parent := commentOn("a.go", 1, "alpha", "needs a guard")
+	m.SetComments([]review.Comment{
+		parent,
+		{ID: "r1", Author: "agent", Body: "fixed", State: review.Open, ReplyTo: parent.ID, Anchor: parent.Anchor},
+		{ID: "r2", Author: review.AuthorHuman, Body: "thanks", State: review.Open, ReplyTo: parent.ID, Anchor: parent.Anchor},
+		// A separate conversation that must survive.
+		{ID: "other", Author: review.AuthorHuman, Body: "unrelated", State: review.Open,
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 2, Text: "beta"}},
+	})
+
+	m.cursorRow = firstRowOfComment(m, parent.ID)
+	updated, _ := m.deleteCommentAtCursor()
+	m = updated.(Model)
+
+	// The store is told once, about the parent — the cascade is its job.
+	if len(deleted) != 1 || deleted[0] != parent.ID {
+		t.Fatalf("expected one delete for the parent, got %v", deleted)
+	}
+	if len(m.comments) != 1 || m.comments[0].ID != "other" {
+		t.Fatalf("expected only the unrelated comment left in the view, got %+v", m.comments)
+	}
+	// And no reply lingers in the stream as its own conversation.
+	for _, c := range m.stream.comments {
+		if c.ReplyTo != "" {
+			t.Fatalf("a reply survived in the stream: %+v", c)
+		}
+	}
+	// The index agrees.
+	if len(m.commentIndex) != 1 || m.commentIndex[0].id != "other" {
+		t.Fatalf("expected one entry left in the index, got %+v", m.commentIndex)
+	}
+	// A cascade that took more than what was pointed at has to say so.
+	if !strings.Contains(m.status, "2 replies") {
+		t.Fatalf("expected the status to report the replies taken, got %q", m.status)
+	}
+}
+
+// Deleting a reply takes only that reply; its conversation stays.
+func TestDeletingAReplyKeepsTheConversation(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.DeleteComment = func(string) error { return nil }
+	parent := commentOn("a.go", 1, "alpha", "top")
+	reply := review.Comment{
+		ID: "r1", Author: "agent", Body: "answer", State: review.Open,
+		ReplyTo: parent.ID, Anchor: parent.Anchor,
+	}
+	m.SetComments([]review.Comment{parent, reply})
+
+	m.cursorRow = firstRowOfComment(m, reply.ID)
+	updated, _ := m.deleteCommentAtCursor()
+	m = updated.(Model)
+	if len(m.comments) != 1 || m.comments[0].ID != parent.ID {
+		t.Fatalf("expected the parent to survive, got %+v", m.comments)
+	}
+	if strings.Contains(m.status, "repl") {
+		t.Fatalf("expected no cascade reported for a leaf reply, got %q", m.status)
+	}
+}

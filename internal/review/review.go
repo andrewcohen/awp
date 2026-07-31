@@ -456,17 +456,63 @@ func (s Store) UpdateComment(r Review, c Comment) error {
 	return writeJSON(filepath.Join(dir, "comments", c.ID+".json"), c)
 }
 
-// DeleteComment removes a comment.
+// DeleteComment removes a comment and every reply beneath it.
+//
+// Cascading rather than leaving the replies behind. Threads promotes a reply
+// whose parent is missing to a conversation of its own, so deleting a remark you
+// had already discussed used to scatter the answers through the diff as if each
+// were an independent finding — the record would still hold them, but nothing
+// would say what they were answering.
+//
+// Transitive, because `awp review reply --to` accepts any comment's id: the deck
+// normalises a reply-to-a-reply onto the conversation's top, but an agent going
+// through the CLI can build a deeper chain.
 func (s Store) DeleteComment(r Review, id string) error {
 	dir := s.dir(r.Repo, r.ID)
 	if dir == "" || id == "" {
 		return errors.New("review: cannot resolve comment path")
 	}
-	err := os.Remove(filepath.Join(dir, "comments", id+".json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	doomed := []string{id}
+	// Best-effort: if the listing fails we still delete the comment that was
+	// asked for. Refusing would leave the reviewer unable to remove anything.
+	if existing, err := s.Comments(r); err == nil {
+		doomed = CommentAndReplies(existing, id)
 	}
-	return err
+	var errs []error
+	for _, victim := range doomed {
+		err := os.Remove(filepath.Join(dir, "comments", victim+".json"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// CommentAndReplies is id plus every comment replying to it, transitively, sorted
+// so callers get a stable order.
+//
+// Exported because deletion happens in two places that must agree: the store
+// removes the records, and a viewer holding the set in memory has to prune the
+// same ones rather than waiting for a reload to notice.
+func CommentAndReplies(comments []Comment, id string) []string {
+	doomed := map[string]bool{id: true}
+	// Repeated passes rather than one: a reply may appear before the reply it
+	// answers, so a single pass could miss the tail of a chain.
+	for grew := true; grew; {
+		grew = false
+		for _, c := range comments {
+			if c.ReplyTo != "" && doomed[c.ReplyTo] && !doomed[c.ID] {
+				doomed[c.ID] = true
+				grew = true
+			}
+		}
+	}
+	out := make([]string, 0, len(doomed))
+	for cid := range doomed {
+		out = append(out, cid)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Comments lists a review's comments, oldest first.
