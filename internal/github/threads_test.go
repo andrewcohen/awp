@@ -137,3 +137,68 @@ func TestResolveRejectsEmptyThreadID(t *testing.T) {
 		t.Fatal("expected no gh call for an empty thread id")
 	}
 }
+
+// A reply goes into the thread it answers, and its body never touches argv.
+func TestReplyToReviewThreadPostsIntoTheThread(t *testing.T) {
+	r := &gqlRunner{reply: `{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"PRRC_new"}}}}`}
+	// A body with the shell metacharacters that broke agent-filed comments when
+	// they went through gh's -f flags.
+	const body = "answered: `git log` $(whoami) \"quoted\""
+	id, err := New(r, "").ReplyToReviewThread("T1", body)
+	if err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if id != "PRRC_new" {
+		t.Fatalf("expected the new comment's id back, got %q", id)
+	}
+	if len(r.bodies) != 1 {
+		t.Fatalf("expected one request, got %d", len(r.bodies))
+	}
+	query, _ := r.bodies[0]["query"].(string)
+	if !strings.Contains(query, "addPullRequestReviewThreadReply") {
+		t.Fatalf("expected the reply mutation, got %q", query)
+	}
+	// Staging it into a pending review is what the input's pullRequestReviewId
+	// would do, and a reply must not need a verdict to go out.
+	if strings.Contains(query, "pullRequestReviewId") {
+		t.Fatalf("a reply is posted on its own, not staged into a review: %q", query)
+	}
+	vars := r.vars(0)
+	if vars["threadId"] != "T1" {
+		t.Fatalf("expected threadId T1, got %v", vars["threadId"])
+	}
+	if vars["body"] != body {
+		t.Fatalf("the body was altered on the way out: %q", vars["body"])
+	}
+}
+
+func TestReplyToReviewThreadRejectsEmptyInput(t *testing.T) {
+	for _, tc := range []struct{ name, threadID, body string }{
+		{"no thread", "  ", "something"},
+		{"no body", "T1", "  \n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &gqlRunner{}
+			if _, err := New(r, "").ReplyToReviewThread(tc.threadID, tc.body); err == nil {
+				t.Fatal("expected the empty input to be rejected")
+			}
+			if len(r.bodies) != 0 {
+				t.Fatal("expected no gh call")
+			}
+		})
+	}
+}
+
+// A reply GitHub did not confirm must not be reported as posted: the caller marks
+// the draft published on success, and a false success loses what was typed.
+func TestReplyToReviewThreadFailsWhenNoCommentComesBack(t *testing.T) {
+	r := &gqlRunner{reply: `{"data":{"addPullRequestReviewThreadReply":{"comment":null}}}`}
+	if _, err := New(r, "").ReplyToReviewThread("T1", "hello"); err == nil {
+		t.Fatal("expected a missing comment to be an error")
+	}
+	r = &gqlRunner{reply: `{"errors":[{"message":"thread is gone"}]}`}
+	_, err := New(r, "").ReplyToReviewThread("T1", "hello")
+	if err == nil || !strings.Contains(err.Error(), "thread is gone") {
+		t.Fatalf("expected GitHub's own message, got %v", err)
+	}
+}
