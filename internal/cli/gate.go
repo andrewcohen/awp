@@ -67,9 +67,12 @@ when the repo has no dev_loop configured.`
 // pass/fail signal. (The Bash tool_response carries no exit status on the
 // builds we tested, which is why reading it was unreliable.)
 type gateHookPayload struct {
-	HookEventName string          `json:"hook_event_name"`
-	ToolName      string          `json:"tool_name"`
-	ToolInput     json.RawMessage `json:"tool_input"`
+	HookEventName string `json:"hook_event_name"`
+	ToolName      string `json:"tool_name"`
+	// CWD is the tree the session is working in, which bounds which edits the
+	// dev-loop tracker treats as work on the current unit (see hook_scope.go).
+	CWD       string          `json:"cwd"`
+	ToolInput json.RawMessage `json:"tool_input"`
 }
 
 // bashCommand pulls the shell command out of a Bash tool_input payload.

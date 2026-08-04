@@ -93,6 +93,13 @@ func runLoopTrack() error {
 			newPhase = ""
 		}
 	default:
+		if isEditTool(payload.ToolName) &&
+			!withinScope(editTargetPath(payload.ToolInput), hookScopeRoot(payload.CWD)) {
+			// An edit to something outside the session's tree — a review record under
+			// ~/.awp, a scratch file — is not progress on this unit, so it must not
+			// move the phase. See hook_scope.go.
+			break
+		}
 		command := ""
 		if payload.ToolName == "Bash" {
 			command = payload.bashCommand()

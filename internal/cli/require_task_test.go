@@ -34,7 +34,7 @@ func TestRequireTaskDeniesEditWithoutInProgress(t *testing.T) {
 	root := t.TempDir()
 	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
 	withGateRepo(t, root, gateConfigJSON)
-	withStdin(t, `{"session_id":"`+session+`","tool_name":"Edit","tool_input":{"file_path":"/x/foo.go"}}`)
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"`+filepath.Join(root, "foo.go")+`"}}`)
 	var errBuf strings.Builder
 	err := runRequireTask([]string{"--hook"}, &errBuf)
 	if !errors.Is(err, ErrTaskRequired) {
@@ -53,7 +53,7 @@ func TestRequireTaskAllowsEditWithInProgress(t *testing.T) {
 	root := t.TempDir()
 	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
 	withGateRepo(t, root, gateConfigJSON)
-	withStdin(t, `{"session_id":"`+session+`","tool_name":"Write","tool_input":{"file_path":"/x/foo.go"}}`)
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"Write","tool_input":{"file_path":"`+filepath.Join(root, "foo.go")+`"}}`)
 	if err := runRequireTask([]string{"--hook"}, io.Discard); err != nil {
 		t.Fatalf("expected allow (nil), got %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRequireTaskDeniesNotebookEdit(t *testing.T) {
 	root := t.TempDir()
 	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
 	withGateRepo(t, root, gateConfigJSON)
-	withStdin(t, `{"session_id":"`+session+`","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/x/n.ipynb"}}`)
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"NotebookEdit","tool_input":{"notebook_path":"`+filepath.Join(root, "n.ipynb")+`"}}`)
 	if err := runRequireTask([]string{"--hook"}, io.Discard); !errors.Is(err, ErrTaskRequired) {
 		t.Fatalf("expected ErrTaskRequired for notebook edit, got %v", err)
 	}
@@ -114,6 +114,75 @@ func TestRequireTaskFailsOpenWithoutSession(t *testing.T) {
 	withStdin(t, `{"tool_name":"Edit","tool_input":{"file_path":"/x/foo.go"}}`)
 	if err := runRequireTask([]string{"--hook"}, io.Discard); err != nil {
 		t.Fatalf("missing session_id should fail open, got %v", err)
+	}
+}
+
+// The gate is about keeping changes to the session's tree attached to a task. A
+// file outside it is state rather than the change being made — repairing a review
+// record under ~/.awp is the case this was found on, and it is exactly what a
+// debugging session has to do.
+func TestRequireTaskAllowsEditsOutsideTheSessionsTree(t *testing.T) {
+	session := seedTasks(t, map[string]string{"1": "completed"}) // no in_progress
+	root := t.TempDir()
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	outside := filepath.Join(t.TempDir(), "reviews", "alpha", "comments", "1785.json")
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"`+outside+`"}}`)
+	if err := runRequireTask([]string{"--hook"}, io.Discard); err != nil {
+		t.Fatalf("a file outside the session's tree should not be gated, got %v", err)
+	}
+
+	// Same gate, same session, a file inside: still blocked. Otherwise the fix
+	// would read as working while having simply turned the gate off.
+	inside := filepath.Join(root, "internal", "cli", "thing.go")
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"`+inside+`"}}`)
+	if err := runRequireTask([]string{"--hook"}, io.Discard); !errors.Is(err, ErrTaskRequired) {
+		t.Fatalf("a file inside the tree must still be gated, got %v", err)
+	}
+}
+
+// The payload's cwd is the tree, not the hook process's own directory: the hook
+// runs wherever it was launched from, and only the payload knows where the agent
+// is working.
+func TestRequireTaskScopesToThePayloadCWD(t *testing.T) {
+	session := seedTasks(t, map[string]string{"1": "completed"})
+	root := t.TempDir()
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	// A relative target resolves against the payload's cwd, so it is inside.
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"internal/cli/thing.go"}}`)
+	if err := runRequireTask([]string{"--hook"}, io.Discard); !errors.Is(err, ErrTaskRequired) {
+		t.Fatalf("a relative path is inside the tree by construction, got %v", err)
+	}
+	// …but only after cleaning.
+	withStdin(t, `{"session_id":"`+session+`","cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"../../elsewhere/thing.go"}}`)
+	if err := runRequireTask([]string{"--hook"}, io.Discard); err != nil {
+		t.Fatalf("a relative path that climbs out is outside the tree, got %v", err)
+	}
+}
+
+func TestWithinScope(t *testing.T) {
+	root := filepath.Join("/repo", "awp")
+	cases := []struct {
+		name, path, root string
+		want             bool
+	}{
+		{"a file in the tree", filepath.Join(root, "internal", "a.go"), root, true},
+		{"the root itself", root, root, true},
+		{"a sibling directory", "/repo/other/a.go", root, false},
+		{"a prefix that is not a parent", "/repo/awp-notes/a.go", root, false},
+		{"home state", "/Users/andrewcohen/.awp/reviews/x/comments/1.json", root, false},
+		// "Cannot tell" has to leave the gate in place: this decides whether a gate
+		// applies, so an unparsed payload must not hand out an exemption.
+		{"no root", "/repo/awp/a.go", "", true},
+		{"no path", "", root, true},
+	}
+	for _, c := range cases {
+		if got := withinScope(c.path, c.root); got != c.want {
+			t.Errorf("%s: withinScope(%q, %q) = %v, want %v", c.name, c.path, c.root, got, c.want)
+		}
 	}
 }
 
