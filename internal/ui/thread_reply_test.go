@@ -305,3 +305,73 @@ func TestAThreadReplyHasNoKindToCycle(t *testing.T) {
 		t.Fatalf("expected a reply body with no kind prefix, got %q", got)
 	}
 }
+
+// A body from GitHub arrives with CRLF line endings, and a bare carriage return in
+// a rendered row is not a character — it moves the cursor back to the start of the
+// line, so the row overwrites itself and every row measured after it lands
+// somewhere else. One mirrored thread with Windows line endings mangled the whole
+// pane: fragments of the diff, and of the left column, drawn over each other.
+func TestCommentRowsCarryNoControlCharacters(t *testing.T) {
+	bodies := map[string]string{
+		"github crlf": "Values are all confirmed!\r\n\r\n### Monday Request\r\n```\r\n- Over 3 million happy customers\r\n- 102,000 5-star reviews\r\n```",
+		"lone cr":     "first\rsecond\rthird",
+		"tabs":        "col\tanother\tthird",
+		"escape":      "innocent \x1b[41;97m NOT A REAL WARNING \x1b[0m text",
+		"nul and bel": "ping\x07 and \x00 gone",
+	}
+	for name, body := range bodies {
+		for _, collapsed := range []bool{false, true} {
+			rows := commentRows(review.Comment{Author: review.AuthorHuman, Body: body}, 40, true, collapsed)
+			for i, r := range rows {
+				for _, ru := range r.text {
+					if isControl(ru) {
+						t.Errorf("%s (collapsed=%v): row %d carries %q: %q",
+							name, collapsed, i, ru, r.text)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The pane's own rows must be clean too, since that is what actually reaches the
+// terminal — and a mirrored thread's body goes through one more hop (threadAsComment
+// joins every message into one string) before it gets there.
+func TestTheRenderedPaneCarriesNoControlCharacters(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{{
+		ID: "T1", Path: "a.go", Side: review.SideNew, Line: 1,
+		Comments: []review.ThreadComment{
+			{ID: "c1", Author: "alice", Body: "why is this here?\r\n\r\nsee the table\r\n"},
+			{ID: "c2", Author: "bob", Body: "because\r\n```\r\n- one\r\n- two\r\n```"},
+		},
+	}})
+	m.threadFold = map[string]bool{"T1": true}
+	m.rebuildStream()
+	out := stripANSI(m.renderStreamPanel(80, 24))
+	for _, ru := range out {
+		if isControl(ru) && ru != '\n' {
+			t.Fatalf("the rendered pane carries %q:\n%q", ru, out)
+		}
+	}
+}
+
+// displayText keeps the text and drops only what the terminal would act on.
+func TestDisplayTextKeepsTheWordsAndDropsTheControls(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"plain", "plain"},
+		{"a\r\nb", "a\nb"},
+		{"a\rb", "a\nb"},
+		{"a\tb", "a    b"},
+		{"a\x1b[31mb", "a[31mb"},
+		{"a\x00\x07b", "ab"},
+		// A body with nothing to fix comes back byte-identical, which is the path
+		// almost every comment takes on every frame.
+		{"keeps\nnewlines\n", "keeps\nnewlines\n"},
+	} {
+		if got := displayText(tc.in); got != tc.want {
+			t.Errorf("displayText(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
