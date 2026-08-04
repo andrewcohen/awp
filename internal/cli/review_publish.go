@@ -105,6 +105,7 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	// the error message asked for without saying how.
 	summary := fs.String("summary", "", "the review's body, which comment and request-changes require")
 	summaryFile := fs.String("summary-file", "", "read the review body from a file, or - for stdin")
+	wsName := workspaceFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -116,35 +117,36 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	if err != nil {
 		return err
 	}
-	store, r, err := openReviewForCwd(runner, svc)
+	scope, err := openReviewFor(runner, svc, *wsName)
 	if err != nil {
 		return err
 	}
-	comments, err := store.Comments(r)
+	comments, err := scope.store.Comments(scope.review)
 	if err != nil {
 		return err
 	}
-	pinned := 0
-	// The command is run from the workspace under review, so the process's own
-	// directory is the one whose commit the comments were read against — no lookup
-	// needed, and correct even for a workspace awp does not know about.
-	cwd, cerr := os.Getwd()
-	if cerr == nil {
-		pinned = pinnedPRForPath(svc, cwd)
-	}
-	prNumber := resolvePublishPR(*prFlag, r.Target, pinned)
+	// The workspace under review, not the process's own directory: usually the same
+	// place, but not when --workspace named another one. Its directory is where the
+	// commit the comments were read against lives, and its PR is what publishing
+	// defaults to. cwd remains the fallback for a workspace awp does not know about.
+	cwd, _ := os.Getwd()
+	prNumber := resolvePublishPR(*prFlag, scope.review.Target, scope.entry.PRNumber)
 	if prNumber == 0 {
-		return errors.New("review publish: this workspace isn't pinned to a PR; pass --pr")
+		return fmt.Errorf("review publish: %s isn't pinned to a PR; pass --pr", scope.label())
 	}
+	// Named before anything is sent. A publish that resolved the wrong review
+	// reports "0 comments" and looks like a store bug; saying which review it read
+	// makes that one line of output instead of an investigation.
+	_, _ = fmt.Fprintf(out, "publishing %s to PR #%d\n", scope.label(), prNumber)
 	return publishReview(runner, publishRequest{
-		Store:    store,
-		Review:   r,
+		Store:    scope.store,
+		Review:   scope.review,
 		Comments: comments,
 		PR:       prNumber,
 		Event:    event,
 		Verdict:  *verdict,
 		DryRun:   *dryRun,
-		Dir:      cwd,
+		Dir:      scope.dir(cwd),
 		Summary:  summaryText,
 	}, out)
 }

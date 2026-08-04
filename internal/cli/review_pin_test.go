@@ -8,6 +8,16 @@ import (
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
+// pinnedPRFor is the PR the workspace containing dir is pinned to, which is what
+// `review publish` defaults to. A test helper rather than a production function:
+// publish reads it off the workspace entry the review was resolved through
+// (reviewScope.entry), so that it follows --workspace instead of the process's own
+// directory. The resolution these tests pin down is workspaceEntryForPath's.
+func pinnedPRFor(svc workspace.Service, dir string) int {
+	e, _ := workspaceEntryForPath(svc, dir)
+	return e.PRNumber
+}
+
 // The pin is the only thing that makes publish reachable: reviews are keyed by
 // workspace, so no review's target ever names a PR.
 func TestResolvePublishPRFallsBackToThePin(t *testing.T) {
@@ -60,7 +70,7 @@ func TestPinnedPRForPathFindsTheContainingWorkspace(t *testing.T) {
 	// From the workspace root, and from a subdirectory of it — an agent runs
 	// `awp review publish` from wherever it happens to be working.
 	for _, cwd := range []string{ws, filepath.Join(ws, "internal", "cli")} {
-		if got := pinnedPRForPath(svc, cwd); got != 430 {
+		if got := pinnedPRFor(svc, cwd); got != 430 {
 			t.Fatalf("cwd %s: expected PR 430, got %d", cwd, got)
 		}
 	}
@@ -76,10 +86,10 @@ func TestPinnedPRForPathPrefersTheNestedWorkspace(t *testing.T) {
 		{Name: "outer", Path: outer, PRNumber: 1},
 		{Name: "inner", Path: inner, PRNumber: 2},
 	}}
-	if got := pinnedPRForPath(svc, inner); got != 2 {
+	if got := pinnedPRFor(svc, inner); got != 2 {
 		t.Fatalf("expected the nested workspace's PR 2, got %d", got)
 	}
-	if got := pinnedPRForPath(svc, outer); got != 1 {
+	if got := pinnedPRFor(svc, outer); got != 1 {
 		t.Fatalf("expected the outer workspace's PR 1, got %d", got)
 	}
 }
@@ -89,15 +99,15 @@ func TestPinnedPRForPathIsZeroWhenNothingMatches(t *testing.T) {
 	svc := &fakeService{listEntries: []workspace.ListEntry{
 		{Name: "ws", Path: filepath.Join(root, "ws"), PRNumber: 430},
 	}}
-	if got := pinnedPRForPath(svc, filepath.Join(root, "elsewhere")); got != 0 {
+	if got := pinnedPRFor(svc, filepath.Join(root, "elsewhere")); got != 0 {
 		t.Fatalf("expected 0 outside any workspace, got %d", got)
 	}
-	if got := pinnedPRForPath(nil, root); got != 0 {
+	if got := pinnedPRFor(nil, root); got != 0 {
 		t.Fatalf("expected 0 with no service, got %d", got)
 	}
 	// A prefix of a workspace path that is not a path component must not match:
 	// .../ws-notes is not inside .../ws.
-	if got := pinnedPRForPath(svc, filepath.Join(root, "ws-notes")); got != 0 {
+	if got := pinnedPRFor(svc, filepath.Join(root, "ws-notes")); got != 0 {
 		t.Fatalf("expected 0 for a sibling whose name shares a prefix, got %d", got)
 	}
 }
@@ -158,8 +168,8 @@ func TestWorkspaceLookupPrefersTheNamedWorkspaceOverDefault(t *testing.T) {
 	if got.PRNumber != 54 {
 		t.Fatalf("lost the PR pin: got %d", got.PRNumber)
 	}
-	if n := pinnedPRForPath(svc, wsPath); n != 54 {
-		t.Fatalf("pinnedPRForPath returned %d, want 54", n)
+	if n := pinnedPRFor(svc, wsPath); n != 54 {
+		t.Fatalf("the pin resolved to %d, want 54", n)
 	}
 }
 

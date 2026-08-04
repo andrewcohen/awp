@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -33,19 +34,11 @@ import (
 // workspace's life: comments accumulate while you work, then opening a PR would
 // move the identity from work-<ws> to pr-<n> and split the store in half
 // mid-life. Where the PR number is actually needed — publishing — it is read
-// from the workspace entry instead (see pinnedPRForPath). Comments anchor to
+// from the workspace entry instead (see reviewScope.entry). Comments anchor to
 // content, so nothing about them depends on the review's identity (D1).
 func reviewTargetFor(svc workspace.Service, cwd string) review.Target {
 	e, _ := workspaceEntryForPath(svc, cwd)
 	return review.Target{Kind: review.TargetWorking, Workspace: e.Name}
-}
-
-// pinnedPRForPath is the PR the workspace containing cwd is pinned to, or 0.
-// Set by `awp review <n>` and by the deck's `p #` link, so it is the number the
-// user already told awp about — publishing should not make them retype it.
-func pinnedPRForPath(svc workspace.Service, cwd string) int {
-	e, _ := workspaceEntryForPath(svc, cwd)
-	return e.PRNumber
 }
 
 // workspaceEntryForPath is the workspace containing cwd, longest match first so
@@ -116,10 +109,55 @@ func isReviewSubcommand(args []string) bool {
 	return false
 }
 
-func openReviewForCwd(runner Runner, svc workspace.Service) (review.Store, review.Review, error) {
+// reviewScope is the review a command resolved, with enough about how it got there
+// to say so out loud.
+//
+// Saying so is the point. `review add` used to report "added suggestion c7 on
+// x.go:12" and never name the destination, so the one way to get this wrong was
+// also invisible: an agent run from the source repo rather than from the
+// workspace resolves to that repo's own review, which is not the review the
+// person reading has open. Both sides report success and the finding is nowhere.
+// That is not hypothetical — seven findings on a real PR went that way, and the
+// only reason it was ever noticed is that the reviewer expected them. Now every
+// write names where it went, so a mismatch shows up in the agent's own transcript
+// at the moment it happens.
+type reviewScope struct {
+	store     review.Store
+	review    review.Review
+	workspace string
+	// entry is the workspace's row, when awp knows it. Publishing reads two things
+	// off it — the directory whose commit the comments were read against, and the PR
+	// the workspace is pinned to — so that both follow the review rather than the
+	// process's own directory.
+	entry workspace.ListEntry
+}
+
+// label is the destination, for the line a command prints on success.
+//
+// The review id and the workspace both, because the id is a slug of the name —
+// they differ whenever a workspace name has a character a slug drops, and the id
+// is what to look for on disk while the name is what to pass to --workspace.
+func (s reviewScope) label() string {
+	if s.workspace == "" {
+		// The id is "work-" with nothing after it: no deck row points at that review,
+		// so nothing will ever read it. Said plainly rather than left to be inferred
+		// from a trailing dash.
+		return fmt.Sprintf("review %s (no awp workspace contains this directory — pass --workspace)", s.review.ID)
+	}
+	return fmt.Sprintf("review %s (workspace %s)", s.review.ID, s.workspace)
+}
+
+// openReviewFor resolves the review a command should write to: the one belonging
+// to wsName, or — when that is empty — to the workspace containing the current
+// directory.
+//
+// The explicit name exists because running an agent from the source repo is a
+// normal thing to do, and until now the only way to reach a workspace's review
+// was to be standing in it.
+func openReviewFor(runner Runner, svc workspace.Service, wsName string) (reviewScope, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return review.Store{}, review.Review{}, err
+		return reviewScope{}, err
 	}
 	if runner == nil {
 		runner = NewExecRunner()
@@ -130,14 +168,64 @@ func openReviewForCwd(runner Runner, svc workspace.Service) (review.Store, revie
 	// never reads — both sides reporting success while nothing showed up.
 	repoRoot, err := jj.New(runner).SourceRepoRoot()
 	if err != nil {
-		return review.Store{}, review.Review{}, fmt.Errorf("not a jj repository: %w", err)
+		return reviewScope{}, fmt.Errorf("not a jj repository: %w", err)
+	}
+	entry, err := resolveReviewWorkspace(svc, cwd, wsName)
+	if err != nil {
+		return reviewScope{}, err
 	}
 	store := review.Store{}
-	r, err := store.Open(repoRoot, reviewTargetFor(svc, cwd))
+	r, err := store.Open(repoRoot, review.Target{Kind: review.TargetWorking, Workspace: entry.Name})
 	if err != nil {
-		return review.Store{}, review.Review{}, err
+		return reviewScope{}, err
 	}
-	return store, r, nil
+	return reviewScope{store: store, review: r, workspace: entry.Name, entry: entry}, nil
+}
+
+// dir is where the reviewed change lives: the workspace's own directory, or the
+// process's when awp does not know the workspace.
+func (s reviewScope) dir(cwd string) string {
+	if strings.TrimSpace(s.entry.Path) != "" {
+		return s.entry.Path
+	}
+	return cwd
+}
+
+// resolveReviewWorkspace decides which workspace's review a command is about.
+//
+// A name that matches nothing is an error rather than a new review: a typo would
+// otherwise open an empty store under the misspelling and report success, which is
+// the same silent loss --workspace exists to prevent. Unmatchable for want of a
+// workspace list is not the same thing — the caller was explicit, and there is
+// nothing to check the name against.
+func resolveReviewWorkspace(svc workspace.Service, cwd, wsName string) (workspace.ListEntry, error) {
+	name := strings.TrimSpace(wsName)
+	if name == "" {
+		e, _ := workspaceEntryForPath(svc, cwd)
+		return e, nil
+	}
+	if svc == nil {
+		return workspace.ListEntry{Name: name}, nil
+	}
+	entries, err := svc.List()
+	if err != nil {
+		return workspace.ListEntry{Name: name}, nil
+	}
+	known := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Name == name {
+			return e, nil
+		}
+		known = append(known, e.Name)
+	}
+	sort.Strings(known)
+	return workspace.ListEntry{}, fmt.Errorf("no workspace named %q in this repo (have: %s)", name, strings.Join(known, ", "))
+}
+
+// workspaceFlag registers --workspace on a review subcommand.
+func workspaceFlag(fs *flag.FlagSet) *string {
+	return fs.String("workspace", "",
+		"file into this workspace's review instead of the one containing the current directory")
 }
 
 // rangeEnd is the end line to record for a --line / --end-line pair: zero unless
@@ -212,6 +300,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 		text     = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
 		endText  = fs.String("end-text", "", "the last line's text, the same way --text anchors the first")
 		kind     = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
+		wsName   = workspaceFlag(fs)
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -243,7 +332,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	if *side == string(review.SideOld) {
 		anchorSide = review.SideOld
 	}
-	store, r, err := openReviewForCwd(runner, svc)
+	scope, err := openReviewFor(runner, svc, *wsName)
 	if err != nil {
 		return err
 	}
@@ -251,7 +340,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	if who == "" {
 		who = "agent"
 	}
-	c, err := store.AddComment(r, review.Comment{
+	c, err := scope.store.AddComment(scope.review, review.Comment{
 		Author: who,
 		Body:   bodyText,
 		// An unrecognised type falls back to a plain comment rather than failing:
@@ -273,10 +362,12 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 		return err
 	}
 	if c.Anchor.Path == "" {
-		_, _ = fmt.Fprintf(out, "added %s %s on the review\n", c.Kind.OrDefault(), c.ID)
+		_, _ = fmt.Fprintf(out, "added %s %s to %s (about the change as a whole)\n",
+			c.Kind.OrDefault(), c.ID, scope.label())
 		return nil
 	}
-	_, _ = fmt.Fprintf(out, "added %s %s on %s:%s\n", c.Kind.OrDefault(), c.ID, c.Anchor.Path, c.Anchor.LineRange())
+	_, _ = fmt.Fprintf(out, "added %s %s to %s on %s:%s\n",
+		c.Kind.OrDefault(), c.ID, scope.label(), c.Anchor.Path, c.Anchor.LineRange())
 	return nil
 }
 
@@ -289,6 +380,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 		bodyFile = fs.String("body-file", "", "read the reply text from a file, or - for stdin (preferred for anything with markdown in it)")
 		author   = fs.String("author", "", "who is replying (defaults to 'agent')")
 		kind     = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, or question")
+		wsName   = workspaceFlag(fs)
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -300,7 +392,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 	if strings.TrimSpace(*to) == "" || strings.TrimSpace(bodyText) == "" {
 		return errors.New("review reply requires --to and one of --body / --body-file")
 	}
-	store, r, err := openReviewForCwd(runner, svc)
+	scope, err := openReviewFor(runner, svc, *wsName)
 	if err != nil {
 		return err
 	}
@@ -308,11 +400,11 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 	if who == "" {
 		who = "agent"
 	}
-	c, err := store.Reply(r, *to, review.Comment{Author: who, Body: bodyText, Kind: review.ParseKind(*kind)})
+	c, err := scope.store.Reply(scope.review, *to, review.Comment{Author: who, Body: bodyText, Kind: review.ParseKind(*kind)})
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "replied to %s (%s)\n", *to, c.ID)
+	_, _ = fmt.Fprintf(out, "replied to %s (%s) in %s\n", *to, c.ID, scope.label())
 	return nil
 }
 
@@ -320,22 +412,29 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 	fs := flag.NewFlagSet("review list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "emit JSON")
+	wsName := workspaceFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	store, r, err := openReviewForCwd(runner, svc)
+	scope, err := openReviewFor(runner, svc, *wsName)
 	if err != nil {
 		return err
 	}
-	comments, err := store.Comments(r)
+	comments, err := scope.store.Comments(scope.review)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
+		// Left a bare array: this is the machine channel, and callers parse it as a
+		// list of comments. The review it came from is named in the human form, which
+		// is what an agent should use to check it is writing where it thinks.
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(comments)
 	}
+	// Named first, and even when there is nothing in it: "no findings" from the wrong
+	// review is the reading that sends someone looking for a bug in the store.
+	_, _ = fmt.Fprintf(out, "%s\n", scope.label())
 	if len(comments) == 0 {
 		_, _ = fmt.Fprintln(out, "no findings")
 		return nil
