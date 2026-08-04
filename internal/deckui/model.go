@@ -4028,7 +4028,7 @@ func (m Model) renderList(width int) string {
 	items := m.items()
 	if len(items) == 0 {
 		header = append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
-		return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(header, "\n"))
+		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(header, "\n"))
 	}
 	projectHints, pinHints, rowHints := m.findHints()
 	// Reserve a fixed-width prefix slot at all times so workspace rows
@@ -4335,7 +4335,7 @@ func (m Model) renderList(width int) string {
 		out = append(out, stickyHeader)
 	}
 	out = append(out, m.deckViewport.View())
-	return lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1).Render(strings.Join(out, "\n"))
+	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(out, "\n"))
 }
 
 // deckStackThreshold is the minimum terminal width (cols) for the
@@ -4370,7 +4370,7 @@ func pickerSplit(total int, stacked bool) (int, int) {
 // deckBodyCapacity returns the number of scrollable body rows the left
 // column can show given the terminal height. Subtracts the chrome the
 // caller renders around the body: the title row + blank header (2
-// lines), the panel's own Padding(2, 1, 1, 1) (3 lines = 2 top + 1
+// lines), the panel's own Padding(1, 1, 1, 1) (2 lines = 1 top + 1
 // bottom), and the footer row + its Padding (3 lines). Each entry in
 // `body` is exactly 1 rendered line, so the math is precise without
 // slack. Falls back to a generous capacity when height is unknown so
@@ -4379,7 +4379,7 @@ func (m Model) deckBodyCapacity() int {
 	if m.height <= 0 {
 		return len(m.items()) * 2
 	}
-	const chrome = 2 + 3 + 3
+	const chrome = 2 + 2 + 3
 	rows := m.height - chrome
 	if rows < 1 {
 		rows = 1

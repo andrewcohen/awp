@@ -147,7 +147,7 @@ func (p *reviewPicker) footerHelp() string {
 }
 
 func (p *reviewPicker) renderList(m *Model, width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
 	listWidth := width - 2
 	if listWidth < 8 {
 		listWidth = 8
