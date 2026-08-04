@@ -20,59 +20,66 @@ import (
 // view and find a shell — and the one moment you are most certain about what you
 // think of a change is the moment you have just finished reading it.
 //
-// It asks for the verdict rather than assuming one, because that is the decision
-// being made: approve, comment, or request changes are GitHub's own three, and
-// which one you pick is the whole point of having read the change. "Post the
-// comments only" is the fourth, for putting remarks up mid-review without
-// pronouncing on anything.
+// Two screens, not four. Compose — the verdict and the summary together, since
+// choosing one and writing the other are one thought — then confirm, which shows
+// the exact calls and sends them. The verdict used to be its own screen ahead of
+// the summary box, which put a step between a decision and the sentence explaining
+// it, and made `esc` from the preview land somewhere its own label denied.
 
-// publishChoice is one row of the prompt.
+// publishChoice is one verdict the reviewer can pick.
 type publishChoice struct {
 	// label is what the reviewer is choosing to do.
 	label string
-	// verdict is the word `awp review publish --verdict` takes, empty for posting
-	// the comments without a verdict at all.
+	// verdict is the word `awp review publish --verdict` takes.
 	verdict string
 	// hint says what the choice means on GitHub, since "comment" as a verdict and
 	// "comment" as a thing you leave on a line are easy to confuse.
 	hint string
 }
 
-// publishChoices is the prompt's rows, in the order a reviewer is most likely to
-// want them: approving is the common ending, and the two that hold a change up
-// come next.
+// publishChoices is the three verdicts, neutral first.
+//
+// `comment` is the default deliberately, even though approving is the more common
+// ending. The default on an irreversible outward action should be the one that claims
+// the least: approving first meant a stray `enter` `enter` put an approval on someone
+// else's PR, and the cost of not defaulting to it is two taps of tab. The order then
+// escalates — say something, ask for changes, sign off — so where the cycle goes is
+// predictable from what the verdicts mean.
+//
+// GitHub's three and no fourth. "Post the comments only" used to be here, and it
+// described the same submission `comment` makes — a review with no verdict — while
+// implying the comments went up outside a review. One less thing to choose between
+// on a screen whose job is to be quick.
 func publishChoices() []publishChoice {
 	return []publishChoice{
+		{label: "comment", verdict: "comment", hint: "a review with no verdict · needs a summary"},
+		{label: "request changes", verdict: "request-changes", hint: "blocks the merge · needs a summary"},
 		{label: "approve", verdict: "approve", hint: "approve the PR"},
-		{label: "request changes", verdict: "request-changes", hint: "blocks the merge · needs a review-level remark"},
-		{label: "comment", verdict: "comment", hint: "a review with no verdict · needs a review-level remark"},
-		{label: "post the comments only", verdict: "", hint: "no review submitted; remarks go up as PR comments"},
 	}
 }
 
 // publishStage is where the flow has got to. Publishing is irreversible and
-// outward-facing, so it does not go straight from a menu choice to posting: you
-// choose a verdict, you read exactly which calls that will make, and then you
+// outward-facing, so it does not go from a keystroke straight to posting: you say
+// what you are doing, you read exactly which calls that will make, and then you
 // confirm. The result then stays on screen instead of being a segment in a footer
 // competing with the workspace name and the base.
 type publishStage int
 
 const (
-	// publishChoosing is the verdict menu.
-	publishChoosing publishStage = iota
-	// publishSummary is the review body — a remark about the change as a whole,
-	// which `request changes` and `comment` require and an approval may want. It
-	// lives here because this is where the need arises: the flow used to dead-end on
-	// its own requirement, since nothing in the viewer could write one.
-	publishSummary
-	// publishPreviewing is the list of calls, awaiting confirmation.
-	publishPreviewing
-	// publishReporting is what happened, awaiting dismissal.
+	// publishComposing is the verdict and the review body, on one screen. The body is
+	// a remark about the change as a whole, which `request changes` and `comment`
+	// require and an approval may want; the verdict is a single row cycled with tab,
+	// so the text area keeps the keyboard and j/k just type.
+	publishComposing publishStage = iota
+	// publishConfirming is the list of calls, awaiting the one key that sends them.
+	publishConfirming
+	// publishReporting is what happened. Not a third step so much as what the confirm
+	// box becomes: the reviewer navigates two screens and then reads an outcome.
 	publishReporting
 )
 
-// beginPublish opens the prompt. Reports what it will not do rather than opening
-// a prompt whose only outcome is an error.
+// beginPublish opens the compose screen. Reports what it will not do rather than
+// opening a prompt whose only outcome is an error.
 func (m *Model) beginPublish() {
 	if m.PublishReview == nil {
 		m.status = "publishing unavailable here"
@@ -86,38 +93,44 @@ func (m *Model) beginPublish() {
 		return
 	}
 	m.publishing = true
-	m.publishStage = publishChoosing
+	m.publishStage = publishComposing
 	m.publishCursor = 0
 	m.publishReport = nil
+	// An empty anchor is what makes a comment review-level: about the change as a
+	// whole rather than about a line of it (see review.Anchor). The box is built here
+	// so the screen opens with the keyboard already in it.
+	m.summaryEditor = newCommentEditor(review.Anchor{}, m.hunkWidth)
+	m.summaryEditor.area.Placeholder = "what you make of the change as a whole…"
+	m.status = ""
+	m.statusErr = false
 }
 
 // endPublish closes the prompt, saying nothing — the prompt disappearing is the
 // message.
 func (m *Model) endPublish() {
 	m.publishing = false
-	m.publishStage = publishChoosing
+	m.publishStage = publishComposing
 	m.publishReport = nil
 	m.status = ""
 }
 
-// handlePublishKey drives the prompt.
+// handlePublishKey drives the two screens.
 func (m Model) handlePublishKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	if key == "ctrl+c" {
 		return m, tea.Quit
 	}
 	switch m.publishStage {
-	case publishSummary:
-		return m.handlePublishSummaryKey(msg)
-	case publishPreviewing:
+	case publishConfirming:
 		switch key {
 		case "esc":
-			// Back one step rather than out: the usual reason to reject a preview is
-			// that something in it is wrong — most often the verdict, sometimes the
-			// summary — not that you have changed your mind about publishing.
-			m.publishStage = publishSummary
+			// Back to compose rather than out: the usual reason to reject a plan is that
+			// something in it is wrong — the verdict, or what the summary says — not that
+			// you have changed your mind about publishing. Both live one screen back now,
+			// so this lands where the hint says it does.
+			m.publishStage = publishComposing
 			m.publishReport = nil
-			return m, nil
+			return m, textarea.Blink
 		case "q", "P":
 			m.endPublish()
 			return m, nil
@@ -128,7 +141,7 @@ func (m Model) handlePublishKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.publishBusy = true
 			m.status = "publishing…"
 			m.statusErr = false
-			return m, publishCmd(m.PublishReview, m.publishVerdict(), false)
+			return m, publishCmd(m.PublishReview, m.publishVerdict(), m.publishSummaryText(), false)
 		}
 		return m, m.scrollPublishReport(msg)
 	case publishReporting:
@@ -137,57 +150,43 @@ func (m Model) handlePublishKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// The footer keeps the one-line summary, so dismissing the report does not
 			// lose what happened.
 			m.publishing = false
-			m.publishStage = publishChoosing
+			m.publishStage = publishComposing
 			m.publishReport = nil
 			return m, nil
 		}
 		return m, m.scrollPublishReport(msg)
 	}
-	choices := publishChoices()
-	switch key {
-	case "esc", "q", "P":
-		m.endPublish()
-		return m, nil
-	case "j", "down":
-		m.publishCursor = min(len(choices)-1, m.publishCursor+1)
-	case "k", "up":
-		m.publishCursor = max(0, m.publishCursor-1)
-	case "enter":
-		// The summary next. Nothing in this stage reaches GitHub.
-		return m.beginPublishSummary()
-	}
-	return m, nil
+	return m.handlePublishComposeKey(msg)
 }
 
-// beginPublishSummary opens the review-body box.
-func (m Model) beginPublishSummary() (tea.Model, tea.Cmd) {
-	m.publishStage = publishSummary
-	// An empty anchor is what makes a comment review-level: about the change as a
-	// whole rather than about a line of it (see review.Anchor).
-	m.summaryEditor = newCommentEditor(review.Anchor{}, m.hunkWidth)
-	m.status = ""
-	m.statusErr = false
-	return m, textarea.Blink
+// publishSummaryText is what is in the review-body box.
+func (m Model) publishSummaryText() string {
+	return strings.TrimSpace(m.summaryEditor.area.Value())
 }
 
-// handlePublishSummaryKey routes keys to the review-body box.
+// handlePublishComposeKey drives the compose screen: the verdict cycler and the
+// review-body box, which share it.
 //
-// The compose box rather than a bespoke field, so the conventions are the ones
-// already learnt in this view: enter accepts, alt+enter is a newline, ctrl+g goes
-// out to $EDITOR — which a summary, being the longest thing anyone writes in a
-// review, wants more than a line comment does.
-func (m Model) handlePublishSummaryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// The two exits are handled here rather than read off the editor's action,
-	// because one of them means something different in this flow: the compose box
-	// treats enter-on-an-empty-box as "never mind", and here an empty box is a skip
-	// — there is a next step to go to. Everything else (typing, tab, ctrl+g, the
-	// cursor blink) is the editor's.
+// The box keeps the keyboard the whole time, so j/k and the arrows type rather than
+// moving a selection, and the verdict is cycled with tab — the same gesture that
+// cycles a comment's kind in the box this one is built from. The kind itself is not
+// offered here: a review body is the review's body, and every other kind would be a
+// claim about a remark that has no line to make it about.
+func (m Model) handlePublishComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "tab":
+		// Intercepted ahead of the editor, which would otherwise cycle the kind.
+		m.publishCursor = (m.publishCursor + 1) % len(publishChoices())
+		return m, nil
+	case "shift+tab":
+		n := len(publishChoices())
+		m.publishCursor = (m.publishCursor - 1 + n) % n
+		return m, nil
 	case "enter":
-		return m.saveSummaryThenPreview()
+		return m.confirmPublish()
 	case "esc":
-		// Back to the verdicts, not out. The way out of publishing is from the menu.
-		m.publishStage = publishChoosing
+		// Out. There is no screen behind this one any more, which is the point.
+		m.endPublish()
 		return m, nil
 	}
 	editor, cmd, action := m.summaryEditor.update(msg)
@@ -195,59 +194,59 @@ func (m Model) handlePublishSummaryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if action == editorSave || action == editorSaveAndSend {
 		// ctrl+s. There is no agent to send a review summary to, so it means the same
 		// thing as enter rather than nothing at all.
-		return m.saveSummaryThenPreview()
+		return m.confirmPublish()
 	}
 	return m, cmd
 }
 
-// saveSummaryThenPreview files what was typed as a review-level comment, then asks
-// for the plan.
-//
-// Saved as a record rather than passed straight into the submission: a remark about
-// the change as a whole *is* a review-level comment, which the store, the stream's
-// review section and the publish path already understand. Special-casing it here
-// would make the one remark that summarises a review the only one that leaves no
-// trace in it.
-func (m Model) saveSummaryThenPreview() (tea.Model, tea.Cmd) {
-	if strings.TrimSpace(m.summaryEditor.area.Value()) == "" {
-		// A skip — publishing an approval stays two keystrokes.
-		return m.previewPublish()
-	}
-	if m.SaveComment == nil {
-		m.status = "commenting unavailable: no review store"
+// confirmPublish asks for the plan, refusing early when the verdict needs a summary
+// and there is none — the plan would only come back with GitHub's version of the
+// same complaint, one screen later.
+func (m Model) confirmPublish() (tea.Model, tea.Cmd) {
+	if github.EventNeedsBody(verdictEvent(m.publishVerdict())) &&
+		m.publishSummaryText() == "" && !m.hasUnpublishedReviewLevel() {
+		m.status = m.publishVerdict() + " needs a summary — GitHub rejects a verdict with no body"
 		m.statusErr = true
 		return m, nil
 	}
-	c := m.summaryEditor.comment()
-	if err := m.SaveComment(c); err != nil {
-		// Stay in the box. The text is still in it, and losing a written summary to a
-		// failed write would be the worst outcome available here.
-		m.status = "summary: " + err.Error()
-		m.statusErr = true
-		return m, nil
-	}
-	if m.LastSavedComment != nil {
-		if saved, ok := m.LastSavedComment(); ok {
-			c = saved
-		}
-	}
-	m.comments = append(m.comments, c)
-	// It belongs in the review section from now on, not only in this submission.
-	m.rebuildStream()
 	return m.previewPublish()
 }
 
-// previewPublish asks for the plan without making any of its calls.
+// hasUnpublishedReviewLevel reports whether the review already holds a remark about
+// the change as a whole that this submission would carry. Such a remark becomes the
+// review's body, so the box being empty is not the same as having nothing to say.
+func (m Model) hasUnpublishedReviewLevel() bool {
+	for _, c := range m.comments {
+		if c.State == review.Published || c.Publish != nil {
+			continue
+		}
+		if strings.TrimSpace(c.Body) == "" {
+			continue
+		}
+		if strings.TrimSpace(c.Anchor.Path) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// previewPublish asks for the plan without making any of its calls, and without
+// writing anything either.
+//
+// The summary rides along as an argument rather than being filed first. It used to be
+// saved on the way out of the compose box, which meant a plan you then declined left
+// the remark behind — four abandoned attempts became four review-level comments on a
+// real PR. It is filed by the publish path once GitHub has accepted it, so the record
+// still exists afterwards without a cancelled run creating one.
 func (m Model) previewPublish() (tea.Model, tea.Cmd) {
-	m.publishStage = publishPreviewing
+	m.publishStage = publishConfirming
 	m.publishReport = []string{"reading the review…"}
 	m.status = ""
 	m.statusErr = false
-	return m, publishCmd(m.PublishReview, m.publishVerdict(), true)
+	return m, publishCmd(m.PublishReview, m.publishVerdict(), m.publishSummaryText(), true)
 }
 
-// verdictEvent maps a choice's verdict word onto GitHub's event constant, empty
-// for "post the comments only".
+// verdictEvent maps a choice's verdict word onto GitHub's event constant.
 //
 // The viewer needs this to know whether a summary is required, which is a fact
 // about GitHub rather than about awp — so it reads the same constants the publish
@@ -295,10 +294,10 @@ type publishDoneMsg struct {
 // publishCmd runs the publish off the update loop. It talks to GitHub once per
 // comment, which is far too slow to do inline — the view would stop redrawing
 // mid-run and take the keyboard with it.
-func publishCmd(fn func(verdict string, dryRun bool) (string, error), verdict string, dry bool) tea.Cmd {
+func publishCmd(fn func(verdict, summary string, dryRun bool) (string, error), verdict, summary string, dry bool) tea.Cmd {
 	return func() tea.Msg {
-		summary, err := fn(verdict, dry)
-		return publishDoneMsg{summary: summary, dry: dry, err: err}
+		report, err := fn(verdict, summary, dry)
+		return publishDoneMsg{summary: report, dry: dry, err: err}
 	}
 }
 
@@ -369,25 +368,27 @@ func (m Model) pendingPublish() (inline, changeWide int) {
 	return inline, changeWide
 }
 
-// publishPrompt is the sentence above the choices: exactly what is about to go
-// where, so the verdict is not being chosen blind.
+// publishPrompt is what is about to go up, as a label for the title row rather than
+// a sentence of its own.
+//
+// A noun phrase, not a question: it names the thing being published, and a paragraph
+// above the two controls pushed the box holding the keyboard further down the screen
+// than it deserved. The PR is not named — the footer under this overlay is already
+// showing which one the review is pinned to.
 func (m Model) publishPrompt() string {
 	inline, changeWide := m.pendingPublish()
-	// "the PR" rather than its number: the host's footer is already showing which
-	// PR this review is pinned to, right under this prompt.
-	const target = "the PR"
 	switch {
 	case inline == 0 && changeWide == 0:
 		// Not an error: a verdict is worth submitting on its own, and approving a PR
 		// whose comments went up earlier is a normal thing to want.
-		return fmt.Sprintf("Nothing unpublished — finish the review on %s?", target)
+		return "nothing unpublished"
 	case changeWide == 0:
-		return fmt.Sprintf("Publish %d comment%s to %s?", inline, plural(inline), target)
+		return fmt.Sprintf("%d comment%s", inline, plural(inline))
 	case inline == 0:
-		return fmt.Sprintf("Publish %d review-level remark%s to %s?", changeWide, plural(changeWide), target)
+		return fmt.Sprintf("%d review-level remark%s", changeWide, plural(changeWide))
 	}
-	return fmt.Sprintf("Publish %d comment%s and %d review-level remark%s to %s?",
-		inline, plural(inline), changeWide, plural(changeWide), target)
+	return fmt.Sprintf("%d comment%s · %d review-level remark%s",
+		inline, plural(inline), changeWide, plural(changeWide))
 }
 
 // publishReportLines splits a report into display rows, dropping the blank ones
@@ -417,51 +418,31 @@ func publishStatusText(report string) string {
 // footer stays where it was.
 func (m Model) renderPublishOverlay(width, height int) string {
 	inner := max(20, width-helpBoxHOverhead)
-	title, rows := "Publish review", []string{}
+	// Both are set by every branch below — each stage names itself.
+	var title string
+	var rows []string
 	switch m.publishStage {
-	case publishSummary:
-		title = "Publish review — say something about the change as a whole"
-		note := "Optional. Left empty, only the comments go up."
-		if github.EventNeedsBody(verdictEvent(m.publishVerdict())) {
-			// GitHub's rule, and its own UI's: a verdict that asks for something has to
-			// say what. Said here rather than left for the plan to refuse over.
-			note = m.publishVerdict() + " needs one — GitHub rejects a verdict with no summary."
-		}
-		rows = append(rows,
-			styleDim.Render(truncate(note, inner)),
-			"",
-			m.summaryEditor.view(inner),
-			"",
-			styleDim.Render(truncate(" enter continue · alt+enter newline · tab kind · ctrl+g $EDITOR · esc back", inner)),
-		)
-	case publishPreviewing:
+	case publishConfirming:
 		// Named for what the reviewer is about to authorise, not for the feature.
 		title = "Publish review — this is what will be sent"
 		rows = m.publishReportRows(inner, height)
-		rows = append(rows, "", styleSelected.Render(truncate(" enter SENDS IT · esc back to the verdict · q cancel", inner)))
+		rows = append(rows, "", styleSelected.Render(truncate(" enter SENDS IT · esc back · q cancel", inner)))
 	case publishReporting:
 		title = "Publish review — what happened"
 		rows = m.publishReportRows(inner, height)
 		rows = append(rows, "", styleDim.Render(truncate(" j/k scroll · enter close", inner)))
 	default:
-		rows = append(rows, styleDim.Render(truncate(m.publishPrompt(), inner)), "")
-		for i, c := range publishChoices() {
-			prefix := selectionPrefixBlank
-			style := lipgloss.NewStyle()
-			if i == m.publishCursor {
-				prefix = styleSelected.Render(selectionPrefixBar)
-				style = styleSelected
-			}
-			row := prefix + style.Render(c.label)
-			if hint := " · " + c.hint; lipgloss.Width(row+hint) <= inner {
-				row += styleDim.Render(hint)
-			}
-			rows = append(rows, truncate(row, inner))
+		// One screen: what is going up, the verdict, and the body. The count sits on
+		// the title row rather than in a sentence of its own — it is a label on the
+		// thing being published, and a paragraph above two controls pushed the box the
+		// keyboard is in further down the screen than it deserved.
+		title = "Publish review — " + m.publishPrompt()
+		rows = append(rows, m.verdictRow(inner), "", m.summaryBoxView(inner), "")
+		hint := " enter continue · tab verdict · alt+enter newline · ctrl+g $EDITOR · esc cancel"
+		if lipgloss.Width(hint) > inner {
+			hint = " enter continue · tab verdict · ctrl+g $EDITOR · esc cancel"
 		}
-		// "review" rather than "publish": enter here shows the calls, it does not
-		// make them. Saying "publish" on the key that only previews is how a reviewer
-		// ends up surprised by an irreversible action.
-		rows = append(rows, "", styleDim.Render(truncate(" j/k choose · enter review what will be sent · esc cancel", inner)))
+		rows = append(rows, styleDim.Render(truncate(hint, inner)))
 	}
 	head := []string{lipgloss.NewStyle().Bold(true).Render(truncate(title, inner)), ""}
 	return lipgloss.NewStyle().
@@ -471,6 +452,53 @@ func (m Model) renderPublishOverlay(width, height int) string {
 		Width(max(1, width-2)).
 		Height(height).
 		Render(strings.Join(append(head, rows...), "\n"))
+}
+
+// verdictRow is the verdict as one cycled row: the choice, then what it means on
+// GitHub, then whether a body is required.
+//
+// A row rather than a list of three. The text area below keeps the keyboard, so
+// there is no second selection for j/k to drive — and the verdict a reviewer wants is
+// nearly always the first one, which a cycler puts under no keystrokes at all.
+func (m Model) verdictRow(inner int) string {
+	c := publishChoices()[min(max(0, m.publishCursor), len(publishChoices())-1)]
+	label := "‹ " + c.label + " ›"
+	hint := "  " + c.hint
+	if github.EventNeedsBody(verdictEvent(c.verdict)) && m.publishSummaryText() == "" && !m.hasUnpublishedReviewLevel() {
+		// Said while it is still fixable, on the screen holding the box that fixes it,
+		// rather than left for the plan — or GitHub — to refuse over one screen later.
+		hint = "  needs a summary below"
+	}
+	// Measured on the plain text and truncated with the ANSI-aware helper: styling
+	// first and cutting afterwards counts escape bytes as characters, which chopped
+	// this row mid-word at a width it comfortably fitted.
+	row := " " + styleDim.Render("verdict  ") + styleSelected.Render(label)
+	if lipgloss.Width(" verdict  "+label+hint) <= inner {
+		row += styleDim.Render(hint)
+	}
+	return truncateStyled(row, inner)
+}
+
+// summaryBoxView renders the review-body box for this screen.
+//
+// Not commentEditor.view: that box heads itself with the comment's kind and hints
+// "enter save · tab kind", which are both wrong here — tab cycles the verdict on this
+// screen, enter goes on to the plan, and a review body has no kind to choose. The
+// text area itself is shared, so typing, alt+enter and ctrl+g behave identically.
+func (m Model) summaryBoxView(width int) string {
+	inner := max(20, width-2) - 2
+	head := " summary — the review's body"
+	if !github.EventNeedsBody(verdictEvent(m.publishVerdict())) {
+		head = " summary — optional for " + m.publishVerdict()
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(charm.Muted)).
+		Width(max(20, width-2)).
+		Render(lipgloss.JoinVertical(lipgloss.Left,
+			styleDim.Render(truncate(head, inner)),
+			m.summaryEditor.area.View(),
+		))
 }
 
 // publishReportRows is the plan or the report, windowed to what fits and scrolled

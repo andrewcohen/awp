@@ -80,7 +80,7 @@ type CommentStore struct {
 	// what happened. Nil leaves the viewer's `P` unavailable.
 	// dryRun asks for the plan — the calls it would make — without making any of
 	// them, which is what the viewer shows before it will post anything.
-	Publish func(item Item, verdict string, dryRun bool) (string, error)
+	Publish func(item Item, verdict, summary string, dryRun bool) (string, error)
 }
 
 // CommentSender delivers a comment to a workspace's agent.
@@ -284,8 +284,8 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
 	}
 	if comments.Publish != nil {
-		inner.PublishReview = func(verdict string, dryRun bool) (string, error) {
-			return comments.Publish(item, verdict, dryRun)
+		inner.PublishReview = func(verdict, summary string, dryRun bool) (string, error) {
+			return comments.Publish(item, verdict, summary, dryRun)
 		}
 	}
 	if comments.SaveReviewed != nil {

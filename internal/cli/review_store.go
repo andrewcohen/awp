@@ -468,8 +468,8 @@ func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) decku
 // deck runs in the source repo, so resolving it the way the command does would
 // find the wrong review — or none. Everything after that is the command's own
 // code, so a publish from the viewer and a publish from a shell cannot drift.
-func publishReviewFor(runner Runner) func(deckui.Item, string, bool) (string, error) {
-	return func(item deckui.Item, verdict string, dryRun bool) (string, error) {
+func publishReviewFor(runner Runner) func(deckui.Item, string, string, bool) (string, error) {
+	return func(item deckui.Item, verdict, summary string, dryRun bool) (string, error) {
 		event, err := parseVerdict(verdict)
 		if err != nil {
 			return "", err
@@ -504,6 +504,7 @@ func publishReviewFor(runner Runner) func(deckui.Item, string, bool) (string, er
 			// commit without running jj at all.
 			Dir:      item.Path,
 			HeadHint: item.BookmarkCommitID,
+			Summary:  summary,
 		}, &buf)
 		// The report is worth having even when part of the run failed — it says what
 		// did land, which is exactly what a reviewer needs in order to retry. Handed
