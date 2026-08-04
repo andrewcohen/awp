@@ -100,8 +100,7 @@ func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 		doomed[id] = true
 	}
 	if err := m.DeleteComment(c.ID); err != nil {
-		m.status = "delete: " + err.Error()
-		m.statusErr = true
+		m.fail("delete: %v", err)
 		return m, nil
 	}
 	// Prune the same closure the store removed. Dropping only the parent would
@@ -213,8 +212,7 @@ func (m Model) toggleResolved() (tea.Model, tea.Cmd) {
 	}
 	want := !t.Resolved
 	if err := m.ResolveThread(t.ID, want); err != nil {
-		m.status = "resolve: " + err.Error()
-		m.statusErr = true
+		m.fail("resolve: %v", err)
 		return m, nil
 	}
 	for i := range m.threads {
@@ -259,21 +257,18 @@ func replyToThreadCmd(post ThreadReplier, localID, threadID, body string) tea.Cm
 // a status line and a draft you can send again.
 func (m Model) postThreadReply(c review.Comment) (tea.Model, tea.Cmd) {
 	if m.ReplyToThread == nil {
-		m.status = "replying to GitHub threads unavailable here"
-		m.statusErr = true
+		m.fail("replying to GitHub threads unavailable here")
 		return m, nil
 	}
 	if c.ID != "" {
 		// Revising a reply that never went out. Replaced rather than appended, the same
 		// as revising any other comment.
 		if m.UpdateComment == nil {
-			m.status = "editing unavailable here"
-			m.statusErr = true
+			m.fail("editing unavailable here")
 			return m, nil
 		}
 		if err := m.UpdateComment(c); err != nil {
-			m.status = "reply: " + err.Error()
-			m.statusErr = true
+			m.fail("reply: %v", err)
 			return m, nil
 		}
 		for i := range m.comments {
@@ -283,8 +278,7 @@ func (m Model) postThreadReply(c review.Comment) (tea.Model, tea.Cmd) {
 		}
 	} else {
 		if err := m.SaveComment(c); err != nil {
-			m.status = "reply: " + err.Error()
-			m.statusErr = true
+			m.fail("reply: %v", err)
 			return m, nil
 		}
 		// The store assigns the id, and the outcome has to be recorded against it. With
@@ -313,8 +307,7 @@ func (m Model) applyThreadReplyDone(msg threadReplyDoneMsg) (tea.Model, tea.Cmd)
 	if msg.err != nil {
 		// The draft stays exactly where it is, labelled unsent (see commentRows), and
 		// `P` will offer to send it again.
-		m.status = "reply: " + msg.err.Error()
-		m.statusErr = true
+		m.fail("reply: %v", msg.err)
 		return m, nil
 	}
 	var posted review.Comment
@@ -335,8 +328,7 @@ func (m Model) applyThreadReplyDone(msg threadReplyDoneMsg) (tea.Model, tea.Cmd)
 		if err := m.UpdateComment(posted); err != nil {
 			// It posted; only the record does not say so. Worth reporting rather than
 			// swallowing: the next publish would read that record and send it again.
-			m.status = "replied, but the record didn't save: " + err.Error()
-			m.statusErr = true
+			m.fail("replied, but the record didn't save: %v", err)
 		}
 	}
 	// Appended to the mirrored conversation so the reply reads as part of it now,
@@ -1465,8 +1457,7 @@ func (m Model) toggleReviewed() (tea.Model, tea.Cmd) {
 	}
 	if m.MarkReviewed != nil {
 		if err := m.MarkReviewed(path, hash); err != nil {
-			m.status = "reviewed: " + err.Error()
-			m.statusErr = true
+			m.fail("reviewed: %v", err)
 			return m, nil
 		}
 	}

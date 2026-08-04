@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/andrewcohen/awp/internal/awplog"
 )
 
 // Publishing a review as one review.
@@ -265,10 +267,18 @@ func (c *Client) graphql(query string, vars map[string]any, out any) error {
 	// GraphQL reports failures in the body, and gh exits non-zero for them too. Read
 	// the errors array first either way: its message is the useful one, where gh's is
 	// only that the request failed.
+	//
+	// Logged as well as returned, and logged with the response GitHub actually sent.
+	// The error that reaches a caller is wrapped for a status line; what is worth
+	// having an hour later is the payload — a GraphQL failure often carries a type and
+	// a path that say which part of the request GitHub objected to, and none of that
+	// survives being flattened into one sentence.
 	if msg := graphqlErrors(raw); msg != "" {
+		awplog.Errorf("gh api graphql in %s: %s | response: %s", c.dir, msg, strings.TrimSpace(raw))
 		return fmt.Errorf("%s", msg)
 	}
 	if runErr != nil {
+		awplog.Errorf("gh api graphql in %s: %v | output: %s", c.dir, runErr, strings.TrimSpace(raw))
 		return fmt.Errorf("%w: %s", runErr, strings.TrimSpace(raw))
 	}
 	if err := json.Unmarshal([]byte(raw), out); err != nil {

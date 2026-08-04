@@ -527,8 +527,7 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if parent := m.editor.replyTo; parent != "" {
 			if err := m.ReplyComment(parent, c); err != nil {
-				m.status = "reply: " + err.Error()
-				m.statusErr = true
+				m.fail("reply: %v", err)
 				return m, nil
 			}
 			c.ReplyTo = parent
@@ -547,8 +546,7 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if c.ID != "" {
 			// Revising: update in place rather than appending a near-duplicate.
 			if err := m.UpdateComment(c); err != nil {
-				m.status = "comment: " + err.Error()
-				m.statusErr = true
+				m.fail("comment: %v", err)
 				return m, nil
 			}
 			for i := range m.comments {
@@ -563,8 +561,7 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			if err := m.SaveComment(c); err != nil {
-				m.status = "comment: " + err.Error()
-				m.statusErr = true
+				m.fail("comment: %v", err)
 				return m, nil
 			}
 			// SaveComment assigns the id; without reading it back the prompt has
@@ -584,8 +581,7 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if err := m.SendComment(c); err != nil {
-				m.status = "comment saved, send failed: " + err.Error()
-				m.statusErr = true
+				m.fail("comment saved, send failed: %v", err)
 				return m, nil
 			}
 			m.status = "comment saved and sent to the agent"
