@@ -35,7 +35,7 @@ import (
 // the same or the footer moves when the help opens.
 const helpBoxHOverhead = 6
 
-func viewerKeyGroups() []charm.KeyGroup {
+func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 	return []charm.KeyGroup{
 		{
 			Title: "Move",
@@ -50,7 +50,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 		},
 		{
 			Title: "Read",
-			Keys: [][2]string{
+			Keys: append([][2]string{
 				{"h/l ←/→", "pan horizontally (no-op under wrap)"},
 				{"0 / $", "start / end of the line"},
 				{"w", "toggle line wrap"},
@@ -59,7 +59,7 @@ func viewerKeyGroups() []charm.KeyGroup {
 				{"n / N", "next / previous match, wrapping"},
 				{"e", "open the file in $EDITOR at the cursor's line"},
 				{"ctrl+r", "refresh now (the view also refreshes itself)"},
-			},
+			}, scope...),
 		},
 		{
 			Title: "Review",
@@ -98,10 +98,20 @@ func viewerKeyGroups() []charm.KeyGroup {
 
 // newHelpViewport builds the overlay's scroll region for a body of this size,
 // with the host's own bindings appended after the view's.
-func newHelpViewport(width, height int, host []charm.KeyGroup) viewport.Model {
+func newHelpViewport(width, height int, scope [][2]string, host []charm.KeyGroup) viewport.Model {
 	vp := viewport.New(helpContentWidth(width), max(1, height))
-	vp.SetContent(helpContent(helpContentWidth(width), host...))
+	vp.SetContent(helpContent(helpContentWidth(width), scope, host))
 	return vp
+}
+
+// scopeHelpRow is the `-` chord's row, spelling out the scopes this view was
+// given. Empty when a host installed none, so the reference never advertises a
+// key that would do nothing.
+func (m Model) scopeHelpRow() [][2]string {
+	if len(m.scopes) < 2 {
+		return nil
+	}
+	return [][2]string{{"-", "switch scope: " + m.scopeKeysHint()}}
 }
 
 // helpContentWidth is the columns left for text inside the panel.
@@ -119,9 +129,9 @@ func helpContentWidth(width int) int {
 // Truncated rather than wrapped: a wrapped line adds a row, and the viewport
 // sizes its scroll against the line count, so wrapping would make the scrollbar
 // disagree with what is on screen.
-func helpContent(width int, host ...charm.KeyGroup) string {
+func helpContent(width int, scope [][2]string, host []charm.KeyGroup) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Keys")
-	body := charm.KeyHelpView(append(viewerKeyGroups(), host...))
+	body := charm.KeyHelpView(append(viewerKeyGroups(scope), host...))
 	return clipToWidth(title+"\n\n"+body, width)
 }
 

@@ -67,8 +67,8 @@ func TestHelpOverlayKeepsTheBodySize(t *testing.T) {
 // terminal shrinks and then overflows the body it was sized to.
 func TestHelpOverlayTruncatesInsteadOfWrapping(t *testing.T) {
 	const height = 20
-	wide := strings.Count(renderHelpOverlay(newHelpViewport(200, height, nil), 200, height), "\n")
-	narrow := strings.Count(renderHelpOverlay(newHelpViewport(60, height, nil), 60, height), "\n")
+	wide := strings.Count(renderHelpOverlay(newHelpViewport(200, height, nil, nil), 200, height), "\n")
+	narrow := strings.Count(renderHelpOverlay(newHelpViewport(60, height, nil, nil), 60, height), "\n")
 	if narrow != wide {
 		t.Fatalf("overlay height depends on width: 200 → %d lines, 60 → %d", wide+1, narrow+1)
 	}
@@ -121,7 +121,7 @@ func TestHelpKeepsItsScrollAcrossAResize(t *testing.T) {
 func TestHelpListsTheBindingsThatExist(t *testing.T) {
 	// Read the content directly rather than through the viewport, which shows only
 	// what fits — this asserts the reference is complete, not what is on screen.
-	view := stripANSI(helpContent(120))
+	view := stripANSI(helpContent(120, nil, nil))
 	for _, k := range []string{"c", "i", "D", "r", "R", "T", "w", "/", "e", "ctrl+r", "ctrl+s", "tab"} {
 		if !strings.Contains(view, k) {
 			t.Fatalf("expected %q documented in the help:\n%s", k, view)
@@ -134,15 +134,15 @@ func TestHelpListsTheBindingsThatExist(t *testing.T) {
 // and a host with none (standalone `awp diff`) adds nothing, so the reference
 // never advertises a key that does nothing.
 func TestHelpListsTheHostSKeysAfterItsOwn(t *testing.T) {
-	plain := stripANSI(helpContent(120))
+	plain := stripANSI(helpContent(120, nil, nil))
 	if strings.Contains(plain, "In the deck") {
 		t.Fatalf("standalone must not advertise a host's keys:\n%s", plain)
 	}
-	withHost := stripANSI(helpContent(120, charm.KeyGroup{
+	withHost := stripANSI(helpContent(120, nil, []charm.KeyGroup{{
 		Title: "In the deck",
-		Keys:  [][2]string{{"-", "switch scope"}},
-	}))
-	if !strings.Contains(withHost, "In the deck") || !strings.Contains(withHost, "switch scope") {
+		Keys:  [][2]string{{"esc / q", "back to the deck"}},
+	}}))
+	if !strings.Contains(withHost, "In the deck") || !strings.Contains(withHost, "back to the deck") {
 		t.Fatalf("expected the host's group in the reference:\n%s", withHost)
 	}
 	// After the view's own, not instead of them.
@@ -291,7 +291,7 @@ func TestHidingTheColumnKeepsYourPlace(t *testing.T) {
 // The binding has to be in the reference, which is the only place it is written
 // down now that the footer stopped listing keys.
 func TestHelpDocumentsTheColumnToggle(t *testing.T) {
-	if view := stripANSI(helpContent(120)); !strings.Contains(view, `\`) {
+	if view := stripANSI(helpContent(120, nil, nil)); !strings.Contains(view, `\`) {
 		t.Fatalf("expected the column toggle documented:\n%s", view)
 	}
 }

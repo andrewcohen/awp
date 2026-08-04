@@ -1043,6 +1043,11 @@ func (m Model) WithDiffViewer(load DiffLoader, open DiffOpener) Model {
 // WithDiffBaseResolver installs the callback that names what a stack-base diff
 // is read against (see DiffBaseResolver). Without it the footer says "vs stack
 // base", which describes how the base was chosen rather than what it is.
+func (m Model) WithDiffScopes(p DiffScopeProvider) Model {
+	m.diffScopes = p
+	return m
+}
+
 func (m Model) WithDiffBaseResolver(r DiffBaseResolver) Model {
 	m.diffBase = r
 	return m
@@ -3229,26 +3234,12 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	if m2, blocked := m.blockIfSettingUp(item); blocked {
 		return m2, nil
 	}
-	m.active, m.status = nil, ""
-	cmd := m.reopenDiffModal(item, scope)
-	// tea.ClearScreen on modal entry — same rationale as the other modals
-	// (see doc.go).
-	return m, batchCmds(cmd, tea.ClearScreen)
-}
-
-// reopenDiffModal replaces whatever is open with the diff viewer over item at
-// scope, and returns the command that loads the diff.
-//
-// This is how `-` switches scope: a scope change changes the whole diff, so
-// there is no cursor or fold worth carrying over, and rebuilding means the new
-// scope goes through exactly the path a fresh open does. Takes the item rather
-// than re-reading the cursor because the caller is the open modal, which knows
-// what it is a review of.
-func (m *Model) reopenDiffModal(item Item, scope DiffScope) tea.Cmd {
-	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffBase, m.diffComments)
+	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffBase, m.diffScopes, m.diffComments)
 	m.active = dm
 	m.status = "diff (" + scope.String() + "): loading…"
-	return loadCmd
+	// tea.ClearScreen on modal entry — same rationale as the other modals
+	// (see doc.go).
+	return m, batchCmds(loadCmd, tea.ClearScreen)
 }
 
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {

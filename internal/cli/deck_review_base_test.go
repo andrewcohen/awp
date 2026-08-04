@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // reviewBaseRunner fakes jj for resolveReviewStackBase: it answers the
@@ -179,4 +180,63 @@ func TestScopeRevset(t *testing.T) {
 
 func deckuiItemForBase(path, bookmark string) deckui.Item {
 	return deckui.Item{Path: path, Bookmark: bookmark}
+}
+
+// The `-` menu, and with it the range a bare `awp diff` opens on. One list feeds
+// both the deck's `c` and standalone `awp diff`, so a key cannot mean one thing in
+// one and nothing in the other.
+func TestScopeOptionsFor(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent-change"}
+	item := deckuiItemForBase("/ws/child", "andrew/child")
+	opts := scopeOptionsFor(r, item, "/ws/child")
+	if len(opts) != 3 {
+		t.Fatalf("expected three scopes, got %d", len(opts))
+	}
+	// The first is the default the view opens on: the whole change against its
+	// stack base, which is what a review is normally of.
+	if opts[0].Key != "c" || opts[0].Label != "vs stack base" {
+		t.Fatalf("expected the stack base first, got %q/%q", opts[0].Key, opts[0].Label)
+	}
+	want := []struct{ key, label string }{
+		{"c", "vs stack base"},
+		{"w", "working copy"},
+		{"t", "vs trunk"},
+	}
+	for i, w := range want {
+		if opts[i].Key != w.key || opts[i].Label != w.label {
+			t.Errorf("scope %d = %q/%q, want %q/%q", i, opts[i].Key, opts[i].Label, w.key, w.label)
+		}
+		if opts[i].Load == nil {
+			t.Errorf("scope %q has no loader", w.key)
+		}
+	}
+	// Each closure captures its own scope rather than sharing the loop variable —
+	// otherwise every entry would read whichever range came last.
+	if base := opts[0].Base(); base != "andrew/parent-change" {
+		t.Errorf("stack-base scope names %q, want andrew/parent-change", base)
+	}
+	if base := opts[1].Base(); base != "" {
+		t.Errorf("the working copy has no base to name, got %q", base)
+	}
+}
+
+// The subject carries the workspace's own bookmark, which resolving the stack base
+// has to exclude. Without it the nearest bookmarked ancestor of @ *is* the
+// workspace's own bookmark, so the base resolved to the change itself and the
+// default diff came back all but empty.
+func TestDiffSubjectCarriesTheOwnBookmark(t *testing.T) {
+	svc := listOnlyService{entries: []workspace.ListEntry{{
+		Name: "pr-2336", Path: "/ws/pr-2336", PRNumber: 2336, Bookmark: "andrew/pr-2336",
+	}}}
+	item := diffSubjectFor(svc, "/src/alpha", "/ws/pr-2336/app")
+	if item.Bookmark != "andrew/pr-2336" {
+		t.Fatalf("Bookmark = %q, want the workspace's own", item.Bookmark)
+	}
+	if item.WorkspaceName != "pr-2336" || item.PRNumber != 2336 {
+		t.Fatalf("unexpected subject: %+v", item)
+	}
+	// The workspace root, not wherever in it you were standing.
+	if item.Path != "/ws/pr-2336" {
+		t.Fatalf("Path = %q, want the workspace root", item.Path)
+	}
 }

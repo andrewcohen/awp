@@ -24,6 +24,7 @@ type deckDeps struct {
 	diffLoad     DiffLoader
 	diffOpen     DiffOpener
 	diffBase     DiffBaseResolver
+	diffScopes   DiffScopeProvider
 	diffComments CommentStore
 
 	prNumberLinkHandler  PRNumberLinkHandler

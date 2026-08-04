@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/andrewcohen/awp/internal/ui"
 )
 
 const diffModalSample = `diff --git a/foo.go b/foo.go
@@ -270,16 +272,22 @@ func TestDiffModalFooterFallsBackBeforeTheBaseResolves(t *testing.T) {
 	}
 }
 
-// The working-copy scope has no base to name, so it keeps its own wording even
-// with a resolver wired.
+// The working-copy scope has no base to name, so the footer shows the scope's own
+// wording rather than a base label — even with a resolver that would answer.
 func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
 		func(ActionRequest) error { return nil }).
 		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
-		WithDiffBaseResolver(func(_ Item, scope DiffScope) string {
-			// A resolver that would answer for either scope, to prove the footer's
-			// gate is the scope and not just an empty label.
-			return "andrew/should-not-appear"
+		WithDiffScopes(func(Item) []ui.ScopeOption {
+			return []ui.ScopeOption{
+				// A base for the stack scope, none for the working copy: the working copy
+				// is diffed against @ itself, which its own wording already says.
+				{Key: "c", Label: "vs stack base",
+					Load: func() (string, error) { return diffModalSample, nil },
+					Base: func() string { return "andrew/parent-change" }},
+				{Key: "w", Label: "working copy",
+					Load: func() (string, error) { return diffModalSample, nil }},
+			}
 		})
 	m.width, m.height = 120, 40
 
@@ -293,13 +301,11 @@ func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
 	if !ok {
 		t.Fatal("expected the diff modal open")
 	}
-	if dm.scope != ScopeWorking {
-		t.Fatalf("expected the working-copy scope, got %v", dm.scope)
+	footer := ansi.Strip(dm.footerHelp())
+	if strings.Contains(footer, "andrew/parent-change") {
+		t.Fatalf("working-copy scope must not carry the other scope's base:\n%s", footer)
 	}
-	if footer := ansi.Strip(dm.footerHelp()); strings.Contains(footer, "should-not-appear") {
-		t.Fatalf("working-copy scope must not show a base label:\n%s", footer)
-	}
-	if footer := ansi.Strip(dm.footerHelp()); !strings.Contains(footer, "working copy") {
+	if !strings.Contains(footer, "working copy") {
 		t.Fatalf("expected the working-copy wording:\n%s", footer)
 	}
 }
@@ -389,115 +395,72 @@ func TestShiftCOpensTheReviewWindowRatherThanTheModal(t *testing.T) {
 	}
 }
 
-// `-` then a letter reloads the same review at another scope. The whole modal is
-// rebuilt, so the new scope goes through the same path a fresh open does.
-func TestScopeChordSwitchesScope(t *testing.T) {
-	for _, c := range []struct {
-		key  string
-		want DiffScope
-	}{
-		{"w", ScopeWorking},
-		{"t", ScopeTrunk},
-		{"c", ScopeStackBase},
-	} {
-		var asked []DiffScope
-		m := diffModalModel(t, func(_ Item, scope DiffScope) (string, error) {
-			asked = append(asked, scope)
-			return diffModalSample, nil
+// The `-` chord lives in the viewer now (internal/ui/scope.go), installed here by
+// the scope provider. The deck had its own copy and standalone `awp diff` had
+// none, so the same surface answered the same key two different ways depending on
+// which door you came through — these assert the deck installs the list and the
+// viewer owns the switching.
+func TestScopeProviderInstallsTheMenu(t *testing.T) {
+	var asked []string
+	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
+		func(ActionRequest) error { return nil }).
+		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
+		WithDiffScopes(func(item Item) []ui.ScopeOption {
+			return []ui.ScopeOption{
+				{Key: "c", Label: "vs stack base", Load: func() (string, error) { asked = append(asked, "base"); return diffModalSample, nil }},
+				{Key: "w", Label: "working copy", Load: func() (string, error) { asked = append(asked, "working"); return diffModalSample, nil }},
+			}
 		})
-		m, cmd := pressKey(m, "c")
-		m = drain(m, cmd)
-		m, cmd = pressKey(m, "-")
-		m = drain(m, cmd)
-		m, cmd = pressKey(m, c.key)
-		m = drain(m, cmd)
-		dm, ok := m.active.(*diffModal)
-		if !ok {
-			t.Fatalf("%s: expected the modal still open, got %T", c.key, m.active)
-		}
-		if dm.scope != c.want {
-			t.Fatalf("%s: expected %v, got %v", c.key, c.want, dm.scope)
-		}
-		if dm.scopePick {
-			t.Fatalf("%s: the chord must close once it has been answered", c.key)
-		}
-		// Re-picking the scope already open is a no-op: reloading would throw away
-		// the cursor and the folds to arrive at the same diff.
-		wantLoads := 2
-		if c.want == ScopeStackBase {
-			wantLoads = 1
-		}
-		if len(asked) != wantLoads {
-			t.Fatalf("%s: expected %d load(s), got %v", c.key, wantLoads, asked)
-		}
+	m.width, m.height = 120, 40
+
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatalf("expected the diff modal open, got %T", m.active)
+	}
+	if got := dm.inner.ScopeLabel(); got != "vs stack base" {
+		t.Fatalf("expected the first scope to be the one open, got %q", got)
+	}
+	// `-` then `w` switches, and the viewer reports the new label — so the deck's
+	// footer follows without knowing anything about how the switch happened.
+	m, cmd = pressKey(m, "-")
+	m = drain(m, cmd)
+	m, cmd = pressKey(m, "w")
+	m = drain(m, cmd)
+	dm, ok = m.active.(*diffModal)
+	if !ok {
+		t.Fatalf("expected the modal still open, got %T", m.active)
+	}
+	if got := dm.inner.ScopeLabel(); got != "working copy" {
+		t.Fatalf("expected the switched scope, got %q", got)
+	}
+	if !strings.Contains(ansi.Strip(dm.footerHelp()), "working copy") {
+		t.Fatalf("expected the footer to follow:\n%s", ansi.Strip(dm.footerHelp()))
+	}
+	if len(asked) == 0 || asked[len(asked)-1] != "working" {
+		t.Fatalf("expected the working-copy loader called, got %v", asked)
 	}
 }
 
-// While the chord is up the footer is the menu, with the current scope marked —
-// the alternatives are the only thing worth saying for the one keypress it lives.
-func TestScopeChordFooterListsTheAlternatives(t *testing.T) {
+// Without a provider there is nothing to offer, so `-` does nothing rather than
+// opening a menu with one answer in it.
+func TestNoScopeProviderLeavesTheChordInert(t *testing.T) {
 	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
-	m, _ = pressKey(m, "-")
-	dm, ok := m.active.(*diffModal)
-	if !ok {
-		t.Fatal("expected the diff modal open")
-	}
-	if !dm.scopePick {
-		t.Fatal("expected the chord up after -")
-	}
-	footer := ansi.Strip(dm.footerHelp())
-	for _, want := range []string{"w working copy", "t vs trunk", "c vs stack base (current)"} {
-		if !strings.Contains(footer, want) {
-			t.Fatalf("expected %q in the menu:\n%s", want, footer)
-		}
-	}
-}
-
-// Anything that isn't a scope key cancels rather than falling through to the
-// viewer — a mistyped key must not do something else instead.
-func TestScopeChordCancels(t *testing.T) {
-	for _, key := range []string{"esc", "x"} {
-		var loads int
-		m := diffModalModel(t, func(Item, DiffScope) (string, error) {
-			loads++
-			return diffModalSample, nil
-		})
-		m, cmd := pressKey(m, "c")
-		m = drain(m, cmd)
-		m, _ = pressKey(m, "-")
-		m, cmd = pressKey(m, key)
-		m = drain(m, cmd)
-		dm, ok := m.active.(*diffModal)
-		if !ok {
-			t.Fatalf("%s: the chord must cancel itself, not the view (got %T)", key, m.active)
-		}
-		if dm.scopePick {
-			t.Fatalf("%s: expected the chord closed", key)
-		}
-		if loads != 1 {
-			t.Fatalf("%s: expected no reload, got %d loads", key, loads)
-		}
-	}
-}
-
-// A refresh tick arriving while the menu is up must not dismiss it: the viewer
-// polls every couple of seconds, so a menu that closed on any message would
-// vanish on its own.
-func TestScopeChordSurvivesANonKeyMessage(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
-	m, cmd := pressKey(m, "c")
+	m, cmd = pressKey(m, "-")
 	m = drain(m, cmd)
-	m, _ = pressKey(m, "-")
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	m = updated.(Model)
 	dm, ok := m.active.(*diffModal)
 	if !ok {
-		t.Fatal("expected the diff modal open")
+		t.Fatalf("expected the modal open, got %T", m.active)
 	}
-	if !dm.scopePick {
-		t.Fatal("expected the chord still up after a resize")
+	if got := dm.inner.ScopeLabel(); got != "" {
+		t.Fatalf("expected no scope installed, got %q", got)
+	}
+	// And the footer still reads as the ordinary one rather than as a menu.
+	if strings.Contains(ansi.Strip(dm.footerHelp()), "esc cancel") {
+		t.Fatalf("expected no menu:\n%s", ansi.Strip(dm.footerHelp()))
 	}
 }
 
@@ -520,11 +483,10 @@ func TestDiffModalDocumentsTheDeckSKeys(t *testing.T) {
 	for _, k := range groups[0].Keys {
 		keys = append(keys, k[0])
 	}
-	if strings.Join(keys, ",") != "-,esc / q" {
-		t.Fatalf("expected the scope chord and the close keys, got %v", keys)
-	}
-	if !strings.Contains(groups[0].Keys[0][1], "w working copy") {
-		t.Fatalf("expected the scope keys spelled out, got %q", groups[0].Keys[0][1])
+	// `-` is not among them any more: the viewer owns that key and documents it
+	// itself, so listing it here would say it twice.
+	if strings.Join(keys, ",") != "esc / q" {
+		t.Fatalf("expected only the close keys, got %v", keys)
 	}
 }
 

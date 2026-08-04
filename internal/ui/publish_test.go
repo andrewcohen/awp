@@ -315,7 +315,7 @@ func TestPublishRefusesASecondRunWhileOneIsInFlight(t *testing.T) {
 func TestPublishKeyIsInTheHelp(t *testing.T) {
 	// The description's wording changes as the flow grows a step; that it is listed
 	// as publishing is the part that has to hold.
-	if !strings.Contains(helpContent(100), "publish:") {
+	if !strings.Contains(helpContent(100, nil, nil), "publish:") {
 		t.Fatal("`P` is missing from the key reference")
 	}
 }

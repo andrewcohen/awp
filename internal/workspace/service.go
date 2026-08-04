@@ -230,6 +230,11 @@ type ListEntry struct {
 	// command running inside a workspace can find its PR without re-reading the
 	// state file — `awp review publish` needs it to know where to post.
 	PRNumber int
+	// Bookmark is the workspace's own bookmark, empty if unlinked. Exposed for the
+	// same reason as PRNumber: resolving what a change is stacked *on* means
+	// excluding the workspace's own bookmark from the search, and a caller that
+	// does not know it resolves the base to the change itself.
+	Bookmark string
 }
 
 type InfoEntry struct {
@@ -750,6 +755,7 @@ func (s *service) List() ([]ListEntry, error) {
 			Status:       entry.Status,
 			Unread:       entry.Unread,
 			PRNumber:     entry.PRNumber,
+			Bookmark:     strings.TrimSpace(entry.Bookmark),
 		})
 	}
 	return out, nil
