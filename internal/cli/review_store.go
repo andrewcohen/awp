@@ -582,7 +582,7 @@ func mirrorReviewThreads(repoRoot, workspaceName string, threads []github.Review
 			Resolved: t.Resolved, Outdated: t.Outdated,
 		}
 		for _, c := range t.Comments {
-			mirrored.Comments = append(mirrored.Comments, review.ThreadComment{Author: c.Author, Body: c.Body})
+			mirrored.Comments = append(mirrored.Comments, review.ThreadComment{ID: c.ID, Author: c.Author, Body: c.Body})
 		}
 		out = append(out, mirrored)
 	}
