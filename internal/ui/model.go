@@ -1129,7 +1129,20 @@ func (m *Model) syncFileCursorToCursor() {
 		m.filesCursor = 0
 		return
 	}
-	m.filesCursor = m.stream.fileAt(m.cursorRow)
+	// Not every row belongs to a file. The review-summary section at the top of the
+	// stream and the detached section at the foot are both remarks about no
+	// particular file, and their rows say so with file -1. Copying that into the file
+	// cursor made it an index into m.filtered that indexes nothing: `ctrl+d` to the
+	// bottom of a change with a detached comment, then `h`, and the pan's clamp asked
+	// for the current file and took the whole deck down with an index out of range.
+	//
+	// So a row with no file leaves the file cursor alone. Where you were is the only
+	// answer that is true — you scrolled past the end of the last file, you did not
+	// move to another one — and it keeps the file list's selection where the reader
+	// left it instead of snapping to the top of the change.
+	if file := m.stream.fileAt(m.cursorRow); file >= 0 {
+		m.filesCursor = file
+	}
 }
 
 // seekToFile puts the cursor on a file's divider row.
@@ -1164,7 +1177,11 @@ func (m *Model) jumpHunk(delta int) {
 
 // currentFile is the file the cursor is on, if any.
 func (m Model) currentFile() (diff.FileDiff, bool) {
-	if len(m.filtered) == 0 || m.filesCursor >= len(m.filtered) {
+	// Both ends. The upper bound was always checked; the lower one was not, and a
+	// file cursor of -1 is expressible — the stream's fileless rows carry it (see
+	// syncFileCursorToCursor). One panic in a Bubble Tea program takes the whole deck
+	// with it, so the guard belongs at the read as well as at the write.
+	if len(m.filtered) == 0 || m.filesCursor < 0 || m.filesCursor >= len(m.filtered) {
 		return diff.FileDiff{}, false
 	}
 	return m.filtered[m.filesCursor], true
@@ -1175,10 +1192,13 @@ func (m Model) pageStep() int {
 }
 
 func (m Model) openCurrentFile() tea.Cmd {
-	if len(m.filtered) == 0 || m.OpenFile == nil {
+	// Through currentFile rather than indexing m.filtered directly, so the bounds are
+	// checked in one place: `e` on a row belonging to no file used to panic here for
+	// exactly the same reason the pan did.
+	f, ok := m.currentFile()
+	if !ok || m.OpenFile == nil {
 		return nil
 	}
-	f := m.filtered[m.filesCursor]
 	return m.OpenFile(m.resolveFilePath(f), diff.FirstChangedLine(f))
 }
 
