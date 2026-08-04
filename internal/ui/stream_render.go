@@ -41,7 +41,22 @@ func (m Model) cachedStreamRow(i, width int) string {
 	if m.stream.rows[i].kind == rowEditor {
 		return m.renderStreamRowAt(i, width)
 	}
-	key := rowKey{
+	key := m.rowKeyAt(i, width)
+	if out, ok := m.cache.rows[key]; ok {
+		return out
+	}
+	out := m.renderStreamRowAt(i, width)
+	m.cache.rows[key] = out
+	return out
+}
+
+// rowKeyAt is everything row i's appearance depends on that the stream itself does
+// not fix. Separate from cachedStreamRow so a new dependency can be tested as a
+// key that changes, which is the property that matters — a stale entry shows the
+// previous frame's styling with nothing to hint that it is wrong.
+func (m Model) rowKeyAt(i, width int) rowKey {
+	r := m.stream.rows[i]
+	return rowKey{
 		row:   i,
 		width: width,
 		// Both halves of the selection treatment, because both vary independently
@@ -54,15 +69,33 @@ func (m Model) cachedStreamRow(i, width int) string {
 		// The ranged-comment bar and its colour. `tab` in the compose box recolours a
 		// range without moving a row, so a key without this would keep serving the
 		// old hue.
-		mark:    m.marks[i],
-		hscroll: m.hunkHScroll,
+		mark: m.marks[i],
+		// Whether this row is a file divider wearing the selection hue. It follows
+		// filesCursor and the focus, and neither goes through rebuildStream —
+		// seekToFile moves the cursor into another file without touching the stream,
+		// so without this the old file's divider stayed highlighted. Left false for
+		// every other row rather than derived from the file alone, so moving focus
+		// does not split the cache entry of every row in the current file.
+		fileRule: r.kind == rowFileHeader && m.fileRuleActive(r.file),
+		hscroll:  m.hunkHScroll,
 	}
-	if out, ok := m.cache.rows[key]; ok {
-		return out
+}
+
+// selectionBarStyle is the `┃` marker's hue on a selected row.
+//
+// Banded means the diff pane has the keyboard, so the marker is the app-wide
+// selection treatment. Unbanded it is the same row seen from another pane: the
+// marker stays, because it is where the keys go back to, but muted — in the
+// selection hue it competed with the pane actually being driven, and it slid down
+// the diff as the file list or comment index seeked.
+//
+// Factored out so the choice is assertable: lipgloss strips colour with no TTY, so
+// it cannot be read back out of rendered output.
+func selectionBarStyle(band bool) lipgloss.Style {
+	if band {
+		return styleSelectedCursor
 	}
-	out := m.renderStreamRowAt(i, width)
-	m.cache.rows[key] = out
-	return out
+	return styleSelectedIdle
 }
 
 func (m Model) renderStreamRowAt(i, width int) string {
@@ -70,16 +103,15 @@ func (m Model) renderStreamRowAt(i, width int) string {
 	// cursorline band is painted only while this pane has the keyboard: two
 	// full-width bands at once — one here, one in the file list or comment index —
 	// leaves no way to tell which selection the keys are actually driving. The ┃
-	// bar stays either way, so the rows you will come back to are still marked.
+	// bar stays either way, so the rows you will come back to are still marked —
+	// muted while the keyboard is elsewhere, see selectionBarStyle.
 	selected, band := m.rowSelected(i), m.rowBanded(i)
 	kind := m.stream.rows[i].kind
 	mark, marked := m.rangeMark(i)
 	prefix := selectionPrefixBlank
 	switch {
-	case band:
-		prefix = styleSelectedCursor.Render(selectionPrefixBar)
 	case selected:
-		prefix = styleSelected.Render(selectionPrefixBar)
+		prefix = selectionBarStyle(band).Render(selectionPrefixBar)
 	// A ranged comment's own bar, in its kind's hue — so the block a remark is
 	// about is visible while reading, not only stated in its header. Below the
 	// cursor in this switch because the cursor is one row and the range's other
@@ -165,7 +197,7 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 		return ""
 	}
 	f := m.filtered[r.file]
-	current := r.file == m.filesCursor
+	current := m.fileRuleActive(r.file)
 	ruleStyle, baseStyle := fileRuleStyles(current)
 
 	lead := ruleStyle.Render(strings.Repeat(fileRuleGlyph, fileRuleLead) + " ")
@@ -192,8 +224,19 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 	return truncateStyled(head, width)
 }
 
+// fileRuleActive reports whether file i's divider should carry the selection hue.
+//
+// Only while the diff pane holds the keyboard. A full-width yellow rule is the
+// loudest thing this pane draws, and keyed off filesCursor alone it jumped from
+// divider to divider as the file list was scanned — motion in a pane the keys were
+// not driving, next to the file list's own highlight on the same file. The `┃` bar
+// still marks the cursor's row, so nothing is lost by letting the rule go quiet.
+func (m Model) fileRuleActive(file int) bool {
+	return m.focus == FocusHunks && file == m.filesCursor
+}
+
 // fileRuleStyles picks the divider's hue: the accent normally, the selection
-// hue for the file the cursor is in.
+// hue for the file the cursor is in while the diff pane is focused.
 func fileRuleStyles(current bool) (rule, base lipgloss.Style) {
 	if current {
 		return styleFileRuleCurrent, styleFileRuleCurBase
@@ -303,8 +346,10 @@ type rowKey struct {
 	selected bool
 	band     bool
 	// mark is the kind of the ranged comment marking this row, empty for none.
-	mark    review.Kind
-	hscroll int
+	mark review.Kind
+	// fileRule is set on a file divider drawn in the selection hue.
+	fileRule bool
+	hscroll  int
 }
 
 // leftKey identifies a rendered left column, which is one string because the
