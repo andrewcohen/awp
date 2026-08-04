@@ -239,7 +239,7 @@ func TestDiffModalFooterNamesTheResolvedBase(t *testing.T) {
 		})
 	m.width, m.height = 120, 40
 
-	m, cmd := pressKey(m, "C")
+	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	dm, ok := m.active.(*diffModal)
 	if !ok {
@@ -260,7 +260,7 @@ func TestDiffModalFooterFallsBackBeforeTheBaseResolves(t *testing.T) {
 	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	// Deliberately not drained: this is the state right after open, before any
 	// command has run.
-	m, _ = pressKey(m, "C")
+	m, _ = pressKey(m, "c")
 	dm, ok := m.active.(*diffModal)
 	if !ok {
 		t.Fatal("expected the diff modal open")
@@ -366,6 +366,26 @@ func TestDiffModalOpensAtTheStackBase(t *testing.T) {
 	}
 	if len(asked) != 1 || asked[0] != ScopeStackBase {
 		t.Fatalf("expected the loader asked for the stack base, got %v", asked)
+	}
+}
+
+// `C` is the same review in a tmux window beside the agent rather than in the
+// deck's popup. It emits a sentinel rather than a built command: naming the base
+// runs jj, which belongs in the action handler, not in the TUI.
+func TestShiftCOpensTheReviewWindowRatherThanTheModal(t *testing.T) {
+	var got ActionRequest
+	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
+		func(r ActionRequest) error { got = r; return nil }).
+		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil)
+	m.width, m.height = 120, 40
+
+	m, cmd := pressKey(m, "C")
+	m = drain(m, cmd)
+	if _, ok := m.active.(*diffModal); ok {
+		t.Fatal("expected no in-deck modal for C — it opens the tmux window")
+	}
+	if got.Action != ActionOpenWindow || got.Arg != ReviewStackArg {
+		t.Fatalf("expected the review-window sentinel, got action=%v arg=%q", got.Action, got.Arg)
 	}
 }
 

@@ -105,12 +105,14 @@ const (
 	ActionMergePR
 )
 
-// ReviewStackArg is the ActionOpenWindow arg the C (stack review) action
-// emits. Retained for the unwired fallback path; the stack-base diff now
-// opens in-deck via ScopeStackBase, where <base> is
-// the workspace's nearest stacked-parent bookmark (or trunk() when nothing is
-// stacked). It's a sentinel rather than a built command because resolving the
-// base runs jj, which belongs in the action handler, not the TUI.
+// ReviewStackArg is the ActionOpenWindow arg `C` emits: open the review in a
+// `review` window in the workspace's tmux session, showing the same thing the
+// deck's own `c` shows — the whole change against its stack base.
+//
+// A sentinel rather than a built command because the base is the workspace's
+// nearest stacked-parent bookmark (or trunk() when nothing is stacked), and
+// resolving that runs jj, which belongs in the action handler rather than in the
+// TUI. The handler expands it into the `awp diff -r <base>..@` the window runs.
 const ReviewStackArg = "review:@stack-base@"
 
 type UserAction struct {
@@ -2518,8 +2520,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, batchCmds(initCmd, tea.ClearScreen)
 		case key.Matches(msg, km.EditorWindow):
 			return m.trigger(ActionOpenWindow, "editor")
-		case key.Matches(msg, km.ReviewWindow), key.Matches(msg, km.ReviewMainWin):
+		case key.Matches(msg, km.ReviewWindow):
 			return m.openDiffModal(ScopeStackBase)
+		case key.Matches(msg, km.ReviewMainWin):
+			// The same review, in a tmux window beside the agent instead of in the
+			// deck's popup — for reading a change over a while, where a popup that
+			// closes when you switch away is the wrong container.
+			return m.trigger(ActionOpenWindow, ReviewStackArg)
 		case key.Matches(msg, km.VCSWindow):
 			return m.trigger(ActionOpenWindow, "vcs")
 		case key.Matches(msg, km.ShellWindow):
@@ -4890,7 +4897,8 @@ func deckKeyGroups() []keyGroup {
 				{"a", "agent window (re-attach without re-prompting)"},
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
-				{"c", "review this change (- inside switches scope)"},
+				{"c", "review this change in the deck (- inside switches scope)"},
+				{"C", "review it in a tmux window beside the agent instead"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},
