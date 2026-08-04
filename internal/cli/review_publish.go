@@ -71,6 +71,15 @@ func partitionForPublish(comments []review.Comment) (inline, changeWide []review
 			skipped++
 			continue
 		}
+		// A reply is a local conversation — you and the agent working a finding out
+		// between you (see review.Store.Reply). There is nothing to publish it into: a
+		// batched review creates new threads only, so sending one would post it as a
+		// fresh top-level comment divorced from what it answers. Replying into a GitHub
+		// thread needs the thread's own id and its own mutation, which is its own task.
+		if c.ReplyTo != "" {
+			skipped++
+			continue
+		}
 		// A remark about the change as a whole has no line to hang a review
 		// comment on, so it goes up as a comment on the PR instead. Sending it
 		// inline with an empty path is what GitHub rejects, and reporting that as
@@ -204,6 +213,13 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	if summary == "" {
 		summary = reviewSummary(changeWide)
 	}
+	// Comments ride in a review, and a review has to be submitted with a verdict —
+	// so publishing them without one is refused rather than guessed at. Leaving the
+	// review pending instead would put the comments on GitHub where only the author can
+	// see them, and a retry would then stage a second copy of every one.
+	if len(inline) > 0 && event == "" {
+		return errors.New("publishing comments needs a verdict; pass --verdict approve|comment|request-changes")
+	}
 	if github.EventNeedsBody(event) && summary == "" {
 		return fmt.Errorf("--verdict %s needs a review summary; pass --summary", req.Verdict)
 	}
@@ -264,96 +280,67 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		res.Posted++
 	}
 
-	for _, c := range inline {
-		where := c.Anchor.Path + ":" + c.Anchor.LineRange()
-		threadID, perr := gh.PostReviewComment(prNumber, github.NewComment{
-			Path: c.Anchor.Path,
-			// GitHub's `line` is the *last* line of a comment, so a range sends its
-			// end here and its start as StartLine. A single-line anchor has no end,
-			// which is why this is not simply EndLineHint.
-			Line:      commentEndLine(c.Anchor),
-			StartLine: rangeStartLine(c.Anchor),
-			Side:      githubSide(c.Anchor.Side),
-			// Kind and the robot marker are composed at publish time, not stored:
-			// the stored body is what the author typed, so baking prefixes in
-			// would double them on a re-publish.
-			Body:      c.PublishBody(),
-			CommitID:  head,
-			InReplyTo: c.ReplyTo,
-		})
-		if perr != nil {
-			res.Failed++
-			failures = append(failures, fmt.Errorf("%s: %w", where, perr))
-			continue
+	switch {
+	case len(inline) > 0:
+		// One review carrying every comment, staged and then submitted. Not one call per
+		// comment: the REST comment endpoint creates a single-comment *review* per call,
+		// so eight comments appeared as eight empty review entries on the PR plus one for
+		// the verdict — and GitHub does not allow deleting a submitted review, so those
+		// are permanent (see alpha #2329, app-main #54).
+		staged, cerr := stageReview(gh, prNumber, head, inline)
+		if cerr != nil {
+			// Nothing was created: the mutation is atomic, and it is refused before
+			// anything becomes visible. So this is a clean failure with nothing to undo.
+			res.Failed += len(inline)
+			failures = append(failures, cerr)
+		} else if serr := gh.SubmitStagedReview(staged.ID, event, summary); serr != nil {
+			// The comments are staged but invisible. Discard them rather than leaving a
+			// pending review behind: a retry would stage a second copy of every comment,
+			// and the reviewer has lost nothing — it is all still in the local store.
+			res.Failed += len(inline)
+			failures = append(failures, serr)
+			if derr := gh.DeleteStagedReview(staged.ID); derr != nil {
+				failures = append(failures, fmt.Errorf(
+					"the staged review could not be discarded either, so it is still pending on the PR — submit or delete it there before retrying: %w", derr))
+			}
+		} else {
+			for _, c := range inline {
+				where := c.Anchor.Path + ":" + c.Anchor.LineRange()
+				// The thread's own id when GitHub named it, so a record points at the
+				// conversation it produced; the review's id otherwise, which is still enough
+				// to know the comment went up.
+				id := staged.ThreadID(c.Anchor.Path, commentEndLine(c.Anchor))
+				if id == "" {
+					id = staged.ID
+				}
+				record(c, id, where)
+			}
+			recordSummaries(store, r, req, changeWide, staged.ID, record, &failures)
+			_, _ = fmt.Fprintf(out, "submitted the review as %s\n", req.Verdict)
 		}
-		record(c, threadID, where)
-	}
-
-	if event != "" {
-		// One review submission carrying the verdict and the summary, after the
-		// inline comments so it reads as the conclusion of what they say. The
-		// remarks that made up the summary are recorded against the review's id, so
-		// a re-publish does not send them again.
+	case event != "":
+		// A verdict on its own — every comment went up earlier. GitHub has no way to
+		// submit a review with no comments through the staging path, since there is
+		// nothing to stage, so this is the plain submission.
 		id, perr := gh.SubmitReview(prNumber, event, summary)
 		if perr != nil {
 			res.Failed++
 			failures = append(failures, fmt.Errorf("submitting the review: %w", perr))
 		} else {
-			// The record has to end up saying what was actually sent. The reviewer edits
-			// the body in a box prefilled from these remarks, so the first of them becomes
-			// that text; the rest are marked published as they stand, since they were part
-			// of what the body was built from.
-			written := strings.TrimSpace(req.Summary)
-			if written != "" && len(changeWide) > 0 {
-				changeWide[0].Body = written
-			}
-			for _, c := range changeWide {
-				record(c, id, "review summary")
-			}
-			// Nothing to reconcile against, so the summary becomes the review's first.
-			// Filed now rather than before the send, so a run the reviewer backed out of
-			// leaves nothing behind — and published in the same breath, since it is on
-			// GitHub as the review's body and a later run must not post it again.
-			if written != "" && len(changeWide) == 0 {
-				saved, aerr := store.AddComment(r, review.Comment{
-					Author: review.AuthorHuman,
-					Body:   written,
-					State:  review.Published,
-				})
-				if aerr != nil {
-					failures = append(failures, fmt.Errorf("the review was submitted but its summary was not saved: %w", aerr))
-				} else {
-					saved.Publish = &review.PublishRecord{ThreadID: id, At: time.Now()}
-					if uerr := store.UpdateComment(r, saved); uerr != nil {
-						failures = append(failures, fmt.Errorf("summary saved but not marked published: %w", uerr))
-					}
-				}
-			}
+			recordSummaries(store, r, req, changeWide, id, record, &failures)
 			_, _ = fmt.Fprintf(out, "submitted the review as %s\n", req.Verdict)
 		}
-	} else {
-		// No verdict: review-level remarks go up as comments on the PR itself.
-		// Posted after the inline ones so a closing summary lands under the
-		// specifics it refers to, which is the order a reader encounters them in.
-		//
-		// A summary written for this run has nowhere better to go, so it becomes one of
-		// them rather than being dropped for want of a review to be the body of.
+	default:
+		// No verdict and nothing inline: the review summary goes up as a comment on the
+		// PR, which is where a remark with no line to attach to belongs.
 		if written := strings.TrimSpace(req.Summary); written != "" {
 			id, perr := gh.PostPRComment(prNumber, written)
 			if perr != nil {
 				res.Failed++
 				failures = append(failures, fmt.Errorf("the summary, on the PR: %w", perr))
-			} else if saved, aerr := store.AddComment(r, review.Comment{
-				Author: review.AuthorHuman,
-				Body:   written,
-				State:  review.Published,
-			}); aerr != nil {
-				failures = append(failures, fmt.Errorf("the summary posted but was not saved: %w", aerr))
 			} else {
-				saved.Publish = &review.PublishRecord{ThreadID: id, At: time.Now()}
-				if uerr := store.UpdateComment(r, saved); uerr != nil {
-					failures = append(failures, fmt.Errorf("summary saved but not marked published: %w", uerr))
-				}
+				fileSummary(store, r, written, id, &failures)
+				res.Posted++
 			}
 		}
 		for _, c := range changeWide {
@@ -376,6 +363,75 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	return nil
 }
 
+// stageReview turns the review's inline comments into one pending review.
+func stageReview(gh *github.Client, prNumber int, head string, inline []review.Comment) (github.CreatedReview, error) {
+	prID, err := gh.PRNodeID(prNumber)
+	if err != nil {
+		return github.CreatedReview{}, err
+	}
+	threads := make([]github.DraftThread, 0, len(inline))
+	for _, c := range inline {
+		threads = append(threads, github.DraftThread{
+			Path: c.Anchor.Path,
+			// GitHub's `line` is the *last* line of a comment, so a range sends its end
+			// here and its start as StartLine. A single-line anchor has no end, which is
+			// why this is not simply EndLineHint.
+			Line:      commentEndLine(c.Anchor),
+			StartLine: rangeStartLine(c.Anchor),
+			Side:      githubSide(c.Anchor.Side),
+			// Kind and the robot marker are composed at publish time, not stored: the
+			// stored body is what the author typed, so baking prefixes in would double
+			// them on a re-publish.
+			Body: c.PublishBody(),
+		})
+	}
+	return gh.CreatePendingReview(prID, head, threads)
+}
+
+// recordSummaries reconciles the review's summary records with the body that was
+// actually sent, then marks them published against the review.
+//
+// The reviewer edits that body in a box prefilled from these remarks, so the first of
+// them becomes the edited text; the rest are marked as they stand, since they were part
+// of what the body was built from.
+func recordSummaries(
+	store review.Store, r review.Review, req publishRequest,
+	changeWide []review.Comment, reviewID string,
+	record func(review.Comment, string, string), failures *[]error,
+) {
+	written := strings.TrimSpace(req.Summary)
+	if written != "" && len(changeWide) > 0 {
+		changeWide[0].Body = written
+	}
+	for _, c := range changeWide {
+		record(c, reviewID, "review summary")
+	}
+	// Nothing to reconcile against, so the summary becomes the review's first. Filed
+	// now rather than before the send, so a run the reviewer backed out of leaves
+	// nothing behind — and published in the same breath, since it is on GitHub as the
+	// review's body and a later run must not post it again.
+	if written != "" && len(changeWide) == 0 {
+		fileSummary(store, r, written, reviewID, failures)
+	}
+}
+
+// fileSummary records a summary that went up but had no local record of its own.
+func fileSummary(store review.Store, r review.Review, body, threadID string, failures *[]error) {
+	saved, aerr := store.AddComment(r, review.Comment{
+		Author: review.AuthorHuman,
+		Body:   body,
+		State:  review.Published,
+	})
+	if aerr != nil {
+		*failures = append(*failures, fmt.Errorf("the review was submitted but its summary was not saved: %w", aerr))
+		return
+	}
+	saved.Publish = &review.PublishRecord{ThreadID: threadID, At: time.Now()}
+	if uerr := store.UpdateComment(r, saved); uerr != nil {
+		*failures = append(*failures, fmt.Errorf("summary saved but not marked published: %w", uerr))
+	}
+}
+
 // publishPlan is what a run would do, one line per call it would make to GitHub.
 //
 // Written as the calls rather than as a summary because this is what a reviewer
@@ -389,40 +445,48 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 	// disagree with the list under it. Counting the inputs instead was wrong the
 	// moment a verdict folded the review-level remarks into one review body: it
 	// promised four calls and listed three.
-	var calls []string
-	for _, c := range inline {
-		where := c.Anchor.Path + ":" + c.Anchor.LineRange()
-		if c.ReplyTo != "" {
-			// A reply is a different call with a different shape: no path, no line,
-			// just the thread it lands in.
-			calls = append(calls, fmt.Sprintf("POST pulls/%d/comments  in_reply_to=%s  %s", req.PR, c.ReplyTo, oneLine(c.PublishBody())))
-			continue
-		}
-		// The composed body, not the stored one: a preview is only useful if it
-		// shows what will actually land on GitHub, kind prefix and robot marker
-		// included.
-		calls = append(calls, fmt.Sprintf("POST pulls/%d/comments  %s  commit=%s  %s",
-			req.PR, where, shortSHA(head), oneLine(c.PublishBody())))
+	//
+	// Threads are listed but not counted: they are what one call carries, not calls of
+	// their own. Counting them said "8 call(s)" above a plan that makes two, which is
+	// exactly the arithmetic this whole change is about.
+	var lines []string
+	calls := 0
+	call := func(format string, args ...any) {
+		calls++
+		lines = append(lines, fmt.Sprintf(format, args...))
 	}
-	if req.Event != "" {
-		// One call, carrying the verdict and — since a verdict makes them the review
-		// body — every review-level remark. Which is why they are not counted
-		// separately above.
+	switch {
+	case len(inline) > 0:
+		// One review, staged with every thread, then submitted. The threads are listed
+		// under it because they are what the reviewer is checking — a target and a body
+		// either look right or they do not.
+		call("addPullRequestReview  PR #%d  commit=%s  %d thread(s), staged",
+			req.PR, shortSHA(head), len(inline))
+		for _, c := range inline {
+			lines = append(lines, fmt.Sprintf("  thread  %s:%s  %s",
+				c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody())))
+		}
+		line := fmt.Sprintf("submitPullRequestReview  event=%s", req.Event)
+		if summary := planSummary(req, changeWide); summary != "" {
+			line += "  body=" + oneLine(summary)
+		}
+		call("%s", line)
+	case req.Event != "":
 		line := fmt.Sprintf("POST pulls/%d/reviews  event=%s", req.PR, req.Event)
 		if summary := planSummary(req, changeWide); summary != "" {
 			line += "  body=" + oneLine(summary)
 		}
-		calls = append(calls, line)
-	} else {
+		call("%s", line)
+	default:
 		if written := strings.TrimSpace(req.Summary); written != "" {
-			calls = append(calls, fmt.Sprintf("POST issues/%d/comments  %s", req.PR, oneLine(written)))
+			call("POST issues/%d/comments  %s", req.PR, oneLine(written))
 		}
 		for _, c := range changeWide {
-			calls = append(calls, fmt.Sprintf("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody())))
+			call("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody()))
 		}
 	}
-	summary := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", len(calls), req.PR, skipped)
-	return append([]string{summary}, calls...)
+	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, skipped)
+	return append([]string{head1}, lines...)
 }
 
 // reviewedCommit is the commit a review's inline comments should be anchored to:
