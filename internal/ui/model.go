@@ -1539,6 +1539,14 @@ func plural(n int) string {
 	return "s"
 }
 
+// pluralY is plural for a noun ending in -y: "summary" / "summaries".
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
 func truncateStyled(s string, width int) string {
 	if width <= 0 {
 		return ""

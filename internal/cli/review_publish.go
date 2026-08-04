@@ -198,7 +198,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// reviewer to work out what landed.
 	summary := joinSummary(strings.TrimSpace(req.Summary), reviewSummary(changeWide))
 	if github.EventNeedsBody(event) && summary == "" {
-		return fmt.Errorf("--verdict %s needs a summary; write one, or file a review-level remark and it becomes the review body", req.Verdict)
+		return fmt.Errorf("--verdict %s needs a review summary; pass --summary", req.Verdict)
 	}
 
 	// The commit every inline comment is anchored against. GitHub requires it and

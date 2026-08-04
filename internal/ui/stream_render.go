@@ -140,7 +140,7 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 	case rowReviewHeader:
 		// Accent rather than the detached section's warning yellow: a remark about
 		// the change as a whole is ordinary, where a lost anchor wants attention.
-		return styleReviewHeader.Width(width).Render(" review — about the change as a whole")
+		return styleReviewHeader.Width(width).Render(" review summary")
 	case rowOrphanHeader:
 		return styleOrphanHeader.Width(width).Render(" detached comments — their anchor could not be found")
 	case rowEditor:

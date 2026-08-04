@@ -203,7 +203,7 @@ func TestPublishPromptCountsWhatIsPending(t *testing.T) {
 	}
 	m.rebuildStream()
 	got := m.publishPrompt()
-	if !strings.Contains(got, "1 comment") || !strings.Contains(got, "1 review-level remark") {
+	if !strings.Contains(got, "1 comment") || !strings.Contains(got, "1 review summary") {
 		t.Fatalf("expected the prompt to count both kinds, got %q", got)
 	}
 	if strings.Contains(got, "2 comment") {
