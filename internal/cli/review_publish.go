@@ -91,7 +91,16 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 	dryRun := fs.Bool("dry-run", false, "show what would be posted without posting it")
 	prFlag := fs.Int("pr", 0, "PR number to publish to (defaults to the review's target)")
 	verdict := fs.String("verdict", "", "submit the comments as a review: approve, comment, or request-changes")
+	// Without this, `--verdict comment` dead-ended: GitHub requires a body, and the
+	// only way to supply one was to go and file a review-level remark first — which
+	// the error message asked for without saying how.
+	summary := fs.String("summary", "", "the review's body, which comment and request-changes require")
+	summaryFile := fs.String("summary-file", "", "read the review body from a file, or - for stdin")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	summaryText, err := commentBody(*summary, *summaryFile, os.Stdin)
+	if err != nil {
 		return err
 	}
 	event, err := parseVerdict(*verdict)
@@ -127,6 +136,7 @@ func runReviewPublish(runner Runner, svc workspace.Service, args []string, out i
 		Verdict:  *verdict,
 		DryRun:   *dryRun,
 		Dir:      cwd,
+		Summary:  summaryText,
 	}, out)
 }
 
@@ -157,6 +167,16 @@ type publishRequest struct {
 	// saves resolving Dir at all. The deck does: it reads every workspace's bookmark
 	// commit to compare against the PR's head, so the answer is already in hand.
 	HeadHint string
+	// Summary is a remark about the change as a whole, written for *this*
+	// submission and not yet part of the review.
+	//
+	// Carried here rather than filed first so that previewing does not write
+	// anything: the viewer used to save the summary on the way out of its compose
+	// box, which meant backing out of a publish left the remark behind — four
+	// abandoned attempts became four review-level comments on a real PR. It is filed
+	// once the publish succeeds instead (see publishReview), so the record still
+	// exists afterwards without a cancelled run creating one.
+	Summary string
 }
 
 func publishReview(runner Runner, req publishRequest, out io.Writer) error {
@@ -176,9 +196,9 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// separate comments on the PR. Checked before anything is posted — a run that
 	// published eight inline comments and then refused the verdict would leave the
 	// reviewer to work out what landed.
-	summary := reviewSummary(changeWide)
+	summary := joinSummary(strings.TrimSpace(req.Summary), reviewSummary(changeWide))
 	if github.EventNeedsBody(event) && summary == "" {
-		return fmt.Errorf("--verdict %s needs a summary; file a review-level remark and it becomes the review body", req.Verdict)
+		return fmt.Errorf("--verdict %s needs a summary; write one, or file a review-level remark and it becomes the review body", req.Verdict)
 	}
 
 	// The commit every inline comment is anchored against. GitHub requires it and
@@ -275,12 +295,51 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			for _, c := range changeWide {
 				record(c, id, "review summary")
 			}
+			// Filed now rather than before the send, so a run the reviewer backed out of
+			// leaves nothing behind. Recorded as published in the same breath: it is on
+			// GitHub as the review's body, so a later run must not post it again.
+			if written := strings.TrimSpace(req.Summary); written != "" {
+				saved, aerr := store.AddComment(r, review.Comment{
+					Author: review.AuthorHuman,
+					Body:   written,
+					State:  review.Published,
+				})
+				if aerr != nil {
+					failures = append(failures, fmt.Errorf("the review was submitted but its summary was not saved: %w", aerr))
+				} else {
+					saved.Publish = &review.PublishRecord{ThreadID: id, At: time.Now()}
+					if uerr := store.UpdateComment(r, saved); uerr != nil {
+						failures = append(failures, fmt.Errorf("summary saved but not marked published: %w", uerr))
+					}
+				}
+			}
 			_, _ = fmt.Fprintf(out, "submitted the review as %s\n", req.Verdict)
 		}
 	} else {
 		// No verdict: review-level remarks go up as comments on the PR itself.
 		// Posted after the inline ones so a closing summary lands under the
 		// specifics it refers to, which is the order a reader encounters them in.
+		//
+		// A summary written for this run has nowhere better to go, so it becomes one of
+		// them rather than being dropped for want of a review to be the body of.
+		if written := strings.TrimSpace(req.Summary); written != "" {
+			id, perr := gh.PostPRComment(prNumber, written)
+			if perr != nil {
+				res.Failed++
+				failures = append(failures, fmt.Errorf("the summary, on the PR: %w", perr))
+			} else if saved, aerr := store.AddComment(r, review.Comment{
+				Author: review.AuthorHuman,
+				Body:   written,
+				State:  review.Published,
+			}); aerr != nil {
+				failures = append(failures, fmt.Errorf("the summary posted but was not saved: %w", aerr))
+			} else {
+				saved.Publish = &review.PublishRecord{ThreadID: id, At: time.Now()}
+				if uerr := store.UpdateComment(r, saved); uerr != nil {
+					failures = append(failures, fmt.Errorf("summary saved but not marked published: %w", uerr))
+				}
+			}
+		}
 		for _, c := range changeWide {
 			id, perr := gh.PostPRComment(prNumber, c.PublishBody())
 			if perr != nil {
@@ -334,11 +393,14 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 		// body — every review-level remark. Which is why they are not counted
 		// separately above.
 		line := fmt.Sprintf("POST pulls/%d/reviews  event=%s", req.PR, req.Event)
-		if summary := reviewSummary(changeWide); summary != "" {
+		if summary := joinSummary(strings.TrimSpace(req.Summary), reviewSummary(changeWide)); summary != "" {
 			line += "  body=" + oneLine(summary)
 		}
 		calls = append(calls, line)
 	} else {
+		if written := strings.TrimSpace(req.Summary); written != "" {
+			calls = append(calls, fmt.Sprintf("POST issues/%d/comments  %s", req.PR, oneLine(written)))
+		}
 		for _, c := range changeWide {
 			calls = append(calls, fmt.Sprintf("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody())))
 		}
@@ -455,6 +517,19 @@ func parseVerdict(s string) (string, error) {
 		return github.EventRequestChanges, nil
 	}
 	return "", fmt.Errorf("review publish: unknown --verdict %q (approve, comment, or request-changes)", s)
+}
+
+// joinSummary puts the summary written for this submission above the review-level
+// remarks already on record. Written-now first: it is the reviewer's conclusion, and
+// the standing remarks are context for it.
+func joinSummary(written, filed string) string {
+	switch {
+	case written == "":
+		return filed
+	case filed == "":
+		return written
+	}
+	return written + "\n\n" + filed
 }
 
 // reviewSummary is the review body built from the change-wide remarks: their

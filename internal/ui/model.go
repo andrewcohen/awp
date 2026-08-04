@@ -196,7 +196,7 @@ type Model struct {
 	// submitting a review. It returns what happened, in the words the CLI's own
 	// publish prints. Nil leaves `P` unavailable, which it says rather than
 	// silently doing nothing.
-	PublishReview func(verdict string, dryRun bool) (string, error)
+	PublishReview func(verdict, summary string, dryRun bool) (string, error)
 	// LoadComments re-reads the review's comments, so findings filed while the
 	// view is open appear without reopening it.
 	LoadComments func() ([]review.Comment, error)
@@ -542,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// review-summary box. They are never open at once — with the stream box up
 		// every key belongs to it, so `P` types a P — so which one is on screen is
 		// enough to say where the body belongs.
-		summary := m.publishing && m.publishStage == publishSummary
+		summary := m.publishing && m.publishStage == publishComposing
 		if !m.editing && !summary {
 			return m, nil
 		}
@@ -566,7 +566,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// this the box renders a static cursor, since nothing else routes them. The
 	// review-summary box is a compose box too, and it is the one on screen when the
 	// publish flow is at that stage.
-	if m.publishing && m.publishStage == publishSummary {
+	if m.publishing && m.publishStage == publishComposing {
 		editor, cmd, _ := m.summaryEditor.update(msg)
 		m.summaryEditor = editor
 		return m, cmd
