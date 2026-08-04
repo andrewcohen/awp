@@ -185,6 +185,17 @@ func ReviewStoreDir() string {
 	return filepath.Join(awpHome(), "reviews")
 }
 
+// LogPath is awp's diagnostic log: ~/.awp/awp.log.
+//
+// One file for the whole program, alongside the rest of its state rather than in
+// /tmp, because the thing it exists for is being *found* later: most of awp's
+// errors are reported into a TUI status line, which cannot be copied, scrolled
+// back to, or pasted into a bug report. "It said something went wrong" is the
+// whole diagnostic otherwise.
+func LogPath() string {
+	return filepath.Join(awpHome(), "awp.log")
+}
+
 // ReviewStorePath is the directory holding one review's state:
 // ~/.awp/reviews/<repo>/<review-id>. Callers on the write, read and cleanup
 // sides all resolve through here so they cannot disagree about the location.
