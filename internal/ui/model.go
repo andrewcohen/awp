@@ -94,6 +94,12 @@ type Model struct {
 	ResolveBase func() string
 	// baseLabel is the last answer ResolveBase gave, empty until it lands.
 	baseLabel string
+	// HostKeys are bindings the surrounding program owns, listed after the view's
+	// own in the `?` reference. A host intercepts its keys before the view sees
+	// them, so this is the only way they can be documented where the reader looks
+	// for them — and leaving it empty is how standalone `awp diff` avoids
+	// advertising keys only the deck has.
+	HostKeys []charm.KeyGroup
 
 	files       []diff.FileDiff
 	filtered    []diff.FileDiff
@@ -284,7 +290,7 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // scroll position where the reader left it.
 func (m *Model) resizeHelp() {
 	at := m.helpVP.YOffset
-	m.helpVP = newHelpViewport(m.width, m.bodyHeight)
+	m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.HostKeys)
 	m.helpVP.SetYOffset(at)
 }
 
@@ -686,7 +692,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Built on open rather than kept in sync: it is cheap, and it means the
 		// reference is always laid out for the size the terminal is now, and always
 		// opens at the top.
-		m.helpVP = newHelpViewport(m.width, m.bodyHeight)
+		m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.HostKeys)
 		return m, nil
 	case "r":
 		// `r` marked a manual refresh until live refresh made that redundant

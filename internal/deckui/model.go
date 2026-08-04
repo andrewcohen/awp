@@ -2518,9 +2518,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, batchCmds(initCmd, tea.ClearScreen)
 		case key.Matches(msg, km.EditorWindow):
 			return m.trigger(ActionOpenWindow, "editor")
-		case key.Matches(msg, km.ReviewWindow):
-			return m.openDiffModal(ScopeWorking)
-		case key.Matches(msg, km.ReviewMainWin):
+		case key.Matches(msg, km.ReviewWindow), key.Matches(msg, km.ReviewMainWin):
 			return m.openDiffModal(ScopeStackBase)
 		case key.Matches(msg, km.VCSWindow):
 			return m.trigger(ActionOpenWindow, "vcs")
@@ -3206,8 +3204,8 @@ func (m Model) blockIfSettingUp(item Item) (Model, bool) {
 }
 
 // openDiffModal opens awp's own diff viewer over the selected workspace at the
-// given scope (`c` for the working change, `C` for the change against its stack
-// base). Falls back to the named review window when the viewer isn't wired, or
+// given scope — `c` opens at ScopeStackBase, and `-` inside the view switches to
+// another. Falls back to the named review window when the viewer isn't wired, or
 // when the row has no local working copy to diff — a virtual inbox row, or one
 // still being set up.
 func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
@@ -3224,12 +3222,26 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	if m2, blocked := m.blockIfSettingUp(item); blocked {
 		return m2, nil
 	}
+	m.active, m.status = nil, ""
+	cmd := m.reopenDiffModal(item, scope)
+	// tea.ClearScreen on modal entry — same rationale as the other modals
+	// (see doc.go).
+	return m, batchCmds(cmd, tea.ClearScreen)
+}
+
+// reopenDiffModal replaces whatever is open with the diff viewer over item at
+// scope, and returns the command that loads the diff.
+//
+// This is how `-` switches scope: a scope change changes the whole diff, so
+// there is no cursor or fold worth carrying over, and rebuilding means the new
+// scope goes through exactly the path a fresh open does. Takes the item rather
+// than re-reading the cursor because the caller is the open modal, which knows
+// what it is a review of.
+func (m *Model) reopenDiffModal(item Item, scope DiffScope) tea.Cmd {
 	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffBase, m.diffComments)
 	m.active = dm
 	m.status = "diff (" + scope.String() + "): loading…"
-	// tea.ClearScreen on modal entry — same rationale as the other modals
-	// (see doc.go).
-	return m, batchCmds(loadCmd, tea.ClearScreen)
+	return loadCmd
 }
 
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
@@ -4878,7 +4890,7 @@ func deckKeyGroups() []keyGroup {
 				{"a", "agent window (re-attach without re-prompting)"},
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
-				{"c / C", "diff viewer: working change  /  whole change vs its stack base"},
+				{"c", "review this change (- inside switches scope)"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},

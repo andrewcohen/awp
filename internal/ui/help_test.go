@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -66,8 +67,8 @@ func TestHelpOverlayKeepsTheBodySize(t *testing.T) {
 // terminal shrinks and then overflows the body it was sized to.
 func TestHelpOverlayTruncatesInsteadOfWrapping(t *testing.T) {
 	const height = 20
-	wide := strings.Count(renderHelpOverlay(newHelpViewport(200, height), 200, height), "\n")
-	narrow := strings.Count(renderHelpOverlay(newHelpViewport(60, height), 60, height), "\n")
+	wide := strings.Count(renderHelpOverlay(newHelpViewport(200, height, nil), 200, height), "\n")
+	narrow := strings.Count(renderHelpOverlay(newHelpViewport(60, height, nil), 60, height), "\n")
 	if narrow != wide {
 		t.Fatalf("overlay height depends on width: 200 → %d lines, 60 → %d", wide+1, narrow+1)
 	}
@@ -125,6 +126,28 @@ func TestHelpListsTheBindingsThatExist(t *testing.T) {
 		if !strings.Contains(view, k) {
 			t.Fatalf("expected %q documented in the help:\n%s", k, view)
 		}
+	}
+}
+
+// A host's own bindings are listed after the view's. The deck intercepts its keys
+// before the view sees them, so this is the only place they can be documented —
+// and a host with none (standalone `awp diff`) adds nothing, so the reference
+// never advertises a key that does nothing.
+func TestHelpListsTheHostSKeysAfterItsOwn(t *testing.T) {
+	plain := stripANSI(helpContent(120))
+	if strings.Contains(plain, "In the deck") {
+		t.Fatalf("standalone must not advertise a host's keys:\n%s", plain)
+	}
+	withHost := stripANSI(helpContent(120, charm.KeyGroup{
+		Title: "In the deck",
+		Keys:  [][2]string{{"-", "switch scope"}},
+	}))
+	if !strings.Contains(withHost, "In the deck") || !strings.Contains(withHost, "switch scope") {
+		t.Fatalf("expected the host's group in the reference:\n%s", withHost)
+	}
+	// After the view's own, not instead of them.
+	if i, j := strings.Index(withHost, "Review"), strings.Index(withHost, "In the deck"); i < 0 || j < i {
+		t.Fatalf("expected the host's group last, got Review at %d and the host at %d", i, j)
 	}
 }
 
