@@ -96,10 +96,11 @@ func viewerKeyGroups() []charm.KeyGroup {
 	}
 }
 
-// newHelpViewport builds the overlay's scroll region for a body of this size.
-func newHelpViewport(width, height int) viewport.Model {
+// newHelpViewport builds the overlay's scroll region for a body of this size,
+// with the host's own bindings appended after the view's.
+func newHelpViewport(width, height int, host []charm.KeyGroup) viewport.Model {
 	vp := viewport.New(helpContentWidth(width), max(1, height))
-	vp.SetContent(helpContent(helpContentWidth(width)))
+	vp.SetContent(helpContent(helpContentWidth(width), host...))
 	return vp
 }
 
@@ -110,12 +111,17 @@ func helpContentWidth(width int) int {
 
 // helpContent is the reference itself, clipped to width.
 //
+// host is whatever bindings the surrounding program adds on top of the view's
+// own — the deck's `-` scope chord and its close keys, which the view never sees
+// because its host intercepts them. Listed last, and only by a host that has
+// them, so standalone `awp diff` does not advertise a key that does nothing.
+//
 // Truncated rather than wrapped: a wrapped line adds a row, and the viewport
 // sizes its scroll against the line count, so wrapping would make the scrollbar
 // disagree with what is on screen.
-func helpContent(width int) string {
+func helpContent(width int, host ...charm.KeyGroup) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Keys")
-	body := charm.KeyHelpView(viewerKeyGroups())
+	body := charm.KeyHelpView(append(viewerKeyGroups(), host...))
 	return clipToWidth(title+"\n\n"+body, width)
 }
 

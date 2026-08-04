@@ -127,9 +127,9 @@ func TestResolveReviewStackBaseNamedHasNoLabelWithoutADir(t *testing.T) {
 	}
 }
 
-// Only the stack-base scope has a base worth naming; the working copy is diffed
-// against @ itself, which the scope's own wording already says.
-func TestDiffBaseResolverOnlyAnswersForTheStackScope(t *testing.T) {
+// Only the scopes that read against something have a base worth naming; the
+// working copy is diffed against @ itself, which its own wording already says.
+func TestDiffBaseResolverOnlyAnswersForTheScopesWithABase(t *testing.T) {
 	r := &reviewBaseRunner{trunk: "main", parent: ""}
 	resolve := diffBaseResolverFor(r)
 	item := deckuiItemForBase("/ws/x", "andrew/x")
@@ -138,6 +138,42 @@ func TestDiffBaseResolverOnlyAnswersForTheStackScope(t *testing.T) {
 	}
 	if got := resolve(item, deckui.ScopeWorking); got != "" {
 		t.Fatalf("working scope should have no base label, got %q", got)
+	}
+	// The trunk scope names the branch too, not the literal "trunk()".
+	if got := resolve(item, deckui.ScopeTrunk); got != "main" {
+		t.Fatalf("trunk scope label = %q, want main", got)
+	}
+}
+
+// Each scope's revision, which is the only thing that differs between them.
+func TestScopeRevset(t *testing.T) {
+	item := deckuiItemForBase("/ws/child", "andrew/child")
+	cases := []struct {
+		scope deckui.DiffScope
+		// parent is the stacked-parent bookmark jj reports, empty for none.
+		parent string
+		want   string
+	}{
+		// Empty: `jj diff`'s own default is the working copy, so there is nothing
+		// to pass.
+		{deckui.ScopeWorking, "andrew/parent", ""},
+		{deckui.ScopeTrunk, "andrew/parent", "trunk()..@"},
+		{deckui.ScopeStackBase, "andrew/parent", "andrew/parent..@"},
+		// Nothing stacked, so the stack base and trunk coincide.
+		{deckui.ScopeStackBase, "", "trunk()..@"},
+	}
+	for _, c := range cases {
+		r := &reviewBaseRunner{trunk: "main", parent: c.parent}
+		if got := scopeRevset(r, item, c.scope); got != c.want {
+			t.Errorf("scopeRevset(%v, parent=%q) = %q, want %q", c.scope, c.parent, got, c.want)
+		}
+	}
+	// The working copy resolves nothing, so it must not spend a jj call finding a
+	// base it will not use.
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent"}
+	scopeRevset(r, item, deckui.ScopeWorking)
+	if len(r.revs) != 0 {
+		t.Errorf("the working-copy scope should not invoke jj, got %v", r.revs)
 	}
 }
 

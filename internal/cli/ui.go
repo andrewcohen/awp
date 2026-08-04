@@ -18,38 +18,57 @@ import (
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
-// diffLoaderFor backs the deck's in-deck diff modal (`c`): the git-format
-// diff of a workspace's working change, the same source `awp diff` reads.
+// diffLoaderFor backs the deck's in-deck diff viewer (`c`): the git-format diff
+// of a workspace at the requested scope, the same source `awp diff` reads.
 func diffLoaderFor(runner Runner) deckui.DiffLoader {
 	return func(item deckui.Item, scope deckui.DiffScope) (string, error) {
 		if runner == nil {
 			runner = NewExecRunner()
 		}
-		revision := ""
-		if scope == deckui.ScopeStackBase {
-			// The whole change against its stack base. Base resolution:
-			// nearest stacked-parent bookmark, falling back to trunk().
-			base := resolveReviewStackBase(runner, item.Path, item.Bookmark)
-			revision = base + "..@"
-		}
-		return jj.New(runner).DiffGit(item.Path, revision)
+		return jj.New(runner).DiffGit(item.Path, scopeRevset(runner, item, scope))
 	}
 }
 
-// diffBaseResolverFor names what a stack-base diff is read against, for the
-// modal's footer. Same resolution the loader uses — the label is whatever that
+// scopeRevset is the revision a scope reads. Empty for the working copy, which
+// is `jj diff`'s own default.
+func scopeRevset(runner Runner, item deckui.Item, scope deckui.DiffScope) string {
+	switch scope {
+	case deckui.ScopeWorking:
+		return ""
+	case deckui.ScopeTrunk:
+		// The whole stack, however deep, against the repo's default branch.
+		// trunk() resolves that itself, so nothing has to be hardcoded.
+		return "trunk()..@"
+	default:
+		// The whole change against its stack base: nearest stacked-parent
+		// bookmark, falling back to trunk().
+		return resolveReviewStackBase(runner, item.Path, item.Bookmark) + "..@"
+	}
+}
+
+// diffBaseResolverFor names what a scope's diff is read against, for the
+// viewer's footer. Same resolution the loader uses — the label is whatever that
 // picked, with the trunk fallback spelled out as the branch it names rather than
 // left as the literal "trunk()".
 //
-// Only ScopeStackBase has a base worth naming: the working-copy scope is diffed
-// against @ itself, which "working copy" already says.
+// The working-copy scope has no base worth naming: it is diffed against @ itself,
+// which "working copy" already says.
 func diffBaseResolverFor(runner Runner) deckui.DiffBaseResolver {
 	return func(item deckui.Item, scope deckui.DiffScope) string {
-		if scope != deckui.ScopeStackBase {
+		if scope == deckui.ScopeWorking {
 			return ""
 		}
 		if runner == nil {
 			runner = NewExecRunner()
+		}
+		if scope == deckui.ScopeTrunk {
+			// Name the branch rather than "trunk()", which jj resolves but which
+			// means nothing to a reader.
+			trunk, err := jj.New(fixedDirRunner{base: runner, dir: item.Path}).Trunk()
+			if err != nil || strings.TrimSpace(trunk) == "" {
+				return "trunk"
+			}
+			return trunk
 		}
 		_, label := resolveReviewStackBaseNamed(runner, item.Path, item.Bookmark)
 		return label

@@ -270,7 +270,7 @@ func TestDiffModalFooterFallsBackBeforeTheBaseResolves(t *testing.T) {
 	}
 }
 
-// The working-copy scope has no base to name, so `c` keeps its own wording even
+// The working-copy scope has no base to name, so it keeps its own wording even
 // with a resolver wired.
 func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
@@ -285,9 +285,16 @@ func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
 
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
+	m, cmd = pressKey(m, "-")
+	m = drain(m, cmd)
+	m, cmd = pressKey(m, "w")
+	m = drain(m, cmd)
 	dm, ok := m.active.(*diffModal)
 	if !ok {
 		t.Fatal("expected the diff modal open")
+	}
+	if dm.scope != ScopeWorking {
+		t.Fatalf("expected the working-copy scope, got %v", dm.scope)
 	}
 	if footer := ansi.Strip(dm.footerHelp()); strings.Contains(footer, "should-not-appear") {
 		t.Fatalf("working-copy scope must not show a base label:\n%s", footer)
@@ -337,6 +344,167 @@ func TestDiffModalFooterOmitsAnAbsentPR(t *testing.T) {
 	}
 	if strings.Contains(footer, " ·  · ") {
 		t.Fatalf("footer has an empty segment:\n%s", footer)
+	}
+}
+
+// One entry key. `c` opens the review of the whole change against its stack base
+// — what a review is normally of — rather than the working copy alone.
+func TestDiffModalOpensAtTheStackBase(t *testing.T) {
+	var asked []DiffScope
+	m := diffModalModel(t, func(_ Item, scope DiffScope) (string, error) {
+		asked = append(asked, scope)
+		return diffModalSample, nil
+	})
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatalf("expected the diff modal open, got %T", m.active)
+	}
+	if dm.scope != ScopeStackBase {
+		t.Fatalf("expected ScopeStackBase, got %v", dm.scope)
+	}
+	if len(asked) != 1 || asked[0] != ScopeStackBase {
+		t.Fatalf("expected the loader asked for the stack base, got %v", asked)
+	}
+}
+
+// `-` then a letter reloads the same review at another scope. The whole modal is
+// rebuilt, so the new scope goes through the same path a fresh open does.
+func TestScopeChordSwitchesScope(t *testing.T) {
+	for _, c := range []struct {
+		key  string
+		want DiffScope
+	}{
+		{"w", ScopeWorking},
+		{"t", ScopeTrunk},
+		{"c", ScopeStackBase},
+	} {
+		var asked []DiffScope
+		m := diffModalModel(t, func(_ Item, scope DiffScope) (string, error) {
+			asked = append(asked, scope)
+			return diffModalSample, nil
+		})
+		m, cmd := pressKey(m, "c")
+		m = drain(m, cmd)
+		m, cmd = pressKey(m, "-")
+		m = drain(m, cmd)
+		m, cmd = pressKey(m, c.key)
+		m = drain(m, cmd)
+		dm, ok := m.active.(*diffModal)
+		if !ok {
+			t.Fatalf("%s: expected the modal still open, got %T", c.key, m.active)
+		}
+		if dm.scope != c.want {
+			t.Fatalf("%s: expected %v, got %v", c.key, c.want, dm.scope)
+		}
+		if dm.scopePick {
+			t.Fatalf("%s: the chord must close once it has been answered", c.key)
+		}
+		// Re-picking the scope already open is a no-op: reloading would throw away
+		// the cursor and the folds to arrive at the same diff.
+		wantLoads := 2
+		if c.want == ScopeStackBase {
+			wantLoads = 1
+		}
+		if len(asked) != wantLoads {
+			t.Fatalf("%s: expected %d load(s), got %v", c.key, wantLoads, asked)
+		}
+	}
+}
+
+// While the chord is up the footer is the menu, with the current scope marked —
+// the alternatives are the only thing worth saying for the one keypress it lives.
+func TestScopeChordFooterListsTheAlternatives(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	m, _ = pressKey(m, "-")
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	if !dm.scopePick {
+		t.Fatal("expected the chord up after -")
+	}
+	footer := ansi.Strip(dm.footerHelp())
+	for _, want := range []string{"w working copy", "t vs trunk", "c vs stack base (current)"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("expected %q in the menu:\n%s", want, footer)
+		}
+	}
+}
+
+// Anything that isn't a scope key cancels rather than falling through to the
+// viewer — a mistyped key must not do something else instead.
+func TestScopeChordCancels(t *testing.T) {
+	for _, key := range []string{"esc", "x"} {
+		var loads int
+		m := diffModalModel(t, func(Item, DiffScope) (string, error) {
+			loads++
+			return diffModalSample, nil
+		})
+		m, cmd := pressKey(m, "c")
+		m = drain(m, cmd)
+		m, _ = pressKey(m, "-")
+		m, cmd = pressKey(m, key)
+		m = drain(m, cmd)
+		dm, ok := m.active.(*diffModal)
+		if !ok {
+			t.Fatalf("%s: the chord must cancel itself, not the view (got %T)", key, m.active)
+		}
+		if dm.scopePick {
+			t.Fatalf("%s: expected the chord closed", key)
+		}
+		if loads != 1 {
+			t.Fatalf("%s: expected no reload, got %d loads", key, loads)
+		}
+	}
+}
+
+// A refresh tick arriving while the menu is up must not dismiss it: the viewer
+// polls every couple of seconds, so a menu that closed on any message would
+// vanish on its own.
+func TestScopeChordSurvivesANonKeyMessage(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	m, _ = pressKey(m, "-")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	if !dm.scopePick {
+		t.Fatal("expected the chord still up after a resize")
+	}
+}
+
+// The `?` reference lists the keys the deck takes before the viewer sees them.
+// The deck's own overlay is unreachable while the diff is open, so this is the
+// only place they can be found.
+func TestDiffModalDocumentsTheDeckSKeys(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+	groups := dm.inner.HostKeys
+	if len(groups) != 1 {
+		t.Fatalf("expected one host group, got %#v", groups)
+	}
+	var keys []string
+	for _, k := range groups[0].Keys {
+		keys = append(keys, k[0])
+	}
+	if strings.Join(keys, ",") != "-,esc / q" {
+		t.Fatalf("expected the scope chord and the close keys, got %v", keys)
+	}
+	if !strings.Contains(groups[0].Keys[0][1], "w working copy") {
+		t.Fatalf("expected the scope keys spelled out, got %q", groups[0].Keys[0][1])
 	}
 }
 
