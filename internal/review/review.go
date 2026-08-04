@@ -204,6 +204,17 @@ func (k Kind) OrDefault() Kind {
 	return k
 }
 
+// Label is the kind as it reads at the head of a sentence: "Suggestion", "Question".
+//
+// Capitalised because that is where it is used — a published body opens with it, and
+// a lowercase word starting a comment reads as a typo rather than as a label. The
+// constant itself stays lowercase: it is what the CLI accepts and what the store
+// holds, and neither should change because a display string did.
+func (k Kind) Label() string {
+	s := string(k.OrDefault())
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 // Comment is one finding. Author distinguishes a human's note from an agent's
 // finding; nothing else about the record differs between the two directions.
 type Comment struct {
@@ -256,7 +267,7 @@ func (c Comment) PublishBody() string {
 	// thread whose first comment already carries the kind, so repeating it on every
 	// message would be noise.
 	if kind := c.Kind.OrDefault(); kind != KindComment && c.ReplyTo == "" {
-		body = string(kind) + ": " + body
+		body = kind.Label() + ": " + body
 	}
 	// The marker leads. Who wrote a remark frames everything after it — including
 	// what the remark is asking for — so "🤖 suggestion: …" reads in the order a

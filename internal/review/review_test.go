@@ -425,14 +425,14 @@ func TestKindPersistsAndRobotAuthorshipIsDetectable(t *testing.T) {
 // re-publish and would show them to the reviewer mid-edit.
 func TestPublishBodyPrefixesKindAndRobot(t *testing.T) {
 	human := Comment{Author: AuthorHuman, Body: "this drops the error", Kind: KindSuggestion}
-	if got := human.PublishBody(); got != "suggestion: this drops the error" {
+	if got := human.PublishBody(); got != "Suggestion: this drops the error" {
 		t.Fatalf("got %q", got)
 	}
 	// A robot's comment is marked, and the marker leads: who wrote a remark frames
 	// everything after it, the kind included. On GitHub it posts under the
 	// authenticated user's account, so nothing else distinguishes it from a person's.
 	robot := Comment{Author: "agent", Body: "nil deref here", Kind: KindSuggestion}
-	want := RobotMarker + " suggestion: nil deref here"
+	want := RobotMarker + " Suggestion: nil deref here"
 	if got := robot.PublishBody(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

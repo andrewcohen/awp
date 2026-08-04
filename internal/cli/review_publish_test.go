@@ -597,3 +597,97 @@ func (r *listlessRunner) Run(_ context.Context, _ string, name string, args ...s
 	}
 	return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
 }
+
+// The viewer prefills its box from the review's own summary remarks, so joining the
+// written summary with those remarks again would send them twice.
+func TestPublishDoesNotDoubleTheSummary(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r, err := store.Open("/repos/theirs", review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	filed, err := store.AddComment(r, review.Comment{Author: review.AuthorHuman, Body: "the draft"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	runner := &dirRecordingRunner{}
+	var out bytes.Buffer
+	if err := publishReview(runner, publishRequest{
+		Store:    store,
+		Review:   r,
+		Comments: []review.Comment{filed},
+		PR:       54,
+		Event:    github.EventComment,
+		Verdict:  "comment",
+		Dir:      "/workspaces/theirs",
+		// What the box holds: the prefill, edited.
+		Summary: "the draft, revised",
+	}, &out); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	plan := publishPlan(publishRequest{
+		PR: 54, Event: github.EventComment, Summary: "the draft, revised",
+	}, nil, []review.Comment{filed}, 0, "abc")
+	joined := strings.Join(plan, "\n")
+	if strings.Count(joined, "the draft") != 1 {
+		t.Fatalf("the summary appears more than once in the body:\n%s", joined)
+	}
+	if !strings.Contains(joined, "the draft, revised") {
+		t.Fatalf("expected the written summary as the body:\n%s", joined)
+	}
+}
+
+// After the send, the record has to say what was actually sent — the reviewer edits
+// the body in a box prefilled from that record.
+func TestPublishReconcilesTheSummaryRecordWithWhatWasSent(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r, err := store.Open("/repos/theirs", review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	filed, err := store.AddComment(r, review.Comment{Author: review.AuthorHuman, Body: "the draft"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	var out bytes.Buffer
+	if err := publishReview(&dirRecordingRunner{}, publishRequest{
+		Store:    store,
+		Review:   r,
+		Comments: []review.Comment{filed},
+		PR:       54,
+		Event:    github.EventComment,
+		Verdict:  "comment",
+		Dir:      "/workspaces/theirs",
+		Summary:  "the draft, revised",
+	}, &out); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	after, err := store.Comments(r)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("expected one summary record, not a second beside it: %+v", after)
+	}
+	if after[0].Body != "the draft, revised" {
+		t.Fatalf("the record does not match what was sent: %q", after[0].Body)
+	}
+	if after[0].State != review.Published || after[0].Publish == nil {
+		t.Fatalf("expected the summary marked published, got %+v", after[0])
+	}
+}
+
+// With nothing written, the review's own summary remarks are the body — the
+// `awp review publish` path, which has no box to prefill.
+func TestPublishUsesTheFiledSummaryWhenNoneIsWritten(t *testing.T) {
+	filed := review.Comment{ID: "s1", Author: review.AuthorHuman, Body: "the filed one"}
+	got := planSummary(publishRequest{}, []review.Comment{filed})
+	if got != "the filed one" {
+		t.Fatalf("got %q", got)
+	}
+	// And a written one wins outright.
+	got = planSummary(publishRequest{Summary: "written"}, []review.Comment{filed})
+	if got != "written" {
+		t.Fatalf("got %q", got)
+	}
+}

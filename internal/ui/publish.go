@@ -96,13 +96,53 @@ func (m *Model) beginPublish() {
 	m.publishStage = publishComposing
 	m.publishCursor = 0
 	m.publishReport = nil
-	// An empty anchor is what makes a comment review-level: about the change as a
-	// whole rather than about a line of it (see review.Anchor). The box is built here
-	// so the screen opens with the keyboard already in it.
+	// An empty anchor is what makes a comment the review summary rather than a remark
+	// about a line (see review.Anchor). The box is built here so the screen opens with
+	// the keyboard already in it.
 	m.summaryEditor = newCommentEditor(review.Anchor{}, m.hunkWidth)
 	m.summaryEditor.area.Placeholder = "review summary…"
+	// Opened on the summary the review already has, rather than empty. They are one
+	// thing: what is in this box is the review's body, and the review section of the
+	// stream shows the same text. An empty box beside a summary sitting at the top of
+	// the diff invited a second one to be written, and both would have gone up.
+	m.summarySources = m.unpublishedSummaries()
+	if len(m.summarySources) > 0 {
+		m.summaryEditor.setBody(joinSummaries(m.summarySources))
+	}
 	m.status = ""
 	m.statusErr = false
+}
+
+// unpublishedSummaries is the review's own summary remarks — the ones a publish
+// would carry — oldest first.
+func (m Model) unpublishedSummaries() []review.Comment {
+	var out []review.Comment
+	for _, c := range m.comments {
+		if c.State == review.Published || c.Publish != nil {
+			continue
+		}
+		if strings.TrimSpace(c.Body) == "" || c.ReplyTo != "" {
+			continue
+		}
+		if strings.TrimSpace(c.Anchor.Path) == "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// joinSummaries is several summary remarks as one body, a paragraph each.
+//
+// Their *published* bodies, marker and kind included, because this text is the review
+// body that will be sent — the box and the plan must not be able to disagree. It also
+// means an agent's 🤖 is visible before you publish its words under your own account,
+// which is the moment that fact matters.
+func joinSummaries(cs []review.Comment) string {
+	parts := make([]string, 0, len(cs))
+	for _, c := range cs {
+		parts = append(parts, c.PublishBody())
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // endPublish closes the prompt, saying nothing — the prompt disappearing is the
@@ -203,31 +243,12 @@ func (m Model) handlePublishComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // and there is none — the plan would only come back with GitHub's version of the
 // same complaint, one screen later.
 func (m Model) confirmPublish() (tea.Model, tea.Cmd) {
-	if github.EventNeedsBody(verdictEvent(m.publishVerdict())) &&
-		m.publishSummaryText() == "" && !m.hasUnpublishedReviewLevel() {
+	if github.EventNeedsBody(verdictEvent(m.publishVerdict())) && m.publishSummaryText() == "" {
 		m.status = m.publishVerdict() + " needs a summary — GitHub rejects a verdict with no body"
 		m.statusErr = true
 		return m, nil
 	}
 	return m.previewPublish()
-}
-
-// hasUnpublishedReviewLevel reports whether the review already holds a remark about
-// the change as a whole that this submission would carry. Such a remark becomes the
-// review's body, so the box being empty is not the same as having nothing to say.
-func (m Model) hasUnpublishedReviewLevel() bool {
-	for _, c := range m.comments {
-		if c.State == review.Published || c.Publish != nil {
-			continue
-		}
-		if strings.TrimSpace(c.Body) == "" {
-			continue
-		}
-		if strings.TrimSpace(c.Anchor.Path) == "" {
-			return true
-		}
-	}
-	return false
 }
 
 // previewPublish asks for the plan without making any of its calls, and without
@@ -344,53 +365,6 @@ func (m Model) applyPublishDone(msg publishDoneMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// pendingPublish counts what a publish would send: comments anchored to a line,
-// and remarks about the change as a whole.
-//
-// Counted from what the view is holding rather than asked of the store, so the
-// prompt describes the review you have been reading. The store is still the
-// authority when the publish runs — it re-partitions there — which is why this
-// only ever appears in a sentence about what is about to happen.
-func (m Model) pendingPublish() (inline, changeWide int) {
-	for _, c := range m.comments {
-		if c.State == review.Published || c.Publish != nil {
-			continue
-		}
-		if strings.TrimSpace(c.Body) == "" {
-			continue
-		}
-		if strings.TrimSpace(c.Anchor.Path) == "" {
-			changeWide++
-			continue
-		}
-		inline++
-	}
-	return inline, changeWide
-}
-
-// publishPrompt is what is about to go up, as a label for the title row rather than
-// a sentence of its own.
-//
-// A noun phrase, not a question: it names the thing being published, and a paragraph
-// above the two controls pushed the box holding the keyboard further down the screen
-// than it deserved. The PR is not named — the footer under this overlay is already
-// showing which one the review is pinned to.
-func (m Model) publishPrompt() string {
-	inline, changeWide := m.pendingPublish()
-	switch {
-	case inline == 0 && changeWide == 0:
-		// Not an error: a verdict is worth submitting on its own, and approving a PR
-		// whose comments went up earlier is a normal thing to want.
-		return "nothing unpublished"
-	case changeWide == 0:
-		return fmt.Sprintf("%d comment%s", inline, plural(inline))
-	case inline == 0:
-		return fmt.Sprintf("%d review summar%s", changeWide, pluralY(changeWide))
-	}
-	return fmt.Sprintf("%d comment%s · %d review summar%s",
-		inline, plural(inline), changeWide, pluralY(changeWide))
-}
-
 // publishReportLines splits a report into display rows, dropping the blank ones
 // the CLI's own formatting leaves behind.
 func publishReportLines(report string) []string {
@@ -423,20 +397,18 @@ func (m Model) renderPublishOverlay(width, height int) string {
 	var rows []string
 	switch m.publishStage {
 	case publishConfirming:
-		// Named for what the reviewer is about to authorise, not for the feature.
-		title = "Publish review — this is what will be sent"
+		title = "Publish review"
 		rows = m.publishReportRows(inner, height)
 		rows = append(rows, "", styleSelected.Render(truncate(" enter SENDS IT · esc back · q cancel", inner)))
 	case publishReporting:
-		title = "Publish review — what happened"
+		title = "Publish review"
 		rows = m.publishReportRows(inner, height)
 		rows = append(rows, "", styleDim.Render(truncate(" j/k scroll · enter close", inner)))
 	default:
-		// One screen: what is going up, the verdict, and the body. The count sits on
-		// the title row rather than in a sentence of its own — it is a label on the
-		// thing being published, and a paragraph above two controls pushed the box the
-		// keyboard is in further down the screen than it deserved.
-		title = "Publish review — " + m.publishPrompt()
+		// Every stage is titled the same. Which one you are on is said by the keys
+		// underneath it — "enter SENDS IT" is not a thing the confirm screen needed a
+		// subtitle to explain, and the counts belong next to the calls they describe.
+		title = "Publish review"
 		rows = append(rows, m.verdictRow(inner), "", m.summaryBoxView(inner), "")
 		hint := " enter continue · tab verdict · alt+enter newline · ctrl+g $EDITOR · esc cancel"
 		if lipgloss.Width(hint) > inner {
@@ -464,7 +436,7 @@ func (m Model) verdictRow(inner int) string {
 	c := publishChoices()[min(max(0, m.publishCursor), len(publishChoices())-1)]
 	label := "‹ " + c.label + " ›"
 	hint := "  " + c.hint
-	if github.EventNeedsBody(verdictEvent(c.verdict)) && m.publishSummaryText() == "" && !m.hasUnpublishedReviewLevel() {
+	if github.EventNeedsBody(verdictEvent(c.verdict)) && m.publishSummaryText() == "" {
 		// Said while it is still fixable, on the screen holding the box that fixes it,
 		// rather than left for the plan — or GitHub — to refuse over one screen later.
 		hint = "  needs a summary below"

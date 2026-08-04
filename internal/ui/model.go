@@ -128,8 +128,12 @@ type Model struct {
 	// summaryEditor is the review-body box inside that flow — the same compose box
 	// the stream uses, so a summary is written with the keys already learnt here.
 	summaryEditor commentEditor
-	focus         Focus
-	filterInput   textinput.Model
+	// summarySources is the review's own summary remarks that the box was prefilled
+	// from. Held so the publish path can reconcile them against whatever was sent
+	// rather than leaving stale copies beside it.
+	summarySources []review.Comment
+	focus          Focus
+	filterInput    textinput.Model
 	// searchInput and searchQuery are the diff's content search (see search.go).
 	// The query outlives the prompt so n/N keep working after enter; searchOrigin
 	// is where the cursor was when the prompt opened, so esc can put it back.
@@ -1537,14 +1541,6 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
-}
-
-// pluralY is plural for a noun ending in -y: "summary" / "summaries".
-func pluralY(n int) string {
-	if n == 1 {
-		return "y"
-	}
-	return "ies"
 }
 
 func truncateStyled(s string, width int) string {
