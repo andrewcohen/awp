@@ -233,6 +233,27 @@ bookmark picker, review picker, `new_flow.go` standalone pickers, the diff
 viewer's `styleSelected`, and bubbles list theming in `charm/theme.go`.
 Add new selectable lists in the same shape.
 
+**The one variation: a pane the keyboard has left.** In a multi-pane screen
+the treatment above says *this is the active row*, so exactly one pane may
+wear it. In the diff viewer the other panes' selections drop a tier:
+
+- the cursorline band is not painted at all (`rowBanded` = `rowSelected`
+  gated on focus)
+- the `┃` bar stays, in `Muted` rather than `Warning` + bold — see
+  `selectionBarStyle` in `internal/ui/stream_render.go`
+- so does any other selection-hued chrome that follows the cursor: the
+  stream's current-file divider goes back to `Accent` (`fileRuleActive`)
+
+The bar has to stay — it is where the keys go back to — but at full
+strength it was the brightest thing in a pane whose keys were dead, and it
+*moved*, since seeking from the file list or the comment index drags the
+diff's cursor along. Motion in an inactive pane reads as the cursor, which
+is the one thing it isn't.
+
+Anything focus-dependent in a cached render path has to be in the cache key:
+`rowKey.fileRule` exists because the divider's hue follows `filesCursor` and
+the focus, neither of which goes through `rebuildStream`.
+
 **Panel padding.** All body-area panels use `Padding(1, 1, 1, 1)` — 1 row
 top/bottom, 1 col left/right. The footer (`composeStatusBar` wrapper) does
 the same. This gives the deck a uniform 1-cell breathing margin and keeps

@@ -1262,9 +1262,16 @@ func (m Model) Body(width, height int) string {
 var (
 	styleHeader   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(charm.Accent)).Padding(0, 1)
 	styleSelected = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
-	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	styleMuted    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	stylePathDir  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	// styleSelectedIdle is the same `┃` marker in a pane the keyboard has left.
+	//
+	// The bar still has to be there — it is where you come back to — but in the
+	// selection hue it was the brightest thing in a pane whose keys are dead, and it
+	// slides down the diff as the file list or comment index is driven. Muted, it
+	// reads as a bookmark instead of as the thing you are moving.
+	styleSelectedIdle = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleDim          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleMuted        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	stylePathDir      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
 	// The stream's file divider is a structural header, so it carries the
 	// accent hue (see the design system in CLAUDE.md) — or the selection hue
 	// when it is the file the cursor is in.
