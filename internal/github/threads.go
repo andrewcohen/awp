@@ -159,6 +159,64 @@ func (c *Client) FetchReviewThreads(num int) ([]ReviewThread, error) {
 	return out, nil
 }
 
+const replyToThreadMutation = `mutation($threadId:ID!,$body:String!){
+  addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){
+    comment{ id }
+  }
+}`
+
+// ReplyToReviewThread posts a message into an existing thread, returning the new
+// comment's node id.
+//
+// Its own mutation because a reply is not a new thread. addPullRequestReview
+// creates threads only, so sending a reply that way would put it on the PR as a
+// fresh top-level remark divorced from the question it answers.
+//
+// Posted on its own rather than staged into a pending review, which the input's
+// optional pullRequestReviewId would allow. Two reasons, both about what a reply
+// is: it needs no verdict — answering a question is not submitting a review, and
+// requiring one would make "reply" the most ceremonious thing in the viewer — and
+// it is what GitHub's own Reply button does, so the conversation reads the same
+// way from either end.
+//
+// The id comes back because it is how a local record recognises its own echo:
+// the mirror will report this same id when it next reads the thread, and without
+// it the reply would be drawn twice — once as our record, once as GitHub's.
+func (c *Client) ReplyToReviewThread(threadID, body string) (string, error) {
+	if strings.TrimSpace(threadID) == "" {
+		return "", fmt.Errorf("review thread id is required")
+	}
+	if strings.TrimSpace(body) == "" {
+		return "", fmt.Errorf("reply body is empty")
+	}
+	// Through the JSON request path, not gh's -f flags: a reply is prose the
+	// reviewer typed, and putting it in argv is where the backtick-escaping problem
+	// in review bodies came from (see Client.graphql).
+	var resp struct {
+		Data struct {
+			AddPullRequestReviewThreadReply struct {
+				Comment *struct {
+					ID string `json:"id"`
+				} `json:"comment"`
+			} `json:"addPullRequestReviewThreadReply"`
+		} `json:"data"`
+	}
+	vars := map[string]any{"threadId": threadID, "body": body}
+	if err := c.graphql(replyToThreadMutation, vars, &resp); err != nil {
+		return "", fmt.Errorf("replying to the thread: %w", err)
+	}
+	comment := resp.Data.AddPullRequestReviewThreadReply.Comment
+	if comment == nil {
+		// GraphQL reported no error and no comment. Treated as a failure rather than
+		// as a success with an unknown id: unlike the REST posts, where an
+		// unreadable id means the comment definitely landed, here there is nothing
+		// to say it did — and reporting success would mark the draft published and
+		// lose it.
+		return "", fmt.Errorf("replying to the thread: GitHub returned no comment")
+	}
+	return comment.ID, nil
+}
+
 const resolveThreadMutation = `mutation($id:ID!){
   resolveReviewThread(input:{threadId:$id}){ thread{ id isResolved } }
 }`
