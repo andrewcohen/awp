@@ -59,7 +59,12 @@ func TestEntryMarshalEmitsPRNumberNotPROverride(t *testing.T) {
 }
 
 type fakeJJ struct {
-	repoRoot             string
+	repoRoot string
+	// sourceRepoRoot is what SourceRepoRoot answers when it differs from repoRoot —
+	// the case of running inside a secondary workspace, where `jj root` reports the
+	// workspace and only the pointer file knows the repo it belongs to. Empty means
+	// the two agree, which is a primary repo.
+	sourceRepoRoot       string
 	repoRootErr          error
 	existing             map[string]bool
 	added                []Entry
@@ -94,8 +99,13 @@ type newRevCall struct {
 	Revision string
 }
 
-func (f *fakeJJ) RepoRoot() (string, error)       { return f.repoRoot, f.repoRootErr }
-func (f *fakeJJ) SourceRepoRoot() (string, error) { return f.repoRoot, f.repoRootErr }
+func (f *fakeJJ) RepoRoot() (string, error) { return f.repoRoot, f.repoRootErr }
+func (f *fakeJJ) SourceRepoRoot() (string, error) {
+	if f.sourceRepoRoot != "" {
+		return f.sourceRepoRoot, f.repoRootErr
+	}
+	return f.repoRoot, f.repoRootErr
+}
 func (f *fakeJJ) WorkspaceExists(name string) (bool, error) {
 	if f.workspaceErr != nil {
 		return false, f.workspaceErr
@@ -1222,6 +1232,57 @@ func TestListPrunesStaleStateEntriesNotInJJ(t *testing.T) {
 	}
 	if _, ok := store.entries["qa"]; ok {
 		t.Fatalf("expected stale qa entry to be pruned, got %+v", store.entries)
+	}
+}
+
+// Listing from inside a secondary workspace must not rewrite the `default` entry to
+// point at that workspace.
+//
+// `jj root` reports the workspace, not the repo it belongs to, and List used to pass
+// that through to canonicalizeEntries — which pins `default`'s path to whatever root
+// it is handed. The store canonicalizes its bucket key back to the source repo, so
+// the damage was written into the real repo's state: two entries sharing one path.
+// Every directory-to-workspace lookup then resolved to `default`, which carries no
+// PR number, so an agent's findings were filed against the wrong review and
+// publishing reported an unpinned workspace.
+func TestListFromInsideAWorkspaceKeepsDefaultAtTheRepoRoot(t *testing.T) {
+	repoRoot := t.TempDir()
+	workspacePath := filepath.Join(repoRoot, ".awp", "workspaces", "pr-54")
+	jj := &fakeJJ{
+		// What `jj root` says inside the workspace, and what the pointer file resolves to.
+		repoRoot:       workspacePath,
+		sourceRepoRoot: repoRoot,
+		existing:       map[string]bool{"default": true, "pr-54": true},
+		listNames:      []string{"default", "pr-54"},
+	}
+	tmux := &fakeTmux{windows: map[string]bool{}}
+	store := &fakeStore{entries: map[string]Entry{
+		"default": {Name: "default", Path: repoRoot},
+		"pr-54":   {Name: "pr-54", Path: workspacePath, PRNumber: 54},
+	}}
+
+	svc := NewService(Dependencies{JJ: jj, Tmux: tmux, Store: store, Input: bytes.NewBuffer(nil), Out: io.Discard})
+	rows, err := svc.List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	byName := map[string]ListEntry{}
+	for _, r := range rows {
+		byName[r.Name] = r
+	}
+	if got := byName["default"].Path; got != repoRoot {
+		t.Fatalf("default workspace moved to %q, want the repo root %q", got, repoRoot)
+	}
+	if got := byName["pr-54"].Path; got != workspacePath {
+		t.Fatalf("pr-54 workspace path changed to %q, want %q", got, workspacePath)
+	}
+	// The state on disk is what the next command reads, so the entry there matters as
+	// much as the row returned here.
+	if got := store.entries["default"].Path; got != repoRoot {
+		t.Fatalf("saved default entry points at %q, want the repo root %q", got, repoRoot)
+	}
+	if byName["default"].Path == byName["pr-54"].Path {
+		t.Fatal("two entries share one path, so which workspace a directory belongs to is ambiguous")
 	}
 }
 

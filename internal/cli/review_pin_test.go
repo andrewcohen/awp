@@ -126,3 +126,55 @@ func TestReviewTargetIgnoresThePin(t *testing.T) {
 		t.Fatalf("review id moved: %q then %q", review.ID(before), review.ID(after))
 	}
 }
+
+// listOnlyService is a workspace.Service that answers List and nothing else. The
+// interface is nineteen methods and the lookup under test calls one of them.
+type listOnlyService struct {
+	workspace.Service
+	entries []workspace.ListEntry
+}
+
+func (s listOnlyService) List() ([]workspace.ListEntry, error) { return s.entries, nil }
+
+// Two entries claiming one path is a state bug (see workspace.List), but while it
+// exists the lookup must not answer with `default`. It used to: the tie was broken by
+// name order, `default` sorts first, and it is the one workspace definitionally
+// somewhere else — so findings were filed against the wrong review and the real
+// entry's PR number was never seen.
+func TestWorkspaceLookupPrefersTheNamedWorkspaceOverDefault(t *testing.T) {
+	const wsPath = "/repo/.awp/workspaces/pr-54"
+	svc := listOnlyService{entries: []workspace.ListEntry{
+		// Sorted as List returns them, which is what put `default` first.
+		{Name: "default", Path: wsPath},
+		{Name: "pr-54", Path: wsPath, PRNumber: 54},
+	}}
+	got, ok := workspaceEntryForPath(svc, wsPath)
+	if !ok {
+		t.Fatal("expected the directory to resolve to a workspace")
+	}
+	if got.Name != "pr-54" {
+		t.Fatalf("resolved to %q, want the named workspace", got.Name)
+	}
+	if got.PRNumber != 54 {
+		t.Fatalf("lost the PR pin: got %d", got.PRNumber)
+	}
+	if n := pinnedPRForPath(svc, wsPath); n != 54 {
+		t.Fatalf("pinnedPRForPath returned %d, want 54", n)
+	}
+}
+
+// A genuinely nested workspace still wins on path length, which is the rule the
+// tie-break must not disturb.
+func TestWorkspaceLookupStillPrefersTheLongestPath(t *testing.T) {
+	svc := listOnlyService{entries: []workspace.ListEntry{
+		{Name: "default", Path: "/repo"},
+		{Name: "nested", Path: "/repo/.awp/workspaces/nested"},
+	}}
+	got, ok := workspaceEntryForPath(svc, "/repo/.awp/workspaces/nested/src")
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	if got.Name != "nested" {
+		t.Fatalf("resolved to %q, want the nested workspace", got.Name)
+	}
+}

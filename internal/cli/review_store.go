@@ -50,6 +50,14 @@ func pinnedPRForPath(svc workspace.Service, cwd string) int {
 
 // workspaceEntryForPath is the workspace containing cwd, longest match first so
 // a nested workspace beats its parent.
+//
+// A tie on path length goes to the entry that is not `default`. Two entries should
+// never share a path, but when they did — see the note in workspace.List — the tie
+// was broken by name order instead, and `default` sorts first. That silently
+// answered "which workspace is this?" with the one workspace that is definitionally
+// somewhere else, so findings were filed against the wrong review and the real
+// entry's PR number was never seen. Preferring the named workspace makes the
+// remaining ambiguity harmless rather than actively wrong.
 func workspaceEntryForPath(svc workspace.Service, cwd string) (workspace.ListEntry, bool) {
 	if svc == nil {
 		return workspace.ListEntry{}, false
@@ -65,11 +73,16 @@ func workspaceEntryForPath(svc workspace.Service, cwd string) (workspace.ListEnt
 		if e.Path == "" {
 			continue
 		}
-		if cwd == e.Path || strings.HasPrefix(cwd, e.Path+string(os.PathSeparator)) {
-			if len(e.Path) > len(best) {
-				best, found, ok = e.Path, e, true
-			}
+		if cwd != e.Path && !strings.HasPrefix(cwd, e.Path+string(os.PathSeparator)) {
+			continue
 		}
+		switch {
+		case len(e.Path) > len(best):
+		case len(e.Path) == len(best) && ok && found.Name == "default" && e.Name != "default":
+		default:
+			continue
+		}
+		best, found, ok = e.Path, e, true
 	}
 	return found, ok
 }
