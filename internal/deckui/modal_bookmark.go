@@ -126,7 +126,7 @@ func (p *bookmarkPicker) footerHelp() string {
 }
 
 func (p *bookmarkPicker) renderList(m *Model, width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(2, 1, 1, 1)
+	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
 	// Reserve 2 rows for container padding plus 3 for the deck's bottom
 	// footer (status line + 1 row top/bottom padding). list.Model handles
 	// its own title, status bar, paginator, and help footer inside the
