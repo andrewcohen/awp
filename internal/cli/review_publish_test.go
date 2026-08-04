@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -252,7 +254,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// One review carrying both threads, then one submission. Two calls, not one per
 	// comment — which is the whole point: the REST comment endpoint made a separate
 	// single-comment review per call, and those cannot be deleted afterwards.
-	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2, "abc123def456789")
+	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2, "abc123def456789", nil)
 	joined := strings.Join(plan, "\n")
 	for _, want := range []string{
 		// Two calls, not four: the two thread lines under the stage call are what it
@@ -280,7 +282,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// With only review-level remarks and no verdict, they go up as PR comments on a
 	// different endpoint — the plan has to say so, or it describes a run that is not
 	// the one about to happen.
-	plan = publishPlan(publishRequest{PR: 54}, nil, changeWide, 0, "abc123def456789")
+	plan = publishPlan(publishRequest{PR: 54}, nil, changeWide, 0, "abc123def456789", nil)
 	joined = strings.Join(plan, "\n")
 	if strings.Contains(joined, "PullRequestReview") {
 		t.Fatalf("a verdictless plan claims a review submission:\n%s", joined)
@@ -364,6 +366,11 @@ func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, arg
 	switch {
 	case len(args) > 2 && args[0] == "api" && strings.HasSuffix(args[2], "/commits"):
 		return reviewedSHA + "\n", nil
+	case len(args) > 2 && args[0] == "api" && strings.HasSuffix(args[2], "/files"):
+		// The anchor preflight's source: one object per line, the way --jq over
+		// --paginate emits them. Every fixture comment sits on line 1-9 of its file, so
+		// a single hunk covering those lines makes them all commentable.
+		return prFilesFixture("a.go", "b.go", "c.go"), nil
 	case len(args) > 1 && args[0] == "api" && args[1] == "graphql":
 		r.graphqlCalls++
 		// Enough of an addPullRequestReview / submitPullRequestReview payload for the
@@ -694,7 +701,7 @@ func TestPublishDoesNotDoubleTheSummary(t *testing.T) {
 	}
 	plan := publishPlan(publishRequest{
 		PR: 54, Event: github.EventComment, Summary: "the draft, revised",
-	}, nil, []review.Comment{filed}, 0, "abc")
+	}, nil, []review.Comment{filed}, 0, "abc", nil)
 	joined := strings.Join(plan, "\n")
 	if strings.Count(joined, "the draft") != 1 {
 		t.Fatalf("the summary appears more than once in the body:\n%s", joined)
@@ -770,7 +777,7 @@ func TestPublishPlanCountsCallsNotThreads(t *testing.T) {
 			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: i + 1},
 		}
 	}
-	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"}, inline, nil, 0, "abc123def456789")
+	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"}, inline, nil, 0, "abc123def456789", nil)
 	if !strings.HasPrefix(plan[0], "2 call(s)") {
 		t.Fatalf("expected two calls for six threads, got %q", plan[0])
 	}
@@ -784,4 +791,23 @@ func TestPublishPlanCountsCallsNotThreads(t *testing.T) {
 	if shown != 6 {
 		t.Fatalf("expected six threads listed, got %d:\n%s", shown, strings.Join(plan, "\n"))
 	}
+}
+
+// prFilesFixture is a `pulls/{n}/files` response whose patch makes lines 1-9 of
+// each named file commentable on the new side.
+func prFilesFixture(paths ...string) string {
+	var b strings.Builder
+	for _, p := range paths {
+		patch := "@@ -1,9 +1,9 @@"
+		for i := 1; i <= 9; i++ {
+			patch += "\n+line " + strconv.Itoa(i)
+		}
+		obj, err := json.Marshal(github.PRFile{Filename: p, Patch: patch})
+		if err != nil {
+			panic(err)
+		}
+		b.Write(obj)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
