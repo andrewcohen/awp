@@ -131,11 +131,24 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		return fmt.Errorf("resolve current directory: %w", err)
 	}
 	j := jj.New(runner)
-	repoRoot, err := j.RepoRoot()
+	// SourceRepoRoot, not RepoRoot: inside a secondary jj workspace `jj root`
+	// answers with the *workspace* path, and the review store is keyed by the
+	// owning repo. Reading the wrong root here opened a different review than the
+	// deck's `c` does — so an agent's findings were simply absent, with nothing
+	// reported, which is the worst shape a wrong answer can take on this surface.
+	repoRoot, err := j.SourceRepoRoot()
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	subject := diffSubjectFor(svc, repoRoot, cwd)
 	revset = strings.TrimSpace(revset)
+	if revset == "" {
+		// The same range `c` opens on: the whole change against its stack base.
+		// Defaulting to the working copy meant `awp diff` in a workspace whose work
+		// is committed — every PR workspace — showed an empty diff, and the only way
+		// to see the change was to know to pass -r.
+		revset = scopeRevset(runner, subject, deckui.ScopeStackBase)
+	}
 	model := ui.New(repoRoot,
 		// Read on every refresh tick, so the revset is resolved by jj each time
 		// rather than pinned to a commit id here: `-r @-` should keep meaning "the
@@ -150,10 +163,15 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 			})
 		},
 	)
+	// The chrome says what it is a review of, the way the deck's footer does:
+	// which workspace, which PR, and what the diff is read against.
+	model.Subject = ui.Subject{
+		Workspace: strings.TrimSpace(subject.WorkspaceName),
+		PR:        deckui.PRLabel(subject),
+	}
 	if revset != "" {
-		// The chrome says what it is showing. Named as the revset the user typed,
-		// not as a resolved commit — that is what they will recognise, and it is
-		// still true after the change is rewritten.
+		// Named as the revset rather than as a resolved commit: that is what the
+		// reader will recognise, and it stays true after the change is rewritten.
 		model.ResolveBase = func() string { return revset }
 	}
 	// The same review seams the deck's modal gets. Without them this was a diff
@@ -163,8 +181,7 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 	//
 	// One wiring function shared with the deck (deckui.ApplyCommentStore), so a
 	// seam cannot be present in one surface and quietly missing in the other.
-	deckui.ApplyCommentStore(&model, diffSubjectFor(svc, repoRoot, cwd),
-		reviewStoreWithSend(runner, tmux.New(runner), svc))
+	deckui.ApplyCommentStore(&model, subject, reviewStoreWithSend(runner, tmux.New(runner), svc))
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err

@@ -2038,25 +2038,15 @@ func resolveReviewStackBaseNamed(runner Runner, dir, ownBookmark string) (revset
 // the window runs (see deckui.ReviewStackArg). Every other arg passes through
 // untouched.
 //
-// Here rather than in the TUI because naming the base runs jj, and here rather
-// than in defaultWindowCommandWithRepo because that answers "what does a review
-// window run by default", which has no workspace to resolve a base against.
-//
-// The revset is quoted: `trunk()..@` reaches a shell, and unquoted parentheses
-// are a syntax error rather than a revset.
-func expandWindowArg(runner Runner, item deckui.Item, arg string) string {
+// Plain `awp diff`, with no revset spliced in: the standalone viewer resolves the
+// same scope `c` opens on by itself now, so naming the range here would be a
+// second copy of that decision — and the copy would be the one that goes stale.
+// It also retires having to quote `trunk()..@` on its way through a shell.
+func expandWindowArg(_ Runner, _ deckui.Item, arg string) string {
 	if arg != deckui.ReviewStackArg {
 		return arg
 	}
-	// Always answerable: the base falls back to the literal trunk(), which jj
-	// resolves in whatever directory the window opens in.
-	return "review:awp diff -r " + shellQuote(scopeRevset(runner, item, deckui.ScopeStackBase))
-}
-
-// shellQuote wraps a value for a POSIX shell, which is where a window command
-// lands (tmux send-keys into the pane's shell).
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+	return "review:awp diff"
 }
 
 func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, arg string, reporter deckui.Reporter) error {

@@ -10,38 +10,22 @@ import (
 )
 
 // `C` opens the review in a tmux window beside the agent rather than in the
-// deck's popup. The scope is the same one `c` opens on, so the two entry points
-// cannot disagree about what "review this change" means — which is why the arg is
-// a sentinel the handler expands once it has resolved the base.
+// deck's popup. The scope is the same one `c` opens on, and the standalone viewer
+// resolves that for itself, so the sentinel expands to a bare `awp diff` rather
+// than to a range named twice.
 
-func TestExpandWindowArgResolvesTheReviewScope(t *testing.T) {
+func TestExpandWindowArgRunsPlainAWPDiff(t *testing.T) {
 	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent-change"}
 	item := deckui.Item{Path: "/ws/child", Bookmark: "andrew/child"}
 	got := expandWindowArg(r, item, deckui.ReviewStackArg)
-	if got != "review:awp diff -r 'andrew/parent-change..@'" {
+	if got != "review:awp diff" {
 		t.Fatalf("got %q", got)
 	}
-}
-
-// The trunk fallback's revset has parentheses in it, and it reaches a shell.
-// Unquoted, `trunk()..@` is a syntax error rather than a revset.
-func TestExpandWindowArgQuotesTheRevset(t *testing.T) {
-	r := &reviewBaseRunner{trunk: "main", parent: ""}
-	item := deckui.Item{Path: "/ws/x", Bookmark: "andrew/x"}
-	got := expandWindowArg(r, item, deckui.ReviewStackArg)
-	if got != "review:awp diff -r 'trunk()..@'" {
-		t.Fatalf("got %q — trunk()..@ must reach the shell quoted", got)
-	}
-}
-
-// With no directory to ask jj in, the base falls back to the literal trunk() —
-// which the window's own cwd resolves — so there is still a command to run rather
-// than a half-built `-r ..@`.
-func TestExpandWindowArgIsAlwaysAnswerable(t *testing.T) {
-	r := &reviewBaseRunner{trunk: "main", parent: "andrew/p"}
-	got := expandWindowArg(r, deckui.Item{}, deckui.ReviewStackArg)
-	if got != "review:awp diff -r 'trunk()..@'" {
-		t.Fatalf("got %q", got)
+	// No revset spliced in, so no base resolved here: the viewer resolves the same
+	// scope by itself, and a second copy of that decision is the one that goes
+	// stale. It also means nothing has to be quoted on its way through a shell.
+	if len(r.revs) != 0 {
+		t.Errorf("expected no base resolution, got jj calls %v", r.revs)
 	}
 }
 
@@ -59,7 +43,7 @@ func TestExpandWindowArgLeavesOtherArgsAlone(t *testing.T) {
 }
 
 // End to end: the sentinel becomes the command the pane actually runs.
-func TestReviewWindowRunsAWPDiffAtTheResolvedScope(t *testing.T) {
+func TestReviewWindowRunsTheViewerInThePane(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{
 		"tmux list-sessions -F #{session_id}\t#{session_name}":                    "$1\t[awp]repo__qa\n",
 		"tmux list-windows -t [awp]repo__qa -F #{window_id}\t#{window_name}":      "@1\tagent\n@2\treview\n",
@@ -69,10 +53,7 @@ func TestReviewWindowRunsAWPDiffAtTheResolvedScope(t *testing.T) {
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws", Bookmark: "andrew/qa"}
 
-	// A base runner for the jj side, and the tmux fake for everything else: the
-	// handler's runner answers both, so give it the tmux fake and resolve the base
-	// through expandWindowArg's own runner in the arg it is handed.
-	arg := expandWindowArg(&reviewBaseRunner{trunk: "main", parent: ""}, item, deckui.ReviewStackArg)
+	arg := expandWindowArg(nil, item, deckui.ReviewStackArg)
 	if err := openNamedWindow(client, svc, item, arg, noopReporter{}); err != nil {
 		t.Fatalf("openNamedWindow: %v", err)
 	}
@@ -82,7 +63,7 @@ func TestReviewWindowRunsAWPDiffAtTheResolvedScope(t *testing.T) {
 	var sent, switched bool
 	for _, call := range runner.calls {
 		joined := strings.Join(call, " ")
-		if joined == `tmux send-keys -t [awp]repo__qa:review -l awp diff -r 'trunk()..@'` {
+		if joined == "tmux send-keys -t [awp]repo__qa:review -l awp diff" {
 			sent = true
 		}
 		// Summoned, not merely launched: landing in the window is the point of the
@@ -111,7 +92,7 @@ func TestReviewWindowAlreadyRunningIsJustFocused(t *testing.T) {
 	svc := &deckFakeService{info: workspace.InfoEntry{Path: "/tmp/ws"}}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", Path: "/tmp/ws"}
 
-	arg := expandWindowArg(&reviewBaseRunner{trunk: "main"}, item, deckui.ReviewStackArg)
+	arg := expandWindowArg(nil, item, deckui.ReviewStackArg)
 	if err := openNamedWindow(client, svc, item, arg, noopReporter{}); err != nil {
 		t.Fatalf("openNamedWindow: %v", err)
 	}
