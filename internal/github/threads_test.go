@@ -45,7 +45,7 @@ const threadsJSON = `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nod
 
 func TestFetchReviewThreadsParsesThreads(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, threadsJSON}}
-	got, err := New(r).FetchReviewThreads(7)
+	got, err := New(r, "").FetchReviewThreads(7)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestFetchReviewThreadsParsesThreads(t *testing.T) {
 // resolution state.
 func TestFetchReviewThreadsUsesGraphQLWithResolvedRepo(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, threadsJSON}}
-	if _, err := New(r).FetchReviewThreads(7); err != nil {
+	if _, err := New(r, "").FetchReviewThreads(7); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if len(r.calls) != 2 {
@@ -97,11 +97,11 @@ func TestFetchReviewThreadsUsesGraphQLWithResolvedRepo(t *testing.T) {
 
 func TestFetchReviewThreadsSurfacesErrors(t *testing.T) {
 	r := &threadRunner{outs: []string{""}, errs: []error{errors.New("no auth")}}
-	if _, err := New(r).FetchReviewThreads(7); err == nil {
+	if _, err := New(r, "").FetchReviewThreads(7); err == nil {
 		t.Fatal("expected the repo-view failure to surface")
 	}
 	r = &threadRunner{outs: []string{repoViewJSON, "{not json"}}
-	if _, err := New(r).FetchReviewThreads(7); err == nil {
+	if _, err := New(r, "").FetchReviewThreads(7); err == nil {
 		t.Fatal("expected a parse failure to surface")
 	}
 }
@@ -109,7 +109,7 @@ func TestFetchReviewThreadsSurfacesErrors(t *testing.T) {
 // Resolving is a GraphQL mutation; REST has no equivalent.
 func TestResolveAndUnresolveUseMutations(t *testing.T) {
 	r := &threadRunner{outs: []string{`{"data":{}}`}}
-	if err := New(r).ResolveReviewThread("T1"); err != nil {
+	if err := New(r, "").ResolveReviewThread("T1"); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	joined := strings.Join(r.calls[0], " ")
@@ -120,7 +120,7 @@ func TestResolveAndUnresolveUseMutations(t *testing.T) {
 	}
 
 	r = &threadRunner{outs: []string{`{"data":{}}`}}
-	if err := New(r).UnresolveReviewThread("T1"); err != nil {
+	if err := New(r, "").UnresolveReviewThread("T1"); err != nil {
 		t.Fatalf("unresolve: %v", err)
 	}
 	if joined := strings.Join(r.calls[0], " "); !strings.Contains(joined, "unresolveReviewThread") {
@@ -130,7 +130,7 @@ func TestResolveAndUnresolveUseMutations(t *testing.T) {
 
 func TestResolveRejectsEmptyThreadID(t *testing.T) {
 	r := &threadRunner{}
-	if err := New(r).ResolveReviewThread("  "); err == nil {
+	if err := New(r, "").ResolveReviewThread("  "); err == nil {
 		t.Fatal("expected an empty thread id to be rejected")
 	}
 	if len(r.calls) != 0 {

@@ -551,7 +551,7 @@ func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
 	// read from, so anchoring to a newer head would attach the remark to a diff
 	// nobody looked at.
 	r := &commitRunner{jj: older + "\n", prView: prView, onPR: onPR}
-	got, note, err := reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	got, note, err := reviewedCommit(r, github.New(r, ""), publishRequest{Dir: "/ws", PR: 7})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
 	// What the review recorded beats even that: it is the review's own statement of
 	// what it was opened against.
 	r = &commitRunner{jj: older + "\n", prView: prView, onPR: onPR}
-	got, _, err = reviewedCommit(r, github.New(r), publishRequest{
+	got, _, err = reviewedCommit(r, github.New(r, ""), publishRequest{
 		Dir:    "/ws",
 		PR:     7,
 		Review: review.Review{Repo: "/repo", ObservedHead: recorded},
@@ -585,7 +585,7 @@ func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
 	// A hint from the caller also skips jj — the deck already knows the workspace's
 	// bookmark commit for every row it draws.
 	r = &commitRunner{jj: older + "\n", prView: prView, onPR: onPR}
-	got, _, err = reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7, HeadHint: recorded})
+	got, _, err = reviewedCommit(r, github.New(r, ""), publishRequest{Dir: "/ws", PR: 7, HeadHint: recorded})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestReviewedCommitPrefersWhatWasRead(t *testing.T) {
 	// Nothing local to ask: the PR's head, and no warning — that is the answer for a
 	// review with no workspace, not a fallback from a better one.
 	r = &commitRunner{jjErr: "not a repo", prView: prView, onPR: onPR}
-	got, note, err = reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	got, note, err = reviewedCommit(r, github.New(r, ""), publishRequest{Dir: "/ws", PR: 7})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
@@ -629,7 +629,7 @@ func TestReviewedCommitRejectsACommitThatIsNotOnThePR(t *testing.T) {
 		jjErr:  "",
 		calls:  nil,
 	}
-	got, note, err := reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	got, note, err := reviewedCommit(r, github.New(r, ""), publishRequest{Dir: "/ws", PR: 7})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}
@@ -647,7 +647,7 @@ func TestReviewedCommitRejectsACommitThatIsNotOnThePR(t *testing.T) {
 func TestReviewedCommitTrustsTheLocalCommitWhenTheListIsUnavailable(t *testing.T) {
 	const local = "1111111111111111111111111111111111111111"
 	r := &listlessRunner{jj: local + "\n"}
-	got, note, err := reviewedCommit(r, github.New(r), publishRequest{Dir: "/ws", PR: 7})
+	got, note, err := reviewedCommit(r, github.New(r, ""), publishRequest{Dir: "/ws", PR: 7})
 	if err != nil {
 		t.Fatalf("reviewedCommit: %v", err)
 	}

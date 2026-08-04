@@ -151,12 +151,12 @@ func TestThreadFetchFailureKeepsThePreviousMirror(t *testing.T) {
 	sem := make(chan struct{}, 2)
 
 	ok := &threadStubRunner{threadsJSON: threadsPayload("first pass")}
-	if got := mirrorPinnedReviewThreads(github.New(fixedDirRunner{base: ok, dir: repo}), repo, pins, sem); got != 1 {
+	if got := mirrorPinnedReviewThreads(github.New(ok, repo), repo, pins, sem); got != 1 {
 		t.Fatalf("first pass mirrored %d threads, want 1", got)
 	}
 
 	broken := &threadStubRunner{threadsErr: errors.New("gh: network is unreachable")}
-	if got := mirrorPinnedReviewThreads(github.New(fixedDirRunner{base: broken, dir: repo}), repo, pins, sem); got != 0 {
+	if got := mirrorPinnedReviewThreads(github.New(broken, repo), repo, pins, sem); got != 0 {
 		t.Fatalf("failed pass reported %d threads mirrored", got)
 	}
 	threads := mirroredThreads(t, repo, "ws-author")
@@ -174,7 +174,7 @@ func TestEmptyThreadFetchDoesNotCreateAStore(t *testing.T) {
 	empty := &threadStubRunner{
 		threadsJSON: `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}`,
 	}
-	if got := mirrorPinnedReviewThreads(github.New(fixedDirRunner{base: empty, dir: repo}), repo, map[int][]string{7: {"ws-author"}}, make(chan struct{}, 1)); got != 0 {
+	if got := mirrorPinnedReviewThreads(github.New(empty, repo), repo, map[int][]string{7: {"ws-author"}}, make(chan struct{}, 1)); got != 0 {
 		t.Fatalf("expected nothing mirrored, got %d", got)
 	}
 	id := review.ID(review.Target{Kind: review.TargetWorking, Workspace: "ws-author"})

@@ -78,7 +78,7 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 		defer close(viewerReady)
 		sem <- struct{}{}
 		defer func() { <-sem }()
-		if login, err := github.New(fixedDirRunner{base: runner, dir: repos[0]}).ViewerLogin(repos[0]); err == nil {
+		if login, err := github.New(runner, repos[0]).ViewerLogin(); err == nil {
 			viewer = login
 		} else {
 			deckDebugLogf("prStatus viewer-login err: %v", err)
@@ -109,7 +109,7 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 // Steps and logged but never abort sibling repos' fetches.
 func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem chan struct{}, getViewer func() string, reporter deckui.Reporter) {
 	started := time.Now()
-	gh := github.New(fixedDirRunner{base: runner, dir: repo})
+	gh := github.New(runner, repo)
 
 	var (
 		statuses []github.PRStatus
@@ -127,7 +127,7 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 		defer fetchWG.Done()
 		sem <- struct{}{}
 		defer func() { <-sem }()
-		statuses, listErr = gh.ListPRStatus(repo)
+		statuses, listErr = gh.ListPRStatus()
 	}()
 	go func() {
 		defer fetchWG.Done()
@@ -136,7 +136,7 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 		// Merge-queue membership is graphql-only — `gh pr list --json`
 		// does not expose isInMergeQueue. Best-effort; a failure here
 		// must not lose the bulk PR status we fetch alongside it.
-		queued, qErr = gh.ListMergeQueuedHeads(repo)
+		queued, qErr = gh.ListMergeQueuedHeads()
 	}()
 	go func() {
 		defer fetchWG.Done()
@@ -320,7 +320,7 @@ func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]dec
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			s, err := gh.GetPRStatus(repo, n)
+			s, err := gh.GetPRStatus(n)
 			if err != nil {
 				deckDebugLogf("prStatus topUp gh pr view err repo=%s pr=%d err=%v", repo, n, err)
 				return

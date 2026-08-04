@@ -200,7 +200,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// happen to be, so resolving the repository from the process's directory sent a
 	// review of one repo's PR to whatever repo that directory belonged to — 404 if it
 	// had no PR with that number, and a write to the wrong PR if it did.
-	gh := github.New(runner).In(r.Repo)
+	gh := github.New(runner, r.Repo)
 
 	// A verdict changes where the review-level remarks go: they become the
 	// review's summary, which is what GitHub's review body is for, instead of

@@ -595,7 +595,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			if dir == "" {
 				dir = repoRoot
 			}
-			gh := github.New(fixedDirRunner{base: runner, dir: dir})
+			gh := github.New(runner, dir)
 			prs, err := gh.ListPRs()
 			if err != nil {
 				return deckui.PRFetchDoneMsg{Err: err}
@@ -1770,11 +1770,11 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		if repoDir == "" {
 			repoDir = item.Path
 		}
-		gh := github.New(fixedDirRunner{base: runner, dir: repoDir})
+		gh := github.New(runner, repoDir)
 		// MergePR narrates its own steps (squash by default; "merge queue
 		// detected" → enqueue) so the progress modal reflects the path it
 		// actually took. We just log its final summary line.
-		out, err := gh.MergePR(repoDir, n, reporter)
+		out, err := gh.MergePR(n, reporter)
 		if s := strings.TrimSpace(out); s != "" {
 			for _, line := range strings.Split(s, "\n") {
 				reporter.Log(line)

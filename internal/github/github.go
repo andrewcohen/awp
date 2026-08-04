@@ -105,19 +105,26 @@ type Client struct {
 	// launched from wherever you happen to be standing, so a review of one repo's PR
 	// resolved whatever repo the launch directory belonged to. Publishing then
 	// addressed repos/<that repo>/pulls/54/comments — 404 if no such PR existed
-	// there, and a silent write to the wrong PR if one did. Anything acting on a
-	// review passes the review's own repo root (see In).
+	// there, and a silent write to the wrong PR if one did.
 	dir string
 }
 
-func New(runner Runner) *Client {
-	return &Client{runner: runner}
-}
-
-// In returns a client whose calls run in dir, so which repository they address
-// comes from the caller rather than from where the process was started.
-func (c *Client) In(dir string) *Client {
-	return &Client{runner: c.runner, dir: dir}
+// New builds a client for the repository at dir.
+//
+// dir is a required argument, and that is the whole design. It used to be
+// sayable three ways — a runner wrapper that filled in an empty dir, an `In(dir)`
+// method on the client, and a repoDir parameter on five individual methods — all
+// composing correctly, which is why nothing looked broken. Three spellings of one
+// idea is how a fourth caller ends up spelling it none of the ways: the review
+// path did exactly that and addressed whatever repo the process happened to start
+// in, which 404'd on a good day and wrote to the wrong PR on a bad one. A required
+// argument cannot be forgotten.
+//
+// "" is still expressible and still means the process's own directory — the right
+// answer for a command the user typed in the repo they meant, which is why it is a
+// value you pass rather than a default you inherit.
+func New(runner Runner, dir string) *Client {
+	return &Client{runner: runner, dir: dir}
 }
 
 type PRSummary struct {
@@ -328,9 +335,9 @@ func (r rawPRStatus) reviewerLogins() []string {
 	return out
 }
 
-// ListPRStatus fetches OPEN PRs for the repo at repoDir via gh and
-// returns a normalized status projection per PR. repoDir scopes the runner's
-// working directory; gh derives the owner/name from that repo's remote.
+// ListPRStatus fetches OPEN PRs for the client's repo via gh and returns a
+// normalized status projection per PR. gh derives the owner/name from that
+// repo's remote.
 //
 // Only open PRs are listed because the deck only ever displays bulk-list
 // PRs that are open: workspace rows show open PRs' status, the inbox's
@@ -341,9 +348,9 @@ func (r rawPRStatus) reviewerLogins() []string {
 // PR. Listing `--state all` forced GitHub to compute the expensive
 // statusCheckRollup for 100 PRs (mostly closed) that nothing rendered;
 // `--state open` cuts a busy repo's fetch from ~7s to ~2s.
-func (c *Client) ListPRStatus(repoDir string) ([]PRStatus, error) {
+func (c *Client) ListPRStatus() ([]PRStatus, error) {
 	out, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "pr", "list",
 		"--state", "open",
 		"--limit", "100",
@@ -442,13 +449,13 @@ func progLog(r ProgressReporter, s string) {
 // progress UI shows squash-vs-queue accurately. The combined output is
 // returned for both success and failure so the caller can surface gh's
 // own message.
-func (c *Client) MergePR(repoDir string, n int, rep ProgressReporter) (string, error) {
+func (c *Client) MergePR(n int, rep ProgressReporter) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("MergePR: invalid PR number %d", n)
 	}
 	progLog(rep, fmt.Sprintf("Trying squash merge (gh pr merge %d --squash)", n))
 	out, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "pr", "merge", strconv.Itoa(n), "--squash",
 	)
 	if err == nil {
@@ -458,7 +465,7 @@ func (c *Client) MergePR(repoDir string, n int, rep ProgressReporter) (string, e
 	if mentionsMergeQueue(out) || mentionsAutoMergeBlocked(out) {
 		progLog(rep, "Merge queue detected — squash strategy rejected; enqueuing via the merge queue")
 		progStep(rep, fmt.Sprintf("Add PR #%d to the merge queue", n))
-		return c.enqueuePR(repoDir, n)
+		return c.enqueuePR(n)
 	}
 	return out, fmt.Errorf("gh pr merge %d: %w: %s", n, err, strings.TrimSpace(out))
 }
@@ -469,9 +476,9 @@ func (c *Client) MergePR(repoDir string, n int, rep ProgressReporter) (string, e
 // (cli/cli#13398). It resolves the PR's node id, runs the mutation, and
 // returns a human-readable confirmation (queue state/position) for the
 // deck's progress log.
-func (c *Client) enqueuePR(repoDir string, n int) (string, error) {
+func (c *Client) enqueuePR(n int) (string, error) {
 	idOut, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "pr", "view", strconv.Itoa(n), "--json", "id",
 	)
 	if err != nil {
@@ -488,7 +495,7 @@ func (c *Client) enqueuePR(repoDir string, n int) (string, error) {
 	}
 	const mutation = `mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position state}}}`
 	out, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "api", "graphql", "-f", "query="+mutation, "-f", "id="+idResp.ID,
 	)
 	if err != nil {
@@ -547,12 +554,12 @@ func mentionsAutoMergeBlocked(s string) bool {
 // PR-pinned workspaces (entries with PRNumber > 0) that fell outside the
 // bulk `gh pr list --limit 100` window — common in busy repos with high
 // PR churn.
-func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
+func (c *Client) GetPRStatus(n int) (PRStatus, error) {
 	if n <= 0 {
 		return PRStatus{}, fmt.Errorf("GetPRStatus: invalid PR number %d", n)
 	}
 	out, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "pr", "view", fmt.Sprintf("%d", n),
 		"--json", "number,headRefName,headRefOid,baseRefName,title,url,author,state,isDraft,reviewDecision,statusCheckRollup,mergeStateStatus,reviewRequests,latestReviews,reviews,labels",
 	)
@@ -583,14 +590,14 @@ func (c *Client) GetPRStatus(repoDir string, n int) (PRStatus, error) {
 	}, nil
 }
 
-// ViewerLogin returns the authenticated gh user's login. repoDir scopes
-// the runner like every other call so gh resolves the right auth host
-// from the repo's remote. Callers treat an error as "viewer unknown"
+// ViewerLogin returns the authenticated gh user's login. It runs in the
+// client's repo like every other call, so gh resolves the right auth host
+// from that repo's remote. Callers treat an error as "viewer unknown"
 // and skip viewer-relative signals (review-requested) rather than
 // failing the fetch.
-func (c *Client) ViewerLogin(repoDir string) (string, error) {
+func (c *Client) ViewerLogin() (string, error) {
 	out, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "api", "user", "--jq", ".login",
 	)
 	if err != nil {
@@ -685,9 +692,9 @@ func latestCheckPerName(checks []rawCheck) []rawCheck {
 // resolve owner/name from the local repo and run a small graphql query. An
 // empty map (with nil error) means nothing is queued or the repo has no
 // merge queue configured.
-func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
+func (c *Client) ListMergeQueuedHeads() (map[string]bool, error) {
 	out, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "repo", "view", "--json", "owner,name",
 	)
 	if err != nil {
@@ -707,7 +714,7 @@ func (c *Client) ListMergeQueuedHeads(repoDir string) (map[string]bool, error) {
 	}
 	const query = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{headRefName isInMergeQueue}}}}`
 	gOut, err := c.runner.Run(
-		context.Background(), repoDir,
+		context.Background(), c.dir,
 		"gh", "api", "graphql",
 		"-F", "owner="+owner.Owner.Login,
 		"-F", "name="+owner.Name,

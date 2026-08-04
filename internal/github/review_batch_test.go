@@ -50,7 +50,7 @@ const stagedReply = `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":
 // entries on the PR — and GitHub does not allow deleting a submitted review.
 func TestCreatePendingReviewSendsEveryThreadInOneCall(t *testing.T) {
 	r := &gqlRunner{reply: stagedReply}
-	got, err := New(r).CreatePendingReview("PR_1", "deadbeef", []DraftThread{
+	got, err := New(r, "").CreatePendingReview("PR_1", "deadbeef", []DraftThread{
 		{Path: "a.go", Line: 12, StartLine: 8, Side: "RIGHT", Body: "a range"},
 		{Path: "b.go", Line: 3, Side: "LEFT", Body: "a removed line"},
 	})
@@ -102,7 +102,7 @@ func TestCreatePendingReviewSendsEveryThreadInOneCall(t *testing.T) {
 // author. That is what makes the submit safe to fail.
 func TestCreatePendingReviewSendsNoEvent(t *testing.T) {
 	r := &gqlRunner{reply: stagedReply}
-	if _, err := New(r).CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 1, Body: "x"}}); err != nil {
+	if _, err := New(r, "").CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 1, Body: "x"}}); err != nil {
 		t.Fatalf("CreatePendingReview: %v", err)
 	}
 	query, _ := r.bodies[0]["query"].(string)
@@ -118,7 +118,7 @@ func TestCreatePendingReviewSendsNoEvent(t *testing.T) {
 // code the reviewer was not looking at.
 func TestCreatePendingReviewDefaultsToTheNewSide(t *testing.T) {
 	r := &gqlRunner{reply: stagedReply}
-	if _, err := New(r).CreatePendingReview("PR_1", "", []DraftThread{{Path: "a.go", Line: 1, Body: "x"}}); err != nil {
+	if _, err := New(r, "").CreatePendingReview("PR_1", "", []DraftThread{{Path: "a.go", Line: 1, Body: "x"}}); err != nil {
 		t.Fatalf("CreatePendingReview: %v", err)
 	}
 	threads, _ := r.vars(0)["threads"].([]any)
@@ -137,7 +137,7 @@ func TestCreatePendingReviewDefaultsToTheNewSide(t *testing.T) {
 // gh's own message is only that the request failed.
 func TestGraphQLErrorsAreReported(t *testing.T) {
 	r := &gqlRunner{reply: `{"errors":[{"message":"line must be part of the diff"}]}`}
-	_, err := New(r).CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 999, Body: "x"}})
+	_, err := New(r, "").CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 999, Body: "x"}})
 	if err == nil {
 		t.Fatal("expected the GraphQL error surfaced")
 	}
@@ -150,7 +150,7 @@ func TestGraphQLErrorsAreReported(t *testing.T) {
 // there says what to fix.
 func TestGraphQLErrorsWinOverTheExitCode(t *testing.T) {
 	r := &gqlRunner{reply: `{"errors":[{"message":"Could not resolve to a node"}]}`, err: errors.New("exit status 1")}
-	err := New(r).SubmitStagedReview("PRR_1", EventApprove, "")
+	err := New(r, "").SubmitStagedReview("PRR_1", EventApprove, "")
 	if err == nil || !strings.Contains(err.Error(), "Could not resolve to a node") {
 		t.Fatalf("expected GitHub's message, got %v", err)
 	}
@@ -158,7 +158,7 @@ func TestGraphQLErrorsWinOverTheExitCode(t *testing.T) {
 
 func TestSubmitStagedReviewRejectsAnUnknownEvent(t *testing.T) {
 	r := &gqlRunner{reply: `{"data":{}}`}
-	if err := New(r).SubmitStagedReview("PRR_1", "LGTM", "body"); err == nil {
+	if err := New(r, "").SubmitStagedReview("PRR_1", "LGTM", "body"); err == nil {
 		t.Fatal("expected an unknown event rejected")
 	}
 	if len(r.bodies) != 0 {
@@ -171,7 +171,7 @@ func TestSubmitStagedReviewRejectsAnUnknownEvent(t *testing.T) {
 func TestSubmitStagedReviewNeedsABodyForTheTwoThatAskForOne(t *testing.T) {
 	for _, event := range []string{EventComment, EventRequestChanges} {
 		r := &gqlRunner{reply: `{"data":{}}`}
-		if err := New(r).SubmitStagedReview("PRR_1", event, "  "); err == nil {
+		if err := New(r, "").SubmitStagedReview("PRR_1", event, "  "); err == nil {
 			t.Fatalf("%s: expected an empty summary rejected", event)
 		}
 		if len(r.bodies) != 0 {
@@ -181,7 +181,7 @@ func TestSubmitStagedReviewNeedsABodyForTheTwoThatAskForOne(t *testing.T) {
 	// An approval needs none, and must not send an empty one — that is the difference
 	// between "approved" and "approved, with an empty comment attached".
 	r := &gqlRunner{reply: `{"data":{"submitPullRequestReview":{"pullRequestReview":{"state":"APPROVED"}}}}`}
-	if err := New(r).SubmitStagedReview("PRR_1", EventApprove, ""); err != nil {
+	if err := New(r, "").SubmitStagedReview("PRR_1", EventApprove, ""); err != nil {
 		t.Fatalf("approve with no body: %v", err)
 	}
 	if _, has := r.vars(0)["body"]; has {
@@ -194,7 +194,7 @@ func TestSubmitStagedReviewNeedsABodyForTheTwoThatAskForOne(t *testing.T) {
 // duplicate.
 func TestDeleteStagedReview(t *testing.T) {
 	r := &gqlRunner{reply: `{"data":{"deletePullRequestReview":{"clientMutationId":null}}}`}
-	if err := New(r).DeleteStagedReview("PRR_1"); err != nil {
+	if err := New(r, "").DeleteStagedReview("PRR_1"); err != nil {
 		t.Fatalf("DeleteStagedReview: %v", err)
 	}
 	if r.vars(0)["id"] != "PRR_1" {
@@ -202,7 +202,7 @@ func TestDeleteStagedReview(t *testing.T) {
 	}
 	// Nothing staged is not an error: the caller does not have to check first.
 	empty := &gqlRunner{reply: `{"data":{}}`}
-	if err := New(empty).DeleteStagedReview(" "); err != nil {
+	if err := New(empty, "").DeleteStagedReview(" "); err != nil {
 		t.Fatalf("expected a quiet no-op, got %v", err)
 	}
 	if len(empty.bodies) != 0 {
@@ -215,7 +215,7 @@ func TestDeleteStagedReview(t *testing.T) {
 func TestCreatedThreadsFallBackToTheOriginalLine(t *testing.T) {
 	r := &gqlRunner{reply: `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1",
 	 "comments":{"nodes":[{"id":"PRRC_a","path":"a.go","line":null,"originalLine":42}]}}}}}`}
-	got, err := New(r).CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 42, Body: "x"}})
+	got, err := New(r, "").CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 42, Body: "x"}})
 	if err != nil {
 		t.Fatalf("CreatePendingReview: %v", err)
 	}
@@ -228,14 +228,14 @@ func TestCreatedThreadsFallBackToTheOriginalLine(t *testing.T) {
 // needs the id, so pretending otherwise would strand the comments as pending.
 func TestCreatePendingReviewRequiresAReviewBack(t *testing.T) {
 	r := &gqlRunner{reply: `{"data":{"addPullRequestReview":{"pullRequestReview":null}}}`}
-	if _, err := New(r).CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 1, Body: "x"}}); err == nil {
+	if _, err := New(r, "").CreatePendingReview("PR_1", "deadbeef", []DraftThread{{Path: "a.go", Line: 1, Body: "x"}}); err == nil {
 		t.Fatal("expected a missing review to be an error")
 	}
 }
 
 func TestCreatePendingReviewNeedsAPullRequest(t *testing.T) {
 	r := &gqlRunner{reply: `{"data":{}}`}
-	if _, err := New(r).CreatePendingReview("  ", "deadbeef", nil); err == nil {
+	if _, err := New(r, "").CreatePendingReview("  ", "deadbeef", nil); err == nil {
 		t.Fatal("expected a missing pull request id rejected")
 	}
 	if len(r.bodies) != 0 {

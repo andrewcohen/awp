@@ -23,7 +23,7 @@ func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...strin
 
 func TestFetchPRParses(t *testing.T) {
 	r := &fakeRunner{out: `{"number":12,"headRefName":"feat/x","baseRefName":"main","title":"t","body":"b","url":"u"}`}
-	c := New(r)
+	c := New(r, "")
 	pr, err := c.FetchPR(12)
 	if err != nil {
 		t.Fatalf("FetchPR err: %v", err)
@@ -48,7 +48,7 @@ func TestFetchPRParses(t *testing.T) {
 
 func TestMergePRRunsSquash(t *testing.T) {
 	r := &fakeRunner{out: "✓ Squashed and merged pull request #42"}
-	out, err := New(r).MergePR("/repo", 42, nil)
+	out, err := New(r, "/repo").MergePR(42, nil)
 	if err != nil {
 		t.Fatalf("MergePR err: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestMergePRRunsSquash(t *testing.T) {
 
 func TestMergePRSurfacesGhFailure(t *testing.T) {
 	r := &fakeRunner{out: "Pull request #42 is not mergeable: the base branch policy prohibits the merge.", err: errors.New("exit status 1")}
-	out, err := New(r).MergePR("/repo", 42, nil)
+	out, err := New(r, "/repo").MergePR(42, nil)
 	if err == nil {
 		t.Fatalf("expected error when gh fails")
 	}
@@ -110,7 +110,7 @@ func enqueueOK(squashFailOut string) *seqRunner {
 func TestMergePREnqueuesWhenStrategyRejected(t *testing.T) {
 	// gh rejects the explicit --squash on a merge-queue branch.
 	r := enqueueOK("The merge strategy for main is set by the merge queue")
-	out, err := New(r).MergePR("/repo", 42, nil)
+	out, err := New(r, "/repo").MergePR(42, nil)
 	if err != nil {
 		t.Fatalf("expected enqueue to succeed, got %v", err)
 	}
@@ -139,7 +139,7 @@ func TestMergePREnqueuesWhenAutoMergeBlocked(t *testing.T) {
 	// Real cli/cli#13398 output: gh tries enablePullRequestAutoMerge and the
 	// repo forbids it. awp must bypass gh and enqueue directly.
 	r := enqueueOK("! The merge strategy for main is set by the merge queue\nGraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)")
-	out, err := New(r).MergePR("/repo", 42, nil)
+	out, err := New(r, "/repo").MergePR(42, nil)
 	if err != nil {
 		t.Fatalf("expected enqueue to succeed, got %v", err)
 	}
@@ -164,7 +164,7 @@ func TestMergePRNarratesSquashThenQueue(t *testing.T) {
 	// fallback — and the final step must name the path actually taken.
 	rep := &captureReporter{}
 	r := enqueueOK("The merge strategy for main is set by the merge queue")
-	if _, err := New(r).MergePR("/repo", 42, rep); err != nil {
+	if _, err := New(r, "/repo").MergePR(42, rep); err != nil {
 		t.Fatalf("enqueue path err: %v", err)
 	}
 	// The completed step names the queue, not --squash (the bug in the UI
@@ -184,7 +184,7 @@ func TestMergePRNarratesSquashThenQueue(t *testing.T) {
 func TestMergePRNarratesSquashSuccess(t *testing.T) {
 	rep := &captureReporter{}
 	r := &fakeRunner{out: "✓ Squashed and merged pull request #42"}
-	if _, err := New(r).MergePR("/repo", 42, rep); err != nil {
+	if _, err := New(r, "/repo").MergePR(42, rep); err != nil {
 		t.Fatalf("squash path err: %v", err)
 	}
 	if len(rep.steps) != 1 || !strings.Contains(rep.steps[0], "Squash-merged") {
@@ -202,7 +202,7 @@ func TestMergePREnqueueErrorSurfaced(t *testing.T) {
 		{out: `{"id":"PR_node_1"}`, err: nil},
 		{out: "GraphQL: Pull request is not in a mergeable state", err: errors.New("exit status 1")},
 	}}
-	_, err := New(r).MergePR("/repo", 42, nil)
+	_, err := New(r, "/repo").MergePR(42, nil)
 	if err == nil {
 		t.Fatalf("expected enqueue error to surface")
 	}
@@ -213,7 +213,7 @@ func TestMergePREnqueueErrorSurfaced(t *testing.T) {
 
 func TestMergePRRejectsInvalidNumber(t *testing.T) {
 	r := &fakeRunner{}
-	if _, err := New(r).MergePR("/repo", 0, nil); err == nil {
+	if _, err := New(r, "/repo").MergePR(0, nil); err == nil {
 		t.Fatalf("expected error for invalid PR number")
 	}
 	if r.gotName != "" {
@@ -223,7 +223,7 @@ func TestMergePRRejectsInvalidNumber(t *testing.T) {
 
 func TestFetchPRParsesStatusFields(t *testing.T) {
 	r := &fakeRunner{out: `{"number":42,"headRefName":"coworker/foo","baseRefName":"main","headRefOid":"deadbeef","title":"t","body":"b","url":"https://github.com/o/r/pull/42","state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY"}`}
-	pr, err := New(r).FetchPR(42)
+	pr, err := New(r, "").FetchPR(42)
 	if err != nil {
 		t.Fatalf("FetchPR err: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestListPRStatusParsesLabels(t *testing.T) {
 		{"number":1,"headRefName":"andrew/a","state":"OPEN","labels":[{"name":"bug"},{"name":"enhancement"}]},
 		{"number":2,"headRefName":"andrew/b","state":"OPEN","labels":[]}
 	]`}
-	got, err := New(r).ListPRStatus("/tmp/repo")
+	got, err := New(r, "/tmp/repo").ListPRStatus()
 	if err != nil {
 		t.Fatalf("ListPRStatus err: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestListPRStatusParsesLabels(t *testing.T) {
 
 func TestFetchPRRunnerError(t *testing.T) {
 	r := &fakeRunner{err: errors.New("boom"), out: "bad"}
-	_, err := New(r).FetchPR(1)
+	_, err := New(r, "").FetchPR(1)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -298,7 +298,7 @@ func TestFetchPRRunnerError(t *testing.T) {
 
 func TestFetchPRParseError(t *testing.T) {
 	r := &fakeRunner{out: "not json"}
-	_, err := New(r).FetchPR(1)
+	_, err := New(r, "").FetchPR(1)
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -312,8 +312,8 @@ func TestListPRStatusParses(t *testing.T) {
 		{"number":4,"headRefName":"andrew/d","headRefOid":"sha4ddd","url":"https://github.com/o/r/pull/4","state":"OPEN","isDraft":false,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}],"mergeStateStatus":"DIRTY","reviews":[{"state":"DISMISSED"},{"state":"COMMENTED"}]},
 		{"number":5,"headRefName":"andrew/e","headRefOid":"sha5eee","url":"https://github.com/o/r/pull/5","state":"CLOSED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"PENDING"}],"mergeStateStatus":"UNKNOWN"}
 	]`}
-	c := New(r)
-	got, err := c.ListPRStatus("/tmp/repo")
+	c := New(r, "/tmp/repo")
+	got, err := c.ListPRStatus()
 	if err != nil {
 		t.Fatalf("ListPRStatus err: %v", err)
 	}
@@ -349,21 +349,21 @@ func TestListPRStatusParses(t *testing.T) {
 
 func TestListPRStatusRunnerError(t *testing.T) {
 	r := &fakeRunner{err: errors.New("boom"), out: "bad"}
-	if _, err := New(r).ListPRStatus(""); err == nil {
+	if _, err := New(r, "").ListPRStatus(); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestListPRStatusParseError(t *testing.T) {
 	r := &fakeRunner{out: "not json"}
-	if _, err := New(r).ListPRStatus(""); err == nil {
+	if _, err := New(r, "").ListPRStatus(); err == nil {
 		t.Fatal("expected parse error")
 	}
 }
 
 func TestGetPRStatusParses(t *testing.T) {
 	r := &fakeRunner{out: `{"number":1717,"headRefName":"old/branch","headRefOid":"oldsha","title":"Old PR","url":"https://github.com/o/r/pull/1717","state":"OPEN","isDraft":false,"reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}],"mergeStateStatus":"BEHIND","reviewRequests":[{"login":"andrewcohen"},{"name":"platform-team","slug":"platform-team"}],"latestReviews":[{"author":{"login":"andrewcohen"}}]}`}
-	got, err := New(r).GetPRStatus("/tmp/repo", 1717)
+	got, err := New(r, "/tmp/repo").GetPRStatus(1717)
 	if err != nil {
 		t.Fatalf("GetPRStatus err: %v", err)
 	}
@@ -385,17 +385,17 @@ func TestGetPRStatusParses(t *testing.T) {
 }
 
 func TestGetPRStatusRejectsNonPositive(t *testing.T) {
-	if _, err := New(&fakeRunner{}).GetPRStatus("/tmp/repo", 0); err == nil {
+	if _, err := New(&fakeRunner{}, "/tmp/repo").GetPRStatus(0); err == nil {
 		t.Fatal("expected error for pr=0")
 	}
-	if _, err := New(&fakeRunner{}).GetPRStatus("/tmp/repo", -1); err == nil {
+	if _, err := New(&fakeRunner{}, "/tmp/repo").GetPRStatus(-1); err == nil {
 		t.Fatal("expected error for pr=-1")
 	}
 }
 
 func TestGetPRStatusRunnerError(t *testing.T) {
 	r := &fakeRunner{err: errors.New("boom"), out: "bad"}
-	if _, err := New(r).GetPRStatus("/tmp/repo", 1); err == nil {
+	if _, err := New(r, "/tmp/repo").GetPRStatus(1); err == nil {
 		t.Fatal("expected error")
 	}
 }
@@ -444,7 +444,7 @@ func TestListMergeQueuedHeadsParses(t *testing.T) {
 		{out: repoView},
 		{out: graphql},
 	}}
-	got, err := New(s).ListMergeQueuedHeads("/tmp/repo")
+	got, err := New(s, "/tmp/repo").ListMergeQueuedHeads()
 	if err != nil {
 		t.Fatalf("ListMergeQueuedHeads err: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestListMergeQueuedHeadsRepoViewError(t *testing.T) {
 	s := &scriptRunner{steps: []scriptStep{
 		{err: errors.New("boom"), out: "bad"},
 	}}
-	if _, err := New(s).ListMergeQueuedHeads(""); err == nil {
+	if _, err := New(s, "").ListMergeQueuedHeads(); err == nil {
 		t.Fatal("expected error when gh repo view fails")
 	}
 }
@@ -490,7 +490,7 @@ func TestListMergeQueuedHeadsGraphqlError(t *testing.T) {
 		{out: `{"owner":{"login":"a"},"name":"b"}`},
 		{err: errors.New("boom"), out: "bad"},
 	}}
-	if _, err := New(s).ListMergeQueuedHeads(""); err == nil {
+	if _, err := New(s, "").ListMergeQueuedHeads(); err == nil {
 		t.Fatal("expected error when gh api graphql fails")
 	}
 }
@@ -524,7 +524,7 @@ func TestFetchPRComments(t *testing.T) {
 		viewOut: `{"comments":[{"author":{"login":"carol"},"body":"needs a test"},{"author":{"login":"x"},"body":"   "}],"reviews":[{"author":{"login":"hubot"},"body":"LGTM"},{"author":{"login":"y"},"body":""}]}`,
 		apiOut:  `[{"user":{"login":"octocat"},"path":"a/b.go","line":42,"body":"nil deref"},{"user":{"login":"z"},"path":"c.go","line":0,"body":"  "}]`,
 	}
-	got, err := New(r).FetchPRComments(7)
+	got, err := New(r, "").FetchPRComments(7)
 	if err != nil {
 		t.Fatalf("FetchPRComments err: %v", err)
 	}

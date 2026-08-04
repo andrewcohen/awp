@@ -70,8 +70,12 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	if derr != nil || strings.TrimSpace(defaultRoot) == "" {
 		return fmt.Errorf("resolve default workspace: %w", derr)
 	}
+	// The wrapper is still what pins jj/git and tmux to the source repo. gh no
+	// longer relies on it: the directory is an argument, so which repository these
+	// calls are about does not depend on a runner someone could hand a different
+	// wrapper to.
 	runner = fixedDirRunner{base: runner, dir: defaultRoot}
-	gh := github.New(runner)
+	gh := github.New(runner, defaultRoot)
 	tmuxClient := tmux.New(runner)
 
 	reporter.Step(fmt.Sprintf("Fetch PR #%d from GitHub", prNumber))
@@ -316,11 +320,15 @@ func repoRootFromPath(p string) (string, error) {
 }
 
 // pickPRNumber lists open PRs via gh and prompts the user to pick one.
+//
+// The one place "" is the right directory: the user typed `awp review` in the repo
+// whose PRs they want listed, so the process's own directory is the answer rather
+// than a repo resolved on their behalf.
 func pickPRNumber(runner Runner, picker workspacePicker) (int, error) {
 	if runner == nil {
 		runner = NewExecRunner()
 	}
-	gh := github.New(runner)
+	gh := github.New(runner, "")
 	prs, err := gh.ListPRs()
 	if err != nil {
 		return 0, err
