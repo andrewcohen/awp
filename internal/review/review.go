@@ -247,20 +247,22 @@ const RobotMarker = "🤖"
 // our palette, and "suggestion: " is the whole signal a reader gets there.
 func (c Comment) PublishBody() string {
 	body := strings.TrimSpace(c.Body)
-	if c.ByRobot() {
-		body = RobotMarker + " " + body
-	}
-	// A reply joins a thread whose first comment already carries the kind;
-	// repeating it on every message would be noise.
-	if c.ReplyTo != "" {
-		return body
-	}
+	// The kind first, so the marker can be put in front of the whole thing below.
+	//
 	// A plain comment says nothing about what it is asking for — that is what makes
 	// it the default — so labelling it labels every remark that had nothing special
 	// to say. The other two are worth announcing, and read as a sentence: "question:
-	// why is this here" rather than "(question) - why is this here".
-	if kind := c.Kind.OrDefault(); kind != KindComment {
-		return string(kind) + ": " + body
+	// why is this here" rather than "(question) - why is this here". A reply joins a
+	// thread whose first comment already carries the kind, so repeating it on every
+	// message would be noise.
+	if kind := c.Kind.OrDefault(); kind != KindComment && c.ReplyTo == "" {
+		body = string(kind) + ": " + body
+	}
+	// The marker leads. Who wrote a remark frames everything after it — including
+	// what the remark is asking for — so "🤖 suggestion: …" reads in the order a
+	// reader needs, where "suggestion: 🤖 …" buries the authorship mid-sentence.
+	if c.ByRobot() {
+		body = RobotMarker + " " + body
 	}
 	return body
 }
