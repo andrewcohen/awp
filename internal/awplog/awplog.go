@@ -46,19 +46,42 @@ var mu sync.Mutex
 // pathOverride redirects the log, for tests. Empty means the real one.
 var pathOverride string
 
-// SetPathForTest points the log at a file a test owns, and restores it on cleanup.
-// Exported for tests in other packages, which is the only reason this is not a
-// plain unexported hook.
-func SetPathForTest(t interface{ Cleanup(func()) }, path string) {
+// testBinary reports whether this process is a `go test` binary.
+//
+// Detected from the executable's name rather than by importing testing, which would
+// put the test flag set into the real binary. Go names a test binary <pkg>.test, and
+// `go test` also runs it from a temp build directory — either signal alone is enough
+// to be sure, and neither can be true of an installed awp.
+func testBinary() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(filepath.Base(exe), ".test")
+}
+
+// SetPath redirects the log and returns a function restoring it.
+//
+// Tests must never append to the log the user is going to read: a suite that writes
+// there is indistinguishable from the program doing it, and this log's whole value is
+// being a trustworthy record of what actually happened. That is enforced by default
+// — see testBinary and the check in write — so this exists for the tests that want to
+// *read* what was logged, not to make the rest of them safe.
+func SetPath(path string) (restore func()) {
 	mu.Lock()
 	previous := pathOverride
 	pathOverride = path
 	mu.Unlock()
-	t.Cleanup(func() {
+	return func() {
 		mu.Lock()
 		pathOverride = previous
 		mu.Unlock()
-	})
+	}
+}
+
+// SetPathForTest is SetPath scoped to one test.
+func SetPathForTest(t interface{ Cleanup(func()) }, path string) {
+	t.Cleanup(SetPath(path))
 }
 
 // Path is the file being written to.
@@ -90,6 +113,13 @@ func write(level, format string, args ...any) {
 	defer mu.Unlock()
 	path := pathOverride
 	if path == "" {
+		if testBinary() {
+			// A test that has not asked for a log does not get one. Opt-in rather than
+			// opt-out, because the failure mode of the other arrangement is silent: a new
+			// package's tests quietly start appending fixtures to the user's log, and
+			// nobody notices until they are reading it for a real failure.
+			return
+		}
 		path = config.LogPath()
 	}
 	if strings.TrimSpace(path) == "" {

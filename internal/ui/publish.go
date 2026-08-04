@@ -82,8 +82,7 @@ const (
 // opening a prompt whose only outcome is an error.
 func (m *Model) beginPublish() {
 	if m.PublishReview == nil {
-		m.status = "publishing unavailable here"
-		m.statusErr = true
+		m.fail("publishing unavailable here")
 		return
 	}
 	if m.publishBusy {
@@ -244,8 +243,7 @@ func (m Model) handlePublishComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // same complaint, one screen later.
 func (m Model) confirmPublish() (tea.Model, tea.Cmd) {
 	if github.EventNeedsBody(verdictEvent(m.publishVerdict())) && m.publishSummaryText() == "" {
-		m.status = m.publishVerdict() + " needs a summary — GitHub rejects a verdict with no body"
-		m.statusErr = true
+		m.fail("%s needs a summary — GitHub rejects a verdict with no body", m.publishVerdict())
 		return m, nil
 	}
 	return m.previewPublish()
@@ -335,8 +333,7 @@ func (m Model) applyPublishDone(msg publishDoneMsg) (tea.Model, tea.Cmd) {
 			// what the reviewer needs, and there is nothing to confirm.
 			m.publishStage = publishReporting
 			m.publishReport = append([]string{"cannot publish: " + msg.err.Error()}, m.publishReport...)
-			m.status = "publish: " + msg.err.Error()
-			m.statusErr = true
+			m.fail("publish: %v", msg.err)
 		}
 		return m, nil
 	}
@@ -346,8 +343,7 @@ func (m Model) applyPublishDone(msg publishDoneMsg) (tea.Model, tea.Cmd) {
 		// eight has to say which two, and one status segment cannot.
 		m.publishReport = append(publishReportLines(msg.summary), "", "failed: "+msg.err.Error())
 		m.publishStage = publishReporting
-		m.status = "publish: " + msg.err.Error()
-		m.statusErr = true
+		m.fail("publish: %v", msg.err)
 		return m, nil
 	}
 	m.publishReport = publishReportLines(msg.summary)

@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/andrewcohen/awp/internal/awplog"
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -249,9 +250,35 @@ type Model struct {
 	// tool has, and awp's agent edits while you review.
 	ReviewedFiles map[string]string
 	MarkReviewed  func(path, hash string) error
-	status        string
-	statusErr     bool
-	refreshing    bool
+	// status is the footer's one line, and statusErr colours it as a failure. Set a
+	// failure through fail() rather than writing both: that is what puts the reason
+	// somewhere it can still be read afterwards.
+	status     string
+	statusErr  bool
+	refreshing bool
+}
+
+// fail reports a failure twice: to the status line, for whoever is at the keyboard
+// now, and to the log, for working out afterwards what actually happened.
+//
+// One method rather than the two assignments it replaces, because the log is only
+// as complete as the sites that remember to write to it — and the site that forgets
+// is discovered exactly when someone needs it. A status line cannot be copied,
+// cannot be scrolled back to, and is gone on the next keystroke; when the reason a
+// publish was refused is GitHub's own sentence, that sentence has to survive the
+// keystroke.
+//
+// Everything the reviewer is told is what goes in the log, verbatim. Somewhere
+// short enough for a footer and complete enough for a bug report is the same string
+// here, and if that ever stops being true the log is the one that should get the
+// longer version.
+// The two assignments below are the only ones in the package: everywhere else
+// reports a failure by calling this. See failure_log_test.go, which enforces it.
+func (m *Model) fail(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	m.status = msg
+	m.statusErr = true
+	awplog.Errorf("diff: %s", msg)
 }
 
 // SetSize sizes the viewer for a host that owns its own chrome: width is
@@ -500,8 +527,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case diffLoadedMsg:
 		m.refreshing = false
 		if msg.err != nil {
-			m.status = "error: " + msg.err.Error()
-			m.statusErr = true
+			m.fail("error: %v", msg.err)
 			return m, scheduleRefresh(m.RefreshInterval)
 		}
 		// Unchanged diff: leave every bit of view state alone. Live refresh
@@ -570,8 +596,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.status = "editor: " + msg.err.Error()
-			m.statusErr = true
+			m.fail("editor: %v", msg.err)
 			return m, nil
 		}
 		if summary {

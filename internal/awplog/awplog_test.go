@@ -137,3 +137,26 @@ func TestTailOnAMissingLogIsAnError(t *testing.T) {
 		t.Fatal("expected a missing log to report itself, so `awp logs` can say so")
 	}
 }
+
+// The default has to be safe, not merely documented as unsafe.
+//
+// Every package whose code path logs would otherwise have to remember to redirect
+// the log in a TestMain, and the one that forgets does not fail — it quietly appends
+// its fixtures to the log the user reads when something actually breaks. Three
+// packages in, that had already happened once.
+func TestATestBinaryDoesNotWriteToTheRealLog(t *testing.T) {
+	if !testBinary() {
+		t.Fatal("expected to be recognised as a test binary")
+	}
+	// With no override, this is the real path — and nothing must appear there.
+	real := Path()
+	before, _ := os.Stat(real)
+	Errorf("this must not be written")
+	after, err := os.Stat(real)
+	switch {
+	case before == nil && err == nil:
+		t.Fatalf("a test wrote to the user's log at %s", real)
+	case before != nil && err == nil && after.Size() != before.Size():
+		t.Fatalf("a test appended to the user's log at %s", real)
+	}
+}
