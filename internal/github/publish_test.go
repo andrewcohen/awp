@@ -9,7 +9,7 @@ import (
 
 func TestPostReviewCommentSendsAnchorAndSide(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"id":123,"node_id":"PRRC_abc"}`}}
-	id, err := New(r).PostReviewComment(9, NewComment{
+	id, err := New(r, "").PostReviewComment(9, NewComment{
 		Path: "a.go", Line: 42, Side: "RIGHT", Body: ":robot: leaks", CommitID: "deadbeef",
 	})
 	if err != nil {
@@ -29,7 +29,7 @@ func TestPostReviewCommentSendsAnchorAndSide(t *testing.T) {
 
 func TestPostReviewCommentFallsBackToNumericID(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"id":123}`}}
-	id, err := New(r).PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"})
+	id, err := New(r, "").PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"})
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestPostReviewCommentFallsBackToNumericID(t *testing.T) {
 // Reporting an error would invite a retry that duplicates it, so this is success.
 func TestPostReviewCommentTreatsUnparseableResponseAsPosted(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, "not json"}}
-	id, err := New(r).PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"})
+	id, err := New(r, "").PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"})
 	if err != nil {
 		t.Fatalf("expected an unparseable response to count as posted, got %v", err)
 	}
@@ -53,7 +53,7 @@ func TestPostReviewCommentTreatsUnparseableResponseAsPosted(t *testing.T) {
 
 func TestPostReviewCommentRequiresAnAnchor(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON}}
-	if _, err := New(r).PostReviewComment(9, NewComment{Body: "no anchor"}); err == nil {
+	if _, err := New(r, "").PostReviewComment(9, NewComment{Body: "no anchor"}); err == nil {
 		t.Fatal("expected a comment with no path or line to be rejected")
 	}
 }
@@ -61,7 +61,7 @@ func TestPostReviewCommentRequiresAnAnchor(t *testing.T) {
 // A reply joins an existing thread, so it must not also send a line anchor.
 func TestPostReviewCommentReplyUsesInReplyTo(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"id":5}`}}
-	if _, err := New(r).PostReviewComment(9, NewComment{InReplyTo: "77", Body: "ack"}); err != nil {
+	if _, err := New(r, "").PostReviewComment(9, NewComment{InReplyTo: "77", Body: "ack"}); err != nil {
 		t.Fatalf("reply: %v", err)
 	}
 	joined := strings.Join(r.calls[1], " ")
@@ -75,14 +75,14 @@ func TestPostReviewCommentReplyUsesInReplyTo(t *testing.T) {
 
 func TestPostReviewCommentSurfacesFailures(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, "422 Unprocessable"}, errs: []error{nil, errors.New("exit 1")}}
-	if _, err := New(r).PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"}); err == nil {
+	if _, err := New(r, "").PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"}); err == nil {
 		t.Fatal("expected a post failure to surface so it can be retried")
 	}
 }
 
 func TestPostPRCommentRejectsEmptyBody(t *testing.T) {
 	r := &threadRunner{}
-	if _, err := New(r).PostPRComment(9, "  "); err == nil {
+	if _, err := New(r, "").PostPRComment(9, "  "); err == nil {
 		t.Fatal("expected an empty comment to be rejected")
 	}
 	if len(r.calls) != 0 {
@@ -95,7 +95,7 @@ func TestPostPRCommentRejectsEmptyBody(t *testing.T) {
 // already landed.
 func TestPostPRCommentPostsAndReturnsAnID(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"id":88,"node_id":"IC_kwDO88"}`}}
-	id, err := New(r).PostPRComment(9, "reviewed internal/cli")
+	id, err := New(r, "").PostPRComment(9, "reviewed internal/cli")
 	if err != nil {
 		t.Fatalf("pr comment: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestPostPRCommentPostsAndReturnsAnID(t *testing.T) {
 // Reporting that as an error would invite a retry that double-posts.
 func TestPostPRCommentTreatsAnUnreadableIDAsSuccess(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, "not json"}}
-	id, err := New(r).PostPRComment(9, "body")
+	id, err := New(r, "").PostPRComment(9, "body")
 	if err != nil {
 		t.Fatalf("expected success with an unknown id, got %v", err)
 	}
@@ -128,7 +128,7 @@ func TestPostPRCommentTreatsAnUnreadableIDAsSuccess(t *testing.T) {
 // PR's side rather than to the side already given for the end.
 func TestPostReviewCommentSendsARange(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"PRRC_abc"}`}}
-	if _, err := New(r).PostReviewComment(9, NewComment{
+	if _, err := New(r, "").PostReviewComment(9, NewComment{
 		Path: "a.go", Line: 18, StartLine: 12, Side: "LEFT", Body: "this block", CommitID: "deadbeef",
 	}); err != nil {
 		t.Fatalf("post: %v", err)
@@ -145,7 +145,7 @@ func TestPostReviewCommentSendsARange(t *testing.T) {
 // as a malformed range rather than as one line.
 func TestPostReviewCommentOmitsStartLineForOneLine(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"PRRC_abc"}`}}
-	if _, err := New(r).PostReviewComment(9, NewComment{
+	if _, err := New(r, "").PostReviewComment(9, NewComment{
 		Path: "a.go", Line: 12, StartLine: 12, Body: "one line", CommitID: "deadbeef",
 	}); err != nil {
 		t.Fatalf("post: %v", err)
@@ -158,7 +158,7 @@ func TestPostReviewCommentOmitsStartLineForOneLine(t *testing.T) {
 // The verdict goes up as its own review submission, after the comments.
 func TestSubmitReviewSendsTheEventAndBody(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"id":77,"node_id":"PRR_abc"}`}}
-	id, err := New(r).SubmitReview(9, EventRequestChanges, "two things to fix")
+	id, err := New(r, "").SubmitReview(9, EventRequestChanges, "two things to fix")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSubmitReviewSendsTheEventAndBody(t *testing.T) {
 // difference between "approved" and "approved, with an empty comment attached".
 func TestSubmitReviewOmitsAnEmptyBody(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"PRR_abc"}`}}
-	if _, err := New(r).SubmitReview(9, EventApprove, "  "); err != nil {
+	if _, err := New(r, "").SubmitReview(9, EventApprove, "  "); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	if joined := strings.Join(r.calls[1], " "); strings.Contains(joined, "body=") {
@@ -193,7 +193,7 @@ func TestSubmitReviewRequiresABodyWhereGitHubDoes(t *testing.T) {
 			t.Fatalf("%s should need a body", event)
 		}
 		r := &threadRunner{outs: []string{repoViewJSON, "{}"}}
-		if _, err := New(r).SubmitReview(9, event, ""); err == nil {
+		if _, err := New(r, "").SubmitReview(9, event, ""); err == nil {
 			t.Fatalf("%s: expected a bodyless review refused", event)
 		}
 	}
@@ -205,7 +205,7 @@ func TestSubmitReviewRequiresABodyWhereGitHubDoes(t *testing.T) {
 // An unknown event never reaches GitHub.
 func TestSubmitReviewRejectsAnUnknownEvent(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, "{}"}}
-	if _, err := New(r).SubmitReview(9, "LGTM", "x"); err == nil {
+	if _, err := New(r, "").SubmitReview(9, "LGTM", "x"); err == nil {
 		t.Fatal("expected an unknown event refused")
 	}
 	if len(r.calls) != 0 {
@@ -223,7 +223,7 @@ func TestSubmitReviewRejectsAnUnknownEvent(t *testing.T) {
 // posted to it.
 func TestClientInRunsEveryCallInThatDirectory(t *testing.T) {
 	r := &dirRunner{outs: []string{repoViewJSON, `{"node_id":"PRRC_abc"}`}}
-	if _, err := New(r).In("/repos/theirs").PostReviewComment(54, NewComment{
+	if _, err := New(r, "/repos/theirs").PostReviewComment(54, NewComment{
 		Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef",
 	}); err != nil {
 		t.Fatalf("post: %v", err)
@@ -239,7 +239,7 @@ func TestClientInRunsEveryCallInThatDirectory(t *testing.T) {
 	// And without In, the dir is empty — the process's own, which is right only for a
 	// command the user typed in the repo they meant.
 	plain := &dirRunner{outs: []string{repoViewJSON, `{"node_id":"x"}`}}
-	if _, err := New(plain).PostReviewComment(1, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"}); err != nil {
+	if _, err := New(plain, "").PostReviewComment(1, NewComment{Path: "a.go", Line: 1, Body: "x", CommitID: "deadbeef"}); err != nil {
 		t.Fatalf("post: %v", err)
 	}
 	for i, dir := range plain.dirs {
@@ -272,13 +272,13 @@ func (r *dirRunner) Run(_ context.Context, dir string, _ string, _ ...string) (s
 // so a run says it once instead of once per comment.
 func TestPostReviewCommentRequiresTheCommit(t *testing.T) {
 	r := &threadRunner{outs: []string{repoViewJSON, "{}"}}
-	_, err := New(r).PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x"})
+	_, err := New(r, "").PostReviewComment(9, NewComment{Path: "a.go", Line: 1, Body: "x"})
 	if err == nil || !strings.Contains(err.Error(), "commit") {
 		t.Fatalf("expected a comment with no commit refused, got %v", err)
 	}
 	// And it is always sent, since it is always required.
 	ok := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"x"}`}}
-	if _, err := New(ok).PostReviewComment(9, NewComment{
+	if _, err := New(ok, "").PostReviewComment(9, NewComment{
 		Path: "a.go", Line: 1, Body: "x", CommitID: "cafe1234",
 	}); err != nil {
 		t.Fatalf("post: %v", err)
@@ -288,7 +288,7 @@ func TestPostReviewCommentRequiresTheCommit(t *testing.T) {
 	}
 	// A reply carries none: it joins a thread that is already anchored.
 	reply := &threadRunner{outs: []string{repoViewJSON, `{"node_id":"x"}`}}
-	if _, err := New(reply).PostReviewComment(9, NewComment{InReplyTo: "PRRC_1", Body: "answering"}); err != nil {
+	if _, err := New(reply, "").PostReviewComment(9, NewComment{InReplyTo: "PRRC_1", Body: "answering"}); err != nil {
 		t.Fatalf("reply: %v", err)
 	}
 }

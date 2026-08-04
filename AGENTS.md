@@ -22,6 +22,16 @@ Focus on the current task request and keep solutions simple, correct, and easy t
 - Keep public interfaces minimal and stable.
 - Handle errors explicitly and return actionable messages.
 - Avoid hidden global state where possible.
+- **One way to say a thing, and make it a required argument.** When something
+  is ambient (which repo, which workspace, which review), give it exactly one
+  spelling and put it where it cannot be forgotten. `github.New(runner, dir)`
+  takes the directory as an argument for this reason: it used to be sayable
+  three ways — a runner wrapper, an `In(dir)` method, a per-method `repoDir`
+  parameter — all composing correctly, so nothing looked broken right up until a
+  fourth caller spelled it none of the ways and addressed whatever repo the
+  process started in. `internal/github/dir_test.go` walks every exported method
+  by reflection to check none of them forgot; add the same kind of guard when a
+  new invariant is only as strong as every call site remembering it.
 
 ## TUI / lipgloss
 
