@@ -87,6 +87,38 @@ func TestLoopTrackEditWithTasksSetsImplement(t *testing.T) {
 	}
 }
 
+// An edit outside the session's tree is not work on the current unit, so it must
+// not pull the phase back to implement — repairing a review record under ~/.awp
+// while verifying is the case this was found on, and it would have looked like the
+// unit had gone back to being written.
+func TestLoopTrackIgnoresEditsOutsideTheSessionsTree(t *testing.T) {
+	root := t.TempDir()
+	fs := newFakeStore()
+	seedLoopWorkspace(fs, root, "feat-x", "verify", true)
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", filepath.Base(root), root)
+	withGateRepo(t, root, loopConfigJSON)
+
+	outside := filepath.Join(t.TempDir(), "reviews", "alpha", "comments", "1785.json")
+	withStdin(t, `{"cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"`+outside+`"}}`)
+	if err := runLoopTrack(); err != nil {
+		t.Fatalf("runLoopTrack: %v", err)
+	}
+	if got := loopSnap(fs, root, "feat-x").Phase; got != "verify" {
+		t.Errorf("phase = %q, want verify (the edit was not in the tree)", got)
+	}
+
+	// The same edit inside the tree still counts, so this is a scope change rather
+	// than the tracker having stopped noticing edits.
+	withStdin(t, `{"cwd":"`+root+`","tool_name":"Edit","tool_input":{"file_path":"`+filepath.Join(root, "internal", "foo.go")+`"}}`)
+	if err := runLoopTrack(); err != nil {
+		t.Fatalf("runLoopTrack: %v", err)
+	}
+	if got := loopSnap(fs, root, "feat-x").Phase; got != "implement" {
+		t.Errorf("phase = %q, want implement (the edit was in the tree)", got)
+	}
+}
+
 // A gate command moves to that gate's phase once in the loop.
 func TestLoopTrackGateBashSetsVerify(t *testing.T) {
 	const root = "/tmp/awp-loop-gate"

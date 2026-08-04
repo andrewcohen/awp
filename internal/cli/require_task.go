@@ -18,9 +18,11 @@ var ErrTaskRequired = errors.New("task required")
 
 // requireTaskPayload is the subset of a PreToolUse hook payload the
 // require-task gate reads. session_id locates the session's task list; the
-// tool name + input decide whether this edit is gated.
+// tool name + input decide whether this edit is gated; cwd is the tree the
+// session is working in, which bounds what the gate has standing over.
 type requireTaskPayload struct {
 	SessionID string          `json:"session_id"`
+	CWD       string          `json:"cwd"`
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
 }
@@ -28,20 +30,14 @@ type requireTaskPayload struct {
 // editPath pulls the target path out of an Edit/Write (file_path) or
 // NotebookEdit (notebook_path) tool_input.
 func (p requireTaskPayload) editPath() string {
-	var in struct {
-		FilePath     string `json:"file_path"`
-		NotebookPath string `json:"notebook_path"`
-	}
-	_ = json.Unmarshal(p.ToolInput, &in)
-	if in.FilePath != "" {
-		return in.FilePath
-	}
-	return in.NotebookPath
+	return editTargetPath(p.ToolInput)
 }
 
 // runRequireTask implements `awp internal require-task --hook`: the
 // PreToolUse(Edit|Write|NotebookEdit) hook that denies editing a non-markdown
-// file unless the session has a task in_progress. It only enforces on repos
+// file *inside the session's tree* unless the session has a task in_progress. A
+// file outside that tree — a review record under ~/.awp, a scratch file — is
+// state rather than the change being made, so it is not gated. It only enforces on repos
 // with a dev_loop configured (see taskGateActive) — matching the gate hooks
 // and preamble injection, all keyed off watch.IsConfigured. It mirrors `gate
 // check --hook`: a denial is a stderr reason + ErrTaskRequired (→ exit 2,
@@ -63,15 +59,20 @@ func runRequireTask(args []string, errOut io.Writer) error {
 		return nil // unreadable payload → fail open
 	}
 
-	switch payload.ToolName {
-	case "Edit", "Write", "MultiEdit", "NotebookEdit":
-	default:
+	if !isEditTool(payload.ToolName) {
 		return nil // not an edit tool → allow
 	}
 
 	path := payload.editPath()
 	if path == "" || isMarkdownPath(path) {
 		return nil // markdown / no path → exempt
+	}
+
+	if !withinScope(path, hookScopeRoot(payload.CWD)) {
+		// Outside the session's tree, so not the code a task would be about — see
+		// hook_scope.go. Checked before the state lookups below because it decides
+		// whether this file is gated at all.
+		return nil
 	}
 
 	if !taskGateActive() {
