@@ -45,8 +45,25 @@ which ones to publish.
       --text "<the line's exact text>" [--end-text "<the last line's text>"] \
       --body-file <path>          # or --body "<your finding>"
 
-There is no session to locate and no path to pass: the review is resolved
-from the workspace you are in.
+**Run these from the workspace directory.** There is no session to locate
+and no path to pass, because the review is resolved from the workspace
+containing your current directory — which means running from somewhere else
+files into a different review. Filing from the source repo instead of the
+workspace puts your findings in that repo's own review, which is not the one
+the reviewer has open: both sides report success and the findings are
+invisible. Seven findings on a real PR were lost that way.
+
+Every write says where it went — `added suggestion c7 to review
+work-pr-54-coworker (workspace pr-54-coworker) on x.go:12` — so **read that
+line**. If the workspace it names is not the one you are reviewing, stop and
+fix it rather than filing the rest. `awp review list` names the same review
+before listing what is in it, which is the cheapest way to check before you
+start.
+
+If you cannot run from the workspace directory, pass `--workspace <name>` on
+`add`, `reply`, `list`, and `publish` to name the review explicitly. A name
+that matches no workspace is an error rather than a new empty review, so a
+typo cannot swallow a finding.
 
 **Write the body to a file and pass `--body-file`, not `--body`.** Findings
 are markdown and markdown is full of backticks; putting one through a shell
