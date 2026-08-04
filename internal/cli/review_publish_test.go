@@ -244,46 +244,100 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	inline := []review.Comment{
 		{ID: "c1", Author: review.AuthorHuman, Body: "a line remark", Kind: review.KindSuggestion,
 			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 12, EndLineHint: 18}},
-		{ID: "c2", Author: review.AuthorHuman, Body: "answering you", ReplyTo: "PRRC_x",
-			Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
+		{ID: "c2", Author: review.AuthorHuman, Body: "another",
+			Anchor: review.Anchor{Path: "b.go", Side: review.SideNew, LineHint: 3}},
 	}
 	changeWide := []review.Comment{{ID: "c3", Author: review.AuthorHuman, Body: "scope was internal/cli"}}
 
-	// With a verdict: the remarks are the review body, and the verdict is its own
-	// call — counted as one of the things about to happen, not a footnote.
+	// One review carrying both threads, then one submission. Two calls, not one per
+	// comment — which is the whole point: the REST comment endpoint made a separate
+	// single-comment review per call, and those cannot be deleted afterwards.
 	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2, "abc123def456789")
 	joined := strings.Join(plan, "\n")
 	for _, want := range []string{
-		"3 call(s) to PR #54 (2 already published)",
-		"POST pulls/54/comments  a.go:12-18",
-		// The commit the comment is anchored to is part of the call, so the preview
-		// has to name it — it is what decides which diff the line numbers mean.
+		// Two calls, not four: the two thread lines under the stage call are what it
+		// carries, not calls of their own.
+		"2 call(s) to PR #54 (2 already published)",
+		"addPullRequestReview  PR #54",
+		// The commit the threads are anchored to is part of the call, so the preview has
+		// to name it — it is what decides which diff the line numbers mean.
 		"commit=abc123def456",
-		"in_reply_to=PRRC_x",
-		"POST pulls/54/reviews  event=APPROVE",
+		"2 thread(s), staged",
+		"thread  a.go:12-18",
+		"thread  b.go:3",
+		"submitPullRequestReview  event=APPROVE",
 		"scope was internal/cli",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("the plan does not mention %q:\n%s", want, joined)
 		}
 	}
-	// A reply has no path or line to send, so it must not claim one.
-	for _, line := range plan {
-		if strings.Contains(line, "in_reply_to") && strings.Contains(line, "a.go:3") {
-			t.Fatalf("a reply's plan line carries an anchor it will not send: %q", line)
-		}
+	// The per-comment REST endpoint must not appear at all.
+	if strings.Contains(joined, "pulls/54/comments") {
+		t.Fatalf("the plan still posts comments one at a time:\n%s", joined)
 	}
 
-	// Without a verdict: no review submission, and the remarks go up as PR comments
-	// on a different endpoint — the plan has to say so, or it describes a run that
-	// is not the one about to happen.
-	plan = publishPlan(publishRequest{PR: 54}, inline, changeWide, 0, "abc123def456789")
+	// With only review-level remarks and no verdict, they go up as PR comments on a
+	// different endpoint — the plan has to say so, or it describes a run that is not
+	// the one about to happen.
+	plan = publishPlan(publishRequest{PR: 54}, nil, changeWide, 0, "abc123def456789")
 	joined = strings.Join(plan, "\n")
-	if strings.Contains(joined, "/reviews") {
+	if strings.Contains(joined, "PullRequestReview") {
 		t.Fatalf("a verdictless plan claims a review submission:\n%s", joined)
 	}
 	if !strings.Contains(joined, "POST issues/54/comments") {
 		t.Fatalf("expected the PR-comment endpoint for review-level remarks:\n%s", joined)
+	}
+}
+
+// A local reply is a conversation with the agent, not something to publish: a batched
+// review creates new threads only, so sending one would post it as a fresh top-level
+// comment divorced from what it answers.
+func TestPublishSkipsLocalReplies(t *testing.T) {
+	inline, changeWide, skipped := partitionForPublish([]review.Comment{
+		{ID: "c1", Body: "the finding", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
+		{ID: "c2", Body: "answering you", ReplyTo: "c1", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
+	})
+	if len(inline) != 1 || inline[0].ID != "c1" {
+		t.Fatalf("expected only the finding to publish, got %+v", inline)
+	}
+	if len(changeWide) != 0 {
+		t.Fatalf("a reply must not become a review-level remark: %+v", changeWide)
+	}
+	if skipped != 1 {
+		t.Fatalf("expected the reply counted as skipped, got %d", skipped)
+	}
+}
+
+// Comments go up as one review, not one review per comment. Counted at the transport
+// so the guarantee is about calls made, not about how the plan reads.
+func TestPublishMakesOneReviewForEveryComment(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r := review.Review{ID: "work-ws", Repo: "/repos/theirs"}
+	runner := &dirRecordingRunner{}
+	var out bytes.Buffer
+	comments := []review.Comment{
+		{ID: "c1", Author: review.AuthorHuman, Body: "one", State: review.Open,
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3, Text: "x"}},
+		{ID: "c2", Author: review.AuthorHuman, Body: "two", State: review.Open,
+			Anchor: review.Anchor{Path: "b.go", Side: review.SideNew, LineHint: 9, Text: "y"}},
+		{ID: "c3", Author: review.AuthorHuman, Body: "three", State: review.Open,
+			Anchor: review.Anchor{Path: "c.go", Side: review.SideNew, LineHint: 1, Text: "z"}},
+	}
+	if err := publishReview(runner, publishRequest{
+		Store: store, Review: r, Comments: comments,
+		PR: 54, Event: github.EventApprove, Verdict: "approve",
+		Dir: "/workspaces/theirs",
+	}, &out); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	// Two: stage the review, then submit it. Three comments used to mean three posts,
+	// each of which GitHub turned into its own empty review entry on the PR.
+	if runner.graphqlCalls != 2 {
+		t.Fatalf("expected 2 GraphQL calls (stage, submit) for 3 comments, got %d", runner.graphqlCalls)
+	}
+	if !strings.Contains(out.String(), "posted 3") {
+		t.Fatalf("expected all three recorded as posted, got %q", out.String())
 	}
 }
 
@@ -295,6 +349,9 @@ const reviewedSHA = "abc123def4567890abc123def4567890abcdef12"
 type dirRecordingRunner struct {
 	ghDirs []string
 	jjDirs []string
+	// graphqlCalls counts the GraphQL round trips, which is how "one review, not one
+	// per comment" is checked.
+	graphqlCalls int
 }
 
 func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
@@ -307,6 +364,14 @@ func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, arg
 	switch {
 	case len(args) > 2 && args[0] == "api" && strings.HasSuffix(args[2], "/commits"):
 		return reviewedSHA + "\n", nil
+	case len(args) > 1 && args[0] == "api" && args[1] == "graphql":
+		r.graphqlCalls++
+		// Enough of an addPullRequestReview / submitPullRequestReview payload for the
+		// publish path to read a review id back out of it.
+		return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1","comments":{"nodes":[]}}},` +
+			`"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1","state":"COMMENTED"}}}}`, nil
+	case len(args) > 3 && args[0] == "pr" && args[1] == "view" && args[3] == "--json":
+		return `{"id":"PR_kwDO1","headRefOid":"` + reviewedSHA + `"}`, nil
 	case len(args) > 1 && args[0] == "repo":
 		return `{"owner":{"login":"acme"},"name":"widgets"}`, nil
 	}
@@ -416,9 +481,11 @@ func TestPublishDryRunDoesNotRecordTheCommit(t *testing.T) {
 			ID: "c1", Author: review.AuthorHuman, Body: "a remark", State: review.Open,
 			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3, Text: "x"},
 		}},
-		PR:     54,
-		DryRun: true,
-		Dir:    "/workspaces/theirs-pr-54",
+		PR:      54,
+		Event:   github.EventApprove,
+		Verdict: "approve",
+		DryRun:  true,
+		Dir:     "/workspaces/theirs-pr-54",
 	}, &out); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
@@ -689,5 +756,32 @@ func TestPublishUsesTheFiledSummaryWhenNoneIsWritten(t *testing.T) {
 	got = planSummary(publishRequest{Summary: "written"}, []review.Comment{filed})
 	if got != "written" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The count above the plan has to be the number of API calls. Threads are listed
+// under the one call that carries them, and counting those said "8 call(s)" over a
+// plan that makes two — the exact arithmetic this change is about.
+func TestPublishPlanCountsCallsNotThreads(t *testing.T) {
+	inline := make([]review.Comment, 6)
+	for i := range inline {
+		inline[i] = review.Comment{
+			ID: "c", Author: review.AuthorHuman, Body: "x",
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: i + 1},
+		}
+	}
+	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"}, inline, nil, 0, "abc123def456789")
+	if !strings.HasPrefix(plan[0], "2 call(s)") {
+		t.Fatalf("expected two calls for six threads, got %q", plan[0])
+	}
+	// And all six are still shown, since they are what the reviewer is checking.
+	shown := 0
+	for _, l := range plan {
+		if strings.HasPrefix(l, "  thread  ") {
+			shown++
+		}
+	}
+	if shown != 6 {
+		t.Fatalf("expected six threads listed, got %d:\n%s", shown, strings.Join(plan, "\n"))
 	}
 }
