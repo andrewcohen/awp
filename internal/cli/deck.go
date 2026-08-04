@@ -1669,11 +1669,7 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 	case deckui.ActionSummon:
 		return summonWorkspaceSession(tmuxClient, svc, item, reporter)
 	case deckui.ActionOpenWindow:
-		// `C` no longer routes here: the change-vs-stack-base diff opens in
-		// the deck's own diff modal (deckui.ScopeStackBase) rather than in a
-		// tmux window, so there is no review revset to splice into a shell
-		// command.
-		return openNamedWindow(tmuxClient, svc, item, req.Arg, reporter)
+		return openNamedWindow(tmuxClient, svc, item, expandWindowArg(runner, item, req.Arg), reporter)
 	case deckui.ActionCI:
 		return openCIWindow(tmuxClient, svc, runner, item, reporter)
 	case deckui.ActionLastSession:
@@ -2036,6 +2032,31 @@ func resolveReviewStackBaseNamed(runner Runner, dir, ownBookmark string) (revset
 		return parent, parent
 	}
 	return "trunk()", trunk
+}
+
+// expandWindowArg resolves the review-window sentinel `C` emits into the command
+// the window runs (see deckui.ReviewStackArg). Every other arg passes through
+// untouched.
+//
+// Here rather than in the TUI because naming the base runs jj, and here rather
+// than in defaultWindowCommandWithRepo because that answers "what does a review
+// window run by default", which has no workspace to resolve a base against.
+//
+// The revset is quoted: `trunk()..@` reaches a shell, and unquoted parentheses
+// are a syntax error rather than a revset.
+func expandWindowArg(runner Runner, item deckui.Item, arg string) string {
+	if arg != deckui.ReviewStackArg {
+		return arg
+	}
+	// Always answerable: the base falls back to the literal trunk(), which jj
+	// resolves in whatever directory the window opens in.
+	return "review:awp diff -r " + shellQuote(scopeRevset(runner, item, deckui.ScopeStackBase))
+}
+
+// shellQuote wraps a value for a POSIX shell, which is where a window command
+// lands (tmux send-keys into the pane's shell).
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func openNamedWindow(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, arg string, reporter deckui.Reporter) error {

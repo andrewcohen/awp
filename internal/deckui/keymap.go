@@ -67,7 +67,7 @@ func newDeckKeyMap() deckKeyMap {
 		AgentWindow:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),
 		EditorWindow:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "editor window ($EDITOR)")),
 		ReviewWindow:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "review this change (- inside switches scope)")),
-		ReviewMainWin: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "review this change (- inside switches scope)")),
+		ReviewMainWin: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "review it in a tmux window instead of the deck")),
 		VCSWindow:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "vcs window (jjui)")),
 		ShellWindow:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shell window")),
 		CIWindow:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "ci window (gh run watch)")),
