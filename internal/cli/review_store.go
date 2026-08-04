@@ -149,25 +149,79 @@ func rangeEnd(line, end int) int {
 	return 0
 }
 
+// commentBody resolves the two ways to hand a body to the CLI. A file wins over
+// --body: passing both is a mistake, and the file is the more deliberate of the two.
+//
+// --body-file exists because argv is a bad channel for markdown. A review body is
+// full of backticks, and an agent composing a shell command escapes them for a
+// quoting context it has to guess — guess wrong and awp stores the escapes. That is
+// not hypothetical: seven findings on a real PR were published reading
+// "Pin the \`graphql_client\` git dep", because a backslash-backtick inside single
+// quotes is two literal characters rather than an escaped backtick. A file has no
+// quoting at all, so nothing can be mis-escaped into it.
+func commentBody(body, bodyFile string, stdin io.Reader) (string, error) {
+	if strings.TrimSpace(bodyFile) == "" {
+		// Only the argv path is de-escaped: a file went through no shell, so a
+		// backslash in one is what the author meant.
+		return unescapeShellBackticks(body), nil
+	}
+	read := func() ([]byte, error) {
+		if bodyFile == "-" {
+			if stdin == nil {
+				return nil, errors.New("review: --body-file - needs something on stdin")
+			}
+			return io.ReadAll(stdin)
+		}
+		return os.ReadFile(bodyFile)
+	}
+	b, err := read()
+	if err != nil {
+		return "", fmt.Errorf("review: reading the body: %w", err)
+	}
+	return string(b), nil
+}
+
+// unescapeShellBackticks repairs a body whose every backtick arrived escaped.
+//
+// Deliberately conditional. A body that escapes *every* backtick and uses none
+// plainly cannot have meant it — markdown escapes a backtick to display one
+// literally, which is a thing you do occasionally, not uniformly. A body that mixes
+// the two is expressing intent and is left exactly as written.
+func unescapeShellBackticks(body string) string {
+	if !strings.Contains(body, "\\`") {
+		return body
+	}
+	if strings.Contains(strings.ReplaceAll(body, "\\`", ""), "`") {
+		// Some backticks are plain, so the escaping is a choice rather than an accident.
+		return body
+	}
+	return strings.ReplaceAll(body, "\\`", "`")
+}
+
 func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("review add", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var (
-		path    = fs.String("file", "", "path of the file being commented on (repo-relative)")
-		line    = fs.Int("line", 0, "line number the comment attaches to")
-		endLine = fs.Int("end-line", 0, "last line, for a comment about a block rather than a line")
-		side    = fs.String("side", "new", "which side of the diff the line is on: new or old")
-		body    = fs.String("body", "", "the comment text")
-		author  = fs.String("author", "", "who is filing this (defaults to the agent name, or 'agent')")
-		text    = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
-		endText = fs.String("end-text", "", "the last line's text, the same way --text anchors the first")
-		kind    = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
+		path     = fs.String("file", "", "path of the file being commented on (repo-relative)")
+		line     = fs.Int("line", 0, "line number the comment attaches to")
+		endLine  = fs.Int("end-line", 0, "last line, for a comment about a block rather than a line")
+		side     = fs.String("side", "new", "which side of the diff the line is on: new or old")
+		body     = fs.String("body", "", "the comment text")
+		bodyFile = fs.String("body-file", "", "read the comment text from a file, or - for stdin (preferred for anything with markdown in it)")
+		author   = fs.String("author", "", "who is filing this (defaults to the agent name, or 'agent')")
+		text     = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
+		endText  = fs.String("end-text", "", "the last line's text, the same way --text anchors the first")
+		kind     = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*body) == "" {
-		return errors.New("review add requires --body")
+	bodyText, err := commentBody(*body, *bodyFile, os.Stdin)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(bodyText) == "" {
+		return errors.New("review add requires --body or --body-file")
 	}
 	// No --file is a review-level remark: something about the change as a whole,
 	// which the diff shows in its own section above the first file rather than
@@ -199,7 +253,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	}
 	c, err := store.AddComment(r, review.Comment{
 		Author: who,
-		Body:   *body,
+		Body:   bodyText,
 		// An unrecognised type falls back to a plain comment rather than failing:
 		// a finding is worth keeping even when the label on it is wrong.
 		Kind: review.ParseKind(*kind),
@@ -230,16 +284,21 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 	fs := flag.NewFlagSet("review reply", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var (
-		to     = fs.String("to", "", "id of the comment being replied to")
-		body   = fs.String("body", "", "the reply text")
-		author = fs.String("author", "", "who is replying (defaults to 'agent')")
-		kind   = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, or question")
+		to       = fs.String("to", "", "id of the comment being replied to")
+		body     = fs.String("body", "", "the reply text")
+		bodyFile = fs.String("body-file", "", "read the reply text from a file, or - for stdin (preferred for anything with markdown in it)")
+		author   = fs.String("author", "", "who is replying (defaults to 'agent')")
+		kind     = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, or question")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*to) == "" || strings.TrimSpace(*body) == "" {
-		return errors.New("review reply requires --to and --body")
+	bodyText, err := commentBody(*body, *bodyFile, os.Stdin)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*to) == "" || strings.TrimSpace(bodyText) == "" {
+		return errors.New("review reply requires --to and one of --body / --body-file")
 	}
 	store, r, err := openReviewForCwd(runner, svc)
 	if err != nil {
@@ -249,7 +308,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 	if who == "" {
 		who = "agent"
 	}
-	c, err := store.Reply(r, *to, review.Comment{Author: who, Body: *body, Kind: review.ParseKind(*kind)})
+	c, err := store.Reply(r, *to, review.Comment{Author: who, Body: bodyText, Kind: review.ParseKind(*kind)})
 	if err != nil {
 		return err
 	}

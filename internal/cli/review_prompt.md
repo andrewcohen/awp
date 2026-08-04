@@ -43,10 +43,19 @@ which ones to publish.
     awp review add --file <path> --line <n> [--end-line <n>] [--side new|old] \
       --author agent --type <comment|suggestion|question> \
       --text "<the line's exact text>" [--end-text "<the last line's text>"] \
-      --body "<your finding>"
+      --body-file <path>          # or --body "<your finding>"
 
 There is no session to locate and no path to pass: the review is resolved
 from the workspace you are in.
+
+**Write the body to a file and pass `--body-file`, not `--body`.** Findings
+are markdown and markdown is full of backticks; putting one through a shell
+argument means escaping it for a quoting context you have to guess, and
+guessing wrong is silent — the escapes get stored and published. That has
+happened: seven findings reached a real PR reading ``Pin the \`graphql_client\`
+git dep``, backslashes and all. A file has no quoting, so nothing can be
+mis-escaped into it. `--body-file -` reads stdin if a heredoc is easier.
+Keep `--body` for one-liners with no code spans in them.
 
 `--text` is worth passing whenever you have it. Findings are anchored to
 the line's **content**, not its number, so a finding with `--text` follows
@@ -152,16 +161,32 @@ a buried lead or a prose-formatted list; restructure before posting.
 
 ### Example
 
+A one-liner with nothing to escape can go through `--body`:
+
     awp review add --file internal/foo/bar.go --line 42 --side new \
       --author agent --type suggestion --text "\treturn baz.Field" \
       --body "Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
+
+Anything with code spans in it goes through a file. Write the body first,
+then reference it:
+
+    cat > /tmp/finding.md <<'EOF'
+    Pin the `graphql_client` git dep to a `rev` in Cargo.toml — that keeps the
+    dependency pinned *without* committing a lockfile.
+    EOF
+    awp review add --file extensions/foo/.gitignore --line 2 --side new \
+      --author agent --type suggestion --text "Cargo.lock" \
+      --body-file /tmp/finding.md
+
+Note the quoted heredoc delimiter (`<<'EOF'`): unquoted, the shell would
+expand the backticks as a command substitution.
 
 A finding about a block, anchored at both ends:
 
     awp review add --file internal/foo/bar.go --line 12 --end-line 18 --side new \
       --author agent --type suggestion \
       --text "\tfor _, row := range rows {" --end-text "\t}" \
-      --body "This loop re-opens the file every iteration; hoist the open above it."
+      --body-file /tmp/finding.md
 
 ### Closing summary
 
@@ -189,7 +214,10 @@ publish.
 When the user replies to one of your findings they send you its id; answer
 on that thread rather than filing a second comment beside it:
 
-    awp review reply --to <id> --author agent --type <type> --body "<your reply>"
+    awp review reply --to <id> --author agent --type <type> --body-file <path>
+
+`--body` works here too, and the same rule applies: a reply with code spans
+in it goes through a file.
 
 Use `awp review list` to see what you have filed. Each finding is a single
 JSON file in the review store, so a mistake (typo, wrong line, duplicate)
