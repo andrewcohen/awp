@@ -680,7 +680,17 @@ func (s *service) createWorkspace(name string, bookmark string, prompt string, r
 }
 
 func (s *service) List() ([]ListEntry, error) {
-	repoRoot, err := s.jj.RepoRoot()
+	// SourceRepoRoot, not RepoRoot: `jj root` inside a secondary workspace returns
+	// that *workspace's* path, and everything below treats this value as the repo
+	// every workspace belongs to. Getting it wrong corrupted state rather than just
+	// reading it wrong — canonicalizeEntries pins the `default` entry's path to this
+	// root, so one command run inside a workspace rewrote `default` to point at that
+	// workspace. The store canonicalizes its bucket key back to the source repo, so
+	// the bad entry was saved into the real repo's state, leaving two entries sharing
+	// one path. Every "which workspace is this directory?" lookup then resolved to
+	// `default` — which carries no PR number — so an agent's findings were filed
+	// against the wrong review and publishing reported an unpinned workspace.
+	repoRoot, err := s.jj.SourceRepoRoot()
 	if err != nil {
 		return nil, fmt.Errorf("not a jj repository: %w", err)
 	}
@@ -1932,6 +1942,10 @@ func (s *service) canonicalizeEntries(repoRoot string, entries map[string]Entry)
 			}
 			changed = true
 		}
+		// The default workspace *is* the repo root, so a recorded path saying
+		// otherwise is stale and gets corrected. Correctness depends on repoRoot being
+		// the *source* repo — see the note in List, where passing a workspace's own
+		// path through here corrupted the entry rather than merely misreading it.
 		if normalizedName == "default" && path != repoRoot {
 			path = repoRoot
 			changed = true
