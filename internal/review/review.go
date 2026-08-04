@@ -285,8 +285,9 @@ func (c Comment) PublishBody() string {
 	// to say. The other two are worth announcing, and read as a sentence: "question:
 	// why is this here" rather than "(question) - why is this here". A reply joins a
 	// thread whose first comment already carries the kind, so repeating it on every
-	// message would be noise.
-	if kind := c.Kind.OrDefault(); kind != KindComment && c.ReplyTo == "" {
+	// message would be noise — and that holds whichever conversation it is joining,
+	// ours or a mirrored GitHub one.
+	if kind := c.Kind.OrDefault(); kind != KindComment && c.ReplyTo == "" && !c.ThreadReply() {
 		body = kind.Label() + ": " + body
 	}
 	// The marker leads. Who wrote a remark frames everything after it — including

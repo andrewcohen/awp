@@ -30,6 +30,10 @@ type commentEditor struct {
 	editing string
 	// replyTo is the id of the comment being replied to, empty otherwise.
 	replyTo string
+	// replyToThread is the node id of the mirrored GitHub thread being answered.
+	// Separate from replyTo because the answer goes somewhere else: replyTo files a
+	// reply in our own store, this one posts it to GitHub.
+	replyToThread string
 	// kind is what the remark is asking for, cycled with tab while composing.
 	kind review.Kind
 }
@@ -42,6 +46,17 @@ func newCommentEditor(a review.Anchor, width int) commentEditor {
 func newReplyEditor(parentID string, a review.Anchor, width int) commentEditor {
 	e := newCommentEditor(a, width)
 	e.replyTo = parentID
+	return e
+}
+
+// newThreadReplyEditor opens an empty box that will answer a GitHub thread.
+//
+// It takes the thread's anchor, so the reply is filed against the same line the
+// conversation is about — which is what keeps it under that thread if it has to
+// be redrawn from the local record before the mirror catches up.
+func newThreadReplyEditor(threadID string, a review.Anchor, width int) commentEditor {
+	e := newCommentEditor(a, width)
+	e.replyToThread = threadID
 	return e
 }
 
@@ -61,7 +76,13 @@ func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	ta.SetValue(c.Body)
 	ta.Focus()
 	ta.CursorEnd()
-	return commentEditor{area: ta, anchor: c.Anchor, editing: c.ID, kind: c.Kind.OrDefault()}
+	return commentEditor{
+		area: ta, anchor: c.Anchor, editing: c.ID,
+		// Carried through so revising an unsent reply still knows which thread it is
+		// for. Without it, saving the revision would file a fresh top-level remark.
+		replyToThread: c.ReplyToThread,
+		kind:          c.Kind.OrDefault(),
+	}
 }
 
 // commentEditorHeight is how many rows the text area gets. Enough for a real
@@ -116,7 +137,14 @@ func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction
 		// The box owns every key while it is open, so tab is free here — it is the
 		// pane switch only in the diff. Cycling rather than three separate keys
 		// keeps the gesture next to the label it changes.
-		e.kind = e.kind.Next()
+		//
+		// Not on a reply into a GitHub thread: the kind is dropped from a reply's
+		// published body (see review.Comment.PublishBody), because the conversation
+		// it joins already carries one. A cycler that changed nothing about what
+		// gets posted would be a label promising something it cannot deliver.
+		if e.replyToThread == "" {
+			e.kind = e.kind.Next()
+		}
 		return e, nil, editorContinue
 	case "ctrl+g":
 		// Out to $EDITOR, the same binding every other multi-line field in awp
@@ -146,6 +174,16 @@ func (e commentEditor) view(width int) string {
 	}
 	verb := " " + string(e.kind.OrDefault()) + " on "
 	switch {
+	case e.replyToThread != "":
+		// Named as what it is, because this is the one box in this surface whose text
+		// goes straight out to a public conversation. Everything else here is a local
+		// draft until `P`, and a box that looked the same as those would be the wrong
+		// place to discover the difference.
+		verb = " reply on github to "
+		hint = " enter post the reply · ctrl+g $EDITOR · alt+enter newline · esc cancel"
+		if lipgloss.Width(hint) > inner {
+			hint = " enter post · ctrl+g $EDITOR · esc cancel"
+		}
 	case e.replyTo != "":
 		verb = " reply (" + string(e.kind.OrDefault()) + ") on "
 	case e.editing != "":
@@ -318,12 +356,13 @@ func lastRowOfThread(idx streamIndex, parentID string) int {
 // comment builds the record from the editor's contents.
 func (e commentEditor) comment() review.Comment {
 	return review.Comment{
-		ID:     e.editing,
-		Author: review.AuthorHuman,
-		Body:   strings.TrimRight(e.area.Value(), "\n"),
-		Kind:   e.kind.OrDefault(),
-		State:  review.Open,
-		Anchor: e.anchor,
+		ID:            e.editing,
+		Author:        review.AuthorHuman,
+		Body:          strings.TrimRight(e.area.Value(), "\n"),
+		Kind:          e.kind.OrDefault(),
+		State:         review.Open,
+		Anchor:        e.anchor,
+		ReplyToThread: e.replyToThread,
 	}
 }
 
@@ -354,6 +393,19 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 	// On a comment, `c` replies to it — the common thing to do with a remark is
 	// answer it. Revising your own wording is `i`.
 	if c, ok := m.localCommentAtCursor(); ok {
+		if c.ThreadReply() {
+			// A reply of ours inside a GitHub conversation. Answering it answers that
+			// conversation, not the message: "one exchange, one thread" is the rule for
+			// our own replies too, and here the exchange is the one on the PR.
+			if m.ReplyToThread == nil {
+				m.status = "replying to GitHub threads unavailable here"
+				return m, nil
+			}
+			m.editing = true
+			m.editor = newThreadReplyEditor(c.ReplyToThread, c.Anchor, m.hunkWidth)
+			m.rebuildStream()
+			return m, textarea.Blink
+		}
 		if m.ReplyComment == nil {
 			m.status = "replying unavailable here"
 			return m, nil
@@ -370,9 +422,28 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 		m.rebuildStream()
 		return m, textarea.Blink
 	}
-	if _, isThread := m.threadAtCursor(); isThread {
-		m.status = "that is a GitHub thread — resolve it with R"
-		return m, nil
+	// On a mirrored thread, `c` answers it — the same gesture as replying to one of
+	// our own remarks, because from the reader's side it is the same act. Where the
+	// answer goes is what differs, and the box says so.
+	if t, isThread := m.threadAtCursor(); isThread {
+		if m.ReplyToThread == nil {
+			m.status = "replying to GitHub threads unavailable here"
+			return m, nil
+		}
+		if m.SaveComment == nil {
+			// The draft is filed before it is posted, so that a failed post leaves the
+			// words somewhere rather than nowhere. With no store there is no such
+			// somewhere, and typing into a box that could lose the text is worse than
+			// saying no.
+			m.status = "replying needs a review store"
+			return m, nil
+		}
+		m.editing = true
+		m.editor = newThreadReplyEditor(t.ID, review.Anchor{
+			Path: t.Path, Side: t.Side, LineHint: t.Line,
+		}, m.hunkWidth)
+		m.rebuildStream()
+		return m, textarea.Blink
 	}
 	a, ok := m.AnchorAtCursor()
 	if !ok {
@@ -390,6 +461,13 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 	c, ok := m.localCommentAtCursor()
 	if !ok {
 		m.status = "put the cursor on one of your comments to edit it"
+		return m, nil
+	}
+	if c.ThreadReply() && c.State == review.Published {
+		// These words are on the PR, and this cannot take them back. Editing the local
+		// copy would leave the record disagreeing with what everyone else can read —
+		// and the mirror, which is what gets drawn, would go on showing the original.
+		m.status = "that reply is on github — edit it there"
 		return m, nil
 	}
 	if m.UpdateComment == nil {
@@ -428,6 +506,12 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// every path rather than only the successful ones.
 		m.rebuildStream()
 		c := m.editor.comment()
+		if c.ThreadReply() {
+			// Straight out to GitHub, which is the one exit in this surface that does
+			// not wait for `P`. Answering a question is a message, not a review, and a
+			// reply nobody sees until you publish is not a reply.
+			return m.postThreadReply(c)
+		}
 		if parent := m.editor.replyTo; parent != "" {
 			if err := m.ReplyComment(parent, c); err != nil {
 				m.status = "reply: " + err.Error()

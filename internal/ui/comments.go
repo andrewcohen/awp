@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -82,6 +83,13 @@ func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 		m.status = "put the cursor on one of your comments to delete it"
 		return m, nil
 	}
+	if c.ThreadReply() && c.State == review.Published {
+		// Deleting the record would not delete the reply, and the mirror would go on
+		// drawing it — so this would look like a delete that did nothing, while
+		// quietly losing our own record of having said it.
+		m.status = "that reply is on github — delete it there"
+		return m, nil
+	}
 	if m.DeleteComment == nil {
 		m.status = "deleting unavailable here"
 		return m, nil
@@ -147,6 +155,14 @@ func (v ThreadVisibility) String() string {
 // resolving unavailable, which the viewer reports rather than silently ignoring.
 type ThreadResolver func(threadID string, resolve bool) error
 
+// ThreadReplier posts a reply into a remote thread and returns the id of the
+// comment GitHub created.
+//
+// The id is what the reply is recorded against, and it is not optional: it is how
+// the local record recognises itself in the mirror. Without it the same reply
+// would be drawn twice, once as ours and once as GitHub's copy of it.
+type ThreadReplier func(threadID, body string) (string, error)
+
 // threadAtCursor is the remote thread the cursor is on, if any. Resolving acts on
 // the thread under the cursor rather than a separate selection, so there is only
 // ever one notion of "this one".
@@ -210,6 +226,131 @@ func (m Model) toggleResolved() (tea.Model, tea.Cmd) {
 		m.status = "thread resolved"
 	} else {
 		m.status = "thread reopened"
+	}
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+	return m, nil
+}
+
+// threadReplyDoneMsg is what came back from posting a reply. localID is the
+// record it was filed as, so the outcome can be recorded against it.
+type threadReplyDoneMsg struct {
+	localID   string
+	threadID  string
+	commentID string
+	err       error
+}
+
+// replyToThreadCmd posts off the update loop. A gh round trip is most of a second,
+// and doing it inline stops the view redrawing and takes the keyboard with it.
+func replyToThreadCmd(post ThreadReplier, localID, threadID, body string) tea.Cmd {
+	return func() tea.Msg {
+		id, err := post(threadID, body)
+		return threadReplyDoneMsg{localID: localID, threadID: threadID, commentID: id, err: err}
+	}
+}
+
+// postThreadReply files the reply, then sends it.
+//
+// Filed first, always, and that order is the point: a post can fail — the thread
+// can be gone, the token can be stale, the network can be down — and a reply that
+// existed only in a text area would be gone with it. On disk first, the failure is
+// a status line and a draft you can send again.
+func (m Model) postThreadReply(c review.Comment) (tea.Model, tea.Cmd) {
+	if m.ReplyToThread == nil {
+		m.status = "replying to GitHub threads unavailable here"
+		m.statusErr = true
+		return m, nil
+	}
+	if c.ID != "" {
+		// Revising a reply that never went out. Replaced rather than appended, the same
+		// as revising any other comment.
+		if m.UpdateComment == nil {
+			m.status = "editing unavailable here"
+			m.statusErr = true
+			return m, nil
+		}
+		if err := m.UpdateComment(c); err != nil {
+			m.status = "reply: " + err.Error()
+			m.statusErr = true
+			return m, nil
+		}
+		for i := range m.comments {
+			if m.comments[i].ID == c.ID {
+				m.comments[i].Body = c.Body
+			}
+		}
+	} else {
+		if err := m.SaveComment(c); err != nil {
+			m.status = "reply: " + err.Error()
+			m.statusErr = true
+			return m, nil
+		}
+		// The store assigns the id, and the outcome has to be recorded against it. With
+		// no way to read it back the reply still posts; it just cannot be marked
+		// published from here, and the next reload picks up the record as written.
+		if m.LastSavedComment != nil {
+			if saved, ok := m.LastSavedComment(); ok {
+				c = saved
+			}
+		}
+		m.comments = append(m.comments, c)
+	}
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+	m.status = "posting the reply…"
+	m.statusErr = false
+	// PublishBody rather than the stored text, so a reply carries the same markers
+	// every other published body does — an agent's 🤖 above all, since this posts
+	// under the authenticated user's account.
+	return m, replyToThreadCmd(m.ReplyToThread, c.ID, c.ReplyToThread, c.PublishBody())
+}
+
+// applyThreadReplyDone records what GitHub did with the reply.
+func (m Model) applyThreadReplyDone(msg threadReplyDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		// The draft stays exactly where it is, labelled unsent (see commentRows), and
+		// `P` will offer to send it again.
+		m.status = "reply: " + msg.err.Error()
+		m.statusErr = true
+		return m, nil
+	}
+	var posted review.Comment
+	for i := range m.comments {
+		if m.comments[i].ID != msg.localID {
+			continue
+		}
+		m.comments[i].State = review.Published
+		// Against the comment GitHub created. This id is what stops a later publish
+		// sending the reply a second time, and what lets the mirror recognise these
+		// words as ours.
+		m.comments[i].Publish = &review.PublishRecord{ThreadID: msg.commentID, At: time.Now()}
+		posted = m.comments[i]
+	}
+	m.status = "replied on github"
+	m.statusErr = false
+	if m.UpdateComment != nil && posted.ID != "" {
+		if err := m.UpdateComment(posted); err != nil {
+			// It posted; only the record does not say so. Worth reporting rather than
+			// swallowing: the next publish would read that record and send it again.
+			m.status = "replied, but the record didn't save: " + err.Error()
+			m.statusErr = true
+		}
+	}
+	// Appended to the mirrored conversation so the reply reads as part of it now,
+	// rather than after whatever refreshes the mirror next — the same reason
+	// resolving writes the new state locally instead of refetching.
+	for i := range m.threads {
+		if m.threads[i].ID != msg.threadID {
+			continue
+		}
+		m.threads[i].Comments = append(m.threads[i].Comments, review.ThreadComment{
+			// "you" for the same reason a comment of ours is labelled that way. The next
+			// mirror refresh replaces it with the login GitHub reports.
+			ID: msg.commentID, Author: "you", Body: posted.PublishBody(),
+		})
 	}
 	m.rebuildStream()
 	m.clampCursor()
@@ -403,8 +544,49 @@ func (m Model) threadAsComment(t review.Thread) review.Comment {
 		Author: threadHeaderLabel(t, m.threadFolded(t)),
 		Body:   b.String(),
 		State:  review.Published,
-		Anchor: review.Anchor{Path: t.Path, Side: t.Side, LineHint: t.Line},
+		Anchor: threadAnchor(t),
 	}
+}
+
+// threadAnchor is where a thread sits, in our own vocabulary.
+//
+// One spelling, because two things need it and they must agree: the adapted
+// comment a thread is drawn as, and a reply filed against it. A reply anchored
+// anywhere else would be relocated to a different line than the conversation it
+// answers the moment it had to be drawn from our own record.
+func threadAnchor(t review.Thread) review.Anchor {
+	return review.Anchor{Path: t.Path, Side: t.Side, LineHint: t.Line}
+}
+
+// threadCarriesOurReply reports whether the mirror already holds this reply of
+// ours.
+//
+// Matched on the id GitHub gave the reply when it was posted, which is the same id
+// the mirror reports for it — the same match echoedByThread makes for a published
+// comment, and for the same reason: after a successful post both records describe
+// one message, and drawing both shows the reply twice.
+//
+// GitHub's copy is the one to keep. It sits inside the conversation, in order,
+// where a reader expects to find an answer.
+func (m Model) threadCarriesOurReply(c review.Comment) bool {
+	if c.Publish == nil {
+		return false
+	}
+	id := strings.TrimSpace(c.Publish.ThreadID)
+	if id == "" {
+		return false
+	}
+	for _, t := range m.threads {
+		if t.ID != c.ReplyToThread {
+			continue
+		}
+		for _, tc := range t.Comments {
+			if tc.ID == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // echoedByThread maps a local comment's id to the display id of the mirrored
@@ -495,14 +677,46 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 	// — a reply is never published — so they move onto the thread rather than being
 	// dropped with the parent, which would strand an exchange with the agent.
 	var deferred map[string][]review.Comment
+	// onto moves a comment of ours into a mirrored conversation, re-parented onto
+	// that thread's display id so placement puts it under the thread's row rather
+	// than wherever its own anchor happens to resolve.
+	onto := func(displayID string, c review.Comment) {
+		if deferred == nil {
+			deferred = make(map[string][]review.Comment, len(threads))
+		}
+		c.ReplyTo = displayID
+		deferred[displayID] = append(deferred[displayID], c)
+	}
+	// shown is the conversations on screen, so a reply can ask whether the thread it
+	// answers is one of them.
+	shown := make(map[string]bool, len(threads))
+	for _, t := range threads {
+		shown[t.ID] = true
+	}
 	for _, th := range review.Threads(m.comments) {
-		if displayID, ok := echoed[th.Parent.ID]; ok {
-			if deferred == nil {
-				deferred = make(map[string][]review.Comment, len(echoed))
+		if th.Parent.ThreadReply() {
+			// Posted, and the mirror has it: GitHub's copy is drawn, ours is not. That
+			// includes not drawing it when `T` has hidden the conversation — once these
+			// words are on the PR they are part of it, and "hide GitHub's threads" has to
+			// mean this one too.
+			if m.threadCarriesOurReply(th.Parent) {
+				continue
 			}
+			if shown[th.Parent.ReplyToThread] {
+				onto(remoteThreadPrefix+th.Parent.ReplyToThread, th.Parent)
+				for _, reply := range th.Replies {
+					onto(remoteThreadPrefix+th.Parent.ReplyToThread, reply)
+				}
+				continue
+			}
+			// The thread it answers is not on screen — hidden, or gone from the mirror —
+			// and this reply has not reached GitHub. Fall through, so it is drawn against
+			// the line it is about: a reply of ours that nobody has received is the last
+			// thing that should quietly disappear.
+		}
+		if displayID, ok := echoed[th.Parent.ID]; ok {
 			for _, reply := range th.Replies {
-				reply.ReplyTo = displayID
-				deferred[displayID] = append(deferred[displayID], reply)
+				onto(displayID, reply)
 			}
 			continue
 		}
@@ -972,6 +1186,14 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	// comment is the default and claims nothing, so it goes unlabelled too.
 	if k := c.Kind.OrDefault(); k != review.KindComment && c.ReplyTo == "" {
 		title += " · " + string(k)
+	}
+	// A reply GitHub has not got says so. Once it lands, the mirror's copy is what
+	// gets drawn and this record is not — so a reply of ours still showing here is
+	// one that did not go out, and it looks exactly like one that did. A reply
+	// nobody received, reading as received, is the failure this surface exists to
+	// prevent.
+	if c.ThreadReply() && c.State != review.Published {
+		title += " · unsent"
 	}
 	if c.State != review.Open {
 		title += " · " + string(c.State)
