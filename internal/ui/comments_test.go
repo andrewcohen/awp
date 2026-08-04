@@ -929,6 +929,65 @@ func TestRemoteThreadsRelocateWithContent(t *testing.T) {
 	}
 }
 
+// Who wrote a remark is header material. The author used to be the first thing in
+// the *body* — `alice: this leaks` under a header reading only `github` — which
+// put the one thing you scan for in the one place you do not, and pushed the
+// remark itself off the start of the line.
+func TestThreadNamesItsAuthorInTheHeaderNotTheBody(t *testing.T) {
+	c := Model{}.threadAsComment(remoteThread("T1", "a.go", 3, false, "this leaks"))
+	if !strings.Contains(c.Author, "alice") {
+		t.Fatalf("expected the author in the header, got %q", c.Author)
+	}
+	// The header already says it, so the body opens on the remark.
+	if strings.HasPrefix(c.Body, "alice:") {
+		t.Fatalf("expected the body to open on the remark, got %q", c.Body)
+	}
+	if c.Body != "this leaks" {
+		t.Fatalf("body = %q, want just the remark", c.Body)
+	}
+	// It stays "github", so a mirrored thread is still distinguishable from one of
+	// ours at a glance.
+	if !strings.Contains(c.Author, "github") {
+		t.Fatalf("expected the github marker kept, got %q", c.Author)
+	}
+}
+
+// A conversation carries more than one speaker, and a header can only name one.
+// The rest keep their inline prefix — there are no per-message headers to hang
+// them on.
+func TestLaterThreadMessagesKeepTheirSpeaker(t *testing.T) {
+	th := threadOf("T1", "a.go", 3, false, "this leaks", "agreed")
+	th.Comments[1].Author = "bob"
+	c := Model{}.threadAsComment(th)
+	if !strings.Contains(c.Author, "alice") {
+		t.Fatalf("expected the opening author in the header, got %q", c.Author)
+	}
+	if c.Body != "this leaks\nbob: agreed" {
+		t.Fatalf("body = %q, want the opener bare and the reply attributed", c.Body)
+	}
+}
+
+// A folded thread is one line, so the author has to be on it — that is the whole
+// summary a reader gets before deciding to open it.
+func TestFoldedThreadNamesItsAuthor(t *testing.T) {
+	label := threadHeaderLabel(threadOf("T1", "a.go", 3, true, "settled", "ok"), true)
+	for _, want := range []string{"alice", "github", "resolved", "2 msgs"} {
+		if !strings.Contains(label, want) {
+			t.Fatalf("expected %q in the folded label, got %q", want, label)
+		}
+	}
+}
+
+// GitHub reports no author for a deleted account. The header drops the segment
+// rather than showing an empty one, which would leave a stray separator.
+func TestThreadWithNoAuthorHasNoEmptySegment(t *testing.T) {
+	th := remoteThread("T1", "a.go", 3, false, "orphaned words")
+	th.Comments[0].Author = ""
+	if label := threadHeaderLabel(th, false); strings.Contains(label, " ·  · ") || strings.Contains(label, "  ·") {
+		t.Fatalf("expected no empty author segment, got %q", label)
+	}
+}
+
 // Local comments and remote threads keep separate vocabularies, so the UI cannot
 // claim a draft was "resolved" or a thread "addressed".
 func TestThreadStateIsPublishedNotOpen(t *testing.T) {

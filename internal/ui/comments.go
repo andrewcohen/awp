@@ -327,11 +327,28 @@ func (m Model) threadCollapsed(c review.Comment) bool {
 // The count is messages, not replies, so a thread of one reads "1 msg" rather
 // than claiming a reply it does not have.
 func threadHeaderLabel(t review.Thread, folded bool) string {
+	// The author leads, the way a local comment's header reads "you · published".
+	// Who wrote a remark is header material: it was inside the body — the first
+	// body line read "alice: this leaks" under a header that said only "github" —
+	// which put the one thing you scan for in the one place you do not scan.
+	label := remoteThreadLabel(t)
+	if a := threadAuthor(t); a != "" {
+		label = a + " · " + label
+	}
 	if !folded {
-		return foldOpen + " " + remoteThreadLabel(t)
+		return foldOpen + " " + label
 	}
 	return fmt.Sprintf("%s %s · %d msg%s",
-		foldClosed, remoteThreadLabel(t), len(t.Comments), plural(len(t.Comments)))
+		foldClosed, label, len(t.Comments), plural(len(t.Comments)))
+}
+
+// threadAuthor is who opened the thread, empty when GitHub reported no author
+// (a deleted account).
+func threadAuthor(t review.Thread) string {
+	if len(t.Comments) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(t.Comments[0].Author)
 }
 
 // toggleThreadFold opens or closes the mirrored thread under the cursor.
@@ -369,6 +386,16 @@ func (m Model) threadAsComment(t review.Thread) review.Comment {
 		if i > 0 {
 			b.WriteString("\n")
 		}
+		if i == 0 {
+			// The opening message's author is in the header, so naming it again on
+			// its first body line said the same thing twice and pushed the remark
+			// itself off the start of the line.
+			b.WriteString(c.Body)
+			continue
+		}
+		// Later messages still name their speaker inline: the header can only carry
+		// one author, and a body is a single string with no per-message headers to
+		// hang the rest on.
 		b.WriteString(c.Author + ": " + c.Body)
 	}
 	return review.Comment{
