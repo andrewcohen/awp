@@ -83,8 +83,22 @@ type CommentStore struct {
 	// SaveReviewed persists one mark; an empty hash clears it.
 	SaveReviewed func(item Item, path, hash string) error
 	// Update revises an existing comment; Delete removes one.
+	//
+	// Update carries a *revision*, which is a change to the body and nothing else:
+	// the implementation keeps the stored state, timestamps and publish record, on the
+	// grounds that an editor does not own them. Anything that needs to change a
+	// comment's state has to say so through its own seam — see MarkPublished.
 	Update func(item Item, c review.Comment) error
 	Delete func(item Item, id string) error
+	// MarkPublished records that a comment reached GitHub, against the id GitHub gave
+	// it.
+	//
+	// Its own seam because Update cannot carry it and silently did not: a reply posted
+	// from the viewer went out, came back through Update with State=Published, and had
+	// that state dropped on the way to disk — so a reply sitting on the PR read as
+	// `unsent` in the diff forever, and a later publish would have offered to send it
+	// again. Two different intentions had one spelling; now they have two.
+	MarkPublished func(item Item, id, remoteID string) error
 	// Reply files a reply against a parent comment.
 	Reply func(item Item, parentID string, c review.Comment) error
 	// LastSaved returns the record Save just wrote, id included.
@@ -335,6 +349,11 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 	}
 	if comments.Delete != nil {
 		inner.DeleteComment = func(id string) error { return comments.Delete(item, id) }
+	}
+	if comments.MarkPublished != nil {
+		inner.RecordPublished = func(id, remoteID string) error {
+			return comments.MarkPublished(item, id, remoteID)
+		}
 	}
 	if comments.Send != nil {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/github"
@@ -502,6 +503,35 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 				}
 			}
 			return store.UpdateComment(r, c)
+		},
+		// MarkPublished is the write Update deliberately refuses to make.
+		//
+		// Update keeps the stored state so a revise cannot clobber a publish record —
+		// which is right, and is exactly why recording a publish needs its own way in.
+		// A reply posted from the viewer went out, came back through Update, and had its
+		// State=Published dropped here; the reply then sat on the PR while the diff went
+		// on labelling it unsent.
+		MarkPublished: func(item deckui.Item, id, remoteID string) error {
+			store, r, err := open(item)
+			if err != nil {
+				return err
+			}
+			existing, err := store.Comments(r)
+			if err != nil {
+				return err
+			}
+			for _, e := range existing {
+				if e.ID != id {
+					continue
+				}
+				e.State = review.Published
+				e.Publish = &review.PublishRecord{ThreadID: remoteID, At: time.Now()}
+				return store.UpdateComment(r, e)
+			}
+			// Nothing to mark. Not an error: the record may have been deleted between
+			// the post and its answer coming back, and the comment is on GitHub either
+			// way — there is nothing here for the caller to do about it.
+			return nil
 		},
 		Reply: func(item deckui.Item, parentID string, c review.Comment) error {
 			store, r, err := open(item)

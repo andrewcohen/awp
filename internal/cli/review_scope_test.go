@@ -348,3 +348,74 @@ type failingGHRunner struct{}
 func (failingGHRunner) Run(_ context.Context, _ string, _ string, _ ...string) (string, error) {
 	return `{"errors":[{"message":"thread is gone"}]}`, nil
 }
+
+// Recording a publish is not a revision, and must not go through the path that is.
+//
+// The revise seam keeps the stored state on purpose — a compose box does not own a
+// comment's state, and letting it write one would let a stale editor copy clobber a
+// publish record. Which is exactly why recording a publish needs its own way in: a
+// reply posted from the viewer went out, came back through the revise seam, and had
+// its published state dropped on the floor. The reply sat on the PR while the diff
+// went on calling it unsent, and the next publish would have offered to send it
+// again.
+func TestMarkPublishedRecordsWhatReviseDeliberatelyWillNot(t *testing.T) {
+	root := tempRoot(t)
+	store := review.Store{}
+	r, err := store.Open(root, review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	draft, err := store.AddComment(r, review.Comment{
+		Author: review.AuthorHuman, Body: "confirmed", State: review.Open,
+		ReplyToThread: "PRRT_1",
+		Anchor:        review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cs := reviewStoreFor(nil)
+	item := deckui.Item{RepoRoot: root, WorkspaceName: "ws"}
+
+	// First, the failure this replaces: the revise seam keeps the stored state, so a
+	// record handed to it already marked published comes back unpublished.
+	published := draft
+	published.State = review.Published
+	published.Publish = &review.PublishRecord{ThreadID: "PRRC_new"}
+	if err := cs.Update(item, published); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	after, _ := store.Comments(r)
+	if len(after) != 1 {
+		t.Fatalf("expected one comment, got %d", len(after))
+	}
+	if after[0].State == review.Published {
+		t.Fatal("the revise seam now writes state — MarkPublished exists because it does not")
+	}
+
+	// And what actually records it.
+	if err := cs.MarkPublished(item, draft.ID, "PRRC_new"); err != nil {
+		t.Fatalf("mark published: %v", err)
+	}
+	after, _ = store.Comments(r)
+	if after[0].State != review.Published {
+		t.Fatalf("expected the reply published on disk, got %q", after[0].State)
+	}
+	if after[0].Publish == nil || after[0].Publish.ThreadID != "PRRC_new" {
+		t.Fatalf("expected GitHub's id recorded, got %+v", after[0].Publish)
+	}
+	// The body and the thread it answers survive, since this write is not about them.
+	if after[0].Body != "confirmed" || after[0].ReplyToThread != "PRRT_1" {
+		t.Fatalf("marking published changed the record: %+v", after[0])
+	}
+}
+
+// A record that vanished between the post and its answer is not an error: the
+// comment is on GitHub either way, and there is nothing the caller could do.
+func TestMarkPublishedOnAMissingRecordIsNotAnError(t *testing.T) {
+	root := tempRoot(t)
+	cs := reviewStoreFor(nil)
+	if err := cs.MarkPublished(deckui.Item{RepoRoot: root, WorkspaceName: "ws"}, "gone", "PRRC_x"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
