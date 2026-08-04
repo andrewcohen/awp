@@ -324,8 +324,12 @@ func (m Model) applyThreadReplyDone(msg threadReplyDoneMsg) (tea.Model, tea.Cmd)
 	}
 	m.status = "replied on github"
 	m.statusErr = false
-	if m.UpdateComment != nil && posted.ID != "" {
-		if err := m.UpdateComment(posted); err != nil {
+	// Through RecordPublished, not UpdateComment: a revision carries a body and the
+	// store keeps the state it already had, so sending this through there wrote the
+	// reply back exactly as unsent — which is what a reply already sitting on the PR
+	// then claimed to be, in the diff, indefinitely.
+	if m.RecordPublished != nil && posted.ID != "" {
+		if err := m.RecordPublished(posted.ID, msg.commentID); err != nil {
 			// It posted; only the record does not say so. Worth reporting rather than
 			// swallowing: the next publish would read that record and send it again.
 			m.fail("replied, but the record didn't save: %v", err)

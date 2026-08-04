@@ -207,8 +207,16 @@ type Model struct {
 	// leaves the send exit unavailable.
 	SendComment CommentSink
 	// UpdateComment revises an existing comment; DeleteComment removes one.
+	//
+	// UpdateComment carries a revision — a new body — and nothing else. The store
+	// keeps the record's state, timestamps and publish record, because a compose box
+	// does not own them.
 	UpdateComment CommentSink
 	DeleteComment CommentDeleter
+	// RecordPublished notes that a comment reached GitHub, against the id GitHub gave
+	// it. Separate from UpdateComment, which drops exactly that (see above): a reply
+	// posted through it went out and still read as unsent.
+	RecordPublished func(id, remoteID string) error
 	// LastSavedComment returns the record the store just wrote, including the id
 	// it assigned. The id is what lets the agent reply on the thread.
 	LastSavedComment func() (review.Comment, bool)
