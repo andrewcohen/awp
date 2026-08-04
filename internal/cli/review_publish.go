@@ -196,7 +196,14 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// separate comments on the PR. Checked before anything is posted — a run that
 	// published eight inline comments and then refused the verdict would leave the
 	// reviewer to work out what landed.
-	summary := joinSummary(strings.TrimSpace(req.Summary), reviewSummary(changeWide))
+	// The body is what the caller wrote, if anything. Not that joined with the
+	// review's own summary remarks: the viewer prefills its box from exactly those, so
+	// joining would send them twice. With nothing written — `awp review publish` and
+	// no --summary — they are the body, as before.
+	summary := strings.TrimSpace(req.Summary)
+	if summary == "" {
+		summary = reviewSummary(changeWide)
+	}
 	if github.EventNeedsBody(event) && summary == "" {
 		return fmt.Errorf("--verdict %s needs a review summary; pass --summary", req.Verdict)
 	}
@@ -292,13 +299,22 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			res.Failed++
 			failures = append(failures, fmt.Errorf("submitting the review: %w", perr))
 		} else {
+			// The record has to end up saying what was actually sent. The reviewer edits
+			// the body in a box prefilled from these remarks, so the first of them becomes
+			// that text; the rest are marked published as they stand, since they were part
+			// of what the body was built from.
+			written := strings.TrimSpace(req.Summary)
+			if written != "" && len(changeWide) > 0 {
+				changeWide[0].Body = written
+			}
 			for _, c := range changeWide {
 				record(c, id, "review summary")
 			}
+			// Nothing to reconcile against, so the summary becomes the review's first.
 			// Filed now rather than before the send, so a run the reviewer backed out of
-			// leaves nothing behind. Recorded as published in the same breath: it is on
-			// GitHub as the review's body, so a later run must not post it again.
-			if written := strings.TrimSpace(req.Summary); written != "" {
+			// leaves nothing behind — and published in the same breath, since it is on
+			// GitHub as the review's body and a later run must not post it again.
+			if written != "" && len(changeWide) == 0 {
 				saved, aerr := store.AddComment(r, review.Comment{
 					Author: review.AuthorHuman,
 					Body:   written,
@@ -393,7 +409,7 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 		// body — every review-level remark. Which is why they are not counted
 		// separately above.
 		line := fmt.Sprintf("POST pulls/%d/reviews  event=%s", req.PR, req.Event)
-		if summary := joinSummary(strings.TrimSpace(req.Summary), reviewSummary(changeWide)); summary != "" {
+		if summary := planSummary(req, changeWide); summary != "" {
 			line += "  body=" + oneLine(summary)
 		}
 		calls = append(calls, line)
@@ -519,17 +535,13 @@ func parseVerdict(s string) (string, error) {
 	return "", fmt.Errorf("review publish: unknown --verdict %q (approve, comment, or request-changes)", s)
 }
 
-// joinSummary puts the summary written for this submission above the review-level
-// remarks already on record. Written-now first: it is the reviewer's conclusion, and
-// the standing remarks are context for it.
-func joinSummary(written, filed string) string {
-	switch {
-	case written == "":
-		return filed
-	case filed == "":
+// planSummary is the body a run would send, for the preview to show. Same rule the
+// run itself uses — see publishReview — so the two cannot describe different bodies.
+func planSummary(req publishRequest, changeWide []review.Comment) string {
+	if written := strings.TrimSpace(req.Summary); written != "" {
 		return written
 	}
-	return written + "\n\n" + filed
+	return reviewSummary(changeWide)
 }
 
 // reviewSummary is the review body built from the change-wide remarks: their

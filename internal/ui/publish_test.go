@@ -191,32 +191,9 @@ func TestPublishSendsTheChosenVerdict(t *testing.T) {
 	}
 }
 
-// The title says what is about to go where, so a verdict is not chosen blind.
-func TestPublishPromptCountsWhatIsPending(t *testing.T) {
-	m, _ := publishModel(t, "", nil)
-	m.comments = []review.Comment{
-		commentOn("a.go", 1, "one", "a line remark"),
-		{ID: "c2", Author: review.AuthorHuman, Body: "about the whole change", State: review.Open},
-		// Already on GitHub: not pending, so not counted.
-		{ID: "c3", Author: review.AuthorHuman, Body: "sent earlier", State: review.Published,
-			Anchor: review.Anchor{Path: "a.go", LineHint: 2}},
-	}
-	m.rebuildStream()
-	got := m.publishPrompt()
-	if !strings.Contains(got, "1 comment") || !strings.Contains(got, "1 review summary") {
-		t.Fatalf("expected the prompt to count both kinds, got %q", got)
-	}
-	if strings.Contains(got, "2 comment") {
-		t.Fatalf("a published comment was counted as pending: %q", got)
-	}
-}
-
 // Nothing pending is not an error: a verdict is worth submitting on its own.
 func TestPublishOffersToFinishWithNothingPending(t *testing.T) {
 	m, asked := publishModel(t, "submitted the review as approve", nil)
-	if got := m.publishPrompt(); !strings.Contains(got, "nothing unpublished") {
-		t.Fatalf("expected the prompt to say so, got %q", got)
-	}
 	m = sendIt(tab(tab(press(m, "P")))) // approve, which needs no summary
 	if got := verdicts(*asked); len(got) != 1 || got[0] != "approve" {
 		t.Fatalf("expected an approval submitted anyway, got %v", *asked)
@@ -362,7 +339,7 @@ func TestPublishPreviewsBeforePosting(t *testing.T) {
 	// The plan, as calls: an endpoint and a target either look right or they do
 	// not, which is the only diagnostic there is when a publish seems to do nothing.
 	body := stripANSI(m.Body(80, 16))
-	for _, want := range []string{"POST pulls/7/comments", "a.go:1", "will be sent"} {
+	for _, want := range []string{"POST pulls/7/comments", "a.go:1", "2 call(s)"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the preview does not show %q:\n%s", want, body)
 		}
@@ -407,7 +384,7 @@ func TestPublishReportStaysUpUntilDismissed(t *testing.T) {
 		t.Fatalf("expected the report on screen, got publishing=%v stage=%v", m.publishing, m.publishStage)
 	}
 	body := stripANSI(m.Body(80, 16))
-	for _, want := range []string{"what happened", "posted 2", "submitted the review as approve"} {
+	for _, want := range []string{"posted 2", "submitted the review as approve"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the report does not show %q:\n%s", want, body)
 		}
@@ -524,5 +501,86 @@ func TestPublishRefusalIsShownInsteadOfAPlan(t *testing.T) {
 	}
 	if body := stripANSI(m.Body(80, 16)); !strings.Contains(body, "isn't pinned to a PR") {
 		t.Fatalf("the refusal is not on screen:\n%s", body)
+	}
+}
+
+// The box opens on the summary the review already has. They are one thing: what is in
+// the box is the review's body, and the stream's review section shows the same text.
+// An empty box beside a summary sitting at the top of the diff invited a second one to
+// be written, and both would have gone up.
+func TestPublishPrefillsTheBoxWithTheReviewSummary(t *testing.T) {
+	m, asked := publishModel(t, "posted 1", nil)
+	m.comments = []review.Comment{
+		{ID: "s1", Author: review.AuthorHuman, Body: "Scope: internal/cli only.", State: review.Open},
+	}
+	m.rebuildStream()
+	m = press(m, "P")
+	if got := m.summaryEditor.area.Value(); got != "Scope: internal/cli only." {
+		t.Fatalf("expected the box prefilled, got %q", got)
+	}
+	// And it is what gets sent, rather than an empty summary alongside the remark.
+	m = sendIt(m)
+	for _, a := range *asked {
+		if a.summary != "Scope: internal/cli only." {
+			t.Fatalf("expected the prefilled body sent (dry=%v), got %q", a.dry, a.summary)
+		}
+	}
+}
+
+// An agent's summary carries its marker into the box, because that is the text that
+// will be sent — and because publishing its words under your own account is the moment
+// to see that a robot wrote them.
+func TestPublishPrefillShowsTheRobotMarker(t *testing.T) {
+	m, _ := publishModel(t, "posted 1", nil)
+	m.comments = []review.Comment{
+		{ID: "s1", Author: "agent", Body: "Reviewed all three files.", State: review.Open},
+	}
+	m.rebuildStream()
+	m = press(m, "P")
+	if got := m.summaryEditor.area.Value(); !strings.HasPrefix(got, review.RobotMarker) {
+		t.Fatalf("expected the marker in the box, got %q", got)
+	}
+}
+
+// Several summary remarks become one body, a paragraph each, in order.
+func TestPublishPrefillJoinsSeveralSummaries(t *testing.T) {
+	m, _ := publishModel(t, "posted 1", nil)
+	m.comments = []review.Comment{
+		{ID: "s1", Author: review.AuthorHuman, Body: "First.", State: review.Open},
+		{ID: "s2", Author: review.AuthorHuman, Body: "Second.", State: review.Open},
+	}
+	m.rebuildStream()
+	m = press(m, "P")
+	if got := m.summaryEditor.area.Value(); got != "First.\n\nSecond." {
+		t.Fatalf("expected both joined, got %q", got)
+	}
+}
+
+// A summary already on GitHub must not come back into the box: it would be sent a
+// second time as part of the next review's body.
+func TestPublishPrefillSkipsPublishedSummaries(t *testing.T) {
+	m, _ := publishModel(t, "posted 1", nil)
+	m.comments = []review.Comment{
+		{ID: "s1", Author: review.AuthorHuman, Body: "went up last time", State: review.Published},
+		{ID: "s2", Author: review.AuthorHuman, Body: "still a draft", State: review.Open},
+	}
+	m.rebuildStream()
+	m = press(m, "P")
+	if got := m.summaryEditor.area.Value(); got != "still a draft" {
+		t.Fatalf("expected only the unpublished summary, got %q", got)
+	}
+}
+
+// Editing the prefill sends what you edited it to, not the original.
+func TestPublishSendsTheEditedPrefill(t *testing.T) {
+	m, asked := publishModel(t, "posted 1", nil)
+	m.comments = []review.Comment{
+		{ID: "s1", Author: review.AuthorHuman, Body: "draft", State: review.Open},
+	}
+	m.rebuildStream()
+	m = sendIt(typeInto(press(m, "P"), " plus more"))
+	last := (*asked)[len(*asked)-1]
+	if last.summary != "draft plus more" {
+		t.Fatalf("expected the edited body, got %q", last.summary)
 	}
 }

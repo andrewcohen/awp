@@ -150,6 +150,12 @@ whether you were thorough. Optimize for that reader.
 - **Length tracks payload.** A one-line ask gets one line. Don't pad a
   small point to look rigorous — padding reads as noise, not diligence.
 
+**Never write a bare `#<number>`.** GitHub turns it into a link to the PR or
+issue of that number in the repo, and cross-links it there — so quoting a
+heading like `feat: bootstrapped styles & components #3` silently references
+someone else's PR #3 and notifies it. Wrap it in backticks (`` `#3` ``) or
+drop the number. The same goes for a bare `@name`, which pings that user.
+
 Smell test before posting: can the reader get the point from sentence
 one and skim the rest? If not, it's not done.
 
