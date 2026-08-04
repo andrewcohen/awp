@@ -112,7 +112,7 @@ func TestEditorReadFailureIsReported(t *testing.T) {
 // It is in the reference, which is the only place the compose box's keys are
 // written down.
 func TestHelpDocumentsTheEditorKey(t *testing.T) {
-	view := stripANSI(helpContent(120))
+	view := stripANSI(helpContent(120, nil, nil))
 	if !strings.Contains(view, "ctrl+g") {
 		t.Fatalf("expected ctrl+g documented:\n%s", view)
 	}

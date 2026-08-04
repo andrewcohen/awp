@@ -104,6 +104,11 @@ type Model struct {
 	// its own chrome (the deck) renders Body and answers this in its footer
 	// instead, so it leaves this empty.
 	Subject Subject
+	// The `-` chord (see scope.go): scopes are the ranges a host offers, scopeIndex
+	// the one being read, scopePick the chord waiting for the key that picks.
+	scopes     []ScopeOption
+	scopeIndex int
+	scopePick  bool
 
 	files       []diff.FileDiff
 	filtered    []diff.FileDiff
@@ -294,7 +299,7 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // scroll position where the reader left it.
 func (m *Model) resizeHelp() {
 	at := m.helpVP.YOffset
-	m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.HostKeys)
+	m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.scopeHelpRow(), m.HostKeys)
 	m.helpVP.SetYOffset(at)
 }
 
@@ -614,6 +619,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditorKey(msg)
 	}
 	key := msg.String()
+	// The `-` chord swallows exactly the next key (see scope.go). Checked before
+	// the modes below because it is one keypress deep and nothing else can be up
+	// while it is.
+	if m.scopePick {
+		return m.handleScopeKey(key)
+	}
 	// The publish prompt owns the keyboard while it is up, for the same reason the
 	// help overlay does: nothing behind it is navigable, and its `esc` means
 	// "don't publish".
@@ -696,13 +707,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Built on open rather than kept in sync: it is cheap, and it means the
 		// reference is always laid out for the size the terminal is now, and always
 		// opens at the top.
-		m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.HostKeys)
+		m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.scopeHelpRow(), m.HostKeys)
 		return m, nil
 	case "r":
 		// `r` marked a manual refresh until live refresh made that redundant
 		// (phase 2). It now marks the file at the cursor reviewed, which is the
 		// gesture used most while working through a change.
 		return m.toggleReviewed()
+	case "-":
+		// Only when a host installed more than one range to offer; otherwise the key
+		// does nothing rather than opening a menu with one answer in it.
+		if len(m.scopes) > 1 {
+			m.scopePick = true
+		}
+		return m, nil
 	case "ctrl+r":
 		m.refreshing = true
 		m.status = "refreshing…"
@@ -1357,8 +1375,14 @@ func (m Model) renderHeader() string {
 	if m.Subject.PR != "" {
 		segs = append(segs, m.Subject.PR)
 	}
-	if m.baseLabel != "" {
+	switch {
+	case m.baseLabel != "":
+		// The base it resolved — "vs main" — says what you are reading against, where
+		// the scope's own name only says how it was picked.
 		segs = append(segs, "vs "+m.baseLabel)
+	case m.ScopeLabel() != "":
+		// Until the resolve lands, and permanently for a scope with no base to name.
+		segs = append(segs, m.ScopeLabel())
 	}
 	return styleHeader.Render(" " + strings.Join(segs, " · ") + " ")
 }
@@ -1368,6 +1392,12 @@ func (m Model) renderFooter() string {
 	// help.go for why it stopped being spelled out on every frame.
 	hint := "? help"
 	filterLine := strings.Repeat(" ", max(1, m.width))
+	if m.scopePick {
+		// The chord owns the whole footer for the one keypress it lives: the
+		// alternatives are the only thing worth saying, and nothing else is readable
+		// in that moment anyway.
+		return lipgloss.JoinVertical(lipgloss.Left, filterLine, styleDim.Render(m.scopeMenuHint()))
+	}
 	switch m.focus {
 	case FocusFilter:
 		// The filter is one of the two modes worth spelling out: it is modal, and

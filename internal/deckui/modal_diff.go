@@ -44,11 +44,6 @@ func (s DiffScope) String() string {
 	}
 }
 
-// hasBase reports whether the scope is diffed against something worth naming.
-// The working copy is diffed against @ itself, which "working copy" already
-// says; the other two resolve to a branch the footer can name instead.
-func (s DiffScope) hasBase() bool { return s != ScopeWorking }
-
 // DiffLoader returns git-format diff text for a workspace at the given scope
 // (`jj diff --git` with the matching revision). Installed by the CLI layer via
 // WithDiffViewer so the deck package doesn't shell out itself.
@@ -66,6 +61,15 @@ type DiffOpener func(item Item, filePath string, line int) tea.Cmd
 // viewer runs it as its own command, so a slow resolve delays the label rather
 // than the diff.
 type DiffBaseResolver func(item Item, scope DiffScope) string
+
+// DiffScopeProvider is the `-` menu for a workspace: the ranges the view offers,
+// the first being the one it opens on.
+//
+// The chord itself lives in the viewer (internal/ui/scope.go) rather than here.
+// The deck had its own copy and standalone `awp diff` had none, so the same
+// surface answered the same key two different ways depending on which door you
+// came through. One implementation; hosts only supply the list.
+type DiffScopeProvider func(item Item) []ui.ScopeOption
 
 // CommentStore is the review store seam. The deck package neither knows nor
 // cares where findings live; the CLI layer supplies these.
@@ -133,10 +137,6 @@ type diffModal struct {
 	// another scope without going back through the cursor.
 	item  Item
 	scope DiffScope
-	// scopePick is the `-` chord: the next key picks a scope. Keys-only with a
-	// footer hint, the same shape as the `p` PR menu — a one-of-three choice does
-	// not need a list to point at.
-	scopePick bool
 	// Styles are cached here rather than built per frame — view and
 	// footerHelp are render paths.
 	muted  lipgloss.Style
@@ -146,7 +146,7 @@ type diffModal struct {
 
 // newDiffModal builds the modal and returns the command that loads the
 // first diff.
-func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, base DiffBaseResolver, comments CommentStore) (*diffModal, tea.Cmd) {
+func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, base DiffBaseResolver, scopes DiffScopeProvider, comments CommentStore) (*diffModal, tea.Cmd) {
 	inner := ui.New(item.Path,
 		func() (string, error) { return load(item, scope) },
 		func(filePath string, line int) tea.Cmd {
@@ -159,15 +159,18 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	if base != nil {
 		inner.ResolveBase = func() string { return base(item, scope) }
 	}
+	if scopes != nil {
+		// The `-` menu. The viewer owns the chord (internal/ui/scope.go) so the deck
+		// and standalone `awp diff` cannot answer the same key differently.
+		inner.WithScopes(scopes(item))
+	}
 	// The keys the deck takes before the viewer sees them. Documented here rather
 	// than in the deck's own `?` overlay because that one is unreachable while this
-	// is open — `?` opens the viewer's.
+	// is open — `?` opens the viewer's. `-` is not among them: the viewer owns it
+	// now, and documents it itself.
 	inner.HostKeys = []charm.KeyGroup{{
 		Title: "In the deck",
-		Keys: [][2]string{
-			{"-", "switch scope: " + scopeMenuKeys()},
-			{"esc / q", "back to the deck"},
-		},
+		Keys:  [][2]string{{"esc / q", "back to the deck"}},
 	}}
 	ApplyCommentStore(&inner, item, comments)
 	dm := &diffModal{
@@ -212,11 +215,6 @@ func PRLabel(item Item) string {
 }
 
 func (dm *diffModal) footerHelp() string {
-	if dm.scopePick {
-		// The chord owns the whole footer while it is up: the alternatives are the
-		// only thing worth saying, and they are only readable for one keypress.
-		return dm.muted.Render(strings.Join(scopeMenuHint(dm.scope), " · "))
-	}
 	status, isErr := dm.inner.Status()
 	style := dm.muted
 	if isErr {
@@ -227,7 +225,11 @@ func (dm *diffModal) footerHelp() string {
 	// back to the scope's own wording for the frame or two before the answer
 	// lands, and permanently when no resolver is installed.
 	against := dm.scope.String()
-	if base := dm.inner.Base(); base != "" && dm.scope.hasBase() {
+	if label := dm.inner.ScopeLabel(); label != "" {
+		// Whatever `-` last switched to, which the viewer owns.
+		against = label
+	}
+	if base := dm.inner.Base(); base != "" {
 		against = "vs " + base
 	}
 	// `? help` rather than a legend: the viewer owns the full keymap behind `?`,
@@ -246,72 +248,9 @@ func (dm *diffModal) footerHelp() string {
 	return style.Render(strings.Join(segs, " · "))
 }
 
-// scopeKeys is the `-` chord's menu: the key that picks each scope, in the order
-// the hint lists them. One table so the hint cannot drift from what the keys do.
-var scopeKeys = []struct {
-	key   string
-	scope DiffScope
-}{
-	{"c", ScopeStackBase},
-	{"w", ScopeWorking},
-	{"t", ScopeTrunk},
-}
-
-// scopeMenuHint is the chord's footer: every scope with its key, the current one
-// marked so the menu says where you are as well as where you can go.
-func scopeMenuHint(current DiffScope) []string {
-	out := make([]string, 0, len(scopeKeys)+2)
-	out = append(out, "scope:")
-	for _, s := range scopeKeys {
-		label := s.key + " " + s.scope.String()
-		if s.scope == current {
-			label += " (current)"
-		}
-		out = append(out, label)
-	}
-	return append(out, "esc cancel")
-}
-
-// scopeMenuKeys is the same menu as one line, for the `?` reference where there
-// is no current scope to mark.
-func scopeMenuKeys() string {
-	parts := make([]string, 0, len(scopeKeys))
-	for _, s := range scopeKeys {
-		parts = append(parts, s.key+" "+s.scope.String())
-	}
-	return strings.Join(parts, " · ")
-}
-
 func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	if Trace != nil {
 		defer traceSince(time.Now(), "diff.update %T", msg)
-	}
-	// The `-` chord swallows the next key, so it is checked before anything else —
-	// including the close keys, which cancel the chord rather than the view.
-	if dm.scopePick {
-		key, ok := msg.(tea.KeyMsg)
-		if !ok {
-			// Not a key: let the viewer have it (a refresh tick, a resize) and keep
-			// the chord up. Closing it on a tick would make the menu vanish on its
-			// own a second after opening.
-			return dm.forward(msg)
-		}
-		dm.scopePick = false
-		pressed := key.String()
-		for _, s := range scopeKeys {
-			if s.key != pressed {
-				continue
-			}
-			if s.scope == dm.scope {
-				// Already there. Reloading would throw away the cursor and the folds
-				// to arrive at the same diff.
-				return nil
-			}
-			return m.reopenDiffModal(dm.item, s.scope)
-		}
-		// Anything else — including esc — cancels. A mistyped key should not fall
-		// through to the viewer and do something else instead.
-		return nil
 	}
 	// While the viewer's filter has focus, or its `?` overlay is up, every key
 	// belongs to it — including the ones that would otherwise close the modal.
@@ -325,9 +264,6 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		case "esc", "q", "ctrl+c":
 			m.active = nil
 			return tea.ClearScreen
-		case "-":
-			dm.scopePick = true
-			return nil
 		}
 	}
 	return dm.forward(msg)

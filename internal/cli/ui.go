@@ -29,6 +29,46 @@ func diffLoaderFor(runner Runner) deckui.DiffLoader {
 	}
 }
 
+// scopeOptionsFor is the `-` menu, built once and installed on whichever viewer is
+// being opened. Both surfaces get the same list from here: the deck's modal and
+// standalone `awp diff` are the same view, and a key that means one thing in one
+// and nothing in the other is the bug this replaced.
+//
+// dir is the directory diffs are read in — the workspace root, which is not
+// necessarily where the process was started.
+func scopeOptionsFor(runner Runner, item deckui.Item, dir string) []ui.ScopeOption {
+	if runner == nil {
+		runner = NewExecRunner()
+	}
+	load := diffLoaderFor(runner)
+	base := diffBaseResolverFor(runner)
+	// The order is the order the menu offers them, and the first is the default the
+	// view opens on: the whole change against its stack base, which is what a review
+	// is normally of.
+	scopes := []struct {
+		key   string
+		scope deckui.DiffScope
+	}{
+		{"c", deckui.ScopeStackBase},
+		{"w", deckui.ScopeWorking},
+		{"t", deckui.ScopeTrunk},
+	}
+	out := make([]ui.ScopeOption, 0, len(scopes))
+	for _, s := range scopes {
+		it, sc := item, s.scope
+		if strings.TrimSpace(dir) != "" {
+			it.Path = dir
+		}
+		out = append(out, ui.ScopeOption{
+			Key:   s.key,
+			Label: sc.String(),
+			Load:  func() (string, error) { return load(it, sc) },
+			Base:  func() string { return base(it, sc) },
+		})
+	}
+	return out
+}
+
 // scopeRevset is the revision a scope reads. Empty for the working copy, which
 // is `jj diff`'s own default.
 func scopeRevset(runner Runner, item deckui.Item, scope deckui.DiffScope) string {
@@ -110,6 +150,11 @@ func diffSubjectFor(svc workspace.Service, repoRoot, cwd string) deckui.Item {
 	if e, ok := workspaceEntryForPath(svc, cwd); ok {
 		item.WorkspaceName = e.Name
 		item.PRNumber = e.PRNumber
+		// The workspace's own bookmark, which resolving the stack base has to
+		// exclude. Without it the nearest bookmarked ancestor of @ *is* the
+		// workspace's own bookmark, so the base resolved to the change itself and
+		// the default diff came back all but empty.
+		item.Bookmark = e.Bookmark
 		if strings.TrimSpace(e.Path) != "" {
 			// The workspace's own root, not wherever in it you happen to be standing:
 			// send-to-agent and the review both key off the workspace, not the cwd.
@@ -141,38 +186,40 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
 	subject := diffSubjectFor(svc, repoRoot, cwd)
-	revset = strings.TrimSpace(revset)
-	if revset == "" {
-		// The same range `c` opens on: the whole change against its stack base.
-		// Defaulting to the working copy meant `awp diff` in a workspace whose work
-		// is committed — every PR workspace — showed an empty diff, and the only way
-		// to see the change was to know to pass -r.
-		revset = scopeRevset(runner, subject, deckui.ScopeStackBase)
+	openEditor := func(filePath string, line int) tea.Cmd {
+		return tea.ExecProcess(editor.OpenExecCmd("", filePath, line), func(err error) tea.Msg {
+			if err != nil {
+				return err
+			}
+			return nil
+		})
 	}
-	model := ui.New(repoRoot,
-		// Read on every refresh tick, so the revset is resolved by jj each time
-		// rather than pinned to a commit id here: `-r @-` should keep meaning "the
-		// change before this one" as the stack moves under it.
-		func() (string, error) { return j.DiffGit(cwd, revset) },
-		func(filePath string, line int) tea.Cmd {
-			return tea.ExecProcess(editor.OpenExecCmd("", filePath, line), func(err error) tea.Msg {
-				if err != nil {
-					return err
-				}
-				return nil
-			})
-		},
-	)
+	var model ui.Model
+	if revset = strings.TrimSpace(revset); revset != "" {
+		// An explicit -r is one range and only that one: the user named what they
+		// want, so there is nothing for `-` to offer and nothing to resolve.
+		//
+		// Read on every refresh tick rather than pinned to a commit id here, so
+		// `-r @-` keeps meaning "the change before this one" as the stack moves
+		// under it.
+		model = ui.New(repoRoot, func() (string, error) { return j.DiffGit(cwd, revset) }, openEditor)
+		// Named as the revset rather than as a resolved commit: that is what the
+		// reader will recognise, and it stays true after the change is rewritten.
+		model.ResolveBase = func() string { return revset }
+	} else {
+		// No arguments: resolve itself exactly the way `c` does. Same scope list, so
+		// the default range and the `-` menu are one decision made in one place —
+		// `awp diff` in a workspace and `c` on its deck row show the same change.
+		scopes := scopeOptionsFor(runner, subject, subject.Path)
+		model = ui.New(repoRoot, scopes[0].Load, openEditor)
+		model.ResolveBase = scopes[0].Base
+		model.WithScopes(scopes)
+	}
 	// The chrome says what it is a review of, the way the deck's footer does:
 	// which workspace, which PR, and what the diff is read against.
 	model.Subject = ui.Subject{
 		Workspace: strings.TrimSpace(subject.WorkspaceName),
 		PR:        deckui.PRLabel(subject),
-	}
-	if revset != "" {
-		// Named as the revset rather than as a resolved commit: that is what the
-		// reader will recognise, and it stays true after the change is rewritten.
-		model.ResolveBase = func() string { return revset }
 	}
 	// The same review seams the deck's modal gets. Without them this was a diff
 	// you could only read: no commenting, no comment index, no mirrored GitHub

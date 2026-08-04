@@ -28,6 +28,7 @@ import (
 	"github.com/andrewcohen/awp/internal/portcapture"
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
+	"github.com/andrewcohen/awp/internal/ui"
 	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -830,6 +831,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithBookmarkFetcher(bookmarkFetcher).
 		WithDiffViewer(diffLoaderFor(runner), openDiffFileInEditor).
 		WithDiffBaseResolver(diffBaseResolverFor(runner)).
+		// The same scope list standalone `awp diff` gets, so `c` and `awp diff`
+		// open on the same range and answer `-` the same way.
+		WithDiffScopes(func(item deckui.Item) []ui.ScopeOption {
+			return scopeOptionsFor(runner, item, item.Path)
+		}).
 		WithReviewStore(reviewStoreWithSend(runner, tmuxClient, svc)).
 		WithTrunkResolver(func(repo string) string {
 			fr := fixedDirRunner{base: runner, dir: repo}
