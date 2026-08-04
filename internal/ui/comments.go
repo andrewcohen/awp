@@ -380,6 +380,59 @@ func (m Model) threadAsComment(t review.Thread) review.Comment {
 	}
 }
 
+// echoedByThread maps a local comment's id to the display id of the mirrored
+// GitHub thread that is the same conversation.
+//
+// A comment published from here comes back through the mirror as a thread, so
+// after a publish both records describe one conversation — and rendering both
+// showed every published comment twice, once as the local record and once as
+// `▶ github · 1 msg · you: 🤖 Suggestion: …` directly beneath it.
+//
+// The mirrored copy is the one to keep. It is GitHub's record of the same words,
+// and it carries what the local one cannot know: whether the thread has been
+// resolved, whether the code moved out from under it, and any reply that arrived
+// after we posted. The local record stays in the store either way — it is what
+// makes a re-publish skip rather than duplicate — it just stops being drawn.
+//
+// Matched on GitHub's comment node id, which both sides hold: the id
+// addPullRequestReview returns for a comment it creates is the id the mirror
+// reports for that same comment. Body and line were the alternatives and both
+// drift — GitHub recomputes a thread's line as the PR moves (a comment filed
+// against line 47 came back reported at 53), and editing a published comment
+// locally changes its body.
+func echoedByThread(comments []review.Comment, threads []review.Thread) map[string]string {
+	// Parents only: a reply is never published, so it has no id to match on and
+	// belongs to whichever copy of the conversation ends up being drawn.
+	published := make(map[string]string, len(comments))
+	for _, c := range comments {
+		if c.ReplyTo != "" || c.Publish == nil {
+			continue
+		}
+		if id := strings.TrimSpace(c.Publish.ThreadID); id != "" {
+			published[id] = c.ID
+		}
+	}
+	if len(published) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, t := range threads {
+		for _, tc := range t.Comments {
+			// An empty id is a mirror written before the ids were carried: it says
+			// nothing, so it is not treated as a match. The next mirror refresh fills
+			// it in.
+			if tc.ID == "" {
+				continue
+			}
+			if localID, ok := published[tc.ID]; ok {
+				out[localID] = remoteThreadPrefix + t.ID
+				break
+			}
+		}
+	}
+	return out
+}
+
 // SetComments replaces the comment set and rebuilds the stream so they appear
 // in place.
 func (m *Model) SetComments(cs []review.Comment) {
@@ -404,7 +457,28 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 	// replies. Placing replies independently would scatter an exchange across the
 	// diff wherever each message's anchor happened to resolve.
 	all := make([]review.Comment, 0, len(m.comments))
+	threads := m.visibleThreads()
+	// A comment published from here is drawn as the mirrored thread it produced,
+	// not twice (see echoedByThread). Reconciled against the threads actually being
+	// shown rather than every mirrored one, so cycling `T` to none does not hide a
+	// remark of your own along with GitHub's conversation.
+	echoed := echoedByThread(m.comments, threads)
+	// deferred holds the replies of a local comment whose conversation is being
+	// drawn from the mirror, keyed by that thread's display id. They are ours alone
+	// — a reply is never published — so they move onto the thread rather than being
+	// dropped with the parent, which would strand an exchange with the agent.
+	var deferred map[string][]review.Comment
 	for _, th := range review.Threads(m.comments) {
+		if displayID, ok := echoed[th.Parent.ID]; ok {
+			if deferred == nil {
+				deferred = make(map[string][]review.Comment, len(echoed))
+			}
+			for _, reply := range th.Replies {
+				reply.ReplyTo = displayID
+				deferred[displayID] = append(deferred[displayID], reply)
+			}
+			continue
+		}
 		all = append(all, th.Parent)
 		for _, reply := range th.Replies {
 			// A reply displays in the thread's kind, not its own. The whole
@@ -417,8 +491,13 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 			all = append(all, reply)
 		}
 	}
-	for _, t := range m.visibleThreads() {
-		all = append(all, m.threadAsComment(t))
+	for _, t := range threads {
+		parent := m.threadAsComment(t)
+		all = append(all, parent)
+		for _, reply := range deferred[parent.ID] {
+			reply.Kind = parent.Kind
+			all = append(all, reply)
+		}
 	}
 	if len(all) == 0 {
 		return commentPlacement{}

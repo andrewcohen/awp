@@ -23,6 +23,11 @@ import (
 
 // ThreadComment is one comment within a review thread.
 type ThreadComment struct {
+	// ID is the comment's GraphQL node ID — the same id addPullRequestReview hands
+	// back for a comment it creates. That is what lets a mirrored thread be
+	// recognised as the echo of a comment published from here, rather than guessed
+	// at from its body and line.
+	ID     string
 	Author string
 	Body   string
 }
@@ -53,7 +58,7 @@ const reviewThreadsQuery = `query($owner:String!,$name:String!,$number:Int!){
       reviewThreads(first:100){
         nodes{
           id isResolved isOutdated path line startLine diffSide
-          comments(first:50){ nodes{ body author{ login } } }
+          comments(first:50){ nodes{ id body author{ login } } }
         }
       }
     }
@@ -116,6 +121,7 @@ func (c *Client) FetchReviewThreads(num int) ([]ReviewThread, error) {
 							DiffSide   string `json:"diffSide"`
 							Comments   struct {
 								Nodes []struct {
+									ID     string `json:"id"`
 									Body   string `json:"body"`
 									Author struct {
 										Login string `json:"login"`
@@ -143,7 +149,7 @@ func (c *Client) FetchReviewThreads(num int) ([]ReviewThread, error) {
 			if strings.TrimSpace(cm.Body) == "" {
 				continue
 			}
-			t.Comments = append(t.Comments, ThreadComment{Author: cm.Author.Login, Body: cm.Body})
+			t.Comments = append(t.Comments, ThreadComment{ID: cm.ID, Author: cm.Author.Login, Body: cm.Body})
 		}
 		if len(t.Comments) == 0 {
 			continue

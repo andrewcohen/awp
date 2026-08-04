@@ -314,6 +314,13 @@ type Thread struct {
 
 // ThreadComment is one message in a remote thread.
 type ThreadComment struct {
+	// ID is GitHub's node id for the message. Kept because it is how a mirrored
+	// thread is recognised as the echo of a comment published from here: the id
+	// GitHub hands back when it creates a comment is the same id it reports when
+	// the mirror reads that comment again. Empty on a mirror written before the
+	// ids were carried, which reconciliation treats as "cannot tell" rather than
+	// as a match.
+	ID     string `json:"id,omitempty"`
 	Author string `json:"author"`
 	Body   string `json:"body"`
 }

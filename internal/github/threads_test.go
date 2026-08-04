@@ -36,7 +36,7 @@ const repoViewJSON = `{"owner":{"login":"acme"},"name":"widgets"}`
 
 const threadsJSON = `{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
   {"id":"T1","isResolved":false,"isOutdated":false,"path":"a.go","line":12,"startLine":0,"diffSide":"RIGHT",
-   "comments":{"nodes":[{"body":"this leaks","author":{"login":"alice"}},{"body":"agreed","author":{"login":"bob"}}]}},
+   "comments":{"nodes":[{"id":"PRRC_a","body":"this leaks","author":{"login":"alice"}},{"id":"PRRC_b","body":"agreed","author":{"login":"bob"}}]}},
   {"id":"T2","isResolved":true,"isOutdated":true,"path":"b.go","line":3,"startLine":1,"diffSide":"LEFT",
    "comments":{"nodes":[{"body":"settled","author":{"login":"carol"}}]}},
   {"id":"T3","isResolved":false,"isOutdated":false,"path":"c.go","line":9,"startLine":0,"diffSide":"RIGHT",
@@ -59,6 +59,12 @@ func TestFetchReviewThreadsParsesThreads(t *testing.T) {
 	}
 	if len(first.Comments) != 2 || first.Comments[0].Author != "alice" {
 		t.Fatalf("expected both comments with authors, got %+v", first.Comments)
+	}
+	// The per-comment node id comes back too. It is what lets a mirrored thread be
+	// recognised as the echo of a comment published from here, instead of the diff
+	// showing both copies of the same conversation.
+	if first.Comments[0].ID != "PRRC_a" || first.Comments[1].ID != "PRRC_b" {
+		t.Fatalf("expected the comment node ids, got %+v", first.Comments)
 	}
 	if first.Resolved || first.Outdated {
 		t.Fatalf("expected the first thread unresolved and current: %+v", first)
