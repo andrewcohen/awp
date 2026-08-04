@@ -91,6 +91,10 @@ type CommentStore struct {
 	LastSaved func() (review.Comment, bool)
 	// Resolve toggles a GitHub review thread's resolved state.
 	Resolve func(item Item, threadID string, resolve bool) error
+	// ReplyToThread posts a reply into a GitHub review thread and returns the id of
+	// the comment it created. That id is not a courtesy: it is what the local record
+	// is marked with, and what stops the same reply being drawn twice or sent twice.
+	ReplyToThread func(item Item, threadID, body string) (string, error)
 	// LoadThreads returns the mirrored PR threads for this workspace's review.
 	LoadThreads func(item Item) ([]review.Thread, error)
 	// Send hands a saved comment to the workspace's agent. Nil leaves the
@@ -350,6 +354,11 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 	}
 	if comments.Resolve != nil {
 		inner.ResolveThread = func(id string, resolve bool) error { return comments.Resolve(item, id, resolve) }
+	}
+	if comments.ReplyToThread != nil {
+		inner.ReplyToThread = func(id, body string) (string, error) {
+			return comments.ReplyToThread(item, id, body)
+		}
 	}
 	if comments.LoadThreads != nil {
 		if threads, err := comments.LoadThreads(item); err == nil && len(threads) > 0 {

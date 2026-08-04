@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/review"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -280,4 +282,69 @@ func TestReviewPromptSaysWhereToRunAndHowToCheck(t *testing.T) {
 			t.Errorf("the review prompt never mentions %q", want)
 		}
 	}
+}
+
+// The replier the diff surfaces get: it posts in the review's own repo, and it
+// caches the reply in the mirror the diff draws from.
+func TestThreadReplyPostsInTheReposDirectoryAndMirrorsTheReply(t *testing.T) {
+	root := tempRoot(t)
+	store := review.Store{}
+	r, err := store.Open(root, review.Target{Kind: review.TargetWorking, Workspace: "ws"})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := store.SaveThreads(r, []review.Thread{{
+		ID: "PRRT_1", Path: "a.go", Side: review.SideNew, Line: 3,
+		Comments: []review.ThreadComment{{ID: "PRRC_a", Author: "alice", Body: "why?"}},
+	}}); err != nil {
+		t.Fatalf("seed the mirror: %v", err)
+	}
+
+	runner := &dirRecordingRunner{}
+	_, _, reply := threadActionsFor(runner)
+	id, err := reply(deckui.Item{RepoRoot: root, WorkspaceName: "ws"}, "PRRT_1", "because of X")
+	if err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if id != "PRRC_reply" {
+		t.Fatalf("expected the new comment's id back, got %q", id)
+	}
+	if len(runner.replyThreads) != 1 || runner.replyThreads[0] != "PRRT_1" {
+		t.Fatalf("expected one post into PRRT_1, got %v", runner.replyThreads)
+	}
+	// The review's own repo, not wherever the deck was launched from — the same
+	// requirement resolving has, and for the same reason.
+	for _, dir := range runner.ghDirs {
+		if dir != root {
+			t.Fatalf("gh ran in %q, not the review's repo %q", dir, root)
+		}
+	}
+	// Cached, so the diff shows the reply as part of the conversation instead of
+	// losing it on the next refresh tick and finding it again minutes later.
+	threads := store.Threads(r)
+	if len(threads) != 1 || len(threads[0].Comments) != 2 {
+		t.Fatalf("expected the reply mirrored onto the thread, got %+v", threads)
+	}
+	last := threads[0].Comments[1]
+	if last.ID != "PRRC_reply" || last.Body != "because of X" {
+		t.Fatalf("unexpected mirrored reply: %+v", last)
+	}
+}
+
+// A post that failed is an error the viewer has to see: it keeps the draft and
+// says so, rather than marking a reply nobody received as sent.
+func TestThreadReplyReportsAFailedPost(t *testing.T) {
+	root := tempRoot(t)
+	runner := &failingGHRunner{}
+	_, _, reply := threadActionsFor(runner)
+	if _, err := reply(deckui.Item{RepoRoot: root, WorkspaceName: "ws"}, "PRRT_1", "hello"); err == nil {
+		t.Fatal("expected the failure to surface")
+	}
+}
+
+// failingGHRunner answers every gh call with a GraphQL error.
+type failingGHRunner struct{}
+
+func (failingGHRunner) Run(_ context.Context, _ string, _ string, _ ...string) (string, error) {
+	return `{"errors":[{"message":"thread is gone"}]}`, nil
 }
