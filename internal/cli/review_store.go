@@ -619,7 +619,7 @@ func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.S
 	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
 	cs.Publish = publishReviewFor(runner)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
-	cs.LoadThreads, cs.Resolve = threadActionsFor(runner)
+	cs.LoadThreads, cs.Resolve, cs.ReplyToThread = threadActionsFor(runner)
 	cs.LastSaved = lastSavedComment
 	return cs
 }
@@ -688,10 +688,12 @@ func mirrorReviewThreads(repoRoot, workspaceName string, threads []github.Review
 	return store.SaveThreads(r, out)
 }
 
-// threadActionsFor wires thread loading and resolution into the diff modal.
+// threadActionsFor wires thread loading, resolution and replying into the diff
+// modal.
 func threadActionsFor(runner Runner) (
 	load func(deckui.Item) ([]review.Thread, error),
 	resolve func(deckui.Item, string, bool) error,
+	reply func(deckui.Item, string, string) (string, error),
 ) {
 	open := func(item deckui.Item) (review.Store, review.Review, error) {
 		store := review.Store{}
@@ -732,7 +734,43 @@ func threadActionsFor(runner Runner) (
 		}
 		return store.SaveThreads(r, threads)
 	}
-	return load, resolve
+	reply = func(item deckui.Item, threadID, body string) (string, error) {
+		// In the workspace's repo, for the same reason resolving is: which repository a
+		// gh call is about comes from where gh runs, and the deck runs somewhere else.
+		gh := github.New(runner, item.RepoRoot)
+		id, err := gh.ReplyToReviewThread(threadID, body)
+		if err != nil {
+			return "", err
+		}
+		// Mirrored locally, the same as a resolve: the mirror is what the diff draws,
+		// and the job that refreshes it from GitHub runs on its own schedule. Without
+		// this the reply would vanish from the conversation on the viewer's next refresh
+		// tick and reappear minutes later.
+		//
+		// Best-effort past this point. The reply is posted; failing to cache it is a
+		// display lag, and reporting it as an error would have the viewer treat a
+		// delivered reply as undelivered and offer to send it again.
+		store, r, oerr := open(item)
+		if oerr != nil {
+			return id, nil
+		}
+		threads := store.Threads(r)
+		for i := range threads {
+			if threads[i].ID != threadID {
+				continue
+			}
+			threads[i].Comments = append(threads[i].Comments, review.ThreadComment{
+				// "you", matching how a comment of ours is labelled everywhere else. The next
+				// mirror refresh replaces it with the login GitHub reports, which costs a
+				// round trip to know and says the same thing.
+				ID: id, Author: "you", Body: body,
+			})
+			_ = store.SaveThreads(r, threads)
+			break
+		}
+		return id, nil
+	}
+	return load, resolve, reply
 }
 
 // lastSavedComment reports the most recently written comment, so the send path
