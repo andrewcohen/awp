@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -132,7 +133,7 @@ func TestWorkspaceAndSourceRepoShareOneReviewStore(t *testing.T) {
 // up as a comment on the PR itself rather than inline — sorted into its own group
 // here, since the two take different API calls.
 func TestPublishSortsReviewLevelCommentsOntoThePR(t *testing.T) {
-	inline, changeWide, skipped := partitionForPublish([]review.Comment{
+	inline, changeWide, _, skipped := partitionForPublish([]review.Comment{
 		{ID: "a", Body: "on a line", Anchor: review.Anchor{Path: "a.go", LineHint: 3, Side: review.SideNew}},
 		{ID: "b", Body: "about the change as a whole"},
 		{ID: "c", Body: "already up", State: review.Published, Anchor: review.Anchor{Path: "b.go", LineHint: 1}},
@@ -152,7 +153,7 @@ func TestPublishSortsReviewLevelCommentsOntoThePR(t *testing.T) {
 // A published review-level comment must not be reposted, the same way an inline
 // one is not: the record is what makes a retry after a partial failure safe.
 func TestPublishSkipsAlreadyPostedReviewLevelComments(t *testing.T) {
-	inline, changeWide, skipped := partitionForPublish([]review.Comment{
+	inline, changeWide, _, skipped := partitionForPublish([]review.Comment{
 		{ID: "a", Body: "summary", Publish: &review.PublishRecord{ThreadID: "IC_1"}},
 		{ID: "b", Body: "another summary", State: review.Published},
 	})
@@ -254,7 +255,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// One review carrying both threads, then one submission. Two calls, not one per
 	// comment — which is the whole point: the REST comment endpoint made a separate
 	// single-comment review per call, and those cannot be deleted afterwards.
-	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, 2, "abc123def456789", nil)
+	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, nil, 2, "abc123def456789", nil)
 	joined := strings.Join(plan, "\n")
 	for _, want := range []string{
 		// Two calls, not four: the two thread lines under the stage call are what it
@@ -282,7 +283,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// With only review-level remarks and no verdict, they go up as PR comments on a
 	// different endpoint — the plan has to say so, or it describes a run that is not
 	// the one about to happen.
-	plan = publishPlan(publishRequest{PR: 54}, nil, changeWide, 0, "abc123def456789", nil)
+	plan = publishPlan(publishRequest{PR: 54}, nil, changeWide, nil, 0, "abc123def456789", nil)
 	joined = strings.Join(plan, "\n")
 	if strings.Contains(joined, "PullRequestReview") {
 		t.Fatalf("a verdictless plan claims a review submission:\n%s", joined)
@@ -296,7 +297,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 // review creates new threads only, so sending one would post it as a fresh top-level
 // comment divorced from what it answers.
 func TestPublishSkipsLocalReplies(t *testing.T) {
-	inline, changeWide, skipped := partitionForPublish([]review.Comment{
+	inline, changeWide, _, skipped := partitionForPublish([]review.Comment{
 		{ID: "c1", Body: "the finding", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 		{ID: "c2", Body: "answering you", ReplyTo: "c1", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 	})
@@ -354,6 +355,42 @@ type dirRecordingRunner struct {
 	// graphqlCalls counts the GraphQL round trips, which is how "one review, not one
 	// per comment" is checked.
 	graphqlCalls int
+	// replyThreads and replyBodies are what each thread reply was sent with, so a
+	// test can check a reply went into the thread it answers rather than becoming a
+	// new one.
+	replyThreads []string
+	replyBodies  []string
+}
+
+// gqlRequest decodes the JSON body gh was handed, which is where a GraphQL call's
+// query and variables live — argv only carries the path to it.
+func gqlRequest(args []string) map[string]any {
+	for i, a := range args {
+		if a != "--input" || i+1 >= len(args) {
+			continue
+		}
+		raw, err := os.ReadFile(args[i+1])
+		if err != nil {
+			return nil
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return nil
+		}
+		return body
+	}
+	return nil
+}
+
+func gqlQuery(args []string) string {
+	q, _ := gqlRequest(args)["query"].(string)
+	return q
+}
+
+func gqlVar(args []string, name string) string {
+	vars, _ := gqlRequest(args)["variables"].(map[string]any)
+	v, _ := vars[name].(string)
+	return v
 }
 
 func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
@@ -373,6 +410,14 @@ func (r *dirRecordingRunner) Run(_ context.Context, dir string, name string, arg
 		return prFilesFixture("a.go", "b.go", "c.go"), nil
 	case len(args) > 1 && args[0] == "api" && args[1] == "graphql":
 		r.graphqlCalls++
+		// Which mutation this is comes from the request body, the same place gh reads
+		// it: a reply and a staged review are both `gh api graphql --input`, so argv
+		// alone cannot tell them apart.
+		if query := gqlQuery(args); strings.Contains(query, "addPullRequestReviewThreadReply") {
+			r.replyBodies = append(r.replyBodies, gqlVar(args, "body"))
+			r.replyThreads = append(r.replyThreads, gqlVar(args, "threadId"))
+			return `{"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"PRRC_reply"}}}}`, nil
+		}
 		// Enough of an addPullRequestReview / submitPullRequestReview payload for the
 		// publish path to read a review id back out of it.
 		return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1","comments":{"nodes":[]}}},` +
@@ -701,7 +746,7 @@ func TestPublishDoesNotDoubleTheSummary(t *testing.T) {
 	}
 	plan := publishPlan(publishRequest{
 		PR: 54, Event: github.EventComment, Summary: "the draft, revised",
-	}, nil, []review.Comment{filed}, 0, "abc", nil)
+	}, nil, []review.Comment{filed}, nil, 0, "abc", nil)
 	joined := strings.Join(plan, "\n")
 	if strings.Count(joined, "the draft") != 1 {
 		t.Fatalf("the summary appears more than once in the body:\n%s", joined)
@@ -777,7 +822,7 @@ func TestPublishPlanCountsCallsNotThreads(t *testing.T) {
 			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: i + 1},
 		}
 	}
-	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"}, inline, nil, 0, "abc123def456789", nil)
+	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"}, inline, nil, nil, 0, "abc123def456789", nil)
 	if !strings.HasPrefix(plan[0], "2 call(s)") {
 		t.Fatalf("expected two calls for six threads, got %q", plan[0])
 	}
@@ -810,4 +855,112 @@ func prFilesFixture(paths ...string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// The one thing a thread reply must never become: a fresh inline comment.
+//
+// It carries the thread's own path and line, so nothing about its anchor
+// distinguishes it from a remark on that line — and sent inline it would appear on
+// the PR as a second, top-level thread saying "yes, fixed" next to the question it
+// was answering.
+func TestPublishSendsAThreadReplyIntoItsThread(t *testing.T) {
+	inline, changeWide, replies, skipped := partitionForPublish([]review.Comment{
+		{ID: "c1", Body: "a finding", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
+		{ID: "c2", Body: "yes, fixed", ReplyToThread: "PRRT_1",
+			Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
+		{ID: "c3", Body: "already replied", ReplyToThread: "PRRT_2", State: review.Published,
+			Anchor: review.Anchor{Path: "b.go", LineHint: 8}},
+	})
+	if len(inline) != 1 || inline[0].ID != "c1" {
+		t.Fatalf("expected only the finding inline, got %+v", inline)
+	}
+	if len(changeWide) != 0 {
+		t.Fatalf("a reply must not become a review-level remark: %+v", changeWide)
+	}
+	if len(replies) != 1 || replies[0].ID != "c2" {
+		t.Fatalf("expected the unsent reply in its own bucket, got %+v", replies)
+	}
+	if skipped != 1 {
+		t.Fatalf("expected the already-sent reply skipped, got %d", skipped)
+	}
+}
+
+// Publishing a reply that never made it out: usually the viewer has already posted
+// it as you wrote it, so what reaches here is a retry.
+func TestPublishPostsAnUnsentThreadReply(t *testing.T) {
+	store := review.Store{Root: t.TempDir()}
+	r := review.Review{ID: "work-ws", Repo: "/repos/theirs"}
+	runner := &dirRecordingRunner{}
+	var out bytes.Buffer
+	reply := review.Comment{
+		ID: "c1", Author: review.AuthorHuman, Body: "fixed in the last commit", State: review.Open,
+		ReplyToThread: "PRRT_1",
+		Anchor:        review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 3, Text: "x"},
+	}
+	if _, err := store.AddComment(r, reply); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// No verdict, which is the point: answering a question is not submitting a
+	// review, so a reply must not need one.
+	if err := publishReview(runner, publishRequest{
+		Store: store, Review: r, Comments: []review.Comment{reply},
+		PR: 54, Dir: "/workspaces/theirs",
+	}, &out); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if len(runner.replyThreads) != 1 || runner.replyThreads[0] != "PRRT_1" {
+		t.Fatalf("expected one reply into PRRT_1, got %v", runner.replyThreads)
+	}
+	if len(runner.replyBodies) != 1 || runner.replyBodies[0] != "fixed in the last commit" {
+		t.Fatalf("unexpected reply body: %v", runner.replyBodies)
+	}
+	if !strings.Contains(out.String(), "posted 1") {
+		t.Fatalf("expected the reply reported as posted, got %q", out.String())
+	}
+	// Recorded against the comment GitHub created, which is what stops the next run
+	// posting it again — and what lets the mirror recognise it as our own words.
+	saved, err := store.Comments(r)
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("read back: %v %+v", err, saved)
+	}
+	if saved[0].State != review.Published {
+		t.Fatalf("expected the reply marked published, got %q", saved[0].State)
+	}
+	if saved[0].Publish == nil || saved[0].Publish.ThreadID != "PRRC_reply" {
+		t.Fatalf("expected the new comment's id recorded, got %+v", saved[0].Publish)
+	}
+	// And a second run has nothing left to do.
+	runner2 := &dirRecordingRunner{}
+	var out2 bytes.Buffer
+	if err := publishReview(runner2, publishRequest{
+		Store: store, Review: r, Comments: saved, PR: 54, Dir: "/workspaces/theirs",
+	}, &out2); err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if len(runner2.replyThreads) != 0 {
+		t.Fatalf("a published reply was sent twice: %v", runner2.replyThreads)
+	}
+	if !strings.Contains(out2.String(), "nothing to publish") {
+		t.Fatalf("expected nothing left to publish, got %q", out2.String())
+	}
+}
+
+// The preview has to name the reply calls too: it is what a reviewer checks before
+// an irreversible outward action, and a call missing from it is a call they did not
+// agree to.
+func TestPublishPlanNamesThreadReplies(t *testing.T) {
+	plan := publishPlan(publishRequest{PR: 54}, nil, nil, []review.Comment{
+		{ID: "c1", Body: "fixed", ReplyToThread: "PRRT_1",
+			Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
+	}, 0, "", nil)
+	joined := strings.Join(plan, "\n")
+	if !strings.Contains(joined, "addPullRequestReviewThreadReply") {
+		t.Fatalf("expected the reply mutation in the plan:\n%s", joined)
+	}
+	if !strings.Contains(joined, "a.go:3") || !strings.Contains(joined, "fixed") {
+		t.Fatalf("expected the thread and the body in the plan:\n%s", joined)
+	}
+	if !strings.HasPrefix(joined, "1 call(s)") {
+		t.Fatalf("expected the reply counted as one call:\n%s", joined)
+	}
 }
