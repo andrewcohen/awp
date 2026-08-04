@@ -100,7 +100,7 @@ func (m *Model) beginPublish() {
 	// whole rather than about a line of it (see review.Anchor). The box is built here
 	// so the screen opens with the keyboard already in it.
 	m.summaryEditor = newCommentEditor(review.Anchor{}, m.hunkWidth)
-	m.summaryEditor.area.Placeholder = "what you make of the change as a whole…"
+	m.summaryEditor.area.Placeholder = "review summary…"
 	m.status = ""
 	m.statusErr = false
 }
@@ -385,10 +385,10 @@ func (m Model) publishPrompt() string {
 	case changeWide == 0:
 		return fmt.Sprintf("%d comment%s", inline, plural(inline))
 	case inline == 0:
-		return fmt.Sprintf("%d review-level remark%s", changeWide, plural(changeWide))
+		return fmt.Sprintf("%d review summar%s", changeWide, pluralY(changeWide))
 	}
-	return fmt.Sprintf("%d comment%s · %d review-level remark%s",
-		inline, plural(inline), changeWide, plural(changeWide))
+	return fmt.Sprintf("%d comment%s · %d review summar%s",
+		inline, plural(inline), changeWide, pluralY(changeWide))
 }
 
 // publishReportLines splits a report into display rows, dropping the blank ones
@@ -487,9 +487,9 @@ func (m Model) verdictRow(inner int) string {
 // text area itself is shared, so typing, alt+enter and ctrl+g behave identically.
 func (m Model) summaryBoxView(width int) string {
 	inner := max(20, width-2) - 2
-	head := " summary — the review's body"
+	head := " review summary"
 	if !github.EventNeedsBody(verdictEvent(m.publishVerdict())) {
-		head = " summary — optional for " + m.publishVerdict()
+		head = " review summary — optional"
 	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

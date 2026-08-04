@@ -90,8 +90,11 @@ comments to migrate.
 - **Block comment**: add `--end-line <n>` when the point is about a range
   rather than a line. Prefer this over a line comment that describes its
   own scope in prose.
-- **Closing summary**: one at the end of every review — see "Closing
-  summary" below.
+- **Review summary**: **no `--file` and no `--line`.** For a point about the
+  change rather than a line of it. It heads the diff and becomes the review's
+  body on publish. A `--line` without a `--file` is rejected.
+- **Closing summary**: one at the end of every review, filed as a review
+  summary — see "Closing summary" below.
 
 Always pass `--author agent` so the user can tell your findings apart from
 their own at a glance in the diff.
@@ -165,18 +168,18 @@ A one-liner with nothing to escape can go through `--body`:
 
     awp review add --file internal/foo/bar.go --line 42 --side new \
       --author agent --type suggestion --text "\treturn baz.Field" \
-      --body "Nil deref when baz is empty; line 39 returns nil and 42 calls .Field on it."
+      --body "Nil deref when baz is empty. Line 39 returns nil and 42 calls .Field on it."
 
 Anything with code spans in it goes through a file. Write the body first,
 then reference it:
 
-    cat > /tmp/finding.md <<'EOF'
+    cat > /tmp/awp-lockfile.md <<'EOF'
     Pin the `graphql_client` git dep to a `rev` in Cargo.toml — that keeps the
     dependency pinned *without* committing a lockfile.
     EOF
     awp review add --file extensions/foo/.gitignore --line 2 --side new \
       --author agent --type suggestion --text "Cargo.lock" \
-      --body-file /tmp/finding.md
+      --body-file /tmp/awp-lockfile.md
 
 Note the quoted heredoc delimiter (`<<'EOF'`): unquoted, the shell would
 expand the backticks as a command substitution.
@@ -186,19 +189,33 @@ A finding about a block, anchored at both ends:
     awp review add --file internal/foo/bar.go --line 12 --end-line 18 --side new \
       --author agent --type suggestion \
       --text "\tfor _, row := range rows {" --end-text "\t}" \
-      --body-file /tmp/finding.md
+      --body-file /tmp/awp-loop-open.md
+
+Give each body its own file. Reusing one path means the next finding
+overwrites the last one's text before you have filed it.
 
 ### Closing summary
 
 End every review with **one** summary finding covering: scope of what you
-reviewed, areas you intentionally skipped, and confidence level. Anchor it
-to the first line of the most relevant file. Example:
+reviewed, areas you intentionally skipped, and confidence level.
 
-    awp review add --file internal/cli/review.go --line 1 \
-      --author agent --type comment \
-      --body "Reviewed internal/cli and internal/github. Skipped UI
-       changes in internal/deckui (out of my depth on lipgloss conventions).
-       Read the diff against {{diff_range}}."
+**Omit `--file` and `--line` entirely.** That is what files it as the
+**review summary**: it heads the diff, and it becomes the review's body when
+the user publishes.
+
+Do not anchor it to line 1 of a file instead. Line 1 is usually not in the
+diff, so the summary shows up **detached**, never reaches the review body,
+and is rejected if published.
+
+    cat > /tmp/awp-summary.md <<'EOF'
+    Reviewed internal/cli and internal/github against {{diff_range}}.
+
+    - Skipped the UI changes in internal/deckui — out of my depth on the
+      lipgloss conventions there.
+    - Confidence high on the publish path, which I exercised; lower on the
+      cache invalidation, which I only read.
+    EOF
+    awp review add --author agent --type comment --body-file /tmp/awp-summary.md
 
 ### Report back in chat
 
@@ -206,7 +223,8 @@ After posting, list each comment in chat as a numbered bullet:
 
     <type> — <file>:<line|start-end> — <one-sentence gist>
 
-in the order you filed them. The user will reply with which numbers to
+in the order you filed them. The review summary has no file to name, so it
+reads `<type> — review — <gist>`. The user will reply with which numbers to
 publish.
 
 ### Fixing a filed finding
