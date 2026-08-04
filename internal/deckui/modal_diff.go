@@ -173,7 +173,7 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	dm := &diffModal{
 		inner:  inner,
 		label:  item.ProjectName + "/" + item.WorkspaceName,
-		pr:     prLabel(item),
+		pr:     PRLabel(item),
 		item:   item,
 		scope:  scope,
 		muted:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
@@ -189,14 +189,18 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	return dm, dm.inner.Init()
 }
 
-// prLabel is the item's PR in `repo#number` form, or empty when the workspace
+// PRLabel is the item's PR in `repo#number` form, or empty when the workspace
 // isn't pinned to one. The repo half is the project name — the same name the
 // deck groups rows under, so "awp#1234" reads the way you would say it.
+//
+// Exported because standalone `awp diff` names its PR the same way, and two
+// spellings of the same label is how the two surfaces start looking like
+// different programs.
 //
 // Rendered muted with the rest of the footer rather than in the palette's PR
 // blue: the footer is styled as one line (the whole thing turns red on an error
 // status), so a per-segment hue would have to fight that.
-func prLabel(item Item) string {
+func PRLabel(item Item) string {
 	if item.PRNumber <= 0 {
 		return ""
 	}

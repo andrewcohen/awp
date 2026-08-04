@@ -295,3 +295,39 @@ func TestHelpDocumentsTheColumnToggle(t *testing.T) {
 		t.Fatalf("expected the column toggle documented:\n%s", view)
 	}
 }
+
+// The standalone header is the only chrome above the panes, so it answers what
+// the deck's footer answers: what am I looking at, whose change, which PR, and
+// against what. It used to say `awp diff  repo: awp` and stop there — which left
+// "is this the PR I think it is" unanswerable without leaving the view.
+func TestStandaloneHeaderNamesTheSubject(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.RepoRoot = "/src/awp"
+	m.Subject = Subject{Workspace: "pr-2336-dev", PR: "awp#2336"}
+	m.baseLabel = "main"
+	header := stripANSI(m.renderHeader())
+	for _, want := range []string{"awp review", "awp", "pr-2336-dev", "awp#2336", "vs main"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected %q in the header:\n%s", want, header)
+		}
+	}
+	// "review", not "diff": it is the same surface `c` opens, and calling it a diff
+	// undersold what the keys do.
+	if strings.Contains(header, "awp diff") {
+		t.Fatalf("expected the surface named as a review:\n%s", header)
+	}
+}
+
+// A plain repo is a legitimate place to read a change, so the segments that have
+// no answer are dropped rather than shown blank.
+func TestStandaloneHeaderOmitsWhatItDoesNotKnow(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.RepoRoot = "/src/awp"
+	header := stripANSI(m.renderHeader())
+	if strings.Contains(header, " ·  · ") || strings.HasSuffix(strings.TrimSpace(header), "·") {
+		t.Fatalf("expected no empty segments:\n%s", header)
+	}
+	if !strings.Contains(header, "awp review") || !strings.Contains(header, "awp") {
+		t.Fatalf("expected the surface and the repo still named:\n%s", header)
+	}
+}

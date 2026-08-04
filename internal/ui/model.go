@@ -100,6 +100,10 @@ type Model struct {
 	// for them — and leaving it empty is how standalone `awp diff` avoids
 	// advertising keys only the deck has.
 	HostKeys []charm.KeyGroup
+	// Subject is what this is a review of, for the standalone header. A host with
+	// its own chrome (the deck) renders Body and answers this in its footer
+	// instead, so it leaves this empty.
+	Subject Subject
 
 	files       []diff.FileDiff
 	filtered    []diff.FileDiff
@@ -1320,6 +1324,17 @@ var (
 	styleMutedCursor            = styleMuted.Background(cursorlineBg)
 )
 
+// Subject is what a standalone view is a review of, so its header can answer the
+// same questions the deck's footer does. Empty fields are omitted rather than
+// shown blank.
+type Subject struct {
+	// Workspace is the workspace the working directory sits in, empty in a plain
+	// repo — which is a legitimate place to read a diff, so it is not an error.
+	Workspace string
+	// PR is the pinned pull request as `repo#number`, empty when there is none.
+	PR string
+}
+
 func (m Model) renderHeader() string {
 	name := filepath.Base(m.RepoRoot)
 	if name == "" || name == "." || name == string(filepath.Separator) {
@@ -1328,7 +1343,24 @@ func (m Model) renderHeader() string {
 	if name == "" {
 		name = "current repo"
 	}
-	return styleHeader.Render(" awp diff  repo: " + name + " ")
+	// "review", not "diff": this is the same surface the deck's `c` opens, and
+	// calling it a diff undersold what the keys here do.
+	//
+	// The segments answer, in order, the questions a reviewer has on arriving:
+	// what am I looking at, whose change, which PR, and against what. The deck
+	// says the same things in its footer; here there is no deck footer to say
+	// them, and the header is the only chrome above the panes.
+	segs := []string{"awp review", name}
+	if m.Subject.Workspace != "" {
+		segs = append(segs, m.Subject.Workspace)
+	}
+	if m.Subject.PR != "" {
+		segs = append(segs, m.Subject.PR)
+	}
+	if m.baseLabel != "" {
+		segs = append(segs, "vs "+m.baseLabel)
+	}
+	return styleHeader.Render(" " + strings.Join(segs, " · ") + " ")
 }
 
 func (m Model) renderFooter() string {

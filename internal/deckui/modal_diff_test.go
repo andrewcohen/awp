@@ -541,8 +541,8 @@ func TestPRLabelFormat(t *testing.T) {
 		{Item{ProjectName: "awp", PRNumber: -1}, ""},
 	}
 	for _, c := range cases {
-		if got := prLabel(c.item); got != c.want {
-			t.Errorf("prLabel(%+v) = %q, want %q", c.item, got, c.want)
+		if got := PRLabel(c.item); got != c.want {
+			t.Errorf("PRLabel(%+v) = %q, want %q", c.item, got, c.want)
 		}
 	}
 }
