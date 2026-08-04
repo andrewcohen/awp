@@ -272,3 +272,44 @@ func (c *Client) PostPRComment(num int, body string) (string, error) {
 	}
 	return "", nil
 }
+
+// PRFile is one file in a PR's diff, with the patch GitHub itself will validate a
+// review comment against.
+type PRFile struct {
+	Filename string `json:"filename"`
+	// Patch is the unified diff for this file — hunks only, with no `diff --git`
+	// header. Absent for a binary file or one too large for GitHub to include, which
+	// is why a caller must treat an empty patch as "cannot tell" rather than as "no
+	// commentable lines".
+	Patch string `json:"patch"`
+}
+
+// PRFiles returns the PR's files and their patches.
+//
+// This is the set of lines GitHub will accept a review comment on. Asking GitHub
+// rather than reading the diff locally is deliberate: what matters is the diff
+// *GitHub* computed for the PR, and a local read can disagree with it — a merge
+// base that moved, a file GitHub decided was too large to include.
+func (c *Client) PRFiles(num int) ([]PRFile, error) {
+	out, err := c.runner.Run(
+		context.Background(), c.dir,
+		"gh", "api", "--paginate",
+		fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/files", num),
+		"--jq", ".[] | {filename, patch}",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gh api pulls/%d/files: %w: %s", num, err, out)
+	}
+	// --jq over --paginate emits one object per line rather than one array, so the
+	// stream is decoded object by object.
+	dec := json.NewDecoder(strings.NewReader(out))
+	var files []PRFile
+	for dec.More() {
+		var f PRFile
+		if derr := dec.Decode(&f); derr != nil {
+			return nil, fmt.Errorf("parse gh api pulls/%d/files: %w", num, derr)
+		}
+		files = append(files, f)
+	}
+	return files, nil
+}

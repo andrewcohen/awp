@@ -249,11 +249,42 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		}
 	}
 
+	// Check every anchor against the diff GitHub itself will validate against,
+	// before the preview is printed and before anything is sent. A comment on a line
+	// that is not in the diff used to be discoverable only as a 422 — and now that
+	// the whole review goes up as one atomic mutation, one bad anchor fails every
+	// comment with it and the message names only the first problem.
+	var verdicts []anchorVerdict
+	if len(inline) > 0 {
+		files, ferr := gh.PRFiles(req.PR)
+		if ferr != nil {
+			// The check is an improvement on GitHub's error message, not a gate the
+			// publish depends on. Say why it did not run and let GitHub arbitrate, which
+			// is what happened before this existed.
+			_, _ = fmt.Fprintf(out, "note: couldn't check the anchors against the PR's diff: %v\n", ferr)
+		} else if len(files) > 0 {
+			verdicts = preflight(inline, parseCommentable(files))
+		}
+		// No files at all is treated the same way as a failed fetch. A PR whose diff
+		// touches nothing is not a real state, so an empty answer means the call told
+		// us nothing — a shape we did not understand, a permission we do not have —
+		// and refusing every anchor on the strength of that would be refusing on
+		// ignorance.
+	}
+
 	if req.DryRun {
-		for _, line := range publishPlan(req, inline, changeWide, skipped, head) {
+		for _, line := range publishPlan(req, inline, changeWide, skipped, head, verdicts) {
 			_, _ = fmt.Fprintln(out, line)
 		}
 		return nil
+	}
+	// Refuse rather than send an anchor GitHub is going to reject. The mutation is
+	// atomic, so this loses nothing that would otherwise have landed — it replaces a
+	// wall of validation errors naming GitHub's first complaint with the full list,
+	// in the reviewer's own terms, before anything is attempted.
+	if blocked := blockedAnchors(inline, verdicts); len(blocked) > 0 {
+		return fmt.Errorf("%d comment(s) are not on lines in PR #%d's diff:\n  %s",
+			len(blocked), req.PR, strings.Join(blocked, "\n  "))
 	}
 	if len(inline) == 0 && len(changeWide) == 0 {
 		// A verdict is worth submitting on its own: approving a PR whose comments
@@ -440,7 +471,7 @@ func fileSummary(store review.Store, r review.Review, body, threadID string, fai
 // target either look right or they do not. The viewer shows exactly this text
 // before posting (see the publish overlay), so a preview cannot describe a
 // different run than the one it is previewing.
-func publishPlan(req publishRequest, inline, changeWide []review.Comment, skipped int, head string) []string {
+func publishPlan(req publishRequest, inline, changeWide []review.Comment, skipped int, head string, verdicts []anchorVerdict) []string {
 	// The calls are collected first and counted afterwards, so the count cannot
 	// disagree with the list under it. Counting the inputs instead was wrong the
 	// moment a verdict folded the review-level remarks into one review body: it
@@ -462,9 +493,16 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 		// either look right or they do not.
 		call("addPullRequestReview  PR #%d  commit=%s  %d thread(s), staged",
 			req.PR, shortSHA(head), len(inline))
-		for _, c := range inline {
-			lines = append(lines, fmt.Sprintf("  thread  %s:%s  %s",
-				c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody())))
+		for i, c := range inline {
+			line := fmt.Sprintf("  thread  %s:%s  %s",
+				c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
+			// The anchor's verdict rides on the thread it is about. A reviewer checking
+			// this plan is checking targets, and "not in the diff" belongs next to the
+			// target it refers to rather than in a separate list underneath.
+			if i < len(verdicts) && verdicts[i].Note != "" {
+				line += "  ⚠ " + verdicts[i].Note
+			}
+			lines = append(lines, line)
 		}
 		line := fmt.Sprintf("submitPullRequestReview  event=%s", req.Event)
 		if summary := planSummary(req, changeWide); summary != "" {
@@ -486,6 +524,12 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 		}
 	}
 	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, skipped)
+	// A refusal, said before the calls rather than discovered after them. The plan
+	// still lists everything: which anchors are wrong is the point, and hiding the
+	// good ones would not help fix the bad.
+	if blocked := blockedAnchors(inline, verdicts); len(blocked) > 0 {
+		head1 += fmt.Sprintf(" — %d anchor(s) would be refused, so this run would send nothing", len(blocked))
+	}
 	return append([]string{head1}, lines...)
 }
 
