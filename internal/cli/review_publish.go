@@ -52,13 +52,13 @@ func resolvePublishPR(flagPR int, target review.Target, pinned int) int {
 	return pinned
 }
 
-// partitionForPublish sorts a review's comments into the ones to post inline, the
-// ones to post on the PR itself, and a count already on GitHub (or empty, which
-// there is nothing to post).
+// partitionForPublish sorts a review's comments by the call that sends each one:
+// inline in a review, on the PR itself, or into a GitHub thread it answers. The
+// count is what is already on GitHub (or empty, which there is nothing to post).
 //
 // Its own function so the rules are testable without a GitHub round-trip: what
 // gets reposted is the one thing here that must never be wrong.
-func partitionForPublish(comments []review.Comment) (inline, changeWide []review.Comment, skipped int) {
+func partitionForPublish(comments []review.Comment) (inline, changeWide, replies []review.Comment, skipped int) {
 	inline = make([]review.Comment, 0, len(comments))
 	for _, c := range comments {
 		// Already on GitHub: skip rather than repost. This is what makes a retry
@@ -71,11 +71,18 @@ func partitionForPublish(comments []review.Comment) (inline, changeWide []review
 			skipped++
 			continue
 		}
-		// A reply is a local conversation — you and the agent working a finding out
-		// between you (see review.Store.Reply). There is nothing to publish it into: a
-		// batched review creates new threads only, so sending one would post it as a
-		// fresh top-level comment divorced from what it answers. Replying into a GitHub
-		// thread needs the thread's own id and its own mutation, which is its own task.
+		// A reply into a GitHub thread goes back into that thread, by its own mutation.
+		// Checked before the anchor rules below, because a reply carries the thread's
+		// anchor and would otherwise look exactly like a fresh inline comment — which is
+		// how it would land: a new top-level thread on the same line, divorced from the
+		// question it answers.
+		if c.ThreadReply() {
+			replies = append(replies, c)
+			continue
+		}
+		// A reply to one of our own comments is a local conversation — you and the
+		// agent working a finding out between you (see review.Store.Reply). There is
+		// nothing to publish it into: a batched review creates new threads only.
 		if c.ReplyTo != "" {
 			skipped++
 			continue
@@ -90,7 +97,7 @@ func partitionForPublish(comments []review.Comment) (inline, changeWide []review
 		}
 		inline = append(inline, c)
 	}
-	return inline, changeWide, skipped
+	return inline, changeWide, replies, skipped
 }
 
 // runReviewPublish implements `awp review publish`.
@@ -192,7 +199,7 @@ type publishRequest struct {
 
 func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	store, r, event, prNumber := req.Store, req.Review, req.Event, req.PR
-	inline, changeWide, skipped := partitionForPublish(req.Comments)
+	inline, changeWide, replies, skipped := partitionForPublish(req.Comments)
 	if runner == nil {
 		runner = NewExecRunner()
 	}
@@ -275,7 +282,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	}
 
 	if req.DryRun {
-		for _, line := range publishPlan(req, inline, changeWide, skipped, head, verdicts) {
+		for _, line := range publishPlan(req, inline, changeWide, replies, skipped, head, verdicts) {
 			_, _ = fmt.Fprintln(out, line)
 		}
 		return nil
@@ -288,7 +295,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		return fmt.Errorf("%d comment(s) are not on lines in PR #%d's diff:\n  %s",
 			len(blocked), req.PR, strings.Join(blocked, "\n  "))
 	}
-	if len(inline) == 0 && len(changeWide) == 0 {
+	if len(inline) == 0 && len(changeWide) == 0 && len(replies) == 0 {
 		// A verdict is worth submitting on its own: approving a PR whose comments
 		// all went up on an earlier run is a normal thing to want.
 		if event == "" {
@@ -387,6 +394,22 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		}
 	}
 
+	// Replies last, and outside the switch, because they are not part of the review:
+	// each goes into a conversation that already exists, needs no verdict, and is
+	// unaffected by whether the review above it went up. Usually there are none —
+	// the viewer posts a reply as you write it — so these are the ones whose post
+	// failed at the time and are being retried.
+	for _, c := range replies {
+		id, perr := gh.ReplyToReviewThread(c.ReplyToThread, c.PublishBody())
+		if perr != nil {
+			res.Failed++
+			failures = append(failures, fmt.Errorf("replying in the thread at %s:%s: %w",
+				c.Anchor.Path, c.Anchor.LineRange(), perr))
+			continue
+		}
+		record(c, id, "the reply")
+	}
+
 	_, _ = fmt.Fprintf(out, "posted %d, skipped %d, failed %d\n", res.Posted, res.Skipped, res.Failed)
 	if len(failures) > 0 {
 		// Report every failure rather than the first: a run that posted 6 of 8
@@ -473,7 +496,7 @@ func fileSummary(store review.Store, r review.Review, body, threadID string, fai
 // target either look right or they do not. The viewer shows exactly this text
 // before posting (see the publish overlay), so a preview cannot describe a
 // different run than the one it is previewing.
-func publishPlan(req publishRequest, inline, changeWide []review.Comment, skipped int, head string, verdicts []anchorVerdict) []string {
+func publishPlan(req publishRequest, inline, changeWide, replies []review.Comment, skipped int, head string, verdicts []anchorVerdict) []string {
 	// The calls are collected first and counted afterwards, so the count cannot
 	// disagree with the list under it. Counting the inputs instead was wrong the
 	// moment a verdict folded the review-level remarks into one review body: it
@@ -524,6 +547,12 @@ func publishPlan(req publishRequest, inline, changeWide []review.Comment, skippe
 		for _, c := range changeWide {
 			call("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody()))
 		}
+	}
+	// Outside the switch, the same as the run itself: a reply is its own call into a
+	// conversation that already exists, whatever else this run is doing.
+	for _, c := range replies {
+		call("addPullRequestReviewThreadReply  %s:%s  %s",
+			c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
 	}
 	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, skipped)
 	// A refusal, said before the calls rather than discovered after them. The plan

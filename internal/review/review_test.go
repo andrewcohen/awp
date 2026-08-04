@@ -656,3 +656,20 @@ func TestRangeAnchorRoundTrips(t *testing.T) {
 		t.Fatalf("expected the range preserved, got %+v", a)
 	}
 }
+
+// A reply into a GitHub thread is not a finding: it is something you said to
+// someone else, and counting it would have the deck's badge ask you to triage your
+// own answer.
+func TestOpenCountIgnoresRepliesIntoGitHubThreads(t *testing.T) {
+	comments := []Comment{
+		{ID: "a", State: Open, Anchor: Anchor{Path: "a.go", LineHint: 1}},
+		{ID: "b", State: Open, ReplyToThread: "PRRT_1", Anchor: Anchor{Path: "b.go", LineHint: 2}},
+		{ID: "c", State: Open, ReplyTo: "a"},
+	}
+	if got := OpenCount(comments); got != 1 {
+		t.Fatalf("expected only the finding counted, got %d", got)
+	}
+	if !comments[1].ThreadReply() || comments[0].ThreadReply() {
+		t.Fatal("ThreadReply must name exactly the comment answering a GitHub thread")
+	}
+}

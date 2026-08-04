@@ -223,14 +223,34 @@ type Comment struct {
 	Body   string `json:"body"`
 	// Kind is what the comment is asking for. Empty means KindComment, so records
 	// written before kinds existed read correctly.
-	Kind      Kind           `json:"kind,omitempty"`
-	State     State          `json:"state"`
-	Anchor    Anchor         `json:"anchor"`
-	ReplyTo   string         `json:"reply_to,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	Publish   *PublishRecord `json:"published,omitempty"`
+	Kind   Kind   `json:"kind,omitempty"`
+	State  State  `json:"state"`
+	Anchor Anchor `json:"anchor"`
+	// ReplyTo is the id of one of our own comments this answers.
+	ReplyTo string `json:"reply_to,omitempty"`
+	// ReplyToThread is the GitHub node id of a mirrored review thread this answers,
+	// for a reply the reviewer wrote into someone else's conversation.
+	//
+	// A separate field from ReplyTo rather than the same one holding a foreign id.
+	// The two mean different things and have different futures: a local reply is an
+	// exchange with the agent that stays here, while this one is destined for
+	// GitHub and is only a record once it gets there. Overloading ReplyTo would
+	// also make every reader of it — the open count, the deletion cascade, the
+	// grouping in Threads — have to know which namespace an id came from before it
+	// could act on it.
+	ReplyToThread string         `json:"reply_to_thread,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	Publish       *PublishRecord `json:"published,omitempty"`
 }
+
+// ThreadReply reports whether this comment answers a mirrored GitHub thread.
+//
+// One spelling for the check, because it is asked in three packages — the store
+// counts findings, the publish path decides which call sends a comment, and the
+// viewer decides where to draw it — and a comment answering someone else's thread
+// is none of the things a top-level remark is.
+func (c Comment) ThreadReply() bool { return strings.TrimSpace(c.ReplyToThread) != "" }
 
 // AuthorHuman marks a comment written by the person at the keyboard.
 const AuthorHuman = "human"
@@ -617,10 +637,14 @@ func (s Store) Comments(r Review) ([]Comment, error) {
 // Replies are excluded: one exchange is one thing awaiting your attention, not
 // one per message. A reply's significance is carried by reopening its parent (see
 // Reply), so a conversation that needs you still counts exactly once.
+//
+// A reply into a GitHub thread is excluded for a different reason: it is not a
+// finding at all. It is something you said to someone else, and counting it would
+// have the badge ask you to triage your own answer.
 func OpenCount(comments []Comment) int {
 	n := 0
 	for _, c := range comments {
-		if c.ReplyTo != "" {
+		if c.ReplyTo != "" || c.ThreadReply() {
 			continue
 		}
 		if c.State == Open {
