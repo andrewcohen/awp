@@ -224,8 +224,12 @@ func (e commentEditor) lines(width int) []string {
 
 // setBody replaces what is in the box, cursor at the end — what coming back from
 // $EDITOR means.
+//
+// Sanitised on the way in, because an editor writing CRLF would otherwise put a
+// carriage return in every line of the draft, and from there into the store and
+// into the row that draws it (see displayText).
 func (e *commentEditor) setBody(body string) {
-	e.area.SetValue(body)
+	e.area.SetValue(displayText(body))
 	e.area.CursorEnd()
 }
 
@@ -311,6 +315,15 @@ func editorAreaWidth(width int) int {
 func (m Model) editorAnchorRow(idx streamIndex) int {
 	if target := m.editor.replyTo; target != "" {
 		if row := lastRowOfThread(idx, target); row >= 0 {
+			return row
+		}
+	}
+	// A reply into a GitHub thread appends to that conversation, so the box belongs
+	// at its foot too — under the thread's display id, which is what the stream holds
+	// it as. Without this the box opened against the *line*, which put it above the
+	// conversation it was answering.
+	if target := m.editor.replyToThread; target != "" {
+		if row := lastRowOfThread(idx, remoteThreadPrefix+target); row >= 0 {
 			return row
 		}
 	}

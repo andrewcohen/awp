@@ -1152,10 +1152,13 @@ type commentRow struct {
 // prose, where it just makes sentences hard to read. ansi.Wrap still hard-breaks a
 // word longer than the line, so a URL or a long identifier cannot overflow.
 func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow {
-	label := c.Author
+	label := displayText(c.Author)
 	if label == review.AuthorHuman {
 		label = "you"
 	}
+	// Sanitised once, here, because every row below is derived from it — the folded
+	// summary, the header's first line, and every wrapped body row.
+	cleanBody := displayText(c.Body)
 	if collapsed {
 		// Exactly one row — no pads. The pad rows below give a multi-message card
 		// air at both ends; a one-line marker needs neither, and they tripled the
@@ -1168,7 +1171,7 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 		// opening remark's first line. No state suffix — the chips said it, and
 		// appending after a truncated summary would put it where nobody reads.
 		title := commentGutter + label
-		if s := firstLine(c.Body); s != "" {
+		if s := firstLine(cleanBody); s != "" {
 			title += " · " + s
 		}
 		return []commentRow{{text: truncate(title, max(1, width)), header: true}}
@@ -1203,7 +1206,7 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	// A robot's words are marked wherever they appear, so an agent's finding is
 	// never mistaken for something the reviewer wrote. Prefixed at render time
 	// rather than stored, so the marker cannot end up doubled or edited away.
-	body := strings.TrimRight(c.Body, "\n")
+	body := strings.TrimRight(cleanBody, "\n")
 	if robotAuthored(c) {
 		body = review.RobotMarker + " " + body
 	}
@@ -1232,6 +1235,71 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	}
 	return out
 }
+
+// displayTabWidth is what a tab becomes. Four rather than eight because these are
+// comment bodies — prose and the occasional code fence — and eight columns of
+// indent inside a pane that also holds a gutter and a diff is most of the width.
+const displayTabWidth = 4
+
+// displayText makes text from anywhere safe to draw.
+//
+// Control characters in a body are not characters: they are instructions to the
+// terminal, and they arrive through a surface whose whole job is showing text other
+// people wrote. GitHub returns comment bodies with **CRLF** line endings, and
+// splitting those on "\n" leaves a bare carriage return at the end of every row —
+// which moves the cursor back to the start of the line, so the row overwrites
+// itself and the frame no longer matches what was measured. One mirrored thread
+// with Windows line endings was enough to mangle the whole pane, fragments of the
+// diff and of the left column included.
+//
+// Tabs go for the neighbouring reason: lipgloss measures one as a single cell and a
+// terminal draws it as up to eight, so a body containing one is a row whose width
+// we are simply wrong about — and every width here matters, since the geometry pass
+// counts rows before anything is rendered.
+//
+// Everything else below 0x20, and DEL, is dropped. ESC above all: without this, a
+// comment body could carry an escape sequence and recolour or reposition the pane
+// it is drawn in — a review surface renders text written by agents and by strangers
+// on the internet, so that has to be impossible rather than unlikely.
+func displayText(s string) string {
+	if !strings.ContainsFunc(s, needsSanitising) {
+		// The common case, and worth not allocating for: a body whose only control
+		// character is the newline comes back unchanged. This runs per comment per
+		// frame, so an ordinary body must not pay for the pathological one.
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteRune(r)
+		case r == '\r':
+			// A lone CR is a line ending too — old Mac files, and what is left when a
+			// CRLF pair was split apart somewhere upstream.
+			b.WriteRune('\n')
+		case r == '\t':
+			b.WriteString(strings.Repeat(" ", displayTabWidth))
+		case isControl(r):
+			// Dropped rather than replaced with a glyph: a marker would still be a
+			// column to account for, and the character carried no meaning worth keeping.
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// isControl reports whether a rune is a C0 control character or DEL — the ones that
+// do something to a terminal rather than appearing in it.
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f
+}
+
+// needsSanitising is isControl minus the newline, which is the one control character
+// a body is allowed to carry: the stream splits on it deliberately.
+func needsSanitising(r rune) bool { return isControl(r) && r != '\n' }
 
 // robotAuthored reports whether the marker belongs on a comment: a robot wrote
 // it, and it is ours rather than a mirrored GitHub thread. A thread's synthetic
