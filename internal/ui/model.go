@@ -195,6 +195,10 @@ type Model struct {
 	threadFold map[string]bool
 	// ResolveThread toggles a GitHub thread's resolved state.
 	ResolveThread ThreadResolver
+	// ReplyToThread posts a reply into a GitHub thread, returning the id of the
+	// comment it created. Nil leaves replying unavailable, which the viewer says
+	// rather than opening a box whose contents would have nowhere to go.
+	ReplyToThread ThreadReplier
 	// SaveComment persists a comment the user wrote. Nil disables commenting, so
 	// the standalone viewer works with no store configured.
 	SaveComment CommentSink
@@ -578,6 +582,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case publishDoneMsg:
 		return m.applyPublishDone(msg)
+	case threadReplyDoneMsg:
+		return m.applyThreadReplyDone(msg)
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
