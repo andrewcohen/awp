@@ -102,15 +102,15 @@ func TestReviewAddAcceptsARemarkWithNoFile(t *testing.T) {
 	}
 }
 
-// The two halves of an anchor go together: a line with no file has nothing to
-// mean, and a file with no line cannot be placed.
-func TestReviewAddRejectsAHalfAnchor(t *testing.T) {
+// A line with no file has nothing to mean, and a range needs lines to be a range
+// of. --file alone is not a half anchor, though — it is the file scope.
+func TestReviewAddRejectsAnIncoherentAnchor(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
 		{[]string{"add", "--line", "4", "--body", "x"}, "--line needs --file"},
-		{[]string{"add", "--file", "a.go", "--body", "x"}, "requires --line with --file"},
+		{[]string{"add", "--file", "a.go", "--end-line", "9", "--body", "x"}, "--end-line needs --line"},
 		{[]string{"add", "--file", "a.go", "--line", "1"}, "requires --body"},
 	} {
 		var out bytes.Buffer

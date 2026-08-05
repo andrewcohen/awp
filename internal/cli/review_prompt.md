@@ -107,9 +107,15 @@ comments to migrate.
 - **Block comment**: add `--end-line <n>` when the point is about a range
   rather than a line. Prefer this over a line comment that describes its
   own scope in prose.
+- **File comment**: `--file <path>` with **no `--line`.** For a point about a
+  file as a whole — it is in the wrong package, it should not exist, it needs
+  splitting, its whole approach is wrong. Use this instead of picking whichever
+  line is closest to your point and writing "this file"; the reviewer sees it on
+  the file's divider rather than buried in a hunk.
 - **Review summary**: **no `--file` and no `--line`.** For a point about the
-  change rather than a line of it. It heads the diff and becomes the review's
-  body on publish. A `--line` without a `--file` is rejected.
+  change rather than a file or line of it. It heads the diff and becomes the
+  review's body on publish. A `--line` without a `--file` is rejected — the
+  number has nothing to be a line of.
 - **Closing summary**: one at the end of every review, filed as a review
   summary — see "Closing summary" below.
 
@@ -246,9 +252,9 @@ After posting, list each comment in chat as a numbered bullet:
 
     <type> — <file>:<line|start-end> — <one-sentence gist>
 
-in the order you filed them. The review summary has no file to name, so it
-reads `<type> — review — <gist>`. The user will reply with which numbers to
-publish.
+in the order you filed them. A file comment has no line, so it reads `<type> —
+<file> — <gist>`; the review summary has no file either, so it reads `<type> —
+review — <gist>`. The user will reply with which numbers to publish.
 
 ### Fixing a filed finding
 

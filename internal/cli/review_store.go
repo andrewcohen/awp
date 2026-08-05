@@ -313,15 +313,21 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	if strings.TrimSpace(bodyText) == "" {
 		return errors.New("review add requires --body or --body-file")
 	}
-	// No --file is a review-level remark: something about the change as a whole,
-	// which the diff shows in its own section above the first file rather than
-	// pinned to a line. A line without a file is a mistake, though — there is
-	// nothing for the number to mean.
+	// The three scopes, each spelled by what is passed (see review.Anchor.Scope):
+	// --file and --line is a line, --file alone is the file as a whole, neither is
+	// the change as a whole. A --line without a --file is the one incoherent
+	// combination — there is nothing for the number to mean — and it is refused
+	// rather than read as one of the three, because either flag could be the
+	// mistake and guessing which files the remark somewhere nobody asked for.
 	if strings.TrimSpace(*path) == "" && *line > 0 {
 		return errors.New("review add: --line needs --file")
 	}
-	if strings.TrimSpace(*path) != "" && *line <= 0 {
-		return errors.New("review add requires --line with --file")
+	// --end-line describes a block of lines, so it needs lines. Caught here because
+	// the alternative is a file-level anchor silently carrying an end that nothing
+	// reads, which would then publish as a comment on the file with a range in the
+	// record and no range in the remark.
+	if *line <= 0 && *endLine > 0 {
+		return errors.New("review add: --end-line needs --line")
 	}
 	// An end above the start describes no block. Rejected rather than quietly
 	// dropped, because the difference between "line 12" and "lines 12-18" is the
