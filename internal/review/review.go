@@ -229,6 +229,54 @@ const (
 // Kinds is every kind, in the order the compose box cycles them.
 func Kinds() []Kind { return []Kind{KindComment, KindSuggestion, KindQuestion} }
 
+// Proposal is an agent's offer to make a change, and where that offer stands.
+//
+// The prompt an agent gets when a finding is handed to it says to reply before
+// changing anything and then stop. That gate had no home: the agent's answer was
+// prose in a chat log, and approving it meant leaving the diff, finding the
+// agent's tmux window and typing "yes" — so the thing the prompt asked for was
+// enforced nowhere and answered somewhere else entirely. A proposal is that
+// exchange written down: the offer is a reply, and the approval is a fact in the
+// store the agent can read back.
+//
+// One field rather than two, holding both "is this a proposal" and "where does it
+// stand". The empty value is not a proposal at all, which is what every record
+// written before this is — and it means the two facts cannot come apart, the same
+// reasoning as Anchor.Scope reading a scope off what the anchor carries rather
+// than storing it beside it.
+//
+// Not a Kind. Kind is what a remark asks for, and a reply's kind is already
+// dropped everywhere it would be shown (see PublishBody). Approval is a property
+// of the exchange, not of the text.
+//
+// There is no "declined". Approving is one key; declining is a reply, whose text
+// is the reason — and a bare no tells an agent nothing it can act on. A proposal
+// you have not approved stays pending, which is the honest reading of it.
+type Proposal string
+
+const (
+	// ProposalPending is an offer awaiting a yes. The agent is expected to have
+	// stopped.
+	ProposalPending Proposal = "pending"
+	// ProposalApproved means the reviewer said go ahead.
+	ProposalApproved Proposal = "approved"
+)
+
+// IsProposal reports whether this comment is an offer to change something, as
+// opposed to an ordinary remark or an answer to a question.
+//
+// The gate is about changing code, not about replying: an agent explaining why
+// the code is the way it is replies normally and carries on. Only a reply that
+// says "here is what I would do" needs a yes.
+func (c Comment) IsProposal() bool { return c.Proposal != "" }
+
+// Approved reports whether the reviewer said go ahead.
+func (c Comment) Approved() bool { return c.Proposal == ProposalApproved }
+
+// AwaitingApproval is a proposal nobody has answered yet — the state that stops
+// an agent, and the only one `A` acts on.
+func (c Comment) AwaitingApproval() bool { return c.Proposal == ProposalPending }
+
 // ParseKind reads a kind from user or agent input, falling back to KindComment.
 // An unrecognised value is not an error: a comment is worth keeping even when the
 // label on it is wrong, and the default is the one that claims the least.
@@ -297,10 +345,13 @@ type Comment struct {
 	// also make every reader of it — the open count, the deletion cascade, the
 	// grouping in Threads — have to know which namespace an id came from before it
 	// could act on it.
-	ReplyToThread string         `json:"reply_to_thread,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	Publish       *PublishRecord `json:"published,omitempty"`
+	ReplyToThread string `json:"reply_to_thread,omitempty"`
+	// Proposal marks a reply that offers to make a change, and says whether the
+	// reviewer has agreed to it. Empty on everything that is not one.
+	Proposal  Proposal       `json:"proposal,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Publish   *PublishRecord `json:"published,omitempty"`
 }
 
 // ThreadReply reports whether this comment answers a mirrored GitHub thread.
@@ -588,12 +639,26 @@ func (s Store) AddComment(r Review, c Comment) (Comment, error) {
 
 // UpdateComment replaces a comment in place.
 func (s Store) UpdateComment(r Review, c Comment) error {
+	_, err := s.writeComment(r, c)
+	return err
+}
+
+// writeComment is UpdateComment for a caller that needs the record as written.
+//
+// UpdateComment takes its comment by value and stamps UpdatedAt on that copy, so
+// the caller's own copy comes back a version behind — harmless when the return
+// value is discarded, and a lie when it is handed on. Approve hands it on: what
+// it returns is what the agent's nudge is rendered from.
+func (s Store) writeComment(r Review, c Comment) (Comment, error) {
 	dir := s.dir(r.Repo, r.ID)
 	if dir == "" || c.ID == "" {
-		return errors.New("review: cannot resolve comment path")
+		return Comment{}, errors.New("review: cannot resolve comment path")
 	}
 	c.UpdatedAt = s.now()
-	return writeJSON(filepath.Join(dir, "comments", c.ID+".json"), c)
+	if err := writeJSON(filepath.Join(dir, "comments", c.ID+".json"), c); err != nil {
+		return Comment{}, err
+	}
+	return c, nil
 }
 
 // DeleteComment removes a comment and every reply beneath it.
@@ -754,6 +819,71 @@ func (s Store) Reply(r Review, parentID string, c Comment) (Comment, error) {
 		}
 	}
 	return saved, nil
+}
+
+// Approve says yes to a proposal and hands the exchange back to the agent.
+//
+// Two records change, and both have to: the proposal itself becomes approved, and
+// the finding it answers moves to Sent. That is the mirror of Reply, which
+// reopens the parent when the agent answers — Open means the exchange is waiting
+// on you, Sent means it is waiting on the agent, and the deck's finding count
+// reads exactly that. Leaving the parent Open would keep asking you to triage a
+// question you have already answered.
+//
+// Approving something that is already approved is not an error and writes
+// nothing: the reviewer pressing the key twice means "get on with it", which is
+// the caller's business (it can send the agent another nudge) and not a reason to
+// rewrite the record with a new timestamp.
+func (s Store) Approve(r Review, id string) (Comment, error) {
+	if strings.TrimSpace(id) == "" {
+		return Comment{}, errors.New("review: approve needs a comment id")
+	}
+	existing, err := s.Comments(r)
+	if err != nil {
+		return Comment{}, err
+	}
+	var c *Comment
+	for i := range existing {
+		if existing[i].ID == id {
+			c = &existing[i]
+			break
+		}
+	}
+	if c == nil {
+		return Comment{}, fmt.Errorf("review: no comment %q to approve", id)
+	}
+	// Refused rather than treated as an approval of something. Writing the field
+	// onto an ordinary remark would invent a proposal nobody made, and the record
+	// would then claim an agent had offered to do something it never offered.
+	if !c.IsProposal() {
+		return Comment{}, fmt.Errorf("review: comment %q is not a proposal", id)
+	}
+	if c.Approved() {
+		return *c, nil
+	}
+	c.Proposal = ProposalApproved
+	written, err := s.writeComment(r, *c)
+	if err != nil {
+		return Comment{}, err
+	}
+	*c = written
+	if c.ReplyTo != "" {
+		for i := range existing {
+			if existing[i].ID != c.ReplyTo || existing[i].State == Sent {
+				continue
+			}
+			parent := existing[i]
+			parent.State = Sent
+			// The approval is already on disk by here, so the error has to say that
+			// rather than read as "approving failed" — the caller's next move is to
+			// tell the agent to go ahead, which is still the right move.
+			if err := s.UpdateComment(r, parent); err != nil {
+				return *c, fmt.Errorf("review: approved, but the finding it answers is still marked open: %w", err)
+			}
+			break
+		}
+	}
+	return *c, nil
 }
 
 // Thread groups a top-level comment with its replies, oldest first.
