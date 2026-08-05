@@ -228,26 +228,65 @@ const unresolveThreadMutation = `mutation($id:ID!){
 // ResolveReviewThread marks a thread resolved. Reversible via
 // UnresolveReviewThread, which is why this needs no confirmation step.
 func (c *Client) ResolveReviewThread(threadID string) error {
-	return c.mutateThread(resolveThreadMutation, threadID)
+	return c.setThreadResolved(resolveThreadMutation, threadID, true)
 }
 
 // UnresolveReviewThread reopens a resolved thread.
 func (c *Client) UnresolveReviewThread(threadID string) error {
-	return c.mutateThread(unresolveThreadMutation, threadID)
+	return c.setThreadResolved(unresolveThreadMutation, threadID, false)
 }
 
-func (c *Client) mutateThread(mutation, threadID string) error {
+// setThreadResolved runs one of the resolution mutations and confirms GitHub agrees
+// about the state afterwards.
+//
+// Both halves of that are the fix for one bug with an unusually quiet failure. This
+// used to run the mutation and look at nothing: not the GraphQL errors array — which
+// is where GraphQL reports refusals, and which `gh api graphql` does not always exit
+// non-zero for — and not the state it asked for. A refused resolve was therefore
+// reported as success, the caller wrote `resolved: true` into the local mirror, and
+// the diff hides resolved threads by default. So the conversation disappeared, the
+// mirror said GitHub had resolved it, and GitHub said it had not.
+//
+// Through Client.graphql so there is one path that reads a GraphQL response, rather
+// than a second one that skips the part where GitHub says no. The returned state is
+// then checked against what was asked: "GitHub accepted the call" and "the thread is
+// now resolved" are different claims, and only the second is safe to mirror.
+func (c *Client) setThreadResolved(mutation, threadID string, want bool) error {
 	if strings.TrimSpace(threadID) == "" {
 		return fmt.Errorf("review thread id is required")
 	}
-	raw, err := c.runner.Run(
-		context.Background(), c.dir,
-		"gh", "api", "graphql",
-		"-f", "query="+mutation,
-		"-F", "id="+threadID,
-	)
-	if err != nil {
-		return fmt.Errorf("gh api graphql resolve thread: %w: %s", err, raw)
+	// One shape for both mutations: whichever ran, the other field is absent.
+	type threadResult struct {
+		Thread *struct {
+			ID         string `json:"id"`
+			IsResolved bool   `json:"isResolved"`
+		} `json:"thread"`
+	}
+	var resp struct {
+		Data struct {
+			Resolve   *threadResult `json:"resolveReviewThread"`
+			Unresolve *threadResult `json:"unresolveReviewThread"`
+		} `json:"data"`
+	}
+	verb := "resolving"
+	if !want {
+		verb = "reopening"
+	}
+	if err := c.graphql(mutation, map[string]any{"id": threadID}, &resp); err != nil {
+		return fmt.Errorf("%s the thread: %w", verb, err)
+	}
+	result := resp.Data.Resolve
+	if result == nil {
+		result = resp.Data.Unresolve
+	}
+	if result == nil || result.Thread == nil {
+		return fmt.Errorf("%s the thread: GitHub returned no thread", verb)
+	}
+	if result.Thread.IsResolved != want {
+		// Accepted and did not do it. Reported rather than mirrored: a mirror that
+		// claims a thread is resolved when GitHub disagrees hides the conversation.
+		return fmt.Errorf("%s the thread: GitHub still reports it as %s", verb,
+			map[bool]string{true: "resolved", false: "unresolved"}[result.Thread.IsResolved])
 	}
 	return nil
 }

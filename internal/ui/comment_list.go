@@ -137,22 +137,35 @@ func firstLine(body string) string {
 // height is the whole left column's budget, less the two rows a second border
 // costs — stacking two bordered panes must leave the column the same overall
 // height as the hunk pane beside it.
-func commentPaneHeight(entries, height int) int {
-	if entries <= 0 {
+// hidden is how many conversations the visibility setting is holding back, which
+// earns the pane its header even with nothing to list: "0 listed, 3 hidden" is the
+// difference between a change nobody has commented on and one whose conversation is
+// entirely off screen, and those must not look the same.
+func commentPaneHeight(entries, hidden, height int) int {
+	if entries <= 0 && hidden <= 0 {
 		return 0
 	}
 	room := min(height/2, height-2-minFileListHeight)
 	if room < 2 { // a header and at least one entry
 		return 0
 	}
+	if entries <= 0 {
+		// Header only. It is a notice, not a list — there is nothing to select.
+		return 2
+	}
 	return min(entries+1, room)
 }
 
-// commentPaneVisible reports whether the index is on screen, which is what
-// decides if it belongs in the tab rotation. Tabbing to a pane that isn't
-// rendered would strand the keyboard.
+// commentPaneVisible reports whether the index is a keyboard target — which is what
+// decides if it belongs in the tab rotation. Tabbing to a pane that isn't rendered
+// would strand the keyboard, and so would tabbing to one with nothing in it.
+//
+// So this is not "is the pane drawn": the pane also appears carrying only a
+// hidden-conversation notice, and that has no rows to select. Drawn and selectable
+// are different questions with different answers.
 func (m Model) commentPaneVisible() bool {
-	return !m.hideLeft && commentPaneHeight(len(m.commentIndex), m.bodyHeight) > 0
+	return !m.hideLeft && len(m.commentIndex) > 0 &&
+		commentPaneHeight(len(m.commentIndex), m.hiddenThreads(), m.bodyHeight) > 0
 }
 
 // renderLeftColumn stacks the file list over the comment index.
@@ -169,6 +182,7 @@ func (m Model) renderLeftColumn(width, height int) string {
 		width: width, height: height,
 		files: m.filesCursor, comments: m.commentsCursor,
 		focus: m.focus, entries: len(m.commentIndex), hidden: m.hideLeft,
+		hiddenThreads: m.hiddenThreads(),
 	}
 	if m.cache.left.ok && m.cache.left.key == key {
 		return m.cache.left.out
@@ -181,7 +195,7 @@ func (m Model) renderLeftColumn(width, height int) string {
 }
 
 func (m Model) buildLeftColumn(width, height int) string {
-	h := commentPaneHeight(len(m.commentIndex), height)
+	h := commentPaneHeight(len(m.commentIndex), m.hiddenThreads(), height)
 	if h <= 0 {
 		return m.renderFileList(width, height)
 	}
@@ -191,12 +205,27 @@ func (m Model) buildLeftColumn(width, height int) string {
 	)
 }
 
+// commentListHeader is the index's title: how many conversations it lists, and how
+// many the visibility setting is holding back.
+//
+// The second half is the whole point of this function existing. `T` is what changes
+// it and the key is not discoverable from a list that simply lacks the rows — so the
+// list says what it is not showing, and names the key that shows it. Without that, a
+// thread wrongly marked resolved is indistinguishable from a thread that was never
+// there.
+func commentListHeader(listed, hidden int) string {
+	if hidden <= 0 {
+		return fmt.Sprintf(" Comments (%d)", listed)
+	}
+	return fmt.Sprintf(" Comments (%d) · %d hidden · T", listed, hidden)
+}
+
 func (m Model) renderCommentList(width, height int) string {
 	border := styleNormalBorder
 	if m.focus == FocusComments {
 		border = styleFocusBorder
 	}
-	rows := []string{styleDim.Render(fmt.Sprintf(" Comments (%d)", len(m.commentIndex)))}
+	rows := []string{styleDim.Render(truncate(commentListHeader(len(m.commentIndex), m.hiddenThreads()), width-4))}
 	start, end := visibleRange(m.commentsCursor, max(1, height-1), len(m.commentIndex))
 	contentWidth := width - 4
 	for i := start; i < end; i++ {

@@ -375,6 +375,18 @@ func (m *Model) cycleThreadVisibility() {
 	m.rebuildStream()
 }
 
+// hiddenThreads is how many mirrored conversations the current visibility is
+// keeping off screen.
+//
+// Reported rather than left to be noticed, because the alternative is what actually
+// happened: a thread the mirror wrongly believed was resolved vanished from the
+// diff, and a conversation sitting open on the PR — three messages of it — read as
+// simply not existing. Hiding settled conversation is the right default; hiding it
+// without saying so turns any wrong flag, any stale mirror, into missing comments.
+func (m Model) hiddenThreads() int {
+	return len(m.threads) - len(m.visibleThreads())
+}
+
 // visibleThreads is the thread set the current visibility admits.
 func (m Model) visibleThreads() []review.Thread {
 	if m.threadVisibility == ThreadsNone || len(m.threads) == 0 {
