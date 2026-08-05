@@ -25,10 +25,6 @@ type deckStyles struct {
 	Bar      lipgloss.Style // the ┃ selection bar prefix
 	Label    lipgloss.Style // plain terminal-default fg — a normal/active (un-muted) row label
 
-	// Title is the "awp deck" heading — bold, terminal-default fg
-	// (white). Kept plain so the teal project headers carry the hue
-	// without the title competing.
-	Title lipgloss.Style
 	// ProjectHeader is the project-header treatment for the all /
 	// attention scopes — teal (Accent) + bold, so the structural
 	// skeleton of every screen carries a hue instead of reading as
@@ -65,7 +61,6 @@ func newDeckStyles() deckStyles {
 		Bar:      lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
 		Label:    lipgloss.NewStyle(),
 
-		Title:         lipgloss.NewStyle().Bold(true),
 		ProjectHeader: lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
 		FindHeader:    lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
 		SubHeader:     lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),

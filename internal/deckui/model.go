@@ -3934,7 +3934,10 @@ func helpColumns(innerWidth int) string {
 		return statusGlyph(state, false, unread) + "  " + label
 	}
 	statusLines := []string{
-		lipgloss.NewStyle().Bold(true).Render("Agent status (left dot)"),
+		// Names both surfaces the dots appear on: the row's own left dot and the
+		// top row's badge, which is nothing but these three glyphs and a count
+		// each. The badge has no words, so this is where it is explained.
+		lipgloss.NewStyle().Bold(true).Render("Agent status (row dot + top badge)"),
 		dot("working", false, "working"),
 		dot("waiting", true, "waiting"),
 		dot("idle", true, "notified"),
@@ -4028,19 +4031,24 @@ const deckTextCol = deckPrefixWidth + 1
 const deckIndent = "   "
 
 func (m Model) renderList(width int) string {
-	title := m.styles.Title.Render("awp deck")
-	// Scope label is pinned to the top-right corner on the title row
-	// (rather than as a subtitle beneath it). Right edge sits at the
-	// panel's inner width — width minus the 1-col horizontal padding on
-	// each side.
+	// One view for the whole frame: its All slice feeds the corner badge and
+	// its Items() the rows. Built once because mergedItemsAll allocates, and
+	// this runs on every keystroke.
+	view := m.rm()
+	// The top row holds the two things at opposite ends: what wants you on the
+	// left, on the body's own text column so its dots line up with the rows'
+	// dots below; which scope you are looking through on the right, its right
+	// edge at the panel's inner width — width minus the 1-col horizontal
+	// padding on each side, which is where the rows end.
+	badge := m.renderAttentionSummary(countAttention(view.All))
 	scope := m.styles.Muted.Render("scope: " + scopeLabel(m.scope))
-	gap := (width - 2) - deckTextCol - lipgloss.Width(title) - lipgloss.Width(scope)
+	gap := (width - 2) - deckTextCol - lipgloss.Width(badge) - lipgloss.Width(scope)
 	if gap < 1 {
 		gap = 1
 	}
-	titleRow := deckIndent + title + strings.Repeat(" ", gap) + scope
+	titleRow := deckIndent + badge + strings.Repeat(" ", gap) + scope
 	header := []string{titleRow, ""}
-	items := m.items()
+	items := view.Items()
 	if len(items) == 0 {
 		header = append(header, deckIndent+lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
 		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(header, "\n"))
