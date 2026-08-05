@@ -35,17 +35,20 @@ func TestEverySurfaceNamesTheSameScope(t *testing.T) {
 				t.Errorf("the agent prompt does not name %q:\n%s", tc.want, got)
 			}
 
-			// The publish preview. A change-scope remark is not a thread, so it is
-			// previewed as a PR comment and named in the reply/summary lines instead.
-			var inline []review.Comment
+			// The publish preview, through the real partitioner rather than a
+			// hand-built bucket — where a comment goes is the thing most likely to be
+			// wrong, so a test that assigns the bucket itself cannot catch it.
+			//
+			// Change scope is excluded on purpose: with a verdict that remark *becomes*
+			// the review's body, so there is no location for the preview to name. It is
+			// the one scope that is not at a place.
 			if tc.anchor.Scope() != review.ChangeScope {
-				inline = []review.Comment{c}
-			}
-			plan := strings.Join(publishPlan(
-				publishRequest{PR: 7, Event: github.EventApprove, Verdict: "approve"},
-				inline, nil, nil, 0, "abc123def4567", nil), "\n")
-			if len(inline) > 0 && !strings.Contains(plan, "thread  "+tc.want) {
-				t.Errorf("the publish preview does not name %q:\n%s", tc.want, plan)
+				plan := strings.Join(publishPlan(
+					publishRequest{PR: 7, Event: github.EventApprove, Verdict: "approve"},
+					partitionForPublish([]review.Comment{c}), "abc123def4567", nil), "\n")
+				if !strings.Contains(plan, tc.want) {
+					t.Errorf("the publish preview does not name %q:\n%s", tc.want, plan)
+				}
 			}
 
 			// A reply's failure message, which is the only record of where a retry
@@ -53,7 +56,7 @@ func TestEverySurfaceNamesTheSameScope(t *testing.T) {
 			reply := c
 			reply.ReplyToThread = "PRRT_1"
 			replyPlan := strings.Join(publishPlan(
-				publishRequest{PR: 7}, nil, nil, []review.Comment{reply}, 0, "", nil), "\n")
+				publishRequest{PR: 7}, publishBuckets{Replies: []review.Comment{reply}}, "", nil), "\n")
 			if !strings.Contains(replyPlan, tc.want) {
 				t.Errorf("the reply preview does not name %q:\n%s", tc.want, replyPlan)
 			}

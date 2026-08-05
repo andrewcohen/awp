@@ -52,23 +52,47 @@ func resolvePublishPR(flagPR int, target review.Target, pinned int) int {
 	return pinned
 }
 
-// partitionForPublish sorts a review's comments by the call that sends each one:
-// inline in a review, on the PR itself, or into a GitHub thread it answers. The
-// count is what is already on GitHub (or empty, which there is nothing to post).
+// publishBuckets is a review's comments sorted by the call that sends each one.
+//
+// A struct rather than a row of return values, because the bug it exists to
+// prevent is a comment scope landing in a bucket nobody meant it to. File-level
+// comments were routed as inline threads simply by being the case nobody added —
+// and since an inline thread must have a line, the anchor preflight then refused
+// the entire publish over a comment that has no line by design. Positional
+// returns are what let that happen without anyone writing it down; a named field
+// per destination means a new scope has to be put somewhere on purpose.
+type publishBuckets struct {
+	// Inline is one thread per comment, staged into a single review.
+	Inline []review.Comment
+	// ChangeWide is a remark about the change as a whole: the review's body when
+	// there is a verdict, a PR comment otherwise.
+	ChangeWide []review.Comment
+	// Replies go back into a GitHub thread they answer, by their own mutation.
+	Replies []review.Comment
+	// FileLevel is a remark about a file as a whole. It has no line, so it cannot
+	// ride in the staged review — GitHub spells this subject_type=file on the REST
+	// comment endpoint, which is not wired up yet.
+	FileLevel []review.Comment
+	// Skipped is what is already on GitHub, or empty, and so has nothing to post.
+	Skipped int
+}
+
+// partitionForPublish sorts a review's comments by the call that sends each one.
 //
 // Its own function so the rules are testable without a GitHub round-trip: what
 // gets reposted is the one thing here that must never be wrong.
-func partitionForPublish(comments []review.Comment) (inline, changeWide, replies []review.Comment, skipped int) {
-	inline = make([]review.Comment, 0, len(comments))
+func partitionForPublish(comments []review.Comment) publishBuckets {
+	var b publishBuckets
+	b.Inline = make([]review.Comment, 0, len(comments))
 	for _, c := range comments {
 		// Already on GitHub: skip rather than repost. This is what makes a retry
 		// after a partial failure safe.
 		if c.State == review.Published || c.Publish != nil {
-			skipped++
+			b.Skipped++
 			continue
 		}
 		if strings.TrimSpace(c.Body) == "" {
-			skipped++
+			b.Skipped++
 			continue
 		}
 		// A reply into a GitHub thread goes back into that thread, by its own mutation.
@@ -77,27 +101,36 @@ func partitionForPublish(comments []review.Comment) (inline, changeWide, replies
 		// how it would land: a new top-level thread on the same line, divorced from the
 		// question it answers.
 		if c.ThreadReply() {
-			replies = append(replies, c)
+			b.Replies = append(b.Replies, c)
 			continue
 		}
 		// A reply to one of our own comments is a local conversation — you and the
 		// agent working a finding out between you (see review.Store.Reply). There is
 		// nothing to publish it into: a batched review creates new threads only.
 		if c.ReplyTo != "" {
-			skipped++
+			b.Skipped++
 			continue
 		}
-		// A remark about the change as a whole has no line to hang a review
-		// comment on, so it goes up as a comment on the PR instead. Sending it
-		// inline with an empty path is what GitHub rejects, and reporting that as
-		// a failure gave the user nothing to act on.
-		if c.Anchor.Scope() == review.ChangeScope {
-			changeWide = append(changeWide, c)
-			continue
+		// Every remaining comment goes by its scope, so a scope that is not handled
+		// here is a compile-time hole rather than a comment quietly treated as
+		// something it is not.
+		switch c.Anchor.Scope() {
+		case review.ChangeScope:
+			// No line to hang a review comment on, so it goes up as a comment on the
+			// PR instead. Sending it inline with an empty path is what GitHub rejects,
+			// and reporting that as a failure gave the user nothing to act on.
+			b.ChangeWide = append(b.ChangeWide, c)
+		case review.FileScope:
+			// Not inline: a staged thread must have a line, and this one has none by
+			// design. Routed here so the anchor preflight never sees it — as an inline
+			// comment it was reported as "line 0 is not in the diff", which refuses the
+			// whole run and takes every good comment beside it down too.
+			b.FileLevel = append(b.FileLevel, c)
+		case review.LineScope:
+			b.Inline = append(b.Inline, c)
 		}
-		inline = append(inline, c)
 	}
-	return inline, changeWide, replies, skipped
+	return b
 }
 
 // runReviewPublish implements `awp review publish`.
@@ -199,7 +232,7 @@ type publishRequest struct {
 
 func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	store, r, event, prNumber := req.Store, req.Review, req.Event, req.PR
-	inline, changeWide, replies, skipped := partitionForPublish(req.Comments)
+	b := partitionForPublish(req.Comments)
 	if runner == nil {
 		runner = NewExecRunner()
 	}
@@ -220,13 +253,13 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// no --summary — they are the body, as before.
 	summary := strings.TrimSpace(req.Summary)
 	if summary == "" {
-		summary = reviewSummary(changeWide)
+		summary = reviewSummary(b.ChangeWide)
 	}
 	// Comments ride in a review, and a review has to be submitted with a verdict —
 	// so publishing them without one is refused rather than guessed at. Leaving the
 	// review pending instead would put the comments on GitHub where only the author can
 	// see them, and a retry would then stage a second copy of every one.
-	if len(inline) > 0 && event == "" {
+	if len(b.Inline) > 0 && event == "" {
 		return errors.New("publishing comments needs a verdict; pass --verdict approve|comment|request-changes")
 	}
 	if github.EventNeedsBody(event) && summary == "" {
@@ -237,7 +270,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// refuses the whole request without one, so it is resolved once, up front — a run
 	// that cannot find it says so once rather than failing per comment.
 	head := ""
-	if len(inline) > 0 {
+	if len(b.Inline) > 0 {
 		resolved, note, herr := reviewedCommit(runner, gh, req)
 		if herr != nil {
 			return herr
@@ -264,7 +297,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// the whole review goes up as one atomic mutation, one bad anchor fails every
 	// comment with it and the message names only the first problem.
 	var verdicts []anchorVerdict
-	if len(inline) > 0 {
+	if len(b.Inline) > 0 {
 		files, ferr := gh.PRFiles(req.PR)
 		if ferr != nil {
 			// The check is an improvement on GitHub's error message, not a gate the
@@ -272,7 +305,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			// is what happened before this existed.
 			_, _ = fmt.Fprintf(out, "note: couldn't check the anchors against the PR's diff: %v\n", ferr)
 		} else if len(files) > 0 {
-			verdicts = preflight(inline, parseCommentable(files))
+			verdicts = preflight(b.Inline, parseCommentable(files))
 		}
 		// No files at all is treated the same way as a failed fetch. A PR whose diff
 		// touches nothing is not a real state, so an empty answer means the call told
@@ -282,7 +315,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	}
 
 	if req.DryRun {
-		for _, line := range publishPlan(req, inline, changeWide, replies, skipped, head, verdicts) {
+		for _, line := range publishPlan(req, b, head, verdicts) {
 			_, _ = fmt.Fprintln(out, line)
 		}
 		return nil
@@ -291,20 +324,31 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// atomic, so this loses nothing that would otherwise have landed — it replaces a
 	// wall of validation errors naming GitHub's first complaint with the full list,
 	// in the reviewer's own terms, before anything is attempted.
-	if blocked := blockedAnchors(inline, verdicts); len(blocked) > 0 {
+	if blocked := blockedAnchors(b.Inline, verdicts); len(blocked) > 0 {
 		return fmt.Errorf("%d comment(s) are not on lines in PR #%d's diff:\n  %s",
 			len(blocked), req.PR, strings.Join(blocked, "\n  "))
 	}
-	if len(inline) == 0 && len(changeWide) == 0 && len(replies) == 0 {
+	// Said out loud, every run, before anything is posted. These are not published
+	// yet, and a comment the reviewer wrote and believes is on the PR is worse than
+	// one they know is still local — silence here is the exact failure this store
+	// keeps getting fixed for.
+	if len(b.FileLevel) > 0 {
+		_, _ = fmt.Fprintf(out, "note: %d comment(s) not published — a comment on a whole file needs an endpoint awp doesn't call yet\n",
+			len(b.FileLevel))
+		for _, c := range b.FileLevel {
+			_, _ = fmt.Fprintf(out, "      %s  %s\n", c.Anchor.Where(), oneLine(c.PublishBody()))
+		}
+	}
+	if len(b.Inline) == 0 && len(b.ChangeWide) == 0 && len(b.Replies) == 0 {
 		// A verdict is worth submitting on its own: approving a PR whose comments
 		// all went up on an earlier run is a normal thing to want.
 		if event == "" {
-			_, _ = fmt.Fprintf(out, "nothing to publish (%d already published)\n", skipped)
+			_, _ = fmt.Fprintf(out, "nothing to publish (%d already published)\n", b.Skipped)
 			return nil
 		}
 	}
 
-	res := publishResult{Skipped: skipped}
+	res := publishResult{Skipped: b.Skipped}
 	var failures []error
 
 	// record marks a comment published and writes it back immediately, per
@@ -321,30 +365,30 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	}
 
 	switch {
-	case len(inline) > 0:
+	case len(b.Inline) > 0:
 		// One review carrying every comment, staged and then submitted. Not one call per
 		// comment: the REST comment endpoint creates a single-comment *review* per call,
 		// so eight comments appeared as eight empty review entries on the PR plus one for
 		// the verdict — and GitHub does not allow deleting a submitted review, so those
 		// are permanent (see alpha #2329, app-main #54).
-		staged, cerr := stageReview(gh, prNumber, head, inline)
+		staged, cerr := stageReview(gh, prNumber, head, b.Inline)
 		if cerr != nil {
 			// Nothing was created: the mutation is atomic, and it is refused before
 			// anything becomes visible. So this is a clean failure with nothing to undo.
-			res.Failed += len(inline)
+			res.Failed += len(b.Inline)
 			failures = append(failures, cerr)
 		} else if serr := gh.SubmitStagedReview(staged.ID, event, summary); serr != nil {
 			// The comments are staged but invisible. Discard them rather than leaving a
 			// pending review behind: a retry would stage a second copy of every comment,
 			// and the reviewer has lost nothing — it is all still in the local store.
-			res.Failed += len(inline)
+			res.Failed += len(b.Inline)
 			failures = append(failures, serr)
 			if derr := gh.DeleteStagedReview(staged.ID); derr != nil {
 				failures = append(failures, fmt.Errorf(
 					"the staged review could not be discarded either, so it is still pending on the PR — submit or delete it there before retrying: %w", derr))
 			}
 		} else {
-			for _, c := range inline {
+			for _, c := range b.Inline {
 				where := c.Anchor.Where()
 				// The thread's own id when GitHub named it, so a record points at the
 				// conversation it produced; the review's id otherwise, which is still enough
@@ -355,7 +399,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 				}
 				record(c, id, where)
 			}
-			recordSummaries(store, r, req, changeWide, staged.ID, record, &failures)
+			recordSummaries(store, r, req, b.ChangeWide, staged.ID, record, &failures)
 			_, _ = fmt.Fprintf(out, "submitted the review as %s\n", req.Verdict)
 		}
 	case event != "":
@@ -367,7 +411,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			res.Failed++
 			failures = append(failures, fmt.Errorf("submitting the review: %w", perr))
 		} else {
-			recordSummaries(store, r, req, changeWide, id, record, &failures)
+			recordSummaries(store, r, req, b.ChangeWide, id, record, &failures)
 			_, _ = fmt.Fprintf(out, "submitted the review as %s\n", req.Verdict)
 		}
 	default:
@@ -383,7 +427,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 				res.Posted++
 			}
 		}
-		for _, c := range changeWide {
+		for _, c := range b.ChangeWide {
 			id, perr := gh.PostPRComment(prNumber, c.PublishBody())
 			if perr != nil {
 				res.Failed++
@@ -399,7 +443,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// unaffected by whether the review above it went up. Usually there are none —
 	// the viewer posts a reply as you write it — so these are the ones whose post
 	// failed at the time and are being retried.
-	for _, c := range replies {
+	for _, c := range b.Replies {
 		id, perr := gh.ReplyToReviewThread(c.ReplyToThread, c.PublishBody())
 		if perr != nil {
 			res.Failed++
@@ -496,7 +540,7 @@ func fileSummary(store review.Store, r review.Review, body, threadID string, fai
 // target either look right or they do not. The viewer shows exactly this text
 // before posting (see the publish overlay), so a preview cannot describe a
 // different run than the one it is previewing.
-func publishPlan(req publishRequest, inline, changeWide, replies []review.Comment, skipped int, head string, verdicts []anchorVerdict) []string {
+func publishPlan(req publishRequest, b publishBuckets, head string, verdicts []anchorVerdict) []string {
 	// The calls are collected first and counted afterwards, so the count cannot
 	// disagree with the list under it. Counting the inputs instead was wrong the
 	// moment a verdict folded the review-level remarks into one review body: it
@@ -512,13 +556,13 @@ func publishPlan(req publishRequest, inline, changeWide, replies []review.Commen
 		lines = append(lines, fmt.Sprintf(format, args...))
 	}
 	switch {
-	case len(inline) > 0:
+	case len(b.Inline) > 0:
 		// One review, staged with every thread, then submitted. The threads are listed
 		// under it because they are what the reviewer is checking — a target and a body
 		// either look right or they do not.
 		call("addPullRequestReview  PR #%d  commit=%s  %d thread(s), staged",
-			req.PR, shortSHA(head), len(inline))
-		for i, c := range inline {
+			req.PR, shortSHA(head), len(b.Inline))
+		for i, c := range b.Inline {
 			line := fmt.Sprintf("  thread  %s  %s",
 				c.Anchor.Where(), oneLine(c.PublishBody()))
 			// The anchor's verdict rides on the thread it is about. A reviewer checking
@@ -530,13 +574,13 @@ func publishPlan(req publishRequest, inline, changeWide, replies []review.Commen
 			lines = append(lines, line)
 		}
 		line := fmt.Sprintf("submitPullRequestReview  event=%s", req.Event)
-		if summary := planSummary(req, changeWide); summary != "" {
+		if summary := planSummary(req, b.ChangeWide); summary != "" {
 			line += "  body=" + oneLine(summary)
 		}
 		call("%s", line)
 	case req.Event != "":
 		line := fmt.Sprintf("POST pulls/%d/reviews  event=%s", req.PR, req.Event)
-		if summary := planSummary(req, changeWide); summary != "" {
+		if summary := planSummary(req, b.ChangeWide); summary != "" {
 			line += "  body=" + oneLine(summary)
 		}
 		call("%s", line)
@@ -544,21 +588,28 @@ func publishPlan(req publishRequest, inline, changeWide, replies []review.Commen
 		if written := strings.TrimSpace(req.Summary); written != "" {
 			call("POST issues/%d/comments  %s", req.PR, oneLine(written))
 		}
-		for _, c := range changeWide {
+		for _, c := range b.ChangeWide {
 			call("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody()))
 		}
 	}
 	// Outside the switch, the same as the run itself: a reply is its own call into a
 	// conversation that already exists, whatever else this run is doing.
-	for _, c := range replies {
+	for _, c := range b.Replies {
 		call("addPullRequestReviewThreadReply  %s  %s",
 			c.Anchor.Where(), oneLine(c.PublishBody()))
 	}
-	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, skipped)
+	// Listed as what it is — a comment this run will not send. A preview whose
+	// whole job is naming the calls has to name the omissions too, or the reviewer
+	// confirms a plan and finds a comment still sitting local afterwards.
+	for _, c := range b.FileLevel {
+		lines = append(lines, fmt.Sprintf("  not sent  %s  %s  ⚠ a comment on a whole file needs an endpoint awp doesn't call yet",
+			c.Anchor.Where(), oneLine(c.PublishBody())))
+	}
+	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, b.Skipped)
 	// A refusal, said before the calls rather than discovered after them. The plan
 	// still lists everything: which anchors are wrong is the point, and hiding the
 	// good ones would not help fix the bad.
-	if blocked := blockedAnchors(inline, verdicts); len(blocked) > 0 {
+	if blocked := blockedAnchors(b.Inline, verdicts); len(blocked) > 0 {
 		head1 += fmt.Sprintf(" — %d anchor(s) would be refused, so this run would send nothing", len(blocked))
 	}
 	return append([]string{head1}, lines...)
