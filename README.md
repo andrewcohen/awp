@@ -61,6 +61,29 @@ bind a display-popup -E -w 90% -h 90% awp deck \; run-shell "awp deck-cleanup"
 
 Press `?` inside the deck for the full key + status legend.
 
+### The top row
+
+The deck's first row says what wants you on the left, in dots and numbers
+ordered by how much it is your problem, and which scope you're looking through
+on the right:
+
+```
+   ● 2  ● 1  ● 3                                            scope: all
+
+   frontend
+ ┃ ● checkout-fix
+```
+
+Yellow is waiting on you, green is working, grey is notified — the same coloured
+dot the matching rows wear a couple of lines below, on the same column, and the
+same badge [`awp internal unread-summary`](#tmux-status-bar-badge) puts in the
+tmux status bar. `?` has the legend. When nothing wants you the badge disappears
+and the row is just the scope label.
+
+The counts cover every workspace, not just the ones the current scope shows, so
+pressing `P` changes which rows you see without changing what the badge says is
+waiting.
+
 ### Mini deck (quick-jump)
 
 ```sh
@@ -388,6 +411,9 @@ set -g status-right '#(awp internal unread-summary) | %H:%M'
 ```
 
 `awp internal unread-summary` prints `● N` (working, green), `▲ N` (waiting, yellow), and/or `● N` (notified, grey) — empty output when nothing is working and nothing is pending, so the divider/clock collapses cleanly. Working is counted live regardless of the unread flag (mirroring the deck's always-on green dot), so the badge stays lit while agents are running, not just when something needs you.
+
+This badge and [the deck's top row](#the-top-row) count the same buckets and are
+decided in one place, so they can't disagree about the same workspaces.
 
 ## Async deck jobs
 

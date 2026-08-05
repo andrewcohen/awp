@@ -3045,16 +3045,10 @@ func TestRenderListCollapsedAlignsWithProjectHeader(t *testing.T) {
 	(&m).clampDeckViewport()
 	out := m.renderList(m.width)
 
-	headerCol, collapsedCol := -1, -1
-	for _, line := range strings.Split(out, "\n") {
-		plain := ansi.Strip(line)
-		if i := strings.Index(plain, "frontend"); i >= 0 && headerCol < 0 {
-			headerCol = i
-		}
-		if i := strings.Index(plain, "zapi"); i >= 0 {
-			collapsedCol = i
-		}
-	}
+	// Columns, not byte offsets — a row carrying a status dot is three bytes
+	// wide and one cell (see colOfFirst).
+	headerCol := colOfFirst(t, out, "frontend")
+	collapsedCol := colOfFirst(t, out, "zapi")
 	if headerCol < 0 || collapsedCol < 0 {
 		t.Fatalf("expected both a 'frontend' header and a collapsed 'zapi' row; header=%d collapsed=%d", headerCol, collapsedCol)
 	}

@@ -12,30 +12,47 @@ import (
 // can drift. They only stay equal because of this.
 func TestDeckIndentMatchesTextCol(t *testing.T) {
 	if len(deckIndent) != deckTextCol {
-		t.Errorf("deckIndent is %d spaces, deckTextCol is %d — the title row would sit off the body column",
+		t.Errorf("deckIndent is %d spaces, deckTextCol is %d — lines that lead with text would sit off the body column",
 			len(deckIndent), deckTextCol)
 	}
 }
 
 // colOfFirst returns the column the given text starts in, on the first
 // rendered line that contains it, with ANSI stripped.
+//
+// The column, not the byte offset: the status dot is three bytes and one cell,
+// so measuring alignment with strings.Index alone reports text as two columns
+// further right than the terminal draws it.
 func colOfFirst(t *testing.T, out, want string) int {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
-		if i := strings.Index(ansi.Strip(line), want); i >= 0 {
-			return i
+		plain := ansi.Strip(line)
+		if i := strings.Index(plain, want); i >= 0 {
+			return lipgloss.Width(plain[:i])
 		}
 	}
 	return -1
 }
 
-func TestTitleRowAlignsWithProjectHeader(t *testing.T) {
-	// The title heads the list below it, so it has to sit in the same column
-	// the list's own headers do. It used to render at col 0 while every
-	// project header's name started at deckTextCol, which read as the heading
-	// hanging off the panel's left edge.
+// badgeOf is the left half of a top row: everything before the scope label.
+func badgeOf(row string) string {
+	return strings.TrimSpace(strings.SplitN(row, "scope:", 2)[0])
+}
+
+// topRow returns the deck's first content row: the badge, then the scope label.
+func topRow(t *testing.T, m Model) string {
+	t.Helper()
+	(&m).clampDeckViewport()
+	lines := strings.Split(m.renderList(m.width), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least two rendered lines, got %d", len(lines))
+	}
+	return ansi.Strip(lines[1])
+}
+
+func TestTopRowPutsTheBadgeLeftAndTheScopeRight(t *testing.T) {
 	items := []Item{
-		{ProjectName: "frontend", WorkspaceName: "dashboard", Status: "idle"},
+		{ProjectName: "frontend", WorkspaceName: "dashboard", Status: "waiting", Unread: true},
 		{ProjectName: "frontend", WorkspaceName: "feat", Status: "idle"},
 	}
 	m := New(items, nil)
@@ -43,56 +60,166 @@ func TestTitleRowAlignsWithProjectHeader(t *testing.T) {
 	(&m).clampDeckViewport()
 	out := m.renderList(m.width)
 
-	titleCol := colOfFirst(t, out, "awp deck")
-	headerCol := colOfFirst(t, out, "frontend")
-	if titleCol < 0 || headerCol < 0 {
-		t.Fatalf("expected both a title and a 'frontend' header; title=%d header=%d", titleCol, headerCol)
+	line := strings.Split(out, "\n")[1]
+	if got := lipgloss.Width(line); got != m.width {
+		t.Errorf("top row is %d cols, want %d (the scope label is off the right edge)", got, m.width)
 	}
-	if titleCol != headerCol {
-		t.Errorf("title starts at col %d, project header name at col %d — must align", titleCol, headerCol)
+	plain := ansi.Strip(line)
+	if !strings.HasSuffix(strings.TrimRight(plain, " "), scopeLabel(m.scope)) {
+		t.Errorf("top row does not end with the scope label: %q", plain)
+	}
+	// The badge leads with a status dot, and it is the dot that has to land on
+	// the body's text column — the same column the rows' own dots sit in, and
+	// the one the project headers start on.
+	dotCol := colOfFirst(t, line, "●")
+	headerCol := colOfFirst(t, out, "frontend")
+	if dotCol < 0 || headerCol < 0 {
+		t.Fatalf("expected both a badge dot and a 'frontend' header; dot=%d header=%d", dotCol, headerCol)
+	}
+	if dotCol != headerCol {
+		t.Errorf("badge starts at col %d, project header name at col %d — must align", dotCol, headerCol)
 	}
 }
 
-func TestTitleRowScopeLabelStaysAtTheRightEdge(t *testing.T) {
-	// Indenting the title must not drag the scope label in with it: the label
-	// is pinned to the panel's inner right edge, which is where the rows
-	// themselves end.
-	m := New([]Item{{ProjectName: "web", WorkspaceName: "default", Status: "idle"}}, nil)
-	m.width, m.height = 100, 40
-	(&m).clampDeckViewport()
+// The badge's job: say what wants you, in numbers, without words.
+func TestTopRowBadgeIsDotsAndNumbers(t *testing.T) {
+	items := []Item{
+		{ProjectName: "web", WorkspaceName: "one", Status: "waiting", Unread: true},
+		{ProjectName: "web", WorkspaceName: "two", Status: "waiting", Unread: true},
+		{ProjectName: "web", WorkspaceName: "three", Status: "working"},
+		{ProjectName: "api", WorkspaceName: "four", Status: "idle", Unread: true},
+		{ProjectName: "api", WorkspaceName: "five", Status: "idle"},
+	}
+	m := New(items, nil)
+	m.width, m.height = 120, 40
 
-	var titleLine string
-	for _, line := range strings.Split(m.renderList(m.width), "\n") {
-		if strings.Contains(ansi.Strip(line), "awp deck") {
-			titleLine = line
-			break
+	row := topRow(t, m)
+	if badge := badgeOf(row); badge != "● 2  ● 1  ● 1" {
+		t.Errorf("badge = %q, want %q", badge, "● 2  ● 1  ● 1")
+	}
+	// The dot is the word. Spelling it out again turned three numbers into a
+	// sentence across the top of the screen.
+	for _, word := range []string{"waiting", "working", "unread", "awp deck"} {
+		if strings.Contains(row, word) {
+			t.Errorf("top row spells out %q: %q", word, row)
 		}
 	}
-	if titleLine == "" {
-		t.Fatal("no title line rendered")
-	}
-	// The panel pads 1 col on each side, so a full-width line is m.width wide
-	// and the scope label's last cell is the second-to-last column.
-	if got := lipgloss.Width(titleLine); got != m.width {
-		t.Errorf("title line is %d cols, want %d (scope label pulled off the right edge)", got, m.width)
-	}
-	if !strings.HasSuffix(strings.TrimRight(ansi.Strip(titleLine), " "), scopeLabel(m.scope)) {
-		t.Errorf("title line does not end with the scope label: %q", ansi.Strip(titleLine))
+}
+
+// The colours are the only thing distinguishing the three counts, so they have
+// to be the row-status colours rather than a palette invented here.
+func TestBadgeDotsWearTheRowStatusColours(t *testing.T) {
+	m := New([]Item{
+		{ProjectName: "web", WorkspaceName: "one", Status: "waiting", Unread: true},
+		{ProjectName: "web", WorkspaceName: "two", Status: "working"},
+		{ProjectName: "web", WorkspaceName: "three", Status: "idle", Unread: true},
+	}, nil)
+	m.width, m.height = 120, 40
+	(&m).clampDeckViewport()
+
+	badge := strings.SplitN(strings.Split(m.renderList(m.width), "\n")[1], "scope:", 2)[0]
+	for _, want := range []struct {
+		status string
+		label  string
+	}{
+		{"waiting", "waiting"},
+		{"working", "working"},
+		{"idle", "unread"},
+	} {
+		dot := statusGlyph(want.status, false, true)
+		if !strings.Contains(badge, dot) {
+			t.Errorf("%s count is not wearing the %s row's dot (%q): %q", want.label, want.status, dot, badge)
+		}
 	}
 }
 
-func TestNoWorkspacesMessageAlignsWithTheTitle(t *testing.T) {
+// Switching scope filters the rows. It must not change what the badge says is
+// waiting, or the number is reporting the filter rather than the work — and the
+// filter is already named on the same row, a few cols to the right.
+func TestBadgeCountsEveryWorkspaceWhateverTheScope(t *testing.T) {
+	items := []Item{
+		{ProjectName: "web", WorkspaceName: "one", Status: "waiting", Unread: true},
+		{ProjectName: "web", WorkspaceName: "two", Status: "waiting", Unread: true},
+		// Neither of these shows in the attention scope, and neither has a PR
+		// so neither shows in the inbox.
+		{ProjectName: "api", WorkspaceName: "three", Status: "idle"},
+		{ProjectName: "api", WorkspaceName: "four", Status: "idle"},
+	}
+	want := ""
+	for _, scope := range []Scope{ScopeAll, ScopeAttention, ScopeInbox} {
+		m := New(items, nil)
+		m.width, m.height = 120, 40
+		m.scope = scope
+
+		got := badgeOf(topRow(t, m))
+		if want == "" {
+			want = got
+		}
+		if got != want {
+			t.Errorf("scope %v badges %q, but %q in the first scope — the count must not follow the filter",
+				scope, got, want)
+		}
+		if got != "● 2" {
+			t.Errorf("scope %v: expected 2 waiting and nothing else, got %q", scope, got)
+		}
+	}
+}
+
+func TestTopRowIsJustTheScopeWhenNothingWants(t *testing.T) {
+	m := New([]Item{
+		{ProjectName: "web", WorkspaceName: "one", Status: "idle"},
+		{ProjectName: "web", WorkspaceName: "two", Status: "exited", Unread: true},
+	}, nil)
+	m.width, m.height = 120, 40
+
+	// No badge, and no sentence saying there is nothing — there is no neutral
+	// way to say "no", and the scope label already proves the frame rendered.
+	row := topRow(t, m)
+	if badge := badgeOf(row); badge != "" {
+		t.Errorf("expected the badge gone entirely, got %q", badge)
+	}
+	if !strings.Contains(row, "scope:") {
+		t.Errorf("expected the scope label to stay, got %q", row)
+	}
+}
+
+func TestNoWorkspacesMessageSitsOnTheBodyColumn(t *testing.T) {
 	m := New(nil, nil)
 	m.width, m.height = 100, 40
 	(&m).clampDeckViewport()
 	out := m.renderList(m.width)
 
-	titleCol := colOfFirst(t, out, "awp deck")
-	msgCol := colOfFirst(t, out, "No workspaces found.")
-	if titleCol < 0 || msgCol < 0 {
-		t.Fatalf("expected a title and the empty-state message; title=%d msg=%d", titleCol, msgCol)
+	if got := colOfFirst(t, out, "No workspaces found."); got != deckTextCol+1 {
+		// +1 for the panel's own left padding.
+		t.Errorf("empty-state message at col %d, want %d (the deck's text column)", got, deckTextCol+1)
 	}
-	if titleCol != msgCol {
-		t.Errorf("empty-state message at col %d, title at col %d — must align", msgCol, titleCol)
+}
+
+func TestCountAttentionSkipsWorkspacesBeingCreated(t *testing.T) {
+	// An optimistic row is a create in flight — its own spinner, nothing to act
+	// on. Counting it would badge the deck for work the user just started.
+	got := countAttention([]Item{
+		{WorkspaceName: "real", Status: "waiting", Unread: true},
+		{WorkspaceName: "pending", Status: "waiting", Unread: true, Optimistic: true},
+	})
+	if got.Waiting != 1 {
+		t.Errorf("Waiting = %d, want 1 (the optimistic row must not count)", got.Waiting)
+	}
+}
+
+// The counts add up to the workspaces, which is what makes three bare numbers
+// readable as a breakdown rather than as three unrelated figures.
+func TestCountAttentionBucketsAreExclusive(t *testing.T) {
+	items := []Item{
+		{Status: "working", Unread: true}, // stale flag from an earlier turn
+		{Status: "waiting", Unread: true},
+		{Status: "idle", Unread: true},
+		{Status: "idle"},
+		{Status: "exited", Unread: true},
+	}
+	c := countAttention(items)
+	if total := c.Waiting + c.Working + c.Notified; total != 3 {
+		t.Errorf("counts total %d (waiting=%d working=%d unread=%d), want 3 — the read idle and the exited row count for nothing, and the working row counts once",
+			total, c.Waiting, c.Working, c.Notified)
 	}
 }
