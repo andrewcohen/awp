@@ -451,3 +451,76 @@ func TestAPaneOfNothingButHiddenThreadsStillSaysSo(t *testing.T) {
 		t.Fatal("expected the empty index out of the tab rotation")
 	}
 }
+
+// A conversation reads as a conversation: one header per message, each naming who
+// wrote that message.
+//
+// Flattened into one card the whole thing was attributed to whoever spoke first,
+// with later authors marked inline on the first line of their own remark — so a
+// multi-line reply ran on under the previous speaker and a reply you had just
+// posted arrived crammed onto the end of somebody else's.
+func TestEveryMessageOfAThreadIsHeadedByItsOwnAuthor(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{{
+		ID: "T1", Path: "a.go", Side: review.SideNew, Line: 1,
+		Comments: []review.ThreadComment{
+			{ID: "c1", Author: "alice", Body: "why is this here?\n\nsecond paragraph"},
+			{ID: "c2", Author: "bob", Body: "because of X"},
+			{ID: "c3", Author: "you", Body: "ok"},
+		},
+	}})
+	view := stripANSI(m.renderStreamPanel(90, 40))
+	for _, want := range []string{"alice", "bob", "you"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected %q named in the conversation:\n%s", want, view)
+		}
+	}
+	// No inline attribution: that is what a header is for, and it only ever marked
+	// the first line of a message anyway.
+	for _, unwanted := range []string{"bob: because", "you: ok"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("expected no inline author prefix, found %q:\n%s", unwanted, view)
+		}
+	}
+	// Each message's text still under its own header, in order.
+	iAlice := strings.Index(view, "alice")
+	iBob := strings.Index(view, "bob")
+	iOK := strings.Index(view, " ok")
+	if iAlice >= iBob || iBob >= iOK {
+		t.Fatalf("expected the conversation in order, got alice=%d bob=%d ok=%d:\n%s",
+			iAlice, iBob, iOK, view)
+	}
+	// One entry in the index, not three: jumping to a reply and to the remark it
+	// answers are the same jump.
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("expected one index entry for the conversation, got %d", len(m.commentIndex))
+	}
+	if m.commentIndex[0].replies != 2 {
+		t.Fatalf("expected 2 replies counted, got %d", m.commentIndex[0].replies)
+	}
+}
+
+// "published" is our word for one of *our* comments having reached GitHub. Every
+// message of a GitHub thread is there by definition, and the card's own header says
+// `github` — so stamping it on each row repeated the least interesting fact about
+// the conversation on every line of it.
+func TestMirroredMessagesDoNotClaimOurPublishedState(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{{
+		ID: "T1", Path: "a.go", Side: review.SideNew, Line: 1,
+		Comments: []review.ThreadComment{
+			{ID: "c1", Author: "alice", Body: "why?"},
+			{ID: "c2", Author: "bob", Body: "because"},
+		},
+	}})
+	view := stripANSI(m.renderStreamPanel(90, 40))
+	if strings.Contains(view, "published") {
+		t.Fatalf("expected no published chip on a mirrored conversation:\n%s", view)
+	}
+	// The marker that says where it lives is still there.
+	if !strings.Contains(view, "github") {
+		t.Fatalf("expected the github marker kept:\n%s", view)
+	}
+}
