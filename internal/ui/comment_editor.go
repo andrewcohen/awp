@@ -189,12 +189,20 @@ func (e commentEditor) view(width int) string {
 	case e.editing != "":
 		verb = " editing " + string(e.kind.OrDefault()) + " on "
 	}
-	// "a.go:12", "a.go:12-18", "a.go", "the whole change" — one spelling of a
+	// "a.go:12", "a.go:12-18", "all of a.go", "the whole change" — one spelling of a
 	// location, shared with the comment index, the agent prompt and the publish log
 	// (see review.Anchor.Where). It names the scope when there is no file rather
 	// than trailing off: "comment on" followed by blank space read as a bug in the
 	// header rather than as a deliberate absence of a file.
+	//
+	// The file scope says "all of" rather than the bare path, which is the one place
+	// the extra words are worth it: "comment on a.go" and "comment on a.go:12" differ
+	// by a detail the eye skips, and this is the moment you are deciding what the
+	// remark covers. The other surfaces name a location you already chose.
 	head := verb + e.anchor.Where()
+	if e.anchor.Scope() == review.FileScope {
+		head = verb + "all of " + e.anchor.Path
+	}
 	// Border and header take the kind's hue, so tab's effect is visible
 	// immediately rather than only once the comment is saved.
 	headStyle := kindStyles(e.kind)
@@ -457,6 +465,38 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 	}
 	m.editing = true
 	m.editor = newCommentEditor(a, m.hunkWidth)
+	m.rebuildStream()
+	return m, textarea.Blink
+}
+
+// startFileComment opens the box for a remark about the file the cursor is in,
+// rather than about a place in it: that it is in the wrong package, that it should
+// not exist, that its whole approach is wrong.
+//
+// Its own key rather than a mode on `c`, because it is a different scope and not a
+// different way of saying the same thing — and because the alternative reviewers
+// actually reach for is picking whichever line is nearest the point and writing
+// "this file", which buries a remark about the file inside a hunk.
+//
+// A range under selection is dropped rather than refused. Asking for the file's
+// scope is unambiguous about what the remark is meant to cover, so the range has
+// been answered rather than ignored.
+func (m Model) startFileComment() (tea.Model, tea.Cmd) {
+	if m.SaveComment == nil {
+		m.status = "commenting unavailable: no review store"
+		return m, nil
+	}
+	f, ok := m.currentFile()
+	if !ok {
+		m.status = "put the cursor in a file to comment on the file"
+		return m, nil
+	}
+	m.clearVisual()
+	m.editing = true
+	// No line, which is what makes it file-scoped — see review.Anchor.Scope. Side is
+	// the new one because a remark about a file is about the file as it now stands;
+	// there is no old-side reading of "this belongs elsewhere".
+	m.editor = newCommentEditor(review.Anchor{Path: pathOf(f), Side: review.SideNew}, m.hunkWidth)
 	m.rebuildStream()
 	return m, textarea.Blink
 }
