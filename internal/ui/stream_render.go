@@ -143,6 +143,11 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 	switch r.kind {
 	case rowSpacer:
 		return ""
+	case rowCommentGap:
+		// Nothing, and nothing is the point: the prefix switch above paints the
+		// reserved columns for comment rows, and this kind is deliberately not one —
+		// so the two columns stay unpainted and the break is a real break.
+		return ""
 	case rowFileHeader:
 		// The divider is already a full-width band, so a cursorline behind it
 		// would add nothing; the bar marks it.

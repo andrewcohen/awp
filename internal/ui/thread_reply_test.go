@@ -524,3 +524,69 @@ func TestMirroredMessagesDoNotClaimOurPublishedState(t *testing.T) {
 		t.Fatalf("expected the github marker kept:\n%s", view)
 	}
 }
+
+// Two conversations on one line are two cards, so there is a real break between
+// them.
+//
+// Each card already pads itself top and bottom, but those pad rows carry the
+// kind-coloured bar — so two adjacent conversations ran together as one block with a
+// continuous left edge, and where one ended and the next began was guesswork.
+func TestConversationsOnOneLineAreSeparatedByABlankRow(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{
+		{ID: "T1", Path: "a.go", Side: review.SideNew, Line: 1, Comments: []review.ThreadComment{
+			{ID: "a1", Author: "alice", Body: "first conversation"},
+			{ID: "a2", Author: "bob", Body: "a reply inside it"},
+		}},
+		{ID: "T2", Path: "a.go", Side: review.SideNew, Line: 1, Comments: []review.ThreadComment{
+			{ID: "b1", Author: "carol", Body: "second conversation"},
+		}},
+	})
+
+	var gaps []int
+	for i, r := range m.stream.rows {
+		if r.kind == rowCommentGap {
+			gaps = append(gaps, i)
+		}
+	}
+	if len(gaps) != 1 {
+		t.Fatalf("expected one break between two conversations, got %d", len(gaps))
+	}
+	// Between the conversations, not between the messages of one: a reply belongs to
+	// the card above it and must not be cut off from it.
+	rowOf := func(id string) int {
+		for i, r := range m.stream.rows {
+			if !isCommentRow(r.kind) || r.commentLine != 0 {
+				continue
+			}
+			if r.comment >= 0 && r.comment < len(m.stream.comments) &&
+				m.stream.comments[r.comment].ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	first, reply, second := rowOf("thread-T1"), rowOf("thread-T1#1"), rowOf("thread-T2")
+	if first < 0 || reply < 0 || second < 0 {
+		t.Fatalf("expected all three messages placed, got %d %d %d", first, reply, second)
+	}
+	if first >= reply || reply >= gaps[0] || gaps[0] >= second {
+		t.Fatalf("expected the break after the first conversation's last message: "+
+			"first=%d reply=%d gap=%d second=%d", first, reply, gaps[0], second)
+	}
+
+	// And it is genuinely blank — no bar, no painted columns. A bar on it would be
+	// the very thing that made the two cards read as one.
+	row := stripANSI(m.renderStreamRowAt(gaps[0], 80))
+	if strings.TrimSpace(row) != "" {
+		t.Fatalf("expected an empty row, got %q", row)
+	}
+	if strings.Contains(row, "▌") {
+		t.Fatalf("expected no comment bar on the break, got %q", row)
+	}
+	// The row is not a comment row, so the comment gestures do not act on it.
+	if isCommentRow(m.stream.rows[gaps[0]].kind) {
+		t.Fatal("the break must not read as a comment row")
+	}
+}
