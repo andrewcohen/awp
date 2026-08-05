@@ -839,7 +839,7 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 // anchor could not be found", which reads as a failure rather than as the thing
 // the author meant.
 func reviewLevel(c review.Comment) bool {
-	return strings.TrimSpace(c.Anchor.Path) == ""
+	return c.Anchor.Scope() == review.ChangeScope
 }
 
 // collapsedFileRow is the divider row of a folded file at the given path, if the

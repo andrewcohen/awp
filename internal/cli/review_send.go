@@ -33,12 +33,11 @@ import (
 func commentPromptFor(c review.Comment, revision string) string {
 	var b strings.Builder
 
-	where := c.Anchor.Path
-	// "12" or "12-18": a remark about a block has to say so, or the agent reads a
-	// comment about five lines as a comment about the first of them.
-	if lines := c.Anchor.LineRange(); lines != "" {
-		where += ":" + lines
-	}
+	// "a.go:12", "a.go:12-18", "a.go", "the whole change" — one spelling of a
+	// location, shared with the compose header, the comment index and the publish
+	// log (see review.Anchor.Where). A remark about a block has to say so, or the
+	// agent reads a comment about five lines as a comment about the first of them.
+	where := c.Anchor.Where()
 	if c.Anchor.Side == review.SideOld {
 		where += " (removed line, old side)"
 	}
