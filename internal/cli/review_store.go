@@ -362,13 +362,8 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	if err != nil {
 		return err
 	}
-	if c.Anchor.Path == "" {
-		_, _ = fmt.Fprintf(out, "added %s %s to %s (about the change as a whole)\n",
-			c.Kind.OrDefault(), c.ID, scope.label())
-		return nil
-	}
-	_, _ = fmt.Fprintf(out, "added %s %s to %s on %s:%s\n",
-		c.Kind.OrDefault(), c.ID, scope.label(), c.Anchor.Path, c.Anchor.LineRange())
+	_, _ = fmt.Fprintf(out, "added %s %s to %s on %s\n",
+		c.Kind.OrDefault(), c.ID, scope.label(), c.Anchor.Where())
 	return nil
 }
 
@@ -441,7 +436,7 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 		return nil
 	}
 	for _, c := range comments {
-		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s:%s\t%s\n", c.ID, c.Kind.OrDefault(), c.State, c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.Body))
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Kind.OrDefault(), c.State, c.Anchor.Where(), oneLine(c.Body))
 	}
 	return nil
 }

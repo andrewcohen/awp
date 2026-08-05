@@ -91,7 +91,7 @@ func partitionForPublish(comments []review.Comment) (inline, changeWide, replies
 		// comment on, so it goes up as a comment on the PR instead. Sending it
 		// inline with an empty path is what GitHub rejects, and reporting that as
 		// a failure gave the user nothing to act on.
-		if strings.TrimSpace(c.Anchor.Path) == "" {
+		if c.Anchor.Scope() == review.ChangeScope {
 			changeWide = append(changeWide, c)
 			continue
 		}
@@ -345,7 +345,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			}
 		} else {
 			for _, c := range inline {
-				where := c.Anchor.Path + ":" + c.Anchor.LineRange()
+				where := c.Anchor.Where()
 				// The thread's own id when GitHub named it, so a record points at the
 				// conversation it produced; the review's id otherwise, which is still enough
 				// to know the comment went up.
@@ -403,8 +403,8 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		id, perr := gh.ReplyToReviewThread(c.ReplyToThread, c.PublishBody())
 		if perr != nil {
 			res.Failed++
-			failures = append(failures, fmt.Errorf("replying in the thread at %s:%s: %w",
-				c.Anchor.Path, c.Anchor.LineRange(), perr))
+			failures = append(failures, fmt.Errorf("replying in the thread at %s: %w",
+				c.Anchor.Where(), perr))
 			continue
 		}
 		record(c, id, "the reply")
@@ -519,8 +519,8 @@ func publishPlan(req publishRequest, inline, changeWide, replies []review.Commen
 		call("addPullRequestReview  PR #%d  commit=%s  %d thread(s), staged",
 			req.PR, shortSHA(head), len(inline))
 		for i, c := range inline {
-			line := fmt.Sprintf("  thread  %s:%s  %s",
-				c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
+			line := fmt.Sprintf("  thread  %s  %s",
+				c.Anchor.Where(), oneLine(c.PublishBody()))
 			// The anchor's verdict rides on the thread it is about. A reviewer checking
 			// this plan is checking targets, and "not in the diff" belongs next to the
 			// target it refers to rather than in a separate list underneath.
@@ -551,8 +551,8 @@ func publishPlan(req publishRequest, inline, changeWide, replies []review.Commen
 	// Outside the switch, the same as the run itself: a reply is its own call into a
 	// conversation that already exists, whatever else this run is doing.
 	for _, c := range replies {
-		call("addPullRequestReviewThreadReply  %s:%s  %s",
-			c.Anchor.Path, c.Anchor.LineRange(), oneLine(c.PublishBody()))
+		call("addPullRequestReviewThreadReply  %s  %s",
+			c.Anchor.Where(), oneLine(c.PublishBody()))
 	}
 	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, skipped)
 	// A refusal, said before the calls rather than discovered after them. The plan

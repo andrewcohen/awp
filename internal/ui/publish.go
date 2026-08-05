@@ -123,7 +123,7 @@ func (m Model) unpublishedSummaries() []review.Comment {
 		if strings.TrimSpace(c.Body) == "" || c.ReplyTo != "" {
 			continue
 		}
-		if strings.TrimSpace(c.Anchor.Path) == "" {
+		if c.Anchor.Scope() == review.ChangeScope {
 			out = append(out, c)
 		}
 	}

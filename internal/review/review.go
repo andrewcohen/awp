@@ -116,6 +116,65 @@ type Anchor struct {
 // both are best read as "one line".
 func (a Anchor) Multiline() bool { return a.EndLineHint > a.LineHint }
 
+// Scope is how much of the change a remark is about: a line, a file, or the
+// whole thing. Three scopes, borrowed from what GitHub's own review model
+// supports, because they are three genuinely different acts — "this line is
+// wrong", "this file is the wrong shape", "this change needs another pass".
+//
+// Not a stored field. It is implied by what the anchor already carries, and a
+// second spelling of the same fact is a second thing to keep in step: a record
+// whose Scope said FileScope while its LineHint said 12 would have to be
+// adjudicated by every reader.
+type Scope int
+
+const (
+	// LineScope is a remark about a line or a run of lines: path and line.
+	LineScope Scope = iota
+	// FileScope is a remark about a file as a whole: path, no line. GitHub
+	// spells this subject_type=file.
+	FileScope
+	// ChangeScope is a remark about the change as a whole: no path at all. It
+	// becomes the review's body when publishing with a verdict.
+	ChangeScope
+)
+
+// Scope reads the anchor's scope off what it carries.
+//
+// A line without a path is the one incoherent combination — there is nothing for
+// the number to mean — and it reads as ChangeScope here rather than getting a
+// fourth case. The CLI refuses to write one, so a record like that came from a
+// hand-edited file, and treating it as "about the change" loses the line hint but
+// keeps the body, which is the part somebody wrote.
+func (a Anchor) Scope() Scope {
+	switch {
+	case strings.TrimSpace(a.Path) == "":
+		return ChangeScope
+	case a.LineHint <= 0:
+		return FileScope
+	default:
+		return LineScope
+	}
+}
+
+// Where is the anchor's scope as a reader should see it: "a.go:12", "a.go:14-20",
+// "a.go" for the file as a whole, "the whole change" for no path.
+//
+// One spelling for every surface that names what a comment is about — the compose
+// box's header, the comment index, the agent prompt, the publish preview and the
+// publish log — so they cannot disagree. Each of those used to derive it from
+// Path and LineHint itself, which is how a scope gets added in one place and read
+// as something else in four others.
+func (a Anchor) Where() string {
+	switch a.Scope() {
+	case ChangeScope:
+		return "the whole change"
+	case FileScope:
+		return a.Path
+	default:
+		return a.Path + ":" + a.LineRange()
+	}
+}
+
 // LineRange is the anchor's lines as a reader should see them: "12" or "12-18",
 // and empty when there is no line at all (a comment about the change as a
 // whole). One spelling for every surface that names a location — the compose

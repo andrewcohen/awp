@@ -266,8 +266,7 @@ func blockedAnchors(inline []review.Comment, verdicts []anchorVerdict) []string 
 		if i >= len(inline) || !v.blocks() {
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s:%s — %s",
-			inline[i].Anchor.Path, inline[i].Anchor.LineRange(), v.Note))
+		out = append(out, fmt.Sprintf("%s — %s", inline[i].Anchor.Where(), v.Note))
 	}
 	return out
 }

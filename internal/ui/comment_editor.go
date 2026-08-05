@@ -189,20 +189,12 @@ func (e commentEditor) view(width int) string {
 	case e.editing != "":
 		verb = " editing " + string(e.kind.OrDefault()) + " on "
 	}
-	head := verb + e.anchor.Path
-	// "12" or "12-18" — one spelling of a location, shared with the comment index,
-	// the agent prompt and the publish log (see review.Anchor.LineRange). Omitted
-	// rather than left as a bare colon when there is no line: a remark about the
-	// change as a whole is not attached to one.
-	if lines := e.anchor.LineRange(); lines != "" {
-		head += ":" + lines
-	}
-	if strings.TrimSpace(e.anchor.Path) == "" {
-		// Nothing to name, so name the scope instead. "comment on" trailing off into
-		// blank space read as a bug in the header rather than as a deliberate absence
-		// of a file.
-		head = verb + "the whole change"
-	}
+	// "a.go:12", "a.go:12-18", "a.go", "the whole change" — one spelling of a
+	// location, shared with the comment index, the agent prompt and the publish log
+	// (see review.Anchor.Where). It names the scope when there is no file rather
+	// than trailing off: "comment on" followed by blank space read as a bug in the
+	// header rather than as a deliberate absence of a file.
+	head := verb + e.anchor.Where()
 	// Border and header take the kind's hue, so tab's effect is visible
 	// immediately rather than only once the comment is saved.
 	headStyle := kindStyles(e.kind)
