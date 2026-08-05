@@ -842,6 +842,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// reachable from the list you are already scanning.
 		case "D":
 			return m.deleteFromIndex()
+		// Resolving is the same gesture as deleting, for the same reason: the list
+		// you scan conversations in is the list you settle them from.
+		case "R":
+			return m.resolveFromIndex()
 		}
 	}
 

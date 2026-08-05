@@ -371,6 +371,34 @@ func (m Model) deleteFromIndex() (tea.Model, tea.Cmd) {
 	return next, cmd
 }
 
+// resolveFromIndex settles the selected conversation on GitHub without leaving
+// the list. The index is where you scan conversations and decide which are done,
+// so `R` has to be one key repeated down the list rather than a seek into the
+// diff and back for each one.
+//
+// The selection holds its position rather than following the thread. Under the
+// default visibility a resolved thread leaves the list, so holding the same index
+// puts the next unresolved thread under the cursor — which is what makes walking
+// the list work. Following the thread instead would scroll to wherever it went,
+// or nowhere, since it is no longer listed.
+func (m Model) resolveFromIndex() (tea.Model, tea.Cmd) {
+	// Seek before acting rather than trusting the diff cursor to be on the
+	// selection already. It normally is — every path into this pane seeks (see
+	// cycleFocus) — but resolving the wrong conversation is not a failure the
+	// reader can see, so this does not rest on every one of those paths.
+	m.seekToComment(m.commentsCursor)
+	updated, cmd := m.toggleResolved()
+	next, ok := updated.(Model)
+	if !ok {
+		return updated, cmd
+	}
+	// toggleResolved rebuilt the stream, so the entry at this index is whatever
+	// took the resolved thread's place; clampCommentsCursor has already pulled the
+	// index into range. This points the diff at it.
+	next.seekToComment(next.commentsCursor)
+	return next, cmd
+}
+
 // cycleFocus rotates focus files → comments → diff, and back the other way.
 func (m *Model) cycleFocus(forward bool) {
 	if m.hideLeft {
