@@ -27,27 +27,21 @@ func runUnreadSummary(out io.Writer) error {
 }
 
 // formatUnreadSummary renders the tmux badge string from the full entry set.
-// Buckets are mutually exclusive and working wins first: a workspace that
-// resumed work but still carries a stale unread flag from a prior waiting
-// turn counts as working, not double-counted as notified. Working mirrors
-// the deck's always-on green dot — counted by status, not gated on unread.
-// Exited workspaces never count: the agent is gone, so there's nothing to
-// act on (and old state files may still carry a stale unread flag).
+// Which entry lands in which bucket is workspace.Classify's call, not this
+// function's — the badge and the deck have to report the same numbers, so
+// there is one place that decides and this only formats the answer.
 func formatUnreadSummary(all map[string]map[string]workspace.Entry) string {
 	var working, waiting, notified int
 	for _, entries := range all {
 		for _, e := range entries {
-			switch {
-			case isWorkingStatus(e.Status):
+			switch workspace.Classify(e.Status, e.Unread) {
+			case workspace.AttentionWorking:
 				working++
-			case workspace.IsExited(e.Status):
-				continue
-			case !e.Unread:
-				continue
-			case strings.EqualFold(strings.TrimSpace(e.Status), "waiting"):
+			case workspace.AttentionWaiting:
 				waiting++
-			default:
+			case workspace.AttentionNotified:
 				notified++
+			case workspace.AttentionNone:
 			}
 		}
 	}
@@ -65,18 +59,6 @@ func formatUnreadSummary(all map[string]map[string]workspace.Entry) string {
 		parts = append(parts, fmt.Sprintf("● %d", notified))
 	}
 	return strings.Join(parts, "  ")
-}
-
-// isWorkingStatus reports whether a status is an active "agent is doing
-// work" state. Mirrors deckui.alwaysShownStatus so the badge's green count
-// matches the deck's always-on green dot.
-func isWorkingStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "working", "in progress", "in_progress", "running":
-		return true
-	default:
-		return false
-	}
 }
 
 // runMarkRead clears the Unread flag for a single workspace. Resolves the

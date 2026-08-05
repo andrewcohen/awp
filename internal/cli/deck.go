@@ -1340,7 +1340,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		seen := map[string]bool{}
 		for _, r := range repos {
 			for _, e := range repoMap[r.repo] {
-				if !isWorkingStatus(e.Status) {
+				if !workspace.IsWorking(e.Status) {
 					continue
 				}
 				sessionName := DeckSessionName(r.project, e.Name)
@@ -1531,7 +1531,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			// for an actively-working row, so the row shows its last-known
 			// progress immediately instead of flashing the branch/port meta.
 			devLoop := devLoopByPath[strings.TrimSpace(e.Path)]
-			if devLoop == nil && active && isWorkingStatus(status) && e.DevLoop != nil {
+			if devLoop == nil && active && workspace.IsWorking(status) && e.DevLoop != nil {
 				devLoop = &deckui.DevLoopSummary{
 					Done:  e.DevLoop.Done,
 					Total: e.DevLoop.Total,

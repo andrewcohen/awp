@@ -6135,25 +6135,17 @@ func statusGlyphVisible(status string, unread bool) bool {
 	if strings.EqualFold(strings.TrimSpace(status), "exited") {
 		return false
 	}
-	return alwaysShownStatus(status) || unread
-}
-
-func alwaysShownStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "working", "in progress", "in_progress", "running":
-		return true
-	default:
-		return false
-	}
+	return workspace.IsWorking(status) || unread
 }
 
 func statusColor(status string, dim bool, unread bool) string {
 	if dim {
 		return colMuted
 	}
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "working", "in progress", "in_progress", "running":
+	if workspace.IsWorking(status) {
 		return colSuccess
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "waiting":
 		return colWarning
 	case "error":

@@ -83,16 +83,3 @@ func TestFormatUnreadSummary(t *testing.T) {
 		})
 	}
 }
-
-func TestIsWorkingStatus(t *testing.T) {
-	for _, s := range []string{"working", "Working", " running ", "in progress", "in_progress"} {
-		if !isWorkingStatus(s) {
-			t.Errorf("isWorkingStatus(%q) = false, want true", s)
-		}
-	}
-	for _, s := range []string{"idle", "waiting", "exited", "", "done"} {
-		if isWorkingStatus(s) {
-			t.Errorf("isWorkingStatus(%q) = true, want false", s)
-		}
-	}
-}
