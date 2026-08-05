@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // MiniRow is one workspace row in the mini-deck quick-jump list.
@@ -267,9 +268,10 @@ func (m MiniModel) FindMode() bool { return m.findMode }
 // stale "working" rows whose tmux session is gone or whose agent pane
 // has fallen back to a bare shell.
 func MiniIncluded(status string, unread bool) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "working", "in progress", "in_progress", "running":
+	if workspace.IsWorking(status) {
 		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "waiting":
 		return unread
 	case "exited", "error":
@@ -303,18 +305,10 @@ func AttentionIncluded(status string, unread, active bool) bool {
 	if !MiniIncluded(status, unread) {
 		return false
 	}
-	if isWorkingStatus(status) && !active {
+	if workspace.IsWorking(status) && !active {
 		return false
 	}
 	return true
-}
-
-func isWorkingStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "working", "in progress", "in_progress", "running":
-		return true
-	}
-	return false
 }
 
 // buildMiniRowHints assigns easymotion hints across every row. Uses
