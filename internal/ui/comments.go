@@ -208,7 +208,14 @@ func (m Model) threadFor(commentID string) (review.Thread, bool) {
 func (m Model) toggleResolved() (tea.Model, tea.Cmd) {
 	t, ok := m.threadAtCursor()
 	if !ok {
-		m.status = "put the cursor on a GitHub thread to resolve it"
+		// Worded for the pane the key was pressed in: from the index there is no
+		// cursor to move, only a selection that is a local comment — which has
+		// nothing to resolve, since resolving is a thing GitHub records.
+		if m.focus == FocusComments {
+			m.status = "only a GitHub thread can be resolved"
+		} else {
+			m.status = "put the cursor on a GitHub thread to resolve it"
+		}
 		return m, nil
 	}
 	if m.ResolveThread == nil {

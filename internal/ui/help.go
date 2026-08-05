@@ -70,7 +70,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"i", "edit your own comment in place"},
 				{"D", "delete the comment and every reply beneath it"},
 				{"r", "mark the file reviewed and collapse it"},
-				{"R", "resolve / reopen the GitHub thread at the cursor"},
+				{"R", "resolve / reopen the GitHub thread — in the diff or the index"},
 				{"T", "cycle GitHub threads shown: unresolved → all → none"},
 				{"enter", "fold / unfold the GitHub thread at the cursor"},
 				{"P", "publish: verdict → summary → preview of every call → send"},
