@@ -4003,6 +4003,30 @@ func helpColumns(innerWidth int) string {
 	return clipBlock(leftBlock, innerWidth) + "\n\n" + clipBlock(rightBlock, innerWidth)
 }
 
+// deckPrefixWidth is the fixed-width prefix slot every project header and
+// workspace row leads with, so nothing shifts horizontally between modes (no
+// find / 1-char hint / 2-char hint). 2 cols is exactly a two-char easymotion
+// hint (rendered bare via renderDeckHint — no brackets) or the ┃-plus-space
+// cursor bar, which keeps the whole body hugging the left edge; the status
+// glyph sits one space after the slot, in the same column as the
+// project-header names.
+const deckPrefixWidth = 2
+
+// deckTextCol is the column the deck's text starts in: past the prefix slot
+// and the space after it. Project-header names sit here, and so does the
+// title row — a heading indented differently from the list it heads reads as
+// hanging off the left edge of the panel, which is what it did before this
+// was named.
+//
+// A constant rather than a literal 3 at each site because the two have to
+// move together: widening the prefix slot without moving the title is a
+// misalignment nobody would think to look for.
+const deckTextCol = deckPrefixWidth + 1
+
+// deckIndent is deckTextCol as spaces, for lines that lead with text rather
+// than with a prefix slot.
+const deckIndent = "   "
+
 func (m Model) renderList(width int) string {
 	title := m.styles.Title.Render("awp deck")
 	// Scope label is pinned to the top-right corner on the title row
@@ -4010,27 +4034,19 @@ func (m Model) renderList(width int) string {
 	// panel's inner width — width minus the 1-col horizontal padding on
 	// each side.
 	scope := m.styles.Muted.Render("scope: " + scopeLabel(m.scope))
-	gap := (width - 2) - lipgloss.Width(title) - lipgloss.Width(scope)
+	gap := (width - 2) - deckTextCol - lipgloss.Width(title) - lipgloss.Width(scope)
 	if gap < 1 {
 		gap = 1
 	}
-	titleRow := title + strings.Repeat(" ", gap) + scope
+	titleRow := deckIndent + title + strings.Repeat(" ", gap) + scope
 	header := []string{titleRow, ""}
 	items := m.items()
 	if len(items) == 0 {
-		header = append(header, lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
+		header = append(header, deckIndent+lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
 		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(header, "\n"))
 	}
 	projectHints, pinHints, rowHints := m.findHints()
-	// Reserve a fixed-width prefix slot at all times so workspace rows
-	// and project headers don't shift horizontally between modes (no
-	// find / 1-char hint / 2-char hint). 2 cols is exactly a two-char
-	// easymotion hint (rendered bare via renderDeckHint — no brackets)
-	// or the ┃-plus-space cursor bar, which keeps the whole body
-	// hugging the left edge; the status glyph sits one space after the
-	// slot, in the same column as the project-header names.
-	const prefixWidth = 2
-	prefixSlot := lipgloss.NewStyle().Width(prefixWidth)
+	prefixSlot := lipgloss.NewStyle().Width(deckPrefixWidth)
 	// Fixed single-cell slot for the status glyph. The status dot ("●")
 	// is one cell, but spinner.Dot frames carry a trailing space
 	// ("⣾ ", 2 cells), so a row entering a loading state would otherwise
@@ -4176,7 +4192,7 @@ func (m Model) renderList(width int) string {
 			// trailing the label above) so the primary row stays
 			// name-only and the glyph cluster lines up in a column.
 			// Truncated to fit; lipgloss.Width pads but doesn't clip.
-			const metaIndentW = prefixWidth + 1 + 1 + 1 + 4 // prefix + space + glyph + space + extra subordinate indent
+			const metaIndentW = deckTextCol + 1 + 1 + 4 // text col + glyph + space + extra subordinate indent
 			// Stacked child rows do NOT shift their meta line by the "└─ "
 			// connector width: the subtext dedents back to the common meta
 			// column so every row's meta lines up, even though the child's
