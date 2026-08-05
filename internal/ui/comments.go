@@ -191,6 +191,11 @@ func (m Model) threadFor(commentID string) (review.Thread, bool) {
 	if id == commentID {
 		return review.Thread{}, false // a local comment, not a remote thread
 	}
+	// Any message of the conversation answers for the whole of it: resolving, folding
+	// and replying all act on the thread, so the cursor may sit on any of its rows.
+	if cut := strings.Index(id, threadMessageSep); cut >= 0 {
+		id = id[:cut]
+	}
 	for _, t := range m.threads {
 		if t.ID == id {
 			return t, true
@@ -519,42 +524,74 @@ func (m Model) toggleThreadFold() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// threadAsComment adapts a remote thread into the same display shape local
-// comments use, so one renderer covers both. The distinction the reader needs —
-// this is already on GitHub — is carried in the author label rather than by a
-// separate row kind.
+// threadAsComments adapts a remote thread into the display shape local comments use
+// — one comment per message — so one renderer covers both.
 //
-// The body is the whole conversation either way. A folded thread shows only its
-// first line, but that is the row builder's business (see commentRows), which
-// keeps folding a display concern and means unfolding needs nothing rebuilt. It
-// is also what lets the comment index summarise a folded thread the same way it
-// summarises everything else.
-func (m Model) threadAsComment(t review.Thread) review.Comment {
-	var b strings.Builder
-	for i, c := range t.Comments {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		if i == 0 {
-			// The opening message's author is in the header, so naming it again on
-			// its first body line said the same thing twice and pushed the remark
-			// itself off the start of the line.
-			b.WriteString(c.Body)
-			continue
-		}
-		// Later messages still name their speaker inline: the header can only carry
-		// one author, and a body is a single string with no per-message headers to
-		// hang the rest on.
-		b.WriteString(c.Author + ": " + c.Body)
-	}
-	return review.Comment{
+// Per message, not one comment holding the whole conversation. That was the shape
+// here, and it flattened a thread into a single card headed by whoever spoke first,
+// with every later author named inline on the first line of their own remark:
+//
+//	▼ CoWorker · github · published
+//	[NOTE] On the naming question: keep `includesBotTraffic`.
+//	- It reads correctly at the declaration and describes the population…
+//	andrewcohen: Keeping `includesBotTraffic`. Agreed on the reasoning…
+//	population rather than the mechanism is what makes it survive…
+//	andrewcohen: ok
+//
+// Which reads as one person saying all of it. The prefix marks only the first line,
+// so a multi-line reply's remaining lines run on under the previous speaker, and a
+// reply you just posted arrives crammed onto the end of somebody else's remark. The
+// old note here said the header could carry only one author — true of one comment,
+// which is why there is now one per message.
+//
+// Replies carry ReplyTo, so everything downstream already handles them: placement
+// keeps a conversation together under one row, the comment index folds them into
+// their parent as a count, and the block renders as one card with a bar-only row
+// between messages.
+func (m Model) threadAsComments(t review.Thread) []review.Comment {
+	folded := m.threadFolded(t)
+	parent := review.Comment{
 		ID:     remoteThreadPrefix + t.ID,
-		Author: threadHeaderLabel(t, m.threadFolded(t)),
-		Body:   b.String(),
+		Author: threadHeaderLabel(t, folded),
 		State:  review.Published,
 		Anchor: threadAnchor(t),
 	}
+	if len(t.Comments) > 0 {
+		parent.Body = t.Comments[0].Body
+	}
+	// Folded is one row for the whole thread, and its label already carries the
+	// message count — so the later messages are not adapted at all rather than being
+	// adapted and then hidden.
+	if folded || len(t.Comments) <= 1 {
+		return []review.Comment{parent}
+	}
+	out := make([]review.Comment, 0, len(t.Comments))
+	out = append(out, parent)
+	for i, c := range t.Comments[1:] {
+		out = append(out, review.Comment{
+			// Indexed off the thread, so every message has a stable id that still names
+			// the thread it belongs to — which is what threadFor reads back to answer
+			// "resolve what?" from any row of the conversation.
+			ID:      threadMessageID(t.ID, i+1),
+			Author:  c.Author,
+			Body:    c.Body,
+			State:   review.Published,
+			Anchor:  parent.Anchor,
+			ReplyTo: parent.ID,
+		})
+	}
+	return out
 }
+
+// threadMessageID is the display id of the nth message of a mirrored thread.
+func threadMessageID(threadID string, n int) string {
+	return remoteThreadPrefix + threadID + threadMessageSep + strconv.Itoa(n)
+}
+
+// threadMessageSep separates a thread's id from a message's index within it. A
+// character GitHub's node ids do not contain, so splitting on it cannot cut an id in
+// half.
+const threadMessageSep = "#"
 
 // threadAnchor is where a thread sits, in our own vocabulary.
 //
@@ -741,10 +778,12 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 		}
 	}
 	for _, t := range threads {
-		parent := m.threadAsComment(t)
-		all = append(all, parent)
-		for _, reply := range deferred[parent.ID] {
-			reply.Kind = parent.Kind
+		messages := m.threadAsComments(t)
+		all = append(all, messages...)
+		// Ours go last, after everything GitHub has: a reply is the newest thing in the
+		// conversation, and the block closes on whichever message comes last.
+		for _, reply := range deferred[messages[0].ID] {
+			reply.Kind = messages[0].Kind
 			all = append(all, reply)
 		}
 	}
@@ -1206,7 +1245,12 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	if c.ThreadReply() && c.State != review.Published {
 		title += " · unsent"
 	}
-	if c.State != review.Open {
+	// Not on a mirrored message. "published" is our word for one of *our* comments
+	// having reached GitHub, and every message of a GitHub thread is there by
+	// definition — the conversation's own header already says `github`. Stamping it on
+	// each one repeated the least interesting fact about the card on every row of it
+	// (see review.Thread on keeping the two vocabularies apart).
+	if c.State != review.Open && !isRemoteThread(c) {
 		title += " · " + string(c.State)
 	}
 	out = append(out, commentRow{text: truncate(title, max(1, width)), header: true})

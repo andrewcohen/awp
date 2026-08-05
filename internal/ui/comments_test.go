@@ -934,7 +934,7 @@ func TestRemoteThreadsRelocateWithContent(t *testing.T) {
 // put the one thing you scan for in the one place you do not, and pushed the
 // remark itself off the start of the line.
 func TestThreadNamesItsAuthorInTheHeaderNotTheBody(t *testing.T) {
-	c := Model{}.threadAsComment(remoteThread("T1", "a.go", 3, false, "this leaks"))
+	c := Model{}.threadAsComments(remoteThread("T1", "a.go", 3, false, "this leaks"))[0]
 	if !strings.Contains(c.Author, "alice") {
 		t.Fatalf("expected the author in the header, got %q", c.Author)
 	}
@@ -952,18 +952,53 @@ func TestThreadNamesItsAuthorInTheHeaderNotTheBody(t *testing.T) {
 	}
 }
 
-// A conversation carries more than one speaker, and a header can only name one.
-// The rest keep their inline prefix — there are no per-message headers to hang
-// them on.
-func TestLaterThreadMessagesKeepTheirSpeaker(t *testing.T) {
+// A conversation carries more than one speaker, and one header can name only one —
+// so each message becomes its own comment with its own header.
+//
+// Flattened into one body with inline `name:` prefixes, a reply read as the previous
+// speaker's: the prefix marks only its first line, so the rest ran on underneath, and
+// a reply you had just posted arrived crammed onto the end of somebody else's remark.
+func TestEachThreadMessageIsItsOwnComment(t *testing.T) {
 	th := threadOf("T1", "a.go", 3, false, "this leaks", "agreed")
 	th.Comments[1].Author = "bob"
-	c := Model{}.threadAsComment(th)
-	if !strings.Contains(c.Author, "alice") {
-		t.Fatalf("expected the opening author in the header, got %q", c.Author)
+	got := Model{}.threadAsComments(th)
+	if len(got) != 2 {
+		t.Fatalf("expected one comment per message, got %d", len(got))
 	}
-	if c.Body != "this leaks\nbob: agreed" {
-		t.Fatalf("body = %q, want the opener bare and the reply attributed", c.Body)
+	if !strings.Contains(got[0].Author, "alice") || got[0].Body != "this leaks" {
+		t.Fatalf("unexpected opener: author=%q body=%q", got[0].Author, got[0].Body)
+	}
+	// The reply's own author, in its own header — not buried in a body.
+	if got[1].Author != "bob" {
+		t.Fatalf("expected the reply attributed to bob, got %q", got[1].Author)
+	}
+	if got[1].Body != "agreed" {
+		t.Fatalf("expected the reply body bare, got %q", got[1].Body)
+	}
+	if strings.Contains(got[1].Body, "bob:") {
+		t.Fatal("the inline prefix is what the header replaces")
+	}
+	// Threaded under the opener, which is what keeps the conversation together when
+	// it is placed and folds it into one row of the comment index.
+	if got[1].ReplyTo != got[0].ID {
+		t.Fatalf("expected the reply threaded under the opener, got %q", got[1].ReplyTo)
+	}
+	// And every message answers for the thread, so resolving works from any row.
+	m := Model{threads: []review.Thread{th}}
+	for i, c := range got {
+		if resolved, ok := m.threadFor(c.ID); !ok || resolved.ID != "T1" {
+			t.Fatalf("message %d does not resolve back to its thread: %v %+v", i, ok, resolved)
+		}
+	}
+}
+
+// Folded is one row for the whole conversation, and its label already carries the
+// count — so the later messages are not adapted at all rather than adapted and hidden.
+func TestAFoldedThreadIsOneComment(t *testing.T) {
+	th := threadOf("T1", "a.go", 3, true, "settled", "ok")
+	m := Model{threadFold: map[string]bool{"T1": false}}
+	if got := m.threadAsComments(th); len(got) != 1 {
+		t.Fatalf("expected one comment for a folded thread, got %d", len(got))
 	}
 }
 
@@ -991,7 +1026,7 @@ func TestThreadWithNoAuthorHasNoEmptySegment(t *testing.T) {
 // Local comments and remote threads keep separate vocabularies, so the UI cannot
 // claim a draft was "resolved" or a thread "addressed".
 func TestThreadStateIsPublishedNotOpen(t *testing.T) {
-	c := Model{}.threadAsComment(remoteThread("T1", "a.go", 3, false, "hi"))
+	c := Model{}.threadAsComments(remoteThread("T1", "a.go", 3, false, "hi"))[0]
 	if c.State != review.Published {
 		t.Fatalf("expected a remote thread to present as published, got %q", c.State)
 	}
