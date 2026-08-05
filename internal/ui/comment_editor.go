@@ -555,7 +555,13 @@ func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Straight out to GitHub, which is the one exit in this surface that does
 			// not wait for `P`. Answering a question is a message, not a review, and a
 			// reply nobody sees until you publish is not a reply.
-			return m.postThreadReply(c)
+			//
+			// The action is passed on rather than dropped here. This used to return
+			// unconditionally, which meant ctrl+s on a reply did exactly what enter did:
+			// the send-to-agent branch at the foot of this function was never reached, so
+			// the one key whose whole purpose is handing work to the agent silently
+			// didn't. It looked like the send failing, when it was never attempted.
+			return m.postThreadReply(c, action == editorSaveAndSend)
 		}
 		if parent := m.editor.replyTo; parent != "" {
 			if err := m.ReplyComment(parent, c); err != nil {

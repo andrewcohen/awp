@@ -103,6 +103,16 @@ func typeAndSave(m Model, body string) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
+// typeAndSend is typeAndSave with ctrl+s: post it, and hand it to the agent too.
+func typeAndSend(m Model, body string) (Model, tea.Cmd) {
+	for _, r := range body {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(Model)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	return updated.(Model), cmd
+}
+
 func TestCOnAGitHubThreadPostsAReplyToIt(t *testing.T) {
 	rec := &replyRecorder{id: "PRRC_new"}
 	m, _ := threadReplyModel(t, rec)
@@ -588,5 +598,88 @@ func TestConversationsOnOneLineAreSeparatedByABlankRow(t *testing.T) {
 	// The row is not a comment row, so the comment gestures do not act on it.
 	if isCommentRow(m.stream.rows[gaps[0]].kind) {
 		t.Fatal("the break must not read as a comment row")
+	}
+}
+
+// ctrl+s on a reply into a GitHub thread has to reach the agent.
+//
+// It used to do exactly what enter did. The save handler routed a thread reply
+// straight to postThreadReply and returned, so the send-to-agent branch at the foot
+// of that function was never reached: the one key whose whole purpose is handing
+// work to the agent silently didn't, and it read as the send failing rather than as
+// never having been attempted.
+func TestCtrlSOnAThreadReplySendsItToTheAgent(t *testing.T) {
+	rec := &replyRecorder{id: "PRRC_new"}
+	m, _ := threadReplyModel(t, rec)
+	var sent []review.Comment
+	m.SendComment = func(c review.Comment) error { sent = append(sent, c); return nil }
+
+	m = cursorToComment(t, m)
+	m = press(m, "c")
+	m, cmd := typeAndSend(m, "have a look at this")
+	if cmd != nil {
+		updated, _ := m.Update(cmd())
+		m = updated.(Model)
+	}
+
+	if len(sent) != 1 {
+		t.Fatalf("the agent got %d comments, want 1 (status %q)", len(sent), m.status)
+	}
+	// The one the store gave an id to: without it the prompt has no id to name and
+	// the agent cannot answer on the thread.
+	if sent[0].ID == "" {
+		t.Errorf("the agent was sent a comment with no id: %+v", sent[0])
+	}
+	if sent[0].Body != "have a look at this" {
+		t.Errorf("the agent was sent %q", sent[0].Body)
+	}
+	// And it still goes to the PR — ctrl+s adds the agent, it does not replace GitHub.
+	if len(rec.bodies) != 1 {
+		t.Errorf("the reply was posted %d times, want 1", len(rec.bodies))
+	}
+	if !strings.Contains(m.status, "agent") {
+		t.Errorf("the status line does not mention the agent: %q", m.status)
+	}
+}
+
+// enter stays enter: it posts, and it does not hand anything to the agent.
+func TestEnterOnAThreadReplyDoesNotSendToTheAgent(t *testing.T) {
+	rec := &replyRecorder{id: "PRRC_new"}
+	m, _ := threadReplyModel(t, rec)
+	var sent []review.Comment
+	m.SendComment = func(c review.Comment) error { sent = append(sent, c); return nil }
+
+	m = cursorToComment(t, m)
+	m = press(m, "c")
+	m, cmd := typeAndSave(m, "answered")
+	if cmd != nil {
+		updated, _ := m.Update(cmd())
+		m = updated.(Model)
+	}
+	if len(sent) != 0 {
+		t.Errorf("enter sent %d comments to the agent, want 0", len(sent))
+	}
+	if len(rec.bodies) != 1 {
+		t.Errorf("enter posted %d replies, want 1", len(rec.bodies))
+	}
+}
+
+// A reply into a thread GitHub reports no line for is not a remark about the whole
+// file, even though its inherited anchor has that exact shape. It belongs with the
+// conversation it answers.
+func TestAReplyToALinelessThreadStaysWithItsThread(t *testing.T) {
+	rec := &replyRecorder{id: "PRRC_new"}
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.SaveComment = func(review.Comment) error { return nil }
+	m.ReplyToThread = rec.reply
+	m.threadVisibility = ThreadsAll
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 0, false, "why is this here?")})
+
+	reply := review.Comment{
+		ID: "local-1", Author: review.AuthorHuman, Body: "because of X",
+		ReplyToThread: "T1", Anchor: review.Anchor{Path: "a.go", Side: review.SideNew},
+	}
+	if m.aboutTheWholeFile(reply) {
+		t.Error("a reply into a thread was read as a remark about the whole file")
 	}
 }

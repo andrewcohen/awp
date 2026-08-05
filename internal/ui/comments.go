@@ -243,14 +243,21 @@ type threadReplyDoneMsg struct {
 	threadID  string
 	commentID string
 	err       error
+	// sent is whether the reply also went to the agent, which is ctrl+s rather than
+	// enter. Carried through the round trip so the line the reader is left with
+	// confirms both halves. Without it the final status said only "replied on
+	// github", which is how a send-to-agent that never happened at all went
+	// unnoticed: the confirmation for the half that worked was also the whole
+	// confirmation.
+	sent bool
 }
 
 // replyToThreadCmd posts off the update loop. A gh round trip is most of a second,
 // and doing it inline stops the view redrawing and takes the keyboard with it.
-func replyToThreadCmd(post ThreadReplier, localID, threadID, body string) tea.Cmd {
+func replyToThreadCmd(post ThreadReplier, localID, threadID, body string, sent bool) tea.Cmd {
 	return func() tea.Msg {
 		id, err := post(threadID, body)
-		return threadReplyDoneMsg{localID: localID, threadID: threadID, commentID: id, err: err}
+		return threadReplyDoneMsg{localID: localID, threadID: threadID, commentID: id, err: err, sent: sent}
 	}
 }
 
@@ -260,7 +267,11 @@ func replyToThreadCmd(post ThreadReplier, localID, threadID, body string) tea.Cm
 // can be gone, the token can be stale, the network can be down — and a reply that
 // existed only in a text area would be gone with it. On disk first, the failure is
 // a status line and a draft you can send again.
-func (m Model) postThreadReply(c review.Comment) (tea.Model, tea.Cmd) {
+// alsoSend is ctrl+s rather than enter: the reply goes to the PR either way, and
+// additionally to the workspace's agent. Passed in rather than checked by the
+// caller after the fact, because the comment the agent needs is the one the store
+// assigned an id to — which only exists inside here.
+func (m Model) postThreadReply(c review.Comment, alsoSend bool) (tea.Model, tea.Cmd) {
 	if m.ReplyToThread == nil {
 		m.fail("replying to GitHub threads unavailable here")
 		return m, nil
@@ -301,10 +312,29 @@ func (m Model) postThreadReply(c review.Comment) (tea.Model, tea.Cmd) {
 	m.followCursor()
 	m.status = "posting the reply…"
 	m.statusErr = false
+	// Before the post, not after it: the post is a tea.Cmd that finishes later, so
+	// doing this on its way back would make sending to the agent depend on GitHub
+	// accepting the reply — and the reason to hand a reply to the agent is usually
+	// that it has work in it, which is true whether or not the PR took the message.
+	sentToAgent := false
+	if alsoSend {
+		if m.SendComment == nil {
+			m.status = "posting the reply… (sending to the agent unavailable here)"
+		} else if err := m.SendComment(c); err != nil {
+			// Through fail() like every other failure in this surface, so the reason
+			// reaches the log rather than only a status line the post's own answer is
+			// about to overwrite. It names the half that failed: the reply is still on
+			// its way, and "reply failed" would be the wrong thing to have believed.
+			m.fail("the reply is posting, but sending it to the agent failed: %v", err)
+		} else {
+			sentToAgent = true
+			m.status = "posting the reply… and sent to the agent"
+		}
+	}
 	// PublishBody rather than the stored text, so a reply carries the same markers
 	// every other published body does — an agent's 🤖 above all, since this posts
 	// under the authenticated user's account.
-	return m, replyToThreadCmd(m.ReplyToThread, c.ID, c.ReplyToThread, c.PublishBody())
+	return m, replyToThreadCmd(m.ReplyToThread, c.ID, c.ReplyToThread, c.PublishBody(), sentToAgent)
 }
 
 // applyThreadReplyDone records what GitHub did with the reply.
@@ -328,6 +358,9 @@ func (m Model) applyThreadReplyDone(msg threadReplyDoneMsg) (tea.Model, tea.Cmd)
 		posted = m.comments[i]
 	}
 	m.status = "replied on github"
+	if msg.sent {
+		m.status = "replied on github and sent to the agent"
+	}
 	m.statusErr = false
 	// Through RecordPublished, not UpdateComment: a revision carries a body and the
 	// store keeps the state it already had, so sending this through there wrote the
@@ -884,6 +917,14 @@ func fileHeaderRow(rows []rowRef, files []diff.FileDiff, path string) (int, bool
 // divider. Outdated is the discriminator, not local-versus-remote.
 func (m Model) aboutTheWholeFile(c review.Comment) bool {
 	if c.Anchor.Scope() != review.FileScope {
+		return false
+	}
+	// Our own reply into a GitHub thread inherits that thread's anchor rather than
+	// choosing a scope, so a reply to a thread GitHub reports no line for looks
+	// file-scoped and is not: it is an answer inside a conversation, and it belongs
+	// with the conversation. Its own case because the outdated check below cannot see
+	// it — threadFor keys off the comment's id, and this comment's id is ours.
+	if c.ThreadReply() {
 		return false
 	}
 	if t, ok := m.threadFor(c.ID); ok && t.Outdated {
