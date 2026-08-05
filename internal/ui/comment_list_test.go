@@ -302,23 +302,28 @@ func TestFocusLeavesTheIndexWhenItEmpties(t *testing.T) {
 // The index takes at most half the column and never shortens the file list past
 // usability — the file list is the primary index.
 func TestCommentPaneHeightIsBounded(t *testing.T) {
-	if got := commentPaneHeight(0, 24); got != 0 {
+	if got := commentPaneHeight(0, 0, 24); got != 0 {
 		t.Fatalf("no comments means no pane, got %d", got)
 	}
-	if got := commentPaneHeight(50, 24); got > 12 {
+	// Except when there is something to report: a change whose conversation is all
+	// hidden must not look like a change nobody has commented on.
+	if got := commentPaneHeight(0, 3, 24); got != 2 {
+		t.Fatalf("expected a header-only pane for hidden threads, got %d", got)
+	}
+	if got := commentPaneHeight(50, 0, 24); got > 12 {
 		t.Fatalf("expected at most half of 24 rows, got %d", got)
 	}
-	if got := commentPaneHeight(2, 24); got != 3 {
+	if got := commentPaneHeight(2, 0, 24); got != 3 {
 		t.Fatalf("expected a header plus 2 entries, got %d", got)
 	}
 	// The tightest split that still works: a 2-row index (header + one entry)
 	// over a 3-row file list. Cramped, but hiding the index instead would make a
 	// comment unreachable on a short terminal.
-	if got := commentPaneHeight(3, 7); got != 2 {
+	if got := commentPaneHeight(3, 0, 7); got != 2 {
 		t.Fatalf("expected the minimum split in a 7-row column, got %d", got)
 	}
 	// One row shorter and it cannot split without starving the file list.
-	if got := commentPaneHeight(3, 6); got != 0 {
+	if got := commentPaneHeight(3, 0, 6); got != 0 {
 		t.Fatalf("expected no pane in a 6-row column, got %d", got)
 	}
 }

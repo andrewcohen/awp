@@ -359,7 +359,13 @@ type leftKey struct {
 	files, comments int
 	focus           Focus
 	entries         int
-	hidden          bool
+	// hidden is the `\` toggle: the whole column is dropped.
+	hidden bool
+	// hiddenThreads is the count the index's header reports. In the key because the
+	// header is text this cache holds, and `T` changes it — the same rule rowKey's
+	// fileRule exists for. It nearly always moves `entries` too, which would have
+	// masked this until the one arrangement where it does not.
+	hiddenThreads int
 }
 
 // renderCache holds rendered fragments between frames.

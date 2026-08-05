@@ -108,23 +108,72 @@ func TestFetchReviewThreadsSurfacesErrors(t *testing.T) {
 
 // Resolving is a GraphQL mutation; REST has no equivalent.
 func TestResolveAndUnresolveUseMutations(t *testing.T) {
-	r := &threadRunner{outs: []string{`{"data":{}}`}}
+	r := &gqlRunner{reply: `{"data":{"resolveReviewThread":{"thread":{"id":"T1","isResolved":true}}}}`}
 	if err := New(r, "").ResolveReviewThread("T1"); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	joined := strings.Join(r.calls[0], " ")
-	for _, want := range []string{"api", "graphql", "resolveReviewThread", "id=T1"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("resolve call missing %q, got %q", want, joined)
-		}
+	if len(r.bodies) != 1 {
+		t.Fatalf("expected one request, got %d", len(r.bodies))
+	}
+	if q, _ := r.bodies[0]["query"].(string); !strings.Contains(q, "resolveReviewThread") {
+		t.Fatalf("expected the resolve mutation, got %q", q)
+	}
+	if got := r.vars(0)["id"]; got != "T1" {
+		t.Fatalf("expected the thread id in the variables, got %v", got)
 	}
 
-	r = &threadRunner{outs: []string{`{"data":{}}`}}
+	r = &gqlRunner{reply: `{"data":{"unresolveReviewThread":{"thread":{"id":"T1","isResolved":false}}}}`}
 	if err := New(r, "").UnresolveReviewThread("T1"); err != nil {
 		t.Fatalf("unresolve: %v", err)
 	}
-	if joined := strings.Join(r.calls[0], " "); !strings.Contains(joined, "unresolveReviewThread") {
-		t.Fatalf("expected the unresolve mutation, got %q", joined)
+	if q, _ := r.bodies[0]["query"].(string); !strings.Contains(q, "unresolveReviewThread") {
+		t.Fatalf("expected the unresolve mutation, got %q", q)
+	}
+}
+
+// The caller mirrors "resolved" locally on success, and the diff hides resolved
+// threads — so a resolve reported as done when GitHub refused it makes a whole
+// conversation disappear while the mirror insists GitHub resolved it. Every way
+// GitHub can decline has to come back as an error.
+func TestResolveReportsWhatGitHubActuallySaid(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, wantIn string
+	}{
+		{
+			// GraphQL reports refusals in the body, and gh does not always exit non-zero
+			// for them. This used to be read as success.
+			name:   "errors array",
+			reply:  `{"errors":[{"message":"Could not resolve to a node with the global id"}]}`,
+			wantIn: "global id",
+		},
+		{
+			name:   "no thread came back",
+			reply:  `{"data":{"resolveReviewThread":{"thread":null}}}`,
+			wantIn: "no thread",
+		},
+		{
+			// Accepted the call and did not do it.
+			name:   "state did not change",
+			reply:  `{"data":{"resolveReviewThread":{"thread":{"id":"T1","isResolved":false}}}}`,
+			wantIn: "still reports it as unresolved",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &gqlRunner{reply: tc.reply}
+			err := New(r, "").ResolveReviewThread("T1")
+			if err == nil {
+				t.Fatal("expected the refusal to surface")
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Fatalf("expected %q in the error, got %v", tc.wantIn, err)
+			}
+		})
+	}
+	// And the same for reopening, which fails the same way in the other direction.
+	r := &gqlRunner{reply: `{"data":{"unresolveReviewThread":{"thread":{"id":"T1","isResolved":true}}}}`}
+	err := New(r, "").UnresolveReviewThread("T1")
+	if err == nil || !strings.Contains(err.Error(), "still reports it as resolved") {
+		t.Fatalf("expected an unresolve that did nothing to be reported, got %v", err)
 	}
 }
 

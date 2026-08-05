@@ -375,3 +375,79 @@ func TestDisplayTextKeepsTheWordsAndDropsTheControls(t *testing.T) {
 		}
 	}
 }
+
+// Hidden is not the same as absent.
+//
+// Resolved threads are hidden by default, which is right — settled conversation
+// buries what still needs attention. But hiding without saying so means any wrong
+// flag reads as a missing comment: a mirror that wrongly believed one thread was
+// resolved made three messages of an open conversation simply not exist, on a real
+// PR, with nothing on screen to suggest otherwise.
+func TestTheIndexSaysHowManyConversationsAreHidden(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetThreads([]review.Thread{
+		remoteThread("T1", "a.go", 1, false, "still open"),
+		remoteThread("T2", "a.go", 2, true, "settled"),
+		remoteThread("T3", "a.go", 2, true, "also settled"),
+	})
+	// The default: unresolved only, so two are held back.
+	if got := m.hiddenThreads(); got != 2 {
+		t.Fatalf("expected 2 hidden, got %d", got)
+	}
+	view := stripANSI(m.renderLeftColumn(40, 24))
+	if !strings.Contains(view, "2 hidden") {
+		t.Fatalf("expected the count in the index header:\n%s", view)
+	}
+	// And the key that shows them, since a list that merely lacks rows cannot say
+	// which keystroke would bring them back.
+	if !strings.Contains(view, "T") {
+		t.Fatalf("expected the key named:\n%s", view)
+	}
+
+	// Cycling to all hides nothing, and the notice goes.
+	m.threadVisibility = ThreadsAll
+	m.rebuildStream()
+	if got := m.hiddenThreads(); got != 0 {
+		t.Fatalf("expected nothing hidden with all shown, got %d", got)
+	}
+	if view := stripANSI(m.renderLeftColumn(40, 24)); strings.Contains(view, "hidden") {
+		t.Fatalf("expected no notice when nothing is hidden:\n%s", view)
+	}
+}
+
+// The count is rendered from a cached string, and `T` changes it. It nearly always
+// moves the entry count too, which would have hidden a missing cache key until the
+// one arrangement where it does not — so the key is asserted directly.
+func TestTheHiddenCountIsInTheLeftColumnsCacheKey(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 1, true, "settled")})
+	before := stripANSI(m.renderLeftColumn(40, 24))
+	m.threadVisibility = ThreadsAll
+	m.rebuildStream()
+	after := stripANSI(m.renderLeftColumn(40, 24))
+	if before == after {
+		t.Fatalf("the column did not re-render when T changed what is hidden:\n%s", after)
+	}
+	if strings.Contains(after, "hidden") {
+		t.Fatalf("expected the notice gone after showing everything:\n%s", after)
+	}
+}
+
+// The notice earns the pane even with nothing to list — otherwise the one case
+// where every conversation is hidden is also the case with nowhere to say so.
+func TestAPaneOfNothingButHiddenThreadsStillSaysSo(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.threadVisibility = ThreadsNone
+	m.SetThreads([]review.Thread{remoteThread("T1", "a.go", 1, false, "open")})
+	if len(m.commentIndex) != 0 {
+		t.Fatalf("fixture is wrong: expected an empty index, got %+v", m.commentIndex)
+	}
+	view := stripANSI(m.renderLeftColumn(40, 24))
+	if !strings.Contains(view, "1 hidden") {
+		t.Fatalf("expected the notice with an empty index:\n%s", view)
+	}
+	// But it is a notice, not a list: tab must not park the keyboard on it.
+	if m.commentPaneVisible() {
+		t.Fatal("expected the empty index out of the tab rotation")
+	}
+}
