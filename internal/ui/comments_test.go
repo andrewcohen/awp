@@ -968,9 +968,11 @@ func TestEachThreadMessageIsItsOwnComment(t *testing.T) {
 	if !strings.Contains(got[0].Author, "alice") || got[0].Body != "this leaks" {
 		t.Fatalf("unexpected opener: author=%q body=%q", got[0].Author, got[0].Body)
 	}
-	// The reply's own author, in its own header — not buried in a body.
-	if got[1].Author != "bob" {
-		t.Fatalf("expected the reply attributed to bob, got %q", got[1].Author)
+	// The reply's own author, in its own header — not buried in a body — and marked
+	// as GitHub's record, since a card can run several screens and "whose words are
+	// these" is asked at the message being read.
+	if got[1].Author != "bob · github" {
+		t.Fatalf("expected the reply attributed to bob on github, got %q", got[1].Author)
 	}
 	if got[1].Body != "agreed" {
 		t.Fatalf("expected the reply body bare, got %q", got[1].Body)

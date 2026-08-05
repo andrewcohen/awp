@@ -53,6 +53,15 @@ const (
 	// rowEditor is one display line of the open compose box, spliced in beneath
 	// whatever it is attached to (see withEditor).
 	rowEditor
+	// rowCommentGap is the empty row between two conversations that landed on the
+	// same line.
+	//
+	// Empty in the strong sense: no gutter, no bar, no painted columns. Each card
+	// already pads itself top and bottom, but those pad rows carry the kind-coloured
+	// bar, so two adjacent conversations ran into each other as one block with a
+	// continuous left edge. A row with nothing on it is what makes the break read as
+	// a break.
+	rowCommentGap
 )
 
 // rowRef says what a single stream row shows. Line numbers are resolved
@@ -200,7 +209,13 @@ func withComments(idx streamIndex, place commentPlacer, folded commentFolder) st
 		group := p.byRow[i]
 		for n, c := range group {
 			ci := index(c)
-			last := n == len(group)-1
+			// The last message of the *conversation*, not of the group: several
+			// conversations can be anchored to one line, and each closes its own card.
+			last := n == len(group)-1 || group[n+1].ReplyTo == ""
+			if n > 0 && c.ReplyTo == "" {
+				// A new conversation starts here, so break from the one above it.
+				rows = append(rows, rowRef{kind: rowCommentGap, file: r.file, hunk: -1, line: -1})
+			}
 			for line := 0; line < commentRowCount(c, idx.width, last, folded.folds(c)); line++ {
 				rows = append(rows, rowRef{
 					kind: rowComment, file: r.file, hunk: -1, line: -1,
@@ -240,7 +255,12 @@ func appendCommentSection(
 		return rows
 	}
 	rows = append(rows, rowRef{kind: header, file: -1, hunk: -1, line: -1})
-	for _, th := range review.Threads(cs) {
+	for i, th := range review.Threads(cs) {
+		if i > 0 {
+			// Same break the anchored conversations get: without it, a section of several
+			// detached threads read as one wall of text with a single left edge.
+			rows = append(rows, rowRef{kind: rowCommentGap, file: -1, hunk: -1, line: -1})
+		}
 		group := append([]review.Comment{th.Parent}, th.Replies...)
 		for n, c := range group {
 			ci := index(c)

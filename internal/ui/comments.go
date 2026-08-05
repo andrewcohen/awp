@@ -425,7 +425,7 @@ const (
 // stale threads on a real PR were indistinguishable from settled ones still
 // pointing at live code.
 func remoteThreadLabel(t review.Thread) string {
-	label := "github"
+	label := threadSource
 	if t.Resolved {
 		label += " · " + chipResolved
 	}
@@ -434,6 +434,13 @@ func remoteThreadLabel(t review.Thread) string {
 	}
 	return label
 }
+
+// threadSource is the chip that marks a message as GitHub's record rather than one
+// of ours. On every message of a conversation, not only its first: a card can be
+// several screens long, and "whose words are these, and where do they live" is the
+// question a reader asks at the message they are looking at rather than at the one
+// that happened to open the thread.
+const threadSource = "github"
 
 // Fold glyphs for a mirrored thread, pointing the way the row will move.
 const (
@@ -573,7 +580,7 @@ func (m Model) threadAsComments(t review.Thread) []review.Comment {
 			// the thread it belongs to — which is what threadFor reads back to answer
 			// "resolve what?" from any row of the conversation.
 			ID:      threadMessageID(t.ID, i+1),
-			Author:  c.Author,
+			Author:  strings.TrimSpace(c.Author) + " · " + threadSource,
 			Body:    c.Body,
 			State:   review.Published,
 			Anchor:  parent.Anchor,
