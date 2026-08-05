@@ -133,35 +133,35 @@ func TestWorkspaceAndSourceRepoShareOneReviewStore(t *testing.T) {
 // up as a comment on the PR itself rather than inline — sorted into its own group
 // here, since the two take different API calls.
 func TestPublishSortsReviewLevelCommentsOntoThePR(t *testing.T) {
-	inline, changeWide, _, skipped := partitionForPublish([]review.Comment{
+	b := partitionForPublish([]review.Comment{
 		{ID: "a", Body: "on a line", Anchor: review.Anchor{Path: "a.go", LineHint: 3, Side: review.SideNew}},
 		{ID: "b", Body: "about the change as a whole"},
 		{ID: "c", Body: "already up", State: review.Published, Anchor: review.Anchor{Path: "b.go", LineHint: 1}},
 		{ID: "d", Body: "   ", Anchor: review.Anchor{Path: "c.go", LineHint: 2}},
 	})
-	if len(inline) != 1 || inline[0].ID != "a" {
-		t.Fatalf("expected only the anchored comment inline, got %+v", inline)
+	if len(b.Inline) != 1 || b.Inline[0].ID != "a" {
+		t.Fatalf("expected only the anchored comment inline, got %+v", b.Inline)
 	}
-	if len(changeWide) != 1 || changeWide[0].ID != "b" {
-		t.Fatalf("expected the review-level remark bound for the PR, got %+v", changeWide)
+	if len(b.ChangeWide) != 1 || b.ChangeWide[0].ID != "b" {
+		t.Fatalf("expected the review-level remark bound for the PR, got %+v", b.ChangeWide)
 	}
-	if skipped != 2 {
-		t.Fatalf("expected the published and the empty one skipped, got %d", skipped)
+	if b.Skipped != 2 {
+		t.Fatalf("expected the published and the empty one skipped, got %d", b.Skipped)
 	}
 }
 
 // A published review-level comment must not be reposted, the same way an inline
 // one is not: the record is what makes a retry after a partial failure safe.
 func TestPublishSkipsAlreadyPostedReviewLevelComments(t *testing.T) {
-	inline, changeWide, _, skipped := partitionForPublish([]review.Comment{
+	b := partitionForPublish([]review.Comment{
 		{ID: "a", Body: "summary", Publish: &review.PublishRecord{ThreadID: "IC_1"}},
 		{ID: "b", Body: "another summary", State: review.Published},
 	})
-	if len(inline) != 0 || len(changeWide) != 0 {
-		t.Fatalf("expected nothing to post, got inline=%+v changeWide=%+v", inline, changeWide)
+	if len(b.Inline) != 0 || len(b.ChangeWide) != 0 {
+		t.Fatalf("expected nothing to post, got inline=%+v changeWide=%+v", b.Inline, b.ChangeWide)
 	}
-	if skipped != 2 {
-		t.Fatalf("expected both skipped, got %d", skipped)
+	if b.Skipped != 2 {
+		t.Fatalf("expected both skipped, got %d", b.Skipped)
 	}
 }
 
@@ -255,7 +255,8 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// One review carrying both threads, then one submission. Two calls, not one per
 	// comment — which is the whole point: the REST comment endpoint made a separate
 	// single-comment review per call, and those cannot be deleted afterwards.
-	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"}, inline, changeWide, nil, 2, "abc123def456789", nil)
+	plan := publishPlan(publishRequest{PR: 54, Event: github.EventApprove, Verdict: "approve"},
+		publishBuckets{Inline: inline, ChangeWide: changeWide, Skipped: 2}, "abc123def456789", nil)
 	joined := strings.Join(plan, "\n")
 	for _, want := range []string{
 		// Two calls, not four: the two thread lines under the stage call are what it
@@ -283,7 +284,7 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 	// With only review-level remarks and no verdict, they go up as PR comments on a
 	// different endpoint — the plan has to say so, or it describes a run that is not
 	// the one about to happen.
-	plan = publishPlan(publishRequest{PR: 54}, nil, changeWide, nil, 0, "abc123def456789", nil)
+	plan = publishPlan(publishRequest{PR: 54}, publishBuckets{ChangeWide: changeWide}, "abc123def456789", nil)
 	joined = strings.Join(plan, "\n")
 	if strings.Contains(joined, "PullRequestReview") {
 		t.Fatalf("a verdictless plan claims a review submission:\n%s", joined)
@@ -297,18 +298,18 @@ func TestPublishPlanNamesTheCalls(t *testing.T) {
 // review creates new threads only, so sending one would post it as a fresh top-level
 // comment divorced from what it answers.
 func TestPublishSkipsLocalReplies(t *testing.T) {
-	inline, changeWide, _, skipped := partitionForPublish([]review.Comment{
+	b := partitionForPublish([]review.Comment{
 		{ID: "c1", Body: "the finding", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 		{ID: "c2", Body: "answering you", ReplyTo: "c1", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 	})
-	if len(inline) != 1 || inline[0].ID != "c1" {
-		t.Fatalf("expected only the finding to publish, got %+v", inline)
+	if len(b.Inline) != 1 || b.Inline[0].ID != "c1" {
+		t.Fatalf("expected only the finding to publish, got %+v", b.Inline)
 	}
-	if len(changeWide) != 0 {
-		t.Fatalf("a reply must not become a review-level remark: %+v", changeWide)
+	if len(b.ChangeWide) != 0 {
+		t.Fatalf("a reply must not become a review-level remark: %+v", b.ChangeWide)
 	}
-	if skipped != 1 {
-		t.Fatalf("expected the reply counted as skipped, got %d", skipped)
+	if b.Skipped != 1 {
+		t.Fatalf("expected the reply counted as skipped, got %d", b.Skipped)
 	}
 }
 
@@ -746,7 +747,7 @@ func TestPublishDoesNotDoubleTheSummary(t *testing.T) {
 	}
 	plan := publishPlan(publishRequest{
 		PR: 54, Event: github.EventComment, Summary: "the draft, revised",
-	}, nil, []review.Comment{filed}, nil, 0, "abc", nil)
+	}, publishBuckets{ChangeWide: []review.Comment{filed}}, "abc", nil)
 	joined := strings.Join(plan, "\n")
 	if strings.Count(joined, "the draft") != 1 {
 		t.Fatalf("the summary appears more than once in the body:\n%s", joined)
@@ -822,7 +823,8 @@ func TestPublishPlanCountsCallsNotThreads(t *testing.T) {
 			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: i + 1},
 		}
 	}
-	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"}, inline, nil, nil, 0, "abc123def456789", nil)
+	plan := publishPlan(publishRequest{PR: 2336, Event: github.EventComment, Verdict: "comment", Summary: "s"},
+		publishBuckets{Inline: inline}, "abc123def456789", nil)
 	if !strings.HasPrefix(plan[0], "2 call(s)") {
 		t.Fatalf("expected two calls for six threads, got %q", plan[0])
 	}
@@ -864,24 +866,24 @@ func prFilesFixture(paths ...string) string {
 // the PR as a second, top-level thread saying "yes, fixed" next to the question it
 // was answering.
 func TestPublishSendsAThreadReplyIntoItsThread(t *testing.T) {
-	inline, changeWide, replies, skipped := partitionForPublish([]review.Comment{
+	b := partitionForPublish([]review.Comment{
 		{ID: "c1", Body: "a finding", Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 		{ID: "c2", Body: "yes, fixed", ReplyToThread: "PRRT_1",
 			Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
 		{ID: "c3", Body: "already replied", ReplyToThread: "PRRT_2", State: review.Published,
 			Anchor: review.Anchor{Path: "b.go", LineHint: 8}},
 	})
-	if len(inline) != 1 || inline[0].ID != "c1" {
-		t.Fatalf("expected only the finding inline, got %+v", inline)
+	if len(b.Inline) != 1 || b.Inline[0].ID != "c1" {
+		t.Fatalf("expected only the finding inline, got %+v", b.Inline)
 	}
-	if len(changeWide) != 0 {
-		t.Fatalf("a reply must not become a review-level remark: %+v", changeWide)
+	if len(b.ChangeWide) != 0 {
+		t.Fatalf("a reply must not become a review-level remark: %+v", b.ChangeWide)
 	}
-	if len(replies) != 1 || replies[0].ID != "c2" {
-		t.Fatalf("expected the unsent reply in its own bucket, got %+v", replies)
+	if len(b.Replies) != 1 || b.Replies[0].ID != "c2" {
+		t.Fatalf("expected the unsent reply in its own bucket, got %+v", b.Replies)
 	}
-	if skipped != 1 {
-		t.Fatalf("expected the already-sent reply skipped, got %d", skipped)
+	if b.Skipped != 1 {
+		t.Fatalf("expected the already-sent reply skipped, got %d", b.Skipped)
 	}
 }
 
@@ -949,10 +951,10 @@ func TestPublishPostsAnUnsentThreadReply(t *testing.T) {
 // an irreversible outward action, and a call missing from it is a call they did not
 // agree to.
 func TestPublishPlanNamesThreadReplies(t *testing.T) {
-	plan := publishPlan(publishRequest{PR: 54}, nil, nil, []review.Comment{
+	plan := publishPlan(publishRequest{PR: 54}, publishBuckets{Replies: []review.Comment{
 		{ID: "c1", Body: "fixed", ReplyToThread: "PRRT_1",
 			Anchor: review.Anchor{Path: "a.go", LineHint: 3}},
-	}, 0, "", nil)
+	}}, "", nil)
 	joined := strings.Join(plan, "\n")
 	if !strings.Contains(joined, "addPullRequestReviewThreadReply") {
 		t.Fatalf("expected the reply mutation in the plan:\n%s", joined)
