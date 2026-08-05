@@ -906,6 +906,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "c":
 			return m.startComment()
+		case "C":
+			return m.startFileComment()
 		case "i":
 			return m.startEdit()
 		case "D":
