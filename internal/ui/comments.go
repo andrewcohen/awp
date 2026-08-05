@@ -846,8 +846,19 @@ func reviewLevel(c review.Comment) bool {
 // change still holds that file and it is folded. The handle a comment attaches to
 // while the lines it was written against are hidden.
 func collapsedFileRow(rows []rowRef, files []diff.FileDiff, path string) (int, bool) {
+	row, ok := fileHeaderRow(rows, files, path)
+	if !ok || !rows[row].collapsed {
+		return 0, false
+	}
+	return row, true
+}
+
+// fileHeaderRow is the divider row for a path, folded or not. The row a remark
+// about the file as a whole hangs under, and the one a folded file's line
+// comments fall back to.
+func fileHeaderRow(rows []rowRef, files []diff.FileDiff, path string) (int, bool) {
 	for i, r := range rows {
-		if r.kind != rowFileHeader || !r.collapsed {
+		if r.kind != rowFileHeader {
 			continue
 		}
 		if r.file >= 0 && r.file < len(files) && pathOf(files[r.file]) == path {
@@ -855,6 +866,30 @@ func collapsedFileRow(rows []rowRef, files []diff.FileDiff, path string) (int, b
 		}
 	}
 	return 0, false
+}
+
+// aboutTheWholeFile reports whether a comment is a remark about a file rather
+// than about a place in it — the one that belongs on the file's divider.
+//
+// A path with no line is not enough to tell, which is the trap here. An outdated
+// GitHub thread has exactly that shape for the opposite reason: it is a remark
+// about a specific line that the change has since removed, and GitHub reports its
+// line as null. Placing one on the divider would present a settled conversation
+// about vanished code as a standing comment about the whole file, which is a claim
+// nobody made — so those keep going to the detached section, labelled outdated
+// (see the thread-visibility rules).
+//
+// A mirrored thread that is *not* outdated and still has no line is genuinely
+// file-level on GitHub's side (subject_type=file), so it does belong on the
+// divider. Outdated is the discriminator, not local-versus-remote.
+func (m Model) aboutTheWholeFile(c review.Comment) bool {
+	if c.Anchor.Scope() != review.FileScope {
+		return false
+	}
+	if t, ok := m.threadFor(c.ID); ok && t.Outdated {
+		return false
+	}
+	return true
 }
 
 // locateComment finds the row a comment attaches to.
@@ -921,6 +956,18 @@ func (m Model) rangeEndRow(rows []rowRef, a review.Anchor, start int) int {
 // match the same way findAnchor does: exact line, then same text elsewhere in the
 // file, then the same text with matching context.
 func (m Model) locateAnchorStart(rows []rowRef, c review.Comment) (int, bool) {
+	// A remark about the file as a whole has no line to look for, and that is not
+	// the same as having a line nobody can find. It hangs under the file's divider,
+	// above the first hunk, which is where a reader looks for something said about
+	// the file rather than about a place in it.
+	//
+	// Checked before anything else: the searches below all key off a line, so a
+	// file-scope anchor fell through every one of them and landed in the detached
+	// section — under a heading that says the anchor could not be located, about the
+	// one anchor that cannot fail to be.
+	if m.aboutTheWholeFile(c) {
+		return fileHeaderRow(rows, m.filtered, c.Anchor.Path)
+	}
 	var inFile []int
 	for i, r := range rows {
 		if r.kind != rowLine || r.file < 0 || r.file >= len(m.filtered) {
