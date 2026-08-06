@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -75,6 +76,8 @@ func jumpToMiniDeckRow(tc *tmux.Client, store *state.JSONStore, row deckui.MiniR
 	_ = store.Update(row.RepoRoot, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
 		if e, ok := entries[row.Workspace]; ok {
 			e.Unread = false
+			// Jumping to a workspace is the clearest activity there is.
+			e.Touch(time.Now())
 			entries[row.Workspace] = e
 		}
 		return entries

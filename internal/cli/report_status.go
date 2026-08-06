@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -286,7 +287,7 @@ func writeWorkspaceStatus(workspaceName, repoName, repoRoot, status, prompt stri
 		// without waiting for a deck refresh. Computed against the
 		// resolved name so a renamed session still matches.
 		viewing := sessionHasAttachedClient(repoName, name)
-		entry.Status = status
+		entry.SetStatus(status, time.Now())
 		switch {
 		case prompt != "":
 			entry.ActivePrompt = prompt

@@ -11,6 +11,7 @@ package deckdata
 
 import (
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/prstatus"
 )
@@ -35,6 +36,11 @@ type Item struct {
 	SessionName      string
 	Active           bool
 	Current          bool
+	// LastActiveAt is when the workspace last changed hands — the agent
+	// reported a status, or you opened it (workspace.Entry.LastActiveAt).
+	// Zero means unknown, which is every workspace that existed before the
+	// field did, and unknown is "no opinion" rather than "very old".
+	LastActiveAt time.Time
 	// Virtual marks a synthetic inbox row that has no local workspace —
 	// an open PR you haven't pulled down yet, either awaiting your review
 	// (inboxVirtualReviewItems) or your own (inboxVirtualMineItems). It
