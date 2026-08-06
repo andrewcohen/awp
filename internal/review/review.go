@@ -710,6 +710,61 @@ type ThreadComment struct {
 	Body   string `json:"body"`
 }
 
+// MirrorOf pairs each comment published from here with the mirrored thread that
+// is the same conversation, keyed by the local comment's id.
+//
+// A comment published from here comes back through the mirror as a thread, so
+// after a publish both records describe one conversation. Everything that reads
+// both has to know which pairs are one thing: the diff drew every published
+// comment twice until it did — the local record with `▶ github · 1 msg · you: 🤖
+// Suggestion: …` directly beneath it — and `awp review list` reported four
+// resolved-and-replied conversations as four open findings.
+//
+// Here rather than in either caller, for the reason the RemoteThreadID scheme
+// gives a few lines up: it is a fact about two types this package owns, and a
+// rule spelled out at each call site is a rule that holds only as long as every
+// call site remembers it.
+//
+// Parents only. A reply is never published, so it has no id to match on and
+// belongs to whichever copy of the conversation ends up being drawn.
+//
+// Matched on GitHub's comment node id, which both sides hold: the id
+// addPullRequestReview returns for a comment it creates is the id the mirror
+// reports for that same comment. Body and line were the alternatives and both
+// drift — GitHub recomputes a thread's line as the PR moves (a comment filed
+// against line 47 came back reported at 53), and editing a published comment
+// locally changes its body.
+func MirrorOf(comments []Comment, threads []Thread) map[string]Thread {
+	published := make(map[string]string, len(comments))
+	for _, c := range comments {
+		if c.ReplyTo != "" {
+			continue
+		}
+		if id, ok := c.PublishedThreadID(); ok {
+			published[id] = c.ID
+		}
+	}
+	if len(published) == 0 {
+		return nil
+	}
+	out := make(map[string]Thread)
+	for _, t := range threads {
+		for _, tc := range t.Comments {
+			// An empty id is a mirror written before the ids were carried: it says
+			// nothing, so it is not treated as a match. The next mirror refresh fills
+			// it in.
+			if tc.ID == "" {
+				continue
+			}
+			if localID, ok := published[tc.ID]; ok {
+				out[localID] = t
+				break
+			}
+		}
+	}
+	return out
+}
+
 // SaveThreads mirrors a PR's threads into the review. Cached rather than fetched
 // per render so opening the diff — and the deck's first paint — stay off the
 // network.

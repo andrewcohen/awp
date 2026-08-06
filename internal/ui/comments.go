@@ -735,57 +735,19 @@ func (m Model) threadCarriesOurReply(c review.Comment) bool {
 	return false
 }
 
-// echoedByThread maps a local comment's id to the display id of the mirrored
-// GitHub thread that is the same conversation.
+// echoed is the mirrored thread each of our published comments came back as,
+// keyed by the local comment's id.
 //
-// A comment published from here comes back through the mirror as a thread, so
-// after a publish both records describe one conversation — and rendering both
-// showed every published comment twice, once as the local record and once as
-// `▶ github · 1 msg · you: 🤖 Suggestion: …` directly beneath it.
-//
-// The mirrored copy is the one to keep. It is GitHub's record of the same words,
-// and it carries what the local one cannot know: whether the thread has been
-// resolved, whether the code moved out from under it, and any reply that arrived
-// after we posted. The local record stays in the store either way — it is what
-// makes a re-publish skip rather than duplicate — it just stops being drawn.
-//
-// Matched on GitHub's comment node id, which both sides hold: the id
-// addPullRequestReview returns for a comment it creates is the id the mirror
-// reports for that same comment. Body and line were the alternatives and both
-// drift — GitHub recomputes a thread's line as the PR moves (a comment filed
-// against line 47 came back reported at 53), and editing a published comment
-// locally changes its body.
-func echoedByThread(comments []review.Comment, threads []review.Thread) map[string]string {
-	// Parents only: a reply is never published, so it has no id to match on and
-	// belongs to whichever copy of the conversation ends up being drawn.
-	published := make(map[string]string, len(comments))
-	for _, c := range comments {
-		if c.ReplyTo != "" {
-			continue
-		}
-		if id, ok := c.PublishedThreadID(); ok {
-			published[id] = c.ID
-		}
-	}
-	if len(published) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	for _, t := range threads {
-		for _, tc := range t.Comments {
-			// An empty id is a mirror written before the ids were carried: it says
-			// nothing, so it is not treated as a match. The next mirror refresh fills
-			// it in.
-			if tc.ID == "" {
-				continue
-			}
-			if localID, ok := published[tc.ID]; ok {
-				out[localID] = review.RemoteThreadID(t.ID)
-				break
-			}
-		}
-	}
-	return out
+// The pairing rule itself is review.MirrorOf — it is a fact about the two record
+// types, and `awp review list` needs the same answer. What the viewer adds is
+// what to do with it: the mirrored copy is the one to keep. It is GitHub's record
+// of the same words, and it carries what the local one cannot know — whether the
+// thread has been resolved, whether the code moved out from under it, and any
+// reply that arrived after we posted. The local record stays in the store either
+// way, since it is what makes a re-publish skip rather than duplicate; it just
+// stops being drawn.
+func (m Model) echoed() map[string]review.Thread {
+	return review.MirrorOf(m.comments, m.mirroredThreads())
 }
 
 // SetComments replaces the comment set and rebuilds the stream so they appear
@@ -818,9 +780,9 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 	all := make([]review.Comment, 0, len(m.comments))
 	threads := m.visibleThreads()
 	// A comment published from here is drawn as the mirrored thread it produced,
-	// not twice (see echoedByThread). Reconciled against every mirrored thread, not
-	// only the drawn ones — see mirroredThreads for why the two hidings differ.
-	echoed := echoedByThread(m.comments, m.mirroredThreads())
+	// not twice (see echoed). Reconciled against every mirrored thread, not only
+	// the drawn ones — see mirroredThreads for why the two hidings differ.
+	echoed := m.echoed()
 	// deferred holds the replies of a local comment whose conversation is being
 	// drawn from the mirror, keyed by that thread's display id. They are ours alone
 	// — a reply is never published — so they move onto the thread rather than being
@@ -837,14 +799,11 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 		deferred[displayID] = append(deferred[displayID], c)
 	}
 	// shown is the conversations on screen, so a reply can ask whether the thread it
-	// answers is one of them. drawn is the same set under the display ids echoed
-	// speaks in, so a published comment can ask whether the conversation it defers
-	// to is actually going to appear.
+	// answers is one of them — and so a published comment can ask whether the
+	// conversation it defers to is actually going to appear.
 	shown := make(map[string]bool, len(threads))
-	drawn := make(map[string]bool, len(threads))
 	for _, t := range threads {
 		shown[t.ID] = true
-		drawn[review.RemoteThreadID(t.ID)] = true
 	}
 	for _, th := range review.Threads(m.comments) {
 		if th.Parent.ThreadReply() {
@@ -867,8 +826,8 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 			// the line it is about: a reply of ours that nobody has received is the last
 			// thing that should quietly disappear.
 		}
-		if displayID, ok := echoed[th.Parent.ID]; ok {
-			if !drawn[displayID] {
+		if mirror, ok := echoed[th.Parent.ID]; ok {
+			if !shown[mirror.ID] {
 				// The mirror holds this conversation but it is not being drawn — it is
 				// resolved, and the filter dropped it. Settled means settled: the local
 				// copy of the same words stays down with it, and so do our replies,
@@ -877,7 +836,7 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 				continue
 			}
 			for _, reply := range th.Replies {
-				onto(displayID, reply)
+				onto(review.RemoteThreadID(mirror.ID), reply)
 			}
 			continue
 		}
