@@ -44,6 +44,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"ctrl+d / ctrl+u", "half a page down / up"},
 				{"{ / }", "previous / next hunk, anywhere in the change"},
 				{"g / G", "first / last row"},
+				{"zz", "centre the diff on the cursor (in the diff)"},
 				{"tab / shift+tab", "cycle pane: files → comments → diff"},
 				{"enter", "hand the keyboard to the diff (from either list)"},
 			},

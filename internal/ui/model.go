@@ -110,6 +110,9 @@ type Model struct {
 	scopes     []ScopeOption
 	scopeIndex int
 	scopePick  bool
+	// pendingZ is the `z` chord waiting for its second key — `zz` centres the diff
+	// on the cursor, the way it does in vim.
+	pendingZ bool
 
 	files       []diff.FileDiff
 	filtered    []diff.FileDiff
@@ -677,6 +680,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.scopePick {
 		return m.handleScopeKey(key)
 	}
+	// So does `z`, and for the same reason — one keypress deep, nothing else up.
+	if m.pendingZ {
+		return m.handleZKey(key)
+	}
 	// The publish prompt owns the keyboard while it is up, for the same reason the
 	// help overlay does: nothing behind it is navigable, and its `esc` means
 	// "don't publish".
@@ -890,6 +897,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.jumpHunk(1)
 		case "{", "[":
 			m.jumpHunk(-1)
+		// `z` opens the chord `zz` closes. Only in the diff: it is about where this
+		// pane is scrolled, and the two lists scroll to follow their own selection.
+		case "z":
+			m.pendingZ = true
+			return m, nil
 		case "g":
 			m.cursorRow = 0
 			m.followCursor()
@@ -1157,6 +1169,26 @@ func (m *Model) followCursor() {
 func (m *Model) centerCursor() {
 	m.streamScroll = m.cursorRow - m.streamContentHeight()/2
 	m.clampStreamScroll()
+}
+
+// handleZKey answers the key that follows `z`.
+//
+// Only `zz` means anything; everything else cancels, esc included, the same
+// bargain handleScopeKey makes. A mistyped second key must not fall through and
+// do whatever that letter means on its own — `zc` silently opening the compose
+// box is worse than `zc` doing nothing.
+//
+// Centring is what the comment index already does when it seeks (see
+// centerCursor), so this is the same gesture reached deliberately rather than as
+// a side effect of jumping somewhere. The cursor does not move: `zz` is about
+// where the pane is scrolled, not where you are.
+func (m Model) handleZKey(key string) (tea.Model, tea.Cmd) {
+	m.pendingZ = false
+	if key != "z" {
+		return m, nil
+	}
+	m.centerCursor()
+	return m, nil
 }
 
 func (m *Model) clampStreamScroll() {
