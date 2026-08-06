@@ -514,10 +514,32 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 		return nil
 	}
 	for _, c := range comments {
-		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			c.ID, c.Kind.OrDefault(), c.State, proposalColumn(c), c.Anchor.Where(), bodyPreview(c.Body))
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			c.ID, c.Kind.OrDefault(), c.State, proposalColumn(c), refusedColumn(c),
+			c.Anchor.Where(), bodyPreview(c.Body))
 	}
 	return nil
+}
+
+// refusedColumn is what the last publish run said about this finding's anchor —
+// nothing, or why it would not send it.
+//
+// Shown because without it a refused finding reads as one of the open ones, and a
+// run that refused looks identical to one that never happened. That is how a real
+// refusal on alpha #2348 went unnoticed for two days, with the message sitting in
+// awp.log where nothing points a reader.
+//
+// The reason travels in the column rather than a bare `refused` marker beside it.
+// A marker says a reason exists somewhere else, and somewhere else is the log —
+// which is the arrangement that failed. Its own column rather than folded into the
+// state column, for the reason proposalColumn gives: one column holding two
+// vocabularies is how a reader matches a word against the wrong field.
+func refusedColumn(c review.Comment) string {
+	reason, refused := c.Rejected()
+	if !refused {
+		return "-"
+	}
+	return "refused: " + reason
 }
 
 // proposalColumn is where a proposal stands, for the listing. This is the whole
