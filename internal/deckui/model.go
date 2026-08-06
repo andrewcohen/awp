@@ -1426,12 +1426,18 @@ func (m Model) metaLine(it Item) string {
 	// render path by the deck refresher (internal/cli/deck.go) and only for
 	// rows with real progress, so a nil DevLoop falls through to the
 	// standard meta line below.
+	var parts []string
+	// In the attention scope the row leads with why it is in the list. That
+	// scope is one flat run with no headers, so nothing else on screen says
+	// what a row is doing there — see attentionReason.
+	if why := m.attentionReason(it); why != "" {
+		parts = append(parts, why)
+	}
 	if it.DevLoop != nil {
 		if s := formatDevLoopMeta(*it.DevLoop); s != "" {
-			return s
+			return strings.Join(append(parts, s), " · ")
 		}
 	}
-	var parts []string
 	// Pinned rows are lifted out of their project group into a register
 	// section, so the project context is otherwise lost. Lead the meta
 	// line with it (all / attention scopes only — the inbox scope keeps
@@ -1498,6 +1504,29 @@ func (m Model) metaLine(it Item) string {
 		id = "…"
 	}
 	return glyphBranch + " " + id
+}
+
+// attentionReason is the words leading a row's meta line in the attention
+// scope: why this row is in a list that has no headers to say so.
+//
+// Empty in every other scope. In the all scope a row's presence needs no
+// explaining — everything is there — and the inbox says it with a bucket
+// header, which is the same claim made once for a section instead of once per
+// row. Only the flat scope has to repeat it.
+//
+// A working row with dev-loop progress is the one exception: "3/7 · implement ·
+// ▶ <unit>" already says working, with more in it than the word has. A row that
+// is working *and* something more urgent still leads with the more urgent
+// thing, since that is what it sorted under.
+func (m Model) attentionReason(it Item) string {
+	if m.scope != ScopeAttention {
+		return ""
+	}
+	v := m.rm()
+	if it.DevLoop != nil && v.Wants(it) == deckdata.ReasonWorking {
+		return ""
+	}
+	return v.WantsText(it)
 }
 
 // renderMetaText colors the semantic tokens of an already-truncated
@@ -2368,9 +2397,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					m.status = stageStatus(m.findStage)
 					return m, nil
 				}
-				// Inbox-scope find has no project stage to back out
-				// to — backspace cancels like esc.
-				if m.findStage == findStageWorkspace && m.scope != ScopeInbox {
+				// A scope with no project sections has no project stage to
+				// back out to — backspace cancels like esc.
+				if m.findStage == findStageWorkspace && m.hasProjectSections() {
 					m.findStage = findStageProject
 					m.findProject = ""
 					m.findPinGroup = ""
@@ -4683,12 +4712,50 @@ func (m Model) bodyRows(items []Item) []deckBodyRow {
 	}
 	pinned := pinnedCount(items)
 	var rows []deckBodyRow
-	if pinned == 0 {
+	switch {
+	case m.scope == ScopeAttention:
+		rows = m.attentionBodyRows(items, pinned)
+	case pinned == 0:
 		rows = deckBodyRows(items, collapsedProjects(items), nil)
-	} else {
+	default:
 		rows = m.deckBodyRowsPinned(items, pinned)
 	}
 	return m.collapseForFind(rows, items)
+}
+
+// attentionBodyRows lays the attention scope out as one flat list, with no
+// project headers.
+//
+// The scope is ordered by urgency (deckdata's urgencyOrdered), so project
+// grouping would cut one priority-ordered list into as many as you have repos —
+// and put a different kind of claim at the top of each. The whole point of the
+// scope is that reading down it is reading down the priority.
+//
+// Pinned rows keep their register sections, since a pin is a place you asked
+// for rather than a grouping the deck imposed.
+func (m Model) attentionBodyRows(items []Item, pinned int) []deckBodyRow {
+	// A group per row would emit a header per row; one shared empty group
+	// emits none, since deckBodyRows only opens a section when the group
+	// changes and it starts on "".
+	flat := func(of []Item) []deckBodyRow {
+		return deckBodyRows(of, nil, make([]string, len(of)))
+	}
+	if pinned == 0 {
+		return flat(items)
+	}
+	rows := m.deckBodyRowsPinnedPrefix(items, pinned)
+	suffix := items[pinned:]
+	if len(suffix) == 0 {
+		return rows
+	}
+	rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: -1})
+	for _, r := range flat(suffix) {
+		if r.itemIndex >= 0 {
+			r.itemIndex += pinned
+		}
+		rows = append(rows, r)
+	}
+	return rows
 }
 
 // collapseForFind rewrites the body layout while find mode is up so a
@@ -4703,7 +4770,7 @@ func (m Model) bodyRows(items []Item) []deckBodyRow {
 // un-expanded sections are dropped, and headerRow is remapped into the
 // compacted slice.
 func (m Model) collapseForFind(rows []deckBodyRow, items []Item) []deckBodyRow {
-	if !m.findMode || m.scope == ScopeInbox {
+	if !m.findMode || !m.hasProjectSections() {
 		return rows
 	}
 	// In the project stage the list is a pure header column, so drop the
@@ -4798,7 +4865,38 @@ func (m Model) inboxBodyRows(items []Item) []deckBodyRow {
 // default-only collapse) beneath a blank spacer. Row itemIndex/headerRow
 // stay absolute into items so the renderer and scroll math agree.
 func (m Model) deckBodyRowsPinned(items []Item, pinned int) []deckBodyRow {
-	rows := make([]deckBodyRow, 0, len(items)*2)
+	rows := m.deckBodyRowsPinnedPrefix(items, pinned)
+	// Project-grouped region for the unpinned suffix. Build it against the
+	// suffix slice (so collapse detection only considers unpinned rows),
+	// then shift each row's itemIndex/headerRow into absolute coordinates.
+	suffix := items[pinned:]
+	if len(suffix) > 0 {
+		// The spacer belongs to the last register section above it, which is
+		// whatever header the final pinned row pointed at.
+		rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: lastHeaderRow(rows)})
+		base := len(rows)
+		for _, r := range deckBodyRows(suffix, collapsedProjects(suffix), nil) {
+			if r.itemIndex >= 0 {
+				r.itemIndex += pinned
+			}
+			if r.headerRow >= 0 {
+				r.headerRow += base
+			}
+			rows = append(rows, r)
+		}
+	}
+	return rows
+}
+
+// deckBodyRowsPinnedPrefix lays out the leading pinned run: one register
+// header per group, then that register's rows.
+//
+// Shared with the attention scope, which drops project grouping for its
+// unpinned rows but keeps the register sections exactly as they are — a pin is
+// somewhere you asked for, and it should look the same in every scope that
+// honours it.
+func (m Model) deckBodyRowsPinnedPrefix(items []Item, pinned int) []deckBodyRow {
+	rows := make([]deckBodyRow, 0, pinned*2+2)
 	lastKey := ""
 	headerIdx := -1
 	for i := 0; i < pinned; i++ {
@@ -4814,24 +4912,29 @@ func (m Model) deckBodyRowsPinned(items []Item, pinned int) []deckBodyRow {
 		rows = append(rows, deckBodyRow{kind: deckRowPrimary, itemIndex: i, project: key, headerRow: headerIdx})
 		rows = append(rows, deckBodyRow{kind: deckRowMeta, itemIndex: i, project: key, headerRow: headerIdx})
 	}
-	// Project-grouped region for the unpinned suffix. Build it against the
-	// suffix slice (so collapse detection only considers unpinned rows),
-	// then shift each row's itemIndex/headerRow into absolute coordinates.
-	suffix := items[pinned:]
-	if len(suffix) > 0 {
-		rows = append(rows, deckBodyRow{kind: deckRowSpacer, itemIndex: -1, headerRow: headerIdx})
-		base := len(rows)
-		for _, r := range deckBodyRows(suffix, collapsedProjects(suffix), nil) {
-			if r.itemIndex >= 0 {
-				r.itemIndex += pinned
-			}
-			if r.headerRow >= 0 {
-				r.headerRow += base
-			}
-			rows = append(rows, r)
-		}
-	}
 	return rows
+}
+
+// hasProjectSections reports whether this scope groups its rows under project
+// headers, which decides whether find has a project stage to narrow by.
+//
+// One predicate rather than a scope comparison at each site. Find's two stages,
+// its backspace, and the collapse that folds unchosen sections away all have to
+// agree about whether the sections exist — and they were spelled as three
+// separate `scope == ScopeInbox` checks, so the attention scope losing its
+// headers would have left find offering a project stage over a list with no
+// projects in it, in whichever of the three nobody remembered.
+func (m Model) hasProjectSections() bool {
+	return m.scope != ScopeInbox && m.scope != ScopeAttention
+}
+
+// lastHeaderRow is the header the final row of a layout belongs to, or -1 for
+// an empty one. Used to attach a spacer to the section it closes.
+func lastHeaderRow(rows []deckBodyRow) int {
+	if len(rows) == 0 {
+		return -1
+	}
+	return rows[len(rows)-1].headerRow
 }
 
 // inboxGroupLabels returns each item's bucket header label — "Needs your
@@ -5097,10 +5200,9 @@ func (m *Model) startFind() {
 	m.findPendingPrefix = 0
 	m.findProject = ""
 	m.findPinGroup = ""
-	if m.scope == ScopeInbox {
-		// The inbox scope has no project headers (rows section by
-		// bucket), so find skips the project stage and hints every
-		// row directly, like the mini-deck.
+	if !m.hasProjectSections() {
+		// No project headers to narrow by, so find skips the project stage
+		// and hints every row directly, like the mini-deck.
 		m.findStage = findStageWorkspace
 		m.findProjectHints = map[string]string{}
 		m.findPinHints = map[string]string{}
