@@ -23,11 +23,6 @@ type View struct {
 	PRStatusByRepo map[string]map[string]prstatus.PRStatus
 	// PinAliases is the register → display-alias map used for pin sorting.
 	PinAliases map[string]string
-	// Attention decides whether a row belongs to the attention scope. It
-	// is injected because the underlying rule (mini-deck inclusion) lives
-	// in deckui alongside the status vocabulary. When nil, the attention
-	// scope shows nothing.
-	Attention func(status string, unread, active bool) bool
 }
 
 // Items applies the scope filter (plus the inbox virtual rows), the text
@@ -65,7 +60,7 @@ func (v View) Items() []Item {
 			// from), even if it doesn't otherwise qualify — otherwise the
 			// cursor can't land on it and selection jitters to another row
 			// after the first tmux refresh settles.
-			if it.Current || (v.Attention != nil && v.Attention(it.Status, it.Unread, it.Active)) {
+			if it.Current || v.Wants(it) != ReasonNone {
 				filtered = append(filtered, it)
 			}
 		}

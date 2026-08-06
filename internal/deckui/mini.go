@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andrewcohen/awp/internal/charm"
-	"github.com/andrewcohen/awp/internal/workspace"
+	"github.com/andrewcohen/awp/internal/deckdata"
 )
 
 // MiniRow is one workspace row in the mini-deck quick-jump list.
@@ -247,68 +247,15 @@ func (m MiniModel) Rows() []MiniRow { return m.rows }
 // mode (test helper).
 func (m MiniModel) FindMode() bool { return m.findMode }
 
-// MiniIncluded reports whether an entry's status/unread combination
-// qualifies it for the mini-deck / attention scope.
+// AttentionIncluded is the mini-deck's "surface this row" filter, and the
+// bool form of deckdata.AgentWants — which is where the rule and the
+// reasoning behind it now live, since the deck's own scope needs the
+// reason and not just the answer.
 //
-// "Attention" is "things I should pay attention to right now":
-//   - working → an agent is actively generating output or running a
-//     tool. Always surface.
-//   - waiting → Claude is blocked on a permission/notification prompt.
-//     Surface ONLY when Unread, because Unread=false in practice
-//     means "I was attached to the session when the hook fired and
-//     already saw it" — at which point the row is just stale noise.
-//   - idle → only surface when Unread, meaning "the agent finished a
-//     turn and I haven't visited since". An idle row that's been
-//     read is just a quiet workspace.
-//   - exited → never surface. The agent process is gone; there is
-//     no one waiting on the other end of an enter press.
-//
-// This is the (status, unread) half of the filter. The full attention
-// filter (AttentionIncluded) layers on a freshness check that drops
-// stale "working" rows whose tmux session is gone or whose agent pane
-// has fallen back to a bare shell.
-func MiniIncluded(status string, unread bool) bool {
-	if workspace.IsWorking(status) {
-		return true
-	}
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "waiting":
-		return unread
-	case "exited", "error":
-		return false
-	case "idle", "":
-		return unread
-	default:
-		return unread
-	}
-}
-
-// AttentionIncluded is the shared "this row needs your attention" filter
-// used by both the deck's ScopeAttention and the mini-deck. It composes
-// MiniIncluded with a freshness check: a stored "working" status only
-// counts when the row is actually fresh (live tmux session whose :agent
-// pane is the real agent, not a bare shell). Without the freshness
-// check, a crashed agent — Claude has no exit hook — would leave
-// "working" pinned in the attention scope forever.
-//
-// active should be true when the row's tmux session exists and its
-// :agent pane is running an agent, OR when tmux state is not yet known
-// (fast first paint — trust the stored status and let a later refresh
-// correct it).
-//
-// active is only consulted for "working" statuses. For waiting/idle the
-// Unread flag is the durable signal (Claude wrote it after the turn
-// finished), so the row surfaces regardless of whether the agent
-// process is still alive — the mini-deck will recreate the session on
-// jump if necessary.
+// Kept as a name because the mini-deck genuinely wants a bool: it is a
+// jump list, so a row either is or is not somewhere to jump.
 func AttentionIncluded(status string, unread, active bool) bool {
-	if !MiniIncluded(status, unread) {
-		return false
-	}
-	if workspace.IsWorking(status) && !active {
-		return false
-	}
-	return true
+	return deckdata.AgentWants(status, unread, active) != deckdata.ReasonNone
 }
 
 // buildMiniRowHints assigns easymotion hints across every row. Uses

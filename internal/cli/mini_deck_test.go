@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -177,34 +176,6 @@ func TestBuildMiniDeckRowsKeepsAllWhenTmuxUnknown(t *testing.T) {
 	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row (snapshot unknown trusts state), got %d", len(rows))
-	}
-}
-
-func TestMiniIncludedRules(t *testing.T) {
-	cases := []struct {
-		name   string
-		status string
-		unread bool
-		want   bool
-	}{
-		{"working unread irrelevant", "working", false, true},
-		{"in_progress alias", "in_progress", false, true},
-		{"waiting requires unread (else it's a seen prompt)", "WAITING", false, false},
-		{"waiting with unread is a fresh ping", "waiting", true, true},
-		{"idle without unread is quiet", "idle", false, false},
-		{"idle with unread is a finished turn to read", "idle", true, true},
-		{"empty status without unread", "", false, false},
-		{"empty status with unread", "", true, true},
-		{"exited never surfaces even when unread", "exited", true, false},
-		{"exited never surfaces when not unread", "exited", false, false},
-		{"error treated like exited", "error", true, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := deckui.MiniIncluded(c.status, c.unread); got != c.want {
-				t.Errorf("MiniIncluded(%q, %v) = %v, want %v", c.status, c.unread, got, c.want)
-			}
-		})
 	}
 }
 
