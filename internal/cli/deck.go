@@ -1491,6 +1491,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 					_ = store.Update(r.repo, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
 						if cur, ok := entries[name]; ok && cur.Unread {
 							cur.Unread = false
+							cur.Touch(time.Now())
 							entries[name] = cur
 						}
 						return entries
@@ -1565,6 +1566,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				SessionName:      sessionName,
 				Active:           active,
 				Current:          current,
+				LastActiveAt:     e.LastActiveAt,
 				DevLoop:          devLoop,
 			}
 			items = append(items, item)

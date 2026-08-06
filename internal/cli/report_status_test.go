@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -339,5 +340,31 @@ func TestRunReportStatusHelp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "--prompt") {
 		t.Errorf("usage should mention --prompt; got %q", out.String())
+	}
+}
+
+// `report-status` is the busiest writer of a workspace's status, and it writes
+// through the state store directly rather than through workspace.Service — so
+// the fact that the service's own mutators date their writes says nothing about
+// this path. It is exactly the call site that would silently not stamp.
+func TestReportStatusDatesTheWorkspace(t *testing.T) {
+	const root = "/tmp/awp-test-repo"
+	fs := newFakeStore()
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"feat-x": {Name: "feat-x", Path: root + "/.jj/awp/feat-x"},
+	}
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-test-repo", root)
+
+	before := time.Now()
+	if err := runReportStatus([]string{"--state", "waiting"}, io.Discard); err != nil {
+		t.Fatalf("runReportStatus: %v", err)
+	}
+	got := fs.byRepo[root]["feat-x"].LastActiveAt
+	if got.IsZero() {
+		t.Fatal("a status report left the workspace undated")
+	}
+	if got.Before(before) || got.After(time.Now()) {
+		t.Errorf("dated %v, outside the call", got)
 	}
 }

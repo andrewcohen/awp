@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -107,6 +108,9 @@ func runMarkRead(args []string) error {
 			return entries
 		}
 		entry.Unread = false
+		// Same reasoning as workspace.MarkRead: clearing the badge happens
+		// because you went and looked, which is the activity being recorded.
+		entry.Touch(time.Now())
 		entries[workspaceName] = entry
 		return entries
 	}

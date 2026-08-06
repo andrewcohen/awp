@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/config"
@@ -153,6 +154,19 @@ type Entry struct {
 	// state.PinGroupAliases) since a register spans repos in the deck's
 	// merged view.
 	PinGroup string `json:",omitempty"`
+	// LastActiveAt is when this workspace last changed hands: the agent
+	// reported a new status, or you opened the workspace and cleared its
+	// badge. Written by SetStatus and Touch, never assigned directly.
+	//
+	// It exists because Unread is a flag, not a history. A workspace you have
+	// read is indistinguishable from one you last touched a month ago, so
+	// there was no way to ask "what was I in the middle of" — reading a row
+	// simply deleted the only evidence it was recent.
+	//
+	// Zero means unknown, which is every entry written before the field
+	// existed. Unknown is "no opinion": it must never sort as very old or be
+	// read as evidence that a workspace is stale.
+	LastActiveAt time.Time `json:",omitempty"`
 	// DevLoop is the last dev-loop progress snapshot the deck computed for
 	// this workspace's agent (see internal/watch). It is a cache, refreshed
 	// by the deck's background loader while the agent is working, so the
@@ -160,6 +174,37 @@ type Entry struct {
 	// without re-scanning the transcript — avoiding a branch/port → progress
 	// "flash". Nil when no snapshot has been recorded.
 	DevLoop *DevLoopSnapshot `json:",omitempty"`
+}
+
+// SetStatus records a new agent status and the moment it arrived.
+//
+// One method rather than two assignments, because a timestamp is only worth
+// anything if it is written every time the thing it dates is. An entry whose
+// status was assigned directly goes on claiming the agent last did something at
+// whatever moment some earlier caller happened to remember, which is worse than
+// having no timestamp at all — it is a wrong answer rather than an absent one.
+// So `e.Status = s` is not a thing to write anywhere; this is.
+//
+// The moment is an argument rather than a call to time.Now inside, so a caller
+// stamping several entries in one pass dates them identically, and so a test can
+// say which moment it means.
+func (e *Entry) SetStatus(status string, at time.Time) {
+	e.Status = status
+	e.Touch(at)
+}
+
+// Touch records activity that did not change the status — summoning the
+// workspace, or clearing its badge. Looking at something counts as being in the
+// middle of it, which is the question LastActiveAt is here to answer.
+//
+// A zero moment is ignored rather than stored. "I don't know when" must not
+// overwrite "I know when": a caller with no clock to hand should leave the last
+// real answer standing.
+func (e *Entry) Touch(at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	e.LastActiveAt = at
 }
 
 // DevLoopSnapshot is the persisted form of the deck's dev-loop meta line:
@@ -919,8 +964,9 @@ func (s *service) UpdatePrompt(workspaceName, prompt string) error {
 }
 
 func (s *service) UpdateStatus(workspaceName, status string) error {
+	now := time.Now()
 	return s.mutateEntry(workspaceName, func(e *Entry) {
-		e.Status = status
+		e.SetStatus(status, now)
 		switch {
 		case WantsAttention(status):
 			e.Unread = true
@@ -934,7 +980,14 @@ func (s *service) UpdateStatus(workspaceName, status string) error {
 }
 
 func (s *service) MarkRead(workspaceName string) error {
-	return s.mutateEntry(workspaceName, func(e *Entry) { e.Unread = false })
+	now := time.Now()
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.Unread = false
+		// Reading the badge is the moment the workspace stops asking and starts
+		// being something you were in the middle of, so it is exactly what the
+		// recency answer is about.
+		e.Touch(now)
+	})
 }
 
 // WantsAttention reports whether a status transition into `status` should mark
@@ -1003,12 +1056,15 @@ func (s *service) mutateEntry(workspaceName string, fn func(*Entry)) error {
 }
 
 func (s *service) RecordSession(workspaceName, sessionID, sessionName string) error {
+	now := time.Now()
 	return s.mutateEntry(workspaceName, func(e *Entry) {
 		e.SessionID = sessionID
 		e.SessionName = sessionName
 		// Summon (or any record-session) implies the user is opening this
-		// workspace, so clear the attention badge.
+		// workspace, so clear the attention badge — and that opening is itself
+		// the activity LastActiveAt records.
 		e.Unread = false
+		e.Touch(now)
 	})
 }
 
