@@ -171,6 +171,10 @@ type Model struct {
 	// geometry is width-dependent.
 	hunkWidth int
 	wrap      bool
+	// sideBySide draws a change as old-beside-new rather than old-above-new (`|`).
+	// A reading preference for the change in front of you, like the scope menu, so
+	// it is not persisted.
+	sideBySide bool
 	// hunkHScroll is how many columns the hunk pane's line content is panned
 	// left. Only meaningful when wrap is off — wrapped lines have no
 	// horizontal overflow.
@@ -368,7 +372,7 @@ func (m *Model) rebuildStream() {
 	// lets the cache outlive a frame at all — see renderCache in stream_render.go.
 	m.cache.drop()
 	idx := withComments(
-		buildStream(m.filtered, m.hunkWidth, m.wrap, m.isCollapsed),
+		buildStreamLayout(m.filtered, m.hunkWidth, m.wrap, m.sideBySide, m.isCollapsed),
 		m.placeComments, m.threadCollapsed,
 	)
 	// The index is built before the compose box is spliced in, so a half-written
@@ -800,6 +804,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterInput.Focus()
 		return m, nil
 	case "w":
+		if m.sideBySide {
+			// Refused out loud. One line-pair is one row is what the split layout is
+			// built on, and a key that quietly did nothing would read as broken.
+			m.status = "wrap is off in side-by-side — h/l pans"
+			return m, nil
+		}
 		// Wrap changes how many rows each line occupies, so the geometry has
 		// to be rebuilt and the scroll re-clamped against it. Wrapped lines
 		// have no horizontal overflow left to pan over, so the column offset
@@ -810,6 +820,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildStream()
 		return m, nil
+	case "|":
+		return m.toggleSideBySide()
 	case "T":
 		m.cycleThreadVisibility()
 		return m, nil

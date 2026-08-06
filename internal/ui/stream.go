@@ -79,6 +79,17 @@ type rowRef struct {
 	// (an added line has no old number, a removed line no new one).
 	oldNo int
 	newNo int
+	// paired marks a side-by-side row, on which oldLine and newLine name the two
+	// source lines it shows — indices into the hunk's Lines, -1 where that column
+	// is empty.
+	//
+	// A flag rather than a -1 sentinel on the indices. rowRef is built in a dozen
+	// places, most of them not about diff lines at all, and a zero oldLine would
+	// read as "line 0 of the hunk" in every one of them that forgot to set it.
+	// False by default means no call site can claim a pair by omission.
+	paired  bool
+	oldLine int
+	newLine int
 	// comment indexes into the placed comment set for comment rows of any
 	// section (see isCommentRow), and commentLine is which display line of that
 	// comment this row is.
@@ -95,10 +106,107 @@ type rowRef struct {
 
 // hunkMeta is the gutter geometry for one hunk: how wide its line-number
 // columns are, and therefore how much width is left for content.
+//
+// prefixWidth is the unified layout's, and it is cached here because it is
+// per-hunk and the geometry pass exists to not recompute per-hunk facts per row
+// per frame. The side-by-side cell geometry is deliberately *not* cached
+// alongside it: it depends on the width the frame is actually being drawn at,
+// which the host can change without rebuilding the index, so a stored copy would
+// be a number that goes quietly stale. splitGeometry derives it from oldWidth and
+// newWidth at render time instead.
 type hunkMeta struct {
 	oldWidth    int
 	newWidth    int
 	prefixWidth int
+}
+
+// sideBySideDivider separates the two cells. A space either side of the rule, so
+// content never butts against it.
+const sideBySideDivider = " │ "
+
+// sideBySideMinWidth is the narrowest pane the split is offered on.
+//
+// Two columns of thirty is not a diff, it is two truncated diffs. Refusing is
+// better than falling back to unified, which would leave `|` looking broken at
+// the one width where the reader most needs to be told what to do instead.
+const sideBySideMinWidth = 100
+
+// splitGeometry divides a pane between two cells.
+func splitGeometry(width, oldWidth, newWidth int) (colWidth, oldPrefix, newPrefix int) {
+	// Each cell shows one number and one gutter glyph: "%*s " + glyph + " ".
+	oldPrefix = oldWidth + 3
+	newPrefix = newWidth + 3
+	colWidth = max(1, (width-len([]rune(sideBySideDivider)))/2)
+	return colWidth, oldPrefix, newPrefix
+}
+
+// linePair is one row of a side-by-side hunk: an index into the hunk's lines for
+// each column, -1 where that column has nothing to show.
+type linePair struct{ old, new int }
+
+// pairHunkLines lays a hunk's lines out two abreast.
+//
+// A maximal run of removals is zipped against the additions immediately
+// following it, which is how a rewritten line comes to sit opposite the thing it
+// was rewritten into — the whole point of the layout. Runs of unequal length
+// leave the shorter side's surplus rows with one cell empty. Anything else is a
+// context line, which exists on both sides and so pairs with itself.
+//
+// Removals before additions is the order git emits a change block in. A `+` run
+// reached first is therefore not part of a pair: it takes the right column alone
+// rather than being held back to see whether removals follow, since guessing
+// wrong would put a line opposite something it has nothing to do with.
+func pairHunkLines(lines []diff.HunkLine) []linePair {
+	out := make([]linePair, 0, len(lines))
+	for i := 0; i < len(lines); {
+		switch lines[i].Type {
+		case '-':
+			dels := i
+			for i < len(lines) && lines[i].Type == '-' {
+				i++
+			}
+			adds := i
+			for i < len(lines) && lines[i].Type == '+' {
+				i++
+			}
+			nDel, nAdd := adds-dels, i-adds
+			for k := range max(nDel, nAdd) {
+				p := linePair{old: -1, new: -1}
+				if k < nDel {
+					p.old = dels + k
+				}
+				if k < nAdd {
+					p.new = adds + k
+				}
+				out = append(out, p)
+			}
+		case '+':
+			out = append(out, linePair{old: -1, new: i})
+			i++
+		default:
+			out = append(out, linePair{old: i, new: i})
+			i++
+		}
+	}
+	return out
+}
+
+// anchorLine is the source line a row is *about* — what a comment on it attaches
+// to and what a range covering it selects.
+//
+// The new side when the row has one, the old side otherwise. Not a new rule: it
+// is what a mixed `v` range already does, since a removed line has no new-side
+// number to anchor to and an added one has no old. Side-by-side makes an existing
+// rule visible rather than introducing a second one, which is why this is the
+// only place either layout asks the question.
+func (r rowRef) anchorLine() int {
+	if !r.paired {
+		return r.line
+	}
+	if r.newLine >= 0 {
+		return r.newLine
+	}
+	return r.oldLine
 }
 
 // streamIndex is the row geometry of a whole diff.
@@ -112,9 +220,10 @@ type streamIndex struct {
 	meta [][]hunkMeta
 	// comments is the comment set this index placed, indexed by rowRef.comment.
 	comments []review.Comment
-	// width and wrap are the inputs this index was built for.
-	width int
-	wrap  bool
+	// width, wrap and sideBySide are the inputs this index was built for.
+	width      int
+	wrap       bool
+	sideBySide bool
 }
 
 // buildStream indexes every row of the diff at the given content width.
@@ -377,17 +486,58 @@ func remap(offsets []int, shift []int) []int {
 // geometry/render split exists to prevent.
 type collapsedSet func(path string) bool
 
+// lineNumbers is a hunk's per-line old/new numbering, resolved once.
+//
+// Its own pass because side-by-side needs a line's number out of order — the
+// addition opposite a removal is several lines further down the hunk — and
+// walking forward to find it per row would put the O(hunk) work back that the
+// geometry pass exists to do once.
+func hunkLineNumbers(h diff.Hunk) []rowRef {
+	out := make([]rowRef, len(h.Lines))
+	oldNo, newNo := h.OldStart, h.NewStart
+	for li, l := range h.Lines {
+		switch l.Type {
+		case '+':
+			out[li].newNo = newNo
+			newNo++
+		case '-':
+			out[li].oldNo = oldNo
+			oldNo++
+		default:
+			out[li].oldNo, out[li].newNo = oldNo, newNo
+			oldNo++
+			newNo++
+		}
+	}
+	return out
+}
+
 func buildStream(files []diff.FileDiff, width int, wrap bool, collapsed collapsedSet) streamIndex {
+	return buildStreamLayout(files, width, wrap, false, collapsed)
+}
+
+// buildStreamLayout is buildStream with the layout named. Side-by-side never
+// wraps (see the spec's decision 1): one line-pair is always exactly one row, so
+// the wrap argument is ignored rather than half-honoured.
+func buildStreamLayout(files []diff.FileDiff, width int, wrap, sideBySide bool, collapsed collapsedSet) streamIndex {
+	if sideBySide {
+		wrap = false
+	}
+	return buildStreamRows(files, width, wrap, sideBySide, collapsed)
+}
+
+func buildStreamRows(files []diff.FileDiff, width int, wrap, sideBySide bool, collapsed collapsedSet) streamIndex {
 	// Row counts must be right even before the first size message, or
 	// scrolling is dead until a resize. At width 1 nothing wraps, so the
 	// geometry is one row per line — correct, just unreadable, which is moot
 	// at that size.
 	width = max(1, width)
 	idx := streamIndex{
-		width:     width,
-		wrap:      wrap,
-		fileStart: make([]int, 0, len(files)),
-		meta:      make([][]hunkMeta, len(files)),
+		width:      width,
+		wrap:       wrap,
+		sideBySide: sideBySide,
+		fileStart:  make([]int, 0, len(files)),
+		meta:       make([][]hunkMeta, len(files)),
 	}
 	for fi, f := range files {
 		if fi > 0 {
@@ -417,21 +567,39 @@ func buildStream(files []diff.FileDiff, width int, wrap bool, collapsed collapse
 			idx.hunkStart = append(idx.hunkStart, len(idx.rows))
 			idx.rows = append(idx.rows, rowRef{kind: rowHunkHeader, file: fi, hunk: hi, line: -1})
 
+			nums := hunkLineNumbers(h)
+			if sideBySide {
+				for _, p := range pairHunkLines(h.Lines) {
+					ref := rowRef{
+						kind: rowLine, file: fi, hunk: hi,
+						// line is the row's anchor, so everything that already reads it —
+						// placement, the range gesture, the agent prompt's context — keeps
+						// working without knowing which layout drew the row.
+						line:    max(p.old, p.new),
+						paired:  true,
+						oldLine: p.old,
+						newLine: p.new,
+					}
+					if p.new >= 0 {
+						ref.line = p.new
+						ref.newNo = nums[p.new].newNo
+					}
+					if p.old >= 0 {
+						ref.oldNo = nums[p.old].oldNo
+						if p.new < 0 {
+							ref.line = p.old
+						}
+					}
+					idx.rows = append(idx.rows, ref)
+				}
+				continue
+			}
+
 			avail := width - meta.prefixWidth
-			oldNo, newNo := h.OldStart, h.NewStart
 			for li, l := range h.Lines {
-				ref := rowRef{kind: rowLine, file: fi, hunk: hi, line: li}
-				switch l.Type {
-				case '+':
-					ref.newNo = newNo
-					newNo++
-				case '-':
-					ref.oldNo = oldNo
-					oldNo++
-				default:
-					ref.oldNo, ref.newNo = oldNo, newNo
-					oldNo++
-					newNo++
+				ref := rowRef{
+					kind: rowLine, file: fi, hunk: hi, line: li,
+					oldNo: nums[li].oldNo, newNo: nums[li].newNo,
 				}
 				segs := 1
 				if wrap {

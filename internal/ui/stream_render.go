@@ -259,6 +259,9 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	if !ok || r.line < 0 || r.line >= len(h.Lines) {
 		return ""
 	}
+	if r.paired {
+		return m.renderSplitLine(h, meta, r, width, cursor)
+	}
 	l := h.Lines[r.line]
 
 	avail := width - meta.prefixWidth
@@ -311,6 +314,77 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	}
 	prefix := numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
 	return truncateStyled(prefix+content, width)
+}
+
+// renderSplitLine draws one side-by-side row: the old text on the left, the new
+// on the right, a rule between them.
+//
+// Each cell goes through splitCell, which is the same number + gutter + content
+// shape the unified renderer uses. Deliberately one function per cell rather than
+// two layouts sharing nothing: the gutter glyph, the number style and the cursor
+// treatment are design-system decisions, and two copies of them would drift the
+// moment either layout was touched.
+func (m Model) renderSplitLine(h diff.Hunk, meta hunkMeta, r rowRef, width int, cursor bool) string {
+	// Derived from the width this frame is being drawn at, not from one stored when
+	// the index was built: the host hands the viewer a width per frame and can
+	// narrow it without a rebuild, and a cell sized to a stale width leaves the
+	// divider off centre or pushes the right column past the border.
+	colWidth, oldPrefix, newPrefix := splitGeometry(width, meta.oldWidth, meta.newWidth)
+	left := m.splitCell(h, r.oldLine, r.oldNo, oldPrefix, colWidth, cursor)
+	right := m.splitCell(h, r.newLine, r.newNo, newPrefix, colWidth, cursor)
+
+	rule := styleLineNo.Render(sideBySideDivider)
+	if cursor {
+		rule = styleCursorLineNo.Render(sideBySideDivider)
+	}
+	return truncateStyled(left+rule+right, width)
+}
+
+// splitCell is one column of a paired row, padded to exactly colWidth.
+//
+// An empty cell — the left of an addition, the right of a deletion — is spaces,
+// not a repeat of the other side. Echoing the counterpart is what a unified diff
+// already does; the whole reason to split is that "nothing was here" and "this
+// is unchanged" are different facts and should not look alike.
+func (m Model) splitCell(h diff.Hunk, li, no, prefixWidth, colWidth int, cursor bool) string {
+	avail := max(1, colWidth-prefixWidth)
+	if li < 0 || li >= len(h.Lines) {
+		blank := strings.Repeat(" ", colWidth)
+		if cursor {
+			return styleCursorFill.Render(blank)
+		}
+		return blank
+	}
+	l := h.Lines[li]
+
+	text := l.Content
+	if m.hunkHScroll > 0 {
+		text = ansi.TruncateLeft(text, m.hunkHScroll, "")
+	}
+	// Cut to the cell before styling: measuring styled text counts escape bytes as
+	// columns, which is what pushes a row past its border.
+	text = ansi.Truncate(text, avail, "")
+	text += strings.Repeat(" ", max(0, avail-ansi.StringWidth(text)))
+
+	added, deleted, context := styleAdded, styleDeleted, styleContext
+	if cursor {
+		added, deleted, context = styleAddedCursor, styleDeletedCursor, styleContextCursor
+	}
+	body, gutterStyle := context, context
+	gutter := "│"
+	switch l.Type {
+	case '+':
+		body, gutterStyle, gutter = added, added, "+"
+	case '-':
+		body, gutterStyle, gutter = deleted, deleted, "-"
+	}
+
+	numberStyle := styleLineNo
+	if cursor {
+		numberStyle = styleCursorLineNo
+	}
+	numbers := fmt.Sprintf("%*s ", max(0, prefixWidth-3), lineNoText(no))
+	return numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ") + body.Render(text)
 }
 
 // A comment block is rendered once, not once per row of it and not once per
