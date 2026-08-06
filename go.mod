@@ -1,6 +1,6 @@
 module github.com/andrewcohen/awp
 
-go 1.23.0
+go 1.25.8
 
 require (
 	github.com/charmbracelet/bubbles v0.21.1-0.20250623103423-23b8fd6302d7
