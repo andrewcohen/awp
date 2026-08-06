@@ -1606,7 +1606,7 @@ func (m Model) renderFileList(width, height int) string {
 	for len(rows) < height {
 		rows = append(rows, "")
 	}
-	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
+	return panelBox(rows, width, height, border)
 }
 
 // renderTreeDir is a directory heading: structure rather than a destination, so

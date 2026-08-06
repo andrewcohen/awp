@@ -520,10 +520,10 @@ func (m Model) renderStreamPanel(width, height int) string {
 		border = styleFocusBorder
 	}
 	if len(m.filtered) == 0 {
-		return border.Width(width - 2).Height(height).Render(styleDim.Render(" No changes"))
+		return panelBox([]string{styleDim.Render(" No changes")}, width, height, border)
 	}
 	if len(m.stream.rows) == 0 {
-		return border.Width(width - 2).Height(height).Render(styleDim.Render(" rename-only, binary, or empty diff body"))
+		return panelBox([]string{styleDim.Render(" rename-only, binary, or empty diff body")}, width, height, border)
 	}
 
 	contentWidth := width - 4

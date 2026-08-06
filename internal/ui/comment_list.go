@@ -272,7 +272,7 @@ func (m Model) renderCommentList(width, height int) string {
 	for len(rows) < height {
 		rows = append(rows, "")
 	}
-	return border.Width(width - 2).Height(height).Render(strings.Join(rows, "\n"))
+	return panelBox(rows, width, height, border)
 }
 
 // commentEntryStyles picks an index row's hues: one for the location, one for
