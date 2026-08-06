@@ -294,6 +294,15 @@ JSON file in the review store, so a mistake (typo, wrong line, duplicate)
 can be corrected by editing or deleting that file. Prefer getting it right
 the first time; this is the repair path, not the workflow.
 
+**Read before you write.** `awp review list --json` also reports what GitHub
+knows about each finding that has been published: a `thread` object carrying
+`resolved`, `outdated`, where the thread sits *now*, and every message in the
+conversation other than the finding itself. On a re-review that is the first
+thing to read. A point the author already answered, or a thread that has been
+resolved, does not want raising again — and a `refused` reason on a finding
+says the publish would not take it where it is pointed, which is an anchor to
+repair rather than a finding to re-file.
+
 ### Out of scope
 
 - Do not send a test ping. The first real comment is your smoke test.
