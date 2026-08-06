@@ -438,24 +438,62 @@ func formatExistingComments(comments []github.PRComment) string {
 			if c.Line > 0 {
 				loc = fmt.Sprintf("%s:%d", c.Path, c.Line)
 			}
-			fmt.Fprintf(&b, "- inline @%s [%s]: %s\n", author, loc, oneLine(c.Body))
+			fmt.Fprintf(&b, "- inline @%s [%s]: %s\n", author, loc, bodyPreview(c.Body))
 		case "review":
-			fmt.Fprintf(&b, "- review @%s: %s\n", author, oneLine(c.Body))
+			fmt.Fprintf(&b, "- review @%s: %s\n", author, bodyPreview(c.Body))
 		default:
-			fmt.Fprintf(&b, "- comment @%s: %s\n", author, oneLine(c.Body))
+			fmt.Fprintf(&b, "- comment @%s: %s\n", author, bodyPreview(c.Body))
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// oneLine collapses a comment body to a single line so the comment list
-// stays scannable. Internal newlines become " / ".
-func oneLine(s string) string {
-	fields := strings.FieldsFunc(s, func(r rune) bool { return r == '\n' || r == '\r' })
-	for i, f := range fields {
-		fields[i] = strings.TrimSpace(f)
+// previewWidth is how much of a body a one-line listing gets, ellipsis
+// included. Wide enough for a finding's whole sentence, narrow enough that the
+// columns in front of it still fit on a line beside it.
+const previewWidth = 72
+
+// previewEllipsis marks a preview that left something out. One spelling for
+// both ways a body gets cut — more lines below, or a line too long — because a
+// reader only needs the one fact, that this is not all of it.
+const previewEllipsis = " …"
+
+// bodyPreview reduces a comment body to one scannable line: its first line with
+// anything on it, cut to previewWidth.
+//
+// Lossy on purpose, and it says so. This used to join every line with " / ",
+// which read fine while bodies were one-line findings and stopped the moment
+// proposals arrived — a nine-line body came back as a single ribbon wrapping
+// the terminal several times over. The ellipsis is the part that has to stay:
+// the publish preview lists bodies too, and a reviewer confirming a plan must
+// be able to tell a whole body from the top of one.
+//
+// Splits on \r as well as \n. A body is text we did not write, and a lone
+// carriage return inside a "single line" reprints over everything before it.
+func bodyPreview(s string) string {
+	first, elided := "", false
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		t := strings.TrimSpace(f)
+		if t == "" {
+			continue
+		}
+		if first == "" {
+			first = t
+			continue
+		}
+		elided = true
+		break
 	}
-	return strings.Join(fields, " / ")
+	// Counted in runes: a body can hold anything, and slicing bytes cuts a
+	// multi-byte character into garbage the terminal renders as a replacement box.
+	if r := []rune(first); len(r) > previewWidth {
+		first = strings.TrimRight(string(r[:previewWidth-len([]rune(previewEllipsis))]), " ")
+		elided = true
+	}
+	if elided {
+		return first + previewEllipsis
+	}
+	return first
 }
 
 // resolveDiffRange returns the commit-SHA range covering the PR's own commits:

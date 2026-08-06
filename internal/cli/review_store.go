@@ -455,7 +455,7 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 	}
 	for _, c := range comments {
 		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			c.ID, c.Kind.OrDefault(), c.State, proposalColumn(c), c.Anchor.Where(), oneLine(c.Body))
+			c.ID, c.Kind.OrDefault(), c.State, proposalColumn(c), c.Anchor.Where(), bodyPreview(c.Body))
 	}
 	return nil
 }
