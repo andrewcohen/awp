@@ -175,6 +175,25 @@ func (a Anchor) Where() string {
 	}
 }
 
+// WhereCovered is Where() for the two moments a reader is deciding *what a
+// remark covers* rather than reading a location they already chose: the compose
+// box's header, and the publish preview they confirm.
+//
+// It differs in one place. A file-scoped anchor reads "all of a.go" instead of
+// the bare path, because "a.go" and "a.go:12" differ by a detail the eye skips,
+// and these are the two screens where skipping it is expensive — one is where
+// you pick the scope, the other is where you agree to send it.
+//
+// Everywhere else keeps Where(): the comment index, the agent prompt and the
+// listing all name a location that was settled earlier, and the extra words
+// would be noise repeated on every row.
+func (a Anchor) WhereCovered() string {
+	if a.Scope() == FileScope {
+		return "all of " + a.Path
+	}
+	return a.Where()
+}
+
 // LineRange is the anchor's lines as a reader should see them: "12" or "12-18",
 // and empty when there is no line at all (a comment about the change as a
 // whole). One spelling for every surface that names a location — the compose

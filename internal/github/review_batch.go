@@ -160,6 +160,18 @@ func (c *Client) CreatePendingReview(prNodeID, commitOID string, threads []Draft
 // startSide is sent alongside startLine because GitHub defaults it to the side of the
 // pull request rather than to the side already given for the end, so a range on the
 // old side would otherwise lose its start.
+//
+// A thread with no line is a remark about the whole file, and the line is left out
+// rather than sent as zero — GitHub reads the absence, not a sentinel. It comes back
+// as subjectType FILE. This was verified against a real PR by staging it PENDING
+// rather than read off the schema: both fields are nullable there, but nullable in
+// the schema is not the same as accepted by the resolver, and GraphQL has no
+// subject_type field at all — that is REST's spelling for the same thing. The
+// alternative if it had refused was POST pulls/{n}/comments, which creates a review
+// entry of its own per call and would have undone what #93 fixed.
+//
+// side is still sent, and is also accepted without a line. It is what lets a remark
+// about a deleted file say so.
 func draftThreadVars(threads []DraftThread) []map[string]any {
 	out := make([]map[string]any, 0, len(threads))
 	for _, t := range threads {
@@ -169,9 +181,11 @@ func draftThreadVars(threads []DraftThread) []map[string]any {
 		}
 		v := map[string]any{
 			"path": t.Path,
-			"line": t.Line,
 			"side": side,
 			"body": t.Body,
+		}
+		if t.Line > 0 {
+			v["line"] = t.Line
 		}
 		if t.StartLine > 0 && t.StartLine < t.Line {
 			v["startLine"] = t.StartLine
