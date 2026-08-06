@@ -70,6 +70,19 @@ func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	// selected row rather than as a line of the thing you are typing, so the
 	// prompt is a plain space aligning the text with the box's header.
 	ta.Prompt = " "
+	// No cursorline band. textarea paints the line you are on with a background
+	// fill by default, which says nothing a blinking cursor is not already saying
+	// and paints a stripe across the box to say it. It was easy to miss in the
+	// stream's four rows and became the most obvious thing on the publish screen
+	// once that box grew to fill the pane.
+	//
+	// It is also a background fill outside the one place this app uses them: the
+	// diff's own cursorline earns its band by picking one row out of hundreds, and
+	// the design system reserves fills for exactly that kind of deliberate
+	// treatment. (Its default is a hard-coded 256-colour value too, which is the
+	// other thing the palette exists to keep out.)
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.SetWidth(editorAreaWidth(width))
 	ta.SetHeight(commentEditorHeight)
 	ta.CharLimit = 0

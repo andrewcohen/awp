@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/andrewcohen/awp/internal/review"
 )
 
 // composingModel is a viewer sitting on the publish screen at the given size.
@@ -151,5 +153,34 @@ func TestTheSummaryBoxUsesTheFullWidth(t *testing.T) {
 	// inner-2 and the border puts the two back.
 	if got := lipgloss.Width(rows[0]); got != inner {
 		t.Errorf("the box renders %d wide inside an overlay of %d", got, inner)
+	}
+}
+
+// No cursorline band in the compose box. textarea paints one by default, which
+// says nothing the blinking cursor is not already saying and paints a stripe
+// across the box to say it — invisible in the stream's four rows, and the most
+// obvious thing on the publish screen once the box fills the pane.
+//
+// Asserted on the style rather than on rendered output: lipgloss strips colour
+// with no TTY, so a background fill leaves no trace in a test's string.
+func TestTheComposeBoxHasNoCursorlineBand(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		e    commentEditor
+	}{
+		{"the stream's box", newCommentEditor(review.Anchor{Path: "a.go", LineHint: 1}, 80)},
+		{"the publish summary", composingModel(t, 120, 30).summaryEditor},
+	} {
+		for _, s := range []struct {
+			when  string
+			style lipgloss.Style
+		}{
+			{"focused", tc.e.area.FocusedStyle.CursorLine},
+			{"blurred", tc.e.area.BlurredStyle.CursorLine},
+		} {
+			if got := s.style.GetBackground(); got != lipgloss.TerminalColor(lipgloss.NoColor{}) {
+				t.Errorf("%s (%s) paints a cursorline background: %v", tc.name, s.when, got)
+			}
+		}
 	}
 }
