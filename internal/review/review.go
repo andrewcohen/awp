@@ -514,6 +514,92 @@ func (c Comment) PublishedThreadID() (string, bool) {
 // comment that is other people's words is none of the things one of ours is.
 func (c Comment) Mirrored() bool { return strings.HasPrefix(c.ID, remoteThreadPrefix) }
 
+// Origin says what a record is: whose words it holds, and how far they have got.
+//
+// Four kinds of thing coexist in one slice and one renderer, and almost every
+// question a surface asks about a comment — may I edit it, does it need the
+// unsent chip, which call publishes it, does the robot marker belong on it — is
+// really a question about which of the four it is. Each of those was deciding for
+// itself from some pair of fields, which is how the same record came to read as a
+// draft in one place and as public in another.
+type Origin int
+
+const (
+	// OriginLocal is ours and has not left: a finding, or a reply to one. The only
+	// kind the reviewer can still take back.
+	OriginLocal Origin = iota
+	// OriginReply is ours, written into someone else's GitHub conversation, and not
+	// posted yet. Its anchor is borrowed from that thread rather than chosen, which
+	// is why it cannot be read like a top-level remark.
+	OriginReply
+	// OriginPublished is ours and on GitHub — a finding a publish sent, or a reply
+	// that went out. The words are public, so this is a record of having said
+	// something rather than something still being said.
+	OriginPublished
+	// OriginMirrored is GitHub's own record, adapted into a Comment so one renderer
+	// covers both conversations. Other people's words: nothing here may change them.
+	OriginMirrored
+)
+
+func (o Origin) String() string {
+	switch o {
+	case OriginReply:
+		return "reply"
+	case OriginPublished:
+		return "published"
+	case OriginMirrored:
+		return "mirrored"
+	default:
+		return "local"
+	}
+}
+
+// Origin classifies a record. Exactly one answer, and the order the cases are
+// tried in is the whole of the definition:
+//
+// Mirrored first, because it is the only one that is not ours at all — a record
+// whose words we did not write is none of the other three no matter what its
+// other fields say.
+//
+// Then on-GitHub, before the reply check, because "has it left" outranks "what
+// was it answering". A reply that has been posted is Published: its words are
+// public, and treating it as a pending reply is exactly the mistake that let a
+// posted reply keep wearing the `unsent` chip.
+//
+// A comment answering one of *our* comments is Local. It is an exchange with the
+// agent that stays here, and nothing publishes it.
+func (c Comment) Origin() Origin {
+	switch {
+	case c.Mirrored():
+		return OriginMirrored
+	case c.OnGitHub():
+		return OriginPublished
+	case c.ThreadReply():
+		return OriginReply
+	default:
+		return OriginLocal
+	}
+}
+
+// Mutable reports whether the reviewer can still change this from here — revise
+// it with `i`, or delete it with `D`.
+//
+// One predicate for both keys, because it is one rule: you may change your own
+// words for as long as they have not left. Editing and deleting used to answer
+// separately, and both allowed a *published finding* to be changed while refusing
+// a *published reply* — the same situation, given opposite answers, because each
+// site spelled the question out of whichever fields were nearest. Neither edit
+// reaches GitHub: the words stay up, the mirror goes on drawing the original, and
+// the local record quietly stops matching what everyone else can read.
+func (c Comment) Mutable() bool {
+	switch c.Origin() {
+	case OriginLocal, OriginReply:
+		return true
+	default:
+		return false
+	}
+}
+
 // ThreadIDOf recovers the thread a mirrored comment belongs to. False for one of
 // ours.
 //

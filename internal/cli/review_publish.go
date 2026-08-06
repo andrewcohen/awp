@@ -85,24 +85,38 @@ func partitionForPublish(comments []review.Comment) publishBuckets {
 	var b publishBuckets
 	b.Inline = make([]review.Comment, 0, len(comments))
 	for _, c := range comments {
-		// Already on GitHub: skip rather than repost. This is what makes a retry
-		// after a partial failure safe.
-		if c.OnGitHub() {
-			b.Skipped++
-			continue
-		}
 		if strings.TrimSpace(c.Body) == "" {
 			b.Skipped++
 			continue
 		}
-		// A reply into a GitHub thread goes back into that thread, by its own mutation.
-		// Checked before the anchor rules below, because a reply carries the thread's
-		// anchor and would otherwise look exactly like a fresh inline comment — which is
-		// how it would land: a new top-level thread on the same line, divorced from the
-		// question it answers.
-		if c.ThreadReply() {
+		// What sends a comment is first of all what kind of record it is, so this asks
+		// that once rather than re-deriving it from a pair of fields per branch. The
+		// order the origins are tried in is review.Comment.Origin's, not this switch's,
+		// which is what keeps a posted reply from being routed as a pending one.
+		switch c.Origin() {
+		case review.OriginPublished:
+			// Already on GitHub: skip rather than repost. This is what makes a retry
+			// after a partial failure safe.
+			b.Skipped++
+			continue
+		case review.OriginMirrored:
+			// Someone else's words, and never in a store this reads from — but if one ever
+			// arrives, republishing it under the reviewer's account is the worst of the
+			// available mistakes.
+			b.Skipped++
+			continue
+		case review.OriginReply:
+			// A reply into a GitHub thread goes back into that thread, by its own mutation.
+			// Sorted before the anchor rules below, because a reply carries the thread's
+			// anchor and would otherwise look exactly like a fresh inline comment — which is
+			// how it would land: a new top-level thread on the same line, divorced from the
+			// question it answers.
 			b.Replies = append(b.Replies, c)
 			continue
+		case review.OriginLocal:
+			// Falls through to the scope rules below — named rather than left to a
+			// default, so a fifth origin is a case someone has to write instead of a
+			// record that silently gets published as a top-level finding.
 		}
 		// A reply to one of our own comments is a local conversation — you and the
 		// agent working a finding out between you (see review.Store.Reply). There is

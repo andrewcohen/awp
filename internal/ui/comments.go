@@ -66,6 +66,22 @@ func (m Model) localCommentAtCursor() (review.Comment, bool) {
 	return review.Comment{}, false
 }
 
+// onGitHubRefusal is why `i` and `D` say no to a record that has left.
+//
+// Both keys refuse the same set (review.Comment.Mutable) and want to say the same
+// thing about it, so they say it in one place — the two used to disagree about
+// which records were even refusable, and shared wording is the cheapest way to
+// keep them from drifting apart again. It names the record, because "that reply"
+// pointed at a finding reads as the wrong row and sends the reader hunting for a
+// reply they never wrote.
+func onGitHubRefusal(c review.Comment, verb string) string {
+	what := "comment"
+	if c.ThreadReply() {
+		what = "reply"
+	}
+	return fmt.Sprintf("that %s is on github — %s it there", what, verb)
+}
+
 // deleteCommentAtCursor removes the comment under the cursor.
 func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 	if _, isThread := m.threadAtCursor(); isThread {
@@ -77,11 +93,11 @@ func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 		m.status = "put the cursor on one of your comments to delete it"
 		return m, nil
 	}
-	if c.ThreadReply() && c.OnGitHub() {
-		// Deleting the record would not delete the reply, and the mirror would go on
-		// drawing it — so this would look like a delete that did nothing, while
+	if !c.Mutable() {
+		// Deleting the record would not delete anything on the PR, and the mirror would
+		// go on drawing it — so this would look like a delete that did nothing, while
 		// quietly losing our own record of having said it.
-		m.status = "that reply is on github — delete it there"
+		m.status = onGitHubRefusal(c, "delete")
 		return m, nil
 	}
 	if m.DeleteComment == nil {
@@ -1346,7 +1362,7 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	// one that did not go out, and it looks exactly like one that did. A reply
 	// nobody received, reading as received, is the failure this surface exists to
 	// prevent.
-	if c.ThreadReply() && !c.OnGitHub() {
+	if c.Origin() == review.OriginReply {
 		title += " · unsent"
 	}
 	// Before the state chip, because it is the more urgent fact: a reply that has
