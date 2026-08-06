@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/andrewcohen/awp/internal/prstatus"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // The agent-state rule, unchanged from the bool it replaced (deckui's
@@ -32,7 +33,14 @@ func TestAgentWantsReadsTheStatusAndTheUnreadFlag(t *testing.T) {
 		{"no status, unread", "", true, true, ReasonNotified},
 		{"exited never surfaces, unread or not", "exited", true, true, ReasonNone},
 		{"exited, read", "exited", false, true, ReasonNone},
-		{"error is treated like exited", "error", true, true, ReasonNone},
+		// Nothing writes "error" — report-status takes a closed set — so this is a
+		// status only a stale state file can hold. It used to be listed with
+		// "exited" here and dropped from the scope, while Classify counted it in the
+		// badge. It follows Classify now: an errored agent is not gone, and "the
+		// agent is gone, so there is nothing to respond to" is the whole argument
+		// for the exited case not applying to it.
+		{"an unrecognised status follows the unread flag, like any other", "error", true, true, ReasonNotified},
+		{"and stays quiet when it has been seen", "error", false, true, ReasonNone},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -41,6 +49,50 @@ func TestAgentWantsReadsTheStatusAndTheUnreadFlag(t *testing.T) {
 					c.status, c.unread, c.active, got, c.want)
 			}
 		})
+	}
+}
+
+// Scope membership and the tmux badge's count are two readings of one question,
+// so they must not be able to answer it differently.
+//
+// They could, and had: this rule listed "error" beside "exited" and dropped such
+// a workspace, while Classify — which the badge counts through — called it
+// notified. Nothing writes "error" today so the badge never actually said 3 over
+// a scope of 2, but a stale state file was all it would have taken, and the shape
+// of the mistake outlives the one word it happened to be about.
+//
+// Liveness is the single admitted difference: the badge reads state files and
+// cannot know whether a session is still up.
+func TestAgentWantsAgreesWithClassify(t *testing.T) {
+	// Every status the two rules have ever named between them, plus the shapes a
+	// state file can be in. One spelling of working and no more: both rules reach
+	// it through workspace.IsWorking, which is the only place allowed to know the
+	// others (see TestOnlyOnePlaceSpellsOutTheWorkingStatuses), so listing them
+	// here would prove nothing and re-open what that guard closed.
+	for _, status := range []string{"working", "waiting", "WAITING", "idle", "done", "exited", "error", "starting", ""} {
+		for _, unread := range []bool{true, false} {
+			want := map[workspace.Attention]Reason{
+				workspace.AttentionWorking:  ReasonWorking,
+				workspace.AttentionWaiting:  ReasonWaiting,
+				workspace.AttentionNotified: ReasonNotified,
+				workspace.AttentionNone:     ReasonNone,
+			}[workspace.Classify(status, unread)]
+			// active=true, so the one difference is out of play and any disagreement
+			// left is a real one.
+			if got := AgentWants(status, unread, true); got != want {
+				t.Errorf("AgentWants(%q, unread=%v) = %v but the badge counts it as %v",
+					status, unread, got, workspace.Classify(status, unread))
+			}
+		}
+	}
+	// The admitted difference, stated rather than left as a gap: a stored
+	// "working" whose session has died is in no scope, though the badge — which
+	// cannot see tmux — still counts it.
+	if got := AgentWants("working", false, false); got != ReasonNone {
+		t.Fatalf("expected a dead session out of the scope, got %v", got)
+	}
+	if got := workspace.Classify("working", false); got != workspace.AttentionWorking {
+		t.Fatalf("fixture is wrong: the badge should still count it, got %v", got)
 	}
 }
 
