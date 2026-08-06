@@ -166,6 +166,78 @@ func TestHidingThreadsBringsBackTheLocalRecord(t *testing.T) {
 	}
 }
 
+// Resolving a thread settles the conversation, and the local copy of the words in
+// it is the same conversation. Reconciling against the visible threads alone made
+// the resolved filter drop the mirror and, with it, the only thing suppressing our
+// copy — so resolving a point put it back on screen as a fresh-looking remark on
+// code that had just been agreed.
+func TestResolvingAThreadDoesNotBringBackTheLocalRecord(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{
+		publishedComment("c1", "PRRC_1", "a.go", 2, "beta", "this leaks"),
+	})
+	resolved := echoThread("T1", "PRRC_1", "a.go", 2, "this leaks")
+	resolved.Resolved = true
+	m.SetThreads([]review.Thread{resolved})
+
+	view := stripANSI(m.renderStreamPanel(90, 14))
+	if strings.Contains(view, "this leaks") {
+		t.Fatalf("expected the settled conversation gone, both copies of it:\n%s", view)
+	}
+	if len(m.commentIndex) != 0 {
+		t.Fatalf("expected nothing in the index, got %+v", m.commentIndex)
+	}
+	// And `T` is how it comes back — as one conversation, not two.
+	m.threadVisibility = ThreadsAll
+	m.rebuildStream()
+	view = stripANSI(m.renderStreamPanel(90, 14))
+	if n := strings.Count(view, "this leaks"); n != 1 {
+		t.Fatalf("expected the conversation once on `T` = all, got %d:\n%s", n, view)
+	}
+}
+
+// Our replies go down with the parent. They have no row to re-parent onto once the
+// mirrored thread is not drawn, and stranding them in the detached section would
+// report settled conversation as lost anchors.
+func TestRepliesGoDownWithAResolvedThread(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	parent := publishedComment("c1", "PRRC_1", "a.go", 2, "beta", "this leaks")
+	reply := review.Comment{
+		ID: "c2", Author: "agent", Body: "fixed in the next commit", State: review.Open,
+		ReplyTo: "c1",
+		Anchor:  review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 2, Text: "beta"},
+	}
+	m.SetComments([]review.Comment{parent, reply})
+	resolved := echoThread("T1", "PRRC_1", "a.go", 2, "this leaks")
+	resolved.Resolved = true
+	m.SetThreads([]review.Thread{resolved})
+
+	view := stripANSI(m.renderStreamPanel(90, 14))
+	for _, gone := range []string{"this leaks", "fixed in the next commit", "detached"} {
+		if strings.Contains(view, gone) {
+			t.Fatalf("expected %q hidden with the settled thread:\n%s", gone, view)
+		}
+	}
+}
+
+// An unresolved thread is unaffected: the mirror is drawn, the local copy defers to
+// it, and the reply moves onto it exactly as before.
+func TestUnresolvedThreadsStillSuppressTheLocalRecord(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{
+		publishedComment("c1", "PRRC_1", "a.go", 2, "beta", "this leaks"),
+	})
+	m.SetThreads([]review.Thread{echoThread("T1", "PRRC_1", "a.go", 2, "this leaks")})
+
+	view := stripANSI(m.renderStreamPanel(90, 14))
+	if n := strings.Count(view, "this leaks"); n != 1 {
+		t.Fatalf("expected the conversation once, got %d:\n%s", n, view)
+	}
+	if !strings.Contains(view, "github") {
+		t.Fatalf("expected GitHub's copy kept:\n%s", view)
+	}
+}
+
 // The review summary's publish record holds the *review* id, which is not a
 // comment id and can never match a thread's — so a summary is never mistaken for
 // an echo of one.
