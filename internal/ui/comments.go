@@ -452,6 +452,27 @@ func (m Model) hiddenThreads() int {
 	return len(m.threads) - len(m.visibleThreads())
 }
 
+// mirroredThreads is the thread set a published comment of ours is reconciled
+// against — every conversation the mirror holds, not only the drawn ones.
+//
+// Two different hidings meet here and they want opposite answers, which is why
+// this is not visibleThreads:
+//
+//   - `T` = none says "don't show me GitHub's side". Your own remark is not
+//     GitHub's side, so it comes back — there is no mirror to defer to.
+//   - the resolved filter says "this conversation is settled". Your remark is
+//     that conversation, so it stays down with it.
+//
+// Reconciling against the visible set alone answered both with the first, and
+// resolving a thread resurrected the local copy of it as a fresh-looking remark
+// on settled code.
+func (m Model) mirroredThreads() []review.Thread {
+	if m.threadVisibility == ThreadsNone {
+		return nil
+	}
+	return m.threads
+}
+
 // visibleThreads is the thread set the current visibility admits.
 func (m Model) visibleThreads() []review.Thread {
 	if m.threadVisibility == ThreadsNone || len(m.threads) == 0 {
@@ -797,10 +818,9 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 	all := make([]review.Comment, 0, len(m.comments))
 	threads := m.visibleThreads()
 	// A comment published from here is drawn as the mirrored thread it produced,
-	// not twice (see echoedByThread). Reconciled against the threads actually being
-	// shown rather than every mirrored one, so cycling `T` to none does not hide a
-	// remark of your own along with GitHub's conversation.
-	echoed := echoedByThread(m.comments, threads)
+	// not twice (see echoedByThread). Reconciled against every mirrored thread, not
+	// only the drawn ones — see mirroredThreads for why the two hidings differ.
+	echoed := echoedByThread(m.comments, m.mirroredThreads())
 	// deferred holds the replies of a local comment whose conversation is being
 	// drawn from the mirror, keyed by that thread's display id. They are ours alone
 	// — a reply is never published — so they move onto the thread rather than being
@@ -817,10 +837,14 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 		deferred[displayID] = append(deferred[displayID], c)
 	}
 	// shown is the conversations on screen, so a reply can ask whether the thread it
-	// answers is one of them.
+	// answers is one of them. drawn is the same set under the display ids echoed
+	// speaks in, so a published comment can ask whether the conversation it defers
+	// to is actually going to appear.
 	shown := make(map[string]bool, len(threads))
+	drawn := make(map[string]bool, len(threads))
 	for _, t := range threads {
 		shown[t.ID] = true
+		drawn[review.RemoteThreadID(t.ID)] = true
 	}
 	for _, th := range review.Threads(m.comments) {
 		if th.Parent.ThreadReply() {
@@ -844,6 +868,14 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 			// thing that should quietly disappear.
 		}
 		if displayID, ok := echoed[th.Parent.ID]; ok {
+			if !drawn[displayID] {
+				// The mirror holds this conversation but it is not being drawn — it is
+				// resolved, and the filter dropped it. Settled means settled: the local
+				// copy of the same words stays down with it, and so do our replies,
+				// which have no row to re-parent onto anyway. `T` brings the whole
+				// conversation back at once.
+				continue
+			}
 			for _, reply := range th.Replies {
 				onto(displayID, reply)
 			}
