@@ -33,17 +33,11 @@ type CommentSink func(review.Comment) error
 // CommentDeleter removes a comment by id.
 type CommentDeleter func(id string) error
 
-// remoteThreadPrefix marks a display comment adapted from a mirrored GitHub
-// thread (see threadAsComment). Those are GitHub's records — other people's
-// words — so they are excluded from anything that treats a comment as ours:
-// editing, deleting, and the robot marker.
-const remoteThreadPrefix = "thread-"
-
-// isRemoteThread reports whether a display comment came from GitHub rather than
-// from our own store.
-func isRemoteThread(c review.Comment) bool {
-	return strings.HasPrefix(c.ID, remoteThreadPrefix)
-}
+// A comment adapted from a mirrored GitHub thread is GitHub's record — other
+// people's words — so it is excluded from anything that treats a comment as ours:
+// editing, deleting, and the robot marker. `review.Comment.Mirrored` is the one
+// place that answers which it is, and review owns the id scheme that lets it (see
+// RemoteThreadID there).
 
 // localCommentAtCursor is the comment under the cursor, if it is one of ours.
 // Remote GitHub threads are excluded: they are GitHub's records, and editing or
@@ -60,7 +54,7 @@ func (m Model) localCommentAtCursor() (review.Comment, bool) {
 		return review.Comment{}, false
 	}
 	c := m.stream.comments[r.comment]
-	if isRemoteThread(c) {
+	if c.Mirrored() {
 		return review.Comment{}, false
 	}
 	// Resolve against the live set: the placed copy is a snapshot.
@@ -187,14 +181,9 @@ func (m Model) threadAtCursor() (review.Thread, bool) {
 // that needs the state itself — resolving, and the index's chips — comes back
 // through here rather than reading that label back apart.
 func (m Model) threadFor(commentID string) (review.Thread, bool) {
-	id := strings.TrimPrefix(commentID, remoteThreadPrefix)
-	if id == commentID {
+	id, ok := review.ThreadIDOf(commentID)
+	if !ok {
 		return review.Thread{}, false // a local comment, not a remote thread
-	}
-	// Any message of the conversation answers for the whole of it: resolving, folding
-	// and replying all act on the thread, so the cursor may sit on any of its rows.
-	if cut := strings.Index(id, threadMessageSep); cut >= 0 {
-		id = id[:cut]
 	}
 	for _, t := range m.threads {
 		if t.ID == id {
@@ -624,7 +613,7 @@ func (m Model) toggleThreadFold() (tea.Model, tea.Cmd) {
 func (m Model) threadAsComments(t review.Thread) []review.Comment {
 	folded := m.threadFolded(t)
 	parent := review.Comment{
-		ID:     remoteThreadPrefix + t.ID,
+		ID:     review.RemoteThreadID(t.ID),
 		Author: threadHeaderLabel(t, folded),
 		State:  review.Published,
 		Anchor: threadAnchor(t),
@@ -645,7 +634,7 @@ func (m Model) threadAsComments(t review.Thread) []review.Comment {
 			// Indexed off the thread, so every message has a stable id that still names
 			// the thread it belongs to — which is what threadFor reads back to answer
 			// "resolve what?" from any row of the conversation.
-			ID:      threadMessageID(t.ID, i+1),
+			ID:      review.RemoteMessageID(t.ID, i+1),
 			Author:  strings.TrimSpace(c.Author) + " · " + threadSource,
 			Body:    c.Body,
 			State:   review.Published,
@@ -655,16 +644,6 @@ func (m Model) threadAsComments(t review.Thread) []review.Comment {
 	}
 	return out
 }
-
-// threadMessageID is the display id of the nth message of a mirrored thread.
-func threadMessageID(threadID string, n int) string {
-	return remoteThreadPrefix + threadID + threadMessageSep + strconv.Itoa(n)
-}
-
-// threadMessageSep separates a thread's id from a message's index within it. A
-// character GitHub's node ids do not contain, so splitting on it cannot cut an id in
-// half.
-const threadMessageSep = "#"
 
 // threadAnchor is where a thread sits, in our own vocabulary.
 //
@@ -752,7 +731,7 @@ func echoedByThread(comments []review.Comment, threads []review.Thread) map[stri
 				continue
 			}
 			if localID, ok := published[tc.ID]; ok {
-				out[localID] = remoteThreadPrefix + t.ID
+				out[localID] = review.RemoteThreadID(t.ID)
 				break
 			}
 		}
@@ -821,9 +800,9 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 				continue
 			}
 			if shown[th.Parent.ReplyToThread] {
-				onto(remoteThreadPrefix+th.Parent.ReplyToThread, th.Parent)
+				onto(review.RemoteThreadID(th.Parent.ReplyToThread), th.Parent)
 				for _, reply := range th.Replies {
-					onto(remoteThreadPrefix+th.Parent.ReplyToThread, reply)
+					onto(review.RemoteThreadID(th.Parent.ReplyToThread), reply)
 				}
 				continue
 			}
@@ -1384,7 +1363,7 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	// definition — the conversation's own header already says `github`. Stamping it on
 	// each one repeated the least interesting fact about the card on every row of it
 	// (see review.Thread on keeping the two vocabularies apart).
-	if c.State != review.Open && !isRemoteThread(c) {
+	if c.State != review.Open && !c.Mirrored() {
 		title += " · " + string(c.State)
 	}
 	out = append(out, commentRow{text: truncate(title, max(1, width)), header: true})
@@ -1492,7 +1471,7 @@ func needsSanitising(r rune) bool { return isControl(r) && r != '\n' }
 // author ("github") is not AuthorHuman, so ByRobot alone would mark other
 // people's comments as an agent's.
 func robotAuthored(c review.Comment) bool {
-	return c.ByRobot() && !isRemoteThread(c)
+	return c.ByRobot() && !c.Mirrored()
 }
 
 // commentStyles picks the styling for a comment row.

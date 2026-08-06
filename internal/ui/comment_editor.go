@@ -323,7 +323,7 @@ func (m Model) editorAnchorRow(idx streamIndex) int {
 	// it as. Without this the box opened against the *line*, which put it above the
 	// conversation it was answering.
 	if target := m.editor.replyToThread; target != "" {
-		if row := lastRowOfThread(idx, remoteThreadPrefix+target); row >= 0 {
+		if row := lastRowOfThread(idx, review.RemoteThreadID(target)); row >= 0 {
 			return row
 		}
 	}
