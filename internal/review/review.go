@@ -226,6 +226,29 @@ type PublishRecord struct {
 	At       time.Time `json:"at"`
 }
 
+// RejectRecord is a publish run's refusal of one finding: why GitHub would not
+// take it where it is pointed, and when that was decided.
+//
+// A record rather than a State, deliberately. State is a position in a comment's
+// life — open, sent to the agent, addressed, published — and being refused is not
+// one: a finding that was handed to the agent and then refused by a publish is
+// still sent. Spending the field that records where a comment *is* to record what
+// happened to one attempt at moving it would lose the first fact to store the
+// second. This is the same shape as PublishRecord for the same reason, and the two
+// are exclusive by construction: nothing on GitHub was refused.
+//
+// Kept because deleting the finding was the only way to clear a blocked anchor.
+// On a real review that is what happened — a finding GitHub would not take was
+// deleted to unblock the run, and its body went with it.
+type RejectRecord struct {
+	// Reason is the preflight's own words, the same ones the refusal printed:
+	// "line 688 is not in the diff". Stored rather than recomputed, because what
+	// the reviewer needs is why *that run* refused, and the diff it was checked
+	// against has moved on by the time anyone reads this.
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
 // Kind is what a comment is asking for. It changes what the reader is expected
 // to do about it, which is worth distinguishing: a suggestion wants a change, a
 // question wants an answer, and a plain comment wants neither.
@@ -393,6 +416,23 @@ type Comment struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	Publish   *PublishRecord `json:"published,omitempty"`
+	// Reject is the last publish run that refused to send this, nil if none did.
+	// Set and cleared by the same pass, so a reason cannot outlive the anchor it
+	// was about.
+	Reject *RejectRecord `json:"rejected,omitempty"`
+}
+
+// Rejected reports whether a publish run refused to send this finding, and gives
+// the reason it gave.
+//
+// One predicate, because the alternative is what OnGitHub had to be written to
+// paper over: two fields meaning the same thing, ORed together at every call site
+// until a write drops one of them and the two halves start disagreeing.
+func (c Comment) Rejected() (string, bool) {
+	if c.Reject == nil {
+		return "", false
+	}
+	return c.Reject.Reason, true
 }
 
 // ThreadReply reports whether this comment answers a mirrored GitHub thread.
