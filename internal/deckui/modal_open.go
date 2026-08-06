@@ -3,9 +3,9 @@ package deckui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // openPicker is the project "open" picker (the `o` key): a fuzzy-filterable
@@ -45,7 +45,7 @@ func (p *openPicker) tickLoading(glyph string) {
 }
 
 func (p *openPicker) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		// Non-key messages (filter matches, cursor blink) drive the
 		// list's own async machinery so filtering applies as you type.

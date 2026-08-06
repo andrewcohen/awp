@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -52,7 +52,7 @@ func TestEnterInvokesOpenActionAndUpdatesStatus(t *testing.T) {
 		return nil
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected command")
 	}
@@ -69,12 +69,12 @@ func TestEnterInvokesOpenActionAndUpdatesStatus(t *testing.T) {
 
 func TestCursorMovesDownAndUp(t *testing.T) {
 	model := New([]Item{{WorkspaceName: "one"}, {WorkspaceName: "two"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m := updated.(Model)
 	if m.cursor != 1 {
 		t.Fatalf("expected cursor 1, got %d", m.cursor)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(Model)
 	if m.cursor != 0 {
 		t.Fatalf("expected cursor 0, got %d", m.cursor)
@@ -88,7 +88,7 @@ func TestShellKeyInvokesOpenWindowAction(t *testing.T) {
 		return nil
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, cmd := model.Update(runeKey("s"))
 	if cmd == nil {
 		t.Fatal("expected command")
 	}
@@ -114,7 +114,7 @@ func TestCIKeyInvokesCIAction(t *testing.T) {
 		return nil
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	updated, cmd := model.Update(runeKey("i"))
 	if cmd == nil {
 		t.Fatal("expected command")
 	}
@@ -443,7 +443,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 		}
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated, cmd := model.Update(runeKey("D"))
 	if cmd != nil {
 		t.Fatal("expected no command before confirmation")
 	}
@@ -455,7 +455,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 		t.Fatal("delete should not run before confirmation")
 	}
 
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, cmd = m.Update(runeKey("y"))
 	if cmd == nil {
 		t.Fatal("expected command after confirmation")
 	}
@@ -468,7 +468,7 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 	if !m.progressDone || m.progressDoneAction != ActionDelete {
 		t.Fatalf("expected progress done after delete, got done=%v action=%v", m.progressDone, m.progressDoneAction)
 	}
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("expected refresh command after esc dismisses delete progress")
 	}
@@ -493,9 +493,9 @@ func TestDeleteCanBeCancelled(t *testing.T) {
 		return nil
 	})
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated, _ := model.Update(runeKey("D"))
 	m := updated.(Model)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, cmd := m.Update(runeKey("n"))
 	if cmd != nil {
 		t.Fatal("expected no command when cancelling")
 	}
@@ -599,7 +599,7 @@ func TestInlineNewWorkspaceFormSubmitDispatches(t *testing.T) {
 	model.newWorkspaceForm.form.State = huh.StateCompleted
 
 	m := model
-	updatedModel, cmd := m.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyEnter})
+	updatedModel, cmd := m.dispatchNewWorkspaceForm(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updatedModel.(Model)
 	if m.newWorkspaceMode {
 		t.Fatal("submit should leave form mode")
@@ -632,7 +632,7 @@ func TestInlineNewWorkspaceFormCancelClearsState(t *testing.T) {
 	form, _ := newNewWorkspaceForm(NewWorkspaceInitial{}, "", "")
 	model.newWorkspaceForm = form
 
-	updated, _ := model.dispatchNewWorkspaceForm(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := model.dispatchNewWorkspaceForm(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m := updated.(Model)
 	if m.newWorkspaceMode {
 		t.Fatal("esc should leave form mode")
@@ -823,7 +823,7 @@ func TestNewWorkspaceFormUsesProvidedTrunk(t *testing.T) {
 
 func TestRenameKeyOpensModalOnWorkspaceRow(t *testing.T) {
 	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ := model.Update(runeKey("R"))
 	m := updated.(Model)
 	if !m.renameMode {
 		t.Fatal("expected rename modal to open")
@@ -838,7 +838,7 @@ func TestRenameKeyOpensModalOnWorkspaceRow(t *testing.T) {
 
 func TestRenameKeyRefusedOnDefaultWorkspace(t *testing.T) {
 	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "default"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ := model.Update(runeKey("R"))
 	m := updated.(Model)
 	if m.renameMode {
 		t.Fatal("expected rename modal not to open on default workspace")
@@ -858,7 +858,7 @@ func TestRenameFormSubmitInvokesHandler(t *testing.T) {
 		gotItem = req.Item
 		return nil
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ := model.Update(runeKey("R"))
 	m := updated.(Model)
 	*m.renameForm.nameVal = "qb"
 	// huh validates and transitions to StateCompleted on enter; the
@@ -866,7 +866,7 @@ func TestRenameFormSubmitInvokesHandler(t *testing.T) {
 	// (same pattern as the new-workspace form test).
 	m.renameForm.form.State = huh.StateCompleted
 
-	updated, cmd := m.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.dispatchRenameForm(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if m.renameMode {
 		t.Fatal("submit should leave rename mode")
@@ -896,10 +896,10 @@ func TestRenameFormSubmitInvokesHandler(t *testing.T) {
 
 func TestRenameFormCancelClearsState(t *testing.T) {
 	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ := model.Update(runeKey("R"))
 	m := updated.(Model)
 
-	updated, _ = m.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.dispatchRenameForm(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if m.renameMode {
 		t.Fatal("esc should leave rename mode")
@@ -918,7 +918,7 @@ func TestRenameFormRejectsEmptyAndUnchangedNames(t *testing.T) {
 		t.Fatalf("handler should not be invoked, got action %v", req.Action)
 		return nil
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	updated, _ := model.Update(runeKey("R"))
 	m := updated.(Model)
 
 	// Validate is attached to the first (and only) huh.Input field;
@@ -950,7 +950,7 @@ func TestRenameFormRejectsEmptyAndUnchangedNames(t *testing.T) {
 
 func TestSendPromptKeyOpensModalOnWorkspaceRow(t *testing.T) {
 	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	updated, _ := model.Update(runeKey("A"))
 	m := updated.(Model)
 	if !m.promptMode {
 		t.Fatal("expected prompt modal to open")
@@ -984,14 +984,14 @@ func TestSendPromptFormSubmitInvokesHandler(t *testing.T) {
 		gotItem = req.Item
 		return nil
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	updated, _ := model.Update(runeKey("A"))
 	m := updated.(Model)
 	*m.promptForm.promptVal = "refactor the foo"
 	// Short-circuit huh's keystream by setting state directly; same
 	// pattern as the new-workspace form test.
 	m.promptForm.form.State = huh.StateCompleted
 
-	updated, cmd := m.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.dispatchPromptForm(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if m.promptMode {
 		t.Fatal("submit should leave prompt mode")
@@ -1037,7 +1037,7 @@ func TestRepairPromptSubmitSendsPrompt(t *testing.T) {
 	*model.promptForm.promptVal = "please re-review"
 	model.promptForm.form.State = huh.StateCompleted
 
-	updated, cmd := model.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.dispatchPromptForm(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if updated.(Model).promptMode {
 		t.Fatal("submit should leave prompt mode")
 	}
@@ -1074,10 +1074,10 @@ func TestSendPromptFormRejectsEmpty(t *testing.T) {
 
 func TestSendPromptFormCancelClearsState(t *testing.T) {
 	model := New([]Item{{ProjectName: "agent-deck", WorkspaceName: "qa"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'A'}})
+	updated, _ := model.Update(runeKey("A"))
 	m := updated.(Model)
 
-	updated, _ = m.dispatchPromptForm(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.dispatchPromptForm(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if m.promptMode {
 		t.Fatal("esc should leave prompt mode")
@@ -1136,7 +1136,7 @@ func TestJobsOverlayOpensOnCapitalJ(t *testing.T) {
 	model := New(nil, nil).WithJobsListRefresher(func() []Job {
 		return []Job{{ID: "a", Title: "create · x", Status: JobRunning, StartedAt: time.Now()}}
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	updated, _ := model.Update(runeKey("J"))
 	m := updated.(Model)
 	if _, ok := m.active.(*jobsModal); !ok {
 		t.Fatal("expected J to open jobs overlay")
@@ -1146,7 +1146,7 @@ func TestJobsOverlayOpensOnCapitalJ(t *testing.T) {
 func TestJobsOverlayClosesOnEsc(t *testing.T) {
 	model := New(nil, nil)
 	model.active = newJobsModal(nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m := updated.(Model)
 	if m.active != nil {
 		t.Fatal("expected esc to close overlay")
@@ -1162,7 +1162,7 @@ func TestJobsOverlayCancelInvokesHandler(t *testing.T) {
 		})
 	model.jobs = []Job{{ID: "abc", Status: JobRunning}}
 	model.active = newJobsModal(model.jobs)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, cmd := model.Update(runeKey("c"))
 	if cmd == nil {
 		t.Fatal("expected cancel cmd")
 	}
@@ -1179,7 +1179,7 @@ func TestJobsOverlayCancelTerminalNoop(t *testing.T) {
 		WithJobCancelHandler(func(id string) error { calls++; return nil })
 	model.jobs = []Job{{ID: "abc", Status: JobDone}}
 	model.active = newJobsModal(model.jobs)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	updated, _ := model.Update(runeKey("c"))
 	m := updated.(Model)
 	if calls != 0 {
 		t.Fatal("cancel should be a no-op for terminal jobs")
@@ -1195,7 +1195,7 @@ func TestJobsOverlayDismissRequiresTerminal(t *testing.T) {
 		WithJobDismissHandler(func(id string) error { calls++; return nil })
 	model.jobs = []Job{{ID: "abc", Status: JobRunning}}
 	model.active = newJobsModal(model.jobs)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := model.Update(runeKey("x"))
 	m := updated.(Model)
 	if calls != 0 {
 		t.Fatal("dismiss should refuse running jobs")
@@ -1223,7 +1223,7 @@ func TestJobsOverlayDeleteAndRetryInvokesHandlerOnStaleWorkspace(t *testing.T) {
 		ErrorWorkspace: "pr-1-feat",
 	}}
 	model.active = newJobsModal(model.jobs)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated, cmd := model.Update(runeKey("D"))
 	if cmd == nil {
 		t.Fatal("expected D to dispatch a cmd for a stale-workspace job")
 	}
@@ -1247,7 +1247,7 @@ func TestJobsOverlayDeleteAndRetryRefusesNonStaleJob(t *testing.T) {
 		ErrorWorkspace: "pr-2-bar",
 	}}
 	model.active = newJobsModal(model.jobs)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated, cmd := model.Update(runeKey("D"))
 	if cmd != nil {
 		_ = cmd()
 	}
@@ -1277,7 +1277,7 @@ func TestJobsOverlayDeleteAndRetryRefusesWithoutErrorWorkspace(t *testing.T) {
 		// WorkspaceName here is exactly the bug we're avoiding.
 	}}
 	model.active = newJobsModal(model.jobs)
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	updated, cmd := model.Update(runeKey("D"))
 	if cmd != nil {
 		_ = cmd()
 	}
@@ -1327,7 +1327,7 @@ func TestFindTwoLevelJumpMovesCursor(t *testing.T) {
 		{ProjectName: "beta", WorkspaceName: "stg"},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
 	if !m.findMode || m.findStage != findStageProject {
 		t.Fatalf("expected find mode in project stage, got findMode=%v stage=%v", m.findMode, m.findStage)
@@ -1336,7 +1336,7 @@ func TestFindTwoLevelJumpMovesCursor(t *testing.T) {
 		t.Fatalf("expected unique-first-letter hint b for beta, got %q (map=%+v)", got, m.findProjectHints)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	updated, _ = m.Update(runeKey("b"))
 	m = updated.(Model)
 	if !m.findMode || m.findStage != findStageWorkspace || m.findProject != "beta" {
 		t.Fatalf("expected workspace stage for beta, got findMode=%v stage=%v project=%q", m.findMode, m.findStage, m.findProject)
@@ -1345,7 +1345,7 @@ func TestFindTwoLevelJumpMovesCursor(t *testing.T) {
 		t.Fatalf("expected row hint d for dev, got %q (map=%+v)", got, m.findRowHints)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, _ = m.Update(runeKey("d"))
 	m = updated.(Model)
 	if m.findMode {
 		t.Fatal("expected find mode to exit after row selection")
@@ -1361,10 +1361,10 @@ func TestFindAutoSelectsWhenProjectHasSingleWorkspace(t *testing.T) {
 		{ProjectName: "beta", WorkspaceName: "dev"},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	updated, _ = m.Update(runeKey("b"))
 	m = updated.(Model)
 	if m.findMode {
 		t.Fatal("expected find mode to exit when project has single workspace")
@@ -1384,9 +1384,9 @@ func TestFindHintsHideProjectLevelOnceInWorkspaceStage(t *testing.T) {
 		{ProjectName: "beta", WorkspaceName: "stg"},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	updated, _ = m.Update(runeKey("b"))
 	m = updated.(Model)
 
 	projectHints, pinHints, rowHints := m.findHints()
@@ -1411,7 +1411,7 @@ func TestFindProjectStageCollapsesToHeaders(t *testing.T) {
 		{ProjectName: "gamma", WorkspaceName: "y"},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
 	if m.findStage != findStageProject {
 		t.Fatalf("expected project stage, got %v", m.findStage)
@@ -1444,9 +1444,9 @@ func TestFindWorkspaceStageExpandsOnlySelected(t *testing.T) {
 		{ProjectName: "gamma", WorkspaceName: "y"},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	updated, _ = m.Update(runeKey("b"))
 	m = updated.(Model)
 	if m.findStage != findStageWorkspace || m.findProject != "beta" {
 		t.Fatalf("expected workspace stage for beta, got stage=%v project=%q", m.findStage, m.findProject)
@@ -1507,13 +1507,13 @@ func TestFindFocusTopRowTargetsExpandedHeader(t *testing.T) {
 		{ProjectName: "gamma", WorkspaceName: "y"},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
 	if got := m.findFocusTopRow(m.bodyRows(m.items())); got != 0 {
 		t.Fatalf("project stage should focus the top, got %d", got)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	updated, _ = m.Update(runeKey("g"))
 	m = updated.(Model)
 	if m.findProject != "gamma" {
 		t.Fatalf("expected gamma selected, got %q", m.findProject)
@@ -1543,7 +1543,7 @@ func twoKeyProjectFind(t *testing.T) (Model, string, []rune) {
 		{ProjectName: "aa", WorkspaceName: "two"},
 		{ProjectName: "aa", WorkspaceName: "tmp"},
 	}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
 	for _, name := range []string{"a", "aa"} {
 		if runes := []rune(m.findProjectHints[name]); len(runes) == 2 {
@@ -1561,7 +1561,7 @@ func TestFindTwoKeyHintResolvesInTwoKeystrokes(t *testing.T) {
 	}
 
 	// First keystroke: stay in project stage with the prefix pending.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[0]}})
+	updated, _ := m.Update(runeKey(string(runes[0])))
 	m = updated.(Model)
 	if m.findPendingPrefix != runes[0] {
 		t.Fatalf("expected pending prefix %q, got %q", string(runes[0]), m.findPendingPrefix)
@@ -1571,7 +1571,7 @@ func TestFindTwoKeyHintResolvesInTwoKeystrokes(t *testing.T) {
 	}
 
 	// Second keystroke: resolve to the colliding project's workspace stage.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[1]}})
+	updated, _ = m.Update(runeKey(string(runes[1])))
 	m = updated.(Model)
 	if m.findStage != findStageWorkspace || m.findProject != name {
 		t.Fatalf("expected workspace stage for %q, got stage=%v project=%q", name, m.findStage, m.findProject)
@@ -1584,13 +1584,13 @@ func TestFindTwoKeyHintResolvesInTwoKeystrokes(t *testing.T) {
 func TestFindEscClearsPendingPrefixWithoutExitingFind(t *testing.T) {
 	m, _, runes := twoKeyProjectFind(t)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[0]}})
+	updated, _ := m.Update(runeKey(string(runes[0])))
 	m = updated.(Model)
 	if m.findPendingPrefix != runes[0] {
 		t.Fatalf("expected pending prefix set, got %q", m.findPendingPrefix)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if !m.findMode {
 		t.Fatal("expected to remain in find mode after esc on pending prefix")
@@ -1603,13 +1603,13 @@ func TestFindEscClearsPendingPrefixWithoutExitingFind(t *testing.T) {
 func TestFindCancelWithQ(t *testing.T) {
 	model := New([]Item{{ProjectName: "repo-a", WorkspaceName: "one"}}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ := model.Update(runeKey("f"))
 	m := updated.(Model)
 	if !m.findMode {
 		t.Fatal("expected find mode")
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, _ = m.Update(runeKey("q"))
 	m = updated.(Model)
 	if m.findMode {
 		t.Fatal("expected find mode cancelled")
@@ -1622,13 +1622,13 @@ func TestFindCancelWithQ(t *testing.T) {
 func TestFindKeyIgnoredWhileFiltering(t *testing.T) {
 	model := New([]Item{{ProjectName: "repo-a", WorkspaceName: "one"}}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	updated, _ := model.Update(runeKey("/"))
 	m := updated.(Model)
 	if !m.filtering {
 		t.Fatal("expected filtering mode")
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ = m.Update(runeKey("f"))
 	m = updated.(Model)
 	if m.findMode {
 		t.Fatal("did not expect find mode while filtering")
@@ -1712,7 +1712,7 @@ func TestAssignHintsNonLetterFirstUsesNameLetters(t *testing.T) {
 
 func TestViewShowsEmptyState(t *testing.T) {
 	model := New(nil, nil)
-	view := model.View()
+	view := model.render()
 	if view == "" {
 		t.Fatal("expected non-empty view")
 	}
@@ -1727,7 +1727,7 @@ func TestReviewModeEntersOnR(t *testing.T) {
 		}
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, cmd := model.Update(runeKey("r"))
 	m := updated.(Model)
 	rp, ok := m.active.(*reviewPicker)
 	if !ok || !rp.loading {
@@ -1771,12 +1771,12 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 		}
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, cmd := model.Update(runeKey("r"))
 	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 
 	// move down to second PR
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m := updated.(Model)
 	rp, ok := m.active.(*reviewPicker)
 	if !ok {
@@ -1787,7 +1787,7 @@ func TestReviewModeSelectDispatchesAction(t *testing.T) {
 	}
 
 	// press enter
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected command on enter")
 	}
@@ -1813,11 +1813,11 @@ func TestReviewModeCancelWithEsc(t *testing.T) {
 		}
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, cmd := model.Update(runeKey("r"))
 	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 
-	updated, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = updated.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m := updated.(Model)
 	if m.active != nil {
 		t.Fatal("expected review picker cancelled")
@@ -1829,7 +1829,7 @@ func TestReviewModeCancelWithEsc(t *testing.T) {
 
 func TestReviewModeNoPRsFetcher(t *testing.T) {
 	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, _ := model.Update(runeKey("r"))
 	m := updated.(Model)
 	if m.active != nil {
 		t.Fatal("expected no review picker without fetcher")
@@ -1846,7 +1846,7 @@ func TestReviewModeEmptyPRs(t *testing.T) {
 		}
 	})
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, cmd := model.Update(runeKey("r"))
 	msg := execCmd(t, cmd)
 	updated, _ = updated.Update(msg)
 	m := updated.(Model)
@@ -1868,13 +1868,13 @@ func TestActionModeDispatchesOnAlias(t *testing.T) {
 		{Name: "lint", Command: "pnpm lint", Alias: "l"},
 	})
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := model.Update(runeKey("x"))
 	m := updated.(Model)
 	if !m.actionMode {
 		t.Fatal("expected action mode")
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, cmd := m.Update(runeKey("d"))
 	if cmd == nil {
 		t.Fatal("expected command on alias press")
 	}
@@ -1897,13 +1897,13 @@ func TestActionModeCancelWithEsc(t *testing.T) {
 		{Name: "dev", Command: "pnpm dev", Alias: "d"},
 	})
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := model.Update(runeKey("x"))
 	m := updated.(Model)
 	if !m.actionMode {
 		t.Fatal("expected action mode")
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if m.actionMode {
 		t.Fatal("expected action mode cancelled")
@@ -1918,9 +1918,9 @@ func TestActionModeUnknownAlias(t *testing.T) {
 		{Name: "dev", Command: "pnpm dev", Alias: "d"},
 	})
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := model.Update(runeKey("x"))
 	m := updated.(Model)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	updated, cmd := m.Update(runeKey("z"))
 	if cmd != nil {
 		t.Fatal("expected no command for unknown alias")
 	}
@@ -1935,7 +1935,7 @@ func TestActionModeUnknownAlias(t *testing.T) {
 
 func TestActionModeNoActionsConfigured(t *testing.T) {
 	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := model.Update(runeKey("x"))
 	m := updated.(Model)
 	if m.actionMode {
 		t.Fatal("expected no action mode without actions")
@@ -1997,7 +1997,7 @@ func TestProgressEventDoneWithErrorMarksRunningStepError(t *testing.T) {
 		t.Fatalf("expected error state on running step, got %v", m.progressSteps[0].State)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if m.progressMode {
 		t.Fatal("expected progress mode dismissed after esc")
@@ -2007,7 +2007,7 @@ func TestProgressEventDoneWithErrorMarksRunningStepError(t *testing.T) {
 func TestStartActionEntersProgressMode(t *testing.T) {
 	// Summon is a quick action: no progress UI, just busy.
 	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected cmd on enter")
 	}
@@ -2022,8 +2022,8 @@ func TestStartActionEntersProgressMode(t *testing.T) {
 
 func TestDeleteEntersProgressMode(t *testing.T) {
 	model := New([]Item{{ProjectName: "repo", WorkspaceName: "ws"}}, func(ActionRequest) error { return nil })
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, _ := model.Update(runeKey("D"))
+	updated, _ = updated.(Model).Update(runeKey("y"))
 	m := updated.(Model)
 	if !m.progressMode {
 		t.Fatal("expected progress mode for delete")
@@ -2101,7 +2101,7 @@ func TestDKeyOpensURLWhenAvailable(t *testing.T) {
 	item := Item{ProjectName: "awp", WorkspaceName: "x", SessionName: "awp/x"}
 	model := New([]Item{item}, nil)
 	// No URL discovered yet → status surfaces the empty case, no crash.
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	updated, _ := model.Update(runeKey("d"))
 	m := updated.(Model)
 	if !strings.Contains(m.status, "no dev url") {
 		t.Fatalf("expected 'no dev url' status, got %q", m.status)
@@ -2576,8 +2576,8 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 		"/r": {"feat": {Number: 99, Title: "Add merge key", State: PRStateOpen}},
 	}, nil)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("m"))
 	m := updated.(Model)
 	cm, ok := m.active.(*confirmMergeModal)
 	if !ok {
@@ -2597,7 +2597,7 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	// y confirms → enters the progress modal and dispatches ActionMergePR
 	// with the PR number as Arg. Draining the batch runs the handler (the
 	// dispatch cmd invokes it synchronously).
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, cmd := m.Update(runeKey("y"))
 	got := updated.(Model)
 	if got.active != nil {
 		t.Fatalf("expected confirm-merge modal cleared after y")
@@ -2655,9 +2655,9 @@ func TestPRMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
 		WithPRStatusSeed(map[string]map[string]PRStatus{
 			"/r": {"feat": {Number: 7, State: PRStateOpen}},
 		}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("m"))
+	updated, _ = updated.(Model).Update(runeKey("n"))
 	m := updated.(Model)
 	if m.active != nil {
 		t.Fatalf("expected confirm-merge modal cleared after n")
@@ -2673,8 +2673,8 @@ func TestPRMenuMergeKeyNoopsWhenPRNotOpen(t *testing.T) {
 		WithPRStatusSeed(map[string]map[string]PRStatus{
 			"/r": {"feat": {Number: 7, State: PRStateMerged}},
 		}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("m"))
 	m := updated.(Model)
 	if m.active != nil {
 		t.Fatalf("expected no merge confirm for a non-open PR")
@@ -2693,11 +2693,11 @@ func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 			Number: 42, URL: "https://example/pr/42", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty,
 		}},
 	}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ := model.Update(runeKey("p"))
 	if _, ok := updated.(Model).active.(prMenuModal); !ok {
 		t.Fatalf("expected pr menu after p")
 	}
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, _ = updated.(Model).Update(runeKey("r"))
 	m := updated.(Model)
 	if _, ok := m.active.(prMenuModal); ok {
 		t.Fatalf("expected pr menu dismissed after r")
@@ -2726,8 +2726,8 @@ func TestPRMenuRepairKeyNoopsWhenNothingToRepair(t *testing.T) {
 		WithPRStatusSeed(map[string]map[string]PRStatus{
 			"/r": {"feat": {Number: 42, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}},
 		}, nil)
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("r"))
 	if calls != 0 {
 		t.Fatalf("handler should not run; got calls=%d", calls)
 	}
@@ -2743,15 +2743,15 @@ func TestPRMenuSetKeyPersistsNumber(t *testing.T) {
 		gotPR = n
 		return nil
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("s"))
 	m := updated.(Model)
 	pm, ok := m.active.(*prNumberModal)
 	if !ok {
 		t.Fatalf("expected pr-number modal after p s")
 	}
 	pm.input.SetValue("123")
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if gotPR != 123 {
 		t.Fatalf("expected handler called with 123, got %d", gotPR)
 	}
@@ -2777,15 +2777,15 @@ func TestPRMenuSetKeyForcesPRStatusRefetch(t *testing.T) {
 	fetched = 0
 	fetchedRepos = nil
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("s"))
 	m := updated.(Model)
 	pm, ok := m.active.(*prNumberModal)
 	if !ok {
 		t.Fatalf("expected pr-number modal after p s")
 	}
 	pm.input.SetValue("77")
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	_ = updated
 	if cmd == nil {
 		t.Fatalf("expected cmd from override save")
@@ -2826,15 +2826,15 @@ func TestPRMenuSetKeyBlankClearsOverride(t *testing.T) {
 		gotPR = n
 		return nil
 	})
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	updated, _ := model.Update(runeKey("p"))
+	updated, _ = updated.(Model).Update(runeKey("s"))
 	m := updated.(Model)
 	pm, ok := m.active.(*prNumberModal)
 	if !ok {
 		t.Fatalf("expected pr-number modal after p s")
 	}
 	pm.input.SetValue("")
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if gotPR != 0 {
 		t.Fatalf("expected blank submit to call handler with 0, got %d", gotPR)
 	}

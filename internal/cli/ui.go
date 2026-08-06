@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/deckui"
@@ -261,7 +261,7 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 	// One wiring function shared with the deck (deckui.ApplyCommentStore), so a
 	// seam cannot be present in one surface and quietly missing in the other.
 	deckui.ApplyCommentStore(&model, subject, reviewStoreWithSend(runner, tmux.New(runner), svc))
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
 }

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/github"
@@ -206,7 +206,7 @@ func (m *Model) endPublish() {
 }
 
 // handlePublishKey drives the two screens.
-func (m Model) handlePublishKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handlePublishKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	if key == "ctrl+c" {
 		return m, tea.Quit
@@ -263,7 +263,7 @@ func (m Model) publishSummaryText() string {
 // cycles a comment's kind in the box this one is built from. The kind itself is not
 // offered here: a review body is the review's body, and every other kind would be a
 // claim about a remark that has no line to make it about.
-func (m Model) handlePublishComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handlePublishComposeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
 		// Intercepted ahead of the editor, which would otherwise cycle the kind.
@@ -343,7 +343,7 @@ func (m Model) publishVerdict() string {
 // scrollPublishReport lets a long plan or report be read. It is a list of lines
 // rather than a viewport because it is at most a few dozen and only exists while
 // the overlay is up.
-func (m *Model) scrollPublishReport(msg tea.KeyMsg) tea.Cmd {
+func (m *Model) scrollPublishReport(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "j", "down":
 		m.publishScroll++
@@ -473,7 +473,7 @@ func (m Model) renderPublishOverlay(width, height int) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(charm.Muted)).
 		Padding(0, 2).
-		Width(max(1, width-2)).
+		Width(max(1, width)).
 		Height(height).
 		Render(strings.Join(append(head, rows...), "\n"))
 }
@@ -518,7 +518,7 @@ func (m Model) summaryBoxView(width int) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(charm.Muted)).
-		Width(max(20, width-2)).
+		Width(max(20+charm.BorderCells, width)).
 		Render(lipgloss.JoinVertical(lipgloss.Left,
 			styleDim.Render(truncate(head, inner)),
 			m.summaryEditor.area.View(),

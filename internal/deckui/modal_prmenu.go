@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // prMenuModal is the PR action chord (the `p` key): a keys-only menu
@@ -47,7 +47,7 @@ func prNumberForAction(m *Model, what string) (Item, int, bool) {
 }
 
 func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return nil
 	}

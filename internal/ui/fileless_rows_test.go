@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -88,17 +88,17 @@ func TestNoKeyPanicsOnAFilelessRow(t *testing.T) {
 		})
 	}
 	// The half-page keys are how you get there in the first place.
-	for _, k := range []tea.KeyType{tea.KeyCtrlD, tea.KeyCtrlU} {
+	for _, k := range []rune{'d', 'u'} {
 		m := detachedModel(t)
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					t.Fatalf("%v panicked: %v", k, r)
+					t.Fatalf("ctrl+%c panicked: %v", k, r)
 				}
 			}()
-			updated, _ := m.Update(tea.KeyMsg{Type: k})
+			updated, _ := m.Update(tea.KeyPressMsg{Code: k, Mod: tea.ModCtrl})
 			m = updated.(Model)
-			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+			updated, _ = m.Update(runeKey("h"))
 			_ = updated
 		}()
 	}
@@ -109,7 +109,7 @@ func TestNoKeyPanicsOnAFilelessRow(t *testing.T) {
 func TestPanningAtTheBottomOfTheStreamDoesNotCloseTheDeck(t *testing.T) {
 	m := detachedModel(t)
 	for i := 0; i < 20; i++ {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+		updated, _ := m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 		m = updated.(Model)
 	}
 	for _, key := range []string{"h", "l", "$", "0"} {

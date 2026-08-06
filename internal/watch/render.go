@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/andrewcohen/awp/internal/charm"
-	"github.com/charmbracelet/lipgloss"
 )
 
 var (

@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/deckdata"
@@ -134,7 +134,7 @@ func (m MiniModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.findMode {
 			return m.updateFind(msg)
 		}
@@ -164,12 +164,12 @@ func (m MiniModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m MiniModel) updateFind(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+func (m MiniModel) updateFind(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c":
 		m.cancelFind()
 		return m, nil
-	case tea.KeyEnter:
+	case "enter":
 		m.cancelFind()
 		if len(m.rows) == 0 {
 			return m, tea.Quit
@@ -178,10 +178,11 @@ func (m MiniModel) updateFind(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chosen = &row
 		return m, tea.Quit
 	}
-	if len(msg.Runes) != 1 {
+	typed := []rune(msg.Text)
+	if len(typed) != 1 {
 		return m, nil
 	}
-	if idx, ok := findHintStep(msg.Runes[0], m.findLookup, m.findPrefix, &m.findPending); ok {
+	if idx, ok := findHintStep(typed[0], m.findLookup, m.findPrefix, &m.findPending); ok {
 		m.list.Select(idx)
 		m.cancelFind()
 	}
@@ -197,7 +198,14 @@ func (m *MiniModel) cancelFind() {
 	m.list.SetDelegate(miniItemDelegate{})
 }
 
-func (m MiniModel) View() string {
+// View satisfies tea.Model. This program runs inline rather than in the
+// alt-screen, so the view declares no terminal features — the content
+// comes from render, which stays a plain string for tests.
+func (m MiniModel) View() tea.View {
+	return tea.NewView(m.render())
+}
+
+func (m MiniModel) render() string {
 	title := lipgloss.NewStyle().Bold(true).Render("awp mini-deck")
 	subtitle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
 		Render("active or notified workspaces")

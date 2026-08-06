@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/ui"
@@ -37,7 +37,7 @@ func diffModalModel(t *testing.T, load DiffLoader) Model {
 }
 
 func pressKey(m Model, s string) (Model, tea.Cmd) {
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+	updated, cmd := m.Update(runeKey(s))
 	return updated.(Model), cmd
 }
 
@@ -116,9 +116,9 @@ func TestDiffModalClosesOnEscAndQ(t *testing.T) {
 		}
 		var updated tea.Model
 		if key == "esc" {
-			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 		} else {
-			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+			updated, _ = m.Update(runeKey(key))
 		}
 		if got := updated.(Model).active; got != nil {
 			t.Fatalf("%s: expected modal closed, got %T", key, got)
@@ -153,7 +153,7 @@ func TestDiffModalViewFitsViewport(t *testing.T) {
 	// Run the load command and feed the result back, so the modal renders
 	// a populated diff rather than the loading state.
 	m = drain(m, cmd)
-	view := m.View()
+	view := m.render()
 	if h := lipgloss.Height(view); h > m.height {
 		t.Fatalf("view is %d rows, viewport is %d", h, m.height)
 	}
@@ -187,7 +187,7 @@ func TestDiffModalLeavesOneRowAboveTheFooter(t *testing.T) {
 	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
-	view := m.View()
+	view := m.render()
 	if got := blankRowsAboveFooter(view); got != 1 {
 		t.Fatalf("expected 1 blank row above the footer, got %d:\n%s", got, view)
 	}

@@ -3,9 +3,9 @@ package deckui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // bookmarkPicker is the fuzzy bookmark picker shared by two flows,
@@ -67,7 +67,7 @@ func (p *bookmarkPicker) cancelToForm(m *Model) tea.Cmd {
 }
 
 func (p *bookmarkPicker) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		var cmd tea.Cmd
 		p.list, cmd = p.list.Update(msg)

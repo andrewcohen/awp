@@ -85,7 +85,7 @@ func TestHelpScrollsWhenItDoesNotFit(t *testing.T) {
 	}
 	top := stripANSI(m.Body(100, 12))
 	m = press(m, "ctrl+d")
-	if m.helpVP.YOffset == 0 {
+	if m.helpVP.YOffset() == 0 {
 		t.Fatal("expected ctrl+d to scroll the reference")
 	}
 	if scrolled := stripANSI(m.Body(100, 12)); scrolled == top {
@@ -95,8 +95,8 @@ func TestHelpScrollsWhenItDoesNotFit(t *testing.T) {
 	// for wherever they were in it last time.
 	m = press(m, "esc")
 	m = press(m, "?")
-	if m.helpVP.YOffset != 0 {
-		t.Fatalf("expected a fresh open to start at the top, got offset %d", m.helpVP.YOffset)
+	if m.helpVP.YOffset() != 0 {
+		t.Fatalf("expected a fresh open to start at the top, got offset %d", m.helpVP.YOffset())
 	}
 }
 
@@ -106,12 +106,12 @@ func TestHelpKeepsItsScrollAcrossAResize(t *testing.T) {
 	m.SetSize(100, 12)
 	m = press(m, "?")
 	m = press(m, "ctrl+d")
-	at := m.helpVP.YOffset
+	at := m.helpVP.YOffset()
 	if at == 0 {
 		t.Fatal("fixture is wrong: expected to have scrolled")
 	}
 	m.SetSize(90, 12)
-	if got := m.helpVP.YOffset; got != at {
+	if got := m.helpVP.YOffset(); got != at {
 		t.Fatalf("resize moved the reader from offset %d to %d", at, got)
 	}
 }

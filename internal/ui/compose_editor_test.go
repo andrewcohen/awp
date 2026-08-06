@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -21,7 +21,7 @@ func TestCtrlGAsksForTheEditor(t *testing.T) {
 		t.Fatal("fixture is wrong: expected the compose box open")
 	}
 	before := m.editor.area.Value()
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ctrl+g")})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
 	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("expected ctrl+g to return a command")

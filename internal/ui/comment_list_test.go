@@ -5,8 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -180,7 +179,7 @@ func TestIndexKeysSeek(t *testing.T) {
 	})
 	m.focus = FocusComments
 	before := m.cursorRow
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	updated, _ := m.Update(runeKey("j"))
 	got := updated.(Model)
 	if got.commentsCursor != 1 {
 		t.Fatalf("expected the index cursor to advance, got %d", got.commentsCursor)
@@ -253,7 +252,7 @@ func TestDeleteFromTheIndexRemovesTheSelection(t *testing.T) {
 	m.focus = FocusFiles
 	m.cycleFocus(true) // into the index, on c1
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	updated, _ := m.Update(runeKey("D"))
 	m = updated.(Model)
 	if len(deleted) != 1 || deleted[0] != "c1" {
 		t.Fatalf("expected c1 deleted through the store, got %v", deleted)
@@ -277,7 +276,7 @@ func TestDeletingTheLastCommentFromTheIndexReleasesFocus(t *testing.T) {
 	m.focus = FocusFiles
 	m.cycleFocus(true)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	updated, _ := m.Update(runeKey("D"))
 	m = updated.(Model)
 	if len(m.commentIndex) != 0 {
 		t.Fatalf("expected an empty index, got %+v", m.commentIndex)

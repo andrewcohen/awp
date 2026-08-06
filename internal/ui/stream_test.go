@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/diff"
@@ -40,7 +40,7 @@ func twoFiles() []diff.FileDiff {
 }
 
 func press(m Model, s string) Model {
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+	updated, _ := m.Update(runeKey(s))
 	return updated.(Model)
 }
 
@@ -575,7 +575,7 @@ func TestWrapWidthAccountsForTheCursorPrefix(t *testing.T) {
 // Paging moves the cursor, not just the viewport.
 func TestPagingMovesTheCursor(t *testing.T) {
 	m := streamModel(t, twoFiles()...)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 	m = updated.(Model)
 	if m.cursorRow == 0 {
 		t.Fatal("expected ctrl+d to move the cursor")

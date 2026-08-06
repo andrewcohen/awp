@@ -4,14 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
-
-// keyRunes presses a single-rune key (letters, including shifted
-// uppercase, arrive as KeyRunes with one rune).
-func keyRunes(r rune) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
-}
 
 func pinnedModel() Model {
 	return New([]Item{
@@ -100,12 +94,12 @@ func chordPin(t *testing.T, m Model, second rune) (string, Model) {
 		return nil
 	}).WithRefresher(func() tea.Cmd { return nil })
 
-	updated, _ := m.Update(keyRunes('m'))
+	updated, _ := m.Update(runeKey(string('m')))
 	m = updated.(Model)
 	if !m.pinChordMode {
 		t.Fatal("expected m chord to be pending after m")
 	}
-	updated, _ = m.Update(keyRunes(second))
+	updated, _ = m.Update(runeKey(string(second)))
 	m = updated.(Model)
 	if m.pinChordMode {
 		t.Fatal("expected m chord to clear after the second key")
@@ -174,9 +168,9 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 		savedAlias = alias
 		return nil
 	})
-	updated, _ := m.Update(keyRunes('m'))
+	updated, _ := m.Update(runeKey(string('m')))
 	m = updated.(Model)
-	updated, _ = m.Update(keyRunes('R'))
+	updated, _ = m.Update(runeKey(string('R')))
 	m = updated.(Model)
 	am, ok := m.active.(*pinAliasModal)
 	if !ok {
@@ -187,10 +181,10 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 	}
 	// Type "auth" and submit.
 	for _, r := range "auth" {
-		updated, _ = m.Update(keyRunes(r))
+		updated, _ = m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if m.active != nil {
 		t.Fatal("expected alias mode to close on enter")
@@ -206,9 +200,9 @@ func TestPinChordRenameOpensAliasInput(t *testing.T) {
 func TestPinChordRenameNoOpWhenUnpinned(t *testing.T) {
 	m := pinnedModel()
 	m.cursor = 3 // the unpinned "main" row after the pinned-first sort
-	updated, _ := m.Update(keyRunes('m'))
+	updated, _ := m.Update(runeKey(string('m')))
 	m = updated.(Model)
-	updated, _ = m.Update(keyRunes('R'))
+	updated, _ = m.Update(runeKey(string('R')))
 	m = updated.(Model)
 	if _, ok := m.active.(*pinAliasModal); ok {
 		t.Fatal("mR on an unpinned row should not open the alias input")
@@ -245,7 +239,7 @@ func findModel() Model {
 }
 
 func TestFindHintsIncludePinnedRegisters(t *testing.T) {
-	updated, _ := findModel().Update(keyRunes('f'))
+	updated, _ := findModel().Update(runeKey(string('f')))
 	m := updated.(Model)
 	if m.findStage != findStageProject {
 		t.Fatalf("expected project stage, got %v", m.findStage)
@@ -266,9 +260,9 @@ func TestFindHintsIncludePinnedRegisters(t *testing.T) {
 }
 
 func TestFindSelectingRegisterScopesToRegister(t *testing.T) {
-	updated, _ := findModel().Update(keyRunes('f'))
+	updated, _ := findModel().Update(runeKey(string('f')))
 	m := updated.(Model)
-	updated, _ = m.Update(keyRunes('z'))
+	updated, _ = m.Update(runeKey(string('z')))
 	m = updated.(Model)
 	if m.findStage != findStageWorkspace || m.findPinGroup != "z" || m.findProject != "" {
 		t.Fatalf("expected workspace stage scoped to register z, got stage=%v pin=%q project=%q", m.findStage, m.findPinGroup, m.findProject)
@@ -278,7 +272,7 @@ func TestFindSelectingRegisterScopesToRegister(t *testing.T) {
 		t.Fatalf("expected 2 row hints for register z, got %d (%+v)", len(m.findRowHints), m.findRowHints)
 	}
 	// beta/x → 'b' lands the cursor on the first register row.
-	updated, _ = m.Update(keyRunes('b'))
+	updated, _ = m.Update(runeKey(string('b')))
 	m = updated.(Model)
 	if m.findMode {
 		t.Fatal("expected find to exit after selecting a row")
@@ -289,9 +283,9 @@ func TestFindSelectingRegisterScopesToRegister(t *testing.T) {
 }
 
 func TestFindSelectingProjectExcludesPinnedRows(t *testing.T) {
-	updated, _ := findModel().Update(keyRunes('f'))
+	updated, _ := findModel().Update(runeKey(string('f')))
 	m := updated.(Model)
-	updated, _ = m.Update(keyRunes('a'))
+	updated, _ = m.Update(runeKey(string('a')))
 	m = updated.(Model)
 	if m.findStage != findStageWorkspace || m.findProject != "alpha" || m.findPinGroup != "" {
 		t.Fatalf("expected workspace stage scoped to alpha, got stage=%v project=%q pin=%q", m.findStage, m.findProject, m.findPinGroup)
@@ -310,14 +304,14 @@ func TestFindSelectingProjectExcludesPinnedRows(t *testing.T) {
 
 func TestFindRegisterWithSingleRowAutoSelects(t *testing.T) {
 	// pinnedModel: register "a" holds exactly one row (gamma/hot).
-	updated, _ := pinnedModel().Update(keyRunes('f'))
+	updated, _ := pinnedModel().Update(runeKey(string('f')))
 	m := updated.(Model)
 	hint := m.findPinHints["a"]
 	if hint == "" {
 		t.Fatalf("expected a hint for register a, got none (%+v)", m.findPinHints)
 	}
 	for _, r := range hint {
-		updated, _ = m.Update(keyRunes(r))
+		updated, _ = m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
 	if m.findMode {

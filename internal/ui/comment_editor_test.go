@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -58,9 +58,9 @@ func TestResizingWhileComposingKeepsTheBoxHeight(t *testing.T) {
 func TestModelResizeWhileComposingKeepsTheGeometryHonest(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
 	m.cursorRow = rowOfLine(m, "beta")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.Repeat("x", 200))})
+	updated, _ = m.Update(runeKey(strings.Repeat("x", 200)))
 	m = updated.(Model)
 
 	m.SetSize(60, 14)
@@ -92,7 +92,7 @@ func TestComposeBoxFitsItsWidth(t *testing.T) {
 func TestComposeBoxOpensBeneathTheAnchoredLine(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
 	m.cursorRow = rowOfLine(m, "beta")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
 
 	rows := editorRows(m)
@@ -116,12 +116,12 @@ func TestComposeBoxOpensBeneathTheAnchoredLine(t *testing.T) {
 func TestClosingTheBoxRemovesItsRows(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
 	m.cursorRow = rowOfLine(m, "beta")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
 	if len(editorRows(m)) == 0 {
 		t.Fatal("fixture is wrong: expected the box open")
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if got := editorRows(m); len(got) != 0 {
 		t.Fatalf("expected the box's rows gone after esc, got %v", got)
@@ -133,11 +133,11 @@ func TestClosingTheBoxRemovesItsRows(t *testing.T) {
 func TestSavingRemovesTheBoxRows(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
 	m.cursorRow = rowOfLine(m, "beta")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	updated, _ = m.Update(runeKey("hi"))
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if got := editorRows(m); len(got) != 0 {
 		t.Fatalf("expected no box rows after saving, got %v", got)
@@ -161,7 +161,7 @@ func TestReplyBoxOpensAtTheFootOfTheThread(t *testing.T) {
 
 	// Put the cursor on the parent and reply to it.
 	m.cursorRow = firstRowOfComment(m, parent.ID)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
 
 	rows := editorRows(m)
@@ -193,7 +193,7 @@ func TestOpeningTheBoxScrollsItIntoView(t *testing.T) {
 		m.cursorRow--
 	}
 	m.followCursor()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
 
 	rows := editorRows(m)
@@ -216,7 +216,7 @@ func TestOpeningTheBoxScrollsItIntoView(t *testing.T) {
 func TestTheOpenBoxIsNotListedInTheIndex(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
 	m.cursorRow = rowOfLine(m, "beta")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
 	if len(m.commentIndex) != 0 {
 		t.Fatalf("expected the index empty while composing, got %+v", m.commentIndex)

@@ -1,6 +1,6 @@
 package deckui
 
-import "github.com/charmbracelet/bubbles/key"
+import "charm.land/bubbles/v2/key"
 
 // deckKeyMap is the single source of truth for the deck row-mode key
 // bindings. Both Update (via key.Matches) and renderHelp / deckKeyGroups

@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // prNumberModal is the `p s` chord's numeric input popover: pin the
@@ -34,7 +34,7 @@ func newPRNumberModal(item Item) (*prNumberModal, tea.Cmd, string) {
 }
 
 func (p *prNumberModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		var cmd tea.Cmd
 		p.input, cmd = p.input.Update(msg)
@@ -96,7 +96,7 @@ func (p *prNumberModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(60)
+		Width(60 + borderCells)
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
@@ -150,7 +150,7 @@ func newPinAliasModal(m *Model, key string) (*pinAliasModal, tea.Cmd, string) {
 }
 
 func (p *pinAliasModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		var cmd tea.Cmd
 		p.input, cmd = p.input.Update(msg)
@@ -200,7 +200,7 @@ func (p *pinAliasModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(60)
+		Width(60 + borderCells)
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)

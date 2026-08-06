@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -233,10 +233,10 @@ func TestCommentGestureSavesThroughTheSink(t *testing.T) {
 		t.Fatal("expected c to open the compose box")
 	}
 	for _, r := range "looks wrong" {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if m.editing {
 		t.Fatal("expected enter to close the compose box")
@@ -260,7 +260,7 @@ func TestCommentGestureCancels(t *testing.T) {
 		m = press(m, "j")
 	}
 	m = press(m, "c")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = updated.(Model)
 	if m.editing || saved != 0 {
 		t.Fatalf("expected esc to discard, editing=%v saved=%d", m.editing, saved)
@@ -276,7 +276,7 @@ func TestEmptyCommentIsDiscarded(t *testing.T) {
 		m = press(m, "j")
 	}
 	m = press(m, "c")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if got := updated.(Model); got.editing || saved != 0 {
 		t.Fatalf("expected an empty comment to be discarded, editing=%v saved=%d", got.editing, saved)
 	}
@@ -290,8 +290,8 @@ func TestSaveFailureIsReported(t *testing.T) {
 		m = press(m, "j")
 	}
 	m = press(m, "c")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(runeKey("x"))
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(Model)
 	if !got.statusErr || !strings.Contains(got.status, "disk full") {
 		t.Fatalf("expected the save error in status, got %q err=%v", got.status, got.statusErr)
@@ -1089,8 +1089,8 @@ func TestIOnACommentEditsItInPlace(t *testing.T) {
 		t.Fatalf("expected the editor to carry the comment id, got %q", m.editor.editing)
 	}
 
-	updatedModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'!'}})
-	updatedModel, _ = updatedModel.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updatedModel, _ := m.Update(runeKey("!"))
+	updatedModel, _ = updatedModel.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updatedModel.(Model)
 	if len(updated) != 1 || updated[0].ID != "c1" {
 		t.Fatalf("expected an update carrying the id, got %+v", updated)
@@ -1322,9 +1322,9 @@ func TestCOnACommentRepliesToIt(t *testing.T) {
 		t.Fatalf("expected an empty reply box, got %q", got)
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}, Alt: false})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(runeKey("o"))
+	updated, _ = updated.(Model).Update(runeKey("k"))
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 
 	if len(replies) != 1 || replies[0].parent != parent.ID || replies[0].body != "ok" {
@@ -1372,7 +1372,7 @@ func TestReplyingToAReplyThreadsUnderTheParent(t *testing.T) {
 }
 
 func pressKeyUI(m Model, s string) (Model, tea.Cmd) {
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+	updated, cmd := m.Update(runeKey(s))
 	return updated.(Model), cmd
 }
 
@@ -1578,7 +1578,7 @@ func TestColourFollowsKindNotAuthor(t *testing.T) {
 func TestTabCyclesTheKindInTheComposeBox(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta", "gamma"))
 	m.cursorRow = rowOfLine(m, "beta")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	updated, _ := m.Update(runeKey("c"))
 	m = updated.(Model)
 	if got := m.editor.kind.OrDefault(); got != review.KindComment {
 		t.Fatalf("expected a new box to start as a plain comment, got %q", got)
@@ -1586,7 +1586,7 @@ func TestTabCyclesTheKindInTheComposeBox(t *testing.T) {
 
 	var order []review.Kind
 	for i := 0; i < len(review.Kinds()); i++ {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		m = updated.(Model)
 		order = append(order, m.editor.kind)
 	}
@@ -1598,12 +1598,12 @@ func TestTabCyclesTheKindInTheComposeBox(t *testing.T) {
 	}
 
 	// And the saved record carries whatever the box was showing.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = updated.(Model)
 	want := m.editor.kind
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	updated, _ = m.Update(runeKey("x"))
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if len(m.comments) != 1 {
 		t.Fatalf("expected the comment saved, got %d", len(m.comments))
@@ -1623,7 +1623,7 @@ func TestEditingKeepsTheExistingKind(t *testing.T) {
 	m.SetComments([]review.Comment{c})
 	m.cursorRow = firstRowOfComment(m, c.ID)
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	updated, _ := m.Update(runeKey("i"))
 	m = updated.(Model)
 	if got := m.editor.kind; got != review.KindSuggestion {
 		t.Fatalf("expected the box to open on the existing kind, got %q", got)
@@ -2480,7 +2480,7 @@ func TestTypingIntoTheBoxRendersEachKeystroke(t *testing.T) {
 	// stale to serve and the bug cannot reproduce.
 	_ = m.renderStreamPanel(80, 14)
 	for _, r := range "hello" {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(runeKey(string(r)))
 		m = updated.(Model)
 		_ = m.renderStreamPanel(80, 14)
 	}

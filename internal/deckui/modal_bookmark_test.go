@@ -3,7 +3,7 @@ package deckui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // bookmarkLinkModel wires a deck whose B-key linker fetches one bookmark
@@ -21,7 +21,7 @@ func bookmarkLinkModel(t *testing.T, linked *[2]string) Model {
 		})
 }
 
-var keyB = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}}
+var keyB = runeKey("B")
 
 func TestBookmarkPickerLinkFlow(t *testing.T) {
 	var linked [2]string
@@ -46,7 +46,7 @@ func TestBookmarkPickerLinkFlow(t *testing.T) {
 	}
 
 	// Enter links the selected bookmark to the target workspace.
-	updated, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = dm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	dm = updated.(Model)
 	if dm.active != nil {
 		t.Fatalf("expected picker closed after selection, got %T", dm.active)
@@ -77,7 +77,7 @@ func TestBookmarkLinkForcesPRStatusRefresh(t *testing.T) {
 	// "ws" has no bookmark/PRNumber on file, so the throttled policy would
 	// deem "/tmp" ineligible and fetch nothing. The forced refresh must fetch
 	// it anyway.
-	updated, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = dm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	dm = updated.(Model)
 	if dm.active != nil {
 		t.Fatalf("expected picker closed after selection, got %T", dm.active)
@@ -96,7 +96,7 @@ func TestBookmarkPickerEscClosesWithoutLinking(t *testing.T) {
 	updated, _ = dm.Update(execCmd(t, cmd)) // BookmarksDoneMsg
 	dm = updated.(Model)
 
-	updated, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = dm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	dm = updated.(Model)
 	if dm.active != nil {
 		t.Fatalf("esc should clear the modal, got %T", dm.active)

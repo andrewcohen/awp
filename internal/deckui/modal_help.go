@@ -1,10 +1,10 @@
 package deckui
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // helpModal is the `?` help overlay: a bordered popover framing a
@@ -18,7 +18,7 @@ type helpModal struct {
 }
 
 func newHelpModal() *helpModal {
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
 	// Scroll with arrows/j/k (line), pgup/pgdn (page), ctrl+u/ctrl+d
 	// (half). Matches the jobs overlay's scroll feel.
 	vp.KeyMap = viewport.KeyMap{
@@ -33,7 +33,7 @@ func newHelpModal() *helpModal {
 }
 
 func (h *helpModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	km, ok := msg.(tea.KeyMsg)
+	km, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return nil
 	}
@@ -57,7 +57,7 @@ func (h *helpModal) renderPopover(m *Model) string {
 		h.vp.SetContent(helpColumns(innerWidth))
 		h.lastW = innerWidth
 	}
-	h.vp.Width = innerWidth
+	h.vp.SetWidth(innerWidth)
 	// Box chrome eats: border+padding (border 2 + vertical padding 2) plus
 	// title (1) + blank (1) + blank (1) + hint (1) = 8 rows around the
 	// viewport. Size the viewport to what's left so the box fits the height.
@@ -65,7 +65,7 @@ func (h *helpModal) renderPopover(m *Model) string {
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	h.vp.Height = vpHeight
+	h.vp.SetHeight(vpHeight)
 
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent)).Render("awp deck — help")
 	hintText := "↑/↓ scroll · pgup/pgdn page · esc close"
@@ -79,6 +79,6 @@ func (h *helpModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(boxWidth).
+		Width(boxWidth + borderCells).
 		Render(body)
 }

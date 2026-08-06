@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -68,7 +68,7 @@ type prDescModal struct {
 }
 
 func newPRDescModal(item Item, number int, load PRDescriptionLoader) (*prDescModal, tea.Cmd) {
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
 	vp.KeyMap = viewport.KeyMap{
 		Up:           key.NewBinding(key.WithKeys("up", "k")),
 		Down:         key.NewBinding(key.WithKeys("down", "j")),
@@ -101,7 +101,7 @@ func (pd *prDescModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		pd.loading = false
 		pd.desc, pd.err = msg.desc, msg.err
 		return nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "d", "esc", "q", "ctrl+c":
 			m.active = nil
@@ -170,12 +170,12 @@ func (pd *prDescModal) prDescHeader() string {
 
 func (pd *prDescModal) renderPopover(m *Model) string {
 	boxWidth, innerWidth := helpBoxDims(m.width)
-	pd.vp.Width = innerWidth
+	pd.vp.SetWidth(innerWidth)
 	vpHeight := m.height - 9
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	pd.vp.Height = vpHeight
+	pd.vp.SetHeight(vpHeight)
 	pd.vp.SetContent(pd.prDescBody(innerWidth))
 
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).
@@ -186,6 +186,6 @@ func (pd *prDescModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(boxWidth).
+		Width(boxWidth + borderCells).
 		Render(body)
 }

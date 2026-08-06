@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/review"
@@ -113,7 +113,7 @@ func TestARemarkFromTheReviewSectionSavesChangeScoped(t *testing.T) {
 	m.cursorRow = rowOfKind(m, rowReviewHeader)
 	m = pressC(t, m)
 	m.editor.setBody("the error paths are inconsistent across this change")
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, _ := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	m = next.(Model)
 
 	if len(saved) != 1 {

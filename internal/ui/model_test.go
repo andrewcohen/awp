@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -31,7 +31,7 @@ func TestModelInitReturnsCmd(t *testing.T) {
 // ctrl+r is the explicit refresh that remains.
 func TestCtrlRForcesARefresh(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("expected ctrl+r to issue a refresh command")
 	}
@@ -39,7 +39,7 @@ func TestCtrlRForcesARefresh(t *testing.T) {
 
 func TestRDoesNotRefresh(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	_, cmd := m.Update(runeKey("r"))
 	if cmd != nil {
 		t.Fatal("expected r to mark reviewed, not refresh")
 	}
@@ -52,8 +52,8 @@ func TestModelFilterMode(t *testing.T) {
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
 	withFiles := updated.(Model)
 	withFiles.focus = FocusFiles
-	updated, _ = withFiles.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	updated, _ = withFiles.Update(runeKey("/"))
+	updated, _ = updated.(Model).Update(runeKey("f"))
 	got := updated.(Model)
 	if got.focus != FocusFilter {
 		t.Fatalf("expected filter focus, got %v", got.focus)
@@ -72,7 +72,7 @@ func TestModelEnterFocusesHunkPaneWithoutOpening(t *testing.T) {
 		return nil
 	})
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M", Hunks: []diff.Hunk{{NewStart: 5}}}}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(Model)
 	if opened {
 		t.Fatal("expected enter not to open a file")
@@ -88,9 +88,9 @@ func TestFilterEnterConfirmsAndReturnsToFiles(t *testing.T) {
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
 	withFiles := updated.(Model)
 	withFiles.focus = FocusFiles
-	updated, _ = withFiles.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = withFiles.Update(runeKey("/"))
+	updated, _ = updated.(Model).Update(runeKey("f"))
+	updated, _ = updated.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(Model)
 	if got.focus != FocusFiles {
 		t.Fatalf("expected filter enter to return to the file list, got %v", got.focus)
@@ -109,7 +109,7 @@ func TestModelEAlsoOpensCurrentFile(t *testing.T) {
 		return nil
 	})
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M", Hunks: []diff.Hunk{{NewStart: 7}}}}})
-	_, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	_, _ = updated.(Model).Update(runeKey("e"))
 	if openedPath == "" || openedLine != 7 {
 		t.Fatalf("unexpected open via e: %q:%d", openedPath, openedLine)
 	}
@@ -145,17 +145,17 @@ func TestOpensOnTheDiffPane(t *testing.T) {
 
 func TestTabTogglesPaneFocusBothWays(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	got := updated.(Model)
 	if got.focus != FocusFiles {
 		t.Fatalf("expected tab to move to the file list, got %v", got.focus)
 	}
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	got = updated.(Model)
 	if got.focus != FocusHunks {
 		t.Fatalf("expected tab to toggle back to the diff, got %v", got.focus)
 	}
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if got := updated.(Model).focus; got != FocusFiles {
 		t.Fatalf("expected shift+tab to switch pane, got %v", got)
 	}
@@ -165,7 +165,7 @@ func TestTabTogglesPaneFocusBothWays(t *testing.T) {
 func TestHAndLDoNotSwitchPanes(t *testing.T) {
 	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
 	m.focus = FocusFiles
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	updated, _ := m.Update(runeKey("l"))
 	if got := updated.(Model).focus; got != FocusFiles {
 		t.Fatalf("expected l to leave focus on the file list, got %v", got)
 	}
@@ -190,7 +190,7 @@ func TestPromptFooterIsStableHeight(t *testing.T) {
 	} {
 		from := m
 		from.focus = tc.focus
-		updated, _ := from.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+		updated, _ := from.Update(runeKey("/"))
 		withPrompt := updated.(Model).renderFooter()
 		if rows(base) != rows(withPrompt) {
 			t.Fatalf("%s: expected stable footer height, got %d vs %d",

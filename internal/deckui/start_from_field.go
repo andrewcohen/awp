@@ -4,10 +4,10 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // startFromField is a custom huh.Field for the new-workspace form's
@@ -32,7 +32,7 @@ type startFromField struct {
 	title       string
 	description string
 	width       int
-	theme       *huh.Theme
+	theme       huh.Theme
 }
 
 type startFromOption struct {
@@ -96,11 +96,14 @@ func (s *startFromField) ConsumePickPending() bool {
 
 func (s *startFromField) Init() tea.Cmd { return nil }
 
-func (s *startFromField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// Update returns huh.Model rather than tea.Model: huh v2 keeps its fields
+// on the v1-shaped model through a compat alias, so a field's Update and
+// View are unaffected by bubbletea's v2 signature change.
+func (s *startFromField) Update(msg tea.Msg) (huh.Model, tea.Cmd) {
 	if !s.focused {
 		return s, nil
 	}
-	k, ok := msg.(tea.KeyMsg)
+	k, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return s, nil
 	}
@@ -132,8 +135,7 @@ func (s *startFromField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (s *startFromField) View() string {
-	theme := s.activeTheme()
-	styles := s.activeStyles(theme)
+	styles := s.activeStyles()
 
 	var sb strings.Builder
 	if s.title != "" {
@@ -173,18 +175,23 @@ func (s *startFromField) View() string {
 	return styles.Base.Render(sb.String())
 }
 
-func (s *startFromField) activeTheme() *huh.Theme {
-	if s.theme != nil {
-		return s.theme
+// activeStyles resolves the styles for this field's focus state.
+//
+// huh v2 made Theme an interface that hands out a *Styles for a light or
+// dark background, so the theme can no longer be read as a struct. The
+// field has no way to ask the terminal what it is running against, so it
+// asks for the dark variant — every other surface in awp is built for the
+// dark palette (see internal/charm/palette.go).
+func (s *startFromField) activeStyles() *huh.FieldStyles {
+	theme := s.theme
+	if theme == nil {
+		theme = huh.ThemeFunc(huh.ThemeBase)
 	}
-	return huh.ThemeBase()
-}
-
-func (s *startFromField) activeStyles(t *huh.Theme) *huh.FieldStyles {
+	styles := theme.Theme(true)
 	if s.focused {
-		return &t.Focused
+		return &styles.Focused
 	}
-	return &t.Blurred
+	return &styles.Blurred
 }
 
 // Bubble Tea Events
@@ -218,7 +225,7 @@ func (s *startFromField) KeyBinds() []key.Binding {
 
 // Configuration setters from huh.Field
 
-func (s *startFromField) WithTheme(t *huh.Theme) huh.Field         { s.theme = t; return s }
+func (s *startFromField) WithTheme(t huh.Theme) huh.Field          { s.theme = t; return s }
 func (s *startFromField) WithAccessible(bool) huh.Field            { return s }
 func (s *startFromField) WithKeyMap(*huh.KeyMap) huh.Field         { return s }
 func (s *startFromField) WithWidth(w int) huh.Field                { s.width = w; return s }

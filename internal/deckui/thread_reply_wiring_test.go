@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -106,7 +106,7 @@ func TestAReplyPostedFromTheDeckIsRecordedAsPublished(t *testing.T) {
 	for _, r := range "fixed" {
 		m, _ = pressKey(m, string(r))
 	}
-	up, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	up, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = up.(Model)
 	if cmd == nil {
 		t.Fatal("expected saving the reply to produce the post")
@@ -165,11 +165,11 @@ func seekAndOpenThreadReply(t *testing.T, m Model) (Model, bool) {
 	t.Helper()
 	for i := 0; i < 200; i++ {
 		m, _ = pressKey(m, "c")
-		if strings.Contains(stripStyle(m.View()), "reply on github") {
+		if strings.Contains(stripStyle(m.render()), "reply on github") {
 			return m, true
 		}
 		// Whatever it opened instead, close it and move on.
-		up, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		up, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 		m = up.(Model)
 		m, _ = pressKey(m, "j")
 	}
