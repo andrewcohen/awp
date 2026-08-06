@@ -203,6 +203,8 @@ A row qualifies for any of these, and shows the most urgent one it matches:
 
 **Recency** keeps a workspace listed for **4 hours** after it was last active, so looking at a row no longer deletes the only evidence you were in the middle of it — before this the scope was binary on the unread flag. The clock is `LastActiveAt` in `workspace-state.json`, written when the agent reports a status and when you open the workspace. A workspace with no timestamp — anything that existed before the field did — is neither recent nor stale: unknown is no opinion, not "last active in 1970".
 
+**Every row carries a muted `[project]` chip** before its name — the mini-deck's pattern for the same situation. With no project headers nothing else says which repo a row is from, and a `default` workspace in each of six projects otherwise renders as six rows called `default`.
+
 **Pinned rows still float to the top**, in register order, above everything: a pin is somewhere you asked for, and when the deck's guess disagrees with what you said the deck is not the one to trust. **The workspace you opened the deck from is always kept** even when it wants nothing, so the cursor has somewhere to land — it is the one row with no reason, and it sorts last. Since there are no project headers, `f` skips its project stage and hints every row directly, the way it already does in the inbox.
 
 ### Inbox scope (`P`)

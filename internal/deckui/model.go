@@ -1440,10 +1440,10 @@ func (m Model) metaLine(it Item) string {
 	}
 	// Pinned rows are lifted out of their project group into a register
 	// section, so the project context is otherwise lost. Lead the meta
-	// line with it (all / attention scopes only — the inbox scope keeps
-	// the project on the primary row as a chip and renders no pinned
-	// region).
-	if m.scope != ScopeInbox && strings.TrimSpace(it.PinGroup) != "" {
+	// line with it — in the all scope only. The inbox renders no pinned
+	// region, and the attention scope now puts the project on every row's
+	// primary line as a chip, so repeating it here would say it twice.
+	if m.scope == ScopeAll && strings.TrimSpace(it.PinGroup) != "" {
 		if p := strings.TrimSpace(it.ProjectName); p != "" {
 			parts = append(parts, "["+p+"]")
 		}
@@ -4203,10 +4203,21 @@ func (m Model) renderList(width int) string {
 			if item.StackDepth > 0 {
 				stackPrefix = s.Accent.Render("└─ ")
 			}
-			// Inbox rows carry no [project] chip — the project subheader
-			// (inboxBodyRows) provides that context now, so the label starts
-			// right after the status glyph (plus any stack connector).
-			label := truncate(m.displayLabel(item), max(10, width-19-lipgloss.Width(stackPrefix)))
+			// Attention rows carry a [project] chip — the mini-deck's pattern
+			// for the same situation: a flat cross-project list where nothing
+			// else says which repo a row is from. Without it, a `default`
+			// workspace in each of six projects renders as six rows called
+			// "default". Inbox rows carry no chip (its project subheader
+			// supplies that context) and the all scope has project headers, so
+			// in both the label starts right after the status glyph.
+			chip := ""
+			if m.scope == ScopeAttention {
+				if p := strings.TrimSpace(item.ProjectName); p != "" {
+					chip = s.Muted.Render("[" + p + "] ")
+				}
+			}
+			label := truncate(m.displayLabel(item),
+				max(10, width-19-lipgloss.Width(stackPrefix)-lipgloss.Width(chip)))
 			// Status is canonical in JSON, so render the stored glyph
 			// immediately on the fast first paint. The only tmux-derived
 			// override is `working` → `exited` (agent shell death — Claude
@@ -4221,7 +4232,7 @@ func (m Model) renderList(width int) string {
 			if !dim && (item.Optimistic || m.workspaceSettingUp(item) || m.workspaceDeleting(item)) {
 				glyph = m.spinner.View()
 			}
-			line := fmt.Sprintf("%s %s %s%s", prefixSlot.Render(prefix), glyphSlot.Render(glyph), stackPrefix, labelStyle.Render(label))
+			line := fmt.Sprintf("%s %s %s%s%s", prefixSlot.Render(prefix), glyphSlot.Render(glyph), stackPrefix, chip, labelStyle.Render(label))
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
