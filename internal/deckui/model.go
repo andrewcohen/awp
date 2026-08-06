@@ -2458,8 +2458,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			m.active = newWatchModal(item)
-			return m, scheduleWatchTick()
+			wm := newWatchModal(item)
+			m.active = wm
+			// The first frame is built by the same async path as every later
+			// one, so opening the modal is instant even when the transcript
+			// takes most of a second to parse.
+			return m, wm.refresh()
 		case key.Matches(msg, km.WatchWindow):
 			if _, ok := m.selected(); !ok {
 				return m, nil

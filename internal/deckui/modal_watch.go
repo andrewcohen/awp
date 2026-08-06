@@ -1,6 +1,7 @@
 package deckui
 
 import (
+	"os"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -18,6 +19,38 @@ import (
 const watchInterval = 1 * time.Second
 
 type watchTickMsg time.Time
+
+// watchFrameMsg carries a rebuilt frame back to the main loop. The rebuild
+// runs in a tea.Cmd because it parses the agent's whole transcript, which is
+// hundreds of milliseconds on a session that has been running a while —
+// measured at 675ms for a 97MB transcript. Done inline, that is 675ms of
+// frozen deck on every open and every tick.
+type watchFrameMsg struct {
+	transcript string
+	header     string
+	body       string
+	// stamp is the transcript's size and mtime at the time it was read, so
+	// the next tick can skip the parse when the agent has written nothing.
+	stamp watchStamp
+	// unchanged means the stamp matched and header/body are not set.
+	unchanged bool
+}
+
+// watchStamp identifies a transcript's contents cheaply. An agent only ever
+// appends to its transcript, so size plus mtime is enough to know a reparse
+// would produce the same frame.
+type watchStamp struct {
+	size int64
+	mod  time.Time
+}
+
+func statWatchStamp(path string) watchStamp {
+	info, err := os.Stat(path)
+	if err != nil {
+		return watchStamp{}
+	}
+	return watchStamp{size: info.Size(), mod: info.ModTime()}
+}
 
 func scheduleWatchTick() tea.Cmd {
 	return tea.Tick(watchInterval, func(t time.Time) tea.Msg { return watchTickMsg(t) })
@@ -37,6 +70,9 @@ type watchModal struct {
 	transcript    string
 	vp            viewport.Model
 	header        string
+	// stamp is what the last rebuilt frame was read from, so a tick over an
+	// idle transcript costs a stat instead of a full parse.
+	stamp watchStamp
 }
 
 // newWatchModal resolves the workspace's dev loop and seeds the first frame.
@@ -59,36 +95,78 @@ func newWatchModal(item Item) *watchModal {
 		agentStatus:   item.Status,
 		vp:            vp,
 	}
-	wm.refresh()
+	wm.header = watch.Header(item.ProjectName+"/"+item.WorkspaceName, watch.State{AgentStatus: item.Status})
+	wm.vp.SetContent("reading the agent's transcript…")
 	return wm
 }
 
-// refresh re-locates the newest transcript (sticky) and rebuilds the view.
-func (wm *watchModal) refresh() {
-	if !wm.configured {
-		// No dev_loop → don't watch with a guessed default loop.
-		wm.header = watch.Header(wm.label, watch.State{AgentStatus: wm.agentStatus})
-		wm.vp.SetContent("no dev_loop configured for this repo — run `awp watch --suggest` for a setup prompt.")
+// refresh builds the next frame off the main loop.
+//
+// Everything it needs is copied into the closure, so the returned Cmd touches
+// no modal state — the result comes back as a watchFrameMsg and apply is the
+// only writer. That is what keeps a multi-hundred-millisecond parse off the
+// thread that is drawing the deck.
+func (wm *watchModal) refresh() tea.Cmd {
+	loop, label, status := wm.loop, wm.label, wm.agentStatus
+	configured, path, known, stamp := wm.configured, wm.workspacePath, wm.transcript, wm.stamp
+	return func() tea.Msg {
+		if !configured {
+			// No dev_loop → don't watch with a guessed default loop.
+			return watchFrameMsg{
+				header: watch.Header(label, watch.State{AgentStatus: status}),
+				body:   "no dev_loop configured for this repo — run `awp watch --suggest` for a setup prompt.",
+			}
+		}
+		transcript := known
+		if located, err := watch.LocateSticky(path, known, time.Now()); err == nil {
+			transcript = located
+		}
+		if transcript == "" {
+			return watchFrameMsg{
+				header: watch.Header(label, watch.State{AgentStatus: status}),
+				body:   "waiting for the agent to start its session…",
+			}
+		}
+		// Stamped before reading, not after: anything the agent appends while
+		// the parse is running belongs to the next frame, and a stamp taken
+		// afterwards would claim to cover it.
+		next := statWatchStamp(transcript)
+		// An agent only appends, so an unchanged size and mtime means the
+		// parse would rebuild the frame already on screen.
+		if transcript == known && next == stamp && stamp != (watchStamp{}) {
+			return watchFrameMsg{transcript: transcript, stamp: stamp, unchanged: true}
+		}
+		st, err := watch.BuildState(loop, transcript, status, time.Now())
+		if err != nil {
+			return watchFrameMsg{
+				transcript: transcript,
+				stamp:      next,
+				header:     watch.Header(label, watch.State{AgentStatus: status}),
+				body:       "watch error: " + err.Error(),
+			}
+		}
+		// The header is pinned as the popover's sticky title (see
+		// renderPopover); the body carries the rest so it isn't repeated.
+		return watchFrameMsg{
+			transcript: transcript,
+			stamp:      next,
+			header:     watch.Header(label, st),
+			body:       watch.RenderBody(loop, st),
+		}
+	}
+}
+
+// apply installs a frame the refresh Cmd produced.
+func (wm *watchModal) apply(msg watchFrameMsg) {
+	if msg.transcript != "" {
+		wm.transcript = msg.transcript
+		wm.stamp = msg.stamp
+	}
+	if msg.unchanged {
 		return
 	}
-	if located, err := watch.LocateSticky(wm.workspacePath, wm.transcript, time.Now()); err == nil {
-		wm.transcript = located
-	}
-	if wm.transcript == "" {
-		wm.header = watch.Header(wm.label, watch.State{AgentStatus: wm.agentStatus})
-		wm.vp.SetContent("waiting for the agent to start its session…")
-		return
-	}
-	st, err := watch.BuildState(wm.loop, wm.transcript, wm.agentStatus, time.Now())
-	if err != nil {
-		wm.header = watch.Header(wm.label, watch.State{AgentStatus: wm.agentStatus})
-		wm.vp.SetContent("watch error: " + err.Error())
-		return
-	}
-	// The header is pinned as the popover's sticky title (see renderPopover);
-	// the viewport carries only the body so the header isn't repeated.
-	wm.header = watch.Header(wm.label, st)
-	wm.vp.SetContent(watch.RenderBody(wm.loop, st))
+	wm.header = msg.header
+	wm.vp.SetContent(msg.body)
 }
 
 func (wm *watchModal) footerHelp() string { return "" }
@@ -96,7 +174,13 @@ func (wm *watchModal) footerHelp() string { return "" }
 func (wm *watchModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case watchTickMsg:
-		wm.refresh()
+		return wm.refresh()
+	case watchFrameMsg:
+		wm.apply(msg)
+		// Re-arm only now. Ticking independently of the rebuild would let a
+		// parse slower than watchInterval queue another before the first
+		// finished, and the modal would fall further behind the more it had
+		// to read.
 		return scheduleWatchTick()
 	case tea.KeyPressMsg:
 		switch msg.String() {
