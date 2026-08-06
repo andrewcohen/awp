@@ -268,10 +268,10 @@ in it goes through a file.
 
 **If the reply is a change you mean to make, add `--proposal` and stop
 there.** A proposal is an offer awaiting a yes: the user sees it marked
-`awaiting your ok` while reading the diff, approves it with one key, and you
-are sent a prompt saying to go ahead. Do not make the change before that
-prompt arrives — `awp review list` shows the state (`pending` / `approved`)
-if you need to check.
+`awaiting approval` while reading the diff, approves it with one key, and you
+get a prompt saying to go ahead. Do not make the change before that prompt
+arrives — `awp review list` shows the state (`pending` / `approved`) if you
+need to check.
 
 The gate is about changing code, not about replying. Answering a question,
 explaining why the code is the way it is, or disagreeing with a finding are

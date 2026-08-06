@@ -377,7 +377,7 @@ func proposalSuffix(e commentEntry) string {
 	if e.proposal != review.ProposalPending {
 		return ""
 	}
-	return " · " + chipAwaitingYou
+	return " · " + chipAwaitingApproval
 }
 
 // clampCommentsCursor keeps the index selection inside the list, and hands the
