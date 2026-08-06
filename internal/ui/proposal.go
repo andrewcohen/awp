@@ -75,7 +75,9 @@ func (m Model) approveAtCursor() (tea.Model, tea.Cmd) {
 		}
 		// The store moved the finding to sent when it took the approval; mirroring
 		// that here keeps this copy from disagreeing with disk until the next load.
-		if m.comments[i].ID == approved.ReplyTo && m.comments[i].State != review.Published {
+		// Not over a finding already on GitHub — published is where it ended up, and
+		// sent would be a step backwards.
+		if m.comments[i].ID == approved.ReplyTo && !m.comments[i].OnGitHub() {
 			m.comments[i].State = review.Sent
 		}
 	}

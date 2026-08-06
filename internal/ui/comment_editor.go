@@ -508,7 +508,7 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 		m.status = "put the cursor on one of your comments to edit it"
 		return m, nil
 	}
-	if c.ThreadReply() && c.State == review.Published {
+	if c.ThreadReply() && c.OnGitHub() {
 		// These words are on the PR, and this cannot take them back. Editing the local
 		// copy would leave the record disagreeing with what everyone else can read —
 		// and the mirror, which is what gets drawn, would go on showing the original.
