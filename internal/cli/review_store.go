@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -500,27 +501,173 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 	if err != nil {
 		return err
 	}
+	// Joined with awp's own mirror of the PR's conversations, which the pr-status
+	// pass keeps fresh on disk. Without it the listing reported the local record's
+	// last known state and was blind to everything that happened on GitHub
+	// afterwards: on a real review four resolved-and-replied threads all read as
+	// `published`, indistinguishable from the one still genuinely open.
+	rows := listRows(comments, scope.store.Threads(scope.review))
 	if *asJSON {
 		// Left a bare array: this is the machine channel, and callers parse it as a
 		// list of comments. The review it came from is named in the human form, which
 		// is what an agent should use to check it is writing where it thinks.
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
-		return enc.Encode(comments)
+		return enc.Encode(rows)
 	}
 	// Named first, and even when there is nothing in it: "no findings" from the wrong
 	// review is the reading that sends someone looking for a bug in the store.
 	_, _ = fmt.Fprintf(out, "%s\n", scope.label())
-	if len(comments) == 0 {
+	// Which commit the anchors' numbers mean. A review is anchored to the commit
+	// the reviewer read, deliberately (see reviewedCommit), so it can sit several
+	// commits behind the PR's head — and the thread column's lines are GitHub's,
+	// against that head. Two sets of numbers on one row need saying once.
+	if head := strings.TrimSpace(scope.review.ObservedHead); head != "" {
+		_, _ = fmt.Fprintf(out, "anchored to %s; thread lines are GitHub's, at the PR head\n", shortSHA(head))
+	}
+	if len(rows) == 0 {
 		_, _ = fmt.Fprintln(out, "no findings")
 		return nil
 	}
-	for _, c := range comments {
-		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+	for _, row := range rows {
+		c := row.Comment
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			c.ID, c.Kind.OrDefault(), c.State, proposalColumn(c), refusedColumn(c),
-			c.Anchor.Where(), bodyPreview(c.Body))
+			row.threadColumn(), row.where(), bodyPreview(c.Body))
 	}
 	return nil
+}
+
+// listedComment is a finding as `review list` reports it: the stored record, plus
+// what the mirror knows about the conversation it became.
+//
+// A type of its own, embedding the record rather than extending it. review.Comment
+// is what is written to disk, and a mirror field on it would be persisted — a copy
+// of GitHub's answer, ageing in our store, next to the record it was meant to
+// correct. Embedding also keeps every existing key at the top level of the JSON, so
+// the machine channel gains `thread` and loses nothing.
+type listedComment struct {
+	review.Comment
+	Thread *listedThread `json:"thread,omitempty"`
+}
+
+// listedThread is GitHub's side of a published finding: whether the conversation
+// is settled, where it sits now, and what was said after we posted.
+//
+// The replies are the point of joining at all. What the author already answered is
+// what stops a re-reviewing agent raising a closed point a second time, and until
+// now the only way to read it was `gh api`.
+type listedThread struct {
+	ID        string        `json:"id"`
+	Resolved  bool          `json:"resolved"`
+	Outdated  bool          `json:"outdated"`
+	Line      int           `json:"line,omitempty"`
+	StartLine int           `json:"start_line,omitempty"`
+	Replies   []listedReply `json:"replies,omitempty"`
+}
+
+// listedReply is one message in the conversation other than the finding itself.
+type listedReply struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+}
+
+// listRows joins the findings to the mirror.
+//
+// The pairing is review.MirrorOf, the same rule the diff viewer reconciles with —
+// matched on GitHub's comment node id, because body and line both drift. A second
+// rule here would be a second answer to "are these one conversation", and the two
+// would disagree on exactly the rows that matter.
+func listRows(comments []review.Comment, threads []review.Thread) []listedComment {
+	mirror := review.MirrorOf(comments, threads)
+	out := make([]listedComment, 0, len(comments))
+	for _, c := range comments {
+		row := listedComment{Comment: c}
+		if t, ok := mirror[c.ID]; ok {
+			row.Thread = mirroredThread(t, c)
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// mirroredThread reads a thread as this finding's counterpart: everything in the
+// conversation except the message this finding *is*.
+func mirroredThread(t review.Thread, c review.Comment) *listedThread {
+	ours, _ := c.PublishedThreadID()
+	out := &listedThread{
+		ID: t.ID, Resolved: t.Resolved, Outdated: t.Outdated,
+		Line: t.Line, StartLine: t.StartLine,
+	}
+	for _, msg := range t.Comments {
+		if msg.ID != "" && msg.ID == ours {
+			continue
+		}
+		out.Replies = append(out.Replies, listedReply{Author: msg.Author, Body: msg.Body})
+	}
+	return out
+}
+
+// threadColumn is what GitHub knows about this finding's conversation — `-` when
+// the mirror has none.
+//
+// Its own column, the same reasoning proposalColumn gives: one column holding two
+// vocabularies is how a reader matches a word against the wrong field. And
+// `resolved` is emphatically a second vocabulary — see review.Thread, where the
+// State / Resolved split is kept deliberately, because a local draft cannot be
+// resolved and a remote thread cannot be addressed.
+func (l listedComment) threadColumn() string {
+	if l.Thread == nil {
+		return "-"
+	}
+	parts := []string{"open"}
+	if l.Thread.Resolved {
+		parts[0] = "resolved"
+	}
+	// Outdated is reported separately by GitHub and means a different thing: the
+	// code moved out from under the thread. A conversation is often both, since
+	// settling a point is what usually precedes the code changing.
+	if l.Thread.Outdated {
+		parts = append(parts, "outdated")
+	}
+	if n := len(l.Thread.Replies); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", n, map[bool]string{true: "reply", false: "replies"}[n == 1]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// where is the finding's location, and where GitHub has it now when the two
+// disagree.
+//
+// The stored number is the line the finding was filed against and is deliberately
+// frozen — an anchor is located by its text, so the number is a hint. GitHub
+// recomputes a thread's line as the PR moves, and printing only the local one is
+// what had the listing report 346-350 for a thread sitting at 438-442. Both,
+// because the drift is information: it is how far the code has travelled since
+// the remark was written.
+func (l listedComment) where() string {
+	here := l.Anchor.Where()
+	if l.Thread == nil {
+		return here
+	}
+	there := l.Thread.lineRange()
+	if there == "" || there == l.Anchor.LineRange() {
+		return here
+	}
+	return here + " → " + there
+}
+
+// lineRange is the thread's lines in our vocabulary. GitHub names a thread by its
+// *last* line with a start_line above it, the reverse of an anchor — see
+// commentEndLine, which does the same translation in the other direction.
+func (l listedThread) lineRange() string {
+	if l.Line <= 0 {
+		return ""
+	}
+	if l.StartLine > 0 && l.StartLine != l.Line {
+		return fmt.Sprintf("%d-%d", l.StartLine, l.Line)
+	}
+	return strconv.Itoa(l.Line)
 }
 
 // refusedColumn is what the last publish run said about this finding's anchor —
