@@ -206,6 +206,14 @@ type Model struct {
 	// SendComment additionally hands a comment to the workspace's agent. Nil
 	// leaves the send exit unavailable.
 	SendComment CommentSink
+	// ApproveProposal says yes to an agent's proposal, returning the record as
+	// written. Nil leaves `A` unavailable, which the viewer reports rather than
+	// appearing to approve something and recording nothing.
+	//
+	// It returns the comment because approving is only half of the gesture: the
+	// other half hands that record to SendComment, and the agent's prompt is
+	// rendered from what the store actually wrote.
+	ApproveProposal func(id string) (review.Comment, error)
 	// UpdateComment revises an existing comment; DeleteComment removes one.
 	//
 	// UpdateComment carries a revision — a new body — and nothing else. The store
@@ -846,6 +854,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// you scan conversations in is the list you settle them from.
 		case "R":
 			return m.resolveFromIndex()
+		// And so is approving — the index is where a pending proposal announces
+		// itself, so it has to be answerable without seeking into the diff.
+		case "A":
+			m.seekToComment(m.commentsCursor)
+			return m.approveAtCursor()
 		}
 	}
 
@@ -918,6 +931,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.deleteCommentAtCursor()
 		case "R":
 			return m.toggleResolved()
+		case "A":
+			return m.approveAtCursor()
 		case "e":
 			return m, m.openAtCursor()
 		}

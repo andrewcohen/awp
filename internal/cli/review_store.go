@@ -579,6 +579,15 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			}
 			return store.DeleteComment(r, id)
 		},
+		Approve: func(item deckui.Item, id string) (review.Comment, error) {
+			store, r, err := open(item)
+			if err != nil {
+				return review.Comment{}, err
+			}
+			// store.Approve also moves the finding it answers to sent, so the badge
+			// stops asking you to triage a question you have just answered.
+			return store.Approve(r, id)
+		},
 	}
 }
 

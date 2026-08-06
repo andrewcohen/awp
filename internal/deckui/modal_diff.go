@@ -101,6 +101,12 @@ type CommentStore struct {
 	MarkPublished func(item Item, id, remoteID string) error
 	// Reply files a reply against a parent comment.
 	Reply func(item Item, parentID string, c review.Comment) error
+	// Approve says yes to an agent's proposal, returning the record as written.
+	//
+	// It returns the comment rather than an error alone because approving is half a
+	// gesture: the viewer hands what comes back to Send, and the prompt the agent
+	// receives is rendered from the record the store actually wrote.
+	Approve func(item Item, id string) (review.Comment, error)
 	// LastSaved returns the record Save just wrote, id included.
 	LastSaved func() (review.Comment, bool)
 	// Resolve toggles a GitHub review thread's resolved state.
@@ -357,6 +363,9 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 	}
 	if comments.Send != nil {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
+	}
+	if comments.Approve != nil {
+		inner.ApproveProposal = func(id string) (review.Comment, error) { return comments.Approve(item, id) }
 	}
 	if comments.Publish != nil {
 		inner.PublishReview = func(verdict, summary string, dryRun bool) (string, error) {

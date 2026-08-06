@@ -192,3 +192,48 @@ func TestPublishTranslatesARangeToGitHubsShape(t *testing.T) {
 		t.Fatalf("expected no start_line for a single-line comment, got %d", got)
 	}
 }
+
+// An approved proposal renders the approval prompt, not the finding prompt. Same
+// funnel, branching on the record: the viewer hands the approved comment to the
+// one sink it already has, and what makes the message different is a fact the
+// record carries.
+func TestAnApprovedProposalGetsTheApprovalPrompt(t *testing.T) {
+	c := review.Comment{
+		ID: "p1", Author: "agent", Body: "wrap it in m.fail and return early",
+		ReplyTo: "f1", Proposal: review.ProposalApproved,
+		Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 12},
+	}
+	got := commentPromptFor(c, "andrew/proposals")
+
+	// The gate is open, and saying so is the whole message.
+	if !strings.Contains(got, "Go ahead") {
+		t.Errorf("the approval prompt does not open the gate:\n%s", got)
+	}
+	// It must not repeat the instruction that stopped the agent in the first place.
+	if strings.Contains(got, "before changing anything") {
+		t.Errorf("the approval prompt still tells the agent to wait:\n%s", got)
+	}
+	// The proposal is echoed: the agent may be reading this on a fresh turn with
+	// none of the context it wrote there.
+	if !strings.Contains(got, "wrap it in m.fail") {
+		t.Errorf("the approval prompt does not say what was approved:\n%s", got)
+	}
+	// And it names the finding to answer, so the exchange closes where it opened.
+	if !strings.Contains(got, "f1") {
+		t.Errorf("the approval prompt does not name the review comment:\n%s", got)
+	}
+}
+
+// A pending proposal is not an approval. Only the approved state changes the
+// message, or an agent that proposed something would read its own offer back as
+// permission to act on it.
+func TestAPendingProposalDoesNotGetTheApprovalPrompt(t *testing.T) {
+	c := review.Comment{
+		ID: "p1", Author: "agent", Body: "wrap it", ReplyTo: "f1",
+		Proposal: review.ProposalPending,
+		Anchor:   review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 12},
+	}
+	if got := commentPromptFor(c, ""); strings.Contains(got, "Go ahead") {
+		t.Errorf("a pending proposal reads as approved:\n%s", got)
+	}
+}
