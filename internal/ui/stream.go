@@ -44,6 +44,13 @@ const (
 	// these are deliberately unanchored, those lost their anchor.
 	rowReviewHeader
 	rowReview
+	// rowReviewEmpty stands in for the review section's content when there is
+	// none. The header is drawn whether or not anything is under it, because it is
+	// the only way in: `c` on it composes a remark about the change as a whole, the
+	// same way `c` on a diff line composes one about that line. A header with
+	// nothing beneath it reads as a rendering fault, so the section says what it is
+	// waiting for instead.
+	rowReviewEmpty
 	// rowOrphanHeader and rowOrphan are the detached section at the end of the
 	// stream, holding comments whose anchor could no longer be located. They are
 	// shown rather than dropped: quietly losing a reviewer's note is worse than
@@ -243,6 +250,10 @@ type commentPlacement struct {
 	// orphans are remarks that name a file but could no longer be located in it,
 	// shown in the detached section at the foot.
 	orphans []review.Comment
+	// canAdd is whether a remark can be written here at all — a viewer with no
+	// store is a reader. It gates the empty review section, whose whole content is
+	// an invitation to press a key, and which would be a lie without one.
+	canAdd bool
 }
 
 func (p commentPlacement) empty() bool {
@@ -292,7 +303,10 @@ func withComments(idx streamIndex, place commentPlacer, folded commentFolder) st
 		return idx
 	}
 	p := place(idx.rows)
-	if p.empty() {
+	// Not an early return on p.empty() any more: the review section leads the
+	// stream whether or not there is anything in it, so a diff nobody has commented
+	// on still has the row that `c` turns into a remark about the whole change.
+	if p.empty() && !p.canAdd {
 		return idx
 	}
 
@@ -306,7 +320,16 @@ func withComments(idx streamIndex, place commentPlacer, folded commentFolder) st
 	// Review-level remarks lead the stream: they are about the change as a whole,
 	// so they belong before the first thing they are about rather than after
 	// everything.
-	rows = appendCommentSection(rows, p.review, rowReviewHeader, rowReview, idx.width, index, folded)
+	if len(p.review) == 0 {
+		// Header plus its stand-in, and nothing else. Two rows at the top of every
+		// diff, which is what an always-available gesture costs.
+		rows = append(rows,
+			rowRef{kind: rowReviewHeader, file: -1, hunk: -1, line: -1},
+			rowRef{kind: rowReviewEmpty, file: -1, hunk: -1, line: -1},
+		)
+	} else {
+		rows = appendCommentSection(rows, p.review, rowReviewHeader, rowReview, idx.width, index, folded)
+	}
 	// Row indices shift as comment rows are inserted, so every recorded offset
 	// has to be remapped rather than reused.
 	shift := make([]int, len(idx.rows))

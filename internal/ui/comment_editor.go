@@ -416,6 +416,19 @@ func (m Model) startComment() (tea.Model, tea.Cmd) {
 		m.rebuildStream()
 		return m, textarea.Blink
 	}
+	// On the review section, `c` writes about the change as a whole. No key of its
+	// own: the cursor being in that section is what says which scope is meant, the
+	// same way the cursor being on a diff line says which line is. The header is
+	// drawn even when the section is empty so the gesture is always reachable.
+	if m.cursorOnReviewHeader() {
+		m.clearVisual()
+		m.editing = true
+		// The zero anchor — no path, no line — is what makes it change-scoped. See
+		// review.Anchor.Scope.
+		m.editor = newCommentEditor(review.Anchor{}, m.hunkWidth)
+		m.rebuildStream()
+		return m, textarea.Blink
+	}
 	// On a comment, `c` replies to it — the common thing to do with a remark is
 	// answer it. Revising your own wording is `i`.
 	if c, ok := m.localCommentAtCursor(); ok {

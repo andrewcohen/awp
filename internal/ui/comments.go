@@ -175,6 +175,21 @@ type ThreadReplier func(threadID, body string) (string, error)
 // threadAtCursor is the remote thread the cursor is on, if any. Resolving acts on
 // the thread under the cursor rather than a separate selection, so there is only
 // ever one notion of "this one".
+// cursorOnReviewHeader reports whether the cursor is on the review section's
+// own two rows — its header, or the stand-in shown when nothing is in it yet.
+// That is where `c` means "about the change as a whole".
+//
+// Deliberately not the section's *body* rows: the cursor on an existing
+// review-level remark is on a comment, and `c` there replies to it, the same as
+// anywhere else. Only the chrome carries the new-remark meaning.
+func (m Model) cursorOnReviewHeader() bool {
+	if m.cursorRow < 0 || m.cursorRow >= len(m.stream.rows) {
+		return false
+	}
+	k := m.stream.rows[m.cursorRow].kind
+	return k == rowReviewHeader || k == rowReviewEmpty
+}
+
 func (m Model) threadAtCursor() (review.Thread, bool) {
 	if len(m.stream.rows) == 0 || m.cursorRow >= len(m.stream.rows) {
 		return review.Thread{}, false
@@ -768,6 +783,10 @@ func (m Model) Comments() []review.Comment { return m.comments }
 //
 // Called during the geometry pass, so it must not render anything.
 func (m Model) placeComments(rows []rowRef) commentPlacement {
+	// Built up front, and every return below is this value: canAdd has to travel
+	// with the empty answer as much as the full one, because the empty answer is
+	// exactly the case that draws the "c to comment" invitation.
+	out := commentPlacement{canAdd: m.SaveComment != nil}
 	// Remote threads render through the same path as local comments; they differ
 	// in their label, not in how they are placed or anchored. Their line numbers
 	// are GitHub's, against a particular commit, so they drift exactly the way
@@ -853,9 +872,9 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 		}
 	}
 	if len(all) == 0 {
-		return commentPlacement{}
+		return out
 	}
-	out := commentPlacement{byRow: make(map[int][]review.Comment, len(all))}
+	out.byRow = make(map[int][]review.Comment, len(all))
 	// A reply goes wherever its parent went, so a thread stays intact even if the
 	// reply's own anchor would resolve elsewhere (or nowhere). Review-level parents
 	// need their own set: they have no row for parentRow to record.
