@@ -382,6 +382,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 		bodyFile = fs.String("body-file", "", "read the reply text from a file, or - for stdin (preferred for anything with markdown in it)")
 		author   = fs.String("author", "", "who is replying (defaults to 'agent')")
 		kind     = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, or question")
+		proposal = fs.Bool("proposal", false, "the reply is a change you intend to make, and needs approval before you make it")
 		wsName   = workspaceFlag(fs)
 	)
 	if err := fs.Parse(args); err != nil {
@@ -402,9 +403,20 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 	if who == "" {
 		who = "agent"
 	}
-	c, err := scope.store.Reply(scope.review, *to, review.Comment{Author: who, Body: bodyText, Kind: review.ParseKind(*kind)})
+	reply := review.Comment{Author: who, Body: bodyText, Kind: review.ParseKind(*kind)}
+	if *proposal {
+		reply.Proposal = review.ProposalPending
+	}
+	c, err := scope.store.Reply(scope.review, *to, reply)
 	if err != nil {
 		return err
+	}
+	// A proposal says so on the way out, because the two replies do different
+	// things to the caller: an ordinary one is said and done, and this one means
+	// stop and wait. The agent that just ran the command is the reader here.
+	if c.AwaitingApproval() {
+		_, _ = fmt.Fprintf(out, "proposed to %s (%s) in %s — awaiting approval\n", *to, c.ID, scope.label())
+		return nil
 	}
 	_, _ = fmt.Fprintf(out, "replied to %s (%s) in %s\n", *to, c.ID, scope.label())
 	return nil
@@ -442,9 +454,25 @@ func runReviewList(runner Runner, svc workspace.Service, args []string, out io.W
 		return nil
 	}
 	for _, c := range comments {
-		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Kind.OrDefault(), c.State, c.Anchor.Where(), oneLine(c.Body))
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			c.ID, c.Kind.OrDefault(), c.State, proposalColumn(c), c.Anchor.Where(), oneLine(c.Body))
 	}
 	return nil
+}
+
+// proposalColumn is where a proposal stands, for the listing. This is the whole
+// answer to "was I approved" — there is no dedicated query command, so an agent
+// told to stop and wait comes back here to find out.
+//
+// A column of its own rather than folded into the state column, which holds a
+// review.State: one column, two vocabularies is how a reader ends up matching
+// "approved" against the wrong field. Present on every row, `-` where there is no
+// proposal, so the columns line up and a parser can index them.
+func proposalColumn(c review.Comment) string {
+	if !c.IsProposal() {
+		return "-"
+	}
+	return string(c.Proposal)
 }
 
 // reviewStoreFor wires the deck's diff modal to the review store. Load and Save
