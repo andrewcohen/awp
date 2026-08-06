@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,5 +230,75 @@ func TestAChangedReasonReplacesTheOldOne(t *testing.T) {
 	reason, refused := only(t, store, r).Rejected()
 	if !refused || reason != "line 688 is not in the diff" {
 		t.Fatalf("expected the new reason, got %q / %v", reason, refused)
+	}
+}
+
+// The listing is where a refusal has to surface. Without it a refused finding
+// reads as one of the open ones, and a run that refused looks identical to one
+// that never happened — which is how a real refusal went unnoticed for two days.
+func TestReviewListSaysAFindingWasRefused(t *testing.T) {
+	runner, svc, finding := proposalCLI(t)
+	store, r := reviewFor(t, runner, svc)
+	finding.Reject = &review.RejectRecord{Reason: "line 688 is not in the diff", At: time.Unix(0, 0)}
+	if err := store.UpdateComment(r, finding); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	out := listing(t, runner, svc)
+	// The reason travels with the mark. A bare `refused` says a reason exists
+	// somewhere else, and somewhere else is awp.log — the arrangement that failed.
+	if !strings.Contains(out, "refused: line 688 is not in the diff") {
+		t.Fatalf("the listing does not say why it was refused:\n%s", out)
+	}
+	// Its own column, on every row, so the fields line up and a reader can index
+	// them (see proposalColumn).
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if !strings.HasPrefix(line, finding.ID) {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 5 || !strings.HasPrefix(fields[4], "refused: ") {
+			t.Fatalf("the refusal is not in its own column: %q", line)
+		}
+	}
+}
+
+// A finding nothing refused says so in the same column, rather than leaving it out
+// and shifting every field after it.
+func TestReviewListMarksTheUnrefusedRows(t *testing.T) {
+	runner, svc, finding := proposalCLI(t)
+	for _, line := range strings.Split(strings.TrimSpace(listing(t, runner, svc)), "\n") {
+		if !strings.HasPrefix(line, finding.ID) {
+			continue
+		}
+		if fields := strings.Split(line, "\t"); len(fields) < 5 || fields[4] != "-" {
+			t.Fatalf("expected `-` in the refusal column, got %q", line)
+		}
+	}
+}
+
+// The machine channel carries it too, so an agent re-reading its own findings does
+// not have to scrape the human table for the one field that says why a publish
+// would not take one.
+func TestARefusalSurvivesTheJSONChannel(t *testing.T) {
+	runner, svc, finding := proposalCLI(t)
+	store, r := reviewFor(t, runner, svc)
+	finding.Reject = &review.RejectRecord{Reason: "line 688 is not in the diff", At: time.Unix(0, 0)}
+	if err := store.UpdateComment(r, finding); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	for _, c := range listComments(t, runner, svc) {
+		if c.ID != finding.ID {
+			// Omitted rather than written null on everything that was never refused.
+			if c.Reject != nil {
+				t.Errorf("%s carries a refusal it never had: %+v", c.ID, c.Reject)
+			}
+			continue
+		}
+		reason, refused := c.Rejected()
+		if !refused || reason != "line 688 is not in the diff" {
+			t.Fatalf("expected the reason through JSON, got %q / %v", reason, refused)
+		}
 	}
 }
