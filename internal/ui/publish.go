@@ -384,7 +384,8 @@ func (m Model) applyPublishDone(msg publishDoneMsg) (tea.Model, tea.Cmd) {
 			// A plan that cannot even be built is the answer: the reason it refused is
 			// what the reviewer needs, and there is nothing to confirm.
 			m.publishStage = publishReporting
-			m.publishReport = append([]string{"cannot publish: " + msg.err.Error()}, m.publishReport...)
+			m.publishReport = append(
+				publishReportLines("cannot publish: "+msg.err.Error()), m.publishReport...)
 			m.fail("publish: %v", msg.err)
 		}
 		return m, nil
@@ -392,8 +393,11 @@ func (m Model) applyPublishDone(msg publishDoneMsg) (tea.Model, tea.Cmd) {
 	m.publishBusy = false
 	if msg.err != nil {
 		// Kept on screen rather than folded into the footer: a run that posted six of
-		// eight has to say which two, and one status segment cannot.
-		m.publishReport = append(publishReportLines(msg.summary), "", "failed: "+msg.err.Error())
+		// eight has to say which two, and one status segment cannot. Split rather than
+		// appended whole — a refusal names one anchor per line, and as a single element
+		// the overlay drew all of them as one unreadable row.
+		m.publishReport = append(append(publishReportLines(msg.summary), ""),
+			publishReportLines("failed: "+msg.err.Error())...)
 		m.publishStage = publishReporting
 		m.fail("publish: %v", msg.err)
 		return m, nil
