@@ -29,7 +29,7 @@ func newPRNumberModal(item Item) (*prNumberModal, tea.Cmd, string) {
 	}
 	ti.Focus()
 	return &prNumberModal{target: item, input: ti},
-		batchCmds(tea.ClearScreen, textinput.Blink),
+		batchCmds(textinput.Blink),
 		fmt.Sprintf("set PR # for %s/%s — enter saves · esc cancels", item.ProjectName, item.WorkspaceName)
 }
 
@@ -44,7 +44,7 @@ func (p *prNumberModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	case "esc", "ctrl+c":
 		m.active = nil
 		m.status = ""
-		return tea.ClearScreen
+		return nil
 	case "enter":
 		typed := strings.TrimSpace(p.input.Value())
 		prNumber := 0
@@ -59,7 +59,7 @@ func (p *prNumberModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		if m.prNumberLinkHandler == nil {
 			m.active = nil
 			m.status = "pr: set PR # handler not configured"
-			return tea.ClearScreen
+			return nil
 		}
 		target := p.target
 		if err := m.prNumberLinkHandler(target, prNumber); err != nil {
@@ -81,7 +81,7 @@ func (p *prNumberModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		*m, prCmd = m.forcePRStatusRefresh(target.RepoRoot)
 		var refreshCmd tea.Cmd
 		*m, refreshCmd = m.requestRefresh(true)
-		return batchCmds(tea.ClearScreen, refreshCmd, prCmd)
+		return batchCmds(refreshCmd, prCmd)
 	}
 	var cmd tea.Cmd
 	p.input, cmd = p.input.Update(key)
@@ -145,7 +145,7 @@ func newPinAliasModal(m *Model, key string) (*pinAliasModal, tea.Cmd, string) {
 	ti.SetValue(strings.TrimSpace(m.pinGroupAliases[key]))
 	ti.Focus()
 	return &pinAliasModal{target: key, input: ti},
-		batchCmds(tea.ClearScreen, textinput.Blink),
+		batchCmds(textinput.Blink),
 		fmt.Sprintf("name group %s — enter saves · esc cancels", pinGroupChordLetter(key))
 }
 
@@ -160,7 +160,7 @@ func (p *pinAliasModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	case "esc", "ctrl+c":
 		m.active = nil
 		m.status = ""
-		return tea.ClearScreen
+		return nil
 	case "enter":
 		alias := strings.TrimSpace(p.input.Value())
 		if m.pinGroupAliasHandler != nil {
@@ -185,7 +185,7 @@ func (p *pinAliasModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		} else {
 			m.status = fmt.Sprintf("pin: group %s → %s", pinGroupChordLetter(p.target), alias)
 		}
-		return tea.ClearScreen
+		return nil
 	}
 	var cmd tea.Cmd
 	p.input, cmd = p.input.Update(key)

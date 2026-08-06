@@ -514,10 +514,8 @@ func TestDeleteCanBeCancelled(t *testing.T) {
 func TestNewWorkspaceErrorStaysOpenAndShowsStatus(t *testing.T) {
 	model := New(nil, nil)
 	updated, _ := model.Update(NewWorkspaceDoneMsg{Err: tea.ErrProgramKilled})
-	// A tea.ClearScreen cmd is expected here so the deck repaints
-	// after returning from the form's tea.Exec; we don't assert its
-	// absence anymore. The important guarantee is that the deck
-	// stays open and surfaces the error in status.
+	// The cmd is not asserted on — the guarantee is that the deck stays
+	// open and surfaces the error in status.
 	m := updated.(Model)
 	if m.status == "" || m.status == "new: " {
 		t.Fatalf("expected error status, got %q", m.status)
@@ -609,9 +607,8 @@ func TestInlineNewWorkspaceFormSubmitDispatches(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected dispatch cmd from submit")
 	}
-	// Submit returns a Batch (dispatch + tea.ClearScreen). Drain the
-	// batch by invoking it; tea.Batch returns a BatchMsg whose contents
-	// we run individually so the dispatch closure actually fires.
+	// Invoke the cmd so the dispatch closure fires. If it is a Batch,
+	// run each member; a bare cmd has already fired by being called.
 	if msg := cmd(); msg != nil {
 		if batch, ok := msg.(tea.BatchMsg); ok {
 			for _, sub := range batch {

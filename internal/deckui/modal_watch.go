@@ -102,7 +102,7 @@ func (wm *watchModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		switch msg.String() {
 		case "w", "esc", "q", "ctrl+c":
 			m.active = nil
-			return tea.ClearScreen
+			return nil
 		}
 		var cmd tea.Cmd
 		wm.vp, cmd = wm.vp.Update(msg)

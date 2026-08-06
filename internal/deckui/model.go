@@ -2312,17 +2312,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.filter = ""
 				m.filterInput.SetValue("")
 				m.cursor = 0
-				// tea.ClearScreen on modal exit so the row list's
-				// first frame after filtering closes overwrites every
-				// cell, not just lines the renderer's per-line diff
-				// thinks changed. See doc.go.
-				return m, tea.ClearScreen
+				return m, nil
 			case "enter":
 				m.filtering = false
 				m.filterInput.Blur()
 				m.filter = m.filterInput.Value()
 				m.cursor = 0
-				return m, tea.ClearScreen
+				return m, nil
 			}
 			beforeCount := len(m.items())
 			var cmd tea.Cmd
@@ -2337,7 +2333,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			// When the row list shrinks, rows that fall out the bottom
 			// otherwise bleed through the renderer's per-line diff.
 			if beforeCount != afterCount {
-				return m, batchCmds(cmd, tea.ClearScreen)
+				return m, cmd
 			}
 			return m, cmd
 		}
@@ -2453,26 +2449,17 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		switch {
 		case key.Matches(msg, km.Help):
 			m.active = newHelpModal()
-			// tea.ClearScreen on modal entry: the renderer's
-			// previous-frame buffer otherwise leaves stripes of the
-			// underlying view visible wherever the popover doesn't
-			// write. See doc.go and the matching pattern on `/`
-			// (filtering) + the new-workspace form.
-			return m, tea.ClearScreen
+			return m, nil
 		case key.Matches(msg, km.Jobs):
 			m.active = newJobsModal(m.jobs)
-			// tea.ClearScreen on modal entry — same rationale as `?`
-			// above. Without this, the deck row list bleeds through
-			// the surrounding area of the jobs popover.
-			return m, tea.Batch(tea.ClearScreen, refreshJobsListCmd(m.jobsListRefresher))
+			return m, refreshJobsListCmd(m.jobsListRefresher)
 		case key.Matches(msg, km.Watch):
 			item, ok := m.selected()
 			if !ok {
 				return m, nil
 			}
 			m.active = newWatchModal(item)
-			// tea.ClearScreen on modal entry — same rationale as `J` above.
-			return m, tea.Batch(tea.ClearScreen, scheduleWatchTick())
+			return m, scheduleWatchTick()
 		case key.Matches(msg, km.WatchWindow):
 			if _, ok := m.selected(); !ok {
 				return m, nil
@@ -2493,9 +2480,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.filtering = true
 			m.filterInput.Focus()
 			m.filterInput.SetValue(m.filter)
-			// tea.ClearScreen on modal entry; see doc.go and the
-			// matching tea.ClearScreen on exit above.
-			return m, tea.ClearScreen
+			return m, nil
 		case key.Matches(msg, km.Find):
 			if len(m.items()) == 0 {
 				return m, nil
@@ -2511,7 +2496,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.scope = (m.scope + 1) % scopeCount
 			m.cursor = 0
 			m.status = "scope: " + scopeLabel(m.scope)
-			return m, tea.ClearScreen
+			return m, nil
 		case key.Matches(msg, km.Up):
 			if m.cursor > 0 {
 				m.cursor--
@@ -2557,9 +2542,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			var initCmd tea.Cmd
 			m.promptForm, initCmd = newPromptForm(item, "")
 			m.status = "send prompt: type message · enter submit · ctrl+g $EDITOR · esc cancel"
-			// tea.ClearScreen on modal entry — same rationale as the
-			// other modals (see doc.go).
-			return m, batchCmds(initCmd, tea.ClearScreen)
+			return m, initCmd
 		case key.Matches(msg, km.EditorWindow):
 			return m.trigger(ActionOpenWindow, "editor")
 		case key.Matches(msg, km.ReviewWindow):
@@ -2621,7 +2604,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			var initCmd tea.Cmd
 			m.renameForm, initCmd = newRenameWorkspaceForm(item)
 			m.status = "rename: type new name · enter rename · esc cancel"
-			return m, batchCmds(initCmd, tea.ClearScreen)
+			return m, initCmd
 		case key.Matches(msg, km.LinkBookmark):
 			item, ok := m.selected()
 			if !ok {
@@ -2804,11 +2787,7 @@ func (m *Model) launchNewForm(initial NewWorkspaceInitial, repo string) (tea.Mod
 	}
 	m.newWorkspaceForm, initCmd = newNewWorkspaceForm(initial, m.bookmarkPrefix, trunk)
 	m.status = "new workspace..."
-	// tea.ClearScreen so the renderer drops its previous-frame buffer
-	// and the form's first paint overwrites every cell, including
-	// columns the deck row list (or the new-menu) wrote that the form
-	// doesn't. See doc.go.
-	return *m, tea.Batch(initCmd, tea.ClearScreen)
+	return *m, initCmd
 }
 
 // dispatchRenameForm forwards a message to the rename form and acts on
@@ -2822,7 +2801,7 @@ func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renameMode = false
 		m.renameForm = renameWorkspaceForm{}
 		m.status = ""
-		return m, batchCmds(cmd, tea.ClearScreen)
+		return m, cmd
 	case renameFormActionSubmit:
 		target := form.target
 		newName := form.value()
@@ -2830,7 +2809,7 @@ func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.renameForm = renameWorkspaceForm{}
 		if m.handler == nil {
 			m.status = "rename: handler not configured"
-			return m, batchCmds(cmd, tea.ClearScreen)
+			return m, cmd
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("renaming %s → %s...", target.WorkspaceName, newName)
@@ -2841,7 +2820,7 @@ func (m Model) dispatchRenameForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			err := handler(ActionRequest{Item: target, Action: ActionRename, Arg: newName, Reporter: noopActionReporter{}})
 			return actionResultMsg{action: ActionRename, arg: newName, item: target, err: err}
 		}
-		return m, batchCmds(cmd, tea.ClearScreen, m.spinner.Tick, dispatch)
+		return m, batchCmds(cmd, m.spinner.Tick, dispatch)
 	}
 	return m, cmd
 }
@@ -2858,7 +2837,7 @@ func (m Model) dispatchPromptForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptMode = false
 		m.promptForm = promptForm{}
 		m.status = ""
-		return m, batchCmds(cmd, tea.ClearScreen)
+		return m, cmd
 	case promptFormActionSubmit:
 		target := form.target
 		prompt := form.value()
@@ -2866,7 +2845,7 @@ func (m Model) dispatchPromptForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptForm = promptForm{}
 		if m.handler == nil {
 			m.status = "send prompt: handler not configured"
-			return m, batchCmds(cmd, tea.ClearScreen)
+			return m, cmd
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("sending prompt to %s/%s...", target.ProjectName, target.WorkspaceName)
@@ -2877,7 +2856,7 @@ func (m Model) dispatchPromptForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			err := handler(ActionRequest{Item: target, Action: ActionSendPrompt, Arg: prompt, Reporter: noopActionReporter{}})
 			return actionResultMsg{action: ActionSendPrompt, arg: prompt, item: target, err: err}
 		}
-		return m, batchCmds(cmd, tea.ClearScreen, m.spinner.Tick, dispatch)
+		return m, batchCmds(cmd, m.spinner.Tick, dispatch)
 	}
 	return m, cmd
 }
@@ -2896,10 +2875,7 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.newWorkspacePR = 0
 		m.newWorkspaceForm = newWorkspaceForm{}
 		m.status = ""
-		// tea.ClearScreen on every modal exit so the row list's first
-		// frame after the modal closes overwrites every cell, not just
-		// the lines the renderer thinks changed.
-		return m, batchCmds(cmd, tea.ClearScreen)
+		return m, cmd
 	case newFormActionSubmit:
 		req := form.request()
 		req.PRNumber = m.newWorkspacePR
@@ -2909,7 +2885,7 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.newWorkspacePR = 0
 		m.newWorkspaceForm = newWorkspaceForm{}
 		updated, dispatchCmd := m.startCreateAction(req, repo)
-		return updated, batchCmds(cmd, dispatchCmd, tea.ClearScreen)
+		return updated, batchCmds(cmd, dispatchCmd)
 	case newFormActionOpenPicker:
 		if m.bookmarkFetcher == nil || strings.TrimSpace(m.newWorkspaceRepo) == "" {
 			m.newWorkspaceForm.RevertStartFrom()
@@ -2918,7 +2894,7 @@ func (m Model) dispatchNewWorkspaceForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.newWorkspaceMode = false
 		m.active = newBookmarkPicker(m.spinner.View(), bookmarkPurposeNewWorkspaceStartFrom, Item{})
-		return m, batchCmds(cmd, m.spinner.Tick, m.bookmarkFetcher(m.newWorkspaceRepo), tea.ClearScreen)
+		return m, batchCmds(cmd, m.spinner.Tick, m.bookmarkFetcher(m.newWorkspaceRepo))
 	}
 	return m, cmd
 }
@@ -2953,7 +2929,7 @@ func (m *Model) acceptBookmarkSelection(name string, purpose bookmarkPurpose, ta
 		m.active = nil
 		m.newWorkspaceMode = true
 		m.newWorkspaceForm.SetPickedBookmark(name)
-		return *m, tea.ClearScreen
+		return *m, nil
 	case bookmarkPurposeLinkExisting:
 		m.active = nil
 		if m.bookmarkLinkHandler == nil {
@@ -3274,9 +3250,7 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	dm, loadCmd := newDiffModal(item, scope, m.diffLoad, m.diffOpen, m.diffBase, m.diffScopes, m.diffComments)
 	m.active = dm
 	m.status = "diff (" + scope.String() + "): loading…"
-	// tea.ClearScreen on modal entry — same rationale as the other modals
-	// (see doc.go).
-	return m, batchCmds(loadCmd, tea.ClearScreen)
+	return m, loadCmd
 }
 
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {

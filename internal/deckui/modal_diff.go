@@ -287,7 +287,7 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		// belongs to the surface, not to closing it.
 		case "esc", "q", "ctrl+c":
 			m.active = nil
-			return tea.ClearScreen
+			return nil
 		}
 	}
 	return dm.forward(msg)
