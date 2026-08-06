@@ -337,33 +337,31 @@ func ago(d time.Duration) string {
 // whether or not the process is still alive; the mini-deck recreates the
 // session on jump if it has to.
 func AgentWants(status string, unread, active bool) Reason {
-	if workspace.IsWorking(status) {
-		if !active {
-			return ReasonNone
-		}
+	// The one thing Classify cannot answer, asked first: whether the session
+	// behind a stored "working" is still alive. Everything else about an agent's
+	// state is a question the badge asks too, so it is asked in one place.
+	if workspace.IsWorking(status) && !active {
+		return ReasonNone
+	}
+	// Routed through workspace.Classify rather than re-deciding here. The two used
+	// to be separate switches over the same vocabulary, and they had drifted: this
+	// one listed "error" alongside "exited" and dropped such a workspace from the
+	// scope, while Classify — which decides the tmux badge count — called it
+	// notified and counted it. Nothing writes "error" today (report-status takes a
+	// closed set: working / idle / waiting / exited), so the badge never actually
+	// said 3 over a scope of 2; a stale state file was all it would have taken.
+	//
+	// The general shape is the point. Membership of the attention scope and the
+	// badge's count are two readings of one question, so a second switch here is a
+	// second answer waiting to disagree with the first.
+	switch workspace.Classify(status, unread) {
+	case workspace.AttentionWorking:
 		return ReasonWorking
+	case workspace.AttentionWaiting:
+		return ReasonWaiting
+	case workspace.AttentionNotified:
+		return ReasonNotified
+	case workspace.AttentionNone:
 	}
-	// Not routed through workspace.Classify, and the divergence is deliberate
-	// enough to be worth naming: Classify calls an errored-and-unread workspace
-	// Notified, and this calls it nothing at all. Classify decides the badge
-	// count and the dot's colour; this decides scope membership, and the two
-	// have disagreed about "error" since before either was written down.
-	// Preserved rather than quietly fixed here — see the note on ReasonNone in
-	// the attention scope's task.
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "waiting":
-		if unread {
-			return ReasonWaiting
-		}
-		return ReasonNone
-	case "exited", "error":
-		return ReasonNone
-	default:
-		// idle, empty, and anything a reporter invents: the unread flag is the
-		// whole signal. A quiet workspace you have already seen is asking nothing.
-		if unread {
-			return ReasonNotified
-		}
-		return ReasonNone
-	}
+	return ReasonNone
 }
