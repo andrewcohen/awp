@@ -100,6 +100,11 @@ func (m *Model) beginPublish() {
 	// the keyboard already in it.
 	m.summaryEditor = newCommentEditor(review.Anchor{}, m.hunkWidth)
 	m.summaryEditor.area.Placeholder = "review summary…"
+	// Sized to the screen it is on. The 4 rows newCommentEditor gives it are right
+	// in the stream, where the box is a guest above the code you are commenting on
+	// — here it is the only thing on the screen, and a review body written through
+	// a 4-row letterbox is why summaries came out shorter than the review deserved.
+	m.resizeSummaryBox()
 	// Opened on the summary the review already has, rather than empty. They are one
 	// thing: what is in this box is the review's body, and the review section of the
 	// stream shows the same text. An empty box beside a summary sitting at the top of
@@ -111,6 +116,53 @@ func (m *Model) beginPublish() {
 	m.status = ""
 	m.statusErr = false
 }
+
+// publishSummaryChrome is every row the composing screen spends around the
+// summary box's text area: the overlay's title and the blank under it (2), the
+// verdict row and the blank under it (2), the box's own border rows and its
+// header (3), and the blank plus key hint at the foot (2).
+//
+// A constant that has to be kept true by hand, the same bargain
+// commentEditorRows makes. Nothing detects it drifting except
+// TestThePublishScreenFillsItsBudget, which is the reason that test asserts an
+// exact height rather than a lower bound — a wrong number here does not crash,
+// it silently gives the box two rows too few or pushes the key hint off the
+// bottom, and neither is visible until someone is typing into it.
+const publishSummaryChrome = 9
+
+// summaryAreaHeight is how many rows the summary's text area gets in a body of
+// this height: everything the chrome does not need.
+//
+// Floored rather than allowed to go negative or vanish. On a terminal too short
+// to fit the chrome the box overflows, which is what a fixed height did at every
+// size anyway — a box you can see three lines of beats one you cannot see at all.
+func summaryAreaHeight(bodyHeight int) int {
+	return max(3, max(minBodyHeight, bodyHeight)-publishSummaryChrome)
+}
+
+// resizeSummaryBox re-lays the summary box for the current viewport.
+//
+// On the model rather than on the render copy, because neither dimension is only
+// about drawing: the height is the viewport the cursor is kept inside, and the
+// width is where the text wraps. Set at render time the box would draw twenty
+// rows while scrolling as if it had four, so typing past the fourth line would
+// jump the view for no reason the writer could see.
+//
+// The width is the overlay's, not m.hunkWidth. The stream's compose box is sized
+// to the right-hand pane because that is where it sits; this screen is not the
+// stream, and inheriting that width left the text wrapping short of a border
+// drawn at the full width — a visible strip of unused box down the right.
+func (m *Model) resizeSummaryBox() {
+	if !m.publishing {
+		return
+	}
+	m.summaryEditor.setWidth(publishOverlayInner(m.width))
+	m.summaryEditor.area.SetHeight(summaryAreaHeight(m.bodyHeight))
+}
+
+// publishOverlayInner is the width inside the publish overlay's border and
+// padding — what renderPublishOverlay hands to the rows it composes.
+func publishOverlayInner(width int) int { return max(20, width-helpBoxHOverhead) }
 
 // unpublishedSummaries is the review's own summary remarks — the ones a publish
 // would carry — oldest first.
@@ -387,7 +439,7 @@ func publishStatusText(report string) string {
 // help overlay does — so the body keeps the height the host budgeted and the
 // footer stays where it was.
 func (m Model) renderPublishOverlay(width, height int) string {
-	inner := max(20, width-helpBoxHOverhead)
+	inner := publishOverlayInner(width)
 	// Both are set by every branch below — each stage names itself.
 	var title string
 	var rows []string

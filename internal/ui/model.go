@@ -339,6 +339,11 @@ func (m *Model) SetSize(width, bodyHeight int) {
 		// so a stale layout would either overflow the panel or leave it half empty.
 		m.resizeHelp()
 	}
+	if m.publishing {
+		// The summary box fills whatever the chrome leaves in both directions, so a
+		// resize moves it.
+		m.resizeSummaryBox()
+	}
 	m.rebuildStream()
 }
 
