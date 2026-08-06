@@ -443,6 +443,59 @@ type Thread struct {
 	Comments  []ThreadComment `json:"comments"`
 }
 
+// A mirrored thread is shown as ordinary comments, so one renderer covers both
+// GitHub's conversations and ours. The ids those borrowed comments carry are the
+// contract between the two types: they have to name the thread they came from, so
+// that resolving, folding and replying can act on the conversation from any of its
+// rows, and they have to be recognisable as *not ours* so that editing, deleting
+// and the robot marker leave other people's words alone.
+//
+// The scheme lives here rather than in the viewer that renders it. It is a
+// translation between two types this package owns, and while it lived upstairs
+// review.Comment could not answer "are you GitHub's record or mine" — so every
+// caller answered by prefix-matching the id itself, which is exactly the kind of
+// invariant that holds only as long as every call site remembers it.
+const (
+	// remoteThreadPrefix marks a comment adapted from a mirrored GitHub thread.
+	remoteThreadPrefix = "thread-"
+	// threadMessageSep separates a thread's id from a message's index within it. A
+	// character GitHub's node ids do not contain, so splitting on it cannot cut an
+	// id in half.
+	threadMessageSep = "#"
+)
+
+// RemoteThreadID is the id the thread's opening message is shown under.
+func RemoteThreadID(threadID string) string { return remoteThreadPrefix + threadID }
+
+// RemoteMessageID is the id of the nth message of a mirrored thread. Indexed off
+// the thread so every message has a stable id that still names its conversation.
+func RemoteMessageID(threadID string, n int) string {
+	return RemoteThreadID(threadID) + threadMessageSep + strconv.Itoa(n)
+}
+
+// Mirrored reports whether this is GitHub's record rather than one of ours.
+//
+// One spelling, because the answer decides whether four different things are
+// allowed — editing, deleting, the robot marker, and the published chip — and a
+// comment that is other people's words is none of the things one of ours is.
+func (c Comment) Mirrored() bool { return strings.HasPrefix(c.ID, remoteThreadPrefix) }
+
+// ThreadIDOf recovers the thread a mirrored comment belongs to. False for one of
+// ours.
+//
+// Any message of the conversation answers for the whole of it: resolving, folding
+// and replying all act on the thread, so the cursor may sit on any of its rows.
+func ThreadIDOf(commentID string) (string, bool) {
+	if !strings.HasPrefix(commentID, remoteThreadPrefix) {
+		return "", false
+	}
+	id := strings.TrimPrefix(commentID, remoteThreadPrefix)
+	if cut := strings.Index(id, threadMessageSep); cut >= 0 {
+		id = id[:cut]
+	}
+	return id, true
+}
+
 // ThreadComment is one message in a remote thread.
 type ThreadComment struct {
 	// ID is GitHub's node id for the message. Kept because it is how a mirrored

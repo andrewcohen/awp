@@ -755,7 +755,7 @@ func commentRowsFor(m Model, id string) int {
 		if !isCommentRow(r.kind) || r.comment < 0 || r.comment >= len(m.stream.comments) {
 			continue
 		}
-		if m.stream.comments[r.comment].ID == remoteThreadPrefix+id {
+		if m.stream.comments[r.comment].ID == review.RemoteThreadID(id) {
 			n++
 		}
 	}
@@ -844,7 +844,7 @@ func threadRow(t *testing.T, m Model, id string) int {
 	t.Helper()
 	for i, r := range m.stream.rows {
 		if isCommentRow(r.kind) && r.comment >= 0 && r.comment < len(m.stream.comments) &&
-			m.stream.comments[r.comment].ID == remoteThreadPrefix+id {
+			m.stream.comments[r.comment].ID == review.RemoteThreadID(id) {
 			return i
 		}
 	}

@@ -145,7 +145,7 @@ func TestOutdatedAndFileLevelThreadsAreToldApart(t *testing.T) {
 			placed[e.id] = true
 		}
 	}
-	outdatedID, fileLevelID := remoteThreadPrefix+"T1", remoteThreadPrefix+"T2"
+	outdatedID, fileLevelID := review.RemoteThreadID("T1"), review.RemoteThreadID("T2")
 	if !detached[outdatedID] {
 		t.Errorf("the outdated thread is not detached — it is about a line, not the file: %+v", m.commentIndex)
 	}
