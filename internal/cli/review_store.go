@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -99,15 +100,16 @@ func runReviewSubcommand(runner Runner, svc workspace.Service, args []string, ou
 
 // isReviewSubcommand reports whether the first argument names a subcommand
 // rather than a PR number. Keeps `awp review 123` working unchanged.
+// reviewSubcommands is what `awp review <word>` dispatches on.
+//
+// A slice rather than a switch's case list so the help text can be checked
+// against it. The two were separate lists of the same names and drifted the way
+// separate lists do: `reply` shipped, ran, was documented in the agent's review
+// prompt, and never appeared in `awp review --help`.
+var reviewSubcommands = []string{"add", "list", "publish", "reply"}
+
 func isReviewSubcommand(args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	switch args[0] {
-	case "add", "list", "publish", "reply":
-		return true
-	}
-	return false
+	return len(args) > 0 && slices.Contains(reviewSubcommands, args[0])
 }
 
 // reviewScope is the review a command resolved, with enough about how it got there
