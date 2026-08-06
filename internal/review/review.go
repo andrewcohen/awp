@@ -224,10 +224,30 @@ const (
 	KindSuggestion Kind = "suggestion"
 	// KindQuestion asks for an answer.
 	KindQuestion Kind = "question"
+	// KindPraise says something is good, and asks for nothing.
+	//
+	// The one kind that wants no action, which is exactly why it needs a name: on a
+	// surface where every remark is a thing to deal with, the only way to say "this
+	// is well done" was to file a plain comment — which arrives looking like work.
+	// It is also the remark most often left unwritten, because writing it costs the
+	// same as writing a complaint and reads as noise in a list of complaints.
+	KindPraise Kind = "praise"
 )
 
 // Kinds is every kind, in the order the compose box cycles them.
-func Kinds() []Kind { return []Kind{KindComment, KindSuggestion, KindQuestion} }
+//
+// Praise last: the cycle should reach the kinds you file most in the fewest
+// presses, and tab is also how you leave a kind you picked by accident.
+func Kinds() []Kind { return []Kind{KindComment, KindSuggestion, KindQuestion, KindPraise} }
+
+// WantsAction reports whether a remark is asking the reader to do something.
+//
+// Praise is not. It is the one kind whose whole point is that nothing is
+// required, so a tally of what a change still owes its reviewer must not count
+// it — a PR with nine compliments and one bug has one thing to fix, and saying
+// "10 open" makes the compliments read as the complaints they were written to
+// balance.
+func (k Kind) WantsAction() bool { return k.OrDefault() != KindPraise }
 
 // Proposal is an agent's offer to make a change, and where that offer stands.
 //
@@ -286,6 +306,8 @@ func ParseKind(s string) Kind {
 		return KindSuggestion
 	case KindQuestion:
 		return KindQuestion
+	case KindPraise:
+		return KindPraise
 	default:
 		return KindComment
 	}
@@ -939,10 +961,15 @@ func (s Store) Comments(r Review) ([]Comment, error) {
 // A reply into a GitHub thread is excluded for a different reason: it is not a
 // finding at all. It is something you said to someone else, and counting it would
 // have the badge ask you to triage your own answer.
+//
+// Praise is excluded for a third reason: it asks for nothing (see
+// Kind.WantsAction). A change with nine compliments and one bug owes its author
+// one thing, and a badge reading 10 turns every compliment into a complaint —
+// which is the opposite of what writing one was for.
 func OpenCount(comments []Comment) int {
 	n := 0
 	for _, c := range comments {
-		if c.ReplyTo != "" || c.ThreadReply() {
+		if c.ReplyTo != "" || c.ThreadReply() || !c.Kind.WantsAction() {
 			continue
 		}
 		if c.State == Open {

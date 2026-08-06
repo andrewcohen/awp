@@ -83,7 +83,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"enter", "save · in a reply to a GitHub thread, post it there"},
 				{"ctrl+s", "save and send to the workspace's agent"},
 				{"ctrl+g", "write it in $EDITOR instead"},
-				{"tab", "cycle kind: comment → suggestion → question"},
+				{"tab", "cycle kind: comment → suggestion → question → praise"},
 				{"alt+enter", "newline"},
 				{"esc", "discard"},
 			},

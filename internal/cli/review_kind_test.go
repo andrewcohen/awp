@@ -191,10 +191,16 @@ func TestReviewPromptDocumentsRanges(t *testing.T) {
 	}
 }
 
-// The prompt must not invent a fourth kind in prose. It told the agent to file a
-// `note` for pushing back on an existing comment, which `--type note` silently
-// turns into a plain comment — the prompt contradicting its own Comment types
-// section a few paragraphs later.
+// The prompt must not invent a kind in prose. It told the agent to file a `note`
+// for pushing back on an existing comment, which `--type note` silently turns
+// into a plain comment — the prompt contradicting its own Comment types section a
+// few paragraphs later.
+//
+// The invented list is deliberately short of `praise`, which used to be on it and
+// is now real: the pair of loops is what caught the omission when the kind was
+// added, because a kind that exists must be named and a kind that does not must
+// not be. Anything moved from the second list to the first has to be added to
+// review.Kinds in the same change, or this fails both ways at once.
 func TestReviewPromptNamesOnlyTheRealKinds(t *testing.T) {
 	for _, kind := range review.Kinds() {
 		if !strings.Contains(reviewPromptTemplate, "`"+string(kind)+"`") {
@@ -203,9 +209,15 @@ func TestReviewPromptNamesOnlyTheRealKinds(t *testing.T) {
 	}
 	// Backticked, i.e. named as a type the agent could pass to --type. The word
 	// itself is fine in prose ("note that…"); it is the vocabulary that matters.
-	for _, invented := range []string{"`note`", "`nit`", "`praise`", "`issue`"} {
+	for _, invented := range []string{"`note`", "`nit`", "`issue`"} {
 		if strings.Contains(reviewPromptTemplate, invented) {
 			t.Fatalf("the review prompt offers %s, which is not a kind awp has", invented)
 		}
+	}
+	// The prompt says how many types there are, in prose the loops above cannot
+	// check. A count that disagrees with review.Kinds is the same contradiction
+	// this test exists for, one sentence earlier.
+	if n := len(review.Kinds()); n != 4 || !strings.Contains(reviewPromptTemplate, "four types and no others") {
+		t.Fatalf("there are %d kinds; the prompt's count sentence has to say so", n)
 	}
 }

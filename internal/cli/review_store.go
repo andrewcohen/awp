@@ -300,7 +300,7 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 		author   = fs.String("author", "", "who is filing this (defaults to the agent name, or 'agent')")
 		text     = fs.String("text", "", "the anchored line's text, so the comment survives the line moving")
 		endText  = fs.String("end-text", "", "the last line's text, the same way --text anchors the first")
-		kind     = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, or question")
+		kind     = fs.String("type", string(review.KindComment), "what the comment is asking for: comment, suggestion, question, or praise")
 		wsName   = workspaceFlag(fs)
 	)
 	if err := fs.Parse(args); err != nil {
@@ -381,7 +381,7 @@ func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.
 		body     = fs.String("body", "", "the reply text")
 		bodyFile = fs.String("body-file", "", "read the reply text from a file, or - for stdin (preferred for anything with markdown in it)")
 		author   = fs.String("author", "", "who is replying (defaults to 'agent')")
-		kind     = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, or question")
+		kind     = fs.String("type", string(review.KindComment), "what the reply is asking for: comment, suggestion, question, or praise")
 		proposal = fs.Bool("proposal", false, "the reply is a change you intend to make, and needs approval before you make it")
 		wsName   = workspaceFlag(fs)
 	)
