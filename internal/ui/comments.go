@@ -457,6 +457,28 @@ const (
 	chipOutdated = "outdated"
 )
 
+// The two things a proposal can say about itself. A pending one is the message in
+// a change that is waiting on *you* — the agent has stopped — so it has to be
+// legible without opening the conversation, and an approved one has to be told
+// apart from it or a proposal you already answered goes on reading as live.
+const (
+	chipAwaitingYou = "awaiting your ok"
+	chipApproved    = "approved"
+)
+
+// proposalChip is what a comment's header says about its proposal, empty for
+// everything that is not one.
+func proposalChip(c review.Comment) string {
+	switch {
+	case c.AwaitingApproval():
+		return chipAwaitingYou
+	case c.Approved():
+		return chipApproved
+	default:
+		return ""
+	}
+}
+
 // remoteThreadLabel is the author label a mirrored thread renders under: where it
 // came from, then whatever GitHub says about it.
 //
@@ -1346,6 +1368,12 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	// prevent.
 	if c.ThreadReply() && c.State != review.Published {
 		title += " · unsent"
+	}
+	// Before the state chip, because it is the more urgent fact: a reply that has
+	// stopped an agent is the one message in the change asking you for something,
+	// and "open" is not competing with that for the reader's attention.
+	if chip := proposalChip(c); chip != "" {
+		title += " · " + chip
 	}
 	// Not on a mirrored message. "published" is our word for one of *our* comments
 	// having reached GitHub, and every message of a GitHub thread is there by

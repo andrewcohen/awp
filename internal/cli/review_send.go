@@ -31,6 +31,9 @@ import (
 // explanatory prose the agent does not need. What is left is the address, the
 // remark, and the two rules that matter: read it yourself, reply before changing.
 func commentPromptFor(c review.Comment, revision string) string {
+	if c.Approved() {
+		return approvalPromptFor(c)
+	}
 	var b strings.Builder
 
 	// "a.go:12", "a.go:12-18", "a.go", "the whole change" — one spelling of a
@@ -61,6 +64,43 @@ func commentPromptFor(c review.Comment, revision string) string {
 	} else {
 		b.WriteString("Reply before changing anything, then wait for approval.\n")
 	}
+	return b.String()
+}
+
+// approvalPromptFor is what the agent is told when its proposal is approved.
+//
+// Rendered from the same funnel as every other comment prompt, branching on the
+// record rather than on a second sink: the viewer hands the approved proposal to
+// SendComment exactly as it hands over any other comment, and what makes this
+// message different is a fact the record already carries.
+//
+// It echoes the proposal back in full. The agent stopped when it made the offer
+// and may well be reading this on a fresh turn with none of the context it wrote
+// there — and unlike the surrounding-code paste that had to be cut from the
+// finding prompt, this is bounded by construction: it is the agent's own words,
+// and it wrote them to be read.
+func approvalPromptFor(c review.Comment) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Proposal approved — %s\n", c.Anchor.Where())
+	if c.ID != "" {
+		fmt.Fprintf(&b, "proposal id %s\n", c.ID)
+	}
+	if c.ReplyTo != "" {
+		fmt.Fprintf(&b, "answering review comment %s\n", c.ReplyTo)
+	}
+
+	b.WriteString("\nApproved:\n")
+	for _, l := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
+		b.WriteString("  " + l + "\n")
+	}
+
+	// Named as the thing to do, because that is the whole content of the message:
+	// the gate that stopped it is open.
+	b.WriteString("\nGo ahead.")
+	if c.ReplyTo != "" {
+		fmt.Fprintf(&b, " Reply on the review comment when it is done:\n  awp review reply --to %s --body-file <path>", c.ReplyTo)
+	}
+	b.WriteString("\n")
 	return b.String()
 }
 

@@ -55,6 +55,15 @@ type commentEntry struct {
 	// diff. GitHub's own word for it, and the reason such a thread is detached —
 	// so it is worth more than the generic "anchor could not be found".
 	outdated bool
+	// proposal is the state of a proposal anywhere in the conversation, empty when
+	// there is none. On the parent's row because the index lists conversations and
+	// folds replies into a count — and a proposal is always a reply, so a state
+	// carried only by the message that holds it would never be listed at all.
+	//
+	// Pending wins over approved when a conversation holds both: what the list is
+	// for is finding what is waiting on you, and one settled proposal does not
+	// settle the exchange.
+	proposal review.Proposal
 }
 
 // commentEntries walks the placed rows in stream order and returns one entry
@@ -80,6 +89,7 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 		if c.ReplyTo != "" {
 			if at, ok := slot[c.ReplyTo]; ok {
 				out[at].replies++
+				out[at].proposal = strongerProposal(out[at].proposal, c.Proposal)
 				continue
 			}
 			// A reply whose parent is not in the stream is a conversation in its
@@ -98,6 +108,11 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 			state:      c.State,
 			detached:   r.kind == rowOrphan,
 			changeWide: r.kind == rowReview,
+			// A proposal is a reply, so this is normally set by the fold above. It is
+			// read off the parent too for the one case that is not: a reply whose
+			// parent is not in the stream is listed as a conversation in its own
+			// right, and it would otherwise be the only proposal the list omits.
+			proposal: c.Proposal,
 		}
 		if t, ok := m.threadFor(c.ID); ok {
 			e.outdated = t.Outdated
@@ -105,6 +120,22 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 		out = append(out, e)
 	}
 	return out
+}
+
+// strongerProposal is which of two proposal states an index row should report.
+//
+// A conversation can hold several — an agent that proposed twice, or proposed
+// again after you replied — and the row has one slot. Pending outranks approved
+// outranks none, because the list is read to find what is waiting on you and a
+// settled proposal beside a live one does not settle the exchange.
+func strongerProposal(a, b review.Proposal) review.Proposal {
+	if a == review.ProposalPending || b == review.ProposalPending {
+		return review.ProposalPending
+	}
+	if a == review.ProposalApproved || b == review.ProposalApproved {
+		return review.ProposalApproved
+	}
+	return ""
 }
 
 // entrySummary is an index row's one-line body preview, carrying the robot
@@ -287,10 +318,20 @@ func renderCommentEntry(e commentEntry, width int, selected, band bool) string {
 	return out
 }
 
-// entryLocation is the "where" half of an index row. The basename rather than
-// the full path: the column is a third of the body and the file list above
-// already shows paths, so spending the width here buys nothing.
+// entryLocation is the "where" half of an index row, plus whatever the
+// conversation is waiting on.
+//
+// The suffix is appended here rather than inside entryWhere because that
+// function returns from two branches — a review-level row leaves early — and a
+// chip added to one of them is a chip the other silently drops.
 func entryLocation(e commentEntry) string {
+	return entryWhere(e) + proposalSuffix(e)
+}
+
+// entryWhere names where a conversation is. The basename rather than the full
+// path: the column is a third of the body and the file list above already shows
+// paths, so spending the width here buys nothing.
+func entryWhere(e commentEntry) string {
 	if e.changeWide {
 		// No file to name. "review" is what the section it lives in is called, so
 		// the index row and the stream agree on where selecting it will take you.
@@ -324,6 +365,19 @@ func entryLocation(e commentEntry) string {
 		loc += " · " + chipOutdated
 	}
 	return loc
+}
+
+// proposalSuffix is what an index row says about a proposal in its conversation.
+//
+// Only the pending one is worth a row's width. The list is scanned to find what
+// is waiting on you, and an approved proposal is not — it is the agent's turn,
+// which the exchange already shows by having gone quiet. The full state is in the
+// conversation itself, and in `awp review list`.
+func proposalSuffix(e commentEntry) string {
+	if e.proposal != review.ProposalPending {
+		return ""
+	}
+	return " · " + chipAwaitingYou
 }
 
 // clampCommentsCursor keeps the index selection inside the list, and hands the
