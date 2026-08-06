@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/review"
@@ -280,7 +280,7 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	// belongs to it — including the ones that would otherwise close the modal.
 	// Grabbing esc/q with the help open would close the diff instead of the help,
 	// so the only way out of the reference would be out of the view.
-	if key, ok := msg.(tea.KeyMsg); ok && !dm.inner.Filtering() && !dm.inner.HelpVisible() {
+	if key, ok := msg.(tea.KeyPressMsg); ok && !dm.inner.Filtering() && !dm.inner.HelpVisible() {
 		switch key.String() {
 		// Deliberately not `c`: that opens the comment box inside the viewer.
 		// `c` opened this modal from the row list, but once it is up the key

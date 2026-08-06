@@ -4,10 +4,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
+	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/editor"
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -81,8 +82,10 @@ func newCommentEditorFor(c review.Comment, width int) commentEditor {
 	// the design system reserves fills for exactly that kind of deliberate
 	// treatment. (Its default is a hard-coded 256-colour value too, which is the
 	// other thing the palette exists to keep out.)
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	taStyles := ta.Styles()
+	taStyles.Focused.CursorLine = lipgloss.NewStyle()
+	taStyles.Blurred.CursorLine = lipgloss.NewStyle()
+	ta.SetStyles(taStyles)
 	ta.SetWidth(editorAreaWidth(width))
 	ta.SetHeight(commentEditorHeight)
 	ta.CharLimit = 0
@@ -122,7 +125,7 @@ const (
 )
 
 func (e commentEditor) update(msg tea.Msg) (commentEditor, tea.Cmd, editorAction) {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		var cmd tea.Cmd
 		e.area, cmd = e.area.Update(msg)
@@ -214,7 +217,7 @@ func (e commentEditor) view(width int) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(kindColor(e.kind))).
-		Width(max(20, width-2)).
+		Width(max(20+charm.BorderCells, width)).
 		Render(lipgloss.JoinVertical(lipgloss.Left,
 			headStyle.Render(truncate(head, inner)),
 			e.area.View(),
@@ -544,7 +547,7 @@ func (m Model) startEdit() (tea.Model, tea.Cmd) {
 }
 
 // handleEditorKey routes input to the compose box and applies its outcome.
-func (m Model) handleEditorKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	was := m.editor.kind
 	editor, cmd, action := m.editor.update(msg)
 	m.editor = editor

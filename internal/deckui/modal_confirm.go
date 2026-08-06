@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // confirmDeleteModal is the delete confirmation popover. A normal
@@ -43,7 +43,7 @@ func newConfirmDelete(target Item) (*confirmDeleteModal, tea.Cmd, string) {
 }
 
 func (c *confirmDeleteModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		if c.isProject {
 			var cmd tea.Cmd
@@ -103,7 +103,7 @@ func (c *confirmDeleteModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colDanger)).
 		Padding(1, 2).
-		Width(60)
+		Width(60 + borderCells)
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colDanger))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
@@ -156,7 +156,7 @@ func newConfirmMerge(target Item, status PRStatus) (*confirmMergeModal, string) 
 }
 
 func (c *confirmMergeModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return nil
 	}
@@ -184,7 +184,7 @@ func (c *confirmMergeModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(64)
+		Width(64 + borderCells)
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	prStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)).Bold(true)

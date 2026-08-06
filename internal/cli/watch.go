@@ -12,7 +12,7 @@ import (
 	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // codingAgentInvocation returns the agent launch command for a coding
@@ -204,7 +204,7 @@ func (a *App) runWatch(args []string) error {
 		agentStatus:   agentStatus,
 		configured:    configured,
 	}
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m).Run()
 	return err
 }
 
@@ -310,7 +310,7 @@ func watchTick() tea.Cmd {
 
 func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
@@ -332,7 +332,17 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m watchModel) View() string {
+// View satisfies tea.Model. Bubble Tea v2 asks the view to declare the
+// terminal features it wants, so alt-screen is stated here rather than
+// as a tea.NewProgram option. The content itself comes from render, which
+// stays a plain string so tests and the panel helpers can call it.
+func (m watchModel) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+func (m watchModel) render() string {
 	if m.err != nil {
 		return fmt.Sprintf("watch error: %v\n\nq to quit\n", m.err)
 	}

@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 )
 
 func TestStartActivityAppendsEntry(t *testing.T) {
@@ -442,7 +442,7 @@ func TestRenameSubmitStartsAndFinishesActivity(t *testing.T) {
 	// pattern as the new-workspace form test.
 	model.renameForm.form.State = huh.StateCompleted
 
-	updated, _ := model.dispatchRenameForm(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := model.dispatchRenameForm(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m := updated.(Model)
 	if !m.hasActivity("workspace:rename:old") {
 		t.Fatalf("expected workspace:rename:old activity, got %+v", m.activities)

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestMiniModelNavigationAndSelect(t *testing.T) {
@@ -15,23 +15,23 @@ func TestMiniModelNavigationAndSelect(t *testing.T) {
 	}
 	m := NewMiniModel(rows)
 	// j moves down, k moves back up.
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	next, _ := m.Update(runeKey("j"))
 	m = next.(MiniModel)
 	if m.Cursor() != 1 {
 		t.Fatalf("after j: want cursor=1 got %d", m.Cursor())
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	next, _ = m.Update(runeKey("k"))
 	m = next.(MiniModel)
 	if m.Cursor() != 0 {
 		t.Fatalf("after k: want cursor=0 got %d", m.Cursor())
 	}
 	// G jumps to end, then enter selects.
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	next, _ = m.Update(runeKey("G"))
 	m = next.(MiniModel)
 	if m.Cursor() != 2 {
 		t.Fatalf("after G: want cursor=2 got %d", m.Cursor())
 	}
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = next.(MiniModel)
 	if m.Chosen() == nil || m.Chosen().Workspace != "three" {
 		t.Fatalf("expected chosen=three, got %+v", m.Chosen())
@@ -43,7 +43,7 @@ func TestMiniModelNavigationAndSelect(t *testing.T) {
 
 func TestMiniModelQuitWithoutSelection(t *testing.T) {
 	m := NewMiniModel([]MiniRow{{Project: "a", Workspace: "b", Status: "working"}})
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(MiniModel)
 	if m.Chosen() != nil {
 		t.Fatalf("esc should not select, got %+v", m.Chosen())
@@ -55,7 +55,7 @@ func TestMiniModelQuitWithoutSelection(t *testing.T) {
 
 func TestMiniModelViewEmpty(t *testing.T) {
 	m := NewMiniModel(nil)
-	view := m.View()
+	view := m.render()
 	if !strings.Contains(view, "Nothing waiting") {
 		t.Fatalf("empty view should explain itself, got: %q", view)
 	}
@@ -69,7 +69,7 @@ func TestMiniModelFindModeJumpsCursor(t *testing.T) {
 	}
 	m := NewMiniModel(rows)
 	// f enters find mode and assigns hints.
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next, _ := m.Update(runeKey("f"))
 	m = next.(MiniModel)
 	if !m.FindMode() {
 		t.Fatal("expected find mode after pressing f")
@@ -85,7 +85,7 @@ func TestMiniModelFindModeJumpsCursor(t *testing.T) {
 		}
 	}
 	// Typing 'g' should jump to gamma/three and exit find mode.
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	next, _ = m.Update(runeKey("g"))
 	m = next.(MiniModel)
 	if m.FindMode() {
 		t.Fatal("find mode should exit after a successful match")
@@ -104,7 +104,7 @@ func TestMiniModelFindModeTwoCharHint(t *testing.T) {
 		{Project: "a", Workspace: "aa", Status: "waiting"},
 	}
 	m := NewMiniModel(rows)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next, _ := m.Update(runeKey("f"))
 	m = next.(MiniModel)
 
 	// Find the row that overflowed to a two-key hint.
@@ -123,7 +123,7 @@ func TestMiniModelFindModeTwoCharHint(t *testing.T) {
 	}
 
 	// Press the first key — should not jump yet, should set pending.
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[0]}})
+	next, _ = m.Update(runeKey(string(runes[0])))
 	m = next.(MiniModel)
 	if m.findPending != runes[0] {
 		t.Fatalf("expected pending=%q, got %q", string(runes[0]), m.findPending)
@@ -133,7 +133,7 @@ func TestMiniModelFindModeTwoCharHint(t *testing.T) {
 	}
 
 	// Press the second key — completes the hint and jumps.
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{runes[1]}})
+	next, _ = m.Update(runeKey(string(runes[1])))
 	m = next.(MiniModel)
 	if m.FindMode() {
 		t.Fatal("find mode should exit after the second char completes")
@@ -149,12 +149,12 @@ func TestMiniModelFindModeEscCancels(t *testing.T) {
 		{Project: "b", Workspace: "y", Status: "working"},
 	}
 	m := NewMiniModel(rows)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next, _ := m.Update(runeKey("f"))
 	m = next.(MiniModel)
 	if !m.FindMode() {
 		t.Fatal("expected find mode")
 	}
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m = next.(MiniModel)
 	if m.FindMode() {
 		t.Fatal("esc should leave find mode")
@@ -169,10 +169,10 @@ func TestMiniModelFindModeUnknownKeyStaysInMode(t *testing.T) {
 		{Project: "alpha", Workspace: "one", Status: "working"},
 	}
 	m := NewMiniModel(rows)
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	next, _ := m.Update(runeKey("f"))
 	m = next.(MiniModel)
 	// "z" is not assigned to any row and not a known prefix → no-op.
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	next, _ = m.Update(runeKey("z"))
 	m = next.(MiniModel)
 	if !m.FindMode() {
 		t.Fatal("unknown key should not exit find mode")
@@ -187,7 +187,7 @@ func TestMiniModelViewIncludesProjectAndWorkspace(t *testing.T) {
 		nm, cmd := m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 		return nm.(MiniModel), cmd
 	}()
-	view := m.View()
+	view := m.render()
 	if !strings.Contains(view, "proj") {
 		t.Fatalf("expected project in view, got: %q", view)
 	}

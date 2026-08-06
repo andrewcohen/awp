@@ -3,10 +3,10 @@ package deckui
 import (
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/watch"
@@ -42,7 +42,7 @@ type watchModal struct {
 // newWatchModal resolves the workspace's dev loop and seeds the first frame.
 func newWatchModal(item Item) *watchModal {
 	cfg, _ := config.Load(item.RepoRoot)
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
 	vp.KeyMap = viewport.KeyMap{
 		Up:           key.NewBinding(key.WithKeys("up", "k")),
 		Down:         key.NewBinding(key.WithKeys("down", "j")),
@@ -98,7 +98,7 @@ func (wm *watchModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	case watchTickMsg:
 		wm.refresh()
 		return scheduleWatchTick()
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "w", "esc", "q", "ctrl+c":
 			m.active = nil
@@ -113,12 +113,12 @@ func (wm *watchModal) update(m *Model, msg tea.Msg) tea.Cmd {
 
 func (wm *watchModal) renderPopover(m *Model) string {
 	boxWidth, innerWidth := helpBoxDims(m.width)
-	wm.vp.Width = innerWidth
+	wm.vp.SetWidth(innerWidth)
 	vpHeight := m.height - 8
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	wm.vp.Height = vpHeight
+	wm.vp.SetHeight(vpHeight)
 
 	hintText := "↑/↓ scroll · pgup/pgdn page · esc close · repaints 1s"
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(hintText)
@@ -128,6 +128,6 @@ func (wm *watchModal) renderPopover(m *Model) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(boxWidth).
+		Width(boxWidth + borderCells).
 		Render(body)
 }

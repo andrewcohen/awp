@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 )
@@ -354,7 +354,7 @@ func newJobsList() list.Model {
 }
 
 func newJobsViewport() viewport.Model {
-	v := viewport.New(0, 0)
+	v := viewport.New()
 	v.KeyMap = viewport.KeyMap{
 		PageDown: key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "scroll log")),
 		PageUp:   key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "scroll log")),
@@ -402,7 +402,7 @@ func renderJobsOverlay(width, height int, l *list.Model, v *viewport.Model, empt
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colMuted)).
 		Padding(1, 2).
-		Width(boxWidth)
+		Width(boxWidth + borderCells)
 
 	if empty {
 		emptyMsg := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Width(innerWidth).
@@ -415,8 +415,8 @@ func renderJobsOverlay(width, height int, l *list.Model, v *viewport.Model, empt
 	listWidth := (innerWidth - gutter) / 2
 	detailsWidth := innerWidth - gutter - listWidth
 	l.SetSize(listWidth, bodyHeight)
-	v.Width = detailsWidth
-	v.Height = bodyHeight
+	v.SetWidth(detailsWidth)
+	v.SetHeight(bodyHeight)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, l.View(), "  ", v.View())
 	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", help))

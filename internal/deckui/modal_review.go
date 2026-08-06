@@ -1,9 +1,9 @@
 package deckui
 
 import (
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // reviewPicker is the PR "review" picker (the `r` key / new-menu review
@@ -50,7 +50,7 @@ func (p *reviewPicker) tickLoading(glyph string) {
 }
 
 func (p *reviewPicker) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		var cmd tea.Cmd
 		p.list, cmd = p.list.Update(msg)
@@ -117,22 +117,25 @@ func (p *reviewPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 }
 
 // isDigitKey reports whether the key press is a single 0-9 digit rune.
-func isDigitKey(k tea.KeyMsg) bool {
-	if k.Type != tea.KeyRunes || len(k.Runes) != 1 {
+func isDigitKey(k tea.KeyPressMsg) bool {
+	typed := []rune(k.Text)
+	if len(typed) != 1 {
 		return false
 	}
-	r := k.Runes[0]
+	r := typed[0]
 	return r >= '0' && r <= '9'
 }
 
 // filterStartMsg builds the key press that puts a bubbles list into its
 // filtering state, derived from the list's own Filter binding so it stays
 // correct if the binding is ever rethemed.
-func filterStartMsg(l list.Model) tea.KeyMsg {
+func filterStartMsg(l list.Model) tea.KeyPressMsg {
 	if keys := l.KeyMap.Filter.Keys(); len(keys) > 0 {
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(keys[0])}
+		if r := []rune(keys[0]); len(r) == 1 {
+			return tea.KeyPressMsg{Code: r[0], Text: keys[0]}
+		}
 	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+	return tea.KeyPressMsg{Code: '/', Text: "/"}
 }
 
 func (p *reviewPicker) view(m *Model) (left, right string) {

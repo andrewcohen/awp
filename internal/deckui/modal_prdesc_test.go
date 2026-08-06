@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // prDescDeck is a deck on one row whose PR is #42, with a loader that answers
@@ -25,7 +25,7 @@ func prDescDeck(t *testing.T, load PRDescriptionLoader) Model {
 }
 
 func pressRune(m Model, r rune) (Model, tea.Cmd) {
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	updated, cmd := m.Update(runeKey(string(r)))
 	return updated.(Model), cmd
 }
 
@@ -195,9 +195,9 @@ func TestTheDescriptionModalClosesOnEscAndOnD(t *testing.T) {
 		name string
 		key  tea.KeyMsg
 	}{
-		{"esc", tea.KeyMsg{Type: tea.KeyEsc}},
-		{"q", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}},
-		{"d", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}}},
+		{"esc", tea.KeyPressMsg{Code: tea.KeyEsc}},
+		{"q", runeKey("q")},
+		{"d", runeKey("d")},
 	} {
 		m := prDescDeck(t, func(Item, int) (PRDescription, error) { return PRDescription{Body: "b"}, nil })
 		m, _ = pressRune(m, 'p')

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/review"
@@ -129,7 +129,7 @@ func TestComposingARangeMarksItAndTabRecoloursIt(t *testing.T) {
 		t.Fatalf("expected the range marked with the box's kind, got %q ok=%v", kind, ok)
 	}
 	before := m.renderStreamRowAt(rows[0], 60)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = updated.(Model)
 	if got, _ := m.rangeMark(rows[0]); got != review.KindSuggestion {
 		t.Fatalf("expected tab to recolour the mark, got %q", got)

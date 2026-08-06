@@ -3,8 +3,6 @@ package ui
 import (
 	"strings"
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // searchModel is a viewer over one file whose lines are distinguishable, tall
@@ -211,7 +209,7 @@ func TestSearchTakesTheKeyboardFromTheHost(t *testing.T) {
 func TestStepWithNoQueryIsANoOp(t *testing.T) {
 	m := searchModel(t)
 	m.cursorRow = 2
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	updated, _ := m.Update(runeKey("n"))
 	got := updated.(Model)
 	if got.cursorRow != 2 || got.status != "" {
 		t.Fatalf("expected n to do nothing, got row %d status %q", got.cursorRow, got.status)

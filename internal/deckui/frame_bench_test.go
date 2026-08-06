@@ -5,8 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -20,11 +19,9 @@ import (
 // and padding code, which points at the size and escape-density of the body being
 // handed to those steps rather than at the steps themselves.
 //
-// Colour has to be forced: without a TTY lipgloss strips every escape sequence,
-// and the whole question is what it costs to re-parse them.
-func init() {
-	lipgloss.SetColorProfile(termenv.ANSI256)
-}
+// Colour needs no forcing under lipgloss v2: Render always emits full-fidelity
+// escapes and downsampling happens at the output layer, so the escape density
+// the benchmark is measuring is present with or without a TTY.
 
 const (
 	frameDiffEnv    = "AWP_BENCH_DIFF"
@@ -100,20 +97,20 @@ func frameDeck(tb testing.TB, showThreads bool) Model {
 // conversation on screen.
 func BenchmarkDeckFrameOverCode(b *testing.B) {
 	m := frameDeck(b, false)
-	b.ReportMetric(float64(len(m.View())), "bytes")
+	b.ReportMetric(float64(len(m.render())), "bytes")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = m.View()
+		_ = m.render()
 	}
 }
 
 // BenchmarkDeckFrameOverThreads is the case reported as slow.
 func BenchmarkDeckFrameOverThreads(b *testing.B) {
 	m := frameDeck(b, true)
-	b.ReportMetric(float64(len(m.View())), "bytes")
+	b.ReportMetric(float64(len(m.render())), "bytes")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = m.View()
+		_ = m.render()
 	}
 }
 

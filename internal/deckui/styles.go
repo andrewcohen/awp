@@ -1,6 +1,6 @@
 package deckui
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // deckStyles caches the base lipgloss.Style values the deck reaches
 // for on every render. Each field is a "foreground + bold" base; call

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 // jobsModal is the `J` jobs overlay: a centered popover with the job list
@@ -51,7 +51,7 @@ func (jm *jobsModal) sync(jobs []Job) {
 
 // refreshViewport re-renders the details pane from the selected job.
 func (jm *jobsModal) refreshViewport() {
-	width := jm.vp.Width
+	width := jm.vp.Width()
 	if width <= 0 {
 		width = 40
 	}
@@ -83,7 +83,7 @@ func (jm *jobsModal) renderPopover(m *Model) string {
 // into the filter input. Non-key messages drive the list's async
 // machinery (filter matches, blink).
 func (jm *jobsModal) update(m *Model, msg tea.Msg) tea.Cmd {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		var cmd tea.Cmd
 		jm.list, cmd = jm.list.Update(msg)

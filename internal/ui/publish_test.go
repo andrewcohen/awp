@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -35,19 +35,19 @@ func publishModel(t *testing.T, report string, err error) (Model, *[]publishAsk)
 
 // enter drives the overlay one step and runs whatever command it returned.
 func enter(m Model) Model {
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return run(updated.(Model), cmd)
 }
 
 // escape sends esc without running any command.
 func escape(m Model) Model {
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	return updated.(Model)
 }
 
 // tab cycles the verdict on the compose screen.
 func tab(m Model) Model {
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	return updated.(Model)
 }
 
@@ -145,7 +145,7 @@ func TestPublishTabCyclesTheVerdict(t *testing.T) {
 		}
 	}
 	// And backwards.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if m = updated.(Model); m.publishVerdict() != "approve" {
 		t.Fatalf("expected shift+tab to go back, got %q", m.publishVerdict())
 	}
@@ -289,7 +289,7 @@ func TestPublishUnavailableSaysSo(t *testing.T) {
 func TestPublishRefusesASecondRunWhileOneIsInFlight(t *testing.T) {
 	m, asked := publishModel(t, "posted 1", nil)
 	m = preview(composed(press(m, "P")))
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if !m.publishBusy {
 		t.Fatal("expected the model to know a publish is in flight")
@@ -389,7 +389,7 @@ func TestPublishReportStaysUpUntilDismissed(t *testing.T) {
 			t.Fatalf("the report does not show %q:\n%s", want, body)
 		}
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m = updated.(Model); m.publishing {
 		t.Fatal("expected enter to dismiss the report")
 	}
@@ -402,7 +402,7 @@ func TestPublishReportStaysUpUntilDismissed(t *testing.T) {
 // typeInto feeds a body into whichever box is open.
 func typeInto(m Model, body string) Model {
 	for _, r := range body {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
 	return m

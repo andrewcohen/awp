@@ -16,3 +16,8 @@ const (
 	colStrong  = charm.Strong
 	colMuted   = charm.Muted
 )
+
+// borderCells is charm.BorderCells under this package's naming convention:
+// the columns a rounded border adds to a style's width, which lipgloss v2
+// counts inside Width rather than outside it.
+const borderCells = charm.BorderCells

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/agenthooks"
 	"github.com/andrewcohen/awp/internal/charm"
@@ -875,7 +875,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		deckDebugLogf("trace on — frame timings follow")
 		defer func() { deckui.Trace = nil }()
 	}
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err
 }

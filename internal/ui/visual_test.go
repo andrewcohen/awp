@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -30,7 +30,7 @@ func rangeModel(t *testing.T, extra ...diff.FileDiff) Model {
 
 // esc as a KeyMsg, which is not a runes key.
 func pressEsc(m Model) Model {
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	return updated.(Model)
 }
 
@@ -90,10 +90,10 @@ func TestCommentOnARangeSavesOneRangedComment(t *testing.T) {
 		t.Fatal("expected the range to be consumed by the compose box")
 	}
 	for _, r := range "this block" {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	if len(saved) != 1 {
 		t.Fatalf("expected one comment, got %d", len(saved))

@@ -1,10 +1,10 @@
 package charm
 
 import (
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/list"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 )
 
 var (
@@ -61,8 +61,16 @@ func NewHelp() help.Model {
 // same Catppuccin (or whatever the user is running) palette as the
 // rest of the deck instead of being stuck on huh's hardcoded
 // pink/indigo "Charm" colors.
-func HuhTheme() *huh.Theme {
-	t := huh.ThemeBase()
+func HuhTheme() huh.Theme {
+	return huh.ThemeFunc(huhStyles)
+}
+
+// huhStyles builds the palette-routed styles for a light or dark
+// terminal. huh v2 asks a theme for its styles per background rather
+// than handing out one baked struct, which is why this is a function
+// and HuhTheme is a one-line adapter around it.
+func huhStyles(isDark bool) *huh.Styles {
+	t := huh.ThemeBase(isDark)
 
 	t.Focused.Base = t.Focused.Base.BorderForeground(colorMuted)
 	t.Focused.Card = t.Focused.Base
@@ -114,8 +122,9 @@ func ApplyListTheme(m *list.Model, d *list.DefaultDelegate) {
 	styles := m.Styles
 	styles.Title = lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Padding(0, 1)
 	styles.TitleBar = lipgloss.NewStyle().Padding(0, 0, 1, 0)
-	styles.FilterPrompt = lipgloss.NewStyle().Foreground(colorAccent)
-	styles.FilterCursor = lipgloss.NewStyle().Foreground(colorAccent)
+	styles.Filter.Focused.Prompt = lipgloss.NewStyle().Foreground(colorAccent)
+	styles.Filter.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorAccent)
+	styles.Filter.Cursor.Color = colorAccent
 	styles.StatusBar = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 0, 1, 0)
 	styles.StatusEmpty = lipgloss.NewStyle().Foreground(colorMuted)
 	styles.StatusBarActiveFilter = lipgloss.NewStyle()

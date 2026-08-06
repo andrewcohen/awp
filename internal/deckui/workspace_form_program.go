@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 )
@@ -37,7 +37,7 @@ func RunWorkspaceForm(
 		return NewWorkspaceRequest{}, errors.New("interactive workspace form not available in dumb terminal")
 	}
 	model := newWorkspaceFormProgram(initial, bookmarkPrefix, trunkName, listBookmarks)
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithInput(in), tea.WithOutput(out))
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	final, err := program.Run()
 	if err != nil {
 		return NewWorkspaceRequest{}, err
@@ -164,7 +164,7 @@ func (p workspaceFormProgram) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (p workspaceFormProgram) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		if !p.pickerReady && p.pickerErr == "" {
 			switch keyMsg.String() {
 			case "esc", "ctrl+c":
@@ -199,7 +199,17 @@ func (p workspaceFormProgram) updatePicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return p, cmd
 }
 
-func (p workspaceFormProgram) View() string {
+// View satisfies tea.Model. Bubble Tea v2 asks the view to declare the
+// terminal features it wants, so alt-screen is stated here rather than
+// as a tea.NewProgram option. The content itself comes from render, which
+// stays a plain string so tests and the panel helpers can call it.
+func (p workspaceFormProgram) View() tea.View {
+	v := tea.NewView(p.render())
+	v.AltScreen = true
+	return v
+}
+
+func (p workspaceFormProgram) render() string {
 	if p.pickerMode {
 		if p.pickerErr != "" {
 			errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger))

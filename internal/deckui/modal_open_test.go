@@ -3,7 +3,7 @@ package deckui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // openPickerModel wires a deck with a project finder that returns one
@@ -19,7 +19,7 @@ func openPickerModel(t *testing.T, opened *string) Model {
 		WithProjectOpener(func(p ProjectItem) error { *opened = p.Name; return nil })
 }
 
-var keyO = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}}
+var keyO = runeKey("o")
 
 func TestOpenPickerOpensLoadingThenPopulates(t *testing.T) {
 	var opened string
@@ -57,7 +57,7 @@ func TestOpenPickerEnterSelectsAndQuits(t *testing.T) {
 	updated, _ = dm.Update(execCmd(t, cmd)) // ProjectsDoneMsg
 	dm = updated.(Model)
 
-	_, cmd = dm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd = dm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if opened != "alpha" {
 		t.Fatalf("projectOpener not invoked with selection, opened=%q", opened)
 	}
@@ -79,7 +79,7 @@ func TestOpenPickerEscClosesToRowMode(t *testing.T) {
 	updated, _ = dm.Update(execCmd(t, cmd)) // ProjectsDoneMsg
 	dm = updated.(Model)
 
-	updated, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = dm.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	dm = updated.(Model)
 	if dm.active != nil {
 		t.Fatalf("esc should clear the active modal, got %T", dm.active)

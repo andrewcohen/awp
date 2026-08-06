@@ -3,8 +3,8 @@ package ui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
@@ -104,7 +104,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 // newHelpViewport builds the overlay's scroll region for a body of this size,
 // with the host's own bindings appended after the view's.
 func newHelpViewport(width, height int, scope [][2]string, host []charm.KeyGroup) viewport.Model {
-	vp := viewport.New(helpContentWidth(width), max(1, height))
+	vp := viewport.New(viewport.WithWidth(helpContentWidth(width)), viewport.WithHeight(max(1, height)))
 	vp.SetContent(helpContent(helpContentWidth(width), scope, host))
 	return vp
 }
@@ -150,13 +150,13 @@ func renderHelpOverlay(vp viewport.Model, width, height int) string {
 		return ""
 	}
 	// Padding(1, 2) inside a rounded border is the modal convention (see the
-	// design system). lipgloss Width covers padding but not border, so the box
-	// renders 2 columns wider than what is set here.
+	// design system). lipgloss v2 Width is the total rendered width, border
+	// included, so the box is set to the width it should span.
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(charm.Muted)).
 		Padding(0, 2).
-		Width(max(1, width-2)).
+		Width(max(1, width)).
 		Render(vp.View())
 }
 

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/awplog"
 	"github.com/andrewcohen/awp/internal/charm"
@@ -357,7 +357,7 @@ func (m *Model) SetSize(width, bodyHeight int) {
 // resizeHelp re-lays the `?` overlay for the current body size, keeping the
 // scroll position where the reader left it.
 func (m *Model) resizeHelp() {
-	at := m.helpVP.YOffset
+	at := m.helpVP.YOffset()
 	m.helpVP = newHelpViewport(m.width, m.bodyHeight, m.scopeHelpRow(), m.HostKeys)
 	m.helpVP.SetYOffset(at)
 }
@@ -637,7 +637,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyPublishDone(msg)
 	case threadReplyDoneMsg:
 		return m.applyThreadReplyDone(msg)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 	// Non-key messages the compose box needs — the cursor blink, chiefly. Without
@@ -671,7 +671,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// The compose box owns every key while it is up, including the ones that
 	// would otherwise navigate or close.
 	if m.editing {
@@ -1345,7 +1345,17 @@ func (m Model) resolveFilePath(f diff.FileDiff) string {
 	return filepath.Join(m.RepoRoot, filepath.FromSlash(p))
 }
 
-func (m Model) View() string {
+// View satisfies tea.Model. Bubble Tea v2 asks the view to declare the
+// terminal features it wants, so alt-screen is stated here rather than
+// as a tea.NewProgram option. The content itself comes from render, which
+// stays a plain string so tests and the panel helpers can call it.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+func (m Model) render() string {
 	if m.width == 0 {
 		return "loading..."
 	}

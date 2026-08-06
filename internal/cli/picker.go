@@ -4,9 +4,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/charm"
 )
@@ -95,7 +95,7 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.list.SetSize(msg.Width, msg.Height)
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.list.FilterState() != list.Filtering {
 			switch msg.String() {
 			case "ctrl+c", "esc", "q":
@@ -117,6 +117,13 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m pickerModel) View() string {
+// View satisfies tea.Model. This program runs inline rather than in the
+// alt-screen, so the view declares no terminal features — the content
+// comes from render, which stays a plain string for tests.
+func (m pickerModel) View() tea.View {
+	return tea.NewView(m.render())
+}
+
+func (m pickerModel) render() string {
 	return m.list.View()
 }

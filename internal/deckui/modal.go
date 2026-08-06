@@ -1,7 +1,7 @@
 package deckui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // modal is one full-screen overlay the deck can show in place of the row

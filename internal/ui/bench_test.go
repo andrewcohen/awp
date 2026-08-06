@@ -7,8 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/diff"
 	"github.com/andrewcohen/awp/internal/review"
@@ -65,11 +64,9 @@ func benchInt(tb testing.TB, name string, def int) int {
 // (a full-width background fill, several style runs each), so measuring without
 // colour measures the wrong thing entirely.
 //
-// ANSI256 rather than TrueColor: the palette is ANSI 16 plus one 256-colour
-// cursorline, which is what the app emits.
-func init() {
-	lipgloss.SetColorProfile(termenv.ANSI256)
-}
+// Colour needs no forcing under lipgloss v2: Render always emits full-fidelity
+// escapes and downsampling happens at the output layer, so the styling cost is
+// measured with or without a TTY.
 
 // benchFiles is the fixture: the captured diff when one is named, otherwise a
 // synthetic change big enough to show the scaling.

@@ -1,6 +1,9 @@
 package charm
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
+)
 
 // Semantic color palette for every TUI surface in the app.
 //
@@ -41,4 +44,15 @@ const (
 // variant from the detected background. Keep this the only non-ANSI-16 value
 // in the palette; if a second one shows up, that is a signal the 16-slot
 // constraint needs revisiting wholesale rather than eroding case by case.
-var Cursorline = lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
+var Cursorline = compat.AdaptiveColor{Light: lipgloss.Color("254"), Dark: lipgloss.Color("236")}
+
+// BorderCells is how many columns a single-cell border adds to a style's
+// width.
+//
+// It exists because lipgloss changed what Width means. In v1 Width was the
+// content-plus-padding box and the border was drawn outside it, so a bordered
+// panel rendered two columns wider than the number you set. In v2 Width is the
+// total rendered width, border included. Every bordered panel that wants to
+// span a known number of columns therefore passes that number directly, and
+// anything still thinking in v1 terms adds this to what it used to set.
+const BorderCells = 2

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -96,20 +96,20 @@ func cursorToCommentID(t *testing.T, m Model, id string) Model {
 // save produced — which is the network call.
 func typeAndSave(m Model, body string) (Model, tea.Cmd) {
 	for _, r := range body {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return updated.(Model), cmd
 }
 
 // typeAndSend is typeAndSave with ctrl+s: post it, and hand it to the agent too.
 func typeAndSend(m Model, body string) (Model, tea.Cmd) {
 	for _, r := range body {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(runeKey(string(r)))
 		m = updated.(Model)
 	}
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	return updated.(Model), cmd
 }
 
@@ -304,7 +304,7 @@ func TestAThreadReplyHasNoKindToCycle(t *testing.T) {
 	m = cursorToComment(t, m)
 	m = press(m, "c")
 	before := m.editor.kind
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m = updated.(Model)
 	if m.editor.kind != before {
 		t.Fatalf("expected the kind fixed on a thread reply, got %q", m.editor.kind)

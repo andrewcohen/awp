@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/review"
@@ -175,12 +177,26 @@ func TestTheComposeBoxHasNoCursorlineBand(t *testing.T) {
 			when  string
 			style lipgloss.Style
 		}{
-			{"focused", tc.e.area.FocusedStyle.CursorLine},
-			{"blurred", tc.e.area.BlurredStyle.CursorLine},
+			{"focused", tc.e.area.Styles().Focused.CursorLine},
+			{"blurred", tc.e.area.Styles().Blurred.CursorLine},
 		} {
-			if got := s.style.GetBackground(); got != lipgloss.TerminalColor(lipgloss.NoColor{}) {
+			// lipgloss v2 reports an unpainted background as NoColor{}
+			// rather than a nil interface, so "no band" is that type
+			// rather than absence.
+			if got := s.style.GetBackground(); !isUnpainted(got) {
 				t.Errorf("%s (%s) paints a cursorline background: %v", tc.name, s.when, got)
 			}
 		}
 	}
+}
+
+// isUnpainted reports whether a style leaves the cell's background to the
+// terminal. lipgloss v2 represents "not set" as NoColor{} rather than a nil
+// interface, so both spellings count as unpainted.
+func isUnpainted(c color.Color) bool {
+	if c == nil {
+		return true
+	}
+	_, plain := c.(lipgloss.NoColor)
+	return plain
 }

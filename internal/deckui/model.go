@@ -11,13 +11,13 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
@@ -463,7 +463,7 @@ func newOpenList() list.Model {
 // j/k handling (which mutates m.cursor and then calls clampDeckViewport
 // to keep the cursor row in view).
 func newDeckViewport() viewport.Model {
-	v := viewport.New(0, 0)
+	v := viewport.New()
 	v.KeyMap = viewport.KeyMap{}
 	return v
 }
@@ -473,7 +473,7 @@ func newDeckViewport() viewport.Model {
 // history while syncProgressViewport auto-follows the tail when the
 // user is already pinned to the bottom.
 func newProgressViewport() viewport.Model {
-	v := viewport.New(0, 0)
+	v := viewport.New()
 	v.KeyMap = viewport.KeyMap{
 		PageDown:     key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "scroll log")),
 		PageUp:       key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "scroll log")),
@@ -2259,7 +2259,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			cmds = append(cmds, prCmd)
 		}
 		return m, batchCmds(cmds...)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.progressMode {
 			// Allow scrolling the log even while the action is still
 			// running — useful for long create/delete pipelines where
@@ -2411,8 +2411,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.cancelFind("find: cancelled")
 				return m, nil
 			}
-			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-				r := unicode.ToLower(msg.Runes[0])
+			if typed := []rune(msg.Text); len(typed) == 1 {
+				r := unicode.ToLower(typed[0])
 				if !strings.ContainsRune(findHintAlphabet, r) {
 					return m, nil
 				}
@@ -2427,8 +2427,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = ""
 				return m, nil
 			}
-			if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-				alias := string(msg.Runes[0])
+			if typed := []rune(msg.Text); len(typed) == 1 {
+				alias := string(typed[0])
 				if ua, ok := m.actionAliasLookup[alias]; ok {
 					m.actionMode = false
 					// Clear the action-menu listing from the status
@@ -3714,7 +3714,17 @@ func (m Model) actionModeStatus() string {
 	return "action: " + strings.Join(parts, " · ")
 }
 
-func (m Model) View() string {
+// View satisfies tea.Model. Bubble Tea v2 asks the view to declare the
+// terminal features it wants, so alt-screen is stated here rather than
+// as a tea.NewProgram option. The content itself comes from render, which
+// stays a plain string so tests and the panel helpers can call it.
+func (m Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+func (m Model) render() string {
 	if Trace != nil {
 		start := time.Now()
 		out := m.view()
@@ -4361,8 +4371,8 @@ func (m Model) renderList(width int) string {
 			capacity--
 		}
 	}
-	m.deckViewport.Width = width - 2
-	m.deckViewport.Height = capacity
+	m.deckViewport.SetWidth(width - 2)
+	m.deckViewport.SetHeight(capacity)
 	m.deckViewport.SetContent(strings.Join(body, "\n"))
 	m.deckViewport.SetYOffset(yoff)
 
@@ -5096,8 +5106,8 @@ func (m *Model) renderProgress(width int) string {
 		if logHeight < 4 {
 			logHeight = 4
 		}
-		m.progressViewport.Width = width - 2
-		m.progressViewport.Height = logHeight
+		m.progressViewport.SetWidth(width - 2)
+		m.progressViewport.SetHeight(logHeight)
 		m.progressViewport.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 		m.progressViewport.SetContent(strings.Join(m.progressLog, "\n"))
 		rows = append(rows, m.progressViewport.View())
