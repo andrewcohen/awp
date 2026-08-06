@@ -59,13 +59,31 @@ func commentPromptFor(c review.Comment, revision string) string {
 
 	b.WriteString("\nRead the file yourself; this is a pointer, not a paste.\n")
 	if c.ID != "" {
-		fmt.Fprintf(&b, "Reply before changing anything:\n  awp review reply --to %s --body \"...\"\n", c.ID)
-		b.WriteString("Then wait for approval.\n")
+		// --body-file rather than --body: a proposal is exactly the long markdown
+		// body #95 was about, and a backtick put through a shell argument arrives
+		// mangled in a way nobody notices until it is on someone's PR.
+		fmt.Fprintf(&b, "Reply before changing anything:\n  awp review reply --to %s --body-file <path>\n", c.ID)
 	} else {
-		b.WriteString("Reply before changing anything, then wait for approval.\n")
+		b.WriteString("Reply before changing anything.\n")
 	}
+	// Two branches, named by what the reply *is* rather than by what you did, so an
+	// agent reading this literally gets the right answer either way.
+	//
+	// "Then stop" rather than the old "wait for approval": waiting was not
+	// observable from here, so an agent told to wait either burned a turn polling
+	// for something with no channel or ignored the instruction. It is told now —
+	// approving sends it a prompt of its own — and `awp review list` is where it
+	// confirms.
+	b.WriteString(proposalGate)
 	return b.String()
 }
+
+// proposalGate is the rule an agent is held to when a finding reaches it. The
+// gate is about changing code, not about replying: an answer or an explanation is
+// an ordinary reply, and only an offer to change something waits for a yes.
+const proposalGate = "Add --proposal if the reply is a change you mean to make, then stop —\n" +
+	"you will be told when it is approved. Answering a question or explaining\n" +
+	"what is already there needs no approval: reply and carry on.\n"
 
 // approvalPromptFor is what the agent is told when its proposal is approved.
 //

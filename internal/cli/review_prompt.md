@@ -266,6 +266,17 @@ on that thread rather than filing a second comment beside it:
 `--body` works here too, and the same rule applies: a reply with code spans
 in it goes through a file.
 
+**If the reply is a change you mean to make, add `--proposal` and stop
+there.** A proposal is an offer awaiting a yes: the user sees it marked
+`awaiting your ok` while reading the diff, approves it with one key, and you
+are sent a prompt saying to go ahead. Do not make the change before that
+prompt arrives — `awp review list` shows the state (`pending` / `approved`)
+if you need to check.
+
+The gate is about changing code, not about replying. Answering a question,
+explaining why the code is the way it is, or disagreeing with a finding are
+ordinary replies: no `--proposal`, no waiting, carry on.
+
 Use `awp review list` to see what you have filed. Each finding is a single
 JSON file in the review store, so a mistake (typo, wrong line, duplicate)
 can be corrected by editing or deleting that file. Prefer getting it right

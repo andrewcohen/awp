@@ -133,12 +133,29 @@ func TestCommentPromptStaysSmallForALongLine(t *testing.T) {
 	}
 }
 
-// Replying must be gated on approval, and a removed line must say so — that is
-// the difference between commenting on code and on its deletion.
+// Changing code must be gated on approval, and a removed line must say so — that
+// is the difference between commenting on code and on its deletion.
+//
+// Both branches have to be there. The gate is about changing code, not about
+// replying: an agent told only "propose and stop" treats a question as something
+// to propose an answer to and then waits for a yes nobody knew to give.
 func TestCommentPromptKeepsTheApprovalGateAndSide(t *testing.T) {
 	got := commentPromptFor(sampleComment(), "")
-	if !strings.Contains(got, "Reply before changing anything") || !strings.Contains(got, "wait for approval") && !strings.Contains(got, "Then wait for approval") {
-		t.Fatalf("expected the approval gate:\n%s", got)
+	for _, want := range []string{
+		"Reply before changing anything",
+		"--proposal",
+		"then stop",
+		// The branch that does not wait, in whatever words: an answer is just a reply.
+		"needs no approval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the prompt does not say %q:\n%s", want, got)
+		}
+	}
+	// The old wording told the agent to wait for something it had no way to
+	// observe, which is either a burned turn polling or an ignored instruction.
+	if strings.Contains(got, "wait for approval") {
+		t.Errorf("the prompt still tells the agent to wait:\n%s", got)
 	}
 	c := sampleComment()
 	c.Anchor.Side = review.SideOld
