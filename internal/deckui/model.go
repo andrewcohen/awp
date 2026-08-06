@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -5897,8 +5898,18 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 	type issue struct {
 		label string
 		fix   string // owner action — used when mine == true
-		look  string // review action — used when mine == false
-		gated bool   // owner tone: propose solutions and wait for approval before acting
+		// look is the review action, used when mine == false. Empty means this is
+		// not a reviewer's problem and the issue is dropped from the review prompt
+		// entirely.
+		//
+		// The absence has to carry that meaning, because the failure was an issue
+		// with no reviewer's angle getting one invented for it: the review prompt
+		// asked a reviewer to report how far behind its base someone else's branch
+		// was, which is the author's rebase and nothing a reviewer can act on. A
+		// new issue now has to decide on purpose rather than inherit a
+		// plausible-sounding review action.
+		look  string
+		gated bool // owner tone: propose solutions and wait for approval before acting
 	}
 	var issues []issue
 	if s.MergeStateStatus == PRMergeStateDirty {
@@ -5919,7 +5930,10 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 		issues = append(issues, issue{
 			label: "an out-of-date base branch",
 			fix:   "update this branch with the latest base",
-			look:  "note how far behind the base branch this PR is (e.g. `git log --oneline <base>..@`) so the user can flag it",
+			// No review action. Bringing a branch up to date is the author's rebase;
+			// a reviewer cannot do it and reading the diff does not depend on it.
+			// Asking one to measure how far behind it is was busywork dressed as a
+			// finding.
 		})
 	}
 	// Same gate as prReviewReqGlyph's owner branch so the chat glyph and
@@ -5941,7 +5955,11 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 		issues = append(issues, issue{
 			label: label,
 			fix:   "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads) and understand each point",
-			look:  "summarize what the reviewers asked for and which points look unaddressed at the current head",
+			// No review action. Someone else's review of someone else's PR is not
+			// yours to answer, and asking you to summarize what they asked for read
+			// as being handed their work. Where it genuinely matters — a re-request,
+			// where the earlier feedback is your own — the re-request issue below
+			// says exactly that, so this arm would only duplicate it.
 			gated: true,
 		})
 	}
@@ -5981,6 +5999,14 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 			look:  "run `jj git fetch` to pick them up, then align this workspace's working copy to the new origin tip (e.g. `jj new " + s.HeadRefName + "@origin`) so you're reading the latest version",
 		})
 	}
+	if !mine {
+		// Drop the author's chores. An issue with no review action is one a reviewer
+		// cannot act on, and listing it hands them work that belongs to whoever
+		// opened the PR.
+		issues = slices.DeleteFunc(issues, func(it issue) bool { return it.look == "" })
+	}
+	// After the filter, not before: dropping every issue has to mean there is
+	// nothing to say, rather than a prompt with an empty list under it.
 	if len(issues) == 0 {
 		return ""
 	}

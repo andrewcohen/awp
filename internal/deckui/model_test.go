@@ -2387,9 +2387,33 @@ func TestPRRepairPrompt(t *testing.T) {
 		{"review · composite",
 			PRStatus{Number: 24, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateDirty}, "", false, "",
 			[]string{"PR #24 has multiple issues:", "merge conflicts against its base branch", "failing CI checks", "Do NOT modify files", "Report what you find in chat"}},
-		{"review · changes requested",
-			PRStatus{Number: 25, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", false, "",
-			[]string{"PR #25 has changes requested by a reviewer", "summarize what the reviewers asked for", "Do NOT modify files"}},
+		// The author's chores do not belong in a reviewer's prompt. Someone else's
+		// review of someone else's PR is not yours to answer, and an out-of-date
+		// base is their rebase — a reviewer cannot do it and reading the diff does
+		// not depend on it. Both used to be listed, with a review action invented
+		// for each, because nothing said an issue could be author-only.
+		{"review · changes requested — not the reviewer's to answer",
+			PRStatus{Number: 25, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewChangesRequested}, "", false, "", nil},
+		{"review · behind base — the author's rebase",
+			PRStatus{Number: 29, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind}, "", false, "", nil},
+		// Dropping every issue means there is nothing to say, not a prompt with an
+		// empty list under it — so the emptiness check has to run after the filter.
+		{"review · only the author's chores — no prompt at all",
+			PRStatus{Number: 30, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind, ReviewDecision: PRReviewChangesRequested}, "", false, "", nil},
+		// What survives the filter still reads as a prompt about one issue, not as
+		// a bullet list with the others quietly missing.
+		{"review · the author's chores dropped from a composite",
+			PRStatus{Number: 31, State: PRStateOpen, CIState: PRCIFailing, MergeStateStatus: PRMergeStateBehind, ReviewDecision: PRReviewChangesRequested}, "", false, "",
+			[]string{"PR #31 has failing CI checks", "summarize the root cause", "Do NOT modify files"}},
+		{"review · a re-request still says to check the earlier feedback",
+			PRStatus{Number: 32, HeadRefName: "coworker/feat", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean,
+				ReviewDecision: PRReviewChangesRequested, ReviewRequested: true, ReviewRerequested: true}, "", false, "",
+			[]string{"PR #32 has a RE-request for your review", "whether each point was addressed"}},
+		// The owner tone is untouched: these are exactly the issues an author has to
+		// deal with, and the filter only runs on the review side.
+		{"behind base is still the author's problem to fix",
+			PRStatus{Number: 33, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateBehind}, "", true, "",
+			[]string{"PR #33 has an out-of-date base branch", "update this branch with the latest base"}},
 		{"review · my review requested",
 			PRStatus{Number: 26, HeadRefName: "coworker/feat", State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewRequested: true}, "", false, "",
 			[]string{"PR #26 has a pending request for your review", "jj git fetch", "coworker/feat@origin", "fall back to `gh pr diff`", "Do NOT modify files"}},
