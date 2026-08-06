@@ -15,6 +15,37 @@ import (
 // row.
 type prMenuModal struct{}
 
+// prDescWindow is the tmux window `p D` opens the description into. Named for
+// what is in it: the session already has `agent`, `editor`, `review` and `vcs`,
+// and this used to join them as `pr`, which said which subject rather than which
+// of the several PR things you might have open.
+const prDescWindow = "pr description"
+
+// prNumberForAction is the selected row's PR number, or the reason there isn't
+// one.
+//
+// Shared by `d` and `D` because they are the same request with two destinations,
+// and the three ways it can fail — no row, no PR, a PR whose number was never
+// cached — are the same three either way. Split out when the second key arrived
+// rather than copied, since a refusal that only one of them knows how to give is
+// how the two would start disagreeing about when they work.
+func prNumberForAction(m *Model, what string) (Item, int, bool) {
+	item, ok := m.selected()
+	if !ok {
+		return Item{}, 0, false
+	}
+	status, _, ok := m.prStatusLabelForItem(item)
+	if !ok {
+		m.status = "pr: no PR for this workspace"
+		return Item{}, 0, false
+	}
+	if status.Number <= 0 {
+		m.status = "pr: " + what + " unavailable (no PR number cached — try p s)"
+		return Item{}, 0, false
+	}
+	return item, status.Number, true
+}
+
 func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -49,25 +80,34 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		return nil
 	case "d":
 		m.active = nil
-		item, ok := m.selected()
+		item, num, ok := prNumberForAction(m, "description")
 		if !ok {
 			return nil
 		}
-		status, _, ok := m.prStatusLabelForItem(item)
+		if m.prDescLoad == nil {
+			m.status = "pr: reading descriptions in the deck unavailable — p D opens it in a window"
+			return nil
+		}
+		// In the deck, because reading what a PR says is a glance and this used to
+		// cost a tmux window each time — one to make, one to switch to, one to come
+		// back from. The window is still there under `D` for when you want the
+		// description open beside something else.
+		var descModal *prDescModal
+		var descCmd tea.Cmd
+		descModal, descCmd = newPRDescModal(item, num, m.prDescLoad)
+		m.active = descModal
+		return batchCmds(descCmd, tea.ClearScreen)
+	case "D":
+		m.active = nil
+		_, num, ok := prNumberForAction(m, "description")
 		if !ok {
-			m.status = "pr: no PR for this workspace"
 			return nil
 		}
-		if status.Number <= 0 {
-			m.status = "pr: description unavailable (no PR number cached — try p s)"
-			return nil
-		}
-		// Open the description the way a review opens: a dedicated tmux
-		// window in the workspace's session. gh renders the body with TTY
-		// formatting; less keeps it scrollable and searchable, and q drops
-		// back to a shell in the window.
-		winCmd := fmt.Sprintf("env GH_FORCE_TTY=100%% gh pr view %d | less -R", status.Number)
-		updated, cmd := m.trigger(ActionOpenWindow, "pr:"+winCmd)
+		// A dedicated tmux window in the workspace's session, the way a review opens.
+		// gh renders the body with TTY formatting; less keeps it scrollable and
+		// searchable, and q drops back to a shell in the window.
+		winCmd := fmt.Sprintf("env GH_FORCE_TTY=100%% gh pr view %d | less -R", num)
+		updated, cmd := m.trigger(ActionOpenWindow, prDescWindow+":"+winCmd)
 		*m = updated.(Model)
 		return cmd
 	case "r":

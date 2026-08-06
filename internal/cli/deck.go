@@ -827,6 +827,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithRefresher(refresher).
 		WithDevURLDiscoverer(devURLDiscoverer).
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).
+		WithPRDescriptionLoader(prDescriptionLoader(runner)).
 		WithPRStatusSeed(cachedByRepo, cachedFetchedAt).
 		WithBookmarkFetcher(bookmarkFetcher).
 		WithDiffViewer(diffLoaderFor(runner), openDiffFileInEditor).

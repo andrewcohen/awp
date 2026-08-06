@@ -12,6 +12,7 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/editor"
+	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/ui"
@@ -26,6 +27,37 @@ func diffLoaderFor(runner Runner) deckui.DiffLoader {
 			runner = NewExecRunner()
 		}
 		return jj.New(runner).DiffGit(item.Path, scopeRevset(runner, item, scope))
+	}
+}
+
+// prDescriptionLoader backs the deck's in-deck PR description (`p d`).
+//
+// Read in the *workspace's* directory rather than wherever the deck process was
+// started, so the PR number is resolved against the repo the row belongs to. A
+// deck spanning several projects would otherwise hand gh a number and let it
+// find whichever repo the process happened to be in — the class of bug #88 was
+// about, which is why github.New takes the directory as an argument.
+func prDescriptionLoader(runner Runner) deckui.PRDescriptionLoader {
+	return func(item deckui.Item, number int) (deckui.PRDescription, error) {
+		if runner == nil {
+			runner = NewExecRunner()
+		}
+		dir := strings.TrimSpace(item.RepoRoot)
+		if dir == "" {
+			dir = item.Path
+		}
+		info, err := github.New(runner, dir).FetchPR(number)
+		if err != nil {
+			return deckui.PRDescription{}, err
+		}
+		return deckui.PRDescription{
+			Number: info.Number,
+			Title:  info.Title,
+			Author: info.Author,
+			State:  string(info.State),
+			URL:    info.URL,
+			Body:   info.Body,
+		}, nil
 	}
 }
 

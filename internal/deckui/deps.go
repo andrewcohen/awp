@@ -16,6 +16,7 @@ type deckDeps struct {
 	hookInstaller   HookInstaller
 	stateWatcher    StateChangeWatcher
 	prFetcher       PRFetcher
+	prDescLoad      PRDescriptionLoader
 	prStatusFetcher PRStatusFetcher
 	bookmarkFetcher BookmarkFetcher
 	trunkResolver   TrunkResolver
