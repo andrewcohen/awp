@@ -202,20 +202,12 @@ func (e commentEditor) view(width int) string {
 	case e.editing != "":
 		verb = " editing " + string(e.kind.OrDefault()) + " on "
 	}
-	// "a.go:12", "a.go:12-18", "all of a.go", "the whole change" — one spelling of a
-	// location, shared with the comment index, the agent prompt and the publish log
-	// (see review.Anchor.Where). It names the scope when there is no file rather
-	// than trailing off: "comment on" followed by blank space read as a bug in the
-	// header rather than as a deliberate absence of a file.
-	//
-	// The file scope says "all of" rather than the bare path, which is the one place
-	// the extra words are worth it: "comment on a.go" and "comment on a.go:12" differ
-	// by a detail the eye skips, and this is the moment you are deciding what the
-	// remark covers. The other surfaces name a location you already chose.
-	head := verb + e.anchor.Where()
-	if e.anchor.Scope() == review.FileScope {
-		head = verb + "all of " + e.anchor.Path
-	}
+	// "a.go:12", "a.go:12-18", "all of a.go", "the whole change" — see
+	// review.Anchor.WhereCovered, which this shares with the publish preview. Those
+	// are the two screens where a reader is deciding what a remark covers rather
+	// than reading a location they already picked, so both spend the extra words on
+	// "all of"; the index, the prompt and the listing keep the bare Where().
+	head := verb + e.anchor.WhereCovered()
 	// Border and header take the kind's hue, so tab's effect is visible
 	// immediately rather than only once the comment is saved.
 	headStyle := kindStyles(e.kind)

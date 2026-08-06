@@ -42,11 +42,19 @@ func TestReviewAddAcceptsAFileWithNoLine(t *testing.T) {
 	}
 }
 
-// A comment on a whole file has no line, by design. Routed as an inline thread it
-// was reported by the anchor preflight as "line 0 is not in the diff", and one
-// blocked anchor refuses the entire run before anything is sent — so a single
-// file-level comment stopped a reviewer publishing every line comment beside it.
-func TestAFileCommentDoesNotBlockThePublish(t *testing.T) {
+// A comment on a whole file rides in the same staged review as a comment on a
+// line. They are one mutation apart only in whether a line is sent, so they share
+// a bucket.
+//
+// The history matters to the assertion below. A file comment used to be routed to
+// a bucket of its own, because a staged thread was believed to need a line: as an
+// inline thread the preflight called it "line 0 is not in the diff", and one
+// blocked anchor refuses the whole run, so a single file-level remark stopped a
+// reviewer publishing every line comment beside it. The separate bucket avoided
+// that by not sending it at all. Now the preflight has an arm for the scope and
+// GraphQL takes the thread, so neither half of the workaround is needed — but the
+// property it protected still has to hold.
+func TestAFileCommentShipsBesideALineComment(t *testing.T) {
 	comments := []review.Comment{
 		{ID: "line", Author: review.AuthorHuman, Body: "off by one",
 			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 2}},
@@ -55,40 +63,38 @@ func TestAFileCommentDoesNotBlockThePublish(t *testing.T) {
 	}
 	b := partitionForPublish(comments)
 
-	if len(b.Inline) != 1 || b.Inline[0].ID != "line" {
-		t.Fatalf("expected only the line comment inline, got %+v", b.Inline)
-	}
-	if len(b.FileLevel) != 1 || b.FileLevel[0].ID != "file" {
-		t.Fatalf("expected the file comment in its own bucket, got %+v", b.FileLevel)
+	if len(b.Threads) != 2 {
+		t.Fatalf("expected both comments staged as threads, got %+v", b.Threads)
 	}
 
-	// The check the file comment used to fail. It never reaches it now, so the run
-	// is not refused and the line comment still goes.
+	// The check the file comment used to fail, run over both of them.
 	commentable := parseCommentable([]github.PRFile{{Filename: "a.go", Patch: "@@ -1,2 +1,3 @@\n ctx\n+added\n"}})
-	if blocked := blockedAnchors(b.Inline, preflight(b.Inline, commentable)); len(blocked) > 0 {
+	if blocked := blockedAnchors(b.Threads, preflight(b.Threads, commentable)); len(blocked) > 0 {
 		t.Fatalf("the run would be refused: %v", blocked)
 	}
 }
 
-// Not published is not the same as not there. A comment the reviewer wrote and
-// believes went up is worse than one they know is still local, so both the preview
-// and the run have to say so.
-func TestAFileCommentIsReportedAsNotSent(t *testing.T) {
+// The preview names it as covering the whole file. This list now mixes the two
+// scopes, and "deck.go" beside "deck.go:12" is a difference the eye skips at the
+// moment the reviewer is agreeing to send both.
+func TestThePreviewSaysAFileCommentCoversTheWholeFile(t *testing.T) {
 	c := review.Comment{ID: "file", Author: review.AuthorHuman, Body: "wrong package",
 		Anchor: review.Anchor{Path: "internal/cli/deck.go", Side: review.SideNew}}
 	b := partitionForPublish([]review.Comment{c})
 
 	plan := strings.Join(publishPlan(publishRequest{PR: 54}, b, "", nil), "\n")
-	if !strings.Contains(plan, "not sent") {
-		t.Errorf("the preview does not say the file comment is not sent:\n%s", plan)
-	}
-	for _, want := range []string{"internal/cli/deck.go", "wrong package"} {
+	for _, want := range []string{"all of internal/cli/deck.go", "wrong package"} {
 		if !strings.Contains(plan, want) {
 			t.Errorf("the preview does not name %q:\n%s", want, plan)
 		}
 	}
-	// And it must not be counted as a call the run is about to make.
-	if strings.Contains(plan, "1 call(s)") {
-		t.Errorf("a comment that is not sent is counted as a call:\n%s", plan)
+	// It is staged, not omitted — so it is one of the threads the review carries.
+	// (The plan is two calls, stage then submit, as it is for any staged review.)
+	if !strings.Contains(plan, "1 thread(s), staged") {
+		t.Errorf("the file comment is not staged into the review:\n%s", plan)
+	}
+	// And the old wording must not survive: it would say the opposite of the truth.
+	if strings.Contains(plan, "not sent") {
+		t.Errorf("the preview still says the file comment is not sent:\n%s", plan)
 	}
 }
