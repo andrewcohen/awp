@@ -1525,6 +1525,8 @@ func kindColor(kind review.Kind) string {
 		return charm.Danger
 	case review.KindQuestion:
 		return charm.Warning
+	case review.KindPraise:
+		return charm.Success
 	default:
 		return charm.Info
 	}
@@ -1538,6 +1540,8 @@ func kindStyles(kind review.Kind) lipgloss.Style {
 		return styleSuggestionHead
 	case review.KindQuestion:
 		return styleQuestionHead
+	case review.KindPraise:
+		return stylePraiseHead
 	default:
 		return styleCommentHead
 	}

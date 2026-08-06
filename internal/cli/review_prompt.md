@@ -19,7 +19,7 @@ Use them to stay non-redundant:
   file a `comment` saying so and cite the point you're pushing back on; the
   user wants your independent read, not deference. (A `comment` because you
   are observing, not asking for a change — see "Comment types" below. There
-  are three types and no others.)
+  are four types and no others.)
 - If a comment is partially right but misses something, add only the
   incremental insight.
 
@@ -41,7 +41,7 @@ which ones to publish.
 ### File findings with `awp review add`
 
     awp review add --file <path> --line <n> [--end-line <n>] [--side new|old] \
-      --author agent --type <comment|suggestion|question> \
+      --author agent --type <comment|suggestion|question|praise> \
       --text "<the line's exact text>" [--end-text "<the last line's text>"] \
       --body-file <path>          # or --body "<your finding>"
 
@@ -141,9 +141,14 @@ without reading every body.
 - `question` — you need an answer before you can judge the code. Use it
   when the right call depends on intent you do not have, not as a softened
   way to assert something.
-- `comment` — observation, context, or a positive callout, with no action
-  required. The default. Use it sparingly for praise: one or two per review
-  at most.
+- `praise` — something is well done and you want to say so. It asks for
+  nothing, and it is the one type that does not count towards the review's
+  open findings, so it will not read as work on the author's list. Use it
+  sparingly and specifically: one or two per review, naming what is good
+  and why, never as padding before a criticism.
+- `comment` — observation or context, with no action required. The default,
+  and what to reach for when a remark is neither asking for something nor
+  praising anything.
 
 `--type` defaults to `comment`, which claims the least. An unrecognised
 value also falls back to `comment` rather than failing, so a typo does not

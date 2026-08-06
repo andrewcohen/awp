@@ -1383,10 +1383,14 @@ var (
 	// A plain comment is Info-hued so it reads as annotation rather than as diff
 	// content — nothing in a diff line is ever blue. A suggestion proposes a
 	// change, so it takes Danger, the hue the app already uses for "this needs
-	// doing". A question is waiting on an answer, which is Warning's role.
+	// doing". A question is waiting on an answer, which is Warning's role. Praise
+	// asks for nothing, so it takes Success — the one hue in the palette that does
+	// not mean "deal with me", which is the whole distinction the kind exists to
+	// draw.
 	styleCommentHead    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Info)).Bold(true)
 	styleSuggestionHead = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true)
 	styleQuestionHead   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	stylePraiseHead     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success)).Bold(true)
 	// The prose itself is not tinted. A whole paragraph in the kind's hue was
 	// harder to read against the block's fill and no more informative than a
 	// coloured edge, so the signal lives on the bar and the label while the body
