@@ -238,19 +238,5 @@ func TestUnresolvedThreadsStillSuppressTheLocalRecord(t *testing.T) {
 	}
 }
 
-// The review summary's publish record holds the *review* id, which is not a
-// comment id and can never match a thread's — so a summary is never mistaken for
-// an echo of one.
-func TestReviewSummaryIsNotReconciledAgainstAThread(t *testing.T) {
-	summary := review.Comment{
-		ID: "s1", Author: "agent", Body: "reviewed the publish path", State: review.Published,
-		Publish: &review.PublishRecord{ThreadID: "PRR_1", At: time.Unix(0, 0)},
-	}
-	got := echoedByThread(
-		[]review.Comment{summary},
-		[]review.Thread{echoThread("T1", "PRRC_1", "a.go", 2, "unrelated")},
-	)
-	if len(got) != 0 {
-		t.Fatalf("expected no match for a review-level remark, got %v", got)
-	}
-}
+// The pairing rule itself is review.MirrorOf and is tested there. What stays here
+// is what the viewer does with the answer.
