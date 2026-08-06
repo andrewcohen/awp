@@ -1312,7 +1312,6 @@ func (m Model) rm() deckdata.View {
 		Filter:         m.filter,
 		PRStatusByRepo: m.prStatusByRepo,
 		PinAliases:     m.pinGroupAliases,
-		Attention:      AttentionIncluded,
 	}
 }
 

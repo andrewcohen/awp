@@ -7,10 +7,6 @@ import (
 	"github.com/andrewcohen/awp/internal/prstatus"
 )
 
-// alwaysAttention is the injected attention predicate for tests that want
-// every row to count as needing attention.
-func alwaysAttention(string, bool, bool) bool { return true }
-
 func TestInboxStackLayoutGroupsAndOrders(t *testing.T) {
 	v := View{
 		Scope: ScopeInbox,
@@ -292,42 +288,10 @@ func TestItemsInboxFiltersToOpenPRsAndSortsByBucket(t *testing.T) {
 	}
 }
 
-func TestItemsAttentionUsesInjectedPredicate(t *testing.T) {
-	all := []Item{
-		{WorkspaceName: "a", ProjectName: "p", Status: "working", Active: true},
-		{WorkspaceName: "b", ProjectName: "p", Status: "idle"},
-	}
-	// nil predicate → attention scope shows nothing.
-	if got := (View{Scope: ScopeAttention, All: all}).Items(); len(got) != 0 {
-		t.Fatalf("nil predicate should yield no rows, got %d", len(got))
-	}
-	// Predicate selecting only "a".
-	only := func(status string, _, _ bool) bool { return status == "working" }
-	got := (View{Scope: ScopeAttention, All: all, Attention: only}).Items()
-	if len(got) != 1 || got[0].WorkspaceName != "a" {
-		t.Fatalf("attention filter = %+v, want [a]", got)
-	}
-}
-
-func TestItemsAttentionKeepsCurrentWorkspace(t *testing.T) {
-	all := []Item{
-		{WorkspaceName: "a", ProjectName: "p", Status: "working", Active: true},
-		{WorkspaceName: "cur", ProjectName: "p", Status: "idle", Current: true},
-	}
-	// A predicate that qualifies nothing on its own — the current workspace
-	// must still survive so the cursor can land on it (no selection jitter).
-	none := func(string, bool, bool) bool { return false }
-	got := (View{Scope: ScopeAttention, All: all, Attention: none}).Items()
-	if len(got) != 1 || got[0].WorkspaceName != "cur" {
-		t.Fatalf("attention scope should keep the current workspace, got %+v", got)
-	}
-}
-
 func TestItemsTextFilterMatchesLabelAndProject(t *testing.T) {
 	v := View{
-		Scope:     ScopeAll,
-		Filter:    "widget",
-		Attention: alwaysAttention,
+		Scope:  ScopeAll,
+		Filter: "widget",
 		All: []Item{
 			{WorkspaceName: "widget-fix", ProjectName: "p"},
 			{WorkspaceName: "other", ProjectName: "widgets"},
