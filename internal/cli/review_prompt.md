@@ -60,6 +60,13 @@ fix it rather than filing the rest. `awp review list` names the same review
 before listing what is in it, which is the cheapest way to check before you
 start.
 
+A finding whose file is not part of the change gets a second line — `warning:
+cmd/other/main.go is not in this review's diff (main..@) — check --workspace,
+or the path`. The finding is filed either way, so this is not a failure to
+retry: it is telling you that either you are writing into the wrong review or
+you have the path wrong. Work out which before filing the rest, because if it
+is the review, every finding after it goes the same way.
+
 If you cannot run from the workspace directory, pass `--workspace <name>` on
 `add`, `reply`, `list`, and `publish` to name the review explicitly. A name
 that matches no workspace is an error rather than a new empty review, so a

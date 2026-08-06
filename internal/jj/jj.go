@@ -76,6 +76,35 @@ func (c *Client) DiffGit(dir string, revision string) (string, error) {
 	return out, nil
 }
 
+// ChangedPaths is the repo-relative path of every file the revision touches.
+//
+// Separate from DiffGit because the callers want different things and the cheap
+// one should not pay for the expensive one: this is `--name-only`, so jj never
+// renders a patch. The caller asking "is this file part of the change" over and
+// over is on a hot path (see checkAnchorAgainstDiff), and rendering every hunk to
+// throw them away is the difference that matters there.
+//
+// A path per line, blanks dropped. Paths use the repo's own separator, which is
+// what an anchor records too.
+func (c *Client) ChangedPaths(dir string, revision string) ([]string, error) {
+	args := []string{"diff", "--name-only"}
+	revision = strings.TrimSpace(revision)
+	if revision != "" {
+		args = append(args, "-r", revision)
+	}
+	out, err := c.runner.Run(context.Background(), dir, "jj", args...)
+	if err != nil {
+		return nil, formatCommandError("list changed paths", err, out)
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
 // WorkspaceExists reports whether jj has a workspace registered under
 // this name, regardless of whether its working-copy commit currently
 // resolves. We check the workspace registry (`jj workspace list`) and
