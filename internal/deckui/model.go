@@ -1031,6 +1031,14 @@ func (m Model) WithPRFetcher(f PRFetcher) Model {
 	return m
 }
 
+// WithPRDescriptionLoader installs the fetch behind `p d`, the in-deck PR
+// description. Without it that key says so and `p D` — the tmux window, which
+// runs gh itself — is the way to read one.
+func (m Model) WithPRDescriptionLoader(l PRDescriptionLoader) Model {
+	m.prDescLoad = l
+	return m
+}
+
 // WithDiffViewer installs the callbacks backing the in-deck diff modal
 // (`c` / `C`). Without a loader, those keys fall back to opening a named
 // review window in tmux.
@@ -2685,7 +2693,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				return m, nil
 			}
 			m.active = prMenuModal{}
-			m.status = "pr: o open in browser · d description · r repair · s set PR # · esc cancel"
+			m.status = "pr: o open in browser · d description · D description in a window · r repair · s set PR # · esc cancel"
 			return m, nil
 		case key.Matches(msg, km.PinChord):
 			if _, ok := m.selected(); !ok {
@@ -4931,7 +4939,8 @@ func deckKeyGroups() []keyGroup {
 				{"d", "open dev URL in browser (auto-discovered)"},
 				{"p o", "open this workspace's PR in browser"},
 				{"p m", "merge this workspace's PR (gh pr merge --squash, with confirmation)"},
-				{"p d", "open this workspace's PR description in a pr tmux window (gh pr view | less)"},
+				{"p d", "read this workspace's PR description in the deck (scrollable, esc closes)"},
+				{"p D", "open the same description in a \"pr description\" tmux window (gh pr view | less)"},
 				{"p r", "repair this workspace's PR (prepopulates a fix prompt)"},
 				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
