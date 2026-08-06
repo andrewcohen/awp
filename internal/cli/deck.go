@@ -1998,8 +1998,8 @@ func summonWorkspaceSession(tmuxClient *tmux.Client, svc workspace.Service, item
 // Finally, it switches the tmux client to the session so the user lands there.
 // resolveReviewStackBase returns the base revset the C (stack review) action
 // diffs @ against. It prefers the workspace's nearest stacked-parent bookmark
-// — the closest bookmarked ancestor of @ that is neither trunk nor the
-// workspace's own bookmark — so a stacked change is reviewed against its
+// — the closest bookmarked ancestor of @ that is none of @ itself, trunk, or
+// the workspace's own bookmark — so a stacked change is reviewed against its
 // parent rather than the whole stack. When nothing is stacked it falls back to
 // trunk(), which auto-resolves the repo's real default branch (so it's already
 // better than a hardcoded "main"). Runs jj read-only in the workspace dir;
@@ -2030,7 +2030,15 @@ func resolveReviewStackBaseNamed(runner Runner, dir, ownBookmark string) (revset
 	// @remote forms, so a locally-ahead trunk can't masquerade as a parent —
 	// and the workspace's own bookmark.
 	// query finds the parent; it is not the base being returned.
-	query := fmt.Sprintf(`heads((trunk()..@) & bookmarks() ~ bookmarks(exact:%q)`, trunk)
+	//
+	// `~ @` is what stops a change being its own base. trunk()..@ includes @, so a
+	// bookmarked @ answers this query with its own bookmark and the diff comes back
+	// empty. The own-bookmark exclusion below used to hide that everywhere it was
+	// recorded — but the default workspace never gets a bookmark, so there the guard
+	// was simply absent and `awp diff` in a repo whose @ carried a bookmark showed
+	// nothing at all. Excluding @ structurally does not depend on a name having been
+	// written down somewhere.
+	query := fmt.Sprintf(`heads((trunk()..@) & bookmarks() ~ @ ~ bookmarks(exact:%q)`, trunk)
 	if b := strings.TrimSpace(ownBookmark); b != "" {
 		query += fmt.Sprintf(` ~ bookmarks(exact:%q)`, b)
 	}

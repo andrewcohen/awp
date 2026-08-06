@@ -12,10 +12,16 @@ import (
 // reviewBaseRunner fakes jj for resolveReviewStackBase: it answers the
 // `-r trunk()` probe with a trunk name and the `-r heads(...)` probe with a
 // (possibly empty) parent bookmark, recording each revset it saw.
+//
+// atCursor is the bookmark sitting on @, if any. The fake has to model this much
+// of jj because `trunk()..@` includes @, so whether the query excludes @ decides
+// whether the change is offered as its own parent — which is the thing under
+// test, not a string the query happens to contain.
 type reviewBaseRunner struct {
-	trunk  string
-	parent string
-	revs   []string
+	trunk    string
+	parent   string
+	atCursor string
+	revs     []string
 }
 
 func (r *reviewBaseRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
@@ -30,6 +36,11 @@ func (r *reviewBaseRunner) Run(_ context.Context, _ string, _ string, args ...st
 	case revset == "trunk()":
 		return r.trunk + "\n", nil
 	case strings.HasPrefix(revset, "heads("):
+		// @ is in trunk()..@ and is the nearest thing to @ there is, so a bookmark on
+		// it wins heads() outright — unless the query took @ out of the set.
+		if r.atCursor != "" && !strings.Contains(revset, "~ @") {
+			return r.atCursor + "\n", nil
+		}
 		if r.parent == "" {
 			return "\n", nil
 		}
@@ -71,15 +82,58 @@ func TestResolveReviewStackBaseFallsBackToTrunk(t *testing.T) {
 func TestResolveReviewStackBaseOmitsOwnExclusionWhenNoBookmark(t *testing.T) {
 	r := &reviewBaseRunner{trunk: "main", parent: ""}
 	resolveReviewStackBase(r, "/ws/x", "")
-	var stackRevset string
-	for _, rv := range r.revs {
-		if strings.HasPrefix(rv, "heads(") {
-			stackRevset = rv
-		}
-	}
-	// With no own bookmark, only the trunk exclusion is present.
+	stackRevset := stackQuery(t, r)
+	// With no own bookmark, only the trunk exclusion is present by name.
 	if strings.Count(stackRevset, "bookmarks(exact:") != 1 {
 		t.Errorf("expected exactly one exact-exclusion (trunk), got %q", stackRevset)
+	}
+	// But @ is still excluded, and that is the exclusion doing the work here — see
+	// TestResolveReviewStackBaseWillNotUseTheBookmarkAtTheCursor.
+	if !strings.Contains(stackRevset, "~ @") {
+		t.Errorf("the query does not exclude @, so a bookmarked @ becomes its own base: %q", stackRevset)
+	}
+}
+
+// stackQuery is the last heads(...) revset the resolver asked jj for.
+func stackQuery(t *testing.T, r *reviewBaseRunner) string {
+	t.Helper()
+	for i := len(r.revs) - 1; i >= 0; i-- {
+		if strings.HasPrefix(r.revs[i], "heads(") {
+			return r.revs[i]
+		}
+	}
+	t.Fatalf("the resolver never asked for a stack parent: %v", r.revs)
+	return ""
+}
+
+// A change must not be its own base.
+//
+// The failure: in a repo's default workspace, `trunk()..@` was one commit — @
+// itself, carrying a bookmark — so the "nearest stacked parent" query answered
+// with the bookmark at @, the diff was that change against itself, and the
+// viewer opened on "no changes" with the footer confidently naming a base.
+//
+// It only ever showed up in the default workspace because everywhere else the
+// workspace's own bookmark is excluded by name, which happened to remove @ too.
+// The default workspace never gets a recorded bookmark, so the guard that was
+// doing the work simply was not there. Excluding @ cannot be forgotten that way.
+func TestResolveReviewStackBaseWillNotUseTheBookmarkAtTheCursor(t *testing.T) {
+	// Both spellings of the workspace: one with its bookmark recorded, one without.
+	// The second is the default workspace, and is where this actually bit.
+	for _, own := range []string{"", "andrew/hil-spec"} {
+		r := &reviewBaseRunner{trunk: "main", atCursor: "andrew/hil-spec"}
+		if got := resolveReviewStackBase(r, "/p/alpha", own); got != "trunk()" {
+			t.Errorf("own=%q: base = %q, want trunk() — the change is being diffed against itself", own, got)
+		}
+	}
+}
+
+// And a change genuinely stacked on another still gets its parent: excluding @
+// must not flatten every review to trunk.
+func TestResolveReviewStackBaseStillFindsARealParent(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", atCursor: "andrew/child", parent: "andrew/parent"}
+	if got := resolveReviewStackBase(r, "/ws/child", "andrew/child"); got != "andrew/parent" {
+		t.Fatalf("base = %q, want andrew/parent", got)
 	}
 }
 
