@@ -54,7 +54,8 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 			Keys: append([][2]string{
 				{"h/l ←/→", "pan horizontally (no-op under wrap)"},
 				{"0 / $", "start / end of the line"},
-				{"w", "toggle line wrap"},
+				{"w", "toggle line wrap (off in side-by-side)"},
+				{"|", "toggle side-by-side vs unified"},
 				{`\`, "show / hide the left column"},
 				{"/", "search the diff · filter files from the lists"},
 				{"n / N", "next / previous match, wrapping"},
