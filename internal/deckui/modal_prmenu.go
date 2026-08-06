@@ -96,7 +96,7 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		var descCmd tea.Cmd
 		descModal, descCmd = newPRDescModal(item, num, m.prDescLoad)
 		m.active = descModal
-		return batchCmds(descCmd, tea.ClearScreen)
+		return descCmd
 	case "D":
 		m.active = nil
 		_, num, ok := prNumberForAction(m, "description")
@@ -134,7 +134,7 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		var initCmd tea.Cmd
 		m.promptForm, initCmd = newPromptForm(item, prompt)
 		m.status = "repair: review prompt · enter send · ctrl+g $EDITOR · esc cancel"
-		return batchCmds(initCmd, tea.ClearScreen)
+		return initCmd
 	case "m":
 		m.active = nil
 		item, ok := m.selected()
@@ -157,7 +157,7 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		var mergeModal *confirmMergeModal
 		mergeModal, m.status = newConfirmMerge(item, status)
 		m.active = mergeModal
-		return tea.ClearScreen
+		return nil
 	case "s":
 		m.active = nil
 		item, ok := m.selected()

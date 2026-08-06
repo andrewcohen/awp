@@ -105,7 +105,7 @@ func (pd *prDescModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		switch msg.String() {
 		case "d", "esc", "q", "ctrl+c":
 			m.active = nil
-			return tea.ClearScreen
+			return nil
 		}
 		var cmd tea.Cmd
 		pd.vp, cmd = pd.vp.Update(msg)

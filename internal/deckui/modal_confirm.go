@@ -57,7 +57,7 @@ func (c *confirmDeleteModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		case "esc", "ctrl+c":
 			m.active = nil
 			m.status = ""
-			return tea.ClearScreen
+			return nil
 		case "enter":
 			if strings.TrimSpace(c.input.Value()) != c.target.ProjectName {
 				c.err = "project name didn't match"
@@ -66,12 +66,12 @@ func (c *confirmDeleteModal) update(m *Model, msg tea.Msg) tea.Cmd {
 			m.active = nil
 			if m.handler == nil {
 				m.status = "delete project: handler not configured"
-				return tea.ClearScreen
+				return nil
 			}
 			m.deleteTarget = c.target
 			updated, cmd := m.startAction(ActionDeleteProject, c.target, "")
 			*m = updated.(Model)
-			return batchCmds(cmd, tea.ClearScreen)
+			return cmd
 		}
 		var cmd tea.Cmd
 		c.input, cmd = c.input.Update(key)

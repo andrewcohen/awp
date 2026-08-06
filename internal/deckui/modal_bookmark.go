@@ -61,7 +61,7 @@ func (p *bookmarkPicker) cancelToForm(m *Model) tea.Cmd {
 	if fromForm {
 		m.newWorkspaceMode = true
 		m.newWorkspaceForm.RevertStartFrom()
-		return tea.ClearScreen
+		return nil
 	}
 	return nil
 }
