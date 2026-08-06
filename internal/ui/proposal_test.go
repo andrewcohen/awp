@@ -9,7 +9,7 @@ import (
 )
 
 // proposalModel is a finding with an agent's proposal under it, plus recorders
-// for the two halves approving does: writing the yes, and telling the agent.
+// for the two halves approving does: writing the yes, and sending it on.
 type approvals struct {
 	approved []string
 	sent     []review.Comment
@@ -51,7 +51,7 @@ func TestAPendingProposalSaysItIsWaitingOnYou(t *testing.T) {
 	m, _ := proposalModel(t, review.ProposalPending)
 
 	view := stripANSI(m.renderStreamPanel(90, 20))
-	if !strings.Contains(view, chipAwaitingYou) {
+	if !strings.Contains(view, chipAwaitingApproval) {
 		t.Errorf("the stream does not say the proposal is waiting:\n%s", view)
 	}
 }
@@ -62,7 +62,7 @@ func TestAnApprovedProposalIsNotStillWaiting(t *testing.T) {
 	m, _ := proposalModel(t, review.ProposalApproved)
 
 	view := stripANSI(m.renderStreamPanel(90, 20))
-	if strings.Contains(view, chipAwaitingYou) {
+	if strings.Contains(view, chipAwaitingApproval) {
 		t.Errorf("an approved proposal still reads as waiting:\n%s", view)
 	}
 	if !strings.Contains(view, chipApproved) {
@@ -83,7 +83,7 @@ func TestTheIndexSaysAConversationIsWaitingOnYou(t *testing.T) {
 	if got := m.commentIndex[0].proposal; got != review.ProposalPending {
 		t.Errorf("the index row carries %q, want pending", got)
 	}
-	if row := entryLocation(m.commentIndex[0]); !strings.Contains(row, chipAwaitingYou) {
+	if row := entryLocation(m.commentIndex[0]); !strings.Contains(row, chipAwaitingApproval) {
 		t.Errorf("the index row does not say it is waiting: %q", row)
 	}
 }
@@ -93,7 +93,7 @@ func TestTheIndexSaysAConversationIsWaitingOnYou(t *testing.T) {
 // silently disappears for one kind of remark.
 func TestAReviewLevelProposalIsAlsoListedAsWaiting(t *testing.T) {
 	e := commentEntry{changeWide: true, proposal: review.ProposalPending}
-	if row := entryLocation(e); !strings.Contains(row, chipAwaitingYou) {
+	if row := entryLocation(e); !strings.Contains(row, chipAwaitingApproval) {
 		t.Errorf("a review-level row drops the chip: %q", row)
 	}
 }
@@ -115,10 +115,10 @@ func TestPendingWinsOverApprovedOnOneRow(t *testing.T) {
 	}
 }
 
-// A records the yes and tells the agent. Both halves, in that order: the record
-// is the durable one, and a send that fails afterwards is a message the reviewer
-// can repeat rather than an approval that never happened.
-func TestAApprovesAndTellsTheAgent(t *testing.T) {
+// A records the yes and sends it to the agent. Both halves, in that order: the
+// record is the durable one, and a send that fails afterwards is a message the
+// reviewer can repeat rather than an approval that never happened.
+func TestAApprovesAndSendsItToTheAgent(t *testing.T) {
 	m, rec := proposalModel(t, review.ProposalPending)
 	m = cursorToComment(t, m)
 
@@ -128,15 +128,16 @@ func TestAApprovesAndTellsTheAgent(t *testing.T) {
 		t.Fatalf("approved %v, want [p1] (status %q)", rec.approved, m.status)
 	}
 	if len(rec.sent) != 1 {
-		t.Fatalf("the agent was told %d times, want 1 (status %q)", len(rec.sent), m.status)
+		t.Fatalf("the agent was sent %d, want 1 (status %q)", len(rec.sent), m.status)
 	}
 	if !rec.sent[0].Approved() {
 		t.Errorf("the agent was handed a record reading %q, want approved", rec.sent[0].Proposal)
 	}
-	// Both halves in the line the reviewer is left with. A status naming only the
-	// half that worked is how a send that never happened went unnoticed before.
-	if !strings.Contains(m.status, "approved") || !strings.Contains(m.status, "agent") {
-		t.Errorf("the status does not report both halves: %q", m.status)
+	// Both halves in the line the reviewer is left with, in the compose box's own
+	// words: "comment saved and sent to the agent" is the same event by another
+	// key, and two spellings of it would read as two different things.
+	if m.status != "approved and sent to the agent" {
+		t.Errorf("the status is %q, want \"approved and sent to the agent\"", m.status)
 	}
 }
 
@@ -168,7 +169,7 @@ func TestApprovingUpdatesTheViewAtOnce(t *testing.T) {
 	m = press(m, "A")
 
 	view := stripANSI(m.renderStreamPanel(90, 20))
-	if strings.Contains(view, chipAwaitingYou) {
+	if strings.Contains(view, chipAwaitingApproval) {
 		t.Errorf("the stream still says the proposal is waiting:\n%s", view)
 	}
 	if !strings.Contains(view, chipApproved) {
@@ -194,8 +195,8 @@ func TestAOnAConversationWithNoProposalSaysSo(t *testing.T) {
 
 // A missing sender is not a failed approval — the yes is on disk, and the agent
 // finds it in `awp review list`. It has to say the difference, though, or the
-// reviewer walks away thinking the agent was told.
-func TestApprovingWithNoAgentToTellStillApproves(t *testing.T) {
+// reviewer walks away thinking the agent got it.
+func TestApprovingWithNoSenderStillApproves(t *testing.T) {
 	m, rec := proposalModel(t, review.ProposalPending)
 	m.SendComment = nil
 	m = cursorToComment(t, m)
@@ -208,8 +209,8 @@ func TestApprovingWithNoAgentToTellStillApproves(t *testing.T) {
 	if !strings.Contains(m.status, "approved") {
 		t.Errorf("the status does not say it was approved: %q", m.status)
 	}
-	if !strings.Contains(m.status, "agent") {
-		t.Errorf("the status does not say the agent was not told: %q", m.status)
+	if !strings.Contains(m.status, "sending unavailable") {
+		t.Errorf("the status does not say the send did not happen: %q", m.status)
 	}
 }
 
@@ -224,7 +225,7 @@ func TestAFailedApprovalDoesNotTellTheAgent(t *testing.T) {
 	m = press(m, "A")
 
 	if len(rec.sent) != 0 {
-		t.Errorf("the agent was told about an approval that failed: %v", rec.sent)
+		t.Errorf("an approval that failed was sent to the agent anyway: %v", rec.sent)
 	}
 	if !strings.Contains(m.status, "no such comment") {
 		t.Errorf("the status does not carry the reason: %q", m.status)

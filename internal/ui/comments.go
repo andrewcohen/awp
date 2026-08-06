@@ -459,11 +459,15 @@ const (
 
 // The two things a proposal can say about itself. A pending one is the message in
 // a change that is waiting on *you* — the agent has stopped — so it has to be
-// legible without opening the conversation, and an approved one has to be told
-// apart from it or a proposal you already answered goes on reading as live.
+// legible without opening the conversation, and an approved one has to read
+// differently or a proposal you already answered goes on looking live.
+//
+// "awaiting approval" rather than "awaiting your ok": the CLI already prints that
+// phrase when a proposal is filed, and a chip that renamed it would make the two
+// surfaces look like they were describing different states.
 const (
-	chipAwaitingYou = "awaiting your ok"
-	chipApproved    = "approved"
+	chipAwaitingApproval = "awaiting approval"
+	chipApproved         = "approved"
 )
 
 // proposalChip is what a comment's header says about its proposal, empty for
@@ -471,7 +475,7 @@ const (
 func proposalChip(c review.Comment) string {
 	switch {
 	case c.AwaitingApproval():
-		return chipAwaitingYou
+		return chipAwaitingApproval
 	case c.Approved():
 		return chipApproved
 	default:

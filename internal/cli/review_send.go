@@ -81,8 +81,8 @@ func commentPromptFor(c review.Comment, revision string) string {
 // proposalGate is the rule an agent is held to when a finding reaches it. The
 // gate is about changing code, not about replying: an answer or an explanation is
 // an ordinary reply, and only an offer to change something waits for a yes.
-const proposalGate = "Add --proposal if the reply is a change you mean to make, then stop —\n" +
-	"you will be told when it is approved. Answering a question or explaining\n" +
+const proposalGate = "Add --proposal if the reply is a change you mean to make, then stop.\n" +
+	"You get a prompt when it is approved. Answering a question or explaining\n" +
 	"what is already there needs no approval: reply and carry on.\n"
 
 // approvalPromptFor is what the agent is told when its proposal is approved.

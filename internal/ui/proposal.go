@@ -58,7 +58,7 @@ func (m Model) approveAtCursor() (tea.Model, tea.Cmd) {
 	if !ok {
 		// Worded as what is missing rather than as what you did wrong: the common
 		// way to land here is a conversation whose proposal you already approved.
-		m.status = "no proposal awaiting an answer here"
+		m.status = "nothing awaiting approval here"
 		return m, nil
 	}
 	approved, err := m.ApproveProposal(c.ID)
@@ -81,18 +81,23 @@ func (m Model) approveAtCursor() (tea.Model, tea.Cmd) {
 	}
 	m.rebuildStream()
 
-	// Both halves get said. The approval is on disk either way, and a nudge that
-	// did not go is the reviewer's cue to go and poke the agent — the failure mode
-	// #133 was about is a status line that reports the half that worked and stays
-	// silent about the half that did not.
+	// Both halves get said. The approval is on disk either way, and a send that did
+	// not go is the reviewer's cue to go and poke the agent — the failure mode #133
+	// was about is a status line that reports the half that worked and stays silent
+	// about the half that did not.
+	//
+	// The wording is the compose box's, verbatim past the first word: "comment
+	// saved" has these same three variants (see saveComment), and inventing a
+	// parallel set for approving made the same event read as two different ones
+	// depending on which key produced it.
 	if m.SendComment == nil {
-		m.status = "approved — no agent to tell from here"
+		m.status = "approved (sending unavailable here)"
 		return m, nil
 	}
 	if err := m.SendComment(approved); err != nil {
-		m.fail("approved, but telling the agent failed: %v", err)
+		m.fail("approved, send failed: %v", err)
 		return m, nil
 	}
-	m.status = "approved and told the agent"
+	m.status = "approved and sent to the agent"
 	return m, nil
 }

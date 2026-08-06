@@ -20,7 +20,9 @@ Focus on the current task request and keep solutions simple, correct, and easy t
 - Keep code idiomatic for the language and project style.
 - Add or update tests for behavior you change.
 - Keep public interfaces minimal and stable.
-- Handle errors explicitly and return actionable messages.
+- Handle errors explicitly and return actionable messages: name what was
+  being attempted and what the reader can do about it. `review: no comment
+  "abc" to approve` beats `not found`.
 - Avoid hidden global state where possible.
 - **One way to say a thing, and make it a required argument.** When something
   is ambient (which repo, which workspace, which review), give it exactly one
