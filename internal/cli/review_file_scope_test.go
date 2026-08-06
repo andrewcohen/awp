@@ -69,7 +69,8 @@ func TestAFileCommentShipsBesideALineComment(t *testing.T) {
 
 	// The check the file comment used to fail, run over both of them.
 	commentable := parseCommentable([]github.PRFile{{Filename: "a.go", Patch: "@@ -1,2 +1,3 @@\n ctx\n+added\n"}})
-	if blocked := blockedAnchors(b.Threads, preflight(b.Threads, commentable)); len(blocked) > 0 {
+	sending, verdicts := preflight(b.Threads, commentable)
+	if blocked := blockedAnchors(sending, verdicts); len(blocked) > 0 {
 		t.Fatalf("the run would be refused: %v", blocked)
 	}
 }

@@ -309,6 +309,11 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// that is not in the diff used to be discoverable only as a 422 — and now that
 	// the whole review goes up as one atomic mutation, one bad anchor fails every
 	// comment with it and the message names only the first problem.
+	//
+	// The threads come back from the check rather than being read on past it,
+	// because the check is also what relocates a comment whose line has drifted.
+	// From here on b.Threads is the anchors this run will send, which is what the
+	// preview below prints and what stageReview turns into the mutation.
 	var verdicts []anchorVerdict
 	if len(b.Threads) > 0 {
 		files, ferr := gh.PRFiles(req.PR)
@@ -318,7 +323,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 			// is what happened before this existed.
 			_, _ = fmt.Fprintf(out, "note: couldn't check the anchors against the PR's diff: %v\n", ferr)
 		} else if len(files) > 0 {
-			verdicts = preflight(b.Threads, parseCommentable(files))
+			b.Threads, verdicts = preflight(b.Threads, parseCommentable(files))
 		}
 		// No files at all is treated the same way as a failed fetch. A PR whose diff
 		// touches nothing is not a real state, so an empty answer means the call told
@@ -392,6 +397,13 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		} else {
 			for _, c := range b.Threads {
 				where := c.Anchor.Where()
+				// A relocated comment is recorded on the line it was sent to, not the one it
+				// was filed against — these are the anchors the check resolved. That is also
+				// what makes the lookup below find anything: GitHub reports its threads by
+				// the line it put them on, so matching on the stale hint would miss every
+				// thread that moved. The local record is unaffected in practice, since a
+				// hint is a hint and the viewer locates comments by text anyway.
+				//
 				// The thread's own id when GitHub named it, so a record points at the
 				// conversation it produced; the review's id otherwise, which is still enough
 				// to know the comment went up.
@@ -579,7 +591,7 @@ func publishPlan(req publishRequest, b publishBuckets, head string, verdicts []a
 			// this plan is checking targets, and "not in the diff" belongs next to the
 			// target it refers to rather than in a separate list underneath.
 			if i < len(verdicts) && verdicts[i].Note != "" {
-				line += "  ⚠ " + verdicts[i].Note
+				line += "  " + verdicts[i].mark() + " " + verdicts[i].Note
 			}
 			lines = append(lines, line)
 		}
