@@ -77,7 +77,7 @@ func (m Model) deleteCommentAtCursor() (tea.Model, tea.Cmd) {
 		m.status = "put the cursor on one of your comments to delete it"
 		return m, nil
 	}
-	if c.ThreadReply() && c.State == review.Published {
+	if c.ThreadReply() && c.OnGitHub() {
 		// Deleting the record would not delete the reply, and the mirror would go on
 		// drawing it — so this would look like a delete that did nothing, while
 		// quietly losing our own record of having said it.
@@ -666,11 +666,8 @@ func threadAnchor(t review.Thread) review.Anchor {
 // GitHub's copy is the one to keep. It sits inside the conversation, in order,
 // where a reader expects to find an answer.
 func (m Model) threadCarriesOurReply(c review.Comment) bool {
-	if c.Publish == nil {
-		return false
-	}
-	id := strings.TrimSpace(c.Publish.ThreadID)
-	if id == "" {
+	id, ok := c.PublishedThreadID()
+	if !ok {
 		return false
 	}
 	for _, t := range m.threads {
@@ -711,10 +708,10 @@ func echoedByThread(comments []review.Comment, threads []review.Thread) map[stri
 	// belongs to whichever copy of the conversation ends up being drawn.
 	published := make(map[string]string, len(comments))
 	for _, c := range comments {
-		if c.ReplyTo != "" || c.Publish == nil {
+		if c.ReplyTo != "" {
 			continue
 		}
-		if id := strings.TrimSpace(c.Publish.ThreadID); id != "" {
+		if id, ok := c.PublishedThreadID(); ok {
 			published[id] = c.ID
 		}
 	}
@@ -1349,7 +1346,7 @@ func commentRows(c review.Comment, width int, last, collapsed bool) []commentRow
 	// one that did not go out, and it looks exactly like one that did. A reply
 	// nobody received, reading as received, is the failure this surface exists to
 	// prevent.
-	if c.ThreadReply() && c.State != review.Published {
+	if c.ThreadReply() && !c.OnGitHub() {
 		title += " · unsent"
 	}
 	// Before the state chip, because it is the more urgent fact: a reply that has

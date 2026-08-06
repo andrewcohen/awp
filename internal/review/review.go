@@ -473,6 +473,40 @@ func RemoteMessageID(threadID string, n int) string {
 	return RemoteThreadID(threadID) + threadMessageSep + strconv.Itoa(n)
 }
 
+// OnGitHub reports whether one of our comments has reached GitHub.
+//
+// One spelling, because there were three. Two call sites asked
+// `State == Published || Publish != nil`, and the OR is the tell: the two halves
+// are supposed to move together and sometimes do not, so both were being checked
+// to be safe. The other two sites each checked one half — the chip that labels a
+// reply `unsent` read only the state, which is how a reply that had reached
+// GitHub went on saying it had not (the failure #83 and #106 were about, where
+// Update dropped State=Published on the way to disk).
+//
+// The union is the honest answer: either half saying yes means the words are up
+// there, and the risk worth defending against is telling someone their remark is
+// unsent when it is public.
+//
+// Not about a mirrored comment, which is GitHub's own record and on GitHub by
+// definition — ask Mirrored for that.
+func (c Comment) OnGitHub() bool { return c.State == Published || c.Publish != nil }
+
+// PublishedThreadID is the GitHub thread our published comment became, and
+// whether we know it.
+//
+// An accessor rather than a nil check at the call site, because the caller wants
+// the id and the nil guard is only in its way — and a `Publish == nil` written
+// out there is a fourth spelling of OnGitHub waiting to drift from the other
+// three. An empty id is "not known": a record written before the ids were carried
+// says nothing, and must not be read as a match.
+func (c Comment) PublishedThreadID() (string, bool) {
+	if c.Publish == nil {
+		return "", false
+	}
+	id := strings.TrimSpace(c.Publish.ThreadID)
+	return id, id != ""
+}
+
 // Mirrored reports whether this is GitHub's record rather than one of ours.
 //
 // One spelling, because the answer decides whether four different things are

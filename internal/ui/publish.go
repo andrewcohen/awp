@@ -117,7 +117,7 @@ func (m *Model) beginPublish() {
 func (m Model) unpublishedSummaries() []review.Comment {
 	var out []review.Comment
 	for _, c := range m.comments {
-		if c.State == review.Published || c.Publish != nil {
+		if c.OnGitHub() {
 			continue
 		}
 		if strings.TrimSpace(c.Body) == "" || c.ReplyTo != "" {

@@ -87,7 +87,7 @@ func partitionForPublish(comments []review.Comment) publishBuckets {
 	for _, c := range comments {
 		// Already on GitHub: skip rather than repost. This is what makes a retry
 		// after a partial failure safe.
-		if c.State == review.Published || c.Publish != nil {
+		if c.OnGitHub() {
 			b.Skipped++
 			continue
 		}
