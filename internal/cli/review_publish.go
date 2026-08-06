@@ -338,12 +338,16 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		}
 		return nil
 	}
+	// What the check decided, written onto the findings before the run either
+	// refuses or goes ahead — so a refusal leaves something behind to act on.
+	recordAnchorVerdicts(store, r, req.Comments, b.Threads, verdicts, out)
 	// Refuse rather than send an anchor GitHub is going to reject. The mutation is
 	// atomic, so this loses nothing that would otherwise have landed — it replaces a
 	// wall of validation errors naming GitHub's first complaint with the full list,
 	// in the reviewer's own terms, before anything is attempted.
 	if blocked := blockedAnchors(b.Threads, verdicts); len(blocked) > 0 {
-		return fmt.Errorf("%d comment(s) are not on lines in PR #%d's diff:\n  %s",
+		return fmt.Errorf("%d comment(s) are not on lines in PR #%d's diff:\n  %s\n"+
+			"they are kept and marked refused (`awp review list`); repair the anchor and publish again",
 			len(blocked), req.PR, strings.Join(blocked, "\n  "))
 	}
 	if len(b.Threads) == 0 && len(b.ChangeWide) == 0 && len(b.Replies) == 0 {
@@ -364,6 +368,11 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 	// duplicate them on GitHub.
 	record := func(c review.Comment, threadID, where string) {
 		c.State = review.Published
+		// Whatever an earlier run refused about this, it is settled: these words are on
+		// GitHub. Cleared here as well as at check time because this copy was read
+		// before the check ran, so writing it back untouched would restore the reason
+		// the check had just retired.
+		c.Reject = nil
 		c.Publish = &review.PublishRecord{ThreadID: threadID, At: time.Now()}
 		if uerr := store.UpdateComment(r, c); uerr != nil {
 			failures = append(failures, fmt.Errorf("%s posted but not recorded: %w", where, uerr))
@@ -475,6 +484,72 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+// recordAnchorVerdicts writes what the anchor check decided onto the findings
+// themselves: a refusal on the ones it blocked, and a clearing on the ones it no
+// longer blocks.
+//
+// This is what makes a refusal survivable. The run is refused as a whole — the
+// mutation is atomic, so that part is right — but until now the refusal existed
+// only as a message on the way past, and the only way to clear a blocked anchor
+// was to delete the finding. On a real review that is what happened: the finding
+// GitHub would not take was deleted to unblock the publish, and its body went with
+// it. Nobody noticed for two days.
+//
+// Both directions in one pass, because a reason that outlives the anchor it was
+// about is the same lie in the other direction — a finding that has since been
+// repaired would go on reading as refused until someone published it.
+//
+// Written against the *stored* comment rather than the one being sent. b.Threads
+// holds the anchors this run would use, which for a passing comment may have been
+// relocated; the store keeps the anchor as filed (a hint is a hint, and the viewer
+// locates a comment by its text), and this write must not quietly change that.
+//
+// Best effort. Failing to record the check must not turn into a second failure on
+// top of the one being reported.
+func recordAnchorVerdicts(
+	store review.Store, r review.Review,
+	stored, sending []review.Comment, verdicts []anchorVerdict, out io.Writer,
+) {
+	if len(verdicts) == 0 {
+		// The check did not run — no PR files, or the fetch failed. It decided nothing,
+		// so it retires nothing either: a rejection from a run that could see the diff
+		// outranks a run that could not.
+		return
+	}
+	byID := make(map[string]review.Comment, len(stored))
+	for _, c := range stored {
+		byID[c.ID] = c
+	}
+	now := time.Now()
+	for i, sent := range sending {
+		if i >= len(verdicts) {
+			break
+		}
+		c, ok := byID[sent.ID]
+		if !ok {
+			continue
+		}
+		was, refused := c.Rejected()
+		switch v := verdicts[i]; {
+		case v.blocks():
+			// Unchanged reasons are left alone, so re-running a publish against the same
+			// broken anchor does not keep moving the timestamp on when it was decided.
+			if refused && was == v.Note {
+				continue
+			}
+			c.Reject = &review.RejectRecord{Reason: v.Note, At: now}
+		case refused:
+			c.Reject = nil
+		default:
+			continue
+		}
+		if uerr := store.UpdateComment(r, c); uerr != nil {
+			_, _ = fmt.Fprintf(out, "note: couldn't record the anchor check for %s: %v\n",
+				c.Anchor.Where(), uerr)
+		}
+	}
 }
 
 // stageReview turns the review's threaded comments into one pending review.
