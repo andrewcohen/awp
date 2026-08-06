@@ -370,7 +370,67 @@ func runReviewAdd(runner Runner, svc workspace.Service, args []string, out io.Wr
 	}
 	_, _ = fmt.Fprintf(out, "added %s %s to %s on %s\n",
 		c.Kind.OrDefault(), c.ID, scope.label(), c.Anchor.Where())
+	// After the write, deliberately. See warnAnchorOutsideDiff.
+	warnAnchorOutsideDiff(runner, scope, c.Anchor, out)
 	return nil
+}
+
+// warnAnchorOutsideDiff says so when a finding names a file the review's own
+// diff does not touch.
+//
+// The signal: a path that is not in the change usually means the wrong review
+// was picked. #84 made that failure *visible* — every write names the review it
+// landed in — but naming it only helps a reader who reads it, and an agent
+// filing a dozen findings in a row is not reading twelve confirmation lines.
+//
+// A warning, never a refusal, and printed after the comment is already on disk.
+// A finding is worth keeping even when its anchor looks wrong: the words are the
+// valuable part and an anchor can be repaired. Writing first also means a slow or
+// broken check can never cost the caller the finding.
+//
+// Silent when it cannot tell — no workspace directory, or jj failing. #94's rule:
+// a check that does not know must not manufacture a complaint, or the warning
+// stops meaning anything and starts being scrolled past.
+//
+// File membership only, not the line. The line-level answer needs the whole patch
+// rendered and parsed — parseCommentable does exactly that on the publish side,
+// where it runs once per publish. This runs on every `review add`, so it asks jj
+// for names alone (jj.ChangedPaths, `--name-only`). A stale line inside a file
+// that really is in the change is a different question, and #111's.
+func warnAnchorOutsideDiff(runner Runner, scope reviewScope, a review.Anchor, out io.Writer) {
+	path := strings.TrimSpace(a.Path)
+	// A remark about the change as a whole names no file, so there is nothing that
+	// could be outside it.
+	if path == "" {
+		return
+	}
+	dir := strings.TrimSpace(scope.entry.Path)
+	if dir == "" {
+		return
+	}
+	// The same range the viewer opens this workspace on, so the diff being checked
+	// against is the diff the reviewer would be looking at.
+	base := resolveReviewStackBase(runner, dir, scope.entry.Bookmark)
+	revset := base + "..@"
+	paths, err := jj.New(fixedDirRunner{base: runner, dir: dir}).ChangedPaths(dir, revset)
+	if err != nil {
+		return
+	}
+	// An empty diff is counted as "cannot tell" rather than "nothing is in it".
+	// Both readings are available and the wrong one is much more expensive: a range
+	// that resolved badly reports every finding as misfiled, which is a warning on
+	// every call, which is a warning nobody reads by the third one. And ranges do
+	// resolve badly — a change was resolving as its own base until recently, and
+	// that produced exactly this, an empty diff that looked authoritative.
+	if len(paths) == 0 {
+		return
+	}
+	for _, p := range paths {
+		if p == path {
+			return
+		}
+	}
+	_, _ = fmt.Fprintf(out, "warning: %s is not in this review's diff (%s) — check --workspace, or the path\n", path, revset)
 }
 
 func runReviewReply(runner Runner, svc workspace.Service, args []string, out io.Writer) error {

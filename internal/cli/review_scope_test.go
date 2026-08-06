@@ -25,7 +25,15 @@ import (
 // resolves without a real repo.
 type rootRunner struct{ root string }
 
-func (r rootRunner) Run(context.Context, string, string, ...string) (string, error) {
+func (r rootRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
+	// Answers every probe with the root, which is enough for the resolution these
+	// tests are about — except the changed-file list, where "the root is the one
+	// changed file" is a lie that makes warnAnchorOutsideDiff complain about every
+	// anchor. Empty means "cannot tell" there, so the check stays quiet in the tests
+	// that are not about it. Tests that *are* about it use changedFilesRunner.
+	if len(args) >= 2 && args[0] == "diff" && args[1] == "--name-only" {
+		return "", nil
+	}
 	return r.root + "\n", nil
 }
 
