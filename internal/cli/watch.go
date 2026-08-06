@@ -13,6 +13,7 @@ import (
 	"github.com/andrewcohen/awp/internal/workspace"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // codingAgentInvocation returns the agent launch command for a coding
@@ -190,7 +191,11 @@ func (a *App) runWatch(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(a.out, watch.Render(loop, label, st))
+		// lipgloss.Fprintln rather than fmt: lipgloss v2 renders at full
+		// fidelity and downsamples at the writer, so `--once` piped to a
+		// file or a pager would otherwise carry raw escapes. v1 stripped
+		// them inside Render by detecting the profile globally.
+		_, _ = lipgloss.Fprintln(a.out, watch.Render(loop, label, st))
 		return nil
 	}
 
