@@ -350,7 +350,7 @@ func publishReview(runner Runner, req publishRequest, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "note: %d comment(s) not published — a comment on a whole file needs an endpoint awp doesn't call yet\n",
 			len(b.FileLevel))
 		for _, c := range b.FileLevel {
-			_, _ = fmt.Fprintf(out, "      %s  %s\n", c.Anchor.Where(), oneLine(c.PublishBody()))
+			_, _ = fmt.Fprintf(out, "      %s  %s\n", c.Anchor.Where(), bodyPreview(c.PublishBody()))
 		}
 	}
 	if len(b.Inline) == 0 && len(b.ChangeWide) == 0 && len(b.Replies) == 0 {
@@ -578,7 +578,7 @@ func publishPlan(req publishRequest, b publishBuckets, head string, verdicts []a
 			req.PR, shortSHA(head), len(b.Inline))
 		for i, c := range b.Inline {
 			line := fmt.Sprintf("  thread  %s  %s",
-				c.Anchor.Where(), oneLine(c.PublishBody()))
+				c.Anchor.Where(), bodyPreview(c.PublishBody()))
 			// The anchor's verdict rides on the thread it is about. A reviewer checking
 			// this plan is checking targets, and "not in the diff" belongs next to the
 			// target it refers to rather than in a separate list underneath.
@@ -589,35 +589,35 @@ func publishPlan(req publishRequest, b publishBuckets, head string, verdicts []a
 		}
 		line := fmt.Sprintf("submitPullRequestReview  event=%s", req.Event)
 		if summary := planSummary(req, b.ChangeWide); summary != "" {
-			line += "  body=" + oneLine(summary)
+			line += "  body=" + bodyPreview(summary)
 		}
 		call("%s", line)
 	case req.Event != "":
 		line := fmt.Sprintf("POST pulls/%d/reviews  event=%s", req.PR, req.Event)
 		if summary := planSummary(req, b.ChangeWide); summary != "" {
-			line += "  body=" + oneLine(summary)
+			line += "  body=" + bodyPreview(summary)
 		}
 		call("%s", line)
 	default:
 		if written := strings.TrimSpace(req.Summary); written != "" {
-			call("POST issues/%d/comments  %s", req.PR, oneLine(written))
+			call("POST issues/%d/comments  %s", req.PR, bodyPreview(written))
 		}
 		for _, c := range b.ChangeWide {
-			call("POST issues/%d/comments  %s", req.PR, oneLine(c.PublishBody()))
+			call("POST issues/%d/comments  %s", req.PR, bodyPreview(c.PublishBody()))
 		}
 	}
 	// Outside the switch, the same as the run itself: a reply is its own call into a
 	// conversation that already exists, whatever else this run is doing.
 	for _, c := range b.Replies {
 		call("addPullRequestReviewThreadReply  %s  %s",
-			c.Anchor.Where(), oneLine(c.PublishBody()))
+			c.Anchor.Where(), bodyPreview(c.PublishBody()))
 	}
 	// Listed as what it is — a comment this run will not send. A preview whose
 	// whole job is naming the calls has to name the omissions too, or the reviewer
 	// confirms a plan and finds a comment still sitting local afterwards.
 	for _, c := range b.FileLevel {
 		lines = append(lines, fmt.Sprintf("  not sent  %s  %s  ⚠ a comment on a whole file needs an endpoint awp doesn't call yet",
-			c.Anchor.Where(), oneLine(c.PublishBody())))
+			c.Anchor.Where(), bodyPreview(c.PublishBody())))
 	}
 	head1 := fmt.Sprintf("%d call(s) to PR #%d (%d already published)", calls, req.PR, b.Skipped)
 	// A refusal, said before the calls rather than discovered after them. The plan
