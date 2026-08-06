@@ -180,6 +180,31 @@ The mirror records **each message's GitHub node id**, which is how the diff reco
 
 **Requires a patched (Nerd Font) terminal font.** Anyone running awp without a Nerd Font will see empty rectangles where the PR glyphs would render.
 
+### Attention scope (`P`)
+
+The second `P` scope is **one flat list of everything that wants you, most-your-problem first**. Unlike the inbox it has no section headers and unlike the all scope it is not grouped by project — grouping would cut a single priority-ordered list into as many lists as you have repos, and put a different kind of claim at the top of each. So reading down it is reading down the priority, and **every row says why it is there** on its meta line, since nothing else on screen does.
+
+A row qualifies for any of these, and shows the most urgent one it matches:
+
+| Reason | What it means |
+|---|---|
+| `waiting on you` | The agent asked something and stopped. The only one where the work has actually halted. |
+| `re-review requested` | You reviewed this PR, the author pushed and asked again. |
+| `your review` | A PR you have **checked out** whose review is still wanted from you. |
+| `finished a turn` | The agent finished since you last looked. |
+| `PR needs action` | Your own PR: changes requested, CI red, or a branch that won't merge as it stands. |
+| `approved, green` | Your own PR, one keypress from done. |
+| `working` | An agent running right now. Replaced by the dev-loop progress when there is any — `3/7 · implement · ▶ <unit>` says "working" with more in it than the word does. |
+| `2h ago` | You were in this workspace recently and nothing else is true of it. |
+
+**Review means still-wanted, not still-open.** GitHub clears the review request the moment you submit a review and re-sets it only if the author asks again, so a PR you have already reviewed drops out on its own — there is no rule saying so, and none needed. "Checked out" is also the whole difference from the inbox's *Needs your review* bucket, which deliberately includes PRs you have **not** pulled down; a PR with no local workspace is the opposite of one you are working on.
+
+**PR state is read off the inbox's own classification**, not re-derived. The two scopes answer the same question about the same PR, and a second copy of "is CI red" is how they would come to disagree. Deliberately not *every* open PR, though: one that is merely open and waiting on somebody else is the inbox's business, and pulling those in would make this a second copy of a scope that already sections them properly.
+
+**Recency** keeps a workspace listed for **4 hours** after it was last active, so looking at a row no longer deletes the only evidence you were in the middle of it — before this the scope was binary on the unread flag. The clock is `LastActiveAt` in `workspace-state.json`, written when the agent reports a status and when you open the workspace. A workspace with no timestamp — anything that existed before the field did — is neither recent nor stale: unknown is no opinion, not "last active in 1970".
+
+**Pinned rows still float to the top**, in register order, above everything: a pin is somewhere you asked for, and when the deck's guess disagrees with what you said the deck is not the one to trust. **The workspace you opened the deck from is always kept** even when it wants nothing, so the cursor has somewhere to land — it is the one row with no reason, and it sorts last. Since there are no project headers, `f` skips its project stage and hints every row directly, the way it already does in the inbox.
+
 ### Inbox scope (`P`)
 
 The third `P` scope sections open-PR workspaces by *what your next move is*, like GitHub's pull request inbox, instead of by project. Buckets render as headers with counts, most urgent first; empty buckets are hidden:
