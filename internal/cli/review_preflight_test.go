@@ -126,6 +126,62 @@ func TestCheckAnchorPassesAReviewLevelRemark(t *testing.T) {
 	}
 }
 
+// A remark about the whole file is checked for its file and nothing else.
+//
+// The failure this closes: a file-scoped anchor has no LineHint, so it fell into
+// the line walk with first == last == 0 and came back "line 0 is not in the
+// diff" — a refusal naming a line the author never chose. partitionForPublish
+// currently routes file-scoped comments away from the preflight entirely to
+// avoid it, which is a bypass rather than an answer; sending them needs the same
+// check every other anchor gets.
+func TestCheckAnchorChecksAFileScopedRemarkAgainstItsFile(t *testing.T) {
+	c := mixedFiles()
+	fileScoped := review.Anchor{Path: "a.go", Side: review.SideNew}
+	if got := fileScoped.Scope(); got != review.FileScope {
+		t.Fatalf("the fixture is wrong: scope is %v, want FileScope", got)
+	}
+	v := c.checkAnchor(fileScoped)
+	if v.State != anchorOK {
+		t.Fatalf("a remark about a file in the diff was refused: %v (%s)", v.State, v.Note)
+	}
+	if strings.Contains(v.Note, "line") {
+		t.Errorf("the verdict talks about a line the author never chose: %q", v.Note)
+	}
+}
+
+// And it is still refused when the file itself is not in the PR.
+func TestCheckAnchorRejectsAFileScopedRemarkOnAFileOutsideTheDiff(t *testing.T) {
+	v := mixedFiles().checkAnchor(review.Anchor{Path: "elsewhere.go", Side: review.SideNew})
+	if v.State != anchorMissingFile {
+		t.Fatalf("expected the file rejected, got %v (%s)", v.State, v.Note)
+	}
+	// The same phrase a line-scoped remark on that file would get: a reviewer reading
+	// the preview is being told one thing, and it does not depend on what the remark
+	// was about.
+	if !strings.Contains(v.Note, "not in the PR's diff") {
+		t.Errorf("unexpected note %q", v.Note)
+	}
+}
+
+// A file present only on one side still takes a whole-file remark. It has no line,
+// so it is not about a side, and refusing it for the side it did not pick would be
+// refusing a question it never asked.
+func TestAFileScopedRemarkIgnoresTheSide(t *testing.T) {
+	// Added file: new side only.
+	c := parseCommentable([]github.PRFile{{Filename: "new.go", Patch: "@@ -0,0 +1,2 @@\n+one\n+two\n"}})
+	for _, side := range []review.Side{review.SideNew, review.SideOld} {
+		if got := c.checkAnchor(review.Anchor{Path: "new.go", Side: side}); got.State != anchorOK {
+			t.Errorf("side %v: a whole-file remark was refused: %v (%s)", side, got.State, got.Note)
+		}
+	}
+	// A line-scoped remark on the missing side is still refused, and still says the
+	// side is what is wrong rather than blaming the line.
+	v := c.checkAnchor(review.Anchor{Path: "new.go", Side: review.SideOld, LineHint: 1})
+	if v.State != anchorMissingLine || !strings.Contains(v.Note, "side") {
+		t.Errorf("a LEFT line on an added file gave %v (%q)", v.State, v.Note)
+	}
+}
+
 // A binary or over-large file comes back with no patch. That is "cannot tell", not
 // "not in the diff", and it must never block a publish GitHub would have accepted.
 func TestAFileWithNoPatchCannotBeChecked(t *testing.T) {

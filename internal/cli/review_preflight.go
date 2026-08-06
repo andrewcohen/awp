@@ -144,6 +144,18 @@ func parseHunkStarts(header string) (oldStart, newStart int, ok bool) {
 	return max(oldStart, 1), max(newStart, 1), true
 }
 
+// hasFile reports whether the PR's diff touches this path at all, on either
+// side. Distinct from "the path has commentable lines on the side I want": a
+// file that was only added is in the diff but has no old side, and those two
+// answers want different words in the preview.
+func (c commentableLines) hasFile(path string) bool {
+	if _, ok := c.right[path]; ok {
+		return true
+	}
+	_, ok := c.left[path]
+	return ok
+}
+
 // anchorState is what the check concluded about one comment.
 type anchorState int
 
@@ -180,27 +192,34 @@ func (v anchorVerdict) blocks() bool {
 // whole range to sit inside one hunk, so a range that straddles the gap between two
 // hunks covers lines that are in no diff at all. Reported at the first line that
 // fails, since that is the one to look at.
+// What there is to check differs by scope, and the line walk is only one of the
+// three answers — so the scope is asked once, up front, rather than inferred
+// from which fields happen to be filled in at each step.
 func (c commentableLines) checkAnchor(a review.Anchor) anchorVerdict {
 	path := strings.TrimSpace(a.Path)
-	if path == "" {
+	if a.Scope() == review.ChangeScope {
 		// A review-level remark has no line to check; it becomes the review body.
 		return anchorVerdict{State: anchorOK}
 	}
 	if c.unknown[path] {
 		return anchorVerdict{State: anchorUnknown, Note: "no patch from GitHub — cannot check"}
 	}
+	if !c.hasFile(path) {
+		return anchorVerdict{State: anchorMissingFile, Note: "file is not in the PR's diff"}
+	}
+	if a.Scope() == review.FileScope {
+		// A remark about the whole file, so the file being in the diff is the entire
+		// question. Deliberately not checked against a side: it has no line, and
+		// refusing it for having nothing on the old side would refuse a remark that was
+		// never about a side. Without this arm it fell into the walk below, where a
+		// LineHint of 0 came back as "line 0 is not in the diff".
+		return anchorVerdict{State: anchorOK}
+	}
 	side := c.right
 	if a.Side == review.SideOld {
 		side = c.left
 	}
-	lines, inDiff := side[path]
-	if !inDiff {
-		if _, right := c.right[path]; !right {
-			if _, left := c.left[path]; !left {
-				return anchorVerdict{State: anchorMissingFile, Note: "file is not in the PR's diff"}
-			}
-		}
-	}
+	lines := side[path]
 	if len(lines) == 0 {
 		// The path is in the diff but has nothing on this side: a file that was only
 		// added has no old side to anchor a LEFT comment to. Worth its own wording —
