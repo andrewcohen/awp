@@ -4,7 +4,7 @@
 - **Spec ID**: `20260806-djsb`
 - **Feature name**: Charm v2 migration (bubbletea, bubbles, lipgloss, huh)
 - **Owner**: andrewcohen
-- **Status**: Planned
+- **Status**: In Progress (code complete, awaiting human QA)
 - **Last updated**: 2026-08-06
 
 ## Goal
@@ -288,6 +288,33 @@ Gates cannot catch a rendering regression. Every surface below needs eyes.
   huh findings verified by compiling a scratch module rather than reading
   pkg.go.dev, which was wrong about `Form.State` and about `Field`'s embedded
   model.
+- 2026-08-06: Implemented. Four deviations from the plan above, all found by
+  the compiler or a test rather than by the upgrade guides:
+
+  1. **`lipgloss.Width` now includes the border.** Not in any upgrade guide
+     and not in the survey. v1 drew the border outside `Width`; v2 counts it
+     inside, so every bordered panel rendered two columns narrow. Measured
+     both versions side by side to confirm padding was always inside and
+     only the border moved. Twelve sites corrected via a new
+     `charm.BorderCells`. One test caught it
+     (`TestTheSummaryBoxUsesTheFullWidth`); the other eleven sites had no
+     coverage, which is exactly the risk this spec named.
+  2. **Six programs, not five.** The survey's regex assumed a receiver named
+     `m` and missed `workspaceFormProgram`, whose receiver is `p`.
+  3. **Phases 3–7 could not be committed separately.** The tree does not
+     build between the start of the import rewrite and the last huh fix, so
+     they landed as one commit. Phases 1, 2, 6's downsampling fix and 8
+     stayed independent as planned.
+  4. **The two `SetColorProfile` bench inits were deleted rather than
+     ported.** v2 always renders full-fidelity escapes and downsamples at
+     the writer, so forcing a profile to make the benchmark see colour is no
+     longer meaningful.
+
+  Also of note: `bubbles/list` needed nothing beyond the import path, as
+  predicted; the palette discipline meant zero colour churn, as predicted;
+  and `tea.KeyMsg` → `tea.KeyPressMsg` reached 209 test literals, which were
+  routed through a new per-package `runeKey` helper rather than expanded
+  inline.
 
 ## Validation
 - [ ] `mise exec -- gofmt -l .`

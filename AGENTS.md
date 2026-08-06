@@ -37,7 +37,12 @@ Focus on the current task request and keep solutions simple, correct, and easy t
 
 ## TUI / lipgloss
 
-The deck and other TUIs are built on Bubble Tea + lipgloss. When working on UI:
+The deck and other TUIs are built on Bubble Tea + lipgloss, **v2**. The
+module paths are `charm.land/{bubbletea,bubbles,lipgloss,huh}/v2` — note
+`charm.land`, not `github.com/charmbracelet`, and note the `/v2`. A plain
+`go get github.com/charmbracelet/bubbletea` silently resolves to v1 and
+nothing warns you; that is how this repo spent its first months on v1 by
+accident. When working on UI:
 
 - Use lipgloss styling primitives (`MarginTop`, `MarginBottom`, `PaddingLeft`, `Border*`, `Foreground`, `Bold`, `Width`) rather than ad-hoc tricks like inserting `""` rows or padding strings with spaces. Spacing should belong to a style, not the row list.
 - Inter-block spacing (between project groups, sections, headers) → `MarginTop` / `MarginBottom` on the block's style. Inner spacing → `Padding*`.
@@ -266,6 +271,18 @@ Anything focus-dependent in a cached render path has to be in the cache key:
 `rowKey.fileRule` exists because the divider's hue follows `filesCursor` and
 the focus, neither of which goes through `rebuildStream`.
 
+**`Width` includes the border.** lipgloss v2 counts border cells inside
+`Style.Width(n)`; v1 drew them outside it, so a bordered panel used to
+render two columns wider than the number you set. Pass a bordered panel
+the width it should actually span. Padding was always inside `Width` and
+still is — only the border moved.
+
+This is the migration's quietest trap: nothing fails, the panel is just
+two columns narrow, and only one test in the repo happened to measure a
+box against its border. `charm.BorderCells` (aliased in `deckui` as
+`borderCells`) names the two columns wherever a call site still thinks in
+v1 terms and has to add them back.
+
 **Panel padding.** All body-area panels use `Padding(1, 1, 1, 1)` — 1 row
 top/bottom, 1 col left/right. The footer (`composeStatusBar` wrapper) does
 the same. This gives the deck a uniform 1-cell breathing margin and keeps
@@ -287,22 +304,28 @@ work in the activity bar). Bootstrap a `m.spinner.Tick` from
 `case jobsListMsg` when `len(m.activities) > 0` so the spinner glyph in
 the bottom bar actually animates from a cold start.
 
-**Alt-screen mode.** `internal/cli/deck.go` runs
-`tea.NewProgram(model, tea.WithAltScreen(), ...)`. Every frame paints
-the full screen, so cells the current frame doesn't write are blanked
-by the renderer rather than carrying leftover content from a previous
+**Alt-screen mode.** The deck declares it on the view: `View() tea.View`
+sets `v.AltScreen = true`. Bubble Tea v2 moved terminal features off
+`tea.NewProgram` options and onto the returned view, so alt-screen,
+window title, mouse mode and cursor are stated in one place per program
+rather than split between construction and commands. Every frame paints
+the full screen, so cells the current frame doesn't write are blanked by
+the renderer rather than carrying leftover content from a previous
 frame. Practical consequences:
 
 - The `padBlock` between body and footer still exists for vertical
   positioning (keeps the footer pinned to the bottom of the
   viewport), but no longer needs the "space-fill to overwrite
   previous-frame cells" property — the renderer does that.
-- Modal transitions don't need explicit `tea.ClearScreen` for
-  correctness. The existing `tea.ClearScreen` calls scattered
-  through `Update` are harmless under alt-screen but no longer
-  load-bearing; new modal handlers can omit them.
+- Modal transitions don't need `tea.ClearScreen`, and none remain —
+  they were deleted during the v2 migration. Don't reintroduce one.
 - Exiting the deck restores the terminal to its prior state — deck
   frames don't accumulate in tmux scrollback.
+
+Not every program wants it: the CLI picker (`internal/cli/picker.go`)
+and the mini-deck run inline, so their `View()` returns a bare
+`tea.NewView(...)` with no features set. Whether a program is
+alt-screen is now visible in its `View`, which is where to check.
 
 Historical note: the deck previously ran inline (no alt-screen)
 because a nested `tea.Program` for the new-workspace form caused
@@ -344,6 +367,13 @@ place of the row list.
   `update(msg) (self, cmd, action)` and `view(width) string` methods — not
   `tea.Model` implementations. Keeping them off `tea.Model` prevents future
   drift toward "just call `tea.NewProgram` here."
+
+  This rule paid for itself in the v2 migration. v2 changed `View()` from
+  returning a string to returning a `tea.View`, and because sub-components
+  are not `tea.Model`s, that landed on the six real programs instead of
+  the sixty-odd files that import bubbletea. Each of those six keeps a
+  `render() string` holding the actual layout, with `View() tea.View` as a
+  thin wrapper — so panel helpers and tests still compose plain strings.
 - The `?` help overlay (`internal/deckui/model.go::renderHelp`) and the
   `deckKeyGroups` slice are the canonical key-binding surface. Any new modal
   key binding has to be reflected there.
