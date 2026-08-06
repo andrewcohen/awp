@@ -427,3 +427,24 @@ func TestMarkPublishedOnAMissingRecordIsNotAnError(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
+
+// Every subcommand `awp review` dispatches has to be in its help.
+//
+// `reply` was not, for as long as it had existed. It ran, it was documented in
+// the review prompt the agent reads, and the one surface a person checks to find
+// out what the command can do disagreed with the prompt telling an agent to use
+// it. Two lists of the same names drift; this is the check that says so.
+func TestReviewUsageNamesEverySubcommand(t *testing.T) {
+	for _, name := range reviewSubcommands {
+		if !isReviewSubcommand([]string{name}) {
+			t.Fatalf("%q is in the dispatch list but does not dispatch", name)
+		}
+		if !strings.Contains(reviewUsage, "awp review "+name+" ") {
+			t.Errorf("`awp review --help` does not document %q:\n%s", name, reviewUsage)
+		}
+	}
+	// A guard that checked nothing would pass forever.
+	if len(reviewSubcommands) < 4 {
+		t.Fatalf("expected the subcommand list populated, got %v", reviewSubcommands)
+	}
+}

@@ -787,9 +787,25 @@ func (a *App) runMiniDeck(args []string) error {
 	return a.miniDeck(a.runner, a.in, a.out)
 }
 
+// reviewUsage is `awp review --help`.
+//
+// Every subcommand isReviewSubcommand accepts has a line here, and
+// TestReviewUsageNamesEverySubcommand checks that it does. `reply` was missing
+// for as long as it has existed: an agent following the review prompt uses it, so
+// the one surface that says what the command can do disagreed with the prompt
+// telling it to. A subcommand that runs and is not documented is a subcommand
+// nobody outside the prompt can find.
+const reviewUsage = `Usage: awp review [pr#]
+       awp review add [--file <path> --line <n> [--end-line <n>]] [--side new|old] [--text <line>] [--end-text <line>] (--body <text> | --body-file <path>) [--type comment|suggestion|question|praise] [--workspace <name>]
+       awp review reply --to <comment-id> (--body <text> | --body-file <path>) [--type comment|suggestion|question|praise] [--proposal] [--workspace <name>]
+       awp review list [--json] [--workspace <name>]
+       awp review publish [--pr <n>] [--verdict approve|comment|request-changes] [--summary <text> | --summary-file <path>] [--dry-run] [--workspace <name>]
+
+With no argument, opens an interactive picker over ` + "`gh pr list`" + `.`
+
 func (a *App) runReview(args []string) error {
 	if isHelpArgSlice(args) {
-		_, _ = fmt.Fprintln(a.out, "Usage: awp review [pr#]\n       awp review add [--file <path> --line <n> [--end-line <n>]] [--side new|old] [--text <line>] [--end-text <line>] --body <text>\n       awp review list [--json]\n       awp review publish [--pr <n>] [--verdict approve|comment|request-changes] [--dry-run]\n\nWith no argument, opens an interactive picker over `gh pr list`.")
+		_, _ = fmt.Fprintln(a.out, reviewUsage)
 		return nil
 	}
 	if isReviewSubcommand(args) {
