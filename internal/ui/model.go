@@ -1450,10 +1450,14 @@ var (
 	// the diff rather than as loose text between code lines. BgPanel is the
 	// palette's chip background — a comment box is exactly that — which keeps
 	// charm.Cursorline the only non-ANSI-16 value in the palette.
-	commentBg             = lipgloss.Color(charm.BgPanel)
-	styleCommentFill      = lipgloss.NewStyle().Background(commentBg)
-	styleOrphanHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
-	styleReviewHeader     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	commentBg         = lipgloss.Color(charm.BgPanel)
+	styleCommentFill  = lipgloss.NewStyle().Background(commentBg)
+	styleOrphanHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleReviewHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	// Muted, not the header's accent: the stand-in is a hint about a section with
+	// nothing in it, and it sits at the top of every diff. Anything brighter would
+	// be the first thing the eye lands on, every time, saying nothing happened.
+	styleReviewEmpty      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
 	styleContextCursor    = styleContext.Background(cursorlineBg)
