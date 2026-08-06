@@ -1,6 +1,12 @@
 package deckdata
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/andrewcohen/awp/internal/prstatus"
+)
 
 // The agent-state rule, unchanged from the bool it replaced (deckui's
 // MiniIncluded + the freshness check) — this unit moves the rule and gives its
@@ -102,5 +108,232 @@ func TestTheCurrentWorkspaceStaysEvenWithNothingToSay(t *testing.T) {
 	}}
 	if got := v.Items(); len(got) != 1 {
 		t.Fatalf("the current workspace was filtered out: %+v", got)
+	}
+}
+
+// openPR is a View holding one repo's PR cache, for the reason arms that read it.
+func openPR(st prstatus.PRStatus) View {
+	st.State = prstatus.PRStateOpen
+	if st.Number == 0 {
+		st.Number = 7
+	}
+	return View{PRStatusByRepo: map[string]map[string]prstatus.PRStatus{
+		"/repo": {"branch": st},
+	}}
+}
+
+// prRow is the workspace those PR fixtures resolve against.
+func prRow() Item {
+	return Item{WorkspaceName: "ws", RepoRoot: "/repo", Bookmark: "branch", Status: "idle"}
+}
+
+// A PR you have checked out that still wants your review. GitHub clears
+// ReviewRequested the moment you submit one and sets ReviewRerequested only if
+// the author asks again — so "I reviewed it and nobody asked twice" leaves the
+// scope on its own, with no rule saying so.
+func TestAPRStillWantingYourReview(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   prstatus.PRStatus
+		want Reason
+	}{
+		{"requested", prstatus.PRStatus{ReviewRequested: true}, ReasonReviewRequested},
+		{"asked again after you looked", prstatus.PRStatus{ReviewRerequested: true}, ReasonReReviewRequested},
+		{"you reviewed it and nobody asked again", prstatus.PRStatus{}, ReasonNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := openPR(tc.st).Wants(prRow()); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Your own PR, by what it needs from you. Read off the inbox's own bucket
+// classification rather than re-deriving "is CI red", so the two scopes cannot
+// come to disagree about the same PR.
+func TestYourOwnPRByWhatItNeeds(t *testing.T) {
+	mine := func(f func(*prstatus.PRStatus)) prstatus.PRStatus {
+		st := prstatus.PRStatus{Mine: true}
+		f(&st)
+		return st
+	}
+	for _, tc := range []struct {
+		name string
+		st   prstatus.PRStatus
+		want Reason
+	}{
+		{"CI red", mine(func(s *prstatus.PRStatus) { s.CIState = prstatus.PRCIFailing }), ReasonPRNeedsAction},
+		{"changes requested", mine(func(s *prstatus.PRStatus) {
+			s.ReviewDecision = prstatus.PRReviewChangesRequested
+		}), ReasonPRNeedsAction},
+		{"will not merge as it stands", mine(func(s *prstatus.PRStatus) {
+			s.MergeStateStatus = prstatus.PRMergeStateDirty
+		}), ReasonPRNeedsAction},
+		{"approved and green", mine(func(s *prstatus.PRStatus) {
+			s.ReviewDecision = prstatus.PRReviewApproved
+			s.CIState = prstatus.PRCIPassing
+			s.MergeStateStatus = prstatus.PRMergeStateClean
+		}), ReasonPRReadyToMerge},
+		// Open and waiting on somebody who is not you. The inbox's business,
+		// not attention's — pulling these in would make the flat list a second
+		// copy of a scope that already sections them properly.
+		{"waiting on reviewers", mine(func(s *prstatus.PRStatus) {
+			s.ReviewDecision = prstatus.PRReviewRequired
+		}), ReasonNone},
+		{"a draft", mine(func(s *prstatus.PRStatus) {
+			s.IsDraft = true
+			s.CIState = prstatus.PRCIFailing
+		}), ReasonNone},
+		{"somebody else's", prstatus.PRStatus{}, ReasonNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := openPR(tc.st).Wants(prRow()); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A closed or merged PR asks nothing, whatever its last CI run said.
+func TestAClosedPRAsksNothing(t *testing.T) {
+	v := openPR(prstatus.PRStatus{Mine: true, CIState: prstatus.PRCIFailing})
+	st := v.PRStatusByRepo["/repo"]["branch"]
+	st.State = prstatus.PRStateMerged
+	v.PRStatusByRepo["/repo"]["branch"] = st
+	if got := v.Wants(prRow()); got != ReasonNone {
+		t.Errorf("a merged PR gave %v", got)
+	}
+}
+
+// "Checked out" is the whole difference between this and the inbox's "Needs
+// your review" bucket, which deliberately includes PRs you have not pulled
+// down. A synthetic row is a PR with no local workspace, which is the opposite
+// of one you are working on.
+func TestAPRYouHaveNotCheckedOutIsNotYoursToBeIn(t *testing.T) {
+	it := prRow()
+	it.Virtual = true
+	if got := openPR(prstatus.PRStatus{ReviewRequested: true}).Wants(it); got != ReasonNone {
+		t.Errorf("a virtual row gave %v", got)
+	}
+}
+
+// A workspace you were just in stays listed after you have read it, which is
+// the whole point: before this, looking at a row deleted the only evidence it
+// was recent.
+func TestRecentlyActiveSurvivesBeingRead(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	v := View{Now: func() time.Time { return now }}
+	fresh := Item{Status: "idle", LastActiveAt: now.Add(-30 * time.Minute)}
+	if got := v.Wants(fresh); got != ReasonRecent {
+		t.Errorf("a workspace from 30m ago gave %v, want ReasonRecent", got)
+	}
+	if got := v.WantsText(fresh); got != "30m ago" {
+		t.Errorf("WantsText = %q, want %q", got, "30m ago")
+	}
+	stale := Item{Status: "idle", LastActiveAt: now.Add(-RecentWindow - time.Minute)}
+	if got := v.Wants(stale); got != ReasonNone {
+		t.Errorf("a workspace past the window gave %v", got)
+	}
+}
+
+// Unknown is no opinion. Every workspace that existed before LastActiveAt did
+// has a zero time, and reading that as "last active in 1970" would be an answer
+// rather than the absence of one.
+func TestAnUndatedWorkspaceIsNeitherRecentNorStale(t *testing.T) {
+	v := View{Now: func() time.Time { return time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC) }}
+	if got := v.Wants(Item{Status: "idle"}); got != ReasonNone {
+		t.Errorf("an undated workspace gave %v", got)
+	}
+}
+
+// A row can be several things at once, and the one it reports has to be the one
+// it sorted under — otherwise the list reads as unordered.
+func TestTheMostUrgentReasonWins(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	v := openPR(prstatus.PRStatus{Mine: true, CIState: prstatus.PRCIFailing})
+	v.Now = func() time.Time { return now }
+	it := prRow()
+	it.LastActiveAt = now.Add(-time.Minute) // also recent
+	it.Status = "waiting"                   // also waiting
+	it.Unread = true
+	if got := v.Wants(it); got != ReasonWaiting {
+		t.Errorf("got %v, want ReasonWaiting — the halted agent outranks the rest", got)
+	}
+}
+
+// The flat list's order is its hierarchy: there are no headers doing that job.
+func TestTheScopeReadsDownThePriority(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	v := View{
+		Scope: ScopeAttention,
+		Now:   func() time.Time { return now },
+		PRStatusByRepo: map[string]map[string]prstatus.PRStatus{"/repo": {
+			"needs-action": {Number: 1, State: prstatus.PRStateOpen, Mine: true, CIState: prstatus.PRCIFailing},
+			"wants-review": {Number: 2, State: prstatus.PRStateOpen, ReviewRequested: true},
+		}},
+		All: []Item{
+			{WorkspaceName: "recent", ProjectName: "p", Status: "idle", LastActiveAt: now.Add(-time.Hour)},
+			{WorkspaceName: "broken", ProjectName: "p", RepoRoot: "/repo", Bookmark: "needs-action", Status: "idle"},
+			{WorkspaceName: "blocked", ProjectName: "p", Status: "waiting", Unread: true, Active: true},
+			{WorkspaceName: "reviewing", ProjectName: "p", RepoRoot: "/repo", Bookmark: "wants-review", Status: "idle"},
+		},
+	}
+	var got []string
+	for _, it := range v.Items() {
+		got = append(got, it.WorkspaceName)
+	}
+	want := []string{"blocked", "reviewing", "broken", "recent"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// A pin outranks every computed reason: it is somewhere you asked for, and when
+// the deck's guess disagrees with what you said, the deck is not the one to
+// trust.
+func TestAPinnedRowStaysOnTop(t *testing.T) {
+	v := View{Scope: ScopeAttention, All: []Item{
+		{WorkspaceName: "blocked", ProjectName: "p", Status: "waiting", Unread: true, Active: true},
+		{WorkspaceName: "pinned", ProjectName: "p", Status: "working", Active: true, PinGroup: PinGroupDefault},
+	}}
+	if got := v.Items(); got[0].WorkspaceName != "pinned" {
+		t.Errorf("first row is %q, want the pinned one", got[0].WorkspaceName)
+	}
+}
+
+// The current workspace is kept whatever it is doing, so the cursor has
+// somewhere to land — but it is the one row with nothing to say, and sorting it
+// by its raw zero value would open the deck with it at the top of a list about
+// what wants you.
+func TestTheCurrentWorkspaceSortsLastWhenItWantsNothing(t *testing.T) {
+	v := View{Scope: ScopeAttention, All: []Item{
+		{WorkspaceName: "here", ProjectName: "p", Status: "idle", Current: true},
+		{WorkspaceName: "working", ProjectName: "p", Status: "working", Active: true},
+	}}
+	got := v.Items()
+	if len(got) != 2 {
+		t.Fatalf("got %d rows, want 2", len(got))
+	}
+	if got[len(got)-1].WorkspaceName != "here" {
+		t.Errorf("last row is %q, want the reasonless current workspace", got[len(got)-1].WorkspaceName)
+	}
+}
+
+// One unit, never two — the chip answers "roughly how long ago", and under a
+// minute it says so in words rather than as "0m ago".
+func TestAgoReadsAsOneUnit(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{90 * time.Second, "1m ago"},
+		{2*time.Hour + 44*time.Minute, "2h ago"},
+		{50 * time.Hour, "2d ago"},
+	} {
+		if got := ago(tc.d); got != tc.want {
+			t.Errorf("ago(%v) = %q, want %q", tc.d, got, tc.want)
+		}
 	}
 }

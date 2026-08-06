@@ -3,6 +3,7 @@ package deckdata
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/prstatus"
 )
@@ -23,6 +24,9 @@ type View struct {
 	PRStatusByRepo map[string]map[string]prstatus.PRStatus
 	// PinAliases is the register → display-alias map used for pin sorting.
 	PinAliases map[string]string
+	// Now is the clock the attention scope dates rows against, for the
+	// recency reason. Nil means time.Now.
+	Now func() time.Time
 }
 
 // Items applies the scope filter (plus the inbox virtual rows), the text
@@ -92,6 +96,14 @@ func (v View) Items() []Item {
 		// when nothing is stacked — while keeping each stack's members
 		// contiguous and depth-annotated for the render indent.
 		return v.stackOrderedInbox(sorted)
+	}
+	if v.Scope == ScopeAttention {
+		// Urgency, not project. The attention scope is one flat list answering
+		// "what next", so its order carries the hierarchy that the inbox's
+		// bucket headers carry — reading top to bottom has to be reading down
+		// the priority. Grouping by project would cut that into as many lists
+		// as you have repos and make the first row of each a different claim.
+		return v.urgencyOrdered(sorted)
 	}
 	// All / attention scopes: pinned rows float to the top (register order),
 	// unpinned rows group by project, and PR stacks stay contiguous root →

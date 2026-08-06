@@ -1,7 +1,10 @@
 package deckdata
 
 import (
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -34,15 +37,35 @@ const (
 	// ReasonNone is a row with nothing to act on. Not in the scope.
 	ReasonNone Reason = iota
 	// ReasonWaiting is an agent that asked and stopped — a question, a
-	// permission prompt, an elicitation. The only reason where you are the
-	// thing standing in the way.
+	// permission prompt, an elicitation. First because it is the only reason
+	// where the work has actually halted and you are the thing in its way.
 	ReasonWaiting
+	// ReasonReReviewRequested is a PR you reviewed once, that the author has
+	// pushed to and asked you about again. Above a first request because
+	// somebody acted on what you said and is now waiting a second time.
+	ReasonReReviewRequested
+	// ReasonReviewRequested is a PR you have checked out whose review is still
+	// wanted from you.
+	ReasonReviewRequested
+	// ReasonNotified is a workspace that finished a turn since you last looked.
+	// Above the PR reasons: an agent that stopped is waiting to be read, where
+	// a PR of yours sits there either way.
+	ReasonNotified
+	// ReasonPRNeedsAction is your own PR with something to fix — changes
+	// requested, CI red, or a branch that will not merge as it stands.
+	ReasonPRNeedsAction
+	// ReasonPRReadyToMerge is your own PR, approved and green. Nothing is
+	// broken, so it ranks below what is — but it is one keypress from done.
+	ReasonPRReadyToMerge
 	// ReasonWorking is an agent running right now. Nothing to do about it, but
 	// it is why the deck stays lit while work is in flight rather than going
 	// quiet the moment you stop being needed.
 	ReasonWorking
-	// ReasonNotified is a workspace that finished a turn since you last looked.
-	ReasonNotified
+	// ReasonRecent is a workspace you were in recently and nothing else is true
+	// of. Last, because it asks for nothing at all — it is the answer to "what
+	// was I doing", which is worth a row only once the list has run out of
+	// things that actually want you.
+	ReasonRecent
 	// lastReason is the highest declared reason, so a test can walk them all
 	// without a list to keep in step with the constants above. Not a reason —
 	// never returned, never rendered.
@@ -57,14 +80,28 @@ const (
 // makes them translate it first. ReasonNone has no words on purpose: a row that
 // is not in the scope has nothing to say, and giving it a phrase would invite a
 // caller to render one.
+//
+// ReasonRecent's real words are a duration, which needs the row — see
+// View.WantsText, the one place a reason is turned into text. What is here is
+// its fallback, for a caller holding a reason and no row to date it against.
 func (r Reason) String() string {
 	switch r {
 	case ReasonWaiting:
 		return "waiting on you"
-	case ReasonWorking:
-		return "working"
+	case ReasonReReviewRequested:
+		return "re-review requested"
+	case ReasonReviewRequested:
+		return "your review"
 	case ReasonNotified:
 		return "finished a turn"
+	case ReasonPRNeedsAction:
+		return "PR needs action"
+	case ReasonPRReadyToMerge:
+		return "approved, green"
+	case ReasonWorking:
+		return "working"
+	case ReasonRecent:
+		return "recently active"
 	default:
 		return ""
 	}
@@ -79,8 +116,201 @@ func (r Reason) String() string {
 // is then a field on the view and an arm in here, not a parameter threaded
 // through every call site, which is the failure the old injected predicate was
 // heading for.
+//
+// Every source is asked and the most urgent answer wins, rather than each
+// source returning early. A workspace can be several things at once — an agent
+// mid-turn on a PR whose CI just went red — and which of those the row reports
+// has to be the one it sorted under, or the list reads as unordered. Taking the
+// minimum makes the constants' declaration order the precedence, so a reason
+// inserted in the right place needs nothing else changed to rank correctly.
 func (v View) Wants(it Item) Reason {
-	return AgentWants(it.Status, it.Unread, it.Active)
+	best := ReasonNone
+	consider := func(r Reason) {
+		if r != ReasonNone && (best == ReasonNone || r < best) {
+			best = r
+		}
+	}
+	consider(AgentWants(it.Status, it.Unread, it.Active))
+	consider(v.prWants(it))
+	consider(v.recentlyActive(it))
+	return best
+}
+
+// WantsText is the words a row shows for why it is in the scope, and the one
+// place a reason becomes text.
+//
+// A method rather than Reason.String alone because one reason's words are a
+// duration, and a duration needs the row to measure against. Everything else
+// delegates, so this is a decorator over String rather than a second set of
+// phrases that could drift from it.
+func (v View) WantsText(it Item) string {
+	r := v.Wants(it)
+	if r == ReasonRecent {
+		return ago(v.now().Sub(it.LastActiveAt))
+	}
+	return r.String()
+}
+
+// urgencyOrdered is the attention scope's row order: most-your-problem first.
+//
+// Pinned rows still float above everything, in register order, because a pin is
+// something you said out loud and a reason is something the deck worked out —
+// when the two disagree the deck is not the one to trust. Below the pins it is
+// Reason order, which is the constants' declaration order, so the ranking lives
+// in one place and a new reason slots into it by being declared in the right
+// spot.
+//
+// Ties fall back to project then label, the order the scope had before it had
+// urgency — so rows that are equally your problem stay in a stable, familiar
+// arrangement rather than shuffling between refreshes.
+func (v View) urgencyOrdered(items []Item) []Item {
+	out := append([]Item(nil), items...)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if ka, kb := v.pinKey(a), v.pinKey(b); ka != kb {
+			return ka < kb
+		}
+		if ra, rb := urgency(v.Wants(a)), urgency(v.Wants(b)); ra != rb {
+			return ra < rb
+		}
+		if a.ProjectName != b.ProjectName {
+			return a.ProjectName < b.ProjectName
+		}
+		return v.DisplayLabel(a) < v.DisplayLabel(b)
+	})
+	return out
+}
+
+// pinKey sorts pinned rows ahead of unpinned ones, pinned by register order.
+func (v View) pinKey(it Item) string {
+	pg := strings.TrimSpace(it.PinGroup)
+	if pg == "" {
+		// After every register. PinGroupSortKey's own keys start at \x00, so
+		// anything above them puts the unpinned pile last.
+		return "\xff"
+	}
+	return PinGroupSortKey(v.PinAliases, pg)
+}
+
+// urgency ranks a reason for sorting, putting "no reason at all" last.
+//
+// Only one row can have no reason and still be in the scope: the workspace the
+// deck was opened from, which is kept whatever it is doing so the cursor has
+// somewhere to land. Sorting it by its raw value would put it first — the zero
+// value being the smallest — which would open the deck with the one row that
+// wants nothing at the top of a list about what wants you.
+func urgency(r Reason) int {
+	if r == ReasonNone {
+		return int(lastReason) + 1
+	}
+	return int(r)
+}
+
+// prWants is what the row's pull request is asking of you, if anything.
+//
+// It reads the inbox's own classification rather than asking "is CI red" a
+// second time. The two scopes answer the same question about the same PR, and a
+// second copy of the rule is how they come to disagree — the inbox filing a PR
+// under "Needs action" while the attention scope has nothing to say about it.
+//
+// Only three of the five buckets are reasons. A PR that is merely open, or
+// somebody else's and not awaiting you, is the inbox's business: attention is
+// "act on this now", and pulling those in would make the flat list a second
+// copy of a scope that already exists and sections its rows properly.
+func (v View) prWants(it Item) Reason {
+	// A synthetic inbox row is a PR with no local workspace, which is the
+	// opposite of one you are working on. The attention scope is built from
+	// real rows only, so this is defensive — but it is the whole difference
+	// between "your review" here and the inbox's "Needs your review" bucket,
+	// which deliberately includes PRs you have not pulled down.
+	if it.Virtual {
+		return ReasonNone
+	}
+	st, ok := v.OpenPRStatus(it)
+	if !ok {
+		return ReasonNone
+	}
+	switch PRInboxBucket(st) {
+	case InboxNeedsYourReview:
+		// Still wanted from you, which is the whole test: GitHub clears
+		// ReviewRequested the moment you submit a review and sets
+		// ReviewRerequested only if the author asks again. So a review you have
+		// already given, with no re-request, drops out of the scope on its own
+		// rather than needing a rule that says so.
+		if st.ReviewRerequested {
+			return ReasonReReviewRequested
+		}
+		return ReasonReviewRequested
+	case InboxNeedsAction:
+		return ReasonPRNeedsAction
+	case InboxReadyToMerge:
+		return ReasonPRReadyToMerge
+	case InboxOtherOpen, InboxMine:
+		// Open, and waiting on somebody who is not you.
+		return ReasonNone
+	}
+	return ReasonNone
+}
+
+// recentlyActive keeps a workspace you were just in from vanishing the moment
+// you read it.
+//
+// Before this the scope was binary on the unread flag, so looking at a row
+// deleted the only evidence it was recent — the deck could tell you what wanted
+// you and never what you were in the middle of.
+//
+// An undated workspace is not recent and not stale: every entry written before
+// LastActiveAt existed has a zero time, and reading that as "last active in
+// 1970" would be an answer rather than the absence of one.
+func (v View) recentlyActive(it Item) Reason {
+	if it.LastActiveAt.IsZero() {
+		return ReasonNone
+	}
+	if v.now().Sub(it.LastActiveAt) > RecentWindow {
+		return ReasonNone
+	}
+	return ReasonRecent
+}
+
+// RecentWindow is how long a workspace goes on counting as one you are in the
+// middle of.
+//
+// Short on purpose. The claim is "you were just here", not "you worked on this
+// today" — a day-long window would put every workspace you touched since
+// breakfast in a list whose whole job is to be shorter than the all scope.
+const RecentWindow = 4 * time.Hour
+
+// now is the view's clock, defaulting to the real one. Injectable so a test can
+// say what "recent" means without sleeping.
+func (v View) now() time.Time {
+	if v.Now == nil {
+		return time.Now()
+	}
+	return v.Now()
+}
+
+// ago is an elapsed time as a row shows it: "4m ago", "2h ago", "just now".
+//
+// One unit, never two. It is a chip on a meta line answering "roughly how long
+// ago", and "2h14m ago" spends four more columns to answer a question nobody
+// asked with that precision. Rounds down, so a row never claims to be older
+// than it is — and under a minute it says "just now", because "0m ago" is a
+// sentence about arithmetic rather than about the workspace.
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d.Minutes())) + "m ago"
+	default:
+		// Days are unreachable while RecentWindow is hours, but the function is
+		// the answer to "how long ago" rather than to "how long ago, given the
+		// window" — a wider window should not need this edited too.
+		if d >= 24*time.Hour {
+			return strconv.Itoa(int(d.Hours()/24)) + "d ago"
+		}
+		return strconv.Itoa(int(d.Hours())) + "h ago"
+	}
 }
 
 // AgentWants is the agent-session half of the answer: what the workspace's own
