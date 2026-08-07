@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -35,6 +36,54 @@ type PaneBackend interface {
 	// declines falls through to the ordinary tmux-window path, so review
 	// windows and the PR-description window keep working unchanged.
 	Describes(kind string) bool
+}
+
+// PaneSession is one long-lived process a backend is holding, described in the
+// deck's own terms rather than the backend's.
+type PaneSession struct {
+	// Item is the deck row this session belongs to, already resolved by the
+	// backend. Zero when no row matches — a session can outlive the workspace
+	// it was started for.
+	//
+	// Resolved by the backend rather than matched here on purpose: session
+	// names are sanitized (a workspace with a dot in it is not spelled the
+	// same in its session name), so matching means knowing the naming scheme.
+	// Doing it in the deck would be a second copy of that scheme, and the one
+	// that drifts. HasItem says whether it found one.
+	Item    Item
+	HasItem bool
+	// Label is what to call this session on screen, from the session's own
+	// name — so a session with no surviving row is still nameable.
+	Label string
+	Kind  string
+	// Live is false for a session whose command has exited. zmx keeps such a
+	// session listed so its output can still be read, so "listed" and
+	// "running" are genuinely different questions.
+	Live bool
+	// Attached is true while some client has it open — including this deck.
+	Attached bool
+	PID      int
+	Started  time.Time
+	// Cmd is what the session is running, for a display that wants to say so.
+	Cmd string
+}
+
+// PaneSessioner is a PaneBackend that can say which sessions it is holding.
+//
+// Separate from PaneBackend because the tmux deck has no answer: it hosts no
+// sessions of its own, and the keys that depend on this (z, and eventually the
+// row model's live-session marks) are only bound when a backend implements it.
+// That is also what keeps the deck from growing a second path to zmx — the
+// backend it already holds is the one place this is asked.
+type PaneSessioner interface {
+	PaneBackend
+	// Sessions lists what is live now, resolving each against the deck's rows.
+	//
+	// Called on demand rather than cached: a session can appear or die without
+	// the deck doing anything. items is passed in so the backend can tie each
+	// session to a row using its own naming scheme, which is the only place
+	// that scheme is written down.
+	Sessions(items []Item) ([]PaneSession, error)
 }
 
 // panePopover is a hosted process shown in place of the deck body.

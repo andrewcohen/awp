@@ -76,6 +76,56 @@ func (zmxPanes) Describes(kind string) bool {
 	return ok
 }
 
+// Sessions reports every awp session zmx is holding, each tied to the deck row
+// it belongs to.
+//
+// The matching happens here rather than in the deck because it needs the naming
+// scheme: SessionName sanitizes each segment, so a workspace called "foo.bar"
+// is "foo_bar" in its session name and comparing the raw strings would never
+// match. Naming a session and un-naming one are the same knowledge, and it
+// lives in internal/zmx.
+//
+// Sessions zmx knows about that awp did not create are skipped — `zmx ls` lists
+// everything on the machine, and the deck has nothing to say about the rest.
+func (z zmxPanes) Sessions(items []deckui.Item) ([]deckui.PaneSession, error) {
+	all, err := z.client.List(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	// Index the rows by the session name each kind would have, so the lookup is
+	// against the same function that created the name.
+	byName := map[string]deckui.Item{}
+	for _, it := range items {
+		if it.Virtual || strings.TrimSpace(it.WorkspaceName) == "" {
+			continue
+		}
+		for _, spec := range panes {
+			byName[zmx.SessionName(it.ProjectName, it.WorkspaceName, spec.label)] = it
+		}
+	}
+
+	out := make([]deckui.PaneSession, 0, len(all))
+	for _, s := range all {
+		project, workspace, kind, ok := zmx.ParseSessionName(s.Name)
+		if !ok {
+			continue
+		}
+		item, hasItem := byName[s.Name]
+		out = append(out, deckui.PaneSession{
+			Item:     item,
+			HasItem:  hasItem,
+			Label:    project + "/" + workspace,
+			Kind:     kind,
+			Live:     s.Live(),
+			Attached: s.Clients > 0,
+			PID:      s.PID,
+			Started:  s.Created,
+			Cmd:      s.Cmd,
+		})
+	}
+	return out, nil
+}
+
 func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func(), error) {
 	spec, ok := panes[kind]
 	if !ok {

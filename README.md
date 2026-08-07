@@ -628,6 +628,21 @@ in `zmx ls`, so they can be inspected and killed from outside awp. Requires
 zmx on PATH; zdeck refuses to start without it rather than failing on the
 first pane.
 
+**`z` lists what is running.** A hosted session outlives the deck that opened
+it, so the set of live agents is real state — and until now the only way to
+see it was `zmx ls`, which prints dotted names, a unix timestamp and a full
+argv on one line. `z` shows the same sessions as deck rows: the workspace they
+belong to, their kind, how long they have been up, and a glyph for their state
+(teal `○` running, green `●` running with a client attached, red `✗` exited —
+zmx keeps a session listed after its command exits, so *listed* and *running*
+are different questions). `/` filters, and `enter` attaches the selected
+session in a pane, which is the thing the raw command cannot do.
+
+A session whose workspace has since been deleted is marked `no workspace` and
+will not attach: a pane is opened for a workspace row, and there is nowhere to
+put one without it. `z` is bound only under zdeck — `awp deck` hosts no
+sessions of its own, so there the key stays free.
+
 **One agent per workspace.** Sending a prompt goes to the zmx agent — the same
 process `a` shows. In `awp deck` a prompt is typed into the workspace's tmux
 session, and doing that under zdeck would give a workspace two agents: the one

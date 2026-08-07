@@ -64,6 +64,22 @@ func SessionName(project, workspace, kind string) string {
 	return "awp." + sanitize(project) + "." + sanitize(workspace) + "." + sanitize(kind)
 }
 
+// ParseSessionName reads a name SessionName produced back into its parts, and
+// reports whether it was one of ours at all — `zmx ls` lists every session on
+// the machine, including ones awp did not create.
+//
+// The split is safe because sanitize replaces a dot with an underscore, so no
+// segment can contain one. The cost is that a project or workspace whose real
+// name had a dot comes back with an underscore; the parts are for display and
+// for finding the matching deck row, not for addressing anything.
+func ParseSessionName(name string) (project, workspace, kind string, ok bool) {
+	parts := strings.Split(name, ".")
+	if len(parts) != 4 || parts[0] != "awp" {
+		return "", "", "", false
+	}
+	return parts[1], parts[2], parts[3], true
+}
+
 func sanitize(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -136,7 +152,13 @@ func parseSession(line string) (Session, bool) {
 		case "exit_code":
 			s.ExitCode, _ = strconv.Atoi(value)
 		case "created":
-			// Not currently used; kept out of Labels so it does not read as one.
+			// A unix stamp. Parsed here so nothing downstream has to know that,
+			// and so a display can show an age instead of a number.
+			if secs, err := strconv.ParseInt(value, 10, 64); err == nil && secs > 0 {
+				s.Created = time.Unix(secs, 0)
+			}
+		case "cmd":
+			s.Cmd = value
 		default:
 			s.Labels[key] = value
 		}
