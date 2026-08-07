@@ -2,7 +2,12 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,6 +85,98 @@ func TestLastSessionSaysThereIsNothingToSwitchTo(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "last session") {
 		t.Errorf("got %v, want an error naming what failed", err)
+	}
+}
+
+// TestEveryActionIsOfferedToTheHostBeforeTmux walks the whole Action enum:
+// each one either stops at the host or reaches tmux, and which of those it does
+// is paneHostAction's decision alone. An action the wrapper never offered would
+// show up here as one that reached tmux against that verdict.
+//
+// It walks deckui.AllActions() rather than a list written out here, because a
+// list is exactly as complete as whoever last added an action remembered to
+// make it — and the ordering bug this guards was itself an action nobody
+// remembered.
+func TestEveryActionIsOfferedToTheHostBeforeTmux(t *testing.T) {
+	actions := deckui.AllActions()
+	if len(actions) < 2 {
+		t.Fatalf("AllActions returned %d actions, so this guard is not walking the enum", len(actions))
+	}
+	for _, a := range actions {
+		req := deckui.ActionRequest{Item: promptItem, Action: a, Arg: "x"}
+		_, claimed := paneHostAction(&fakeHost{}, req, noopReporter{})
+
+		var reachedTmux bool
+		err := hostFirst(&fakeHost{}, func(deckui.ActionRequest) error {
+			reachedTmux = true
+			return nil
+		})(req)
+		if reachedTmux == claimed {
+			t.Errorf("action %v: host claimed=%v but it reached tmux=%v (err=%v)", a, claimed, reachedTmux, err)
+		}
+	}
+}
+
+// TestWithNoHostEveryActionReachesTmux is the other half: awp deck has no pane
+// host, and the wrapper must be invisible to it rather than swallowing keys.
+func TestWithNoHostEveryActionReachesTmux(t *testing.T) {
+	for _, a := range deckui.AllActions() {
+		var reachedTmux bool
+		if err := hostFirst(nil, func(deckui.ActionRequest) error {
+			reachedTmux = true
+			return nil
+		})(deckui.ActionRequest{Item: promptItem, Action: a}); err != nil {
+			t.Errorf("action %v: %v", a, err)
+		}
+		if !reachedTmux {
+			t.Errorf("action %v never reached tmux on a deck with no pane host", a)
+		}
+	}
+}
+
+// TestTheHostIsConsultedInExactlyOnePlace is what actually pins the bug shut.
+//
+// The interception used to sit inside the action handler, below two early
+// returns; `x` took one of them and the host was never asked. Moving it into
+// hostFirst fixes today's ordering, but nothing stops a future branch from
+// asking the host itself and re-creating a second, earlier answer — so this
+// asserts the question is asked in one place, the wrapper that runs before the
+// handler at all. Same shape as internal/github/dir_test.go, and for the same
+// reason: the invariant is only as strong as every call site remembering it.
+func TestTheHostIsConsultedInExactlyOnePlace(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob the package: %v", err)
+	}
+	fset := token.NewFileSet()
+	var sites []string
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "paneHostAction" {
+					sites = append(sites, fmt.Sprintf("%s at %s", fn.Name.Name, fset.Position(call.Pos())))
+				}
+				return true
+			})
+		}
+	}
+	if len(sites) != 1 || !strings.HasPrefix(sites[0], "hostFirst at ") {
+		t.Fatalf("paneHostAction must be called from hostFirst and nowhere else; found %d call sites: %v", len(sites), sites)
 	}
 }
 

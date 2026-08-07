@@ -104,7 +104,25 @@ const (
 	// in the foreground progress modal (not the async jobs subsystem) so
 	// the modal stays open until gh reports success or failure.
 	ActionMergePR
+	// actionEnd is one past the last action, and must stay last in this
+	// block. AllActions counts to it, so a new action declared above it is
+	// enumerated without anyone remembering to say so twice.
+	actionEnd
 )
+
+// AllActions returns every Action, in declaration order.
+//
+// It exists for the callers that have to treat the whole enum alike — the
+// deck's handler must offer every action to its pane host before any tmux path
+// runs — because a hand-written list is exactly as complete as whoever last
+// added an action remembered to make it.
+func AllActions() []Action {
+	all := make([]Action, 0, int(actionEnd))
+	for a := ActionSummon; a < actionEnd; a++ {
+		all = append(all, a)
+	}
+	return all
+}
 
 // ReviewStackArg is the ActionOpenWindow arg `C` emits: open the review in a
 // `review` window in the workspace's tmux session, showing the same thing the
