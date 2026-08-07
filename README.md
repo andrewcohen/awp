@@ -654,6 +654,17 @@ last tmux session) reports that there is nothing to switch to, rather than
 appearing to work — `tmux switch-client -l` from outside tmux exits 0 having
 done nothing.
 
+**Creating a workspace does not start an agent.** In `awp deck` one call makes
+the tmux session and launches the agent in it, because the same call could do
+both. zdeck cannot: the create runs as a detached subprocess with no terminal
+for a hosted agent to start on, so doing it that way gave the workspace two —
+the zmx one you would open later, and an invisible tmux one holding the prompt
+you typed. Under zdeck, `n` prepares the jj workspace and stops; the prompt is
+parked on the workspace, and `a` starts the agent and delivers it. A parked
+prompt arrives as the agent's own argument, so there is no waiting for it to
+boot, and it is delivered once. Everything else about the create is unchanged —
+the bookmark, the PR pin, and the row appearing in the list.
+
 The mouse and the cursor follow the pane's program rather than the pane. A
 program that enables mouse reporting — an agent, jjui — gets the wheel
 forwarded to it; one that doesn't, like a shell, leaves the mouse to your

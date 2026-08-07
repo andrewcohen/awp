@@ -95,6 +95,22 @@ type panePopover struct {
 	setH    int
 }
 
+// PaneKindAgent is the window kind whose process is the workspace's agent.
+//
+// Named because three places have to mean the same one: the backend that maps
+// kinds to commands, the deck asking whether it starts agents at all, and the
+// backend deciding where a workspace's parked prompt goes.
+const PaneKindAgent = "agent"
+
+// hostsAgents says the workspace's agent runs on a pty this deck owns.
+//
+// It is the one question the create flow has to get right: a deck that hosts
+// agents must not let anything else start one, or the workspace ends up with
+// two — the visible one and the one holding the prompt.
+func (m Model) hostsAgents() bool {
+	return m.panes != nil && m.panes.Describes(PaneKindAgent)
+}
+
 // openPane hosts the given window kind for the selected row. It reports false
 // when there is no backend for it, so the caller can fall back to tmux.
 func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {

@@ -25,6 +25,15 @@ type openRequest struct {
 	// async create-workspace job so the subprocess prepares the workspace
 	// without yanking the user's tmux focus away from the deck.
 	NoSwitch bool
+	// PaneHosted says the caller hosts this workspace's agent itself, so
+	// creation prepares the workspace and stops: no tmux session, no agent,
+	// no switch. The prompt is parked on the workspace for whatever starts
+	// the agent to pick up.
+	//
+	// Without it a zdeck-created workspace gets two agents — the tmux one
+	// this function starts, which nothing in a zdeck can see, and the zmx one
+	// the pane starts later. The invisible one is the one holding the prompt.
+	PaneHosted bool
 }
 
 // runOpenWithCharm runs the unified workspace form (a deckui tea.Program)

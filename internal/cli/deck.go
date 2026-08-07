@@ -564,6 +564,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 				Prompt:           req.Workspace.Prompt,
 				PRNumber:         req.Workspace.PRNumber,
 				Yes:              true,
+				PaneHosted:       req.PaneHosted,
 			}, reporter)
 		}
 		if req.Action == deckui.ActionReview {
@@ -986,6 +987,7 @@ func buildAsyncJobs(repoRoot string, runner Runner) (deckui.AsyncJobLauncher, de
 			Arg:              spec.Arg,
 			WorkspaceName:    spec.WorkspaceName,
 			WorkspacePath:    spec.WorkspacePath,
+			PaneHosted:       spec.PaneHosted,
 		}
 		_, err := store.Spawn(jspec, spec.Title, jobs.SpawnOptions{})
 		return err

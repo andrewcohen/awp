@@ -263,6 +263,9 @@ func (f *fakeTmux) CurrentWindow() (string, error) { return f.current, nil }
 
 type fakeStore struct {
 	entries map[string]Entry
+	// saves counts writes, so a test can assert that a read-only question did
+	// not turn into one.
+	saves int
 }
 
 type fakeHooks struct {
@@ -310,6 +313,7 @@ func (f *fakeStore) Load(string) (map[string]Entry, error) {
 	return cp, nil
 }
 func (f *fakeStore) Save(_ string, entries map[string]Entry) error {
+	f.saves++
 	f.entries = map[string]Entry{}
 	for k, v := range entries {
 		f.entries[k] = v

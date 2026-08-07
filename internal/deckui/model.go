@@ -144,6 +144,10 @@ type ActionRequest struct {
 	Arg       string
 	Workspace NewWorkspaceRequest
 	Reporter  Reporter
+	// PaneHosted says this deck hosts the workspace's agent itself, so a
+	// handler must not start one somewhere the deck cannot see it. Set from
+	// Model.hostsAgents, which is the only place the question is answered.
+	PaneHosted bool
 }
 
 type Handler func(ActionRequest) error
@@ -2145,6 +2149,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.status = fmt.Sprintf("sent prompt → %s/%s", msg.item.ProjectName, msg.item.WorkspaceName)
 			return m, promptExpireCmd
 		}
+		if m.hostsAgents() {
+			// Quitting is the tmux deck's way of getting out of the user's
+			// way: the action ended with switch-client, so the terminal
+			// already belongs to the new session. A deck that hosts its own
+			// panes is the outermost program — quitting drops the user at a
+			// shell instead. Stay, and show the result.
+			var refreshCmd tea.Cmd
+			m, refreshCmd = m.requestRefresh(true)
+			return m, refreshCmd
+		}
 		return m, tea.Quit
 	case StateEditDoneMsg:
 		if msg.Err != nil {
@@ -3606,14 +3620,16 @@ func (m *Model) startCreateAction(req NewWorkspaceRequest, repoRoot string) (tea
 	m.status = "creating workspace..."
 	ch := m.progressChan
 	handler := m.handler
+	paneHosted := m.hostsAgents()
 	item := Item{RepoRoot: repoRoot}
 	dispatch := func() tea.Msg {
 		reporter := &chanReporter{ch: ch}
 		err := handler(ActionRequest{
-			Item:      item,
-			Action:    ActionCreateWorkspace,
-			Workspace: req,
-			Reporter:  reporter,
+			Item:       item,
+			Action:     ActionCreateWorkspace,
+			Workspace:  req,
+			Reporter:   reporter,
+			PaneHosted: paneHosted,
 		})
 		if ch != nil {
 			ch <- progressEvent{kind: progressEventDone, err: err, action: ActionCreateWorkspace, item: item}
@@ -3653,6 +3669,10 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		// the row that appears (via workspace-state.json) while the job is
 		// still bootstrapping — see workspaceSetupJob.
 		WorkspaceName: strings.TrimSpace(req.Name),
+		// The job runs detached, with no terminal to start a hosted agent
+		// on, so tell it to prepare the workspace and park the prompt. The
+		// agent starts when the pane does.
+		PaneHosted: m.hostsAgents(),
 	}
 	// Show the new workspace immediately as an optimistic row, so it
 	// appears the instant the form is submitted rather than after the

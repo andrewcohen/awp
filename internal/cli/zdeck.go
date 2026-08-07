@@ -43,10 +43,10 @@ var panes = map[string]struct {
 	// codingAgentArgv, not config.AgentInvocation: the latter omits the
 	// dev-loop preamble, so a pane agent would not know to work in units, run
 	// gates or commit — the same instruction the tmux path has always sent.
-	"agent":  {"agent", longLived, func(it deckui.Item) []string { return codingAgentArgv(it.RepoRoot) }},
-	"editor": {"editor", longLived, func(deckui.Item) []string { return append(fields(envOr("EDITOR", "vi")), ".") }},
-	"vcs":    {"vcs", ephemeral, func(deckui.Item) []string { return []string{"jjui"} }},
-	"":       {"shell", ephemeral, func(deckui.Item) []string { return fields(envOr("SHELL", "sh")) }},
+	deckui.PaneKindAgent: {"agent", longLived, func(it deckui.Item) []string { return codingAgentArgv(it.RepoRoot) }},
+	"editor":             {"editor", longLived, func(deckui.Item) []string { return append(fields(envOr("EDITOR", "vi")), ".") }},
+	"vcs":                {"vcs", ephemeral, func(deckui.Item) []string { return []string{"jjui"} }},
+	"":                   {"shell", ephemeral, func(deckui.Item) []string { return fields(envOr("SHELL", "sh")) }},
 }
 
 func envOr(key, fallback string) string {
@@ -69,7 +69,30 @@ func fields(s string) []string {
 
 // zmxPanes hosts the deck's window kinds on ptys awp owns, backed by zmx for
 // the ones that have to survive.
-type zmxPanes struct{ client zmx.Client }
+type zmxPanes struct {
+	client zmx.Client
+	// svcFor resolves the workspace service for a repo, so a cross-project
+	// deck reads each row's state file rather than the one it started in.
+	// Used for the prompt a workspace was created with and has not delivered
+	// yet — see Entry.PendingPrompt.
+	svcFor func(repoRoot string) workspace.Service
+}
+
+// takePendingPrompt returns the prompt this workspace was created with, once.
+//
+// It is best-effort: a state file we cannot read is not a reason to refuse to
+// open the agent. A prompt lost that way is recoverable by typing it; a pane
+// that will not open is not.
+func (z zmxPanes) takePendingPrompt(item deckui.Item) string {
+	if z.svcFor == nil || strings.TrimSpace(item.RepoRoot) == "" {
+		return ""
+	}
+	prompt, err := z.svcFor(item.RepoRoot).TakePendingPrompt(item.WorkspaceName)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(prompt)
+}
 
 func (zmxPanes) Describes(kind string) bool {
 	_, ok := panes[kind]
@@ -126,6 +149,33 @@ func (z zmxPanes) Sessions(items []deckui.Item) ([]deckui.PaneSession, error) {
 	return out, nil
 }
 
+// deliverPending routes a parked prompt to the agent, and returns the argv to
+// start it with.
+//
+// Which route depends on whether the session is already there. zmx ignores
+// argv for a session that exists (see zmx.AttachCmd), so for a live agent the
+// prompt has to be pasted; for one we are about to create it can be the
+// agent's own argument, which is better — no waiting for it to boot, and no
+// paste racing its input box.
+//
+// A paste that fails re-parks the prompt. A prompt still parked can be
+// delivered next time; one we dropped is gone.
+func (z zmxPanes) deliverPending(item deckui.Item, name string, argv []string, prompt string) ([]string, error) {
+	session, found, err := z.client.Lookup(context.Background(), name)
+	if err != nil {
+		_ = z.svcFor(item.RepoRoot).RecordPendingPrompt(item.WorkspaceName, prompt)
+		return nil, err
+	}
+	if !found || !session.Live() {
+		return append(argv, prompt), nil
+	}
+	if err := z.client.Paste(context.Background(), name, prompt); err != nil {
+		_ = z.svcFor(item.RepoRoot).RecordPendingPrompt(item.WorkspaceName, prompt)
+		return nil, err
+	}
+	return argv, nil
+}
+
 func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func(), error) {
 	spec, ok := panes[kind]
 	if !ok {
@@ -153,6 +203,23 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	name := zmx.SessionName(item.ProjectName, item.WorkspaceName, spec.label)
 	if _, err := z.client.Reap(context.Background(), name); err != nil {
 		return nil, nil, err
+	}
+
+	// A workspace created under a pane host has its prompt parked rather than
+	// delivered — at creation time there was no agent to deliver it to, and
+	// the create may well have run in a detached subprocess with no terminal
+	// to start one on. This is where the agent comes into existence, so this
+	// is where the prompt arrives.
+	//
+	// Only looked up when the kind is the agent: nothing else is a recipient,
+	// and the Lookup below is a subprocess we should not spend on every pane.
+	if kind == deckui.PaneKindAgent {
+		if prompt := z.takePendingPrompt(item); prompt != "" {
+			var err error
+			if argv, err = z.deliverPending(item, name, argv, prompt); err != nil {
+				return nil, nil, err
+			}
+		}
 	}
 	// One command both creates and attaches. Nothing labels the session,
 	// because SessionName already spells the project, the workspace and the
@@ -208,8 +275,16 @@ func runZdeck(runner Runner, svc workspace.Service, in io.Reader, out io.Writer)
 	if _, err := exec.LookPath("zmx"); err != nil {
 		return fmt.Errorf("zdeck needs zmx on PATH — install it, or use `awp deck` (%w)", err)
 	}
-	backend := zmxPanes{client: zmx.New(func(ctx context.Context, dir, name string, args ...string) (string, error) {
-		return runner.Run(ctx, dir, name, args...)
-	})}
+	backend := zmxPanes{
+		client: zmx.New(func(ctx context.Context, dir, name string, args ...string) (string, error) {
+			return runner.Run(ctx, dir, name, args...)
+		}),
+		// Per-repo, not the deck's own service: zdeck opens at ScopeAll, so
+		// the row whose agent you are starting may belong to another project
+		// and keep its pending prompt in that project's state file.
+		svcFor: func(repoRoot string) workspace.Service {
+			return newDeckActionService(runner, repoRoot, nil)
+		},
+	}
 	return runDeckWithCharm(runner, svc, in, out, deckui.ScopeAll, backend)
 }

@@ -37,6 +37,9 @@ type AsyncJobSpec struct {
 	Arg              string
 	WorkspaceName    string
 	WorkspacePath    string
+	// PaneHosted says this deck hosts its own agents, so the job must not
+	// start one in tmux. Set from Model.hostsAgents.
+	PaneHosted bool
 }
 
 // AsyncJobLauncher dispatches an async job. Returns immediately after
