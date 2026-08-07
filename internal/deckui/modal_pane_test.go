@@ -216,3 +216,39 @@ func runCmd(cmd tea.Cmd) {
 		}
 	}
 }
+
+// Summoning has nowhere to hand off to when awp is hosting the panes, and
+// `tmux switch-client` from outside tmux exits 0 having done nothing. So enter
+// brings the workspace's agent into the deck instead of silently no-opping.
+func TestSummonOpensTheAgentPaneWhenABackendIsWired(t *testing.T) {
+	backend := allKinds()
+	m := paneModel(t, backend)
+
+	next, _ := m.trigger(ActionSummon, "")
+	got := next.(Model)
+	p, ok := got.active.(*panePopover)
+	if !ok {
+		t.Fatalf("enter opened no pane; status %q", got.status)
+	}
+	t.Cleanup(func() { p.close(&got) })
+	if backend.opened != "agent" {
+		t.Errorf("enter asked the backend for %q, want agent", backend.opened)
+	}
+}
+
+// And without a backend, enter is the tmux handoff it has always been.
+func TestSummonIsUnchangedWithoutABackend(t *testing.T) {
+	var got []Action
+	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", Path: "/tmp", RepoRoot: "/tmp"}},
+		func(r ActionRequest) error { got = append(got, r.Action); return nil })
+	m.width, m.height = 120, 40
+
+	next, cmd := m.trigger(ActionSummon, "")
+	if next.(Model).active != nil {
+		t.Error("a pane opened with no backend wired")
+	}
+	runCmd(cmd)
+	if len(got) != 1 || got[0] != ActionSummon {
+		t.Errorf("the handler saw %v, want one ActionSummon", got)
+	}
+}

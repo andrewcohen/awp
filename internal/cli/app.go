@@ -891,7 +891,11 @@ func (a *App) runZdeck(args []string) error {
 		_, _ = fmt.Fprintln(a.out, "  v  vcs      ephemeral: same")
 		_, _ = fmt.Fprintln(a.out, "  c  review   unchanged \u2014 the deck already shows the diff in place")
 		_, _ = fmt.Fprintln(a.out, "")
-		_, _ = fmt.Fprintln(a.out, "ctrl+\\ leaves a pane. Requires zmx on PATH.")
+		_, _ = fmt.Fprintln(a.out, "  enter      the agent pane \u2014 there is no other client to switch to")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "ctrl+\\ leaves a pane. Requires zmx on PATH. Unlike `awp deck`, zdeck hosts")
+		_, _ = fmt.Fprintln(a.out, "its panes, so it does not need to run inside tmux \u2014 though C and p D still")
+		_, _ = fmt.Fprintln(a.out, "open tmux windows and need a client to switch to.")
 		return nil
 	}
 	if len(args) > 0 {

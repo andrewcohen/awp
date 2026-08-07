@@ -3278,9 +3278,20 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	// One interception point, so every window key changes together. A pane
 	// backend that declines a kind falls through to tmux, which is what keeps
 	// the review and PR-description windows working unchanged.
-	if a == ActionOpenWindow && !item.Virtual {
-		if cmd, handled := m.openPane(item, arg); handled {
-			return m, cmd
+	if !item.Virtual {
+		kind, isPane := arg, a == ActionOpenWindow
+		if a == ActionSummon {
+			// With awp hosting panes there is no other client to switch to,
+			// and `tmux switch-client` from outside tmux exits 0 having done
+			// nothing — a silent no-op that reads as a broken key. Summoning a
+			// workspace here means bringing its agent into the deck, which is
+			// the same gesture with the handoff removed.
+			kind, isPane = "agent", true
+		}
+		if isPane {
+			if cmd, handled := m.openPane(item, kind); handled {
+				return m, cmd
+			}
 		}
 	}
 	if item.Virtual {
