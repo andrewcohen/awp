@@ -45,6 +45,11 @@ type deckStyles struct {
 	// BucketHeader holds the urgency-colored, bold header style for
 	// each inbox bucket, indexed by inboxBucket.
 	BucketHeader [inboxBucketCount]lipgloss.Style
+	// PaneTitle / PaneHint are the hosted-terminal popover's chrome, matching
+	// the other overlays so a live process still reads as one of the deck's
+	// own surfaces.
+	PaneTitle lipgloss.Style
+	PaneHint  lipgloss.Style
 }
 
 func newDeckStyles() deckStyles {
@@ -65,6 +70,9 @@ func newDeckStyles() deckStyles {
 		FindHeader:    lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
 		SubHeader:     lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
 		Port:          lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
+
+		PaneTitle: lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
+		PaneHint:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
 	}
 	for b := inboxBucket(0); b < inboxBucketCount; b++ {
 		s.BucketHeader[b] = lipgloss.NewStyle().Foreground(lipgloss.Color(inboxBucketColor(b))).Bold(true)

@@ -399,7 +399,7 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 	return newDeckActionServiceWithIO(runner, repoRoot, in, io.Discard)
 }
 
-func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope) error {
+func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes deckui.PaneBackend) error {
 	if os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp deck must run inside tmux (hint: bind a display-popup -E awp deck)")
 	}
@@ -824,6 +824,9 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 
 	model := deckui.New(items, handler).
 		WithInitialScope(initialScope).
+		// nil for `awp deck`; zdeck supplies one so the window keys render a
+		// pane in place instead of handing off to tmux.
+		WithPaneBackend(panes).
 		WithRefresher(refresher).
 		WithDevURLDiscoverer(devURLDiscoverer).
 		WithPRFetcher(prFetcher).WithPRStatusFetcher(prStatusFetcher).

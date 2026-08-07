@@ -822,7 +822,13 @@ type Model struct {
 	// single-slot replacement for the deck's per-mode bool flags; modes are
 	// migrated onto it incrementally (see modal.go). When set, Update
 	// dispatches keys to it before the legacy flag handlers.
-	active      modal
+	active modal
+	// panes, when set, makes the window keys (a / e / v / s) render the
+	// process inside the deck on a pty awp owns instead of handing off to
+	// a tmux window. nil is the ordinary deck. The UI is the same either
+	// way; only where the process lives differs.
+	panes       PaneBackend
+	paneGen     int
 	filterInput textinput.Model
 	filtering   bool
 	filter      string
@@ -1000,6 +1006,13 @@ func (m Model) indexCurrent() int {
 
 func (m Model) WithRefresher(r Refresher) Model {
 	m.refresher = r
+	return m
+}
+
+// WithPaneBackend makes the deck host processes itself rather than opening
+// tmux windows for them. See PaneBackend.
+func (m Model) WithPaneBackend(b PaneBackend) Model {
+	m.panes = b
 	return m
 }
 
@@ -3261,6 +3274,14 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	item, ok := m.selected()
 	if !ok || m.handler == nil {
 		return m, nil
+	}
+	// One interception point, so every window key changes together. A pane
+	// backend that declines a kind falls through to tmux, which is what keeps
+	// the review and PR-description windows working unchanged.
+	if a == ActionOpenWindow && !item.Virtual {
+		if cmd, handled := m.openPane(item, arg); handled {
+			return m, cmd
+		}
 	}
 	if item.Virtual {
 		// A virtual inbox row has no local workspace to act on. The one
