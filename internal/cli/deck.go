@@ -2246,9 +2246,21 @@ func defaultWindowCommandWithRepo(windowName, repoRoot string) string {
 	return ""
 }
 
+// ciWatchScript is what `i` runs, wherever it runs: resolve the workspace's
+// nearest bookmark, find that branch's most recent GitHub run, and watch it.
+//
+// One string because the tmux window and the zdeck pane have to watch the same
+// run, and the resolution happens in the shell rather than in Go — so a second
+// copy would be a second answer to "which run", drifting the first time either
+// is edited. It carries no single quote, which is what lets the tmux path wrap
+// it in one to type it at a shell; ci_pane_test.go pins that.
+const ciWatchScript = `b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"`
+
 // openCIWindow opens (or reuses) a `ci` tmux window in the workspace and runs
-// `gh run watch` with a fallback to `gh run view`. gh resolves the repo and
-// branch from the workspace's cwd.
+// ciWatchScript in it. gh resolves the repo from the workspace's cwd.
+//
+// The zdeck pane for the same key runs the same script directly on a pty — see
+// the `ci` entry in zdeck.go's panes map.
 func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item deckui.Item, reporter deckui.Reporter) error {
 	reporter.Step("Open ci window")
 	path := resolvePath(svc, item)
@@ -2286,7 +2298,7 @@ func openCIWindow(tmuxClient *tmux.Client, svc workspace.Service, _ Runner, item
 			return err
 		}
 	}
-	cmd := `bash -c 'b=$(jj log --no-graph -r "latest(::@ & bookmarks())" -T "local_bookmarks.map(|b| b.name()).join(\"\n\") ++ \"\n\"" | head -n1); id=$(gh run list --branch "$b" --limit 1 --json databaseId -q ".[0].databaseId"); gh run watch "$id" --compact --exit-status || gh run view "$id"'`
+	cmd := "bash -c '" + ciWatchScript + "'"
 	if !exists || paneIsShell(tmuxClient, target) {
 		if err := tmuxClient.SendCommand(target, cmd); err != nil {
 			return err

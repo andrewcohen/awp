@@ -33,8 +33,10 @@ const (
 // PR-description windows keep working.
 //
 // Andrew's call on lifetimes: the agent and the editor are worth keeping alive
-// between glances; a shell and jjui are not, since you open those to do one
-// thing and the next one can start fresh.
+// between glances; a shell, jjui, CI and the watch view are not, since you open
+// those to do one thing and the next one can start fresh. CI and watch are the
+// clearest ephemerals of the set — each runs one foreground program you watch
+// until it says something, and a stale one is worse than no one at all.
 var panes = map[string]struct {
 	label    string
 	lifetime paneLifetime
@@ -46,7 +48,25 @@ var panes = map[string]struct {
 	deckui.PaneKindAgent: {"agent", longLived, func(it deckui.Item) []string { return codingAgentArgv(it.RepoRoot) }},
 	"editor":             {"editor", longLived, func(deckui.Item) []string { return append(fields(envOr("EDITOR", "vi")), ".") }},
 	"vcs":                {"vcs", ephemeral, func(deckui.Item) []string { return []string{"jjui"} }},
+	// bash, not $SHELL: ciWatchScript is the tmux window's command verbatim,
+	// and it is written in POSIX-ish bash. Running it under whatever shell the
+	// user prefers would make `i` mean something different per machine.
+	deckui.PaneKindCI: {"ci", ephemeral, func(deckui.Item) []string { return []string{"bash", "-c", ciWatchScript} }},
+	// The running awp rather than whatever PATH resolves, so a deck you built
+	// to a temp path opens that build's watch view and not an older install's.
+	deckui.PaneKindWatch: {"watch", ephemeral, func(deckui.Item) []string { return []string{awpSelf(), "watch"} }},
 	"":                   {"shell", ephemeral, func(deckui.Item) []string { return fields(envOr("SHELL", "sh")) }},
+}
+
+// awpSelf is the awp binary to spawn for awp's own subcommands.
+//
+// os.Executable can fail (a deleted or unreadable binary); "awp" is the honest
+// fallback, and the pane will say so itself if PATH has none.
+func awpSelf() string {
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		return exe
+	}
+	return "awp"
 }
 
 func envOr(key, fallback string) string {
