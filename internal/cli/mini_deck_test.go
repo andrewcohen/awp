@@ -21,15 +21,10 @@ func TestBuildMiniDeckRowsFiltersAndSorts(t *testing.T) {
 			"unknown":  {Name: "unknown", Path: "/ws/alpha/unknown", Status: ""},
 		},
 	}
-	snap := deckTmuxSnapshot{
-		known: true,
-		liveByName: map[string]string{
-			DeckSessionName("alpha", "running"):  "$1",
-			DeckSessionName("zeta", "feature-x"): "$2",
-			DeckSessionName("alpha", "notified"): "$3",
-		},
-		agentShell: map[string]bool{},
-	}
+	snap := newKnownSessions().
+		running("alpha", "running").
+		running("zeta", "feature-x").
+		running("alpha", "notified").snap
 	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows after filter, got %d: %+v", len(rows), rows)
@@ -66,18 +61,9 @@ func TestBuildMiniDeckRowsDropsStaleActiveRows(t *testing.T) {
 			"finished": {Name: "finished", Path: "/ws/r/finished", Status: "exited", Unread: true},
 		},
 	}
-	keepSession := DeckSessionName("alpha", "keep-me")
-	deadSession := DeckSessionName("alpha", "agent-died")
-	snap := deckTmuxSnapshot{
-		known: true,
-		liveByName: map[string]string{
-			keepSession: "$1",
-			deadSession: "$2",
-		},
-		agentShell: map[string]bool{
-			deadSession: true,
-		},
-	}
+	snap := newKnownSessions().
+		running("alpha", "keep-me").
+		exited("alpha", "agent-died").snap
 	rows := buildMiniDeckRows(all, snap, nil)
 	got := map[string]bool{}
 	for _, r := range rows {
@@ -114,16 +100,7 @@ func TestBuildMiniDeckRowsKeepsIdleUnreadWithDeadAgentShell(t *testing.T) {
 			"finished-turn": {Name: "finished-turn", Path: "/ws/r/ft", Status: "idle", Unread: true},
 		},
 	}
-	session := DeckSessionName("alpha", "finished-turn")
-	snap := deckTmuxSnapshot{
-		known: true,
-		liveByName: map[string]string{
-			session: "$1",
-		},
-		agentShell: map[string]bool{
-			session: true,
-		},
-	}
+	snap := newKnownSessions().exited("alpha", "finished-turn").snap
 	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 1 || rows[0].Workspace != "finished-turn" {
 		t.Fatalf("expected finished-turn to survive freshness check (idle+unread is durable), got %+v", rows)
@@ -141,14 +118,9 @@ func TestBuildMiniDeckRowsKeepsDefaultWorkspaces(t *testing.T) {
 			"feature-x": {Name: "feature-x", Path: "/ws/r/fx", Status: "working"},
 		},
 	}
-	snap := deckTmuxSnapshot{
-		known: true,
-		liveByName: map[string]string{
-			DeckSessionName("alpha", "default"):   "$1",
-			DeckSessionName("alpha", "feature-x"): "$2",
-		},
-		agentShell: map[string]bool{},
-	}
+	snap := newKnownSessions().
+		running("alpha", "default").
+		running("alpha", "feature-x").snap
 	rows := buildMiniDeckRows(all, snap, nil)
 	got := map[string]bool{}
 	for _, r := range rows {
@@ -171,8 +143,8 @@ func TestBuildMiniDeckRowsKeepsAllWhenTmuxUnknown(t *testing.T) {
 			"working-row": {Name: "working-row", Path: "/ws/r/w", Status: "working"},
 		},
 	}
-	// snap.known == false (fast path / no tmux) → trust stored status.
-	snap := deckTmuxSnapshot{liveByName: map[string]string{}, agentShell: map[string]bool{}}
+	// snap.known == false (fast path / no session probe) → trust stored status.
+	snap := deckSessionSnapshot{byWorkspace: map[workspaceRef]sessionFacts{}}
 	rows := buildMiniDeckRows(all, snap, nil)
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row (snapshot unknown trusts state), got %d", len(rows))
