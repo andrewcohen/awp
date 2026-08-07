@@ -164,6 +164,12 @@ func paneDims(deckW, deckH int) (w, h int) { return deckW - paneChromeW, deckH -
 // screen: the centred popover's origin, plus the chrome around the terminal,
 // plus wherever the program put it.
 //
+// ok is false when there should be no cursor at all — the pane does not fit,
+// the program has hidden its cursor, or it sits outside the terminal. A
+// full-screen program like jjui hides the cursor and then leaves it wherever
+// was convenient, so honouring that is what stops a blinking block appearing
+// at an arbitrary spot on its screen.
+//
 // The box size is computed rather than measured so this does not have to
 // render the popover a second time.
 func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
@@ -173,8 +179,8 @@ func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
 	w, h := paneDims(deckW, deckH)
 	boxW, boxH := w+4+borderCells, h+2+borderCells+4
 	originX, originY := (deckW-boxW)/2, (deckH-boxH)/2
-	cx, cy := p.term.Cursor()
-	if cx < 0 || cy < 0 || cx >= w || cy >= h {
+	cx, cy, visible := p.term.Cursor()
+	if !visible || cx < 0 || cy < 0 || cx >= w || cy >= h {
 		return 0, 0, false
 	}
 	return originX + paneInsetX + cx, originY + paneInsetY + cy, true

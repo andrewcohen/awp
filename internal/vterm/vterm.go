@@ -18,9 +18,11 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 )
@@ -51,9 +53,40 @@ type Term struct {
 	dirty chan struct{}
 	done  chan error
 
+	// What the hosted program has asked its terminal for. Both are fed by
+	// emulator callbacks, which fire on the goroutine writing into the
+	// emulator and while it holds its own lock — so they are atomics rather
+	// than guarded by mu, and the callback bodies must never call back into
+	// the emulator.
+	cursorVisible atomic.Bool
+	mouseModes    atomic.Int32
+
 	mu     sync.Mutex
 	closed bool
 	w, h   int
+}
+
+// mouseModes are the DEC private modes that mean "send me mouse events". A
+// program that has set none of them has no use for the mouse, and the terminal
+// hosting it should not take the mouse away from whoever does.
+var mouseModes = [...]ansi.DECMode{
+	ansi.ModeMouseX10,
+	ansi.ModeMouseNormal,
+	ansi.ModeMouseHighlight,
+	ansi.ModeMouseButtonEvent,
+	ansi.ModeMouseAnyEvent,
+}
+
+// mouseModeBit maps a mode to its slot in Term.mouseModes, and reports whether
+// it is a mouse mode at all. The comparison is against the interface value, so
+// a DEC mode never matches an ANSI mode that happens to share its number.
+func mouseModeBit(m ansi.Mode) (int32, bool) {
+	for i, mm := range mouseModes {
+		if m == mm {
+			return 1 << i, true
+		}
+	}
+	return 0, false
 }
 
 // Start runs c on a w×h PTY and begins interpreting its output.
@@ -81,6 +114,27 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 		w:     w,
 		h:     h,
 	}
+
+	// A cursor is visible until a program hides it (DECTCEM starts set), and
+	// nothing wants the mouse until a program asks.
+	//
+	// SetCallbacks is promoted from the inner Emulator and so is not
+	// lock-guarded; this is the one safe moment to call it, before any output
+	// has started flowing.
+	t.cursorVisible.Store(true)
+	t.emu.SetCallbacks(vt.Callbacks{
+		CursorVisibility: func(visible bool) { t.cursorVisible.Store(visible) },
+		EnableMode: func(m ansi.Mode) {
+			if bit, ok := mouseModeBit(m); ok {
+				t.mouseModes.Or(bit)
+			}
+		},
+		DisableMode: func(m ansi.Mode) {
+			if bit, ok := mouseModeBit(m); ok {
+				t.mouseModes.And(^bit)
+			}
+		},
+	})
 
 	// Pane output into the emulator, flagging a repaint after each chunk.
 	go func() {
@@ -225,20 +279,28 @@ func (t *Term) SendMouse(msg tea.MouseMsg) {
 }
 
 // Cursor is where the hosted program has put its cursor, relative to the top
-// left of the terminal.
+// left of the terminal, and whether it wants one drawn at all.
 //
 // The caller has to place it on screen itself: a Term is rendered as a string
 // with no idea where that string ends up, and in Bubble Tea v2 the cursor is
 // declared on the view rather than emitted into the content.
 //
-// Visibility is not reported because the emulator does not expose it — a
-// hosted program that hides its cursor will still get one drawn. That is the
-// wrong way round for a full-screen TUI and the right way round for a shell or
-// an agent, which is what panes actually hold.
-func (t *Term) Cursor() (x, y int) {
+// visible is returned alongside the position rather than offered as a separate
+// method so a caller cannot paint the one without consulting the other. A
+// full-screen program hides its cursor and moves it wherever is convenient, so
+// drawing an unwanted one puts a blinking block at an arbitrary spot.
+func (t *Term) Cursor() (x, y int, visible bool) {
 	pos := t.emu.CursorPosition()
-	return pos.X, pos.Y
+	return pos.X, pos.Y, t.cursorVisible.Load()
 }
+
+// WantsMouse reports whether the hosted program has enabled mouse reporting.
+//
+// It matters because the host has to ask its own terminal for mouse events to
+// have any to forward, and asking costs the terminal's native selection. For a
+// program that never wanted the mouse that is a pure loss: the emulator drops
+// the events (see SendMouse) and the user loses drag-to-select for nothing.
+func (t *Term) WantsMouse() bool { return t.mouseModes.Load() != 0 }
 
 // Resize changes the PTY window and the emulator together. They have to move
 // as one: the process lays out for the PTY size, and the emulator interprets

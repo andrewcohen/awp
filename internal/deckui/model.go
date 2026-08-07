@@ -3761,10 +3761,15 @@ func (m Model) View() tea.View {
 	// mouse and cursor, so it is the only thing that asks for them. Requesting
 	// them all the time would cost drag-to-select everywhere else.
 	if p, ok := m.active.(*panePopover); ok {
-		// Without this the outer terminal, being in alt-screen with no mouse
-		// tracking asked for, turns the wheel into arrow keys and the pane
-		// gets typed at.
-		v.MouseMode = tea.MouseModeCellMotion
+		// Only ask when the pane's own program has enabled mouse reporting.
+		// Without it the outer terminal, being in alt-screen with no tracking
+		// asked for, turns the wheel into arrow keys and the pane gets typed
+		// at — but asking on behalf of a program that never wanted the mouse
+		// is worse than not asking: the emulator drops the events and the user
+		// loses the terminal's own drag-to-select for nothing.
+		if p.term.WantsMouse() {
+			v.MouseMode = tea.MouseModeCellMotion
+		}
 		if x, y, ok := p.screenCursor(m.width, m.height); ok {
 			v.Cursor = tea.NewCursor(x, y)
 		}
