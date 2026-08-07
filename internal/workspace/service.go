@@ -154,7 +154,11 @@ type Entry struct {
 	// Distinct from ActivePrompt, which is what a running agent is working
 	// on. This one is a message with no recipient yet.
 	PendingPrompt string `json:",omitempty"`
-	Status        string `json:",omitempty"`
+	// PendingPromptIsReview says the parked prompt is a review brief, so
+	// whatever starts the agent must start a reviewer rather than a coding
+	// agent — see PendingPrompt.Review.
+	PendingPromptIsReview bool   `json:",omitempty"`
+	Status                string `json:",omitempty"`
 	// Unread is set when the agent transitions to a state that wants the
 	// user's attention (waiting/idle) and cleared when the user summons
 	// the workspace or the agent exits. Surfaces as a tmux status badge
@@ -320,8 +324,8 @@ type Service interface {
 	RecordBookmark(workspaceName, bookmark string) error
 	RecordPROverride(workspaceName string, prNumber int) error
 	UpdatePrompt(workspaceName, prompt string) error
-	RecordPendingPrompt(workspaceName, prompt string) error
-	TakePendingPrompt(workspaceName string) (string, error)
+	RecordPendingPrompt(workspaceName string, p PendingPrompt) error
+	TakePendingPrompt(workspaceName string) (PendingPrompt, error)
 	UpdateStatus(workspaceName, status string) error
 	MarkRead(workspaceName string) error
 	ClearSession(workspaceName string) error
@@ -978,11 +982,35 @@ func (s *service) UpdatePrompt(workspaceName, prompt string) error {
 	return s.mutateEntry(workspaceName, func(e *Entry) { e.ActivePrompt = prompt })
 }
 
+// PendingPrompt is a prompt waiting for an agent that does not exist yet.
+type PendingPrompt struct {
+	Text string
+	// Review says the recipient is a reviewer, so whatever starts the agent
+	// must start one without the dev-loop preamble.
+	//
+	// The two agent flavors are not interchangeable and the difference is not
+	// visible from the prompt text: a reviewer told to work in units, run
+	// gates and commit starts doing the author's job on someone else's PR.
+	// The tmux review path makes the same distinction by reaching for
+	// config.AgentInvocation rather than the coding invocation; parking the
+	// prompt separates the decision from the launch, so the fact has to
+	// travel with it.
+	Review bool
+}
+
+// Empty reports whether there is nothing to deliver.
+func (p PendingPrompt) Empty() bool { return strings.TrimSpace(p.Text) == "" }
+
 // RecordPendingPrompt parks a prompt for an agent that does not exist yet.
-// Passing "" clears it.
-func (s *service) RecordPendingPrompt(workspaceName, prompt string) error {
-	prompt = strings.TrimSpace(prompt)
-	return s.mutateEntry(workspaceName, func(e *Entry) { e.PendingPrompt = prompt })
+// An empty Text clears whatever was parked.
+func (s *service) RecordPendingPrompt(workspaceName string, p PendingPrompt) error {
+	text := strings.TrimSpace(p.Text)
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.PendingPrompt = text
+		// A cleared prompt has no flavor. Leaving the flag set would hand the
+		// next parked prompt a role it never asked for.
+		e.PendingPromptIsReview = text != "" && p.Review
+	})
 }
 
 // TakePendingPrompt returns the parked prompt and clears it in the same write,
@@ -992,27 +1020,28 @@ func (s *service) RecordPendingPrompt(workspaceName, prompt string) error {
 // every pane open would otherwise rewrite the state file to store a field it
 // did not change. A missing workspace is not an error — there is simply no
 // prompt waiting, which is also true of one that was never given a prompt.
-func (s *service) TakePendingPrompt(workspaceName string) (string, error) {
+func (s *service) TakePendingPrompt(workspaceName string) (PendingPrompt, error) {
 	repoRoot, err := s.jj.RepoRoot()
 	if err != nil {
-		return "", fmt.Errorf("not a jj repository: %w", err)
+		return PendingPrompt{}, fmt.Errorf("not a jj repository: %w", err)
 	}
 	normalized, err := NormalizeName(workspaceName)
 	if err != nil {
-		return "", err
+		return PendingPrompt{}, err
 	}
 	entries, err := s.store.Load(repoRoot)
 	if err != nil {
-		return "", err
+		return PendingPrompt{}, err
 	}
 	if entries[normalized].PendingPrompt == "" {
-		return "", nil
+		return PendingPrompt{}, nil
 	}
-	var took string
+	var took PendingPrompt
 	if err := s.mutateEntry(normalized, func(e *Entry) {
-		took, e.PendingPrompt = e.PendingPrompt, ""
+		took = PendingPrompt{Text: e.PendingPrompt, Review: e.PendingPromptIsReview}
+		e.PendingPrompt, e.PendingPromptIsReview = "", false
 	}); err != nil {
-		return "", err
+		return PendingPrompt{}, err
 	}
 	return took, nil
 }

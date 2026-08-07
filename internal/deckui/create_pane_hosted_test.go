@@ -85,6 +85,43 @@ func TestTheAsyncCreateJobCarriesWhoHostsTheAgent(t *testing.T) {
 	}
 }
 
+// TestTheReviewJobCarriesWhoHostsTheAgent: the second entry point with the
+// same defect. A review workspace exists only to hold a reviewing agent, so a
+// review that starts one in tmux puts the whole thing you asked for somewhere
+// a pane deck cannot open.
+func TestTheReviewJobCarriesWhoHostsTheAgent(t *testing.T) {
+	var spec AsyncJobSpec
+	m := New(nil, func(ActionRequest) error { return nil }).
+		WithPaneBackend(allKinds()).
+		WithAsyncJobLauncher(func(s AsyncJobSpec) error { spec = s; return nil })
+	_, cmd := m.startReview(Item{RepoRoot: "/repo"}, 12, "andrew/thing")
+	runAll(cmd)
+	if spec.Action != "review" {
+		t.Fatalf("expected a review job, got %q", spec.Action)
+	}
+	if !spec.PaneHosted {
+		t.Fatalf("review spec did not say the deck hosts agents: %#v", spec)
+	}
+}
+
+// TestTheHandlerPathCarriesItToo covers the synchronous fallback: every
+// handler-bound action goes through dispatch, so review's no-async path and
+// anything else that starts an agent get the same answer.
+func TestTheHandlerPathCarriesItToo(t *testing.T) {
+	got := make(chan bool, 1)
+	m := New(nil, func(r ActionRequest) error { got <- r.PaneHosted; return nil }).
+		WithPaneBackend(allKinds())
+	runAll(m.dispatch(ActionReview, Item{RepoRoot: "/repo"}, "12"))
+	select {
+	case v := <-got:
+		if !v {
+			t.Fatal("dispatch did not tell the handler this deck hosts agents")
+		}
+	default:
+		t.Fatal("handler was never called")
+	}
+}
+
 // TestAPaneDeckDoesNotQuitAfterCreating: the tmux deck quits because its
 // create ends in switch-client — the terminal already belongs to the new
 // session. A deck that hosts its own panes is the outermost program, so

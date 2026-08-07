@@ -3532,6 +3532,10 @@ func (m *Model) startReview(item Item, prNumber int, branch string) (tea.Model, 
 		RepoRoot:      item.RepoRoot,
 		WorkspaceName: rawName,
 		Arg:           arg,
+		// Same reason as the create job: this runs detached, with no terminal
+		// to start a hosted reviewer on. It prepares the workspace and parks
+		// the review prompt; the agent pane delivers it.
+		PaneHosted: m.hostsAgents(),
 	})
 }
 
@@ -3729,9 +3733,13 @@ type asyncJobDispatchedMsg struct {
 func (m Model) dispatch(a Action, item Item, arg string) tea.Cmd {
 	ch := m.progressChan
 	handler := m.handler
+	// Every handler-bound action goes through here, so this is where the
+	// answer belongs: a handler that starts an agent has to know whether this
+	// deck already hosts one, and the handler cannot see m.panes.
+	paneHosted := m.hostsAgents()
 	return func() tea.Msg {
 		reporter := &chanReporter{ch: ch}
-		err := handler(ActionRequest{Item: item, Action: a, Arg: arg, Reporter: reporter})
+		err := handler(ActionRequest{Item: item, Action: a, Arg: arg, Reporter: reporter, PaneHosted: paneHosted})
 		if ch != nil {
 			ch <- progressEvent{kind: progressEventDone, err: err, action: a, arg: arg, item: item}
 			close(ch)

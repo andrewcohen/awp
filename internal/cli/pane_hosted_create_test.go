@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,8 +57,12 @@ func TestPaneHostedCreateParksThePrompt(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("openWorkspaceWithReporter: %v", err)
 	}
-	if got := svc.pendingPrompts["qa"]; got != "fix tests" {
-		t.Fatalf("pending prompt = %q, want %q", got, "fix tests")
+	got := svc.pendingPrompts["qa"]
+	if got.Text != "fix tests" {
+		t.Fatalf("pending prompt = %q, want %q", got.Text, "fix tests")
+	}
+	if got.Review {
+		t.Error("a create parked its prompt as a review brief")
 	}
 }
 
@@ -131,18 +136,18 @@ func (f *fakeZmx) run(_ context.Context, _ string, name string, args ...string) 
 // questions — the rest of the interface is not reached by pane opening.
 type promptSvc struct {
 	workspace.Service
-	pending  string
-	reparked string
+	pending  workspace.PendingPrompt
+	reparked workspace.PendingPrompt
 }
 
-func (p *promptSvc) TakePendingPrompt(string) (string, error) {
+func (p *promptSvc) TakePendingPrompt(string) (workspace.PendingPrompt, error) {
 	took := p.pending
-	p.pending = ""
+	p.pending = workspace.PendingPrompt{}
 	return took, nil
 }
 
-func (p *promptSvc) RecordPendingPrompt(_, prompt string) error {
-	p.reparked = prompt
+func (p *promptSvc) RecordPendingPrompt(_ string, pp workspace.PendingPrompt) error {
+	p.reparked = pp
 	return nil
 }
 
@@ -156,7 +161,7 @@ func paneItem() deckui.Item {
 // paste racing its input box.
 func TestOpeningTheAgentDeliversTheParkedPrompt(t *testing.T) {
 	fz := &fakeZmx{}
-	svc := &promptSvc{pending: "fix the tests"}
+	svc := &promptSvc{pending: workspace.PendingPrompt{Text: "fix the tests"}}
 	panes := zmxPanes{
 		client: zmx.New(fz.run),
 		svcFor: func(string) workspace.Service { return svc },
@@ -171,7 +176,7 @@ func TestOpeningTheAgentDeliversTheParkedPrompt(t *testing.T) {
 	if len(fz.pasted) != 0 {
 		t.Fatalf("a session being created should take argv, not a paste; pasted %v", fz.pasted)
 	}
-	if svc.pending != "" {
+	if !svc.pending.Empty() {
 		t.Fatal("the prompt should have been taken, so it is not delivered twice")
 	}
 }
@@ -180,7 +185,7 @@ func TestOpeningTheAgentDeliversTheParkedPrompt(t *testing.T) {
 // that already exists, so a live agent has to be pasted to instead.
 func TestOpeningALiveAgentPastesTheParkedPrompt(t *testing.T) {
 	fz := &fakeZmx{live: true}
-	svc := &promptSvc{pending: "fix the tests"}
+	svc := &promptSvc{pending: workspace.PendingPrompt{Text: "fix the tests"}}
 	panes := zmxPanes{
 		client: zmx.New(fz.run),
 		svcFor: func(string) workspace.Service { return svc },
@@ -206,7 +211,7 @@ func TestOpeningALiveAgentPastesTheParkedPrompt(t *testing.T) {
 // TestAFailedDeliveryReparksThePrompt: a prompt still parked can be delivered
 // next time; one we took and dropped is gone.
 func TestAFailedDeliveryReparksThePrompt(t *testing.T) {
-	svc := &promptSvc{pending: "fix the tests"}
+	svc := &promptSvc{pending: workspace.PendingPrompt{Text: "fix the tests"}}
 	panes := zmxPanes{
 		client: zmx.New((&fakeZmx{live: true, sendErr: errors.New("zmx is not answering")}).run),
 		svcFor: func(string) workspace.Service { return svc },
@@ -214,15 +219,15 @@ func TestAFailedDeliveryReparksThePrompt(t *testing.T) {
 	if _, _, err := panes.Open(paneItem(), deckui.PaneKindAgent, 80, 24); err == nil {
 		t.Fatal("expected Open to report the failure")
 	}
-	if svc.reparked != "fix the tests" {
-		t.Fatalf("prompt was not re-parked; reparked = %q", svc.reparked)
+	if svc.reparked.Text != "fix the tests" {
+		t.Fatalf("prompt was not re-parked; reparked = %q", svc.reparked.Text)
 	}
 }
 
 // TestOnlyTheAgentPaneTakesThePrompt: a shell or an editor is not a recipient,
 // and taking the prompt to open one would silently eat it.
 func TestOnlyTheAgentPaneTakesThePrompt(t *testing.T) {
-	svc := &promptSvc{pending: "fix the tests"}
+	svc := &promptSvc{pending: workspace.PendingPrompt{Text: "fix the tests"}}
 	panes := zmxPanes{
 		client: zmx.New((&fakeZmx{}).run),
 		svcFor: func(string) workspace.Service { return svc },
@@ -230,8 +235,8 @@ func TestOnlyTheAgentPaneTakesThePrompt(t *testing.T) {
 	if _, _, err := panes.Open(paneItem(), "editor", 80, 24); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if svc.pending != "fix the tests" {
-		t.Fatalf("the editor pane took the agent's prompt; pending = %q", svc.pending)
+	if svc.pending.Text != "fix the tests" {
+		t.Fatalf("the editor pane took the agent's prompt; pending = %q", svc.pending.Text)
 	}
 }
 
@@ -242,4 +247,45 @@ func hasArg(cmd *exec.Cmd, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestAParkedReviewPromptStartsAReviewer is the defect that splitting the
+// review flow created: the review path deliberately launches without the
+// dev-loop preamble, but the pane's agent kind launches with it. A reviewer
+// told to work in units, run gates and commit starts doing the author's job on
+// someone else's PR.
+func TestAParkedReviewPromptStartsAReviewer(t *testing.T) {
+	dir := writeRepoConfig(t, `{
+		"agent": "claude",
+		"dev_loop": {"phases": ["implement"], "gates": [{"name": "test", "phase": "implement", "match": "go test"}]}
+	}`)
+
+	argvFor := func(p workspace.PendingPrompt) []string {
+		svc := &promptSvc{pending: p}
+		panes := zmxPanes{
+			client: zmx.New((&fakeZmx{}).run),
+			svcFor: func(string) workspace.Service { return svc },
+		}
+		item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", RepoRoot: dir, Path: dir}
+		cmd, _, err := panes.Open(item, deckui.PaneKindAgent, 80, 24)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		return cmd.Args
+	}
+
+	// The comparison only means something if the coding agent does get a
+	// preamble from this fixture — otherwise both sides are trivially equal
+	// and the test would pass with the distinction deleted.
+	coding := argvFor(workspace.PendingPrompt{Text: "review PR 12"})
+	if !slices.Contains(coding, appendPreambleFlag) {
+		t.Fatalf("fixture is wrong: the coding agent got no preamble to distinguish from: %v", coding)
+	}
+	review := argvFor(workspace.PendingPrompt{Text: "review PR 12", Review: true})
+	if slices.Contains(review, appendPreambleFlag) {
+		t.Errorf("a parked review prompt started an agent carrying the dev-loop preamble: %v", review)
+	}
+	if !slices.Contains(review, "review PR 12") {
+		t.Errorf("the review prompt did not reach the agent: %v", review)
+	}
 }

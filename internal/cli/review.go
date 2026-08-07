@@ -36,25 +36,47 @@ func (w writerReporter) Log(line string) {
 	}
 }
 
+// runReviewWithCharm is `awp review` from a shell. It always takes the tmux
+// path: the pane host is a property of a deck, and there is no deck here.
 func runReviewWithCharm(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error {
-	return runReviewWithReporter(runner, svc, prNumber, in, writerReporter{out: out})
+	return runReviewWithReporter(runner, svc, prNumber, in, writerReporter{out: out}, reviewOpts{})
+}
+
+// reviewOpts are the two things the caller knows and this flow does not:
+// whether to yank the user's tmux focus at the end, and whether there is a
+// tmux to yank at all.
+type reviewOpts struct {
+	// noSwitch suppresses the final SwitchToWindow + SwitchClient. The async
+	// job path sets it so a background review does not move the user.
+	noSwitch bool
+	// paneHosted says the caller hosts the reviewing agent itself, so this
+	// flow prepares the workspace, parks the review prompt, and stops — no
+	// tmux session, no agent, no switch.
+	//
+	// Without it a zdeck review is worse than a zdeck create was: a review
+	// workspace exists only to hold a reviewing agent, so the whole thing you
+	// asked for runs in a session that deck cannot open.
+	paneHosted bool
 }
 
 // runReviewWithReporter prepares (or attaches to) the PR-review tmux
 // session and switches the user's client to it.
-func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter) error {
-	return runReviewOpts(runner, svc, prNumber, in, reporter, false)
+func runReviewWithReporter(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter, opts reviewOpts) error {
+	return runReviewOpts(runner, svc, prNumber, in, reporter, opts)
 }
 
 // runReviewAsync runs the same setup as runReviewWithReporter but
 // suppresses the final SwitchToWindow + SwitchClient — used by the
 // async job path so the user's tmux focus is not yanked away.
-func runReviewAsync(runner Runner, svc workspace.Service, prNumber int, reporter deckui.Reporter) error {
-	return runReviewOpts(runner, svc, prNumber, nil, reporter, true)
+func runReviewAsync(runner Runner, svc workspace.Service, prNumber int, reporter deckui.Reporter, paneHosted bool) error {
+	return runReviewOpts(runner, svc, prNumber, nil, reporter, reviewOpts{noSwitch: true, paneHosted: paneHosted})
 }
 
-func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter, noSwitch bool) error {
-	if os.Getenv("TMUX") == "" {
+func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Reader, reporter deckui.Reporter, opts reviewOpts) error {
+	// A pane-hosted review touches no tmux at all, so requiring one would
+	// refuse the flow over a dependency it does not have — and zdeck is the
+	// one deck that can run outside tmux.
+	if !opts.paneHosted && os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp review must run inside tmux")
 	}
 	if prNumber <= 0 {
@@ -159,6 +181,64 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		}
 	}
 
+	// No review window is opened: awp's own diff view is the review surface now
+	// (`c` in the deck, `C` for the change against its stack base). That also
+	// retires the stale-head reset and prior-head draft migration that used to
+	// live here — findings anchor to content, so a force-push relocates them
+	// rather than stranding them in a session for the old head.
+	diffRange := resolveDiffRange(runner, wsPath, base, pr.HeadSHA)
+	// Pull existing PR comments so the agent doesn't re-raise points
+	// reviewers (or bots) already made. Non-fatal: a review with no prior
+	// comments is the common case, and a fetch error shouldn't block the
+	// review — fall back to the empty list.
+	reporter.Step(fmt.Sprintf("Fetch existing comments for PR #%d", prNumber))
+	comments, cerr := gh.FetchPRComments(prNumber)
+	if cerr != nil {
+		reporter.Log(fmt.Sprintf("could not fetch existing comments: %v", cerr))
+		comments = nil
+	} else {
+		reporter.Log(fmt.Sprintf("found %d existing comment(s)", len(comments)))
+	}
+	// Mirror the PR's review threads into the review store so the diff can show
+	// the conversation already on the PR without a fetch per frame. Non-fatal
+	// for the same reason as above.
+	if threads, terr := gh.FetchReviewThreads(prNumber); terr != nil {
+		reporter.Log(fmt.Sprintf("could not fetch review threads: %v", terr))
+	} else if len(threads) > 0 {
+		if serr := mirrorReviewThreads(repoRoot, name, threads); serr != nil {
+			reporter.Log(fmt.Sprintf("could not cache review threads: %v", serr))
+		} else {
+			reporter.Log(fmt.Sprintf("cached %d review thread(s)", len(threads)))
+		}
+	}
+	// Render the full review instructions, but don't paste them into the
+	// agent terminal — that block is what users complained was "too big".
+	// Write it to disk and hand the agent a tiny pointer prompt instead.
+	instructions := buildReviewPrompt(pr, base, diffRange, comments)
+	prompt := instructions
+	if promptPath, werr := writeReviewPromptFile(repoRoot, name, instructions); werr != nil {
+		reporter.Log(fmt.Sprintf("could not write review prompt file (sending inline): %v", werr))
+	} else {
+		reporter.Log(fmt.Sprintf("review prompt: %s", promptPath))
+		prompt = buildReviewPointerPrompt(pr, promptPath)
+	}
+
+	// Everything below is the tmux half: a session, a PR-description window, a
+	// reviewing agent running in it, and a client switched to it. A caller
+	// that hosts the workspace's processes itself has none of those, and the
+	// reviewer it would start is the entire point of the workspace — so
+	// starting one here puts the whole review somewhere the deck cannot see.
+	//
+	// The PR description is not lost with the window: `p d` renders it in the
+	// deck, which is where a pane-hosted deck was always going to read it.
+	if opts.paneHosted {
+		reporter.Step("Park the review prompt for the agent")
+		if err := svc.RecordPendingPrompt(name, workspace.PendingPrompt{Text: prompt, Review: true}); err != nil {
+			return fmt.Errorf("park the review prompt for %s: %w", name, err)
+		}
+		return nil
+	}
+
 	prDescWindow := "pr description"
 	prDescTarget := sessionName + ":" + prDescWindow
 	prDescCmd := fmt.Sprintf("GH_FORCE_TTY=100%% gh pr view %d | less -R", pr.Number)
@@ -202,47 +282,6 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 			return err
 		}
 	}
-	// No review window is opened: awp's own diff view is the review surface now
-	// (`c` in the deck, `C` for the change against its stack base). That also
-	// retires the stale-head reset and prior-head draft migration that used to
-	// live here — findings anchor to content, so a force-push relocates them
-	// rather than stranding them in a session for the old head.
-	diffRange := resolveDiffRange(runner, wsPath, base, pr.HeadSHA)
-	// Pull existing PR comments so the agent doesn't re-raise points
-	// reviewers (or bots) already made. Non-fatal: a review with no prior
-	// comments is the common case, and a fetch error shouldn't block the
-	// review — fall back to the empty list.
-	reporter.Step(fmt.Sprintf("Fetch existing comments for PR #%d", prNumber))
-	comments, cerr := gh.FetchPRComments(prNumber)
-	if cerr != nil {
-		reporter.Log(fmt.Sprintf("could not fetch existing comments: %v", cerr))
-		comments = nil
-	} else {
-		reporter.Log(fmt.Sprintf("found %d existing comment(s)", len(comments)))
-	}
-	// Mirror the PR's review threads into the review store so the diff can show
-	// the conversation already on the PR without a fetch per frame. Non-fatal
-	// for the same reason as above.
-	if threads, terr := gh.FetchReviewThreads(prNumber); terr != nil {
-		reporter.Log(fmt.Sprintf("could not fetch review threads: %v", terr))
-	} else if len(threads) > 0 {
-		if serr := mirrorReviewThreads(repoRoot, name, threads); serr != nil {
-			reporter.Log(fmt.Sprintf("could not cache review threads: %v", serr))
-		} else {
-			reporter.Log(fmt.Sprintf("cached %d review thread(s)", len(threads)))
-		}
-	}
-	// Render the full review instructions, but don't paste them into the
-	// agent terminal — that block is what users complained was "too big".
-	// Write it to disk and hand the agent a tiny pointer prompt instead.
-	instructions := buildReviewPrompt(pr, base, diffRange, comments)
-	prompt := instructions
-	if promptPath, werr := writeReviewPromptFile(repoRoot, name, instructions); werr != nil {
-		reporter.Log(fmt.Sprintf("could not write review prompt file (sending inline): %v", werr))
-	} else {
-		reporter.Log(fmt.Sprintf("review prompt: %s", promptPath))
-		prompt = buildReviewPointerPrompt(pr, promptPath)
-	}
 
 	if !have["agent"] {
 		reporter.Step("Open agent window")
@@ -272,7 +311,7 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		return err
 	}
 
-	if noSwitch {
+	if opts.noSwitch {
 		return nil
 	}
 	reporter.Step(fmt.Sprintf("Switch to %s", sessionName))

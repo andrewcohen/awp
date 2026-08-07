@@ -491,7 +491,7 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	if req.PaneHosted {
 		if promptArg := strings.TrimSpace(req.Prompt); promptArg != "" {
 			step("Park prompt for the agent")
-			if err := svc.RecordPendingPrompt(normalized, promptArg); err != nil {
+			if err := svc.RecordPendingPrompt(normalized, workspace.PendingPrompt{Text: promptArg}); err != nil {
 				return fmt.Errorf("park the prompt for %s: %w", normalized, err)
 			}
 		}
