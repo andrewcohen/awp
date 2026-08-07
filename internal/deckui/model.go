@@ -1766,12 +1766,35 @@ func prStatusReposPolicy(items []Item, lastFetch map[string]time.Time, now time.
 	return out
 }
 
+// canBackgroundRefresh says whether the 5s poll may run right now.
+//
+// The rule is not "no modal is open" but "no modal owns state a refresh would
+// pull out from under the user". A picker's list is rebuilt from the same
+// items the refresh replaces, so refreshing behind one moves the cursor while
+// they are reading it.
+//
+// A hosted pane is the exception, and has to be: it owns a pty and nothing
+// else, so a refresh behind it changes only rows it does not draw. Excluding
+// it meant the deck froze for as long as a pane was open — which in zdeck is
+// the whole session, since the pane is the primary view rather than a
+// few-second overlay. The agent's hooks kept writing status the deck never
+// read, so coming back to the list showed the state from before you left.
 func (m Model) canBackgroundRefresh() bool {
 	return m.refresher != nil && !m.busy && !m.progressMode &&
-		m.active == nil &&
+		!m.modalOwnsDeckState() &&
 		!m.filtering &&
 		!m.findMode && !m.actionMode &&
 		!m.newWorkspaceMode
+}
+
+// modalOwnsDeckState reports whether the active modal would be disturbed by
+// the row list changing underneath it.
+func (m Model) modalOwnsDeckState() bool {
+	if m.active == nil {
+		return false
+	}
+	_, pane := m.active.(*panePopover)
+	return !pane
 }
 
 // requestRefresh starts a row refresh, coalescing concurrent requests.

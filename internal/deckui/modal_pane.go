@@ -92,7 +92,13 @@ func paneLabel(kind string) string {
 	return kind
 }
 
-func (p *panePopover) close(m *Model) {
+// close tears the pane down and returns the command that catches the deck up.
+//
+// A pane is open for as long as you are working in it, and the agent inside is
+// reporting status the whole time. Without the refresh the row list you land
+// back on is whatever it was when you opened the pane, until the next poll —
+// so leaving a pane looked like status had stopped updating.
+func (p *panePopover) close(m *Model) tea.Cmd {
 	_ = p.term.Close()
 	if p.restore != nil {
 		p.restore()
@@ -101,6 +107,9 @@ func (p *panePopover) close(m *Model) {
 	if m.active == p {
 		m.active = nil
 	}
+	var cmd tea.Cmd
+	*m, cmd = m.requestRefresh(false)
+	return cmd
 }
 
 func (p *panePopover) footerHelp() string { return "" }
@@ -119,13 +128,11 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		if msg.Gen != p.term.Gen() {
 			return nil
 		}
-		p.close(m)
-		return nil
+		return p.close(m)
 
 	case tea.KeyPressMsg:
 		if msg.String() == paneLeaveKey {
-			p.close(m)
-			return nil
+			return p.close(m)
 		}
 		p.term.SendKey(msg)
 		return nil
