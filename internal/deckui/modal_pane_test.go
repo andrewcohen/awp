@@ -252,3 +252,80 @@ func TestSummonIsUnchangedWithoutABackend(t *testing.T) {
 		t.Errorf("the handler saw %v, want one ActionSummon", got)
 	}
 }
+
+// A hosted pane is the only thing in the deck that wants the terminal's mouse
+// and cursor, and it must be the only thing that asks for them: requesting
+// mouse tracking all the time costs drag-to-select on every other screen.
+func TestOnlyAPaneAsksForTheMouseAndCursor(t *testing.T) {
+	m := paneModel(t, allKinds())
+
+	plain := m.View()
+	if plain.MouseMode != tea.MouseModeNone {
+		t.Errorf("the deck asked for mouse mode %v with no pane open", plain.MouseMode)
+	}
+	if plain.Cursor != nil {
+		t.Error("the deck placed a cursor with no pane open")
+	}
+
+	next, _ := m.trigger(ActionOpenWindow, "agent")
+	m = next.(Model)
+	p := m.active.(*panePopover)
+	t.Cleanup(func() { p.close(&m) })
+
+	withPane := m.View()
+	if withPane.MouseMode == tea.MouseModeNone {
+		// Without this the outer terminal turns the wheel into arrow keys and
+		// scrolling types at the agent.
+		t.Error("a pane did not ask for mouse events, so the wheel arrives as arrow keys")
+	}
+	if withPane.Cursor == nil {
+		t.Error("a pane did not place a cursor, so the hosted program has none")
+	}
+}
+
+// The cursor has to land inside the terminal region of the popover, at every
+// size the pane agrees to open at — the same arithmetic the box itself uses.
+func TestTheCursorLandsInsideTheTerminal(t *testing.T) {
+	m := paneModel(t, allKinds())
+	next, _ := m.trigger(ActionOpenWindow, "agent")
+	m = next.(Model)
+	p := m.active.(*panePopover)
+	t.Cleanup(func() { p.close(&m) })
+
+	for _, size := range [][2]int{{80, 24}, {120, 40}, {200, 60}, {32, 16}} {
+		w, h := size[0], size[1]
+		if !paneFits(w, h) {
+			continue
+		}
+		x, y, ok := p.screenCursor(w, h)
+		if !ok {
+			continue // the program's cursor is off its own screen
+		}
+		tw, th := paneDims(w, h)
+		boxW, boxH := tw+4+borderCells, th+2+borderCells+4
+		minX, minY := (w-boxW)/2+paneInsetX, (h-boxH)/2+paneInsetY
+		if x < minX || x >= minX+tw {
+			t.Errorf("%dx%d: cursor x=%d outside the terminal's columns [%d,%d)", w, h, x, minX, minX+tw)
+		}
+		if y < minY || y >= minY+th {
+			t.Errorf("%dx%d: cursor y=%d outside the terminal's rows [%d,%d)", w, h, y, minY, minY+th)
+		}
+		if x >= w || y >= h {
+			t.Errorf("%dx%d: cursor (%d,%d) is off screen", w, h, x, y)
+		}
+	}
+}
+
+// A deck too small for a pane must not place a cursor at a negative or
+// off-screen position.
+func TestNoCursorWhenThePaneDoesNotFit(t *testing.T) {
+	m := paneModel(t, allKinds())
+	next, _ := m.trigger(ActionOpenWindow, "agent")
+	m = next.(Model)
+	p := m.active.(*panePopover)
+	t.Cleanup(func() { p.close(&m) })
+
+	if _, _, ok := p.screenCursor(10, 4); ok {
+		t.Error("a deck too small for a pane still reported a cursor position")
+	}
+}

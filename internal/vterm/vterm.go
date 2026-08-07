@@ -204,6 +204,42 @@ func (t *Term) SendKey(k tea.KeyPressMsg) {
 // SendText delivers printable text, as a paste would.
 func (t *Term) SendText(s string) { t.emu.SendText(s) }
 
+// SendMouse delivers a mouse event to the process.
+//
+// Without this the wheel never reaches the program at all: a terminal in
+// alt-screen with no mouse tracking requested translates wheel movement into
+// arrow keys, so scrolling a hosted pane types arrows at it. Asking for mouse
+// events and passing them down is what makes a wheel a wheel again.
+func (t *Term) SendMouse(msg tea.MouseMsg) {
+	m := uv.Mouse(msg.Mouse())
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		t.emu.SendMouse(uv.MouseClickEvent(m))
+	case tea.MouseReleaseMsg:
+		t.emu.SendMouse(uv.MouseReleaseEvent(m))
+	case tea.MouseWheelMsg:
+		t.emu.SendMouse(uv.MouseWheelEvent(m))
+	case tea.MouseMotionMsg:
+		t.emu.SendMouse(uv.MouseMotionEvent(m))
+	}
+}
+
+// Cursor is where the hosted program has put its cursor, relative to the top
+// left of the terminal.
+//
+// The caller has to place it on screen itself: a Term is rendered as a string
+// with no idea where that string ends up, and in Bubble Tea v2 the cursor is
+// declared on the view rather than emitted into the content.
+//
+// Visibility is not reported because the emulator does not expose it — a
+// hosted program that hides its cursor will still get one drawn. That is the
+// wrong way round for a full-screen TUI and the right way round for a shell or
+// an agent, which is what panes actually hold.
+func (t *Term) Cursor() (x, y int) {
+	pos := t.emu.CursorPosition()
+	return pos.X, pos.Y
+}
+
 // Resize changes the PTY window and the emulator together. They have to move
 // as one: the process lays out for the PTY size, and the emulator interprets
 // what comes back, so a mismatch shows up as wrapping that is off by however
