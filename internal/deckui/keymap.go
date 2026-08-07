@@ -14,6 +14,7 @@ import "charm.land/bubbles/v2/key"
 type deckKeyMap struct {
 	Help          key.Binding
 	Jobs          key.Binding
+	Sessions      key.Binding
 	Watch         key.Binding
 	WatchWindow   key.Binding
 	Quit          key.Binding
@@ -53,6 +54,7 @@ func newDeckKeyMap() deckKeyMap {
 	return deckKeyMap{
 		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help overlay")),
 		Jobs:          key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "jobs overlay")),
+		Sessions:      key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "hosted sessions")),
 		Watch:         key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "watch dev-loop progress for the selected workspace")),
 		WatchWindow:   key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "open the watch view in a new tmux window")),
 		Quit:          key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q/esc", "quit · esc clears filter first")),

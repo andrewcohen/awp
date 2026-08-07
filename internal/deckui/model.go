@@ -2489,6 +2489,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		case key.Matches(msg, km.Jobs):
 			m.active = newJobsModal(m.jobs)
 			return m, refreshJobsListCmd(m.jobsListRefresher)
+		case key.Matches(msg, km.Sessions):
+			// Only when something is actually hosting sessions. The tmux deck
+			// has none of its own, so there the key stays free rather than
+			// opening an overlay that can only ever be empty.
+			if _, ok := m.panes.(PaneSessioner); !ok {
+				return m, nil
+			}
+			sp, cmd := newSessionPicker(&m)
+			m.active = sp
+			return m, cmd
 		case key.Matches(msg, km.Watch):
 			item, ok := m.selected()
 			if !ok {
@@ -5135,6 +5145,7 @@ func deckKeyGroups() []keyGroup {
 			Keys: [][2]string{
 				{"J", "jobs overlay (list, cancel, retry, dismiss, open log)"},
 				{"w", "watch dev-loop progress for the selected workspace"},
+				{"z", "hosted sessions (zdeck only) · enter attaches one in a pane"},
 			},
 		},
 		{
