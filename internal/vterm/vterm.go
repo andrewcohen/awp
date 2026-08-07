@@ -243,16 +243,35 @@ func (t *Term) Send(b []byte) error {
 // SendKey delivers a key press to the process, encoded the way a real
 // terminal would encode it.
 //
-// The encoding is the emulator's, not ours. Arrows, function keys, ctrl and
-// alt combinations, and the application-cursor-key mode a full-screen program
-// switches on all have escape sequences that depend on the terminal's current
-// modes — which the emulator is already tracking and we are not. Reproducing
-// that table here would be a second, worse copy that drifts.
+// A printable key is sent as the characters it produced. Key.Text holds them —
+// "A" for shift+a, "!" for shift+1 — and that is what a terminal puts on the
+// wire. Routing them through the emulator's key table instead loses them
+// outright: its fallback is `if key.Mod == 0 { seq += string(key.Code) }`, so
+// any key carrying a modifier it does not list emits nothing, and shift+a
+// would send the unshifted 'a' even if it did.
+//
+// Everything else is the emulator's to encode, and deliberately so. Arrows,
+// function keys, ctrl and alt combinations, and the application-cursor-key
+// mode a full-screen program switches on all have escape sequences that depend
+// on the terminal's current modes — which the emulator tracks and we do not.
+// Reproducing that table here would be a second, worse copy that drifts.
 //
 // The reply path is the same one the drain in Start serves: the emulator emits
 // the encoded bytes on its read side, and the drain carries them to the PTY.
 func (t *Term) SendKey(k tea.KeyPressMsg) {
-	t.emu.SendKey(vt.KeyPressEvent(uv.Key(tea.Key(k))))
+	// Shift is excluded from the modifier check because it is already baked
+	// into Text. Ctrl and alt are not, and change the encoding entirely.
+	key := tea.Key(k)
+	if key.Text != "" && key.Mod&^tea.ModShift == 0 {
+		t.emu.SendText(key.Text)
+		return
+	}
+	// Only Code and Mod are handed on, because the emulator's table is a
+	// switch over whole KeyPressEvent values — `case KeyPressEvent{Code: 'g',
+	// Mod: ModCtrl}`. It zeroes BaseCode and ShiftedCode before matching but
+	// not Text, so a ctrl+g that arrived carrying Text "g" equals none of its
+	// cases and falls into the same default that drops the key.
+	t.emu.SendKey(vt.KeyPressEvent(uv.Key(tea.Key{Code: key.Code, Mod: key.Mod})))
 }
 
 // SendText delivers printable text, as a paste would.
