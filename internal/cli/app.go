@@ -29,7 +29,7 @@ type doctorService interface {
 // diffWorkflow runs the standalone diff viewer. revset is empty for the working
 // copy, or any jj revset from `-r`.
 type diffWorkflow func(runner Runner, svc workspace.Service, revset string, in io.Reader, out io.Writer) error
-type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes deckui.PaneBackend) error
+type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes paneHost) error
 type miniDeckWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
 

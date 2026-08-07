@@ -596,3 +596,20 @@ Long-lived sessions are named `awp.<project>.<workspace>.<kind>` and show up
 in `zmx ls`, so they can be inspected and killed from outside awp. Requires
 zmx on PATH; zdeck refuses to start without it rather than failing on the
 first pane.
+
+**One agent per workspace.** Sending a prompt goes to the zmx agent — the same
+process `a` shows. In `awp deck` a prompt is typed into the workspace's tmux
+session, and doing that under zdeck would give a workspace two agents: the one
+on screen and an invisible tmux one receiving everything you send it. zdeck
+will not *start* an agent that isn't running, because zmx has no way to create
+a session detached with a real command as its own process; it says
+`no agent running for <workspace> — press a to start one`. `,` (switch to the
+last tmux session) reports that there is nothing to switch to, rather than
+appearing to work — `tmux switch-client -l` from outside tmux exits 0 having
+done nothing.
+
+The mouse and the cursor follow the pane's program rather than the pane. A
+program that enables mouse reporting — an agent, jjui — gets the wheel
+forwarded to it; one that doesn't, like a shell, leaves the mouse to your
+terminal so its own drag-to-select keeps working. Likewise a program that
+hides its cursor doesn't get one drawn.

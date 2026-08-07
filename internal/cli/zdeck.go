@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -102,6 +103,42 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	// Closing the pane kills this client, not the session; that is what
 	// long-lived means.
 	return zmx.AttachCmd(dir, name, argv, os.Environ()), func() {}, nil
+}
+
+// SendPrompt delivers text to the workspace's agent — the same process `a`
+// shows, and the reason this exists.
+//
+// Without it the deck sends prompts through tmux, to a session zdeck never
+// opens, so a workspace ends up with two agents: the zmx one on screen and an
+// invisible tmux one receiving everything you type at it.
+//
+// It will not start an agent that is not running. zmx has no way to create a
+// session detached with a real command as its own process (see zmx.AttachCmd),
+// so the honest answer is to say so and name the key that fixes it.
+func (z zmxPanes) SendPrompt(item deckui.Item, text string, reporter deckui.Reporter) error {
+	if reporter == nil {
+		reporter = noopReporter{}
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("send prompt: nothing to send")
+	}
+	ws := strings.TrimSpace(item.WorkspaceName)
+	if ws == "" {
+		return errors.New("send prompt: select a workspace row first")
+	}
+
+	name := zmx.SessionName(item.ProjectName, ws, panes["agent"].label)
+	session, found, err := z.client.Lookup(context.Background(), name)
+	if err != nil {
+		return err
+	}
+	if !found || !session.Live() {
+		return fmt.Errorf("send prompt: no agent running for %s — press a to start one", ws)
+	}
+
+	reporter.Step("Send prompt to agent")
+	return z.client.Paste(context.Background(), name, text)
 }
 
 // runZdeck is `awp deck` with zmx behind the window keys instead of tmux.
