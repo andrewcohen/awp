@@ -107,13 +107,15 @@ func (s *deckFakeService) RecordSession(name, id, sess string) error {
 	s.recordedSess = sess
 	return nil
 }
-func (s *deckFakeService) RecordBookmark(string, string) error { return nil }
-func (s *deckFakeService) RecordPROverride(string, int) error  { return nil }
-func (s *deckFakeService) UpdatePrompt(string, string) error   { return nil }
-func (s *deckFakeService) UpdateStatus(string, string) error   { return nil }
-func (s *deckFakeService) ClearSession(string) error           { return nil }
-func (s *deckFakeService) PruneOrphans(bool) ([]string, error) { return nil, nil }
-func (s *deckFakeService) MarkRead(string) error               { return nil }
+func (s *deckFakeService) RecordBookmark(string, string) error      { return nil }
+func (s *deckFakeService) RecordPROverride(string, int) error       { return nil }
+func (s *deckFakeService) UpdatePrompt(string, string) error        { return nil }
+func (s *deckFakeService) RecordPendingPrompt(string, string) error { return nil }
+func (s *deckFakeService) TakePendingPrompt(string) (string, error) { return "", nil }
+func (s *deckFakeService) UpdateStatus(string, string) error        { return nil }
+func (s *deckFakeService) ClearSession(string) error                { return nil }
+func (s *deckFakeService) PruneOrphans(bool) ([]string, error)      { return nil, nil }
+func (s *deckFakeService) MarkRead(string) error                    { return nil }
 
 func TestOpenNamedWindowCreatesShellWindowAndSwitchesToIt(t *testing.T) {
 	runner := &deckFakeRunner{outs: map[string]string{

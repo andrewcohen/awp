@@ -141,6 +141,19 @@ type Entry struct {
 	AgentWindowID string `json:",omitempty"`
 	AgentPaneID   string `json:",omitempty"`
 	ActivePrompt  string `json:",omitempty"`
+	// PendingPrompt is the prompt this workspace was created with, waiting
+	// for an agent to exist to receive it.
+	//
+	// Creating a workspace in tmux could hand the prompt straight to the
+	// agent, because the same call made the session. A deck that hosts its
+	// own panes cannot: nothing starts an agent until you open its pane, and
+	// the create may well have run in a detached subprocess that has no
+	// terminal to start one on. So the prompt is parked here, and the pane
+	// that starts the agent takes it — see Service.TakePendingPrompt.
+	//
+	// Distinct from ActivePrompt, which is what a running agent is working
+	// on. This one is a message with no recipient yet.
+	PendingPrompt string `json:",omitempty"`
 	Status        string `json:",omitempty"`
 	// Unread is set when the agent transitions to a state that wants the
 	// user's attention (waiting/idle) and cleared when the user summons
@@ -307,6 +320,8 @@ type Service interface {
 	RecordBookmark(workspaceName, bookmark string) error
 	RecordPROverride(workspaceName string, prNumber int) error
 	UpdatePrompt(workspaceName, prompt string) error
+	RecordPendingPrompt(workspaceName, prompt string) error
+	TakePendingPrompt(workspaceName string) (string, error)
 	UpdateStatus(workspaceName, status string) error
 	MarkRead(workspaceName string) error
 	ClearSession(workspaceName string) error
@@ -961,6 +976,45 @@ func (s *service) ListAll() ([]CrossRepoEntry, error) {
 
 func (s *service) UpdatePrompt(workspaceName, prompt string) error {
 	return s.mutateEntry(workspaceName, func(e *Entry) { e.ActivePrompt = prompt })
+}
+
+// RecordPendingPrompt parks a prompt for an agent that does not exist yet.
+// Passing "" clears it.
+func (s *service) RecordPendingPrompt(workspaceName, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	return s.mutateEntry(workspaceName, func(e *Entry) { e.PendingPrompt = prompt })
+}
+
+// TakePendingPrompt returns the parked prompt and clears it in the same write,
+// so a prompt is delivered once even if two things race to start the agent.
+//
+// It reads before it writes because the answer is almost always "nothing":
+// every pane open would otherwise rewrite the state file to store a field it
+// did not change. A missing workspace is not an error — there is simply no
+// prompt waiting, which is also true of one that was never given a prompt.
+func (s *service) TakePendingPrompt(workspaceName string) (string, error) {
+	repoRoot, err := s.jj.RepoRoot()
+	if err != nil {
+		return "", fmt.Errorf("not a jj repository: %w", err)
+	}
+	normalized, err := NormalizeName(workspaceName)
+	if err != nil {
+		return "", err
+	}
+	entries, err := s.store.Load(repoRoot)
+	if err != nil {
+		return "", err
+	}
+	if entries[normalized].PendingPrompt == "" {
+		return "", nil
+	}
+	var took string
+	if err := s.mutateEntry(normalized, func(e *Entry) {
+		took, e.PendingPrompt = e.PendingPrompt, ""
+	}); err != nil {
+		return "", err
+	}
+	return took, nil
 }
 
 func (s *service) UpdateStatus(workspaceName, status string) error {

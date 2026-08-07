@@ -471,6 +471,36 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 			reporter.Log(fmt.Sprintf("bookmark skipped: cannot resolve workspace revision (%v)", revErr))
 		}
 	}
+	// Pin the workspace to its PR when the caller created it from a known
+	// PR. Done before the host split because it is a property of the
+	// workspace, not of where its agent lives. Best-effort: the workspace is
+	// already usable if this fails.
+	if req.PRNumber > 0 {
+		if err := svc.RecordPROverride(normalized, req.PRNumber); err != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("pin PR #%d: %v", req.PRNumber, err))
+		} else if reporter != nil {
+			reporter.Log(fmt.Sprintf("linked to PR #%d", req.PRNumber))
+		}
+	}
+
+	// Everything below this line is the tmux half: a session, an agent
+	// running in it, and a client switched to it. A caller that hosts the
+	// workspace's processes itself has none of those, and starting a tmux
+	// agent for it would give the workspace a second one that nothing in
+	// that deck can see.
+	if req.PaneHosted {
+		if promptArg := strings.TrimSpace(req.Prompt); promptArg != "" {
+			step("Park prompt for the agent")
+			if err := svc.RecordPendingPrompt(normalized, promptArg); err != nil {
+				return fmt.Errorf("park the prompt for %s: %w", normalized, err)
+			}
+		}
+		if err := invalidatePRStatusCacheRepo(repoRoot); err != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("pr-status cache invalidate: %v", err))
+		}
+		return nil
+	}
+
 	projectName := filepath.Base(repoRoot)
 	sessionName := DeckSessionName(projectName, normalized)
 	tmuxClient := tmux.New(runner)
@@ -496,19 +526,6 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	}
 	if err := svc.RecordSession(normalized, id, sessionName); err != nil {
 		return err
-	}
-	// Pin the workspace to its PR when the caller created it from a known
-	// PR (e.g. the deck's virtual "mine" inbox row). Mirrors the review
-	// flow's override so the row resolves its PR directly by number,
-	// regardless of bookmark drift — and links as soon as the deck
-	// reloads, without reopening. Best-effort: the workspace is already
-	// usable if this fails.
-	if req.PRNumber > 0 {
-		if err := svc.RecordPROverride(normalized, req.PRNumber); err != nil && reporter != nil {
-			reporter.Log(fmt.Sprintf("pin PR #%d: %v", req.PRNumber, err))
-		} else if reporter != nil {
-			reporter.Log(fmt.Sprintf("linked to PR #%d", req.PRNumber))
-		}
 	}
 	// Agent launch / prompt delivery splits on whether we own the
 	// freshly-created session:

@@ -203,6 +203,11 @@ func runDeleteProjectJob(runner Runner, svc workspace.Service, job jobs.Job, rep
 // delivery — but skips the final switch-client so the user's tmux
 // focus stays with the deck. They summon the new workspace by
 // pressing enter on it in the deck list once it appears.
+//
+// A pane-hosted job stops after the jj workspace: this is a detached
+// subprocess with no terminal, and a hosted agent needs one to start on. The
+// prompt is parked on the workspace instead, for the pane that starts the
+// agent to deliver.
 func runCreateWorkspaceJob(runner Runner, svc workspace.Service, job jobs.Job, reporter *storeReporter) error {
 	dir := job.Spec.RepoRoot
 	fr := fixedDirRunner{base: runner, dir: dir}
@@ -214,6 +219,7 @@ func runCreateWorkspaceJob(runner Runner, svc workspace.Service, job jobs.Job, r
 		PRNumber:         job.Spec.PRNumber,
 		Yes:              true,
 		NoSwitch:         true,
+		PaneHosted:       job.Spec.PaneHosted,
 	}, reporter)
 }
 
