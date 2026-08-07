@@ -3,6 +3,7 @@ package deckui
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -142,23 +143,37 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// The popover's chrome, matching the deck's other overlays: a rounded border
-// with Padding(1, 2), a title, and a hint.
+// The popover's chrome is one row and the border, and no more. Every cell it
+// takes is one the hosted program does not get, and unlike the deck's other
+// overlays — which frame a fixed amount of awp's own text — a pane is showing
+// someone else's full-screen program.
+//
+// So there is no padding, and the leave hint shares the header row with the
+// label instead of costing two more rows of its own. The border stays: it is
+// what says where the pane ends when its program does not fill it.
 const (
-	paneChromeW = 6 // border 2 + horizontal padding 4
-	paneChromeH = 8 // border 2 + vertical padding 2 + title, blank, blank, hint
-	paneMinW    = 20
-	paneMinH    = 5
+	paneHeaderRows = 1
+	paneChromeW    = borderCells
+	paneChromeH    = borderCells + paneHeaderRows
+	paneMinW       = 20
+	paneMinH       = 5
 )
 
 // paneInsetX / paneInsetY are where the terminal starts inside the popover:
-// border + left padding across, and border + top padding + title + blank down.
+// past the left border, and past the top border and the header row.
 const (
-	paneInsetX = 3
-	paneInsetY = 4
+	paneInsetX = 1
+	paneInsetY = 1 + paneHeaderRows
 )
 
 func paneDims(deckW, deckH int) (w, h int) { return deckW - paneChromeW, deckH - paneChromeH }
+
+// paneBox is the popover's outer size for a terminal of w×h. renderPopover and
+// screenCursor both derive from it rather than each doing the arithmetic, so
+// the cursor cannot land somewhere the box isn't.
+func paneBox(w, h int) (boxW, boxH int) {
+	return w + paneChromeW, h + paneChromeH
+}
 
 // screenCursor is where the hosted program's cursor lands on the deck's own
 // screen: the centred popover's origin, plus the chrome around the terminal,
@@ -177,7 +192,7 @@ func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
 		return 0, 0, false
 	}
 	w, h := paneDims(deckW, deckH)
-	boxW, boxH := w+4+borderCells, h+2+borderCells+4
+	boxW, boxH := paneBox(w, h)
 	originX, originY := (deckW-boxW)/2, (deckH-boxH)/2
 	cx, cy, visible := p.term.Cursor()
 	if !visible || cx < 0 || cy < 0 || cx >= w || cy >= h {
@@ -202,13 +217,25 @@ func (p *panePopover) renderPopover(m *Model) string {
 		}
 	}
 
-	title := m.styles.PaneTitle.Render(p.label)
-	hint := m.styles.PaneHint.Render(paneLeaveKey + " deck · every other key goes to the pane")
-	body := lipgloss.JoinVertical(lipgloss.Left, title, "", p.term.View(), "", hint)
+	boxW, _ := paneBox(w, h)
+	body := lipgloss.JoinVertical(lipgloss.Left, p.header(m, w), p.term.View())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
-		Padding(1, 2).
-		Width(w + 4 + borderCells).
+		Width(boxW).
 		Render(body)
+}
+
+// header is the pane's one row of chrome: what you are looking at on the left,
+// how to leave on the right. It doubles as the status line the hint used to
+// have a row of its own for.
+func (p *panePopover) header(m *Model, w int) string {
+	hint := m.styles.PaneHint.Render(paneLeaveKey + " deck")
+	label := m.styles.PaneTitle.Render(truncate(p.label, w-lipgloss.Width(hint)-1))
+	gap := w - lipgloss.Width(label) - lipgloss.Width(hint)
+	if gap < 1 {
+		// Too narrow for both; the label is the one you can infer without.
+		return hint
+	}
+	return label + strings.Repeat(" ", gap) + hint
 }

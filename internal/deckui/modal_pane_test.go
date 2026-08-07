@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/vterm"
 )
@@ -215,24 +216,70 @@ func TestThePanePopoverFitsTheDeck(t *testing.T) {
 			if !paneFits(w, h) {
 				continue
 			}
-			tw, th := paneDims(w, h)
-			if boxW := tw + 4 + borderCells; boxW > w {
+			boxW, boxH := paneBox(paneDims(w, h))
+			if boxW > w {
 				t.Fatalf("at %dx%d the pane box is %d wide, past the deck's %d", w, h, boxW, w)
 			}
-			if boxH := th + 2 + borderCells + 4; boxH > h {
+			if boxH > h {
 				t.Fatalf("at %dx%d the pane box is %d tall, past the deck's %d", w, h, boxH, h)
 			}
 		}
 	}
 }
 
+// Every cell of chrome is one the hosted program does not get, and a pane
+// shows someone else's full-screen program rather than a fixed amount of awp's
+// own text. This pins the cost so padding cannot creep back in.
+func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
+	if paneChromeW != borderCells {
+		t.Errorf("a pane costs %d columns, want just the border (%d) — no horizontal padding",
+			paneChromeW, borderCells)
+	}
+	if want := borderCells + 1; paneChromeH != want {
+		t.Errorf("a pane costs %d rows, want the border plus one header row (%d)", paneChromeH, want)
+	}
+
+	// And the rendered box has to actually match those numbers, or the cursor
+	// arithmetic in screenCursor is placing against a box that isn't there.
+	m, p := openedPane(t, allKinds())
+	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
+
+	box := p.renderPopover(&m)
+	tw, th := paneDims(m.width, m.height)
+	wantW, wantH := paneBox(tw, th)
+	if got := lipgloss.Width(box); got != wantW {
+		t.Errorf("the box rendered %d columns wide, want %d", got, wantW)
+	}
+	if got := lipgloss.Height(box); got != wantH {
+		t.Errorf("the box rendered %d rows tall, want %d", got, wantH)
+	}
+}
+
+// The hint shares the header row with the label rather than costing two more
+// rows of its own — but it is what tells you how to get out, so it survives
+// even when the label has to go.
+func TestTheHeaderKeepsTheLeaveKeyEvenWhenNarrow(t *testing.T) {
+	m, p := openedPane(t, allKinds())
+	for _, w := range []int{200, 80, 40, 24, 12, 4} {
+		header := p.header(&m, w)
+		if strings.Contains(header, "\n") {
+			t.Errorf("at %d columns the header wrapped onto a second row: %q", w, header)
+		}
+		if !strings.Contains(header, paneLeaveKey) {
+			t.Errorf("at %d columns the header dropped the leave key: %q", w, header)
+		}
+	}
+}
+
 func TestATinyDeckRefusesAPane(t *testing.T) {
 	m := paneModel(t, allKinds())
-	m.width, m.height = 40, 12
+	// Chrome is the border plus one header row, so the smallest workable deck
+	// is paneMin plus that. 20x6 is under it on both axes.
+	m.width, m.height = 20, 6
 	next, _ := m.trigger(ActionOpenWindow, "agent")
 	got := next.(Model)
 	if got.active != nil {
-		t.Fatal("a 40x12 deck opened a pane it cannot draw")
+		t.Fatal("a 20x6 deck opened a pane it cannot draw")
 	}
 	if !strings.Contains(got.status, "too small") {
 		t.Errorf("status is %q, want it to say the terminal is too small", got.status)

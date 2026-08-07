@@ -617,6 +617,12 @@ every other key belongs to the program: `esc`, `q` and `ctrl+c` all mean
 something to an agent. Any window kind zdeck does not handle — the review
 window, the PR-description window — falls through to tmux exactly as before.
 
+A pane costs two columns and three rows: a border, and one header row carrying
+the workspace on the left and `ctrl+\ deck` on the right. There is no padding —
+unlike the deck's other overlays, which frame a fixed amount of awp's own text,
+a pane is showing someone else's full-screen program, and every cell of chrome
+is one that program does not get.
+
 Long-lived sessions are named `awp.<project>.<workspace>.<kind>` and show up
 in `zmx ls`, so they can be inspected and killed from outside awp. Requires
 zmx on PATH; zdeck refuses to start without it rather than failing on the
