@@ -3,7 +3,6 @@ package deckui
 import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // reviewPicker is the PR "review" picker (the `r` key / new-menu review
@@ -150,15 +149,5 @@ func (p *reviewPicker) footerHelp() string {
 }
 
 func (p *reviewPicker) renderList(m *Model, width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
-	listWidth := width - 2
-	if listWidth < 8 {
-		listWidth = 8
-	}
-	listHeight := m.height - 5
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	p.list.SetSize(listWidth, listHeight)
-	return containerStyle.Render(p.list.View())
+	return renderPickerPanel(m, &p.list, width)
 }

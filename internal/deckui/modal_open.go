@@ -110,17 +110,7 @@ func (p *openPicker) footerHelp() string {
 }
 
 func (p *openPicker) renderList(m *Model, width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
-	listWidth := width - 2
-	if listWidth < 8 {
-		listWidth = 8
-	}
-	listHeight := m.height - 5
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	p.list.SetSize(listWidth, listHeight)
-	return containerStyle.Render(p.list.View())
+	return renderPickerPanel(m, &p.list, width)
 }
 
 func (p *openPicker) renderDetails(width int) string {

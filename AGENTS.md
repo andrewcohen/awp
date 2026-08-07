@@ -101,8 +101,8 @@ bubble:
   cache the style on the shared `Theme` or `Model`. (Initialization
   paths are fine.)
 
-**Don't follow hand-rolled precedent.** The conventions below are
-load-bearing — every panel uses `Padding(1, 1, 1, 1)`, every selection
+**Don't follow hand-rolled precedent.** The conventions below are not
+suggestions — every body panel wears `deckStyles.Panel`, every selection
 uses `Foreground(Warning).Bold(true)` + `┃ `. Component choice is the
 same kind of rule: if you're scrolling, you're using `viewport`. If
 existing code hand-rolls a primitive that exists in bubbles, it is
@@ -283,15 +283,38 @@ box against its border. `charm.BorderCells` (aliased in `deckui` as
 `borderCells`) names the two columns wherever a call site still thinks in
 v1 terms and has to add them back.
 
-**Panel padding.** All body-area panels use `Padding(1, 1, 1, 1)` — 1 row
-top/bottom, 1 col left/right. The footer (`composeStatusBar` wrapper) does
-the same. This gives the deck a uniform 1-cell breathing margin and keeps
-every panel's content aligned at col 1.
+**Panel padding.** All body-area panels and the footer share one style —
+`deckStyles.Panel`, which is `Padding(panelPadY, panelPadX)` = **1 col left
+and right, and no rows top or bottom**. Content still aligns at col 1;
+nothing is spent vertically.
 
-- Modals/popovers (help, jobs overlay) have their own `Padding(1, 2)`
-  inside a rounded border — keep that pattern.
+Horizontal padding is cheap and vertical padding is not. The deck is a
+full-screen alt-screen program, so a blank row above the title is a
+workspace row the list does not get — the frame used to spend 7 of 24 rows
+on itself and now spends 3 (title, one gap, status bar). The status bar
+sits on the terminal's last row, the way vim's and tmux's do.
+
+- The one gap the deck keeps is the blank under the title row. It earns
+  the row: the attention badge sits on `deckTextCol`, the same column the
+  workspace rows' status dots do, so butted against the first project
+  header it reads as a row rather than as a title.
+- **Bordered popovers** (help, jobs overlay, confirms, inputs) keep their
+  own `Padding(1, 2)`. They float over a blank canvas rather than competing
+  for the frame's height, and content flush against a border reads as a
+  mistake.
+- **`internal/deckui/layout.go` is the one place the frame budget is
+  written down** — `panelPadX/Y`, `panelRows`, `panelCols`, `footerRows`,
+  `deckHeaderRows`, `deckTitleRowIndex`. Anything that subtracts chrome
+  from `m.height` derives from those. It used to be literals at each site
+  (`m.height - 5` in three pickers, `2 + 2 + 3` in `deckBodyCapacity`,
+  `diffModalChrome = 6`), and a wrong one does not fail — it leaves a band
+  of dead rows above the footer, or clips a list's pagination off the
+  bottom. `layout_test.go` pins the frame budget; `modal_diff_test.go`
+  pins that nothing dead sits above the status bar.
+- New list picker → `renderPickerPanel(m, &p.list, width)`. Don't
+  re-derive the height.
 - The footer renders via `composeStatusBar(activities, spinnerGlyph,
-  rightSeg, m.width-2)` wrapped in `Padding(1, 1, 1, 1)`.
+  rightSeg, hint, m.width-panelCols)` wrapped in `m.styles.Panel`.
 
 **Status messages.** Cancellations clear `m.status` to `""` instead of
 printing `"...: cancelled"`. The user already pressed esc; echoing the

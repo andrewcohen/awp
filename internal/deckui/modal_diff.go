@@ -133,14 +133,15 @@ type CommentStore struct {
 type CommentSender func(item Item, c review.Comment) error
 
 // diffModalChrome is the rows the deck's chrome takes around the viewer's
-// body: 1 for the panel's top padding, 2 for the pane borders, 3 for the
-// footer block (its own Padding(1, 1, 1, 1) around a one-line status bar).
+// body: the panel's own vertical padding, 2 for the viewer's pane borders, and
+// the footer block.
 //
 // It has to be exact. Over-reserving does not shrink the frame — the deck pads
 // whatever is left over to pin the footer to the bottom — it just converts the
-// rows into a blank band above the footer. This was 8, two rows too many, which
-// is what put a visible gap under the diff.
-const diffModalChrome = 6
+// rows into a blank band above the footer. It was written as a literal 8 once,
+// two rows too many, which is what put a visible gap under the diff; derived
+// from layout.go it cannot drift from the padding it is describing.
+const diffModalChrome = panelRows + 2 + footerRows
 
 // diffModal is the `c` overlay: awp's own diff viewer (internal/ui, the
 // same one `awp diff` runs) rendered in place of the row list, scoped to
@@ -205,13 +206,13 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 		scope:  scope,
 		muted:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
 		danger: lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)),
-		// Padding(1, 1, 0, 1) rather than the body panel's usual 1 on every
-		// side: the footer block already contributes a row of top padding, and
-		// this is the one body panel that fills its whole height budget, so the
-		// two paddings stack into a 2-row gap instead of being absorbed by the
-		// pad block. Dropping ours leaves exactly the 1 row of breathing room
-		// the convention is after.
-		panel: lipgloss.NewStyle().Padding(1, 1, 0, 1),
+		// The shared body-panel inset. This used to be Padding(1, 1, 0, 1) —
+		// asymmetric, because back when the footer carried a row of top padding
+		// the two stacked into a 2-row gap under the diff. The panels have no
+		// vertical padding now, so there is nothing left to compensate for and
+		// the one panel that fills its whole height budget can wear what the
+		// others wear.
+		panel: lipgloss.NewStyle().Padding(panelPadY, panelPadX),
 	}
 	return dm, dm.inner.Init()
 }

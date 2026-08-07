@@ -44,10 +44,10 @@ func topRow(t *testing.T, m Model) string {
 	t.Helper()
 	(&m).clampDeckViewport()
 	lines := strings.Split(m.renderList(m.width), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least two rendered lines, got %d", len(lines))
+	if len(lines) <= deckTitleRowIndex {
+		t.Fatalf("expected a line at index %d, got %d lines", deckTitleRowIndex, len(lines))
 	}
-	return ansi.Strip(lines[1])
+	return ansi.Strip(lines[deckTitleRowIndex])
 }
 
 func TestTopRowPutsTheBadgeLeftAndTheScopeRight(t *testing.T) {
@@ -60,7 +60,7 @@ func TestTopRowPutsTheBadgeLeftAndTheScopeRight(t *testing.T) {
 	(&m).clampDeckViewport()
 	out := m.renderList(m.width)
 
-	line := strings.Split(out, "\n")[1]
+	line := strings.Split(out, "\n")[deckTitleRowIndex]
 	if got := lipgloss.Width(line); got != m.width {
 		t.Errorf("top row is %d cols, want %d (the scope label is off the right edge)", got, m.width)
 	}
@@ -117,7 +117,7 @@ func TestBadgeDotsWearTheRowStatusColours(t *testing.T) {
 	m.width, m.height = 120, 40
 	(&m).clampDeckViewport()
 
-	badge := strings.SplitN(strings.Split(m.renderList(m.width), "\n")[1], "scope:", 2)[0]
+	badge := strings.SplitN(strings.Split(m.renderList(m.width), "\n")[deckTitleRowIndex], "scope:", 2)[0]
 	for _, want := range []struct {
 		status string
 		label  string
