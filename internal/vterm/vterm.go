@@ -61,6 +61,13 @@ type Term struct {
 	cursorVisible atomic.Bool
 	mouseModes    atomic.Int32
 
+	// log is the optional traffic recorder (see PaneLogEnv), and in is the
+	// write side of the pty with the recorder wrapped around it — Send has to
+	// go through the same tap the emulator's replies do, or a capture would
+	// show only half of what reached the process.
+	log *os.File
+	in  io.Writer
+
 	mu     sync.Mutex
 	closed bool
 	w, h   int
@@ -136,9 +143,16 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 		},
 	})
 
+	// Both directions optionally recorded — see PaneLogEnv. Wrapped here, at
+	// the two io.Copy calls, because this is the only place every byte in and
+	// every byte out passes through.
+	t.log = openPaneLog()
+	toEmulator, toProcess := tapPair(t.log, notifier{w: t.emu, dirty: t.dirty}, ptmx)
+	t.in = toProcess
+
 	// Pane output into the emulator, flagging a repaint after each chunk.
 	go func() {
-		_, _ = io.Copy(notifier{w: t.emu, dirty: t.dirty}, ptmx)
+		_, _ = io.Copy(toEmulator, ptmx)
 		t.done <- t.cmd.Wait()
 	}()
 
@@ -149,7 +163,7 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 	// write blocks *inside the parser, holding the emulator's lock*, so the
 	// next View deadlocks. It fires on the first query, and it presents as a
 	// hang rather than an error.
-	go func() { _, _ = io.Copy(ptmx, t.emu) }()
+	go func() { _, _ = io.Copy(toProcess, t.emu) }()
 
 	return t, nil
 }
@@ -234,7 +248,7 @@ func (t *Term) Send(b []byte) error {
 	if closed {
 		return errors.New("vterm: the terminal is closed")
 	}
-	if _, err := t.ptmx.Write(b); err != nil {
+	if _, err := t.in.Write(b); err != nil {
 		return fmt.Errorf("vterm: send %d bytes to the pty: %w", len(b), err)
 	}
 	return nil
@@ -358,6 +372,9 @@ func (t *Term) Close() error {
 	_ = t.ptmx.Close()
 	if t.cmd.Process != nil {
 		_ = t.cmd.Process.Kill()
+	}
+	if t.log != nil {
+		_ = t.log.Close()
 	}
 	return t.emu.Close()
 }
