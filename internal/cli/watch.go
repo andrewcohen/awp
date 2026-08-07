@@ -27,30 +27,66 @@ import (
 // shouldn't be told to work in units / run gates / commit).
 func codingAgentInvocation(repoRoot string) string {
 	inv := config.AgentInvocation(repoRoot)
+	path, ok := devLoopPreambleFile(repoRoot)
+	if !ok {
+		return inv
+	}
+	return inv + " " + appendPreambleFlag + " " + shellSingleQuote(path)
+}
+
+// codingAgentArgv is codingAgentInvocation for callers that exec the agent
+// directly rather than handing a line to a shell — a hosted pane, say.
+//
+// The two cannot be one. Going argv-first and joining for the shell callers
+// would mean putting agent_options through fields(), which splits on
+// whitespace and is deliberately not a shell parse; anyone whose options carry
+// shell syntax would have it broken up and re-quoted into nonsense. Going
+// string-first and splitting for this one would hand Claude a preamble path
+// with literal quote characters in it.
+//
+// So they render differently because their targets do, and everything they
+// could disagree about — whether a preamble applies, where it is, what the
+// flag is called — is single-sourced.
+func codingAgentArgv(repoRoot string) []string {
+	argv := fields(config.AgentInvocation(repoRoot))
+	if path, ok := devLoopPreambleFile(repoRoot); ok {
+		argv = append(argv, appendPreambleFlag, path)
+	}
+	return argv
+}
+
+// appendPreambleFlag is how Claude is told to read the dev-loop preamble.
+const appendPreambleFlag = "--append-system-prompt-file"
+
+// devLoopPreambleFile writes this repo's dev-loop preamble and returns its
+// path. ok is false when no preamble applies — no dev_loop configured, an
+// agent that is not Claude, an empty preamble — or when it could not be
+// written, in which case the agent starts without one rather than not at all.
+//
+// The preamble goes by file path rather than inline because it is multi-line:
+// Claude reads the file directly, so the launch command stays short and there
+// is no shell-quoting of the content, which inline embedding garbles.
+func devLoopPreambleFile(repoRoot string) (string, bool) {
 	cfg, _ := config.Load(repoRoot)
 	if !watch.IsConfigured(cfg) {
-		return inv
+		return "", false
 	}
 	agent := strings.TrimSpace(cfg.Agent)
 	if agent == "" {
 		agent = config.DefaultAgent
 	}
 	if !strings.Contains(agent, "claude") {
-		return inv // --append-system-prompt is Claude-specific
+		return "", false // --append-system-prompt is Claude-specific
 	}
 	preamble := watch.GeneratePreamble(watch.Resolve(cfg))
 	if strings.TrimSpace(preamble) == "" {
-		return inv
+		return "", false
 	}
-	// Pass the preamble by file path (--append-system-prompt-file) rather
-	// than embedding the text inline: Claude reads it directly, so the launch
-	// command stays short and there's no shell-quoting of the multi-line
-	// content (embedding it inline floods/garbles the command line).
 	path, err := writeDevLoopPreamble(repoRoot, preamble)
 	if err != nil {
-		return inv
+		return "", false
 	}
-	return inv + " --append-system-prompt-file " + shellSingleQuote(path)
+	return path, true
 }
 
 // writeDevLoopPreamble persists the generated preamble to a stable per-repo

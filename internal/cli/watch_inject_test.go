@@ -36,6 +36,60 @@ func TestCodingAgentInvocationInjectsForClaude(t *testing.T) {
 	}
 }
 
+// A pane execs the agent directly, so it needs the same instruction the tmux
+// path sends. Without it an agent opened with `a` does not know to work in
+// units, run gates or commit, and the dev-loop config reads as ignored.
+func TestTheArgvFormCarriesThePreambleToo(t *testing.T) {
+	dir := writeRepoConfig(t, `{
+		"agent": "claude",
+		"dev_loop": {"phases": ["implement"], "gates": [{"name": "test", "phase": "implement", "match": "go test"}]}
+	}`)
+	argv := codingAgentArgv(dir)
+
+	var path string
+	for i, a := range argv {
+		if a == appendPreambleFlag && i+1 < len(argv) {
+			path = argv[i+1]
+		}
+	}
+	if path == "" {
+		t.Fatalf("the pane's agent got no preamble: %q", argv)
+	}
+	// The trap that makes the two forms irreducible: the shell form quotes the
+	// path because tmux runs it through a shell. An argv element is passed to
+	// exec verbatim, so a quote here becomes part of the filename.
+	if strings.ContainsAny(path, "'\"") {
+		t.Errorf("the preamble path is shell-quoted in an argv: %q — Claude will look for a file with quotes in its name", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the preamble path does not exist: %v", err)
+	}
+}
+
+// Both forms have to agree about whether a preamble applies; only how they
+// render it may differ.
+func TestBothFormsAgreeOnWhetherAPreambleApplies(t *testing.T) {
+	for _, tc := range []struct{ name, cfg string }{
+		{"claude with a dev_loop", `{"agent":"claude","dev_loop":{"phases":["implement"],"gates":[{"name":"test","phase":"implement","match":"go test"}]}}`},
+		{"claude with no dev_loop", `{"agent":"claude"}`},
+		{"another agent", `{"agent":"pi","dev_loop":{"phases":["implement"],"gates":[{"name":"test","phase":"implement","match":"go test"}]}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeRepoConfig(t, tc.cfg)
+			inShell := strings.Contains(codingAgentInvocation(dir), appendPreambleFlag)
+			inArgv := false
+			for _, a := range codingAgentArgv(dir) {
+				if a == appendPreambleFlag {
+					inArgv = true
+				}
+			}
+			if inShell != inArgv {
+				t.Errorf("the shell form says preamble=%v but the argv form says %v", inShell, inArgv)
+			}
+		})
+	}
+}
+
 func TestCodingAgentInvocationSkipsNonClaude(t *testing.T) {
 	dir := writeRepoConfig(t, `{
 		"agent": "pi",
