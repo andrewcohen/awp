@@ -78,20 +78,21 @@ type zmxPanes struct {
 	svcFor func(repoRoot string) workspace.Service
 }
 
-// takePendingPrompt returns the prompt this workspace was created with, once.
+// takePendingPrompt returns the prompt parked for this workspace, once.
 //
 // It is best-effort: a state file we cannot read is not a reason to refuse to
 // open the agent. A prompt lost that way is recoverable by typing it; a pane
 // that will not open is not.
-func (z zmxPanes) takePendingPrompt(item deckui.Item) string {
+func (z zmxPanes) takePendingPrompt(item deckui.Item) workspace.PendingPrompt {
 	if z.svcFor == nil || strings.TrimSpace(item.RepoRoot) == "" {
-		return ""
+		return workspace.PendingPrompt{}
 	}
-	prompt, err := z.svcFor(item.RepoRoot).TakePendingPrompt(item.WorkspaceName)
+	p, err := z.svcFor(item.RepoRoot).TakePendingPrompt(item.WorkspaceName)
 	if err != nil {
-		return ""
+		return workspace.PendingPrompt{}
 	}
-	return strings.TrimSpace(prompt)
+	p.Text = strings.TrimSpace(p.Text)
+	return p
 }
 
 func (zmxPanes) Describes(kind string) bool {
@@ -160,17 +161,25 @@ func (z zmxPanes) Sessions(items []deckui.Item) ([]deckui.PaneSession, error) {
 //
 // A paste that fails re-parks the prompt. A prompt still parked can be
 // delivered next time; one we dropped is gone.
-func (z zmxPanes) deliverPending(item deckui.Item, name string, argv []string, prompt string) ([]string, error) {
+func (z zmxPanes) deliverPending(item deckui.Item, name string, argv []string, p workspace.PendingPrompt) ([]string, error) {
 	session, found, err := z.client.Lookup(context.Background(), name)
 	if err != nil {
-		_ = z.svcFor(item.RepoRoot).RecordPendingPrompt(item.WorkspaceName, prompt)
+		_ = z.svcFor(item.RepoRoot).RecordPendingPrompt(item.WorkspaceName, p)
 		return nil, err
 	}
 	if !found || !session.Live() {
-		return append(argv, prompt), nil
+		// Creating the session, so this is the one moment the agent's flavor
+		// is still ours to choose — see reviewAgentArgv.
+		if p.Review {
+			argv = reviewAgentArgv(item.RepoRoot)
+		}
+		return append(argv, p.Text), nil
 	}
-	if err := z.client.Paste(context.Background(), name, prompt); err != nil {
-		_ = z.svcFor(item.RepoRoot).RecordPendingPrompt(item.WorkspaceName, prompt)
+	// A live agent is whatever it already is; the flavor was decided when it
+	// started. Same as the tmux path's pre-existing-window branch, which also
+	// just pastes.
+	if err := z.client.Paste(context.Background(), name, p.Text); err != nil {
+		_ = z.svcFor(item.RepoRoot).RecordPendingPrompt(item.WorkspaceName, p)
 		return nil, err
 	}
 	return argv, nil
@@ -214,9 +223,9 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	// Only looked up when the kind is the agent: nothing else is a recipient,
 	// and the Lookup below is a subprocess we should not spend on every pane.
 	if kind == deckui.PaneKindAgent {
-		if prompt := z.takePendingPrompt(item); prompt != "" {
+		if p := z.takePendingPrompt(item); !p.Empty() {
 			var err error
-			if argv, err = z.deliverPending(item, name, argv, prompt); err != nil {
+			if argv, err = z.deliverPending(item, name, argv, p); err != nil {
 				return nil, nil, err
 			}
 		}

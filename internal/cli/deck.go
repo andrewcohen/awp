@@ -582,7 +582,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			if reporter == nil {
 				reporter = noopReporter{}
 			}
-			return runReviewWithReporter(fr, reviewSvc, n, nil, reporter)
+			return runReviewWithReporter(fr, reviewSvc, n, nil, reporter, reviewOpts{paneHosted: req.PaneHosted})
 		}
 		reporter := req.Reporter
 		if reporter == nil {

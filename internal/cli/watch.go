@@ -55,6 +55,19 @@ func codingAgentArgv(repoRoot string) []string {
 	return argv
 }
 
+// reviewAgentArgv is the same launch without the dev-loop preamble, for an
+// agent whose job is to read someone else's change.
+//
+// The preamble tells an agent to work in units, run gates and commit. A
+// reviewer given that starts doing the author's job on their PR, so the tmux
+// review path has always reached for config.AgentInvocation directly. Named
+// here so the pane path says the same thing the same way, rather than
+// open-coding "the coding one, minus the preamble" and drifting the next time
+// a flag is added.
+func reviewAgentArgv(repoRoot string) []string {
+	return fields(config.AgentInvocation(repoRoot))
+}
+
 // appendPreambleFlag is how Claude is told to read the dev-loop preamble.
 const appendPreambleFlag = "--append-system-prompt-file"
 

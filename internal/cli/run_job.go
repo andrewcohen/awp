@@ -159,7 +159,7 @@ func runReviewJob(runner Runner, svc workspace.Service, job jobs.Job, reporter *
 	}
 	dir := job.Spec.RepoRoot
 	fr := fixedDirRunner{base: runner, dir: dir}
-	return runReviewAsync(fr, svc, prNum, reporter)
+	return runReviewAsync(fr, svc, prNum, reporter, job.Spec.PaneHosted)
 }
 
 // runDeleteJob delegates to handleDeckAction's delete branch with

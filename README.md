@@ -665,6 +665,15 @@ prompt arrives as the agent's own argument, so there is no waiting for it to
 boot, and it is delivered once. Everything else about the create is unchanged —
 the bookmark, the PR pin, and the row appearing in the list.
 
+**`r` works the same way.** A review under zdeck does the whole setup — fetches
+the PR, prepares the `pr-<n>-<branch>` workspace, pins it, mirrors the existing
+review threads, writes the review brief — and parks the brief instead of
+launching a reviewer. Press `a` on the new row and the reviewer starts with it.
+The parked brief remembers that it is a review, so the agent launches *without*
+the dev-loop preamble: a reviewer told to work in units, run gates and commit
+starts doing the author's job on someone else's PR. No `pr description` tmux
+window is opened either — `p d` renders it in the deck.
+
 The mouse and the cursor follow the pane's program rather than the pane. A
 program that enables mouse reporting — an agent, jjui — gets the wheel
 forwarded to it; one that doesn't, like a shell, leaves the mouse to your

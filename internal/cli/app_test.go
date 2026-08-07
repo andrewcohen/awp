@@ -43,7 +43,7 @@ type fakeService struct {
 	recordedWorkspace string
 	recordedSessionID string
 	recordedSession   string
-	pendingPrompts    map[string]string
+	pendingPrompts    map[string]workspace.PendingPrompt
 	renameOld         string
 	renameNew         string
 	deleteName        string
@@ -90,17 +90,17 @@ func (f *fakeService) RecordBookmark(string, string) error          { return nil
 func (f *fakeService) RecordPROverride(string, int) error           { return nil }
 func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error) { return nil, nil }
 func (f *fakeService) UpdatePrompt(string, string) error            { return nil }
-func (f *fakeService) RecordPendingPrompt(name, prompt string) error {
+func (f *fakeService) RecordPendingPrompt(name string, p workspace.PendingPrompt) error {
 	if f.pendingPrompts == nil {
-		f.pendingPrompts = map[string]string{}
+		f.pendingPrompts = map[string]workspace.PendingPrompt{}
 	}
-	f.pendingPrompts[name] = prompt
+	f.pendingPrompts[name] = p
 	return nil
 }
-func (f *fakeService) TakePendingPrompt(name string) (string, error) {
-	prompt := f.pendingPrompts[name]
+func (f *fakeService) TakePendingPrompt(name string) (workspace.PendingPrompt, error) {
+	p := f.pendingPrompts[name]
 	delete(f.pendingPrompts, name)
-	return prompt, nil
+	return p, nil
 }
 func (f *fakeService) UpdateStatus(string, string) error   { return nil }
 func (f *fakeService) ClearSession(string) error           { return nil }
