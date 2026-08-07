@@ -17,7 +17,24 @@ var piAwpStatusExtension []byte
 
 // HookMarkerVersion bumps when the hook block schema changes; the installer
 // rewrites entries whose version differs.
-const HookMarkerVersion = 10
+const HookMarkerVersion = 11
+
+// InAwpWorkspace is the shell test every awp hook opens with: "does this agent
+// belong to an awp workspace?"
+//
+// These hooks are installed globally, so they have to be inert for Claude Code
+// used anywhere else. $TMUX was the original test, and it was never really the
+// question — it was a stand-in for it, correct only while a tmux session was
+// the only way to be in a workspace. An agent hosted in a deck pane has no
+// $TMUX (vterm strips it so a nested client will start), so every hook that
+// asked went quiet: the deck saw the agent as permanently idle and recorded
+// none of its gates.
+//
+// $AWP_WORKSPACE is the direct question, and both worlds set it. The $TMUX arm
+// stays because report-status falls back to reading the tmux session env for
+// processes that predate env injection, and those have no $AWP_WORKSPACE of
+// their own to offer.
+const InAwpWorkspace = `[ -n "$AWP_WORKSPACE" ] || [ -n "$TMUX" ]`
 
 // BlockingTools lists tool names that block on user input. When a
 // PreToolUse hook fires for one of these, awp reports "waiting" instead of
@@ -25,9 +42,8 @@ const HookMarkerVersion = 10
 // — not actively producing output.
 var BlockingTools = []string{"AskUserQuestion"}
 
-// HookCommand returns the shell snippet each Claude hook runs. It gates on
-// $TMUX so global installation never affects non-tmux Claude usage, and
-// honors $AWP_BIN for users running a non-PATH awp binary. The awp CLI
+// HookCommand returns the shell snippet each Claude hook runs. It opens with InAwpWorkspace so global
+// installation never affects Claude used outside a workspace, and honors $AWP_BIN for users running a non-PATH awp binary. The awp CLI
 // itself falls back to reading session env from tmux when its own env is
 // missing, so this works for processes that predate env injection.
 //
@@ -51,32 +67,32 @@ func HookCommand(event, state string) string {
 			extra = " --waiting-when-tool " + strings.Join(BlockingTools, ",")
 		}
 	}
-	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal report-status --state ` + state + extra + ` >/dev/null 2>&1 || true`
+	return InAwpWorkspace + ` && "${AWP_BIN:-awp}" internal report-status --state ` + state + extra + ` >/dev/null 2>&1 || true`
 }
 
 // GateRecordHookCommand returns the shell snippet for the gate-record hook
 // (`awp internal gate record --result <verdict>`). stdout is NOT redirected —
 // Claude reads it as the hook's result (the PostToolUse nudge). stderr is
 // dropped and a non-zero exit is swallowed so recording never breaks a turn;
-// record always exits 0 anyway. It gates on $TMUX and honors $AWP_BIN.
+// record always exits 0 anyway. It opens with InAwpWorkspace and honors $AWP_BIN.
 func GateRecordHookCommand(verdict string) string {
-	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal gate record --result ` + verdict + ` 2>/dev/null || true`
+	return InAwpWorkspace + ` && "${AWP_BIN:-awp}" internal gate record --result ` + verdict + ` 2>/dev/null || true`
 }
 
 // GateCheckHookCommand returns the shell snippet for the gate-check hook
 // (`awp internal gate check --hook`). Unlike the other hooks it must NOT
 // swallow stderr or the exit code: the completion block is signalled by exit
 // code 2 with the reason on stderr, which Claude feeds back to the agent. It
-// exits 0 cleanly outside tmux so it never emits a spurious hook error there.
+// exits 0 cleanly outside a workspace so it never emits a spurious hook error there.
 func GateCheckHookCommand() string {
-	return `[ -n "$TMUX" ] || exit 0; "${AWP_BIN:-awp}" internal gate check --hook`
+	return InAwpWorkspace + ` || exit 0; "${AWP_BIN:-awp}" internal gate check --hook`
 }
 
 // RequireTaskHookCommand returns the shell snippet for the require-task hook
 // (`awp internal require-task --hook`). Like gate check it must NOT swallow
 // stderr or the exit code — a block is signalled by exit code 2 with the
 // reason on stderr, which Claude feeds back to the agent. Unlike the other
-// hooks it is NOT gated on $TMUX at the shell level: the command self-gates in
+// hooks it carries no InAwpWorkspace test at the shell level: the command self-gates in
 // Go on the repo having a dev_loop configured (see taskGateActive), and that
 // resolution works from $AWP_WORKSPACE env as well as tmux. It guards on awp
 // being resolvable so a session without awp on PATH fails open (exit 0) rather
@@ -88,10 +104,10 @@ func RequireTaskHookCommand() string {
 // LoopTrackHookCommand returns the shell snippet for the loop-track hook
 // (`awp internal loop track`). Like gate record it swallows stdout/stderr and
 // the exit code so tracking never breaks a turn (it always exits 0 anyway),
-// gates on $TMUX, and honors $AWP_BIN. It carries no --result: the phase it
+// opens with InAwpWorkspace, and honors $AWP_BIN. It carries no --result: the phase it
 // records doesn't depend on the tool's pass/fail outcome.
 func LoopTrackHookCommand() string {
-	return `[ -n "$TMUX" ] && "${AWP_BIN:-awp}" internal loop track >/dev/null 2>&1 || true`
+	return InAwpWorkspace + ` && "${AWP_BIN:-awp}" internal loop track >/dev/null 2>&1 || true`
 }
 
 // hookSpec is one awp-managed hook entry: the event it lives under, an

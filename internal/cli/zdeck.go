@@ -85,9 +85,15 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	}
 	argv := spec.argv(item)
 
+	// The same env a tmux workspace session carries. It is what tells an agent
+	// which workspace it belongs to, and every awp hook opens by asking (see
+	// agenthooks.InAwpWorkspace) — without it a hosted agent reports no status,
+	// so the deck shows it idle forever, and records no gates.
+	env := append(os.Environ(), workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)...)
+
 	if spec.lifetime == ephemeral {
 		// Nothing to keep, nothing to restore.
-		return zmx.Command(dir, argv, os.Environ()), func() {}, nil
+		return zmx.Command(dir, argv, env), func() {}, nil
 	}
 
 	// Reap first: a session whose command has already exited would otherwise
@@ -102,7 +108,11 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	//
 	// Closing the pane kills this client, not the session; that is what
 	// long-lived means.
-	return zmx.AttachCmd(dir, name, argv, os.Environ()), func() {}, nil
+	//
+	// The session's env is fixed at creation, so a workspace renamed later
+	// leaves AWP_WORKSPACE stale here — the tmux path re-reads it from the
+	// session, and there is no zmx equivalent yet.
+	return zmx.AttachCmd(dir, name, argv, env), func() {}, nil
 }
 
 // SendPrompt delivers text to the workspace's agent — the same process `a`
