@@ -15,6 +15,7 @@ import (
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
+	"github.com/andrewcohen/awp/internal/zdeck"
 )
 
 type workspacePicker func(title string, options []string) (string, error)
@@ -81,6 +82,8 @@ func (a *App) Run(args []string) error {
 		return a.runDeck(args[1:])
 	case "mini-deck":
 		return a.runMiniDeck(args[1:])
+	case "zdeck":
+		return a.runZdeck(args[1:])
 	case "deck-cleanup":
 		return runDeckCleanup(a.runner, a.out)
 	case "run-job":
@@ -870,4 +873,43 @@ func isInteractiveInput(in io.Reader) bool {
 
 func isHelpArgSlice(args []string) bool {
 	return len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")
+}
+
+// runZdeck opens the navigation-flow proof of concept: the workspace list and
+// a live pane side by side, with awp owning the layout and the PTY.
+func (a *App) runZdeck(args []string) error {
+	if isHelpArgSlice(args) {
+		_, _ = fmt.Fprintln(a.out, "Usage: awp zdeck")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "A proof of concept, not a replacement for `awp deck`. The workspace list")
+		_, _ = fmt.Fprintln(a.out, "and a live pane share the screen; awp owns the layout rather than asking")
+		_, _ = fmt.Fprintln(a.out, "a multiplexer for it.")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Panes:")
+		for _, k := range zdeck.Kinds {
+			_, _ = fmt.Fprintf(a.out, "  %-6s %-8s %s\n", k.Key, k.Label, zdeckLifetimeHelp(k))
+		}
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "  j/k     move  ·  tab focus the pane  ·  ctrl+\\ leave it  ·  x close  ·  q quit")
+		_, _ = fmt.Fprintln(a.out, "")
+		_, _ = fmt.Fprintln(a.out, "Long-lived panes run in zmx sessions and survive closing the pane or awp")
+		_, _ = fmt.Fprintln(a.out, "itself; `zmx ls` lists them. Requires zmx on PATH.")
+		return nil
+	}
+	if len(args) > 0 {
+		return fmt.Errorf("zdeck: unexpected argument %q", args[0])
+	}
+	return runZdeck(a.runner, a.svc, a.in, a.out)
+}
+
+func zdeckLifetimeHelp(k zdeck.Kind) string {
+	switch k.Lifetime {
+	case zdeck.LongLived:
+		return "zmx session — survives closing the pane"
+	case zdeck.Ephemeral:
+		return "spawned by awp — dies with the pane"
+	case zdeck.Native:
+		return "awp's own view (not wired up yet)"
+	}
+	return ""
 }
