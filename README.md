@@ -303,7 +303,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 |---|---|
 | `awp deck [--scope=all\|attention\|inbox]` | Open the workspace dashboard. `--scope` sets the initial filter (default `all`); `P` still cycles through every scope inside the deck. `pr` and the legacy `open-pr` are accepted as aliases for `inbox`. |
 | `awp mini-deck` | Quick-jump list of workspaces with an active agent or unread notification |
-| `awp zdeck` | **Proof of concept**, not a replacement for `awp deck`. The workspace list and a live pane share one screen, with awp owning the layout and the PTY instead of asking a multiplexer for them. See *zdeck* below. Requires [zmx](https://github.com/neurosnap/zmx) on PATH. |
+| `awp zdeck` | **Proof of concept.** The same deck with a different backend: `a`, `e`, `v` and `s` render the process as a live pane inside the deck rather than opening a tmux window. See *zdeck* below. Requires [zmx](https://github.com/neurosnap/zmx) on PATH. |
 | `awp w open [name]` | Create or attach to a workspace. Run with no name to drop into the same unified form the deck's `n` key shows: workspace name, `Start from` (`main` by default, or `pick a bookmark…`), and an optional agent prompt. To review a PR instead, use `awp review`. |
 | `awp w list` | List workspaces in the current repo |
 | `awp w info <name>` | Show details for a workspace |
@@ -553,46 +553,38 @@ See repository.
 
 ## zdeck (proof of concept)
 
-`awp zdeck` is where the next shape of awp is being tried out. It is a
-separate command from `awp deck`, which is unchanged and remains the one you
-should use for work.
+`awp zdeck` is **the same deck with a different backend**. Same list, same
+keys, same everything — the only difference is that `a`, `e`, `v` and `s`
+render the process as a live pane *inside* the deck, on a pty awp owns,
+instead of handing off to a tmux window.
 
-The idea it tests: **awp owns the layout and the PTY.** The workspace list and
-a live pane are on screen at the same time — a thing a multiplexer cannot do,
-because tmux can only split terminals against terminals and has no way to put
-an agent's pane beside awp's own diff viewer.
+`awp deck` is unchanged and remains the one to use for work.
 
-It also drops a distinction that turned out not to be real. "Peek" and
-"summon" were two tmux operations (`display-popup` and `switch-client`) that
-looked like two features; once awp owns layout, one is just the other at a
-different size. What does need a mechanism is whether a process outlives the
-view, so panes come in three kinds:
+The point it tests is that awp can own the pty, and therefore the layout,
+without negotiating with a multiplexer for it. Attaching to a tmux session
+hands you a *client* — a status bar, a current window, its own key routing —
+because that is the only pane-shaped thing tmux offers. [zmx](https://github.com/neurosnap/zmx)
+has no windows and no status bar, so a client is simply the program.
 
-| Key | Pane | Lifetime |
+`c` needs no backend: the deck already shows the diff in place.
+
+| Key | Pane | Behind it |
 |---|---|---|
-| `a` | agent | **Long-lived** — a zmx session. Closing the pane, or awp, leaves it running. |
-| `e` | editor | **Long-lived** — keeps its buffers between glances. |
-| `s` | shell | **Ephemeral** — awp spawns it on a PTY it owns; it dies with the pane. |
-| `v` | vcs (jjui) | **Ephemeral** — same. |
-| `c` | review | **Native** — awp's own diff viewer, not a process at all. Not wired up yet. |
+| `a` | agent | **zmx session.** Survives closing the pane, and awp. |
+| `e` | editor | **zmx session.** Keeps its buffers between glances. |
+| `s` | shell | **Spawned by awp.** Dies with the pane. |
+| `v` | vcs (jjui) | **Spawned by awp.** Dies with the pane. |
 
-The only difference between a long-lived pane and an ephemeral one is which
-command awp runs: a zmx client, or the program itself. Everything downstream —
+Whether the process outlives the view is the only thing the two rows differ
+by; the difference in code is which command awp runs. Everything downstream —
 the emulator, the keys, the rendering — is identical.
 
-| Key | Action |
-|---|---|
-| `j` / `k` | Move down / up the workspace list |
-| `a` `s` `v` `e` `c` | Open that pane for the selected workspace |
-| `tab` | Move the keyboard into the pane |
-| `ctrl+\` | Give the keyboard back to the list. The pane stays open and live. |
-| `x` | Close the pane. A long-lived pane's session keeps running. |
-| `q` | Quit |
+`ctrl+\` leaves a pane. It has to be a key nothing inside one wants, because
+every other key belongs to the program: `esc`, `q` and `ctrl+c` all mean
+something to an agent. Any window kind zdeck does not handle — the review
+window, the PR-description window — falls through to tmux exactly as before.
 
-`ctrl+\` has to be a key nothing inside a pane wants, because every other key
-belongs to the program — `esc`, `q` and `ctrl+c` all mean something to an
-agent. zdeck intercepts it before the pane sees it, so it means the same thing
-whether the pane is a zmx client or a bare process.
-
-Long-lived sessions are named `awp.<project>.<workspace>.<kind>` and show up in
-`zmx ls`, so they can be inspected and killed from outside awp.
+Long-lived sessions are named `awp.<project>.<workspace>.<kind>` and show up
+in `zmx ls`, so they can be inspected and killed from outside awp. Requires
+zmx on PATH; zdeck refuses to start without it rather than failing on the
+first pane.

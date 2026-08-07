@@ -15,7 +15,6 @@ import (
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
-	"github.com/andrewcohen/awp/internal/zdeck"
 )
 
 type workspacePicker func(title string, options []string) (string, error)
@@ -30,7 +29,7 @@ type doctorService interface {
 // diffWorkflow runs the standalone diff viewer. revset is empty for the working
 // copy, or any jj revset from `-r`.
 type diffWorkflow func(runner Runner, svc workspace.Service, revset string, in io.Reader, out io.Writer) error
-type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope) error
+type deckWorkflow func(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes deckui.PaneBackend) error
 type miniDeckWorkflow func(runner Runner, in io.Reader, out io.Writer) error
 type reviewWorkflow func(runner Runner, svc workspace.Service, prNumber int, in io.Reader, out io.Writer) error
 
@@ -767,7 +766,7 @@ func (a *App) runDeck(args []string) error {
 	if a.deck == nil {
 		return errors.New("deck is not configured")
 	}
-	return a.deck(a.runner, a.svc, a.in, a.out, scope)
+	return a.deck(a.runner, a.svc, a.in, a.out, scope, nil)
 }
 
 func (a *App) runMiniDeck(args []string) error {
@@ -875,41 +874,28 @@ func isHelpArgSlice(args []string) bool {
 	return len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")
 }
 
-// runZdeck opens the navigation-flow proof of concept: the workspace list and
-// a live pane side by side, with awp owning the layout and the PTY.
+// runZdeck opens the deck with zmx behind it instead of tmux: the same UI,
+// with the agent, editor, vcs and shell keys rendering a live pane inside the
+// deck rather than handing off to a tmux window.
 func (a *App) runZdeck(args []string) error {
 	if isHelpArgSlice(args) {
 		_, _ = fmt.Fprintln(a.out, "Usage: awp zdeck")
 		_, _ = fmt.Fprintln(a.out, "")
-		_, _ = fmt.Fprintln(a.out, "A proof of concept, not a replacement for `awp deck`. The workspace list")
-		_, _ = fmt.Fprintln(a.out, "and a live pane share the screen; awp owns the layout rather than asking")
-		_, _ = fmt.Fprintln(a.out, "a multiplexer for it.")
+		_, _ = fmt.Fprintln(a.out, "The same deck, with a different backend. Where `awp deck` opens a tmux")
+		_, _ = fmt.Fprintln(a.out, "window for a, e, v and s, zdeck renders the process as a live pane inside")
+		_, _ = fmt.Fprintln(a.out, "the deck, on a pty awp owns. Every other key behaves identically.")
 		_, _ = fmt.Fprintln(a.out, "")
-		_, _ = fmt.Fprintln(a.out, "Panes:")
-		for _, k := range zdeck.Kinds {
-			_, _ = fmt.Fprintf(a.out, "  %-6s %-8s %s\n", k.Key, k.Label, zdeckLifetimeHelp(k))
-		}
+		_, _ = fmt.Fprintln(a.out, "  a  agent    long-lived: a zmx session, survives closing the pane")
+		_, _ = fmt.Fprintln(a.out, "  e  editor   long-lived: same")
+		_, _ = fmt.Fprintln(a.out, "  s  shell    ephemeral: spawned by awp, dies with the pane")
+		_, _ = fmt.Fprintln(a.out, "  v  vcs      ephemeral: same")
+		_, _ = fmt.Fprintln(a.out, "  c  review   unchanged \u2014 the deck already shows the diff in place")
 		_, _ = fmt.Fprintln(a.out, "")
-		_, _ = fmt.Fprintln(a.out, "  j/k     move  ·  tab focus the pane  ·  ctrl+\\ leave it  ·  x close  ·  q quit")
-		_, _ = fmt.Fprintln(a.out, "")
-		_, _ = fmt.Fprintln(a.out, "Long-lived panes run in zmx sessions and survive closing the pane or awp")
-		_, _ = fmt.Fprintln(a.out, "itself; `zmx ls` lists them. Requires zmx on PATH.")
+		_, _ = fmt.Fprintln(a.out, "ctrl+\\ leaves a pane. Requires zmx on PATH.")
 		return nil
 	}
 	if len(args) > 0 {
 		return fmt.Errorf("zdeck: unexpected argument %q", args[0])
 	}
 	return runZdeck(a.runner, a.svc, a.in, a.out)
-}
-
-func zdeckLifetimeHelp(k zdeck.Kind) string {
-	switch k.Lifetime {
-	case zdeck.LongLived:
-		return "zmx session — survives closing the pane"
-	case zdeck.Ephemeral:
-		return "spawned by awp — dies with the pane"
-	case zdeck.Native:
-		return "awp's own view (not wired up yet)"
-	}
-	return ""
 }
