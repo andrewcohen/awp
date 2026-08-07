@@ -42,7 +42,13 @@ type Session struct {
 	// and "running" are different questions.
 	Ended    bool
 	ExitCode int
-	Labels   map[string]string
+	// Created is when zmx started the session, and Cmd the command it is
+	// running. Both are only interesting to something displaying the session
+	// to a human — `zmx ls` prints created as a unix stamp, which is not a
+	// thing to show anyone.
+	Created time.Time
+	Cmd     string
+	Labels  map[string]string
 }
 
 // Live reports whether the session's process is still running.
