@@ -3757,6 +3757,18 @@ func (m Model) actionModeStatus() string {
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// A hosted pane is the only thing in the deck that needs the terminal's
+	// mouse and cursor, so it is the only thing that asks for them. Requesting
+	// them all the time would cost drag-to-select everywhere else.
+	if p, ok := m.active.(*panePopover); ok {
+		// Without this the outer terminal, being in alt-screen with no mouse
+		// tracking asked for, turns the wheel into arrow keys and the pane
+		// gets typed at.
+		v.MouseMode = tea.MouseModeCellMotion
+		if x, y, ok := p.screenCursor(m.width, m.height); ok {
+			v.Cursor = tea.NewCursor(x, y)
+		}
+	}
 	return v
 }
 

@@ -132,6 +132,12 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 	case tea.PasteMsg:
 		p.term.SendText(msg.Content)
 		return nil
+
+	case tea.MouseMsg:
+		// The deck asks for mouse events only while a pane is up (see View),
+		// so anything arriving here belongs to the hosted program.
+		p.term.SendMouse(msg)
+		return nil
 	}
 	return nil
 }
@@ -145,7 +151,34 @@ const (
 	paneMinH    = 5
 )
 
+// paneInsetX / paneInsetY are where the terminal starts inside the popover:
+// border + left padding across, and border + top padding + title + blank down.
+const (
+	paneInsetX = 3
+	paneInsetY = 4
+)
+
 func paneDims(deckW, deckH int) (w, h int) { return deckW - paneChromeW, deckH - paneChromeH }
+
+// screenCursor is where the hosted program's cursor lands on the deck's own
+// screen: the centred popover's origin, plus the chrome around the terminal,
+// plus wherever the program put it.
+//
+// The box size is computed rather than measured so this does not have to
+// render the popover a second time.
+func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
+	if !paneFits(deckW, deckH) {
+		return 0, 0, false
+	}
+	w, h := paneDims(deckW, deckH)
+	boxW, boxH := w+4+borderCells, h+2+borderCells+4
+	originX, originY := (deckW-boxW)/2, (deckH-boxH)/2
+	cx, cy := p.term.Cursor()
+	if cx < 0 || cy < 0 || cx >= w || cy >= h {
+		return 0, 0, false
+	}
+	return originX + paneInsetX + cx, originY + paneInsetY + cy, true
+}
 
 func paneFits(deckW, deckH int) bool {
 	w, h := paneDims(deckW, deckH)
