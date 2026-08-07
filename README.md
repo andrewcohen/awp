@@ -370,6 +370,31 @@ Example:
 
 Command used to launch the workspace agent. Invoked as `<agent> <prompt>` (with the prompt shell-quoted) when summoning with a prompt, or just `<agent>` when re-attaching via the `a` key. Defaults to `pi`. Common values: `pi`, `claude`, `aider`. Anything that accepts a prompt as its first positional argument works.
 
+### `agent_options`
+
+Flags inserted between the agent command and the prompt, e.g.
+`"--permission-mode auto --model opus"`. Passed through verbatim, so quoting is
+yours to get right.
+
+**Continuity across a lost session.** A workspace's agent normally survives
+because its session does, but a machine restart or a kill takes it with them,
+and the next `a` starts a blank conversation. Adding `--continue` (Claude Code)
+makes the agent resume the workspace's previous conversation instead:
+
+```json
+{ "agent": "claude", "agent_options": "--continue" }
+```
+
+Safe on a brand-new workspace — in a directory with no prior conversation
+`--continue` simply starts one. The one surprise: conversation history is keyed
+to the directory and outlives the workspace, so deleting a workspace and
+recreating it under the same name resumes the old conversation rather than
+starting clean.
+
+Note that any conversation resumed this way gets a **new session id**, and
+Claude Code's task list is stored per session id — so a resumed agent starts
+with an empty task list even though its conversation is intact.
+
 ### `actions`
 
 Custom commands surfaced by the deck's `x` action menu. By default each action runs in a new tmux window in the workspace.
