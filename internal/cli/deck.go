@@ -437,6 +437,31 @@ func paneHostAction(panes paneHost, req deckui.ActionRequest, reporter deckui.Re
 	return nil, false
 }
 
+// hostFirst wraps the deck's tmux action handler so the pane host is offered
+// every action before the tmux handler sees any of them.
+//
+// The order is the whole point, and it used to live *inside* the handler, one
+// early return away from being wrong — which it was: the ActionCustom branch
+// returned above the interception, so `x` opened a tmux window on a deck that
+// hosts its own panes and the host was never asked. Nothing errored; the
+// action just happened somewhere the user could not see.
+//
+// Wrapping puts the interception outside the handler, where no branch of it
+// can jump the queue. Declining is paneHostAction's job and its alone, which
+// is the contract it already had.
+func hostFirst(panes paneHost, tmuxHandler func(deckui.ActionRequest) error) func(deckui.ActionRequest) error {
+	return func(req deckui.ActionRequest) error {
+		reporter := req.Reporter
+		if reporter == nil {
+			reporter = noopReporter{}
+		}
+		if err, handled := paneHostAction(panes, req, reporter); handled {
+			return err
+		}
+		return tmuxHandler(req)
+	}
+}
+
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes paneHost) error {
 	// The deck needs tmux because every window key hands off to a tmux client.
 	// A deck with a pane backend hosts those itself, so it is the one thing
@@ -545,7 +570,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		}
 		return deckui.UserAction{}, false
 	}
-	handler := func(req deckui.ActionRequest) error {
+	tmuxHandler := func(req deckui.ActionRequest) error {
 		if req.Action == deckui.ActionCreateWorkspace {
 			dir := strings.TrimSpace(req.Item.RepoRoot)
 			if dir == "" {
@@ -603,15 +628,13 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			}
 			return openCustomActionWindow(tmuxClient, actionSvc, req.Item, ua, reporter)
 		}
-		if err, handled := paneHostAction(panes, req, reporter); handled {
-			return err
-		}
 		actionSvc := svc
 		if strings.TrimSpace(req.Item.RepoRoot) != "" {
 			actionSvc = newDeckActionService(runner, req.Item.RepoRoot, in)
 		}
 		return handleDeckAction(tmuxClient, actionSvc, runner, req, reporter)
 	}
+	handler := hostFirst(panes, tmuxHandler)
 	bookmarkFetcher := func(itemRepoRoot string) tea.Cmd {
 		return func() tea.Msg {
 			dir := strings.TrimSpace(itemRepoRoot)
