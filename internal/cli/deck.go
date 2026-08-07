@@ -516,7 +516,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// session name so the initial cursor lands on the workspace the
 	// user launched from. The full enrichment refresh follows ~50 ms
 	// later and fills in caution glyphs / stale decorations.
-	items, err := loadDeckItems(nil, tmuxClient, true, svc, repoRoot, projectName, nil, nil)
+	// awp deck's processes live in tmux, so tmux is what it asks. zdeck swaps
+	// this for the zmx source; nothing below here knows which it got.
+	sessionSource := deckSessions(tmuxSessions{client: tmuxClient})
+	items, err := loadDeckItems(nil, sessionSource, true, svc, repoRoot, projectName, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -654,7 +657,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 	refresher := func() tea.Cmd {
 		return func() tea.Msg {
-			items, err := loadDeckItems(j, tmuxClient, false, svc, repoRoot, projectName, in, out)
+			items, err := loadDeckItems(j, sessionSource, false, svc, repoRoot, projectName, in, out)
 			return deckui.RefreshDoneMsg(items, err)
 		}
 	}
@@ -1188,51 +1191,134 @@ func runJobsStartupCleanup() {
 	}
 }
 
-// deckTmuxSnapshot is the tmux state needed to enrich rows on a single
-// refresh. Captured up-front in two shell-outs (list-sessions +
-// list-panes -a) so per-row enrichment is a map lookup. `known` is
-// false on the JSON-only fast path (e.g. first paint), in which case
-// row decorations fall back to optimistic defaults — Active reflects
-// the stored SessionID, Stale stays off — so we don't flash a caution
-// badge for the ~50 ms until the next refresh fills in real tmux state.
-type deckTmuxSnapshot struct {
-	known          bool
-	liveByName     map[string]string   // session name → session id
-	liveByID       map[string]struct{} // session id set
-	currentSession string              // current attached session name
-	agentShell     map[string]bool     // session name → agent pane is a shell
+// workspaceRef identifies the workspace a session belongs to, without saying
+// what is holding it.
+//
+// The row model used to key on a tmux session name, so every consumer spelled
+// DeckSessionName and only tmux could ever answer. A workspace is what all of
+// them actually meant.
+type workspaceRef struct {
+	project   string
+	workspace string
 }
 
-// captureDeckTmuxSnapshot reads tmux state used to decorate deck rows.
-// When fast is true, only the currently-attached session name is read
-// (a single cheap `display-message` call) — ListSessions/ListPanes are
-// skipped, and snap.known stays false so caution glyphs / stale
-// decorations remain suppressed until the next full enrichment pass.
-// The current-session name still flows through so the initial cursor
-// can land on the workspace the user launched from.
-func captureDeckTmuxSnapshot(tmuxClient *tmux.Client, fast bool) deckTmuxSnapshot {
-	snap := deckTmuxSnapshot{
-		liveByName: map[string]string{},
-		liveByID:   map[string]struct{}{},
-		agentShell: map[string]bool{},
-	}
-	if tmuxClient == nil {
+// sessionFacts is what one refresh knows about one workspace's session.
+//
+// present and agentGone are separate questions and both matter, because both
+// substrates keep a session after its agent exits — tmux's window falls back to
+// a bare shell, and zmx keeps a session listed so its output can still be read.
+// A session whose agent is gone reads "exited", which is a different row from
+// one with no session at all.
+type sessionFacts struct {
+	// name is the substrate's own name for the session, for a row that has to
+	// display or address it.
+	name string
+	// present says a session exists for this workspace.
+	present bool
+	// agentGone says the session is there but its agent process is not.
+	agentGone bool
+}
+
+// deckSessionSnapshot is everything one refresh knows about the processes
+// behind the rows, captured up front so per-row enrichment is a map lookup.
+//
+// known is false on the JSON-only fast path (first paint), in which case row
+// decorations fall back to optimistic defaults — Active reflects the stored
+// SessionID, Stale stays off — so we don't flash a caution badge for the ~50 ms
+// until the next refresh fills in real state.
+type deckSessionSnapshot struct {
+	known       bool
+	byWorkspace map[workspaceRef]sessionFacts
+	// current is the workspace the user is looking at, and only tmux can
+	// answer it: a deck that hosts its own panes is the outermost program, so
+	// there is no session to be "in". Under such a deck the honest source is
+	// cwd, which is a separate question from which sessions exist.
+	current    workspaceRef
+	hasCurrent bool
+}
+
+// facts answers both session questions for one workspace.
+func (s deckSessionSnapshot) facts(project, workspace string) sessionFacts {
+	return s.byWorkspace[workspaceRef{project: project, workspace: workspace}]
+}
+
+// agentRunning says this workspace has a session and its agent is alive in it —
+// the condition for trusting a stored "working" status.
+func (s deckSessionSnapshot) agentRunning(project, workspace string) bool {
+	f := s.facts(project, workspace)
+	return f.present && !f.agentGone
+}
+
+// isCurrent says the user is looking at this workspace.
+func (s deckSessionSnapshot) isCurrent(project, workspace string) bool {
+	return s.hasCurrent && s.current == workspaceRef{project: project, workspace: workspace}
+}
+
+// deckSessions reads the substrate a deck's long-lived processes live on.
+//
+// An interface because there are two substrates and each deck has exactly one:
+// awp deck's sessions are tmux's, zdeck's are zmx's. Deliberately not a merge
+// of the two — asking both would let a workspace read live on the strength of a
+// leftover session on the substrate this deck does not use, which is the
+// staleness the seam exists to remove.
+type deckSessions interface {
+	// sessions reads the substrate. fast trades completeness for a single
+	// cheap call, for the first paint; the snapshot says which it got via
+	// known.
+	sessions(fast bool) deckSessionSnapshot
+}
+
+// tmuxSessions answers from tmux, which is what awp deck's processes live on.
+type tmuxSessions struct{ client *tmux.Client }
+
+// sessions reads the two shell-outs (list-sessions + list-panes -a) the row
+// decorations need. When fast is true only the currently-attached session is
+// read — a single cheap display-message — and known stays false so caution
+// glyphs and stale decorations remain suppressed until the next full pass. The
+// current session still flows through so the first cursor lands on the
+// workspace the user launched from.
+func (t tmuxSessions) sessions(fast bool) deckSessionSnapshot {
+	snap := deckSessionSnapshot{byWorkspace: map[workspaceRef]sessionFacts{}}
+	if t.client == nil {
 		return snap
 	}
+	name, _ := t.client.CurrentSessionName()
+	snap.current, snap.hasCurrent = tmuxWorkspaceRef(name)
 	if fast {
-		snap.currentSession, _ = tmuxClient.CurrentSessionName()
 		return snap
 	}
 	snap.known = true
-	sessions, _ := tmuxClient.ListSessions()
+	sessions, _ := t.client.ListSessions()
+	panes, _ := t.client.ListPanes()
+	agentShell := agentShellSessions(panes)
 	for _, s := range sessions {
-		snap.liveByName[s.Name] = s.ID
-		snap.liveByID[s.ID] = struct{}{}
+		ref, ok := tmuxWorkspaceRef(s.Name)
+		if !ok {
+			// Not a session awp made. The deck has nothing to say about the
+			// rest of the user's tmux.
+			continue
+		}
+		snap.byWorkspace[ref] = sessionFacts{
+			name:      s.Name,
+			present:   true,
+			agentGone: agentShell[s.Name],
+		}
 	}
-	snap.currentSession, _ = tmuxClient.CurrentSessionName()
-	panes, _ := tmuxClient.ListPanes()
-	snap.agentShell = agentShellSessions(panes)
 	return snap
+}
+
+// tmuxWorkspaceRef reads the workspace out of an awp tmux session name.
+//
+// Inverse of DeckSessionName, and inherits parseAwpSession's ambiguity: a
+// project whose directory name contains "__" splits in the wrong place. That
+// predates this seam — adoption has always parsed these names — and the
+// round-trip is pinned by session_source_test.go for names that do not.
+func tmuxWorkspaceRef(name string) (workspaceRef, bool) {
+	project, ws, ok := parseAwpSession(name)
+	if !ok {
+		return workspaceRef{}, false
+	}
+	return workspaceRef{project: project, workspace: ws}, true
 }
 
 // agentShellSessions reports, per session, whether its "agent" window has
@@ -1279,7 +1365,7 @@ func isShellCommand(cmd string) bool {
 // per-row tmux calls. Workspaces created externally via `jj workspace
 // add` won't appear until the deck reconciles via a write path
 // (deck-driven create/delete already does this).
-func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, error) {
+func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, error) {
 	_ = j
 	_ = in
 	_ = out
@@ -1300,13 +1386,15 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 	// are no-ops.
 	migrateBookmarkPRNumbersIfNeeded(store, repoMap)
 
-	snap := captureDeckTmuxSnapshot(tmuxClient, fastTmux)
+	snap := sessions.sessions(fastSessions)
 
-	// adoptable: live [awp]<projectName>__* sessions not represented in state.
-	adoptable := map[string]struct{}{}
-	for name := range snap.liveByName {
-		if repo, _, ok := parseAwpSession(name); ok && repo == projectName {
-			adoptable[name] = struct{}{}
+	// adoptable: live sessions for this project that no store entry claims.
+	// Entries delete themselves from it as they are visited below, so what is
+	// left is a session with no workspace behind it.
+	adoptable := map[workspaceRef]sessionFacts{}
+	for ref, facts := range snap.byWorkspace {
+		if ref.project == projectName {
+			adoptable[ref] = facts
 		}
 	}
 
@@ -1417,10 +1505,9 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 				if !workspace.IsWorking(e.Status) {
 					continue
 				}
-				sessionName := DeckSessionName(r.project, e.Name)
-				if _, live := snap.liveByName[sessionName]; !live || snap.agentShell[sessionName] {
-					// No live session, or the :agent pane fell back to a
-					// bare shell — the stored "working" is stale.
+				if !snap.agentRunning(r.project, e.Name) {
+					// No session, or one whose agent is gone — the stored
+					// "working" is stale.
 					continue
 				}
 				p := strings.TrimSpace(e.Path)
@@ -1545,8 +1632,8 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		for _, n := range names {
 			e := entries[n]
 			sessionName := DeckSessionName(r.project, e.Name)
-			_, nameMatch := snap.liveByName[sessionName]
-			delete(adoptable, sessionName)
+			facts := snap.facts(r.project, e.Name)
+			delete(adoptable, workspaceRef{project: r.project, workspace: e.Name})
 
 			unread := e.Unread
 			// If the user is currently focused on this workspace's session,
@@ -1555,7 +1642,7 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			// store directly so the tmux unread summary (which reads the
 			// store) doesn't show a gray dot for a workspace the user is
 			// actively viewing.
-			if snap.known && unread && sessionName == snap.currentSession {
+			if snap.known && unread && snap.isCurrent(r.project, e.Name) {
 				unread = false
 				if isCurrentRepo {
 					_ = svc.MarkRead(e.Name)
@@ -1576,16 +1663,16 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 			if strings.TrimSpace(status) == "" {
 				status = "idle"
 			}
-			// Without tmux info (fast first paint), trust the stored
+			// Without session info (fast first paint), trust the stored
 			// SessionID: if there is one, assume the session is still
-			// alive. Real tmux state arrives ~50 ms later from the
+			// alive. Real state arrives ~50 ms later from the
 			// Init-driven refresh and overwrites this.
-			active := nameMatch
-			current := snap.currentSession != "" && sessionName == snap.currentSession
+			active := facts.present
+			current := snap.isCurrent(r.project, e.Name)
 			if !snap.known {
 				active = e.SessionID != ""
 			}
-			if snap.known && nameMatch && snap.agentShell[sessionName] {
+			if snap.known && facts.present && facts.agentGone {
 				status = "exited"
 				// An exited agent has nothing for the user to act on, so the
 				// transition drops any stale unread badge instead of setting
@@ -1646,23 +1733,19 @@ func loadDeckItems(j *jj.Client, tmuxClient *tmux.Client, fastTmux bool, svc wor
 		}
 	}
 
-	// Live tmux sessions for the current project that aren't in state — show
-	// them as "unmanaged" rows so the user can adopt or kill them.
-	for name := range adoptable {
-		repo, ws, ok := parseAwpSession(name)
-		if !ok {
-			continue
-		}
+	// Live sessions for the current project that aren't in state — show them as
+	// "unmanaged" rows so the user can adopt or kill them.
+	for ref, facts := range adoptable {
 		items = append(items, deckui.Item{
-			ProjectName:   repo,
-			WorkspaceName: ws,
+			ProjectName:   ref.project,
+			WorkspaceName: ref.workspace,
 			Path:          "",
 			Status:        "unmanaged",
 			PromptPreview: "(live tmux session, not in store)",
-			TmuxWindow:    name,
-			SessionName:   name,
+			TmuxWindow:    facts.name,
+			SessionName:   facts.name,
 			Active:        true,
-			Current:       name == snap.currentSession,
+			Current:       snap.isCurrent(ref.project, ref.workspace),
 		})
 	}
 

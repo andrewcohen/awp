@@ -27,7 +27,7 @@ func runMiniDeck(runner Runner, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("load workspace state: %w", err)
 	}
 	tc := tmux.New(runner)
-	snap := captureDeckTmuxSnapshot(tc, false)
+	snap := tmuxSessions{client: tc}.sessions(false)
 	prCache, _, _ := loadPRStatusCache()
 	rows := buildMiniDeckRows(all, snap, prCache)
 
@@ -88,23 +88,24 @@ func jumpToMiniDeckRow(tc *tmux.Client, store *state.JSONStore, row deckui.MiniR
 // buildMiniDeckRows projects a global state snapshot into the mini-deck
 // row list, using the same deckui.AttentionIncluded predicate that the
 // regular deck's ScopeAttention applies. The only mini-deck-specific
-// work here is computing the `active` flag from the tmux snapshot:
-// a workspace counts as active when its [awp]<repo>__<workspace>
-// session exists and the :agent pane is not a bare shell. When the
-// snapshot is unknown (fast first paint), we trust the stored status
-// and let a later refresh correct it.
+// work here is computing the `active` flag from the session snapshot:
+// a workspace counts as active when it has a session and the agent in
+// it is still running. When the snapshot is unknown (fast first paint),
+// we trust the stored status and let a later refresh correct it.
+//
+// The mini deck runs bound under tmux, so its snapshot always comes
+// from tmux — but it reads through the same accessor the deck does, so
+// the two agree on what "active" means.
 //
 // Sorted by project name then workspace name so the list is stable.
-func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckTmuxSnapshot, prCache map[string]map[string]deckui.PRStatus) []deckui.MiniRow {
+func buildMiniDeckRows(all map[string]map[string]workspace.Entry, snap deckSessionSnapshot, prCache map[string]map[string]deckui.PRStatus) []deckui.MiniRow {
 	var rows []deckui.MiniRow
 	for repoRoot, entries := range all {
 		project := projectNameForRepo(repoRoot)
 		for name, e := range entries {
 			active := true
 			if snap.known {
-				sessionName := DeckSessionName(project, name)
-				_, alive := snap.liveByName[sessionName]
-				active = alive && !snap.agentShell[sessionName]
+				active = snap.agentRunning(project, name)
 			}
 			if !deckui.AttentionIncluded(e.Status, e.Unread, active) {
 				continue
