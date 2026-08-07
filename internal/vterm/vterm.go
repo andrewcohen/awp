@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
@@ -112,6 +113,31 @@ func (n notifier) Write(p []byte) (int, error) {
 	default: // a repaint is already pending; one is enough
 	}
 	return written, err
+}
+
+// TermType is what a hosted process should be told its terminal is.
+//
+// It has to be stated rather than inherited, because the process is talking to
+// this emulator and not to whatever awp itself is running under. Inheriting it
+// while awp runs inside tmux hands the child TERM=tmux-256color, and a
+// screen-class terminal quietly loses capabilities the emulator has.
+const TermType = "xterm-256color"
+
+// Env prepares the environment for a hosted process: TermType, and no
+// inherited multiplexer markers that would make a nested client refuse to
+// start.
+func Env(base []string) []string {
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		switch {
+		case strings.HasPrefix(kv, "TERM="),
+			strings.HasPrefix(kv, "TMUX="),
+			strings.HasPrefix(kv, "TMUX_PANE="):
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "TERM="+TermType)
 }
 
 // Gen is the generation this Term was started with.
