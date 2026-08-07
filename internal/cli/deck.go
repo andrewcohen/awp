@@ -399,7 +399,45 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 	return newDeckActionServiceWithIO(runner, repoRoot, in, io.Discard)
 }
 
-func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes deckui.PaneBackend) error {
+// paneHost is where a workspace's processes live when awp owns them instead of
+// handing them to tmux.
+//
+// It is one interface rather than deckui.PaneBackend plus an optional extra,
+// because every action that addresses "the workspace's agent" has to agree on
+// which agent that is. A backend that can show you an agent but cannot be sent
+// a prompt would leave the deck talking to two different processes — which is
+// exactly the bug this type exists to make unspellable.
+type paneHost interface {
+	deckui.PaneBackend
+	// SendPrompt delivers text to the agent the backend hosts.
+	SendPrompt(item deckui.Item, text string, reporter deckui.Reporter) error
+}
+
+// paneHostAction routes the actions that address a workspace's agent, or a
+// tmux client, to the pane host. handled is false when there is no host, or
+// when the action is not one of those, and the caller should fall through to
+// the ordinary tmux path.
+//
+// This is one switch rather than a check at each call site because the failure
+// it prevents is silent: every action below it assumes tmux, so a missed case
+// does not error — it talks to an agent the user cannot see, or asks a client
+// that is not there to switch, and returns success.
+func paneHostAction(panes paneHost, req deckui.ActionRequest, reporter deckui.Reporter) (err error, handled bool) {
+	if panes == nil {
+		return nil, false
+	}
+	switch req.Action {
+	case deckui.ActionSendPrompt:
+		return panes.SendPrompt(req.Item, req.Arg, reporter), true
+	case deckui.ActionLastSession:
+		// `tmux switch-client -l` from outside tmux exits 0 having done
+		// nothing, so without this the key is a silent no-op.
+		return errors.New("last session: nothing to switch to — this deck hosts its own panes"), true
+	}
+	return nil, false
+}
+
+func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes paneHost) error {
 	// The deck needs tmux because every window key hands off to a tmux client.
 	// A deck with a pane backend hosts those itself, so it is the one thing
 	// that can be the outermost program — which is the whole point of it, and
@@ -563,6 +601,9 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 				actionSvc = newDeckActionService(runner, req.Item.RepoRoot, in)
 			}
 			return openCustomActionWindow(tmuxClient, actionSvc, req.Item, ua, reporter)
+		}
+		if err, handled := paneHostAction(panes, req, reporter); handled {
+			return err
 		}
 		actionSvc := svc
 		if strings.TrimSpace(req.Item.RepoRoot) != "" {

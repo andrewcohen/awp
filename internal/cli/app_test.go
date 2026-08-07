@@ -433,7 +433,7 @@ func TestRunDeckPassesScopeFlag(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
 	var gotScope deckui.Scope
-	app.deck = func(runner Runner, _ workspace.Service, _ io.Reader, _ io.Writer, scope deckui.Scope, _ deckui.PaneBackend) error {
+	app.deck = func(runner Runner, _ workspace.Service, _ io.Reader, _ io.Writer, scope deckui.Scope, _ paneHost) error {
 		gotScope = scope
 		return nil
 	}
@@ -455,7 +455,7 @@ func TestRunDeckCallsWorkflow(t *testing.T) {
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
 	called := false
-	app.deck = func(runner Runner, gotSvc workspace.Service, in io.Reader, out io.Writer, scope deckui.Scope, _ deckui.PaneBackend) error {
+	app.deck = func(runner Runner, gotSvc workspace.Service, in io.Reader, out io.Writer, scope deckui.Scope, _ paneHost) error {
 		called = true
 		if gotSvc != svc {
 			t.Fatal("expected service to be passed to deck workflow")

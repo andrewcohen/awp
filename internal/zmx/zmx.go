@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/vterm"
 )
@@ -178,6 +179,33 @@ func (c Client) Label(ctx context.Context, name string, pairs map[string]string)
 	}
 	if _, err := c.run(ctx, "", "zmx", args...); err != nil {
 		return fmt.Errorf("label zmx session %q: %w", name, err)
+	}
+	return nil
+}
+
+// pasteSettle gives the receiving program time to finish ingesting a
+// bracketed paste before the submit that follows it. Without the gap a large
+// paste swallows the Enter instead of being submitted by it — the same
+// hazard, and the same remedy, as the tmux path this mirrors.
+const pasteSettle = 150 * time.Millisecond
+
+// Paste delivers text to the session's program as one bracketed paste and
+// then submits it.
+//
+// Bracketed rather than typed: a prompt with newlines sent as raw input is a
+// stream of submits, so an agent would receive the first line as a message and
+// the rest as separate ones. The markers tell it the whole block arrived at
+// once.
+func (c Client) Paste(ctx context.Context, name, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("paste to zmx session %q: nothing to send", name)
+	}
+	if _, err := c.run(ctx, "", "zmx", "send", name, "\x1b[200~"+text+"\x1b[201~"); err != nil {
+		return fmt.Errorf("paste into zmx session %q: %w", name, err)
+	}
+	time.Sleep(pasteSettle)
+	if _, err := c.run(ctx, "", "zmx", "send", name, "\r"); err != nil {
+		return fmt.Errorf("submit the paste in zmx session %q: %w", name, err)
 	}
 	return nil
 }

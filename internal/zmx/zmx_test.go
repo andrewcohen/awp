@@ -143,6 +143,37 @@ func TestAttachRunsTheCommandRatherThanTypingItIntoAShell(t *testing.T) {
 	}
 }
 
+// A prompt with newlines sent as raw input is a stream of submits: the agent
+// takes the first line as a message and each following line as another. The
+// bracketed-paste markers say the whole block arrived at once, and the
+// trailing carriage return is what submits it.
+func TestPasteBracketsTheTextAndThenSubmitsIt(t *testing.T) {
+	f := &fakeZmx{}
+	if err := New(f.run).Paste(context.Background(), "awp.p.w.agent", "line one\nline two"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) != 2 {
+		t.Fatalf("made %d calls, want a paste then a submit: %v", len(f.calls), f.calls)
+	}
+	paste := f.calls[0]
+	if !strings.Contains(paste, "\x1b[200~line one\nline two\x1b[201~") {
+		t.Errorf("the text was not bracketed as a paste: %q", paste)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(f.calls[1]), "\r") && !strings.Contains(f.calls[1], "\r") {
+		t.Errorf("nothing submitted the paste: %q", f.calls[1])
+	}
+}
+
+func TestPasteRefusesAnEmptyPrompt(t *testing.T) {
+	f := &fakeZmx{}
+	if err := New(f.run).Paste(context.Background(), "awp.p.w.agent", "   "); err == nil {
+		t.Error("an empty prompt was sent")
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("it talked to zmx anyway: %v", f.calls)
+	}
+}
+
 // An attach with no command is how you ask zmx for a login $SHELL.
 func TestAttachWithNoCommandAsksForAShell(t *testing.T) {
 	cmd := AttachCmd("/repo", "awp.p.w.shell", nil, nil)
