@@ -4139,20 +4139,24 @@ func helpColumns(innerWidth int) string {
 // project-header names.
 const deckPrefixWidth = 2
 
-// deckTextCol is the column the deck's text starts in: past the prefix slot
-// and the space after it. Project-header names sit here, and so does the
-// title row — a heading indented differently from the list it heads reads as
-// hanging off the left edge of the panel, which is what it did before this
-// was named.
+// deckTextCol is the column the deck's text starts in: immediately past the
+// prefix slot. Project-header names sit here, and so does the title row — a
+// heading indented differently from the list it heads reads as hanging off the
+// left edge of the panel, which is what it did before this was named.
 //
-// A constant rather than a literal 3 at each site because the two have to
-// move together: widening the prefix slot without moving the title is a
+// There used to be a further space between the slot and the text. The slot's
+// own content already ends in one — the cursor bar is "┃ ", the hint is
+// padded to width — so the extra column was a second gap doing the first
+// one's job, and it cost every row on screen.
+//
+// A constant rather than a literal at each site because the two have to move
+// together: widening the prefix slot without moving the title is a
 // misalignment nobody would think to look for.
-const deckTextCol = deckPrefixWidth + 1
+const deckTextCol = deckPrefixWidth
 
 // deckIndent is deckTextCol as spaces, for lines that lead with text rather
 // than with a prefix slot.
-const deckIndent = "   "
+const deckIndent = "  "
 
 func (m Model) renderList(width int) string {
 	// One view for the whole frame: its All slice feeds the corner badge and
@@ -4220,7 +4224,7 @@ func (m Model) renderList(width int) string {
 			if hint, ok := projectHints[r.project]; ok {
 				hintStr = renderDeckHint(hint)
 			}
-			headerLine := fmt.Sprintf("%s %s", prefixSlot.Render(hintStr), r.project)
+			headerLine := fmt.Sprintf("%s%s", prefixSlot.Render(hintStr), r.project)
 			body = append(body, headerStyle.Render(headerLine))
 		case deckRowPinHeader:
 			// r.project holds the register key. Render the display label
@@ -4245,14 +4249,14 @@ func (m Model) renderList(width int) string {
 			if hint, ok := pinHints[r.project]; ok {
 				hintStr = renderDeckHint(hint)
 			}
-			body = append(body, fmt.Sprintf("%s %s %s", prefixSlot.Render(hintStr), star, label))
+			body = append(body, fmt.Sprintf("%s%s %s", prefixSlot.Render(hintStr), star, label))
 		case deckRowSubHeader:
 			// Inbox project subheader under a bucket header: muted blue,
 			// non-bold, indented one step past the bucket header so the
 			// two-level section reads as bucket → project. Blue (not the
 			// teal project-header hue) keeps it distinct from the teal
 			// "Needs your review" bucket header.
-			line := fmt.Sprintf("%s   %s", prefixSlot.Render(""), r.project)
+			line := fmt.Sprintf("%s  %s", prefixSlot.Render(""), r.project)
 			body = append(body, s.SubHeader.Render(line))
 		case deckRowPrimary:
 			item := items[r.itemIndex]
@@ -4324,7 +4328,7 @@ func (m Model) renderList(width int) string {
 			if !dim && (item.Optimistic || m.workspaceSettingUp(item) || m.workspaceDeleting(item)) {
 				glyph = m.spinner.View()
 			}
-			line := fmt.Sprintf("%s %s %s%s%s", prefixSlot.Render(prefix), glyphSlot.Render(glyph), stackPrefix, chip, labelStyle.Render(label))
+			line := fmt.Sprintf("%s%s %s%s%s", prefixSlot.Render(prefix), glyphSlot.Render(glyph), stackPrefix, chip, labelStyle.Render(label))
 			body = append(body, fitRow(line, width-2))
 			if r.itemIndex == m.cursor {
 				cursorRow = len(body) - 1
@@ -4431,7 +4435,7 @@ func (m Model) renderList(width int) string {
 				nameStyle = s.Selected
 			}
 			name := truncate(item.ProjectName, max(10, width-19))
-			line := fmt.Sprintf("%s %s", prefixSlot.Render(prefix), nameStyle.Render(name))
+			line := fmt.Sprintf("%s%s", prefixSlot.Render(prefix), nameStyle.Render(name))
 			if prGlyph := m.prGlyphForItem(item); prGlyph != "" {
 				line += " " + prGlyph
 			}
