@@ -566,7 +566,15 @@ hands you a *client* — a status bar, a current window, its own key routing —
 because that is the only pane-shaped thing tmux offers. [zmx](https://github.com/neurosnap/zmx)
 has no windows and no status bar, so a client is simply the program.
 
-`c` needs no backend: the deck already shows the diff in place.
+`c` needs no backend: the deck already shows the diff in place. `enter`
+brings the workspace's agent into the deck rather than switching tmux
+clients — there is no other client to switch to, and outside tmux that
+handoff silently does nothing.
+
+Because it hosts its panes, zdeck is the one deck that can be the outermost
+program: it does not require running inside tmux. Window kinds it does not
+handle still do — `C` (review window) and `p D` (PR description) open tmux
+windows, so they need a tmux client to switch to.
 
 | Key | Pane | Behind it |
 |---|---|---|

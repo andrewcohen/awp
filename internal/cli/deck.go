@@ -400,7 +400,11 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 }
 
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes deckui.PaneBackend) error {
-	if os.Getenv("TMUX") == "" {
+	// The deck needs tmux because every window key hands off to a tmux client.
+	// A deck with a pane backend hosts those itself, so it is the one thing
+	// that can be the outermost program — which is the whole point of it, and
+	// requiring a multiplexer above it would defeat that.
+	if panes == nil && os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp deck must run inside tmux (hint: bind a display-popup -E awp deck)")
 	}
 	if charm.IsDumbTerminal() {
