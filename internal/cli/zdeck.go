@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/workspace"
 	"github.com/andrewcohen/awp/internal/zmx"
@@ -41,7 +40,10 @@ var panes = map[string]struct {
 	lifetime paneLifetime
 	argv     func(it deckui.Item) []string
 }{
-	"agent":  {"agent", longLived, func(it deckui.Item) []string { return fields(config.AgentInvocation(it.RepoRoot)) }},
+	// codingAgentArgv, not config.AgentInvocation: the latter omits the
+	// dev-loop preamble, so a pane agent would not know to work in units, run
+	// gates or commit — the same instruction the tmux path has always sent.
+	"agent":  {"agent", longLived, func(it deckui.Item) []string { return codingAgentArgv(it.RepoRoot) }},
 	"editor": {"editor", longLived, func(deckui.Item) []string { return append(fields(envOr("EDITOR", "vi")), ".") }},
 	"vcs":    {"vcs", ephemeral, func(deckui.Item) []string { return []string{"jjui"} }},
 	"":       {"shell", ephemeral, func(deckui.Item) []string { return fields(envOr("SHELL", "sh")) }},
