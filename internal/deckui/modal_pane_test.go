@@ -450,3 +450,44 @@ func TestNoCursorWhenThePaneDoesNotFit(t *testing.T) {
 		t.Error("a deck too small for a pane still reported a cursor position")
 	}
 }
+
+// The deck behind a pane has to keep polling. A pane is open for as long as
+// you are working in it, and the agent inside reports status the whole time —
+// so a deck that pauses its refresh while one is up shows you the state from
+// before you opened it. Every other modal is a picker whose list a refresh
+// would rebuild under the cursor; a pane owns a pty and nothing else.
+func TestTheDeckKeepsRefreshingBehindAPane(t *testing.T) {
+	m, _ := openedPane(t, allKinds())
+	m.refresher = func() tea.Cmd { return nil }
+	if !m.canBackgroundRefresh() {
+		t.Error("the deck stops polling while a pane is open, so status goes stale behind it")
+	}
+}
+
+// A picker is the case the pause exists for: refreshing rebuilds the very
+// items its list is showing.
+func TestTheDeckStillPausesBehindAPicker(t *testing.T) {
+	m := paneModel(t, allKinds())
+	m.refresher = func() tea.Cmd { return nil }
+	m.active = &bookmarkPicker{}
+	if m.canBackgroundRefresh() {
+		t.Error("refreshing behind a picker moves the list under the cursor")
+	}
+}
+
+// Leaving a pane must catch the deck up at once, not on the next 5s tick.
+func TestClosingAPaneAsksForAFreshRead(t *testing.T) {
+	m, p := openedPane(t, allKinds())
+	reads := 0
+	m.refresher = func() tea.Cmd { reads++; return func() tea.Msg { return nil } }
+
+	if cmd := p.close(&m); cmd == nil {
+		t.Error("closing a pane returned no command, so the row list stays as it was until the next poll")
+	}
+	if m.active != nil {
+		t.Fatal("the pane did not close")
+	}
+	if reads != 1 {
+		t.Errorf("closing a pane asked for %d fresh reads, want 1", reads)
+	}
+}
