@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -13,8 +14,12 @@ import (
 
 // fakePanes hosts a harmless process and records what it was asked for.
 type fakePanes struct {
-	kinds    []string
-	handles  map[string]bool
+	kinds   []string
+	handles map[string]bool
+	// script is what the hosted process runs, so a test can decide what the
+	// pane's program asks its terminal for. Empty means a quiet sleeper that
+	// asks for nothing.
+	script   string
 	opened   string
 	restored int
 	err      error
@@ -28,7 +33,38 @@ func (f *fakePanes) Open(_ Item, kind string, _, _ int) (*exec.Cmd, func(), erro
 		return nil, nil, f.err
 	}
 	f.opened = kind
-	return exec.Command("sh", "-c", "echo PANE-UP; sleep 30"), func() { f.restored++ }, nil
+	script := f.script
+	if script == "" {
+		script = "echo PANE-UP; sleep 30"
+	}
+	return exec.Command("sh", "-c", script), func() { f.restored++ }, nil
+}
+
+// openedPane opens the agent pane and hands back the model and the popover.
+func openedPane(t *testing.T, backend *fakePanes) (Model, *panePopover) {
+	t.Helper()
+	m := paneModel(t, backend)
+	next, _ := m.trigger(ActionOpenWindow, "agent")
+	m = next.(Model)
+	p, ok := m.active.(*panePopover)
+	if !ok {
+		t.Fatalf("no pane opened; status %q", m.status)
+	}
+	t.Cleanup(func() { p.close(&m) })
+	return m, p
+}
+
+// eventually polls until cond holds. The hosted process runs for real, so
+// anything it tells its terminal arrives on its own schedule.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("waited 2s for %s", what)
 }
 
 func paneModel(t *testing.T, backend PaneBackend) Model {
@@ -256,7 +292,7 @@ func TestSummonIsUnchangedWithoutABackend(t *testing.T) {
 // A hosted pane is the only thing in the deck that wants the terminal's mouse
 // and cursor, and it must be the only thing that asks for them: requesting
 // mouse tracking all the time costs drag-to-select on every other screen.
-func TestOnlyAPaneAsksForTheMouseAndCursor(t *testing.T) {
+func TestTheDeckAsksForNothingWithNoPaneOpen(t *testing.T) {
 	m := paneModel(t, allKinds())
 
 	plain := m.View()
@@ -266,31 +302,73 @@ func TestOnlyAPaneAsksForTheMouseAndCursor(t *testing.T) {
 	if plain.Cursor != nil {
 		t.Error("the deck placed a cursor with no pane open")
 	}
+}
 
-	next, _ := m.trigger(ActionOpenWindow, "agent")
-	m = next.(Model)
-	p := m.active.(*panePopover)
-	t.Cleanup(func() { p.close(&m) })
+// A pane whose program has enabled mouse reporting has to have the events
+// forwarded to it. Without that the outer terminal, in alt-screen with no
+// tracking asked for, turns the wheel into arrow keys and scrolling types at
+// the agent.
+func TestAPaneAsksForTheMouseWhenItsProgramDoes(t *testing.T) {
+	backend := allKinds()
+	backend.script = `printf '\033[?1000h'; sleep 30`
+	m, p := openedPane(t, backend)
 
-	withPane := m.View()
-	if withPane.MouseMode == tea.MouseModeNone {
-		// Without this the outer terminal turns the wheel into arrow keys and
-		// scrolling types at the agent.
+	eventually(t, "the program to enable mouse reporting", p.term.WantsMouse)
+	if got := m.View().MouseMode; got == tea.MouseModeNone {
 		t.Error("a pane did not ask for mouse events, so the wheel arrives as arrow keys")
 	}
-	if withPane.Cursor == nil {
+}
+
+// The other half, and the one that was wrong: taking the mouse for a program
+// that never asked is a pure loss. The emulator drops the events, and the user
+// loses the terminal's own drag-to-select in exchange for nothing.
+func TestAPaneLeavesTheMouseAloneWhenItsProgramIgnoresIt(t *testing.T) {
+	m, p := openedPane(t, allKinds())
+
+	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
+	if p.term.WantsMouse() {
+		t.Fatal("a plain sleeper somehow enabled mouse reporting")
+	}
+	if got := m.View().MouseMode; got != tea.MouseModeNone {
+		t.Errorf("the deck took the mouse (%v) for a program that does not want it, "+
+			"which costs the terminal's native selection and gains nothing", got)
+	}
+}
+
+// A pane's program owns whether there is a cursor at all.
+func TestAPaneShowsACursorWhenItsProgramWantsOne(t *testing.T) {
+	m, p := openedPane(t, allKinds())
+
+	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
+	if m.View().Cursor == nil {
 		t.Error("a pane did not place a cursor, so the hosted program has none")
+	}
+}
+
+// A full-screen program hides its cursor and then parks it wherever suits its
+// own rendering. Drawing one anyway puts a blinking block at an arbitrary spot
+// on its screen — which is what jjui looked like.
+func TestNoCursorWhenTheProgramHidesIt(t *testing.T) {
+	backend := allKinds()
+	backend.script = `printf '\033[?25l'; sleep 30`
+	m, p := openedPane(t, backend)
+
+	eventually(t, "the program to hide its cursor", func() bool {
+		_, _, visible := p.term.Cursor()
+		return !visible
+	})
+	if _, _, ok := p.screenCursor(m.width, m.height); ok {
+		t.Error("screenCursor placed a cursor the program had hidden")
+	}
+	if m.View().Cursor != nil {
+		t.Error("the deck drew a cursor the program had hidden")
 	}
 }
 
 // The cursor has to land inside the terminal region of the popover, at every
 // size the pane agrees to open at — the same arithmetic the box itself uses.
 func TestTheCursorLandsInsideTheTerminal(t *testing.T) {
-	m := paneModel(t, allKinds())
-	next, _ := m.trigger(ActionOpenWindow, "agent")
-	m = next.(Model)
-	p := m.active.(*panePopover)
-	t.Cleanup(func() { p.close(&m) })
+	_, p := openedPane(t, allKinds())
 
 	for _, size := range [][2]int{{80, 24}, {120, 40}, {200, 60}, {32, 16}} {
 		w, h := size[0], size[1]
@@ -319,11 +397,7 @@ func TestTheCursorLandsInsideTheTerminal(t *testing.T) {
 // A deck too small for a pane must not place a cursor at a negative or
 // off-screen position.
 func TestNoCursorWhenThePaneDoesNotFit(t *testing.T) {
-	m := paneModel(t, allKinds())
-	next, _ := m.trigger(ActionOpenWindow, "agent")
-	m = next.(Model)
-	p := m.active.(*panePopover)
-	t.Cleanup(func() { p.close(&m) })
+	_, p := openedPane(t, allKinds())
 
 	if _, _, ok := p.screenCursor(10, 4); ok {
 		t.Error("a deck too small for a pane still reported a cursor position")
