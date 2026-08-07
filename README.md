@@ -607,10 +607,19 @@ windows, so they need a tmux client to switch to.
 | `e` | editor | **zmx session.** Keeps its buffers between glances. |
 | `s` | shell | **Spawned by awp.** Dies with the pane. |
 | `v` | vcs (jjui) | **Spawned by awp.** Dies with the pane. |
+| `i` | ci | **Spawned by awp.** Dies with the pane. |
+| `W` | watch | **Spawned by awp.** Dies with the pane. |
 
-Whether the process outlives the view is the only thing the two rows differ
+Whether the process outlives the view is the only thing the two groups differ
 by; the difference in code is which command awp runs. Everything downstream —
 the emulator, the keys, the rendering — is identical.
+
+`i` and `W` are the clearest ephemerals of the set: each runs one foreground
+program you watch until it says something, and a stale one is worse than none.
+`i` runs the same run-resolution script the tmux `ci` window runs, so both
+watch the same GitHub run. `W` runs the awp binary the deck itself is running,
+so a build in a temp path opens that build's watch view rather than an older
+install's.
 
 `ctrl+\` leaves a pane. It has to be a key nothing inside one wants, because
 every other key belongs to the program: `esc`, `q` and `ctrl+c` all mean

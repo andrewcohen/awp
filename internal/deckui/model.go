@@ -2546,10 +2546,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if _, ok := m.selected(); !ok {
 				return m, nil
 			}
-			// Open the live `awp watch` view as a real tmux window in the
+			// Open the live `awp watch` view as its own window in the
 			// workspace's session (vs the in-deck `w` overlay). `awp watch`
 			// resolves the workspace from the session's AWP_WORKSPACE env.
-			return m.trigger(ActionOpenWindow, "watch:awp watch")
+			// The name half is the pane kind a host claims it by; the command
+			// half is what the tmux window runs.
+			return m.trigger(ActionOpenWindow, PaneKindWatch+":awp watch")
 		case key.Matches(msg, km.Quit):
 			if m.filter != "" && msg.String() == "esc" {
 				m.filter = ""
@@ -3335,6 +3337,19 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	return m, loadCmd
 }
 
+// windowKind is the pane kind a window arg names.
+//
+// A window arg is `name` or `name:command`, and the kind is the name. The
+// command half is the tmux path's business — a pane backend builds its own
+// argv from the kind, because a tmux window runs a line typed into a shell and
+// a pane runs a process. Without this the two args that carry a command
+// (`watch:awp watch`, ReviewStackArg) could never match a pane kind, since the
+// backend would have to key its map on the command too.
+func windowKind(arg string) string {
+	name, _, _ := strings.Cut(arg, ":")
+	return name
+}
+
 func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	item, ok := m.selected()
 	if !ok || m.handler == nil {
@@ -3344,14 +3359,20 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	// backend that declines a kind falls through to tmux, which is what keeps
 	// the review and PR-description windows working unchanged.
 	if !item.Virtual {
-		kind, isPane := arg, a == ActionOpenWindow
-		if a == ActionSummon {
+		kind, isPane := windowKind(arg), a == ActionOpenWindow
+		switch a {
+		case ActionSummon:
 			// With awp hosting panes there is no other client to switch to,
 			// and `tmux switch-client` from outside tmux exits 0 having done
 			// nothing — a silent no-op that reads as a broken key. Summoning a
 			// workspace here means bringing its agent into the deck, which is
 			// the same gesture with the handoff removed.
-			kind, isPane = "agent", true
+			kind, isPane = PaneKindAgent, true
+		case ActionCI:
+			// `i` is not an ActionOpenWindow, but what it opens is a window
+			// like any other: a program you watch and then leave. Naming it as
+			// a kind is what lets a pane host claim it.
+			kind, isPane = PaneKindCI, true
 		}
 		if isPane {
 			if cmd, handled := m.openPane(item, kind); handled {

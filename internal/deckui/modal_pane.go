@@ -102,6 +102,15 @@ type panePopover struct {
 // backend deciding where a workspace's parked prompt goes.
 const PaneKindAgent = "agent"
 
+// PaneKindCI and PaneKindWatch are the two window kinds not spelled by an
+// ActionOpenWindow arg on its own: `i` is its own action, and `W`'s arg carries
+// the tmux command after the name. Named here so the deck and the backend agree
+// on the string without either writing it out a second time.
+const (
+	PaneKindCI    = "ci"
+	PaneKindWatch = "watch"
+)
+
 // hostsAgents says the workspace's agent runs on a pty this deck owns.
 //
 // It is the one question the create flow has to get right: a deck that hosts
