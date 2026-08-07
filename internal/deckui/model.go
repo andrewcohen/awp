@@ -3895,14 +3895,11 @@ func (m Model) view() string {
 	default:
 		rightSeg = dim.Render(statusText)
 	}
-	// Inset the footer to match the body panels (Padding(1, 1, 1, 1)):
-	// 1 col on each side AND 1 row of bottom padding so the status bar
-	// has the same breathing room below it as the panels have above
-	// their content.
-	// Footer inset matches the body panels (Padding(1, 1, 1, 1)):
-	// 1 col on each side, 1 row of padding top AND bottom so the status
-	// bar has the same breathing room above/below as the panels have
-	// around their content.
+	// The footer wears the same inset as the body panels (styles.Panel):
+	// panelPadX cols on each side and no vertical padding, so the status bar
+	// sits on the terminal's last row the way vim's and tmux's do rather than
+	// floating one row above it.
+	//
 	// "? help" describes the deck row-mode help overlay. Suppress it on
 	// modal screens (pickers, menus, jobs overlay, find/action chords)
 	// since the overlay doesn't apply there — those screens surface
@@ -3912,8 +3909,8 @@ func (m Model) view() string {
 		m.findMode || m.actionMode {
 		hint = ""
 	}
-	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, hint, m.width-2)
-	footer = lipgloss.NewStyle().Padding(1, 1, 1, 1).Render(footer)
+	footer := composeStatusBar(m.activities, m.spinner.View(), rightSeg, hint, m.width-panelCols)
+	footer = m.styles.Panel.Render(footer)
 	step("footer")
 	footerHeight := lipgloss.Height(footer)
 	bodyHeight := lipgloss.Height(body)
@@ -3937,7 +3934,7 @@ func (m Model) view() string {
 		// push the footer's bottom padding off screen.
 		// strings.Join rather than lipgloss.JoinVertical: both blocks are already
 		// m.width wide (the body was just padded, and the footer is composed at
-		// m.width-2 inside Padding(1, 1, 1, 1)), so there is no alignment left to
+		// m.width-panelCols inside styles.Panel), so there is no alignment left to
 		// do — and JoinVertical would re-measure every line of the frame to work
 		// that out, at another whole-frame parser buffer.
 		out := strings.Join([]string{body, footer}, "\n")
@@ -4116,16 +4113,20 @@ func (m Model) renderList(width int) string {
 	// padding on each side, which is where the rows end.
 	badge := m.renderAttentionSummary(countAttention(view.All))
 	scope := m.styles.Muted.Render("scope: " + scopeLabel(m.scope))
-	gap := (width - 2) - deckTextCol - lipgloss.Width(badge) - lipgloss.Width(scope)
+	gap := (width - panelCols) - deckTextCol - lipgloss.Width(badge) - lipgloss.Width(scope)
 	if gap < 1 {
 		gap = 1
 	}
+	// The blank under the title is deckHeaderRows' second row, and the only
+	// vertical gap the deck spends on itself. It earns the row: the badge sits
+	// on deckTextCol, the rows' own text column, so butted straight against the
+	// first project header it reads as a row rather than as a title.
 	titleRow := deckIndent + badge + strings.Repeat(" ", gap) + scope
 	header := []string{titleRow, ""}
 	items := view.Items()
 	if len(items) == 0 {
-		header = append(header, deckIndent+lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render("No workspaces found."))
-		return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(header, "\n"))
+		header = append(header, deckIndent+m.styles.Muted.Render("No workspaces found."))
+		return m.styles.Panel.Width(width).Render(strings.Join(header, "\n"))
 	}
 	projectHints, pinHints, rowHints := m.findHints()
 	prefixSlot := lipgloss.NewStyle().Width(deckPrefixWidth)
@@ -4424,7 +4425,7 @@ func (m Model) renderList(width int) string {
 			capacity--
 		}
 	}
-	m.deckViewport.SetWidth(width - 2)
+	m.deckViewport.SetWidth(width - panelCols)
 	m.deckViewport.SetHeight(capacity)
 	m.deckViewport.SetContent(strings.Join(body, "\n"))
 	m.deckViewport.SetYOffset(yoff)
@@ -4435,7 +4436,7 @@ func (m Model) renderList(width int) string {
 		out = append(out, stickyHeader)
 	}
 	out = append(out, m.deckViewport.View())
-	return lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1).Render(strings.Join(out, "\n"))
+	return m.styles.Panel.Width(width).Render(strings.Join(out, "\n"))
 }
 
 // deckStackThreshold is the minimum terminal width (cols) for the
@@ -4469,17 +4470,17 @@ func pickerSplit(total int, stacked bool) (int, int) {
 
 // deckBodyCapacity returns the number of scrollable body rows the left
 // column can show given the terminal height. Subtracts the chrome the
-// caller renders around the body: the title row + blank header (2
-// lines), the panel's own Padding(1, 1, 1, 1) (2 lines = 1 top + 1
-// bottom), and the footer row + its Padding (3 lines). Each entry in
-// `body` is exactly 1 rendered line, so the math is precise without
-// slack. Falls back to a generous capacity when height is unknown so
-// tests and initial paints don't accidentally hide rows.
+// caller renders around the body: the title row and the blank under it
+// (deckHeaderRows), the panel's own vertical padding (panelRows), and
+// the footer block (footerRows). Each entry in `body` is exactly 1
+// rendered line, so the math is precise without slack. Falls back to a
+// generous capacity when height is unknown so tests and initial paints
+// don't accidentally hide rows.
 func (m Model) deckBodyCapacity() int {
 	if m.height <= 0 {
 		return len(m.items()) * 2
 	}
-	const chrome = 2 + 2 + 3
+	const chrome = deckHeaderRows + panelRows + footerRows
 	rows := m.height - chrome
 	if rows < 1 {
 		rows = 1

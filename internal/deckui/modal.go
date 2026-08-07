@@ -1,8 +1,31 @@
 package deckui
 
 import (
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 )
+
+// renderPickerPanel is the body panel every list picker (bookmark, open,
+// review) renders into: the shared panel inset, with the list sized to fill
+// exactly what the deck's chrome leaves.
+//
+// One function rather than three identical copies because the three had
+// already drifted apart in their comments while agreeing on the number, and a
+// wrong number here does not fail — it leaves a band of dead rows above the
+// footer, or clips the list's own pagination off the bottom. list.Model owns
+// its title, status bar, paginator and help inside whatever height it is given.
+func renderPickerPanel(m *Model, l *list.Model, width int) string {
+	listWidth := width - panelCols
+	if listWidth < 8 {
+		listWidth = 8
+	}
+	listHeight := m.height - panelRows - footerRows
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	l.SetSize(listWidth, listHeight)
+	return m.styles.Panel.Width(width).Render(l.View())
+}
 
 // modal is one full-screen overlay the deck can show in place of the row
 // list: a picker, a form, a confirmation, an overlay. At most one is

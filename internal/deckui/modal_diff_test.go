@@ -182,14 +182,16 @@ func blankRowsAboveFooter(view string) int {
 
 // The viewer fills its height budget, so any row diffModalChrome over-reserves
 // shows up as a blank band above the status line rather than as a smaller frame.
-// One row of separation is the intent; three was the bug.
-func TestDiffModalLeavesOneRowAboveTheFooter(t *testing.T) {
+// The body panels spend nothing on vertical padding now, so the intent is zero:
+// the viewer's bottom border, then the status bar. Three was the original bug,
+// one was the padding this cleanup removed.
+func TestDiffModalLeavesNoDeadRowsAboveTheFooter(t *testing.T) {
 	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	view := m.render()
-	if got := blankRowsAboveFooter(view); got != 1 {
-		t.Fatalf("expected 1 blank row above the footer, got %d:\n%s", got, view)
+	if got := blankRowsAboveFooter(view); got != 0 {
+		t.Fatalf("expected no blank rows above the footer, got %d:\n%s", got, view)
 	}
 	// And the frame must still fit — the fix takes the reclaimed rows as diff
 	// content, so an off-by-one the other way would push the footer off screen.

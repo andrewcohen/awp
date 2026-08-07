@@ -50,6 +50,13 @@ type deckStyles struct {
 	// own surfaces.
 	PaneTitle lipgloss.Style
 	PaneHint  lipgloss.Style
+
+	// Panel is the inset every body-area panel and the footer share — see
+	// layout.go for why it is horizontal-only. Chain Width(...) per use.
+	// Bordered popovers (help, jobs, confirm) keep their own Padding(1, 2):
+	// they float over a blank canvas rather than competing for the frame's
+	// height, and content flush against a border reads as a mistake.
+	Panel lipgloss.Style
 }
 
 func newDeckStyles() deckStyles {
@@ -73,6 +80,8 @@ func newDeckStyles() deckStyles {
 
 		PaneTitle: lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
 		PaneHint:  lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
+
+		Panel: lipgloss.NewStyle().Padding(panelPadY, panelPadX),
 	}
 	for b := inboxBucket(0); b < inboxBucketCount; b++ {
 		s.BucketHeader[b] = lipgloss.NewStyle().Foreground(lipgloss.Color(inboxBucketColor(b))).Bold(true)

@@ -5,7 +5,6 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // bookmarkPicker is the fuzzy bookmark picker shared by two flows,
@@ -126,20 +125,7 @@ func (p *bookmarkPicker) footerHelp() string {
 }
 
 func (p *bookmarkPicker) renderList(m *Model, width int) string {
-	containerStyle := lipgloss.NewStyle().Width(width).Padding(1, 1, 1, 1)
-	// Reserve 2 rows for container padding plus 3 for the deck's bottom
-	// footer (status line + 1 row top/bottom padding). list.Model handles
-	// its own title, status bar, paginator, and help footer inside the
-	// remaining space — and a single loadingItem during the fetch so the
-	// chrome's shape stays constant.
-	listWidth := width - 2
-	if listWidth < 8 {
-		listWidth = 8
-	}
-	listHeight := m.height - 5
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	p.list.SetSize(listWidth, listHeight)
-	return containerStyle.Render(p.list.View())
+	// A single loadingItem stands in during the fetch so the list's chrome
+	// keeps its shape and the panel doesn't resize under the user.
+	return renderPickerPanel(m, &p.list, width)
 }
