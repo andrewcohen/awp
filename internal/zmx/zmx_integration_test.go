@@ -2,10 +2,14 @@ package zmx
 
 import (
 	"context"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // The unit tests above run against a fake, so they prove the client's logic but
@@ -28,31 +32,60 @@ func TestAgainstRealZmx(t *testing.T) {
 	t.Cleanup(func() { _ = c.Kill(ctx, name) })
 	_ = c.Kill(ctx, name)
 
-	created, err := c.Ensure(ctx, name, t.TempDir(), []string{"sh"})
+	// The session is created by attaching to it, which needs a pty — awp hosts
+	// this command on one (see internal/vterm), so the test does the same.
+	// The command reports its own parent, which is how "is this really the
+	// session's process, or a line typed into a shell?" gets answered.
+	attach := AttachCmd(t.TempDir(), name,
+		[]string{"sh", "-c", `echo "PARENT=$(ps -o comm= -p $PPID)"; sleep 60`}, os.Environ())
+	ptmx, err := pty.StartWithSize(attach, &pty.Winsize{Cols: 80, Rows: 24})
 	if err != nil {
-		t.Fatalf("Ensure: %v", err)
+		t.Fatalf("host `zmx attach` on a pty: %v", err)
 	}
-	if !created {
-		t.Fatal("Ensure reported it did not create a session that did not exist")
-	}
+	go func() { _, _ = io.Copy(io.Discard, ptmx) }()
+	t.Cleanup(func() {
+		_ = ptmx.Close()
+		if attach.Process != nil {
+			_ = attach.Process.Kill()
+		}
+	})
 
 	// The name SessionName produced has to be one zmx actually accepted — it
 	// silently declines names containing a slash, so a bad scheme shows up as
 	// a session that is simply not there.
-	found, ok, err := c.Lookup(ctx, name)
-	if err != nil {
-		t.Fatalf("Lookup: %v", err)
-	}
-	if !ok {
-		t.Fatalf("zmx did not accept the session name %q", name)
-	}
+	var found Session
+	waitFor(t, "the session to appear in `zmx ls`", func() bool {
+		var ok bool
+		found, ok, err = c.Lookup(ctx, name)
+		return err == nil && ok
+	})
 	if !found.Live() || found.PID == 0 {
 		t.Errorf("a freshly created session parsed as %+v", found)
 	}
 
-	// A second Ensure must attach to what is there rather than start a rival.
-	if again, err := c.Ensure(ctx, name, t.TempDir(), []string{"sh"}); err != nil || again {
-		t.Errorf("second Ensure returned created=%v err=%v, want false/nil", again, err)
+	// `zmx run` would have made the session a login bash with the command
+	// typed at its prompt. `zmx attach <name> <argv>` makes argv the process,
+	// with zmx as its parent and no shell in between.
+	var parent string
+	waitFor(t, "the hosted command to report its parent", func() bool {
+		hist, err := c.History(ctx, name)
+		if err != nil {
+			return false
+		}
+		_, after, ok := strings.Cut(hist, "PARENT=")
+		if !ok {
+			return false
+		}
+		parent, _, _ = strings.Cut(after, "\n")
+		return true
+	})
+	if !strings.Contains(parent, "zmx") || strings.Contains(parent, "bash") {
+		t.Errorf("the session's command was parented by %q; want zmx, with no shell wrapping it", parent)
+	}
+
+	// Reap must leave a running session alone — attaching to it is the point.
+	if removed, err := c.Reap(ctx, name); err != nil || removed {
+		t.Errorf("Reap on a live session returned removed=%v err=%v, want false/nil", removed, err)
 	}
 
 	if err := c.Label(ctx, name, map[string]string{"kind": "probe"}); err != nil {
@@ -66,23 +99,25 @@ func TestAgainstRealZmx(t *testing.T) {
 		t.Errorf("labels round-tripped as %v, want kind=probe", labelled.Labels)
 	}
 
-	// History reads the session's screen with no client attached.
-	if _, err := realRun(ctx, "", "zmx", "send", name, "echo SCROLLBACK-MARKER\n"); err != nil {
-		t.Fatal(err)
+	// Closing the pane closes the client, not the session. This is the whole
+	// reason zdeck's agent and editor panes go through zmx at all, so it is
+	// worth asserting against the real thing rather than trusting the docs.
+	_ = ptmx.Close()
+	_ = attach.Process.Kill()
+	_, _ = attach.Process.Wait()
+
+	survivor, ok, err := c.Lookup(ctx, name)
+	if err != nil {
+		t.Fatalf("Lookup after the client went away: %v", err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		hist, err := c.History(ctx, name)
-		if err != nil {
-			t.Fatalf("History: %v", err)
-		}
-		if strings.Contains(hist, "SCROLLBACK-MARKER") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("waited 5s for the marker in scrollback; last read was %q", hist)
-		}
-		time.Sleep(50 * time.Millisecond)
+	if !ok || !survivor.Live() {
+		t.Fatalf("the session did not survive its client: found=%v %+v", ok, survivor)
+	}
+	// History reads the screen back with nothing attached.
+	if hist, err := c.History(ctx, name); err != nil {
+		t.Fatalf("History with no client attached: %v", err)
+	} else if !strings.Contains(hist, "PARENT=") {
+		t.Errorf("scrollback lost the session's output once the client left: %q", hist)
 	}
 
 	if err := c.Kill(ctx, name); err != nil {
@@ -90,5 +125,22 @@ func TestAgainstRealZmx(t *testing.T) {
 	}
 	if _, stillThere, _ := c.Lookup(ctx, name); stillThere {
 		t.Error("the session was still listed after Kill")
+	}
+}
+
+// waitFor polls until cond holds, failing the test if it never does. zmx work
+// happens in another process, so every observation here is eventually
+// consistent.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited 5s for %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
