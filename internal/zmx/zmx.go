@@ -140,35 +140,29 @@ func parseSession(line string) (Session, bool) {
 	return s, true
 }
 
-// Ensure guarantees a live session called name, running argv in dir, and
-// reports whether it had to create one.
+// Reap clears the way for a fresh session called name, and reports whether it
+// had to remove one.
 //
-// A session that is listed but whose command has exited is replaced rather
-// than reused: attaching to it would render a dead program's last screen.
-func (c Client) Ensure(ctx context.Context, name, dir string, argv []string) (created bool, err error) {
+// A session that is listed but whose command has exited is not reusable:
+// attaching to it would render a dead program's last screen. A live session is
+// left alone — attaching to that one is the point.
+//
+// Creating the session is AttachCmd's job, not this one's. zmx has no way to
+// start a session detached with a given command as its own process (see
+// AttachCmd), so the only correct order is reap, then attach.
+func (c Client) Reap(ctx context.Context, name string) (removed bool, err error) {
 	if name == "" {
-		return false, fmt.Errorf("ensure a zmx session: no name given")
-	}
-	if len(argv) == 0 {
-		return false, fmt.Errorf("ensure zmx session %q: no command to run", name)
+		return false, fmt.Errorf("reap a zmx session: no name given")
 	}
 	existing, found, err := c.Lookup(ctx, name)
 	if err != nil {
 		return false, err
 	}
-	if found && existing.Live() {
+	if !found || existing.Live() {
 		return false, nil
 	}
-	if found {
-		if _, err := c.run(ctx, "", "zmx", "kill", name, "--force"); err != nil {
-			return false, fmt.Errorf("replace the finished zmx session %q: %w", name, err)
-		}
-	}
-	// `-d` after the name is the non-blocking form; without it zmx waits for
-	// the command to finish.
-	args := append([]string{"run", name, "-d"}, argv...)
-	if _, err := c.run(ctx, dir, "zmx", args...); err != nil {
-		return false, fmt.Errorf("start zmx session %q running %q: %w", name, strings.Join(argv, " "), err)
+	if _, err := c.run(ctx, "", "zmx", "kill", name, "--force"); err != nil {
+		return false, fmt.Errorf("remove the finished zmx session %q: %w", name, err)
 	}
 	return true, nil
 }
@@ -206,13 +200,23 @@ func (c Client) History(ctx context.Context, name string) (string, error) {
 	return out, nil
 }
 
-// AttachCmd is the command that hosts a session in a terminal awp owns.
+// AttachCmd is the command that hosts a session in a terminal awp owns,
+// creating it to run argv in dir if it is not there yet. An empty argv asks
+// zmx for a login $SHELL instead.
 //
-// ctrl+\ is zmx's own detach key and is handled by this client rather than
-// reaching the program, so it ends the process and awp learns the pane closed
-// through the ordinary exit path. There is nothing to intercept.
-func AttachCmd(name string, env []string) *exec.Cmd {
-	cmd := exec.Command("zmx", "attach", name) //nolint:gosec // name comes from SessionName
+// This is `zmx attach`, and deliberately not `zmx run`. run spawns a login
+// bash and *types the command at its prompt*: the session's process is the
+// shell, so the pane shows bash's banner, bash's prompt, the command echoed
+// back, and an exit-code marker after it — none of which is the program you
+// asked for. attach makes argv the session's own process, with zmx as its
+// parent and nothing in between.
+//
+// argv is ignored when the session already exists, which is what makes one
+// call both "create it" and "attach to it".
+func AttachCmd(dir, name string, argv, env []string) *exec.Cmd {
+	args := append([]string{"attach", name}, argv...)
+	cmd := exec.Command("zmx", args...) //nolint:gosec // name comes from SessionName, argv from awp's own config
+	cmd.Dir = dir
 	cmd.Env = vterm.Env(env)
 	return cmd
 }

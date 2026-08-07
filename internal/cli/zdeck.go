@@ -89,17 +89,19 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 		return zmx.Command(dir, argv, os.Environ()), func() {}, nil
 	}
 
+	// Reap first: a session whose command has already exited would otherwise
+	// be attached to and render a dead program's last screen.
 	name := zmx.SessionName(item.ProjectName, item.WorkspaceName, spec.label)
-	if _, err := z.client.Ensure(context.Background(), name, dir, argv); err != nil {
+	if _, err := z.client.Reap(context.Background(), name); err != nil {
 		return nil, nil, err
 	}
-	// Best effort: labels make `zmx ls` legible from outside awp. A session
-	// that runs but is not labelled is still a working pane.
-	_ = z.client.Label(context.Background(), name, map[string]string{
-		"awp": "1", "kind": spec.label, "project": item.ProjectName, "workspace": item.WorkspaceName,
-	})
-	// Detaching leaves the session running; that is what long-lived means.
-	return zmx.AttachCmd(name, os.Environ()), func() {}, nil
+	// One command both creates and attaches. Nothing labels the session,
+	// because SessionName already spells the project, the workspace and the
+	// kind into the name that `zmx ls` prints.
+	//
+	// Closing the pane kills this client, not the session; that is what
+	// long-lived means.
+	return zmx.AttachCmd(dir, name, argv, os.Environ()), func() {}, nil
 }
 
 // runZdeck is `awp deck` with zmx behind the window keys instead of tmux.

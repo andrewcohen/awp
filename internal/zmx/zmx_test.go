@@ -87,69 +87,67 @@ func TestListSaysWhatToCheckWhenZmxIsMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureReusesALiveSession(t *testing.T) {
+func TestReapLeavesALiveSessionAlone(t *testing.T) {
 	f := &fakeZmx{out: map[string]string{"zmx ls": lsOutput}}
-	created, err := New(f.run).Ensure(context.Background(),
-		"awp.awp.portal.agent", "/Users/x/awp", []string{"claude"})
+	removed, err := New(f.run).Reap(context.Background(), "awp.awp.portal.agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created {
-		t.Error("Ensure created a session that was already live")
+	if removed {
+		t.Error("Reap removed a session that was still running")
 	}
-	if f.ran("zmx run") {
-		t.Error("Ensure started a second process for a live session")
+	if f.ran("zmx kill") {
+		t.Errorf("Reap killed a live session; calls were %v", f.calls)
 	}
 }
 
-// A session whose command has exited must be replaced, not reused: attaching
-// would render a dead program's last screen and look like a hung agent.
-func TestEnsureReplacesAFinishedSession(t *testing.T) {
+// A session whose command has exited must be cleared, not attached to:
+// attaching would render a dead program's last screen and look like a hung
+// agent.
+func TestReapRemovesAFinishedSession(t *testing.T) {
 	f := &fakeZmx{out: map[string]string{"zmx ls": lsOutput}}
-	created, err := New(f.run).Ensure(context.Background(), "dead", "/Users/x", []string{"sh"})
+	removed, err := New(f.run).Reap(context.Background(), "dead")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created {
-		t.Error("Ensure reused a session whose command had exited")
+	if !removed {
+		t.Error("Reap kept a session whose command had exited")
 	}
 	if !f.ran("zmx kill dead --force") {
-		t.Error("the finished session was not cleared first")
-	}
-	if !f.ran("zmx run dead -d sh") {
-		t.Errorf("did not restart the session; calls were %v", f.calls)
+		t.Errorf("the finished session was not cleared; calls were %v", f.calls)
 	}
 }
 
-// `-d` has to come after the name. Without it zmx blocks until the command
-// finishes, which hung a probe before this was understood.
-func TestEnsureStartsDetachedInTheRightDirectory(t *testing.T) {
-	f := &fakeZmx{}
-	if _, err := New(f.run).Ensure(context.Background(),
-		"awp.p.w.shell", "/repo/path", []string{"fish", "-l"}); err != nil {
-		t.Fatal(err)
-	}
-	if !f.ran("zmx run awp.p.w.shell -d fish -l") {
-		t.Errorf("wrong invocation: %v", f.calls)
-	}
-	var startDir string
-	for i, c := range f.calls {
-		if strings.HasPrefix(c, "zmx run") {
-			startDir = f.dirs[i]
-		}
-	}
-	if startDir != "/repo/path" {
-		t.Errorf("the session was started in %q, want /repo/path", startDir)
-	}
-}
-
-func TestEnsureRefusesNonsense(t *testing.T) {
-	c := New((&fakeZmx{}).run)
-	if _, err := c.Ensure(context.Background(), "", "/d", []string{"sh"}); err == nil {
+func TestReapRefusesAnEmptyName(t *testing.T) {
+	if _, err := New((&fakeZmx{}).run).Reap(context.Background(), ""); err == nil {
 		t.Error("an empty name was accepted")
 	}
-	if _, err := c.Ensure(context.Background(), "n", "/d", nil); err == nil {
-		t.Error("an empty command was accepted")
+}
+
+// The regression this guards: `zmx run <name> -d <argv>` spawns a login bash
+// and types argv at its prompt, so the session's process is the shell and the
+// pane shows a banner, a prompt and an exit-code marker. `zmx attach <name>
+// <argv>` makes argv the session's own process.
+func TestAttachRunsTheCommandRatherThanTypingItIntoAShell(t *testing.T) {
+	cmd := AttachCmd("/repo/path", "awp.p.w.agent", []string{"claude", "--resume"}, nil)
+	got := strings.Join(cmd.Args, " ")
+	want := "zmx attach awp.p.w.agent claude --resume"
+	if got != want {
+		t.Errorf("invocation was %q, want %q", got, want)
+	}
+	if strings.Contains(got, " run ") || strings.Contains(got, " -d ") {
+		t.Error("the pane went back to the `zmx run` form, which wraps the command in bash")
+	}
+	if cmd.Dir != "/repo/path" {
+		t.Errorf("the session would start in %q, want /repo/path", cmd.Dir)
+	}
+}
+
+// An attach with no command is how you ask zmx for a login $SHELL.
+func TestAttachWithNoCommandAsksForAShell(t *testing.T) {
+	cmd := AttachCmd("/repo", "awp.p.w.shell", nil, nil)
+	if got := strings.Join(cmd.Args, " "); got != "zmx attach awp.p.w.shell" {
+		t.Errorf("invocation was %q, want a bare attach", got)
 	}
 }
 
@@ -184,7 +182,7 @@ func TestHostedCommandsDescribeTheEmulator(t *testing.T) {
 		name string
 		cmd  interface{ Environ() []string }
 	}{
-		{"attach", AttachCmd("awp.p.w.agent", base)},
+		{"attach", AttachCmd("/repo", "awp.p.w.agent", []string{"claude"}, base)},
 		{"direct", Command("/repo", []string{"jjui"}, base)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
