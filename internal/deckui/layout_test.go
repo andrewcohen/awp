@@ -46,6 +46,35 @@ func TestTheDeckSpendsThreeRowsOnChrome(t *testing.T) {
 	}
 }
 
+// The deck spends nothing on its own inset. It is the outermost program in its
+// terminal, so a margin is a column of the user's screen buying a gap against
+// nothing.
+//
+// Checked twice, because the constants and the render can disagree: a panel
+// that hardcodes its own padding instead of taking deckStyles.Panel satisfies
+// the arithmetic and still indents. The selection bar is the leftmost thing
+// the frame draws, so it is where the frame's own edge is visible — the
+// indentation on the rows themselves belongs to their content.
+func TestTheDeckSpendsNothingOnItsInset(t *testing.T) {
+	if panelCols != 0 || panelRows != 0 {
+		t.Errorf("the frame is inset by %d cols and %d rows, want none", panelCols, panelRows)
+	}
+	m := chromeProbeModel(80, 24)
+	var bar string
+	for _, line := range strings.Split(m.render(), "\n") {
+		if plain := ansi.Strip(line); strings.Contains(plain, "┃") {
+			bar = plain
+			break
+		}
+	}
+	if bar == "" {
+		t.Fatal("no selected row rendered, so there is no frame edge to measure")
+	}
+	if !strings.HasPrefix(bar, "┃") {
+		t.Errorf("the selection bar is indented, so the frame still has an inset: %q", bar)
+	}
+}
+
 // The capacity constant is only right if the list actually gets those rows. An
 // over-reserving chrome does not shrink the frame, it converts list rows into a
 // dead band above the footer, which is how the diff modal's version of this bug

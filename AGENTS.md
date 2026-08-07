@@ -284,15 +284,23 @@ box against its border. `charm.BorderCells` (aliased in `deckui` as
 v1 terms and has to add them back.
 
 **Panel padding.** All body-area panels and the footer share one style —
-`deckStyles.Panel`, which is `Padding(panelPadY, panelPadX)` = **1 col left
-and right, and no rows top or bottom**. Content still aligns at col 1;
-nothing is spent vertically.
+`deckStyles.Panel`, which is `Padding(panelPadY, panelPadX)` = **zero, in
+both directions**. The deck reaches all four edges of its terminal.
 
-Horizontal padding is cheap and vertical padding is not. The deck is a
-full-screen alt-screen program, so a blank row above the title is a
-workspace row the list does not get — the frame used to spend 7 of 24 rows
-on itself and now spends 3 (title, one gap, status bar). The status bar
-sits on the terminal's last row, the way vim's and tmux's do.
+The deck is the outermost program in its terminal, so there is no
+surrounding surface for a margin to separate it from — an inset is a cell of
+the user's screen buying a gap against the edge of the world. Rows still
+read as rows because their own content indents them: the selection's `┃ `
+prefix and the status dot occupy the columns an outer pad was holding, and
+they belong to the row rather than to the frame. Vertically the same
+argument is sharper still, since a blank row above the title is a workspace
+row the list does not get — the frame used to spend 7 of 24 rows on itself
+and now spends 3 (title, one gap, status bar). The status bar sits on the
+terminal's last row, the way vim's and tmux's do.
+
+The constants stay even at zero. Every panel and the footer derive from
+them, so reintroducing an inset is one edit in `layout.go` rather than a
+hunt through the call sites that file exists to have replaced.
 
 - The one gap the deck keeps is the blank under the title row. It earns
   the row: the attention badge sits on `deckTextCol`, the same column the
@@ -301,7 +309,12 @@ sits on the terminal's last row, the way vim's and tmux's do.
 - **Bordered popovers** (help, jobs overlay, confirms, inputs) keep their
   own `Padding(1, 2)`. They float over a blank canvas rather than competing
   for the frame's height, and content flush against a border reads as a
-  mistake.
+  mistake. That is padding *inside* a border; nothing goes outside one.
+- **A pane has nothing outside its border either.** `paneBox` renders
+  exactly `m.width × m.height`, so the `lipgloss.Place` that centres it adds
+  no canvas. A pane shows someone else's full-screen program, and a column
+  of blank beside the border is a second edge next to the one already there.
+  `TestNothingSitsOutsideThePanesBorder` pins it.
 - **`internal/deckui/layout.go` is the one place the frame budget is
   written down** — `panelPadX/Y`, `panelRows`, `panelCols`, `footerRows`,
   `deckHeaderRows`, `deckTitleRowIndex`. Anything that subtracts chrome
