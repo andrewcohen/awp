@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/vterm"
 )
@@ -252,6 +253,36 @@ func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
 	}
 	if got := lipgloss.Height(box); got != wantH {
 		t.Errorf("the box rendered %d rows tall, want %d", got, wantH)
+	}
+}
+
+// Nothing sits outside the pane's border.
+//
+// The border is the pane's whole frame, so a column of canvas around it is a
+// column the hosted program does not get, spent on a second edge next to the
+// one already there. This is asserted through the deck's own render rather
+// than through renderPopover, because the padding it would catch is added by
+// the lipgloss.Place that centres the box — not by the box.
+func TestNothingSitsOutsideThePanesBorder(t *testing.T) {
+	m, p := openedPane(t, allKinds())
+	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
+
+	lines := strings.Split(m.render(), "\n")
+	if len(lines) != m.height {
+		t.Fatalf("the frame is %d rows, the terminal is %d", len(lines), m.height)
+	}
+	top, bottom := ansi.Strip(lines[0]), ansi.Strip(lines[len(lines)-1])
+	for _, tc := range []struct {
+		what string
+		line string
+	}{{"top", top}, {"bottom", bottom}} {
+		if lipgloss.Width(tc.line) != m.width {
+			t.Errorf("the %s border row is %d columns, the terminal is %d",
+				tc.what, lipgloss.Width(tc.line), m.width)
+		}
+		if strings.HasPrefix(tc.line, " ") || strings.HasSuffix(tc.line, " ") {
+			t.Errorf("the %s border row has canvas beside it: %q", tc.what, tc.line)
+		}
 	}
 }
 

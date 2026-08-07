@@ -189,9 +189,11 @@ func TestNoWorkspacesMessageSitsOnTheBodyColumn(t *testing.T) {
 	(&m).clampDeckViewport()
 	out := m.renderList(m.width)
 
-	if got := colOfFirst(t, out, "No workspaces found."); got != deckTextCol+1 {
-		// +1 for the panel's own left padding.
-		t.Errorf("empty-state message at col %d, want %d (the deck's text column)", got, deckTextCol+1)
+	// Derived rather than a literal: the message sits on the rows' text column,
+	// wherever the panel's own inset puts that.
+	if want := deckTextCol + panelPadX; colOfFirst(t, out, "No workspaces found.") != want {
+		t.Errorf("empty-state message at col %d, want %d (the deck's text column)",
+			colOfFirst(t, out, "No workspaces found."), want)
 	}
 }
 
