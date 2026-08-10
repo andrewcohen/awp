@@ -314,6 +314,22 @@ func TestTheMostUrgentReasonWins(t *testing.T) {
 	}
 }
 
+// A working agent outranks whatever else is true of its workspace, and that is
+// the right way round: something is already on it, so reporting the red PR would
+// send you to a row that is being dealt with.
+func TestAWorkingAgentReportsWorking(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	v := openPR(prstatus.PRStatus{Mine: true, CIState: prstatus.PRCIFailing})
+	v.Now = func() time.Time { return now }
+	it := prRow()
+	it.LastActiveAt = now.Add(-time.Minute) // also recent
+	it.Status = "working"
+	it.Active = true
+	if got := v.Wants(it); got != ReasonWorking {
+		t.Errorf("got %v, want ReasonWorking", got)
+	}
+}
+
 // The flat list's order is its hierarchy: there are no headers doing that job.
 func TestTheScopeReadsDownThePriority(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
@@ -329,13 +345,18 @@ func TestTheScopeReadsDownThePriority(t *testing.T) {
 			{WorkspaceName: "broken", ProjectName: "p", RepoRoot: "/repo", Bookmark: "needs-action", Status: "idle"},
 			{WorkspaceName: "blocked", ProjectName: "p", Status: "waiting", Unread: true, Active: true},
 			{WorkspaceName: "reviewing", ProjectName: "p", RepoRoot: "/repo", Bookmark: "wants-review", Status: "idle"},
+			{WorkspaceName: "running", ProjectName: "p", Status: "working", Active: true},
 		},
 	}
 	var got []string
 	for _, it := range v.Items() {
 		got = append(got, it.WorkspaceName)
 	}
-	want := []string{"blocked", "reviewing", "broken", "recent"}
+	// The running agent leads, which is not where urgency would put it — there
+	// is nothing to do about a working agent. The deck is watched as much as it
+	// is acted on, and scattered below the rows that want you the moving rows
+	// were the hardest thing in the list to keep an eye on.
+	want := []string{"running", "blocked", "reviewing", "broken", "recent"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", got, want)
 	}

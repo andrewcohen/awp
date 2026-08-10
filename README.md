@@ -182,19 +182,21 @@ The mirror records **each message's GitHub node id**, which is how the diff reco
 
 ### Attention scope (`P`)
 
-The second `P` scope is **one flat list of everything that wants you, most-your-problem first**. Unlike the inbox it has no section headers and unlike the all scope it is not grouped by project — grouping would cut a single priority-ordered list into as many lists as you have repos, and put a different kind of claim at the top of each. So reading down it is reading down the priority, and **every row says why it is there** on its meta line, since nothing else on screen does.
+The second `P` scope is **one flat list — the agents that are running, then everything that wants you, most-your-problem first**. Unlike the inbox it has no section headers and unlike the all scope it is not grouped by project — grouping would cut a single priority-ordered list into as many lists as you have repos, and put a different kind of claim at the top of each. So reading down it is reading down the priority, and **every row says why it is there** on its meta line, since nothing else on screen does.
 
-A row qualifies for any of these, and shows the most urgent one it matches:
+**Running agents lead**, which is not where urgency would put them: there is nothing to do about an agent that is working. But the deck is watched as much as it is acted on, and the running rows are the ones that are changing — scattered below the rows that want you they were the hardest thing in the list to keep an eye on. Being first also decides what a row reports when it matches more than one reason, and that lands the right way round: a workspace whose agent is working and whose PR has gone red reads as `working`, because something is already on it.
+
+A row qualifies for any of these, and shows the first one it matches:
 
 | Reason | What it means |
 |---|---|
-| `waiting on you` | The agent asked something and stopped. The only one where the work has actually halted. |
+| `working` | An agent running right now. Replaced by the dev-loop progress when there is any — `3/7 · implement · ▶ <unit>` says "working" with more in it than the word does. |
+| `waiting on you` | The agent asked something and stopped. The first of the ones that want you, and the only one where the work has actually halted. |
 | `re-review requested` | You reviewed this PR, the author pushed and asked again. |
 | `your review` | A PR you have **checked out** whose review is still wanted from you. |
 | `finished a turn` | The agent finished since you last looked. |
 | `PR needs action` | Your own PR: changes requested, CI red, or a branch that won't merge as it stands. |
 | `approved, green` | Your own PR, one keypress from done. |
-| `working` | An agent running right now. Replaced by the dev-loop progress when there is any — `3/7 · implement · ▶ <unit>` says "working" with more in it than the word does. |
 | `2h ago` | You were in this workspace recently and nothing else is true of it. |
 
 **Review means still-wanted, not still-open.** GitHub clears the review request the moment you submit a review and re-sets it only if the author asks again, so a PR you have already reviewed drops out on its own — there is no rule saying so, and none needed. "Checked out" is also the whole difference from the inbox's *Needs your review* bucket, which deliberately includes PRs you have **not** pulled down; a PR with no local workspace is the opposite of one you are working on.

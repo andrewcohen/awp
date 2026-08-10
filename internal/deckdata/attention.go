@@ -36,9 +36,22 @@ type Reason int
 const (
 	// ReasonNone is a row with nothing to act on. Not in the scope.
 	ReasonNone Reason = iota
+	// ReasonWorking is an agent running right now. First, which is not where
+	// urgency would put it — there is nothing to do about a working agent — but
+	// the deck is watched as much as it is acted on, and the running agents are
+	// the rows that are changing. Scattered below the rows that want you they
+	// were the hardest thing in the list to keep an eye on; grouped at the top
+	// they are one glance.
+	//
+	// Being first also decides what a row reports when it matches more than one
+	// reason, and that lands the right way round: a workspace whose agent is
+	// working and whose PR has gone red reads as working, because something is
+	// already on it.
+	ReasonWorking
 	// ReasonWaiting is an agent that asked and stopped — a question, a
-	// permission prompt, an elicitation. First because it is the only reason
-	// where the work has actually halted and you are the thing in its way.
+	// permission prompt, an elicitation. First of the reasons that want you,
+	// because it is the only one where the work has actually halted and you are
+	// the thing in its way.
 	ReasonWaiting
 	// ReasonReReviewRequested is a PR you reviewed once, that the author has
 	// pushed to and asked you about again. Above a first request because
@@ -57,10 +70,6 @@ const (
 	// ReasonPRReadyToMerge is your own PR, approved and green. Nothing is
 	// broken, so it ranks below what is — but it is one keypress from done.
 	ReasonPRReadyToMerge
-	// ReasonWorking is an agent running right now. Nothing to do about it, but
-	// it is why the deck stays lit while work is in flight rather than going
-	// quiet the moment you stop being needed.
-	ReasonWorking
 	// ReasonRecent is a workspace you were in recently and nothing else is true
 	// of. Last, because it asks for nothing at all — it is the answer to "what
 	// was I doing", which is worth a row only once the list has run out of
