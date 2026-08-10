@@ -236,17 +236,29 @@ The `awp deck` title is plain bold (terminal-default fg / white) — it delibera
   inline mode; the deck now runs alt-screen so painted bg cells no
   longer matter for blending with the surrounding tmux pane.)
 
-**Foregrounds are ANSI 16; background tints are not.** The 16-slot rule
-above is about foreground semantics, where being remapped by the user's
-theme is the whole point. A low-contrast *background* has no ANSI 16 slot
-at all — the nearest, `BgPanel` ("0", surface), is sized for chip and badge
-fills where contrast is the point, and reads far too strong for a tint you
-are meant to read text through. So the background tints in
-`internal/charm/palette.go` (`Cursorline`, `AddedBg`, `RemovedBg`, and
-their `*Cursor` variants) are adaptive off-palette values, declared there
-beside everything else rather than inlined at a call site. That block is
-the whole set; a new one belongs in it, not next to the style that wanted
-it.
+**Chrome is ANSI 16. Content and background tints are not.** The 16-slot
+rule above is about awp's own *chrome* — a status dot, a project header, a
+selection bar — where being remapped by the user's terminal theme is the
+whole point. Two things are outside it, and both live in
+`internal/charm/palette.go` beside everything else rather than inlined at a
+call site:
+
+- **Background tints** (`Cursorline`, `AddedBg`, `RemovedBg`, and their
+  `*Cursor` variants). A low-contrast background has no ANSI 16 slot at
+  all — the nearest, `BgPanel` ("0", surface), is sized for chip and badge
+  fills where contrast is the point, and reads far too strong for a tint
+  you are meant to read text through.
+- **Syntax colours** (`Syntax*`), which are Catppuccin — Latte against a
+  light terminal, Macchiato against a dark one, via
+  `github.com/catppuccin/go`. Code in a diff is not chrome, it is
+  *content*, and it should look the way the same code looks in the editor
+  the reader is about to open it in. Sixteen slots also cannot carry a
+  syntax palette: six are already spoken for by status roles, so a token
+  would either share its hue with "CI failing" or get none — which is why
+  punctuation and operators had none until this moved.
+
+Those two blocks are the whole set of off-palette values. A new one belongs
+in one of them, not next to the style that wanted it.
 
 The diff tints exist because syntax highlighting spends the foreground on
 the lexer, so the change type has to move to the background or a `+` line

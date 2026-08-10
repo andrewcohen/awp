@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"os"
 	"strings"
 	"sync"
@@ -195,13 +196,13 @@ func fillStyle(lineType byte, cursor bool) lipgloss.Style {
 	return styleCode
 }
 
-// syntaxHue is a token class's palette token, empty for the classes that keep the
-// colour of the line they are on.
+// syntaxHue is a token class's colour, nil for the one class that keeps the colour
+// of the line it is on.
 //
 // Factored out so the mapping is assertable. lipgloss strips colour when there is
 // no TTY, so which hue a class ended up wearing cannot be read back out of
 // rendered output — the same reason selectionBarStyle exists.
-func syntaxHue(t highlight.Token) string {
+func syntaxHue(t highlight.Token) color.Color {
 	switch t {
 	case highlight.Keyword:
 		return charm.SyntaxKeyword
@@ -217,10 +218,15 @@ func syntaxHue(t highlight.Token) string {
 		return charm.SyntaxNumber
 	case highlight.Comment:
 		return charm.SyntaxComment
+	case highlight.Operator:
+		return charm.SyntaxOperator
+	case highlight.Punct:
+		return charm.SyntaxPunct
 	}
-	// Plain and Punct: they wear the base, which is the terminal's own foreground.
-	// See the note in charm.palette on why neither gets a hue of its own.
-	return ""
+	// Plain — a bare identifier — wears the base, which is the terminal's own
+	// foreground. Under this theme that is already Catppuccin's Text, so stating it
+	// would only take the choice away from a terminal set to something else.
+	return nil
 }
 
 // paintRow is base combined with each token class's hue, reduced to the escapes
@@ -229,8 +235,8 @@ func paintRow(base lipgloss.Style) []spanPaint {
 	out := make([]spanPaint, highlight.TokenCount)
 	for tok := range out {
 		style := base
-		if hue := syntaxHue(highlight.Token(tok)); hue != "" {
-			style = base.Foreground(lipgloss.Color(hue))
+		if hue := syntaxHue(highlight.Token(tok)); hue != nil {
+			style = base.Foreground(hue)
 		}
 		out[tok] = capture(style)
 	}
