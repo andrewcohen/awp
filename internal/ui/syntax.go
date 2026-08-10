@@ -14,25 +14,29 @@ import (
 	"github.com/andrewcohen/awp/internal/highlight"
 )
 
-// SyntaxEnv turns syntax highlighting on for the diff body.
+// SyntaxEnv selects the diff body's syntax treatment. Unset means on.
 //
-// A flag rather than a setting because the question it exists to answer is which
-// of the two treatments below is worth having, and that needs both of them
-// reachable on the same diff.
+// It is the escape hatch rather than the switch: `off` for a terminal this reads
+// badly on, or for not wanting it, and `changed` for the other treatment. Nobody
+// should have to set anything to get the ordinary rendering.
 const SyntaxEnv = "AWP_DIFF_SYNTAX"
 
 // syntaxMode is where a diff line's colour comes from.
 type syntaxMode uint8
 
 const (
-	// syntaxAll paints every code line, context included. The change type comes off
-	// the body entirely and is carried by the gutter glyph and the line numbers,
-	// which are already tinted by it.
+	// syntaxAll paints every code line, context included, and is the default.
+	//
+	// The change type comes off the body entirely and is carried by the background
+	// tint and the gutter. That tint is also why this beats syntaxChanged: muting
+	// context existed to make the change read as foreground against it, and marking
+	// the changed lines directly does that better than dimming everything else. With
+	// nothing left for the muting to buy, colouring the surrounding code is the point
+	// of reading a diff in context rather than a patch.
 	syntaxAll syntaxMode = iota + 1
-	// syntaxChanged paints the added and removed lines only. Context stays uniformly
-	// Muted, as it is today, so the change keeps reading as foreground against
-	// unchanged code as background — and the majority of a diff's lines are never
-	// lexed at all.
+	// syntaxChanged paints the added and removed lines only, leaving context Muted
+	// the way an unhighlighted diff has it. Kept reachable because it is a taste
+	// question, and it never lexes the majority of a diff's lines.
 	syntaxChanged
 )
 
@@ -59,17 +63,20 @@ type highlighter struct {
 // spanKey is one line of one file.
 type spanKey struct{ path, line string }
 
-// newHighlighter reads the flag. Anything it does not recognise is off, so a typo
-// gets today's rendering rather than a silently different treatment.
+// newHighlighter reads the escape hatch.
+//
+// Anything unrecognised gets the default rather than nothing: the failure mode of
+// a typo should be the ordinary rendering, and the ordinary rendering is now
+// highlighted. Turning it off has to be spelled correctly, which is the right way
+// round — a misspelled `off` that silently kept highlighting on is a puzzle, where
+// a misspelled `changed` is just the default.
 func newHighlighter() *highlighter {
-	var mode syntaxMode
+	mode := syntaxAll
 	switch os.Getenv(SyntaxEnv) {
-	case "1", "on", "all":
-		mode = syntaxAll
+	case "off", "0", "false", "none":
+		return nil
 	case "changed":
 		mode = syntaxChanged
-	default:
-		return nil
 	}
 	return &highlighter{
 		mode:   mode,
@@ -121,19 +128,38 @@ func lexPath(f diff.FileDiff) string {
 // spanPaint is the escape pair one token class's text is wrapped in.
 type spanPaint struct{ prefix, suffix string }
 
-// syntaxPaint is the token classes' escapes, one set per background a painted
-// line can sit on: its change type, and whether the cursorline is behind it.
+// linePaint is everything needed to draw one painted line: its spans' escapes, and
+// the styles for the columns either side of the code.
 //
-// Six rather than two because the backwash moved the change type into the
-// background — see charm.AddedBg — so a span's escapes now depend on the kind of
-// line it is on as well as on its own token class.
-type syntaxPaint struct {
-	context, added, removed          []spanPaint
-	contextCur, addedCur, removedCur []spanPaint
+// One of these per background a line can sit on, which is why the number and glyph
+// styles live here rather than being derived at the call site: a lipgloss Style
+// carrying a background is built once, not per row.
+type linePaint struct {
+	// spans is indexed by highlight.Token.
+	spans []spanPaint
+	// number and glyph are the line-number columns and the +/-/│ marker. They carry
+	// the change tint too, so the backwash starts at the row's left edge — begun at
+	// the code instead, it left the gutter as an untinted notch that read as a gap
+	// rather than as a zone boundary.
+	number, glyph lipgloss.Style
+	// fill pads the row out to the pane's width. The tint has to reach the edge or it
+	// reads as a highlight on the code rather than a property of the line, and a row
+	// whose tint stops where its text happens to end looks like a rendering fault.
+	fill lipgloss.Style
 }
 
-// row is the escapes for a line of this change type, cursor or not.
-func (p syntaxPaint) row(lineType byte, cursor bool) []spanPaint {
+// syntaxPaint is the six of them: three change types, cursor or not.
+//
+// Six rather than one because the backwash moved the change type into the
+// background — see charm.AddedBg — so everything on a row depends on the kind of
+// line it is as well as on its own role.
+type syntaxPaint struct {
+	context, added, removed          linePaint
+	contextCur, addedCur, removedCur linePaint
+}
+
+// line is the styles for a line of this change type, cursor or not.
+func (p syntaxPaint) line(lineType byte, cursor bool) linePaint {
 	switch lineType {
 	case '+':
 		if cursor {
@@ -162,38 +188,39 @@ var paintTable = sync.OnceValue(buildPaintTable)
 
 func buildPaintTable() syntaxPaint {
 	return syntaxPaint{
-		context:    paintRow(styleCode),
-		added:      paintRow(styleCodeAdded),
-		removed:    paintRow(styleCodeRemoved),
-		contextCur: paintRow(styleCodeCursor),
-		addedCur:   paintRow(styleCodeAddedCursor),
-		removedCur: paintRow(styleCodeRemovedCursor),
+		// A nil background is unchanged code with no cursor on it — the majority of a
+		// diff, and the one case that paints no background at all.
+		context:    lineFor(nil, styleContext, styleLineNo),
+		contextCur: lineFor(cursorlineBg, styleContext, styleCursorLineNo),
+		added:      lineFor(charm.AddedBg, styleAdded, styleLineNo),
+		addedCur:   lineFor(charm.AddedBgCursor, styleAdded, styleCursorLineNo),
+		removed:    lineFor(charm.RemovedBg, styleDeleted, styleLineNo),
+		removedCur: lineFor(charm.RemovedBgCursor, styleDeleted, styleCursorLineNo),
 	}
 }
 
-// fillStyle is what pads a painted line out to the width it should span.
+// lineFor builds one row's styles over a shared background.
 //
-// The tint has to reach the edge of the pane, or it reads as a highlight on the
-// code rather than as a property of the line — and a row whose tint stops where
-// its text does looks like a rendering fault, since the length of the code is not
-// something the reader is meant to notice.
-func fillStyle(lineType byte, cursor bool) lipgloss.Style {
-	switch lineType {
-	case '+':
-		if cursor {
-			return styleCodeAddedCursor
-		}
-		return styleCodeAdded
-	case '-':
-		if cursor {
-			return styleCodeRemovedCursor
-		}
-		return styleCodeRemoved
+// glyph and number are passed in for their *foregrounds* — the gutter marker keeps
+// the change type's hue and the numbers keep theirs, including the cursor row's
+// Warning tint. Only the background is imposed here, which is what makes the whole
+// row one continuous field.
+func lineFor(bg color.Color, glyph, number lipgloss.Style) linePaint {
+	base := withBg(styleCode, bg)
+	return linePaint{
+		spans:  paintRow(base),
+		number: withBg(number, bg),
+		glyph:  withBg(glyph, bg),
+		fill:   base,
 	}
-	if cursor {
-		return styleCursorFill
+}
+
+// withBg is s over bg, or s unchanged when there is no background to impose.
+func withBg(s lipgloss.Style, bg color.Color) lipgloss.Style {
+	if bg == nil {
+		return s
 	}
-	return styleCode
+	return s.Background(bg)
 }
 
 // syntaxHue is a token class's colour, nil for the one class that keeps the colour
@@ -277,7 +304,7 @@ func capture(style lipgloss.Style) spanPaint {
 // them and writes nothing else, so a gap would be text that never reaches the
 // screen.
 func paintCode(text string, spans []highlight.Span, lineType byte, cursor bool) string {
-	row := paintTable().row(lineType, cursor)
+	row := paintTable().line(lineType, cursor).spans
 	var b strings.Builder
 	// The escapes roughly double a short line; one allocation beats growing.
 	b.Grow(len(text) * 2)

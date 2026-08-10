@@ -640,10 +640,25 @@ func TestCursorlineSpansTheFullWidth(t *testing.T) {
 	if got := lipgloss.Width(row); got != width {
 		t.Fatalf("cursorline spans %d columns, want %d", got, width)
 	}
-	// A non-cursor row is not padded out.
-	other := m.renderStreamRowAt(m.cursorRow+1, width)
-	if lipgloss.Width(other) == width {
-		t.Fatalf("non-cursor rows should not be padded to full width: %q", stripANSI(other))
+	// A non-cursor row is not padded out — a context row specifically, since a
+	// syntax-painted added or removed line is filled with its own change tint, which
+	// is a different fill for a different reason (TestAPaintedChangeFillsThePane).
+	other := -1
+	for i, r := range m.stream.rows {
+		if i == m.cursorRow || r.kind != rowLine {
+			continue
+		}
+		if lineType, ok := m.paintedLine(i); ok && (lineType == '+' || lineType == '-') {
+			continue
+		}
+		other = i
+		break
+	}
+	if other < 0 {
+		t.Fatal("the fixture has no unfilled non-cursor line row to compare against")
+	}
+	if row := m.renderStreamRowAt(other, width); lipgloss.Width(row) == width {
+		t.Fatalf("non-cursor rows should not be padded to full width: %q", stripANSI(row))
 	}
 }
 

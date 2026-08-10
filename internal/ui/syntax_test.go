@@ -146,6 +146,32 @@ func TestEveryKindOfPaintedLineHasItsOwnBackground(t *testing.T) {
 	}
 }
 
+// The backwash covers the whole row, gutter and line numbers included. Starting it
+// at the code left those columns as an untinted notch, which reads as a gap rather
+// than as a zone boundary.
+func TestThePaintedGutterSharesTheLinesBackground(t *testing.T) {
+	for _, lineType := range []byte{' ', '+', '-'} {
+		for _, cursor := range []bool{false, true} {
+			lp := paintTable().line(lineType, cursor)
+			want := lp.fill.GetBackground()
+			for name, col := range map[string]lipgloss.Style{"numbers": lp.number, "glyph": lp.glyph} {
+				if got := col.GetBackground(); got != want {
+					t.Errorf("%q (cursor %v): the %s column is on %v, the line is on %v",
+						lineType, cursor, name, got, want)
+				}
+			}
+			// Only the background is imposed. The glyph keeps the change type's hue and the
+			// numbers keep theirs, or the columns stop saying anything of their own.
+			if lineType == ' ' {
+				continue
+			}
+			if lp.glyph.GetForeground() == lp.number.GetForeground() {
+				t.Errorf("%q (cursor %v): the glyph and the numbers are the same colour", lineType, cursor)
+			}
+		}
+	}
+}
+
 // The tint has to reach the pane's edge. A background that stops where the code
 // happens to end is not a property of the line, and reads as a rendering fault —
 // the length of a line is not something the reader is meant to notice.
@@ -173,7 +199,7 @@ func TestAPaintedChangeFillsThePane(t *testing.T) {
 // Unpainted, nothing changes: the change type is already the foreground of every
 // character on the line, so a context row still ends where its text does.
 func TestAnUnpaintedRowIsNotFilled(t *testing.T) {
-	t.Setenv(SyntaxEnv, "")
+	t.Setenv(SyntaxEnv, "off")
 	m := goFileModel(t, false)
 
 	for i, r := range m.stream.rows {
@@ -188,30 +214,31 @@ func TestAnUnpaintedRowIsNotFilled(t *testing.T) {
 	}
 }
 
-func TestTheFlagIsOffUnlessItIsSet(t *testing.T) {
+func TestHighlightingIsOnUnlessTurnedOff(t *testing.T) {
 	for _, tc := range []struct {
 		env  string
 		want syntaxMode
 	}{
-		{"", 0},
-		// Not recognised, so today's rendering — a typo that silently picked a treatment
-		// would be indistinguishable from the flag not working.
-		{"yes", 0},
-		{"true", 0},
-		{"1", syntaxAll},
-		{"on", syntaxAll},
-		{"all", syntaxAll},
+		// The default, and what a typo gets. A misspelled `off` that silently kept
+		// highlighting on would be a puzzle; a misspelled `changed` is just the default.
+		{"", syntaxAll},
+		{"yes", syntaxAll},
+		{"chnaged", syntaxAll},
 		{"changed", syntaxChanged},
+		{"off", 0},
+		{"0", 0},
+		{"false", 0},
+		{"none", 0},
 	} {
 		t.Setenv(SyntaxEnv, tc.env)
 		h := newHighlighter()
 		switch {
 		case tc.want == 0 && h != nil:
-			t.Errorf("%q built a highlighter in mode %d, want off", tc.env, h.mode)
+			t.Errorf("%s=%q built a highlighter in mode %d, want off", SyntaxEnv, tc.env, h.mode)
 		case tc.want != 0 && h == nil:
-			t.Errorf("%q is off, want mode %d", tc.env, tc.want)
+			t.Errorf("%s=%q is off, want mode %d", SyntaxEnv, tc.env, tc.want)
 		case tc.want != 0 && h.mode != tc.want:
-			t.Errorf("%q is mode %d, want %d", tc.env, h.mode, tc.want)
+			t.Errorf("%s=%q is mode %d, want %d", SyntaxEnv, tc.env, h.mode, tc.want)
 		}
 	}
 }
@@ -299,7 +326,7 @@ func TestAPaintedRowIsTheSameWidth(t *testing.T) {
 		{"unified", false},
 		{"side by side", true},
 	} {
-		t.Setenv(SyntaxEnv, "")
+		t.Setenv(SyntaxEnv, "off")
 		plain := goFileModel(t, layout.sideBySide)
 		t.Setenv(SyntaxEnv, "all")
 		painted := goFileModel(t, layout.sideBySide)
@@ -330,7 +357,7 @@ func TestAPaintedRowIsTheSameWidth(t *testing.T) {
 // ansi.TruncateLeft keeps the escapes it skips past — so the text still reads the
 // same as the unpainted pan of the same line.
 func TestPanningAPaintedLineCutsTheSameText(t *testing.T) {
-	t.Setenv(SyntaxEnv, "")
+	t.Setenv(SyntaxEnv, "off")
 	plain := goFileModel(t, false)
 	plain.hunkHScroll = 8
 	t.Setenv(SyntaxEnv, "all")

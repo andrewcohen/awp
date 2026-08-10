@@ -299,19 +299,22 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `?` | Help overlay (scrollable — `↑`/`↓` or `j`/`k` to scroll, `pgup`/`pgdn` / `ctrl+u`/`ctrl+d` to page; `?` / `esc` / `q` / `enter` to close) |
 | `q` / `esc` | Quit |
 
-### Syntax-highlighted diff bodies (experimental)
+### Syntax-highlighted diff bodies
 
-A diff line's only colour is normally its change type — added green, removed
-red, unchanged muted. `AWP_DIFF_SYNTAX` paints the code itself instead, on every
-diff surface (`c` in the deck and standalone `awp diff`). Off unless set.
+Every diff surface — `c` in the deck and standalone `awp diff` — syntax-colours
+the code, with the change type carried by a background tint. On by default;
+`AWP_DIFF_SYNTAX` is the escape hatch rather than the switch.
 
 | Value | Treatment |
 |-------|-----------|
-| `1` / `on` / `all` | Every code line is syntax-coloured, unchanged lines included. The change type comes off the body entirely and is carried by the `+`/`-` gutter glyph and the line numbers, which are already tinted by it. |
-| `changed` | Only added and removed lines are painted. Unchanged code stays muted, as it is today, so the change keeps reading as foreground against context as background. |
+| unset (default) | Every code line is coloured, unchanged lines included. |
+| `changed` | Only added and removed lines are coloured; unchanged code stays muted the way an unhighlighted diff has it. |
+| `off` / `0` / `false` / `none` | No highlighting — the change type is the body's foreground colour, as it was before. |
 
-Anything else — including a typo — is off, so a misspelling gets the ordinary
-rendering rather than silently picking a treatment.
+Anything unrecognised gets the default, so a typo lands on the ordinary
+rendering. Turning it off has to be spelled correctly, which is the useful way
+round: a misspelled `off` that silently kept highlighting on would be a puzzle,
+where a misspelled `changed` is just the default.
 
 Colours are **Catppuccin** — Latte against a light terminal, Macchiato against a
 dark one — in Catppuccin's own conventional syntax assignment, so a diff matches
@@ -349,14 +352,15 @@ this wrong is silent, since "no colour" is a legitimate answer and a grey diff
 looks like a plain one, so `internal/highlight/coverage_test.go` asserts a
 representative line per language actually comes back coloured.
 
-Added and removed lines get a **background tint** the full width of the pane,
-because highlighting spends the foreground on the lexer and the change type has
-to live somewhere — without it a `+` line and a `-` line differ only in the
-gutter glyph. The row under the cursor uses a brighter variant of the same tint
-rather than the ordinary cursorline, so the change is still readable on the line
-you are on; letting the cursorline win outright makes the tint blink off and on
-down the file as you scroll. The tint appears only when highlighting is on:
-unpainted, the change type is already the colour of every character on the line.
+Added and removed lines get a **background tint** across the whole row — line
+numbers and `+`/`-` gutter included — because highlighting spends the foreground
+on the lexer and the change type has to live somewhere; without it a `+` line and
+a `-` line differ only in the gutter glyph. The row under the cursor uses a
+brighter variant of the same tint rather than the ordinary cursorline, so the
+change is still readable on the line you are on; letting the cursorline win
+outright makes the tint blink off and on down the file as you scroll. The tint
+appears only when highlighting is on — unpainted, the change type is already the
+colour of every character on the line.
 
 Two limitations worth knowing. Each line is lexed on its own, because a hunk
 interleaves the old and new sides and joining them would be lexing text that was
