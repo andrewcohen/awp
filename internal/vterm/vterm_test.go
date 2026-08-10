@@ -42,7 +42,7 @@ func awaitScreen(t *testing.T, term *Term, want string) {
 
 func start(t *testing.T, args ...string) *Term {
 	t.Helper()
-	term, err := Start(1, 40, 10, exec.Command(args[0], args[1:]...))
+	term, err := Start(1, 40, 10, exec.Command(args[0], args[1:]...), HostColors{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,10 +135,10 @@ func TestClosingIsSafeAndFinal(t *testing.T) {
 }
 
 func TestStartRejectsNonsense(t *testing.T) {
-	if _, err := Start(1, 0, 10, exec.Command("true")); err == nil {
+	if _, err := Start(1, 0, 10, exec.Command("true"), HostColors{}); err == nil {
 		t.Error("a zero width was accepted")
 	}
-	if _, err := Start(1, 40, 10, nil); err == nil {
+	if _, err := Start(1, 40, 10, nil, HostColors{}); err == nil {
 		t.Error("a nil command was accepted")
 	}
 }

@@ -160,7 +160,7 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		return nil, true
 	}
 	m.paneGen++
-	term, err := vterm.Start(m.paneGen, w, h, cmd)
+	term, err := vterm.Start(m.paneGen, w, h, cmd, m.hostColors)
 	if err != nil {
 		if restore != nil {
 			restore()

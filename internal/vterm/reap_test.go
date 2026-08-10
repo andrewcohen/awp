@@ -12,7 +12,7 @@ import (
 // surviving is a process holding a pty for a deck that no longer exists, and it
 // accumulates one per pane per deck run.
 func TestCloseAllStopsATermNobodyClosed(t *testing.T) {
-	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo UP; sleep 60"))
+	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo UP; sleep 60"), HostColors{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestCloseAllStopsATermNobodyClosed(t *testing.T) {
 // A Term that closed itself is out of the registry, so CloseAll neither trips
 // over it nor keeps it alive: the set must not grow for the life of the process.
 func TestAClosedTermLeavesTheRegistry(t *testing.T) {
-	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo UP; sleep 60"))
+	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo UP; sleep 60"), HostColors{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestAClosedTermLeavesTheRegistry(t *testing.T) {
 // naive implementation deadlocks the first time it is used for real.
 func TestCloseAllDoesNotDeadlockOnItsOwnLock(t *testing.T) {
 	for i := range 3 {
-		term, err := Start(i+1, 40, 10, exec.Command("sh", "-c", "echo UP; sleep 60"))
+		term, err := Start(i+1, 40, 10, exec.Command("sh", "-c", "echo UP; sleep 60"), HostColors{})
 		if err != nil {
 			t.Fatal(err)
 		}
