@@ -163,6 +163,9 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 	// hang rather than an error.
 	go func() { _, _ = io.Copy(toProcess, t.emu) }()
 
+	// Registered at the only place a Term comes into being, so CloseAll can
+	// reach one whose owner lost track of it — see reap.go.
+	register(t)
 	return t, nil
 }
 
@@ -376,6 +379,7 @@ func (t *Term) Close() error {
 	}
 	t.closed = true
 	t.mu.Unlock()
+	unregister(t)
 
 	_ = t.ptmx.Close()
 	if t.cmd.Process != nil {
