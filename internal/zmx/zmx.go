@@ -111,8 +111,26 @@ func (c Client) List(ctx context.Context) ([]Session, error) {
 	return sessions, nil
 }
 
+// named checks that an operation addressing one session was given one to
+// address, and names the operation when it wasn't.
+//
+// Every method below takes a name a caller computed, usually from SessionName
+// over an Item's fields — and an Item arriving with a field missing is a thing
+// this codebase has been bitten by more than once. A name that came out empty
+// is a bug upstream, and the useful behaviour is to say so rather than to hand
+// a process manager an empty argument and find out what it decides that means.
+func named(op, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%s a zmx session: no name given", op)
+	}
+	return nil
+}
+
 // Lookup finds one session by name.
 func (c Client) Lookup(ctx context.Context, name string) (Session, bool, error) {
+	if err := named("look up", name); err != nil {
+		return Session{}, false, err
+	}
 	all, err := c.List(ctx)
 	if err != nil {
 		return Session{}, false, err
@@ -180,8 +198,8 @@ func parseSession(line string) (Session, bool) {
 // start a session detached with a given command as its own process (see
 // AttachCmd), so the only correct order is reap, then attach.
 func (c Client) Reap(ctx context.Context, name string) (removed bool, err error) {
-	if name == "" {
-		return false, fmt.Errorf("reap a zmx session: no name given")
+	if err := named("reap", name); err != nil {
+		return false, err
 	}
 	existing, found, err := c.Lookup(ctx, name)
 	if err != nil {
@@ -200,6 +218,9 @@ func (c Client) Reap(ctx context.Context, name string) (removed bool, err error)
 func (c Client) Label(ctx context.Context, name string, pairs map[string]string) error {
 	if len(pairs) == 0 {
 		return nil
+	}
+	if err := named("label", name); err != nil {
+		return err
 	}
 	args := []string{"set", name}
 	for k, v := range pairs {
@@ -225,6 +246,9 @@ const pasteSettle = 150 * time.Millisecond
 // the rest as separate ones. The markers tell it the whole block arrived at
 // once.
 func (c Client) Paste(ctx context.Context, name, text string) error {
+	if err := named("paste to", name); err != nil {
+		return err
+	}
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("paste to zmx session %q: nothing to send", name)
 	}
@@ -240,6 +264,9 @@ func (c Client) Paste(ctx context.Context, name, text string) error {
 
 // Kill ends a session and everything attached to it.
 func (c Client) Kill(ctx context.Context, name string) error {
+	if err := named("kill", name); err != nil {
+		return err
+	}
 	if _, err := c.run(ctx, "", "zmx", "kill", name, "--force"); err != nil {
 		return fmt.Errorf("kill zmx session %q: %w", name, err)
 	}
@@ -249,6 +276,9 @@ func (c Client) Kill(ctx context.Context, name string) error {
 // History returns the session's scrollback, with escape sequences, without
 // attaching to it — a peek that costs nothing and needs no client.
 func (c Client) History(ctx context.Context, name string) (string, error) {
+	if err := named("read the scrollback of", name); err != nil {
+		return "", err
+	}
 	out, err := c.run(ctx, "", "zmx", "history", name, "--vt")
 	if err != nil {
 		return "", fmt.Errorf("read the scrollback of zmx session %q: %w", name, err)
