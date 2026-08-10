@@ -67,6 +67,11 @@ type Term struct {
 	// the process.
 	in io.Writer
 
+	// keys is which key encoding the hosted program asked for, read out of its
+	// own output because x/vt neither answers those requests nor reports them.
+	// See modkeys.go.
+	keys keyRequests
+
 	mu     sync.Mutex
 	closed bool
 	w, h   int
@@ -145,7 +150,10 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 	// Both directions optionally recorded — see PaneLogEnv. Wrapped here, at
 	// the two io.Copy calls, because this is the only place every byte in and
 	// every byte out passes through.
-	toEmulator, toProcess := tapPair(openLog(PaneLogEnv), notifier{w: t.emu, dirty: t.dirty}, ptmx)
+	// The sniffer sits between the recorder and the emulator so a capture shows
+	// the same bytes it read.
+	sniffed := &modeSniffer{next: notifier{w: t.emu, dirty: t.dirty}, keys: &t.keys}
+	toEmulator, toProcess := tapPair(openLog(PaneLogEnv), sniffed, ptmx)
 	t.in = toProcess
 
 	// Pane output into the emulator, flagging a repaint after each chunk.
@@ -284,9 +292,20 @@ func (t *Term) Send(b []byte) error {
 // The reply path is the same one the drain in Start serves: the emulator emits
 // the encoded bytes on its read side, and the drain carries them to the PTY.
 func (t *Term) SendKey(k tea.KeyPressMsg) {
+	key := tea.Key(k)
+	// Enter with a modifier held is checked before anything else, because it is
+	// the one key whose legacy form carries no modifier at all: CR is CR, so
+	// shift+enter reaches a program only in an encoding it asked for. See
+	// modkeys.go. Agents bind it to "newline, don't submit", which is the whole
+	// of multi-line input.
+	if key.Code == tea.KeyEnter {
+		if seq := enterKeyBytes(key.Mod, t.keys.encoding()); seq != "" {
+			t.emu.SendText(seq)
+			return
+		}
+	}
 	// Shift is excluded from the modifier check because it is already baked
 	// into Text. Ctrl and alt are not, and change the encoding entirely.
-	key := tea.Key(k)
 	if key.Text != "" && key.Mod&^tea.ModShift == 0 {
 		t.emu.SendText(key.Text)
 		return
