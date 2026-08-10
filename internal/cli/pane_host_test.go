@@ -76,14 +76,69 @@ func TestWithoutAHostEveryActionStillGoesToTmux(t *testing.T) {
 	}
 }
 
-// Actions a host does not own must fall through, or the deck loses them.
+// Actions that are nobody's window business must fall through, or the deck
+// loses them. Delete, rename and merge are workspace operations, not windows —
+// they mean the same thing on either substrate.
 func TestAHostOnlyClaimsTheActionsItOwns(t *testing.T) {
-	for _, a := range []deckui.Action{deckui.ActionSummon, deckui.ActionOpenWindow, deckui.ActionDelete, deckui.ActionCI} {
+	for _, a := range []deckui.Action{deckui.ActionDelete, deckui.ActionRename, deckui.ActionMergePR, deckui.ActionCreateWorkspace} {
 		if _, handled := paneHostAction(&fakeHost{}, deckui.ActionRequest{Item: promptItem, Action: a}, nil); handled {
 			t.Errorf("the host swallowed action %v, which it does not handle", a)
 		}
 	}
 }
+
+// TestNoWindowActionFallsThroughToATmuxSessionOnAnAgentHostingDeck.
+//
+// The bug: openNamedWindow and openCustomActionWindow both open with "no tmux
+// session for this workspace? make one" — createWorkspaceSession, which runs
+// `tmux new-session` and sends the coding agent's invocation into it. On a deck
+// that hosts the agent there is never a tmux session, so every one of these keys
+// forked a second agent, in a tmux server started from nothing, invisible to the
+// deck, with the same AWP_WORKSPACE. Then SwitchClient no-opped, so nothing
+// appeared to happen.
+//
+// Kinds the host handles never reach here — openPane claims them in
+// Model.trigger. These are the declined ones, and the answer for them is to say
+// so rather than to quietly fork an agent.
+func TestNoWindowActionFallsThroughToATmuxSessionOnAnAgentHostingDeck(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		req  deckui.ActionRequest
+	}{
+		{"C", deckui.ActionRequest{Item: promptItem, Action: deckui.ActionOpenWindow, Arg: "review"}},
+		{"p D", deckui.ActionRequest{Item: promptItem, Action: deckui.ActionOpenWindow, Arg: "pr-description"}},
+		{"x", deckui.ActionRequest{Item: promptItem, Action: deckui.ActionCustom, Arg: "dev-server"}},
+		{"enter", deckui.ActionRequest{Item: promptItem, Action: deckui.ActionSummon}},
+		{"i", deckui.ActionRequest{Item: promptItem, Action: deckui.ActionCI}},
+	} {
+		err, handled := paneHostAction(&fakeHost{}, tc.req, nil)
+		if !handled {
+			t.Errorf("%s fell through to tmux, where it would start a second agent", tc.what)
+			continue
+		}
+		if err == nil {
+			t.Errorf("%s was swallowed silently; a key that does nothing reads as broken", tc.what)
+		}
+	}
+}
+
+// TestAHostThatDoesNotRunAgentsStillUsesTmuxForWindows. The refusal exists
+// because a tmux session would carry a duplicate agent. A host with no agent to
+// duplicate has nothing to protect, so the tmux path is still right for it —
+// and this is what keeps the rule about agents rather than about panes.
+func TestAHostThatDoesNotRunAgentsStillUsesTmuxForWindows(t *testing.T) {
+	host := &noAgentHost{}
+	for _, a := range []deckui.Action{deckui.ActionOpenWindow, deckui.ActionCustom, deckui.ActionCI} {
+		if err, handled := paneHostAction(host, deckui.ActionRequest{Item: promptItem, Action: a, Arg: "review"}, nil); handled {
+			t.Errorf("action %v was refused by a host that runs no agents (err=%v)", a, err)
+		}
+	}
+}
+
+// noAgentHost hosts panes but not the agent — an editor-only host, say.
+type noAgentHost struct{ fakeHost }
+
+func (h *noAgentHost) Describes(kind string) bool { return kind != deckui.PaneKindAgent }
 
 // Switching to the last tmux session means nothing when the deck is the
 // outermost program, and `tmux switch-client -l` exits 0 having done nothing —

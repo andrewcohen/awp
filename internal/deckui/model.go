@@ -3337,7 +3337,7 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	return m, loadCmd
 }
 
-// windowKind is the pane kind a window arg names.
+// WindowKind is the pane kind a window arg names.
 //
 // A window arg is `name` or `name:command`, and the kind is the name. The
 // command half is the tmux path's business — a pane backend builds its own
@@ -3345,7 +3345,11 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 // a pane runs a process. Without this the two args that carry a command
 // (`watch:awp watch`, ReviewStackArg) could never match a pane kind, since the
 // backend would have to key its map on the command too.
-func windowKind(arg string) string {
+//
+// Exported because the pane host's action switch has to read the same kind out
+// of the same arg when it declines one, and two parsers for one string is how
+// they end up disagreeing about what `watch:awp watch` is called.
+func WindowKind(arg string) string {
 	name, _, _ := strings.Cut(arg, ":")
 	return name
 }
@@ -3373,7 +3377,7 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 		if m2, blocked := m.blockIfSettingUp(item); blocked {
 			return m2, nil
 		}
-		kind, isPane := windowKind(arg), a == ActionOpenWindow
+		kind, isPane := WindowKind(arg), a == ActionOpenWindow
 		switch a {
 		case ActionSummon:
 			// With awp hosting panes there is no other client to switch to,
