@@ -20,9 +20,14 @@ import (
 // optimising a render path will touch it. A large cost with a small gap means the
 // opposite. Guessing between those two is what wasted the first three attempts.
 //
-// Nil unless the CLI layer installs it (AWP_TRACE=1), because the writer opens
-// the log file per line — fine for a diagnostic session, not for every frame of
-// every deck.
+// Nil unless the CLI layer installs it (AWP_TRACE=1): a frame that is not being
+// traced should not pay to format or write a line about itself.
+//
+// The writer used to reopen the log file per line, which made the tracer the
+// most expensive thing in a traced session — 38% of the process — and quietly
+// inflated every number it reported. It now holds the file open, so a traced
+// frame costs one write. Tracing is still opt-in, because one write per frame is
+// not free either, and nothing needs it when nobody is looking.
 var Trace func(format string, args ...any)
 
 // lastFrameEnd is when the previous View returned, for the gap measurement.
