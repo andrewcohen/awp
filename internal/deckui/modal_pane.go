@@ -111,6 +111,10 @@ type panePopover struct {
 	restore func()
 	setW    int
 	setH    int
+	// opened is when the process started, which is how the exit is judged. An
+	// exit is only worth reporting on its own if it happened before you could
+	// have read anything — see paneQuickExit.
+	opened time.Time
 }
 
 // PaneKindAgent is the window kind whose process is the workspace's agent.
@@ -171,6 +175,7 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		restore: restore,
 		setW:    w,
 		setH:    h,
+		opened:  time.Now(),
 	}
 	m.active = p
 	m.status = ""
@@ -204,6 +209,39 @@ func (p *panePopover) close(m *Model) tea.Cmd {
 	return cmd
 }
 
+// paneQuickExit is how soon a pane's process dying is surprising in itself.
+//
+// A pane you worked in and then left by typing `exit` is not news. One that was
+// gone before you could read it is, even with a clean exit status — that is what
+// a program refusing to start looks like from here.
+const paneQuickExit = 2 * time.Second
+
+// paneExitReasonMax bounds the pane's last line, which is a whole terminal row
+// wide and would otherwise push everything else out of the status bar.
+const paneExitReasonMax = 80
+
+// paneExitStatus says why a pane closed, or "" when it closing was unremarkable.
+//
+// The reason is the pane's own last line. Nothing above this knows what a `zmx
+// attach` that will not attach prints, and it should not have to: whatever the
+// program said on its way out is better than any sentence written here about the
+// class of thing that might have happened.
+func paneExitStatus(label string, err error, lived time.Duration, reason string) string {
+	if err == nil && lived >= paneQuickExit {
+		return ""
+	}
+	status := label + ": "
+	if err != nil {
+		status += "exited: " + err.Error()
+	} else {
+		status += "exited immediately"
+	}
+	if reason != "" {
+		status += " — " + truncate(reason, paneExitReasonMax)
+	}
+	return status
+}
+
 func (p *panePopover) footerHelp() string { return "" }
 
 func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
@@ -220,7 +258,16 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		if msg.Gen != p.term.Gen() {
 			return nil
 		}
-		return p.close(m)
+		// The screen has to be read before the close, which throws it away, and
+		// the status set after it, because close is what puts the deck back —
+		// there is nowhere to show a message until it has.
+		reason := p.term.LastLine()
+		lived := time.Since(p.opened)
+		cmd := p.close(m)
+		if s := paneExitStatus(p.label, msg.Err, lived, reason); s != "" {
+			m.status = s
+		}
+		return cmd
 
 	case tea.KeyPressMsg:
 		if msg.String() == paneLeaveKey {
