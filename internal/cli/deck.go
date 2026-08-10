@@ -29,6 +29,7 @@ import (
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/ui"
+	"github.com/andrewcohen/awp/internal/vterm"
 	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
@@ -1054,7 +1055,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		deckDebugLogf("trace on — frame timings follow")
 		defer func() { deckui.Trace = nil }()
 	}
-	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
+	// Optionally record the frames themselves — see vterm.FrameLogEnv. The deck
+	// is where this belongs rather than every program: it is the one that hosts
+	// panes, so it is the one whose output a pane's bytes have to survive.
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(vterm.TapTerminal(out)))
 	_, err = program.Run()
 	return err
 }

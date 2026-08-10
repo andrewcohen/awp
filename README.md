@@ -709,3 +709,25 @@ program that enables mouse reporting — an agent, jjui — gets the wheel
 forwarded to it; one that doesn't, like a shell, leaves the mouse to your
 terminal so its own drag-to-select keeps working. Likewise a program that
 hides its cursor doesn't get one drawn.
+
+### Recording what a pane and the deck actually wrote
+
+Rendering questions in a pane come down to which bytes flowed, and two
+environment variables answer that. Both are off unless set, both append, and
+both write `0600` — a capture holds whatever an agent typed, including anything
+pasted into it.
+
+| Variable | Records |
+|----------|---------|
+| `AWP_PANE_LOG=<path>` | Every byte between the deck and each hosted process, both directions (`out` = process to us, `in` = us to the process). |
+| `AWP_FRAME_LOG=<path>` | Every byte the deck writes to its own terminal (`tty`). |
+
+Point them at the same path to read a pane's output and the frame it produced in
+order — that pairing is the whole reason they share a format:
+
+```sh
+AWP_PANE_LOG=/tmp/awp.log AWP_FRAME_LOG=/tmp/awp.log awp zdeck
+```
+
+Escape sequences are written quoted (`"\x1b[2mdim"`), so the file is safe to
+`cat` — a log of raw escapes would reprogram whichever terminal read it.
