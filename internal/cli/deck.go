@@ -118,13 +118,45 @@ func (r fixedDirRunner) Run(ctx context.Context, dir string, name string, args .
 // `awp deck` to see what gh saw on each repo without crowding the TUI.
 const deckDebugLogPath = "/tmp/awp-deck.log"
 
+// deckDebugLog holds the log open for the life of the process.
+//
+// It used to open and close the file on every line, which is unnoticeable for
+// the PR-status chatter this was built for and ruinous for the frame tracer,
+// which calls it once per frame: a profile of a real zdeck session spent 38% of
+// the whole process in os.OpenFile under traceFrame. The instrument was the
+// slowest thing being measured, and every frame timing it printed included the
+// cost of printing it.
+//
+// failed latches so a log we cannot open is not retried once per frame either.
+//
+// Writes stay unbuffered. This log exists to diagnose hangs and crashes, and a
+// buffer loses exactly the lines that explain one; a write syscall per line is
+// ~3% of what the open cost, and `tail -f` keeps working.
+//
+// O_APPEND stays because the pr-status job is a separate process writing the
+// same file. Appends from a held descriptor interleave correctly the same way
+// the per-call opens did.
+var deckDebugLog struct {
+	mu     sync.Mutex
+	f      *os.File
+	failed bool
+}
+
 func deckDebugLogf(format string, args ...any) {
-	f, err := os.OpenFile(deckDebugLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
+	deckDebugLog.mu.Lock()
+	defer deckDebugLog.mu.Unlock()
+	if deckDebugLog.f == nil {
+		if deckDebugLog.failed {
+			return
+		}
+		f, err := os.OpenFile(deckDebugLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			deckDebugLog.failed = true
+			return
+		}
+		deckDebugLog.f = f
 	}
-	defer func() { _ = f.Close() }()
-	_, _ = fmt.Fprintf(f, "%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
+	_, _ = fmt.Fprintf(deckDebugLog.f, "%s "+format+"\n", append([]any{time.Now().Format("15:04:05.000")}, args...)...)
 }
 
 // persistPRStatusMerge merges fresh per-repo results into the on-disk
