@@ -217,8 +217,13 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 
 	case tea.MouseMsg:
 		// The deck asks for mouse events only while a pane is up (see View),
-		// so anything arriving here belongs to the hosted program.
-		p.term.SendMouse(msg)
+		// so anything arriving here belongs to the hosted program — but in the
+		// deck's coordinates, not its own.
+		inner, ok := paneMouse(msg, m.width, m.height)
+		if !ok {
+			return nil
+		}
+		p.term.SendMouse(inner)
 		return nil
 	}
 	return nil
@@ -280,6 +285,46 @@ func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
 		return 0, 0, false
 	}
 	return originX + paneInsetX + cx, originY + paneInsetY + cy, true
+}
+
+// paneMouse translates a mouse event from the deck's screen into the hosted
+// terminal's own grid, reporting false for one that lands outside it.
+//
+// The program is told where the pointer is and draws its own selection there,
+// so an untranslated event does not look like a mouse bug — it looks like the
+// highlight appearing paneInsetY rows below the pointer, because that is
+// exactly where the program was told to put it.
+//
+// Derived from the same paneDims / paneBox / paneInset as screenCursor, in the
+// opposite direction, so the two cannot come to disagree about where the
+// terminal starts. The bounds check mirrors it too: a click on the border or
+// the header row is not a cell the program has.
+func paneMouse(msg tea.MouseMsg, deckW, deckH int) (tea.MouseMsg, bool) {
+	if !paneFits(deckW, deckH) {
+		return nil, false
+	}
+	w, h := paneDims(deckW, deckH)
+	boxW, boxH := paneBox(w, h)
+	originX, originY := (deckW-boxW)/2, (deckH-boxH)/2
+	mouse := msg.Mouse()
+	x, y := mouse.X-originX-paneInsetX, mouse.Y-originY-paneInsetY
+	if x < 0 || y < 0 || x >= w || y >= h {
+		return nil, false
+	}
+	mouse.X, mouse.Y = x, y
+	// Each concrete message is a defined type over Mouse, so the kind has to be
+	// carried across by hand — the program distinguishes a click from motion.
+	switch msg.(type) {
+	case tea.MouseClickMsg:
+		return tea.MouseClickMsg(mouse), true
+	case tea.MouseReleaseMsg:
+		return tea.MouseReleaseMsg(mouse), true
+	case tea.MouseWheelMsg:
+		return tea.MouseWheelMsg(mouse), true
+	case tea.MouseMotionMsg:
+		return tea.MouseMotionMsg(mouse), true
+	}
+	return nil, false
 }
 
 func paneFits(deckW, deckH int) bool {
