@@ -299,6 +299,32 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `?` | Help overlay (scrollable — `↑`/`↓` or `j`/`k` to scroll, `pgup`/`pgdn` / `ctrl+u`/`ctrl+d` to page; `?` / `esc` / `q` / `enter` to close) |
 | `q` / `esc` | Quit |
 
+### Syntax-highlighted diff bodies (experimental)
+
+A diff line's only colour is normally its change type — added green, removed
+red, unchanged muted. `AWP_DIFF_SYNTAX` paints the code itself instead, on every
+diff surface (`c` in the deck and standalone `awp diff`). Off unless set.
+
+| Value | Treatment |
+|-------|-----------|
+| `1` / `on` / `all` | Every code line is syntax-coloured, unchanged lines included. The change type comes off the body entirely and is carried by the `+`/`-` gutter glyph and the line numbers, which are already tinted by it. |
+| `changed` | Only added and removed lines are painted. Unchanged code stays muted, as it is today, so the change keeps reading as foreground against context as background. |
+
+Anything else — including a typo — is off, so a misspelling gets the ordinary
+rendering rather than silently picking a treatment.
+
+Colours route through the palette like everything else: the lexer's token
+classes map onto ANSI 16 slots (keyword magenta, type yellow, function blue,
+string green, comment muted), so your terminal theme supplies the actual hues.
+Punctuation and identifiers deliberately get none — at 16 slots the palette runs
+out of distinguishable hues long before a lexer runs out of token types.
+
+Two limitations worth knowing. Each line is lexed on its own, because a hunk
+interleaves the old and new sides and joining them would be lexing text that was
+never source — so a line in the middle of a block comment or a multi-line string
+is coloured as if it were code. And a file whose extension no lexer claims
+renders exactly as it does today rather than being guessed at.
+
 ## CLI reference (highlights)
 
 | Command | Purpose |

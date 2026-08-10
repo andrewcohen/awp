@@ -262,6 +262,10 @@ type Model struct {
 	// pointer because the render path takes Model by value; it is scratch space
 	// shared by those copies, not state.
 	cache *renderCache
+	// hl is the diff body's syntax colour, nil when AWP_DIFF_SYNTAX is unset. A
+	// pointer for the same reason cache is: it holds the lexers and the lexed lines,
+	// which are scratch shared by the copies of Model the render path makes.
+	hl *highlighter
 	// hideLeft drops the left column (`\`), giving the stream the full width.
 	// The file and comment cursors keep their state while it is hidden, so
 	// unhiding returns you to where you were rather than to the top.
@@ -502,6 +506,7 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 		searchInput:     si,
 		visualAnchor:    visualNone,
 		cache:           newRenderCache(),
+		hl:              newHighlighter(),
 		status:          "loading...",
 		// Open on the diff itself. Reading the change is what you came for;
 		// the file list is a jump index you reach for second.
@@ -1422,7 +1427,15 @@ var (
 	styleAdded           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success))
 	styleDeleted         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger))
 	styleContext         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	styleLineNo          = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	// styleCode is a syntax-painted line's base — the terminal's own foreground.
+	//
+	// Deliberately uncoloured. In that treatment the change type is not on the body
+	// at all; the gutter glyph and the line numbers carry it, and anything the lexer
+	// had no opinion about stays the colour ordinary text is. Tinting the base by
+	// change type as well is what the flag's other setting does, and it fights every
+	// hue the lexer puts on top of it.
+	styleCode   = lipgloss.NewStyle()
+	styleLineNo = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
 	// Cursorline: the row the cursor is on takes a subtle background across the
 	// full pane width, vim-style. Every style used on that row has to carry the
 	// background itself — an enclosing style can't provide it, because the
@@ -1471,6 +1484,7 @@ var (
 	styleAddedCursor      = styleAdded.Background(cursorlineBg)
 	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
 	styleContextCursor    = styleContext.Background(cursorlineBg)
+	styleCodeCursor       = styleCode.Background(cursorlineBg)
 	styleHunkHeaderCursor = styleHunkHeader.Background(cursorlineBg)
 	styleSelectedCursor   = styleSelected.Background(cursorlineBg)
 	styleStatus           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Padding(0, 1)

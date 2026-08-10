@@ -269,25 +269,34 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	l := h.Lines[r.line]
 
 	avail := width - meta.prefixWidth
-	text := l.Content
-	if m.wrap {
-		text = segmentText(text, r.seg, avail)
-	} else if m.hunkHScroll > 0 {
-		text = ansi.TruncateLeft(text, m.hunkHScroll, "")
-	}
 
 	added, deleted, context := styleAdded, styleDeleted, styleContext
 	if cursor {
 		added, deleted, context = styleAddedCursor, styleDeletedCursor, styleContextCursor
 	}
-	var content string
+	base := context
 	switch l.Type {
 	case '+':
-		content = added.Render(text)
+		base = added
 	case '-':
-		content = deleted.Render(text)
-	default:
-		content = context.Render(text)
+		base = deleted
+	}
+
+	// Two orders, because the two treatments need opposite ones.
+	//
+	// Unpainted — the path this pane has always taken — cuts the plain text and
+	// styles it once, which is why every width calculation here is ANSI-free.
+	//
+	// Painted has to style the whole line first, because the spans are byte offsets
+	// into the whole line. visibleSlice is ANSI-aware, so cutting after is safe; the
+	// alternative is re-deriving in bytes where a wrap segment or a pan starts, which
+	// is a second copy of arithmetic that already exists here and would have to be
+	// kept in step with it by hand.
+	var content string
+	if spans := m.hl.spansFor(lexPath(m.filtered[r.file]), l); len(spans) > 0 {
+		content = m.visibleSlice(paintCode(l.Content, spans, cursor), r.seg, avail)
+	} else {
+		content = base.Render(m.visibleSlice(l.Content, r.seg, avail))
 	}
 
 	// Continuation rows carry no gutter, just its width as padding.
@@ -334,8 +343,9 @@ func (m Model) renderSplitLine(h diff.Hunk, meta hunkMeta, r rowRef, width int, 
 	// narrow it without a rebuild, and a cell sized to a stale width leaves the
 	// divider off centre or pushes the right column past the border.
 	colWidth, oldPrefix, newPrefix := splitGeometry(width, meta.oldWidth, meta.newWidth)
-	left := m.splitCell(h, r.oldLine, r.oldNo, oldPrefix, colWidth, cursor)
-	right := m.splitCell(h, r.newLine, r.newNo, newPrefix, colWidth, cursor)
+	path := lexPath(m.filtered[r.file])
+	left := m.splitCell(h, path, r.oldLine, r.oldNo, oldPrefix, colWidth, cursor)
+	right := m.splitCell(h, path, r.newLine, r.newNo, newPrefix, colWidth, cursor)
 
 	rule := styleLineNo.Render(sideBySideDivider)
 	if cursor {
@@ -350,7 +360,7 @@ func (m Model) renderSplitLine(h diff.Hunk, meta hunkMeta, r rowRef, width int, 
 // not a repeat of the other side. Echoing the counterpart is what a unified diff
 // already does; the whole reason to split is that "nothing was here" and "this
 // is unchanged" are different facts and should not look alike.
-func (m Model) splitCell(h diff.Hunk, li, no, prefixWidth, colWidth int, cursor bool) string {
+func (m Model) splitCell(h diff.Hunk, path string, li, no, prefixWidth, colWidth int, cursor bool) string {
 	avail := max(1, colWidth-prefixWidth)
 	if li < 0 || li >= len(h.Lines) {
 		blank := strings.Repeat(" ", colWidth)
@@ -360,15 +370,6 @@ func (m Model) splitCell(h diff.Hunk, li, no, prefixWidth, colWidth int, cursor 
 		return blank
 	}
 	l := h.Lines[li]
-
-	text := l.Content
-	if m.hunkHScroll > 0 {
-		text = ansi.TruncateLeft(text, m.hunkHScroll, "")
-	}
-	// Cut to the cell before styling: measuring styled text counts escape bytes as
-	// columns, which is what pushes a row past its border.
-	text = ansi.Truncate(text, avail, "")
-	text += strings.Repeat(" ", max(0, avail-ansi.StringWidth(text)))
 
 	added, deleted, context := styleAdded, styleDeleted, styleContext
 	if cursor {
@@ -383,12 +384,37 @@ func (m Model) splitCell(h diff.Hunk, li, no, prefixWidth, colWidth int, cursor 
 		body, gutterStyle, gutter = deleted, deleted, "-"
 	}
 
+	// Painted whole and cut after, for the reason renderStreamLine gives. The cutters
+	// below are ANSI-aware in both directions, and ansi.StringWidth measures the
+	// painted text correctly — what the old comment here warned against was measuring
+	// with something that is not.
+	spans := m.hl.spansFor(path, l)
+	text := l.Content
+	if len(spans) > 0 {
+		text = paintCode(text, spans, cursor)
+	}
+	if m.hunkHScroll > 0 {
+		text = ansi.TruncateLeft(text, m.hunkHScroll, "")
+	}
+	text = ansi.Truncate(text, avail, "")
+	pad := strings.Repeat(" ", max(0, avail-ansi.StringWidth(text)))
+
 	numberStyle := styleLineNo
 	if cursor {
 		numberStyle = styleCursorLineNo
 	}
 	numbers := fmt.Sprintf("%*s ", max(0, prefixWidth-3), lineNoText(no))
-	return numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ") + body.Render(text)
+	prefix := numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
+	if len(spans) == 0 {
+		// One Render over text and its padding together, as before.
+		return prefix + body.Render(text+pad)
+	}
+	// The padding is not part of the painted text, so on a cursor row it has to carry
+	// the background itself or the cursorline has a hole at the end of every line.
+	if cursor {
+		pad = styleCursorFill.Render(pad)
+	}
+	return prefix + text + pad
 }
 
 // A comment block is rendered once, not once per row of it and not once per
