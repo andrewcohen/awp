@@ -1924,9 +1924,12 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 				}
 			}
 		}
-		return nil
+		// Last, so a zmx failure cannot leave the tmux side half torn down.
+		// This runs in a detached job with no pane host to consult, which is why
+		// it asks the substrate directly rather than being told to.
+		return killWorkspaceSessions(runner, item.ProjectName, item.WorkspaceName, reporter)
 	case deckui.ActionDeleteProject:
-		return handleDeleteProjectAction(tmuxClient, svc, item, reporter)
+		return handleDeleteProjectAction(tmuxClient, runner, svc, item, reporter)
 	case deckui.ActionRename:
 		newName := strings.TrimSpace(req.Arg)
 		oldSessionName := DeckSessionName(item.ProjectName, item.WorkspaceName)
@@ -2086,7 +2089,7 @@ func sendPromptToAgent(tmuxClient *tmux.Client, svc workspace.Service, item deck
 // intact — "deleting the project" is a deck concept (the project
 // disappears from the row list); the source repo and its default
 // workspace stay on disk.
-func handleDeleteProjectAction(tmuxClient *tmux.Client, svc workspace.Service, item deckui.Item, reporter deckui.Reporter) error {
+func handleDeleteProjectAction(tmuxClient *tmux.Client, runner Runner, svc workspace.Service, item deckui.Item, reporter deckui.Reporter) error {
 	repoRoot := strings.TrimSpace(item.RepoRoot)
 	if repoRoot == "" {
 		return errors.New("delete-project: missing repo root")
@@ -2137,6 +2140,9 @@ func handleDeleteProjectAction(tmuxClient *tmux.Client, svc workspace.Service, i
 					return err
 				}
 			}
+		}
+		if err := killWorkspaceSessions(runner, item.ProjectName, name, reporter); err != nil {
+			return err
 		}
 	}
 

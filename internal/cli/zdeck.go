@@ -383,14 +383,76 @@ func zmxWorkspaceRef(name string) (workspaceRef, bool) {
 	return workspaceRef{project: project, workspace: ws}, true
 }
 
+// zmxClientFor is the one way to build a zmx client over a deck runner, so the
+// deck, its panes and the detached jobs all talk to the same daemon the same
+// way.
+func zmxClientFor(runner Runner) zmx.Client {
+	return zmx.New(func(ctx context.Context, dir, name string, args ...string) (string, error) {
+		return runner.Run(ctx, dir, name, args...)
+	})
+}
+
+// killWorkspaceSessions ends every zmx session belonging to a workspace, and
+// reports what it killed.
+//
+// Called on delete regardless of which deck is running, and deliberately not
+// gated on the deck hosting panes. A delete happens in a detached subprocess
+// with no terminal and therefore no pane host to ask, so gating would mean
+// threading the answer through the job spec — a fourth way to say which
+// substrate is real, on a flow that has already been wrong twice for exactly
+// that reason. Killing sessions that do not exist is a no-op, so `awp deck`
+// users are unaffected and delete comes to mean the same thing from either
+// deck.
+//
+// Matched by parsing names rather than by walking the pane kinds, so a kind
+// added later — including a user-defined one — is reaped without anyone
+// remembering to add it here.
+func killWorkspaceSessions(runner Runner, project, workspaceName string, reporter deckui.Reporter) error {
+	if runner == nil {
+		// Named rather than left to panic: this runs inside a detached job, where
+		// a segfault is the least visible way for a delete to half-finish.
+		return fmt.Errorf("kill the zmx sessions of workspace %q: no runner", workspaceName)
+	}
+	if _, err := exec.LookPath("zmx"); err != nil {
+		// Not installed: there is nothing of ours in a substrate that isn't here.
+		return nil
+	}
+	client := zmxClientFor(runner)
+	sessions, err := client.List(context.Background())
+	if err != nil {
+		return fmt.Errorf("find the zmx sessions of workspace %q: %w", workspaceName, err)
+	}
+	want := workspaceRef{project: project, workspace: workspaceName}
+	var failed []string
+	for _, s := range sessions {
+		ref, ok := zmxWorkspaceRef(s.Name)
+		if !ok || ref != want {
+			continue
+		}
+		if reporter != nil {
+			reporter.Step(fmt.Sprintf("Kill zmx session %s", s.Name))
+		}
+		if err := client.Kill(context.Background(), s.Name); err != nil {
+			failed = append(failed, s.Name)
+		}
+	}
+	if len(failed) > 0 {
+		// The workspace is already gone by the time we get here, so this is not
+		// a reason to fail the delete — but a surviving agent in a deleted tree
+		// is exactly the bug this exists to prevent, so say which one and how to
+		// finish the job by hand.
+		return fmt.Errorf("workspace %q was deleted but its zmx session(s) %s survived — run `zmx kill %s --force`",
+			workspaceName, strings.Join(failed, ", "), failed[0])
+	}
+	return nil
+}
+
 func runZdeck(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
 	if _, err := exec.LookPath("zmx"); err != nil {
 		return fmt.Errorf("zdeck needs zmx on PATH — install it, or use `awp deck` (%w)", err)
 	}
 	backend := zmxPanes{
-		client: zmx.New(func(ctx context.Context, dir, name string, args ...string) (string, error) {
-			return runner.Run(ctx, dir, name, args...)
-		}),
+		client: zmxClientFor(runner),
 		// Per-repo, not the deck's own service: zdeck opens at ScopeAll, so
 		// the row whose agent you are starting may belong to another project
 		// and keep its pending prompt in that project's state file.
