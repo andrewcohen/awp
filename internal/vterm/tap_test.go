@@ -18,7 +18,7 @@ func TestThePaneLogRecordsBothDirections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pane.log")
 	t.Setenv(PaneLogEnv, path)
 
-	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "cat"))
+	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "cat"), HostColors{})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestThePaneLogRecordsBothDirections(t *testing.T) {
 // Unset means off, and the pane must start regardless.
 func TestNoPaneLogByDefault(t *testing.T) {
 	t.Setenv(PaneLogEnv, "")
-	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo hi; sleep 5"))
+	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo hi; sleep 5"), HostColors{})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestNoPaneLogByDefault(t *testing.T) {
 // never a reason a pane will not start.
 func TestABadPaneLogPathStillStartsThePane(t *testing.T) {
 	t.Setenv(PaneLogEnv, filepath.Join(t.TempDir(), "no-such-dir", "pane.log"))
-	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo hi; sleep 5"))
+	term, err := Start(1, 40, 10, exec.Command("sh", "-c", "echo hi; sleep 5"), HostColors{})
 	if err != nil {
 		t.Fatalf("an unwritable log path stopped the pane: %v", err)
 	}

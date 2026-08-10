@@ -98,7 +98,7 @@ func renderLines(t *testing.T, in []string) []string {
 	if err := os.WriteFile(path, []byte(strings.Join(in, "\r\n")+"\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	term, err := Start(1, 40, len(in)+2, exec.Command("cat", path))
+	term, err := Start(1, 40, len(in)+2, exec.Command("cat", path), HostColors{})
 	if err != nil {
 		t.Fatal(err)
 	}

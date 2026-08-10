@@ -23,6 +23,7 @@ import (
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/deckdata"
 	"github.com/andrewcohen/awp/internal/prstatus"
+	"github.com/andrewcohen/awp/internal/vterm"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -849,8 +850,13 @@ type Model struct {
 	// process inside the deck on a pty awp owns instead of handing off to
 	// a tmux window. nil is the ordinary deck. The UI is the same either
 	// way; only where the process lives differs.
-	panes       PaneBackend
-	paneGen     int
+	panes   PaneBackend
+	paneGen int
+	// hostColors is what this deck's own terminal looks like, asked for at boot
+	// and answered asynchronously. A pane hands it to its emulator so a hosted
+	// program that asks what colour its background is gets the real one — see
+	// vterm.HostColors. Zero until the terminal answers.
+	hostColors  vterm.HostColors
 	filterInput textinput.Model
 	filtering   bool
 	filter      string
@@ -1690,6 +1696,11 @@ func (m Model) Init() tea.Cmd {
 	// window between "last activity expired" and "a foreground action
 	// or jobsListMsg batched a fresh Tick."
 	cmds = append(cmds, m.spinner.Tick)
+	// Ask the terminal what it actually looks like. Only a pane needs the answer
+	// — it is what a hosted program is told when it asks the same question — but
+	// it has to be asked here, once, because the reply comes back through Update
+	// and a pane opening cannot wait for a round trip to the terminal.
+	cmds = append(cmds, tea.RequestForegroundColor, tea.RequestBackgroundColor, tea.RequestCursorColor)
 	return tea.Batch(cmds...)
 }
 
@@ -1916,6 +1927,19 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+	// The terminal answering what it looks like. Recorded rather than acted on:
+	// the deck paints in palette tokens the terminal resolves itself, so these
+	// are only ever passed on to a pane's emulator, which has to answer the same
+	// questions on our behalf.
+	case tea.ForegroundColorMsg:
+		m.hostColors.Fg = msg.Color
+		return m, nil
+	case tea.BackgroundColorMsg:
+		m.hostColors.Bg = msg.Color
+		return m, nil
+	case tea.CursorColorMsg:
+		m.hostColors.Cursor = msg.Color
 		return m, nil
 	case initKickMsg:
 		cmds := []tea.Cmd{}

@@ -727,6 +727,21 @@ Kitty. A program that asked for neither gets a plain CR, which is what a real
 terminal would send — a pane does not invent an escape sequence nobody is
 listening for.
 
+**A pane tells the truth about its colours.** A program that asks its terminal
+what colour its foreground, background or cursor is (`OSC 10` / `11` / `12`) is
+asking the pane, and the pane used to answer out of the emulator's defaults —
+white on black, whatever was actually on your screen. So a program picking a dim
+grey by blending toward the background was blending toward a background nobody
+was looking at. The deck now asks its own terminal at startup and hands the
+answers to every pane it opens; a pane opened before the terminal has replied
+falls back to the emulator's defaults rather than guessing.
+
+`TERM` is a different question and stays `xterm-256color`. It is stated rather
+than inherited because a hosted program is talking to awp's emulator, not to
+whatever awp is running under — inheriting `tmux-256color` describes tmux — and
+`xterm-256color` is the closest true statement about that emulator. Claiming
+`xterm-ghostty` would advertise capabilities it does not have.
+
 The mouse and the cursor follow the pane's program rather than the pane. A
 program that enables mouse reporting — an agent, jjui — gets the wheel
 forwarded to it; one that doesn't, like a shell, leaves the mouse to your

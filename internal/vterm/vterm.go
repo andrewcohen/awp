@@ -104,7 +104,13 @@ func mouseModeBit(m ansi.Mode) (int32, bool) {
 //
 // gen is the caller's generation counter, echoed back on every message so a
 // stale Term's frames can be discarded rather than painted over a new one.
-func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
+//
+// host is what the outer terminal looks like, and is a required argument for the
+// reason the repo's other ambient values are: what a hosted program is told about
+// its terminal has exactly one place to come from, and a caller that forgot to
+// say does not fail — it silently hands the program x/vt's white-on-black. Pass
+// a zero HostColors to mean "not known".
+func Start(gen, w, h int, c *exec.Cmd, host HostColors) (*Term, error) {
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("vterm: %dx%d is not a usable size (want both > 0)", w, h)
 	}
@@ -124,6 +130,24 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 		done:  make(chan error, 1),
 		w:     w,
 		h:     h,
+	}
+
+	// What the outer terminal is, so the emulator's answers to OSC 10 / 11 / 12
+	// describe the screen the pane is really on. Only what is known is stated:
+	// x/vt's own defaults stand in for the rest, which is the same wrong answer
+	// as before but at least not a newly invented one.
+	//
+	// Set here for the same reason SetCallbacks is — these are promoted from the
+	// inner Emulator and so unguarded, and this is the last moment before output
+	// starts flowing.
+	if host.Fg != nil {
+		t.emu.SetDefaultForegroundColor(host.Fg)
+	}
+	if host.Bg != nil {
+		t.emu.SetDefaultBackgroundColor(host.Bg)
+	}
+	if host.Cursor != nil {
+		t.emu.SetDefaultCursorColor(host.Cursor)
 	}
 
 	// A cursor is visible until a program hides it (DECTCEM starts set), and
