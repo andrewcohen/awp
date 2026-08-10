@@ -3,6 +3,7 @@ package charm
 import (
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	catppuccingo "github.com/catppuccin/go"
 )
 
 // Semantic color palette for every TUI surface in the app.
@@ -32,28 +33,47 @@ const (
 	Link = Info
 )
 
-// Syntax token roles, for code shown inside a diff body.
+// Syntax colours, for code shown inside a diff body.
 //
-// Named separately from the status tokens above even where they land on the same
-// ANSI slot, because the two are retuned for different reasons: changing what a
-// keyword looks like must not change what a failing check looks like. Same 16
-// slots, so the user's terminal theme still supplies every hue — a chroma style
-// would emit its own 256/truecolour codes, which is the thing this file exists to
-// prevent.
+// Catppuccin rather than the ANSI 16 slots above, and the distinction is worth
+// naming because it is not an exception. Everything above is awp's **chrome** — a
+// status dot, a project header, a selection bar. Chrome should follow whatever
+// theme the terminal is set to, which is exactly what the 16 slots buy. Code in a
+// diff is not chrome, it is **content**, and it should look the way the same code
+// looks in the editor the reader is about to open it in.
 //
-// There is no token for punctuation or for an identifier. Both stay at the base
-// colour of the line they are on: at ANSI-16 resolution the palette runs out of
-// distinguishable hues long before a lexer runs out of token types, and the ones
-// worth spending a hue on are the ones you scan for.
-const (
-	SyntaxKeyword = "5" // magenta — keywords, and the builtins that read like them
-	SyntaxType    = "3" // yellow — type names, tags, YAML keys, markdown headings
-	SyntaxFunc    = "4" // blue — function names
-	SyntaxAttr    = "6" // teal — attributes, properties, variables, decorators
-	SyntaxString  = "2" // green — string and other non-numeric literals
-	SyntaxNumber  = "5" // magenta — literals read as one family with keywords
-	SyntaxComment = "8" // bright black — the same dimming hints wear
+// Sixteen slots also cannot carry a syntax palette. Six are already spoken for by
+// status roles, so at ANSI 16 a token either shares its hue with "CI failing" or
+// gets none at all — which is why punctuation and operators had none. Catppuccin
+// has fourteen accents plus graded overlays, which is what a lexer's output needs.
+//
+// Latte against a light terminal, Macchiato against a dark one. The assignment is
+// Catppuccin's own conventional one, so a diff matches an editor wearing the theme
+// rather than approximating it. catppuccingo.Color implements color.Color, so
+// these need no conversion to reach lipgloss.
+//
+// Plain — a bare identifier — deliberately has no entry. It keeps the terminal's
+// default foreground, which under this theme is already Catppuccin's Text.
+var (
+	SyntaxKeyword  = syntax(catppuccingo.Latte.Mauve, catppuccingo.Macchiato.Mauve)       // keywords, builtins, constants
+	SyntaxType     = syntax(catppuccingo.Latte.Yellow, catppuccingo.Macchiato.Yellow)     // types, classes, tags, YAML keys, markdown headings
+	SyntaxFunc     = syntax(catppuccingo.Latte.Blue, catppuccingo.Macchiato.Blue)         // function names
+	SyntaxAttr     = syntax(catppuccingo.Latte.Teal, catppuccingo.Macchiato.Teal)         // attributes, properties, variables, decorators
+	SyntaxString   = syntax(catppuccingo.Latte.Green, catppuccingo.Macchiato.Green)       // strings and other non-numeric literals
+	SyntaxNumber   = syntax(catppuccingo.Latte.Peach, catppuccingo.Macchiato.Peach)       // numeric literals
+	SyntaxComment  = syntax(catppuccingo.Latte.Overlay1, catppuccingo.Macchiato.Overlay1) // comments
+	SyntaxOperator = syntax(catppuccingo.Latte.Sky, catppuccingo.Macchiato.Sky)           // = => ?? |
+	SyntaxPunct    = syntax(catppuccingo.Latte.Overlay2, catppuccingo.Macchiato.Overlay2) // ( ) { } , ;
 )
+
+// syntax pairs a Catppuccin colour's light and dark flavours.
+//
+// Takes the accessors rather than the colours so a call site names the accent once
+// — `catppuccingo.Latte.Mauve, catppuccingo.Macchiato.Mauve` reads as "mauve", and
+// a pair that disagreed would be a typo this shape makes visible.
+func syntax(light, dark func() catppuccingo.Color) compat.AdaptiveColor {
+	return compat.AdaptiveColor{Light: light(), Dark: dark()}
+}
 
 // Background tints. These are the exception to the ANSI-16 rule above, and the
 // rule is narrower than it first looked: it is about *foreground* semantics,

@@ -39,6 +39,11 @@ const (
 	String
 	Number
 	Comment
+	// Operator is separate from Punct because the two want different weights: an
+	// operator is a word of the expression, punctuation is scaffolding around it.
+	// They were one class while the palette was ANSI 16, where the only options were
+	// a status hue or nothing.
+	Operator
 	Punct
 )
 
@@ -161,11 +166,13 @@ func (l Lexer) Spans(line string) []Span {
 //   - String: any literal that is not a number.
 //   - Number: numeric literals.
 //   - Comment: comments.
-//   - Punct: punctuation and operators, which keep the line's own colour.
+//   - Operator: operators.
+//   - Punct: punctuation.
 //
-// Operators stay at base deliberately. Python's attribute access `.` is an
-// Operator, and Go's `*` and `&` are too, so giving the class a hue paints a
-// colour on every dereference and every field access in the file.
+// Operator and Punct are separate classes but neither is loud. Python's attribute
+// access `.` is an Operator and Go's `*` and `&` are too, so whatever the class
+// wears appears on every dereference and every field access in the file — which is
+// an argument for a quiet hue, not for none.
 func classify(t chroma.TokenType) Token {
 	switch {
 	// Before the Keyword category, which KeywordType is in: a type name is a
@@ -198,7 +205,9 @@ func classify(t chroma.TokenType) Token {
 		return String
 	case t.InCategory(chroma.Comment):
 		return Comment
-	case t.InCategory(chroma.Operator), t.InCategory(chroma.Punctuation):
+	case t.InCategory(chroma.Operator):
+		return Operator
+	case t.InCategory(chroma.Punctuation):
 		return Punct
 	}
 	return Plain

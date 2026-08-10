@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 func TestEveryTokenClassHasADecidedHue(t *testing.T) {
 	table := []struct {
 		tok  highlight.Token
-		want string
+		want color.Color
 	}{
 		{highlight.Keyword, charm.SyntaxKeyword},
 		{highlight.Type, charm.SyntaxType},
@@ -26,11 +27,12 @@ func TestEveryTokenClassHasADecidedHue(t *testing.T) {
 		{highlight.String, charm.SyntaxString},
 		{highlight.Number, charm.SyntaxNumber},
 		{highlight.Comment, charm.SyntaxComment},
-		// Both keep the colour of the line they are on. Punctuation given a hue of its
-		// own turned every `(){},.` on the screen into another colour to read past, and
-		// operators are punctuation too — Python's attribute access `.` is one.
-		{highlight.Plain, ""},
-		{highlight.Punct, ""},
+		{highlight.Operator, charm.SyntaxOperator},
+		{highlight.Punct, charm.SyntaxPunct},
+		// A bare identifier keeps the colour of the line it is on. Stating it would
+		// override a terminal set to something other than this theme, for no gain — the
+		// theme's own Text is what the terminal's default already is.
+		{highlight.Plain, nil},
 	}
 	// A class added to highlight without a hue decided for it renders in whatever the
 	// zero style produces, which is indistinguishable from a deliberate "no hue".
@@ -39,8 +41,24 @@ func TestEveryTokenClassHasADecidedHue(t *testing.T) {
 	}
 	for _, tc := range table {
 		if got := syntaxHue(tc.tok); got != tc.want {
-			t.Errorf("token %d is hue %q, want %q", tc.tok, got, tc.want)
+			t.Errorf("token %d is hue %v, want %v", tc.tok, got, tc.want)
 		}
+	}
+}
+
+// Every class that has a hue must have a *distinct* one, or two of them are the
+// same colour on screen and one of the two rules is doing nothing.
+func TestNoTwoClassesShareAHue(t *testing.T) {
+	seen := map[color.Color]highlight.Token{}
+	for tok := highlight.Token(0); int(tok) < highlight.TokenCount; tok++ {
+		hue := syntaxHue(tok)
+		if hue == nil {
+			continue
+		}
+		if prev, dup := seen[hue]; dup {
+			t.Errorf("tokens %d and %d are both %v", prev, tok, hue)
+		}
+		seen[hue] = tok
 	}
 }
 

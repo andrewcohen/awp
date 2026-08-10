@@ -313,12 +313,31 @@ diff surface (`c` in the deck and standalone `awp diff`). Off unless set.
 Anything else — including a typo — is off, so a misspelling gets the ordinary
 rendering rather than silently picking a treatment.
 
-Colours route through the palette like everything else: the lexer's token
-classes map onto ANSI 16 slots (keyword magenta, type yellow, function blue,
-attribute teal, string green, comment muted), so your terminal theme supplies the
-actual hues. Punctuation, operators and bare identifiers deliberately get none —
-Python's attribute-access `.` is an operator, so hueing the class paints a colour
-on every field access in the file.
+Colours are **Catppuccin** — Latte against a light terminal, Macchiato against a
+dark one — in Catppuccin's own conventional syntax assignment, so a diff matches
+an editor wearing the theme rather than approximating it:
+
+| Class | Colour |
+|-------|--------|
+| keyword, builtin, constant | mauve |
+| type, class, tag, YAML key, markdown heading | yellow |
+| function name | blue |
+| attribute, property, variable, decorator | teal |
+| string and other non-numeric literals | green |
+| number | peach |
+| comment | overlay1 |
+| operator | sky |
+| punctuation | overlay2 |
+
+A bare identifier keeps your terminal's default foreground, which under this
+theme is already Catppuccin's Text.
+
+This is the one place awp does **not** use the ANSI 16 slots the rest of its UI
+routes through. Those exist so awp's own chrome — status dots, headers, the
+selection bar — follows whatever theme your terminal is set to. Code in a diff
+isn't chrome, it's content, and sixteen slots can't carry a syntax palette
+anyway: six are already spoken for by status roles, so a token would either share
+its hue with "CI failing" or get none at all.
 
 The mapping is semantic, not per-language, because every lexer spells the same
 idea differently: Go says `NameFunction` where TypeScript says `NameOther`, and
