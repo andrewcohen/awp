@@ -192,15 +192,25 @@ func (n notifier) Write(p []byte) (int, error) {
 const TermType = "xterm-256color"
 
 // Env prepares the environment for a hosted process: TermType, and no
-// inherited multiplexer markers that would make a nested client refuse to
-// start.
+// inherited multiplexer markers.
+//
+// A marker says "you are already inside me", and a hosted process is not
+// inside whatever awp is inside — it is inside this emulator. Under tmux the
+// markers make a nested client refuse to start, which is loud. ZMX_SESSION is
+// the quiet one: `zmx attach` reads it and, finding one, tells the daemon to
+// switch the *calling* client's session rather than making a new client. So a
+// pane that inherited it does not open a session beside awp's, it steals the
+// terminal awp is running in, and the session it was pulled off is re-created
+// empty — losing whatever agent was in it. zmx sets the variable itself for a
+// session's own child, so dropping the inherited value is not information lost.
 func Env(base []string) []string {
 	out := make([]string, 0, len(base)+1)
 	for _, kv := range base {
 		switch {
 		case strings.HasPrefix(kv, "TERM="),
 			strings.HasPrefix(kv, "TMUX="),
-			strings.HasPrefix(kv, "TMUX_PANE="):
+			strings.HasPrefix(kv, "TMUX_PANE="),
+			strings.HasPrefix(kv, "ZMX_SESSION="):
 			continue
 		}
 		out = append(out, kv)
