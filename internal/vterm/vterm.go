@@ -251,6 +251,33 @@ func Env(base []string) []string {
 	return append(out, "TERM="+TermType)
 }
 
+// HostTerm restores the real terminal's TERM in an environment Env prepared.
+//
+// Env states TERM because the child is talking to this emulator. A child handed
+// the terminal itself — see the pane handover — is talking to the same terminal
+// awp is, so the honest answer is awp's own TERM: xterm-ghostty describes what
+// is on the other end, and claiming xterm-256color there gives up capabilities
+// that are genuinely present.
+//
+// Only TERM is restored. The multiplexer markers Env dropped stay dropped, and
+// ZMX_SESSION most of all: `zmx attach` reads it and switches the *calling*
+// client's session rather than making a new one, so a handed-over attach that
+// inherited it would steal the terminal awp is running in.
+func HostTerm(env []string) []string {
+	term := os.Getenv("TERM")
+	if term == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TERM=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "TERM="+term)
+}
+
 // Gen is the generation this Term was started with.
 func (t *Term) Gen() int { return t.gen }
 
