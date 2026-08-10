@@ -1358,10 +1358,10 @@ func (m Model) rm() deckdata.View {
 // twice during the reconcile window.
 func (m Model) mergedItemsAll() []Item {
 	// Drop "unmanaged" (live-session-only) rows for workspaces a delete job
-	// has already removed from state but whose tmux session kill is deferred
-	// to popup exit. Without this, the row flips from the real workspace to an
-	// adoptable "(live tmux session, not in store)" entry the moment the
-	// delete job finishes, and lingers until the deck closes.
+	// has already removed from state but whose session kill is deferred to
+	// popup exit. Without this, the row flips from the real workspace to an
+	// adoptable "(live session, not in store)" entry the moment the delete job
+	// finishes, and lingers until the deck closes.
 	base := make([]Item, 0, len(m.itemsAll)+len(m.optimisticCreates))
 	for _, it := range m.itemsAll {
 		if it.Status == "unmanaged" && m.hasDeleteJobFor(it.ProjectName, it.WorkspaceName) {

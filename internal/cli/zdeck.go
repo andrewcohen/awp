@@ -308,6 +308,81 @@ func (z zmxPanes) SendPrompt(item deckui.Item, text string, reporter deckui.Repo
 }
 
 // runZdeck is `awp deck` with zmx behind the window keys instead of tmux.
+// sessionSource is the substrate zdeck's long-lived processes live on, so the
+// deck reads zmx rather than tmux. Same client, so a row cannot describe one
+// substrate while the keys act on the other.
+func (z zmxPanes) sessionSource() deckSessions { return zmxSessions{client: z.client} }
+
+// zmxSessions answers the deck's session questions from `zmx ls`.
+//
+// Deliberately not a merge with tmux. A workspace whose agent is in a leftover
+// tmux session — started earlier by `awp deck` — reads as having no session
+// here, and that is the honest answer: zdeck cannot show it to you, `a` will
+// not take you to it, and calling it active is exactly the stale read the
+// session-truth seam exists to remove.
+type zmxSessions struct{ client zmx.Client }
+
+// sessions reads every awp session and folds it onto the workspace it names.
+//
+// The fast path costs nothing at all: which workspace the user is looking at is
+// in the environment, so the first paint needs no subprocess. known stays false
+// so the deck keeps suppressing caution glyphs until the full read lands.
+func (z zmxSessions) sessions(fast bool) deckSessionSnapshot {
+	snap := deckSessionSnapshot{byWorkspace: map[workspaceRef]sessionFacts{}}
+	snap.current, snap.hasCurrent = zmxWorkspaceRef(os.Getenv("ZMX_SESSION"))
+	if fast {
+		return snap
+	}
+	list, err := z.client.List(context.Background())
+	if err != nil {
+		// A daemon that is not answering is not the same as no sessions.
+		// Leaving known false says "unread", so nothing renders a workspace as
+		// dead on the strength of a failed call.
+		return snap
+	}
+	snap.known = true
+	for _, s := range list {
+		project, ws, kind, ok := zmx.ParseSessionName(s.Name)
+		if !ok {
+			// Not a session awp made. The deck has nothing to say about the
+			// rest of the user's zmx.
+			continue
+		}
+		ref := workspaceRef{project: project, workspace: ws}
+		f := snap.byWorkspace[ref]
+		f.present = true
+		switch {
+		case kind == deckui.PaneKindAgent:
+			// The agent runs as the session's own process, so whether it is
+			// gone is simply whether the session's command has exited. The
+			// tmux path has to sniff for a window that fell back to a bare
+			// shell, because a tmux window outlives the process in it; there
+			// is nothing to carry across.
+			f.name, f.agentGone = s.Name, !s.Live()
+		case f.name == "":
+			// An editor session is a session — the workspace is present — but
+			// it says nothing about the agent. agentGone stays false, so a
+			// workspace that never ran an agent does not read as "exited".
+			f.name = s.Name
+		}
+		snap.byWorkspace[ref] = f
+	}
+	return snap
+}
+
+// zmxWorkspaceRef reads the workspace out of a zmx session name, for the
+// session awp is itself running in. Inverse of zmx.SessionName, and inherits
+// its sanitizing: a project or workspace whose real name contained a dot comes
+// back with an underscore and will not match its row. Names that survive
+// sanitizing round-trip, which is what the deck's own sessions are.
+func zmxWorkspaceRef(name string) (workspaceRef, bool) {
+	project, ws, _, ok := zmx.ParseSessionName(strings.TrimSpace(name))
+	if !ok {
+		return workspaceRef{}, false
+	}
+	return workspaceRef{project: project, workspace: ws}, true
+}
+
 func runZdeck(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
 	if _, err := exec.LookPath("zmx"); err != nil {
 		return fmt.Errorf("zdeck needs zmx on PATH — install it, or use `awp deck` (%w)", err)

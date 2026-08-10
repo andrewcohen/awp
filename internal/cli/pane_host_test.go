@@ -33,6 +33,17 @@ func (h *fakeHost) SendPrompt(item deckui.Item, text string, _ deckui.Reporter) 
 	return h.err
 }
 
+// A host has to say which substrate it reads. This one hosts nothing real, so
+// it reports nothing rather than answering from tmux — a fake that read the
+// developer's actual tmux would make these tests depend on it.
+func (h *fakeHost) sessionSource() deckSessions { return noSessions{} }
+
+type noSessions struct{}
+
+func (noSessions) sessions(bool) deckSessionSnapshot {
+	return deckSessionSnapshot{byWorkspace: map[workspaceRef]sessionFacts{}}
+}
+
 var promptItem = deckui.Item{ProjectName: "proj", WorkspaceName: "ws", Path: "/tmp", RepoRoot: "/tmp"}
 
 // The bug this prevents: the deck sent prompts through tmux to a session zdeck
