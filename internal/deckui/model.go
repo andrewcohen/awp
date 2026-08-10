@@ -3359,6 +3359,20 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 	// backend that declines a kind falls through to tmux, which is what keeps
 	// the review and PR-description windows working unchanged.
 	if !item.Virtual {
+		// Before anything opens: the row shows up as soon as the workspace is
+		// registered, but its working copy and agent don't exist until the
+		// create or review job's bootstrap finishes. Under tmux this guard was
+		// the first thing an action met. The pane interception below arrived in
+		// front of it, and jumping it is not a no-op — a pane opened on a
+		// still-setting-up row starts a program in a directory the workspace
+		// does not have yet, under the session name the workspace will use, so
+		// nothing ever reaps it and the agent is in the wrong tree for good.
+		// The review flow is where it showed: `r` parks the reviewer's brief at
+		// the end of the job, so an agent started before then also comes up with
+		// no brief and never receives one.
+		if m2, blocked := m.blockIfSettingUp(item); blocked {
+			return m2, nil
+		}
 		kind, isPane := windowKind(arg), a == ActionOpenWindow
 		switch a {
 		case ActionSummon:
@@ -3421,14 +3435,8 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 		m.status = "no workspace yet — press enter to create it"
 		return m, nil
 	}
-	// The row shows up as soon as the workspace is registered in state,
-	// but the tmux session + agent aren't created until the create job's
-	// bootstrap hooks finish. Summoning / opening windows before then
-	// would attach to a session that doesn't exist yet, so hold the
-	// action until setup completes.
-	if m2, blocked := m.blockIfSettingUp(item); blocked {
-		return m2, nil
-	}
+	// Everything below is reached only for a non-virtual row, which the
+	// blockIfSettingUp above has already vetted.
 	if isProgressAction(a) {
 		return m.startAction(a, item, arg)
 	}
