@@ -61,12 +61,11 @@ type Term struct {
 	cursorVisible atomic.Bool
 	mouseModes    atomic.Int32
 
-	// log is the optional traffic recorder (see PaneLogEnv), and in is the
-	// write side of the pty with the recorder wrapped around it — Send has to
-	// go through the same tap the emulator's replies do, or a capture would
-	// show only half of what reached the process.
-	log *os.File
-	in  io.Writer
+	// in is the write side of the pty with the traffic recorder (see
+	// PaneLogEnv) wrapped around it — Send has to go through the same tap the
+	// emulator's replies do, or a capture would show only half of what reached
+	// the process.
+	in io.Writer
 
 	mu     sync.Mutex
 	closed bool
@@ -146,8 +145,7 @@ func Start(gen, w, h int, c *exec.Cmd) (*Term, error) {
 	// Both directions optionally recorded — see PaneLogEnv. Wrapped here, at
 	// the two io.Copy calls, because this is the only place every byte in and
 	// every byte out passes through.
-	t.log = openPaneLog()
-	toEmulator, toProcess := tapPair(t.log, notifier{w: t.emu, dirty: t.dirty}, ptmx)
+	toEmulator, toProcess := tapPair(openLog(PaneLogEnv), notifier{w: t.emu, dirty: t.dirty}, ptmx)
 	t.in = toProcess
 
 	// Pane output into the emulator, flagging a repaint after each chunk.
@@ -383,8 +381,9 @@ func (t *Term) Close() error {
 	if t.cmd.Process != nil {
 		_ = t.cmd.Process.Kill()
 	}
-	if t.log != nil {
-		_ = t.log.Close()
-	}
+	// The recorder is deliberately not closed: one file can be shared by every
+	// pane and by the frame tee (see FrameLogEnv), so closing it here would take
+	// the log out from under whoever is still writing. It is append-mode and
+	// goes away with the process.
 	return t.emu.Close()
 }
