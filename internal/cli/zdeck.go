@@ -447,6 +447,33 @@ func killWorkspaceSessions(runner Runner, project, workspaceName string, reporte
 	return nil
 }
 
+// liveZmxAgent names the workspace's zmx agent session if its process is still
+// running, and "" if there is none. It is the zmx half of the question the
+// rename guard asks tmux with PaneCurrentCommand.
+//
+// Simpler than the tmux half, and for the reason that keeps recurring: a zmx
+// session runs the agent as its own process, so "is the agent alive" is the
+// session being live. There is no window to have fallen back to a shell.
+func liveZmxAgent(runner Runner, project, workspaceName string) (string, error) {
+	if runner == nil {
+		return "", fmt.Errorf("check for a live agent in workspace %q: no runner", workspaceName)
+	}
+	if _, err := exec.LookPath("zmx"); err != nil {
+		return "", nil
+	}
+	name := zmx.SessionName(project, workspaceName, deckui.PaneKindAgent)
+	s, found, err := zmxClientFor(runner).Lookup(context.Background(), name)
+	if err != nil {
+		// Refusing to guess: a rename that cannot tell whether an agent is
+		// running is the case this guard exists for.
+		return "", fmt.Errorf("check for a live agent in workspace %q: %w", workspaceName, err)
+	}
+	if !found || !s.Live() {
+		return "", nil
+	}
+	return name, nil
+}
+
 func runZdeck(runner Runner, svc workspace.Service, in io.Reader, out io.Writer) error {
 	if _, err := exec.LookPath("zmx"); err != nil {
 		return fmt.Errorf("zdeck needs zmx on PATH — install it, or use `awp deck` (%w)", err)

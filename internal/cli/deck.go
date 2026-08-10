@@ -2008,6 +2008,23 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 				}
 			}
 		}
+		// The same question, asked of the other substrate. Under a pane host
+		// sessionID is always empty, so the guard above never fired and every
+		// step below it was skipped: the workspace was renamed while its zmx
+		// session kept the old name, and the next `a` — computing the new name,
+		// finding nothing — started a SECOND agent, alongside a first still
+		// running with AWP_WORKSPACE frozen at a workspace that no longer
+		// exists.
+		//
+		// Refusing rather than renaming the session, because zmx has no rename:
+		// the choice is between killing the agent (losing the context that is the
+		// point of the thing being renamed) and leaving it stale. Stopping it
+		// deliberately is the user's call, not ours to make silently.
+		if live, err := liveZmxAgent(runner, item.ProjectName, item.WorkspaceName); err != nil {
+			return err
+		} else if live != "" {
+			return fmt.Errorf("workspace %q has a live agent in zmx session %s — close it first (zmx has no rename, so the session cannot follow the new name)", item.WorkspaceName, live)
+		}
 		reporter.Step(fmt.Sprintf("Rename workspace %s → %s", item.WorkspaceName, newName))
 		if err := svc.Rename(item.WorkspaceName, newName); err != nil {
 			return err

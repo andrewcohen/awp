@@ -378,7 +378,7 @@ func TestHandleDeckActionRenameRenamesSessionWhenAgentIsShell(t *testing.T) {
 	svc := &deckFakeService{}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa", RepoRoot: "/repo"}
 
-	if err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionRename, Arg: "qb"}, noopReporter{}); err != nil {
+	if err := handleDeckAction(client, svc, runner, deckui.ActionRequest{Item: item, Action: deckui.ActionRename, Arg: "qb"}, noopReporter{}); err != nil {
 		t.Fatalf("handleDeckAction: %v", err)
 	}
 	if svc.renameOld != "qa" || svc.renameNew != "qb" {
