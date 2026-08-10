@@ -315,9 +315,20 @@ rendering rather than silently picking a treatment.
 
 Colours route through the palette like everything else: the lexer's token
 classes map onto ANSI 16 slots (keyword magenta, type yellow, function blue,
-string green, comment muted), so your terminal theme supplies the actual hues.
-Punctuation and identifiers deliberately get none — at 16 slots the palette runs
-out of distinguishable hues long before a lexer runs out of token types.
+attribute teal, string green, comment muted), so your terminal theme supplies the
+actual hues. Punctuation, operators and bare identifiers deliberately get none —
+Python's attribute-access `.` is an operator, so hueing the class paints a colour
+on every field access in the file.
+
+The mapping is semantic, not per-language, because every lexer spells the same
+idea differently: Go says `NameFunction` where TypeScript says `NameOther`, and
+YAML says `NameTag` for a key where JSON says `LiteralStringDouble`. So a class
+is chosen by what the token *means* — a name that describes a shape (type, class,
+tag, YAML key, markdown heading) is one colour, a name that gets called is
+another, a named slot (attribute, property, variable, decorator) a third. Getting
+this wrong is silent, since "no colour" is a legitimate answer and a grey diff
+looks like a plain one, so `internal/highlight/coverage_test.go` asserts a
+representative line per language actually comes back coloured.
 
 Added and removed lines get a **background tint** the full width of the pane,
 because highlighting spends the foreground on the lexer and the change type has

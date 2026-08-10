@@ -31,6 +31,11 @@ const (
 	Keyword
 	Type
 	Func
+	// Attr is a named slot rather than a thing that is called: an attribute, a
+	// property, a variable reference, a decorator. Distinct from Func because in the
+	// languages where it shows up it is usually the token carrying the meaning —
+	// `image` in a YAML line, `className` in JSX, `$f` in a shell script.
+	Attr
 	String
 	Number
 	Comment
@@ -142,25 +147,55 @@ func (l Lexer) Spans(line string) []Span {
 
 // classify maps chroma's token type onto the small set above.
 //
-// By category where it can be, because chroma has hundreds of types and matching
-// them one by one is how a language nobody tested comes back entirely Plain.
+// The rule is semantic rather than per-language, because chroma has hundreds of
+// types and every lexer spells the same idea differently — Go says NameFunction
+// where TypeScript says NameOther, YAML says NameTag where JSON says
+// LiteralStringDouble. Matching type by type is how a language nobody checked
+// comes back entirely Plain, which is silent: Plain is a legitimate answer, so
+// nothing looks broken, the diff is just grey.
+//
+//   - Keyword: keywords, builtins, constants — anything the language provides.
+//   - Type: names that describe a shape — types, classes, tags, namespaces.
+//   - Func: names that get called.
+//   - Attr: named slots — attributes, properties, variables, decorators.
+//   - String: any literal that is not a number.
+//   - Number: numeric literals.
+//   - Comment: comments.
+//   - Punct: punctuation and operators, which keep the line's own colour.
+//
+// Operators stay at base deliberately. Python's attribute access `.` is an
+// Operator, and Go's `*` and `&` are too, so giving the class a hue paints a
+// colour on every dereference and every field access in the file.
 func classify(t chroma.TokenType) Token {
 	switch {
 	// Before the Keyword category, which KeywordType is in: a type name is a
 	// different thing to read than `if`.
-	case t == chroma.KeywordType, t == chroma.NameClass:
+	case t == chroma.KeywordType, t == chroma.NameClass,
+		// A tag is the shape of the thing: a YAML key, a TypeScript generic argument, a
+		// JSX element, an HTML tag. In a YAML diff it is the token that carries the line.
+		t == chroma.NameTag, t == chroma.NameNamespace, t == chroma.NameException,
+		// A markdown heading. Its lexer has no notion of code, so without this a
+		// markdown diff comes back with nothing but its comments coloured.
+		t == chroma.GenericHeading, t == chroma.GenericSubheading:
 		return Type
 	// Builtins are language-provided names, so they read as the same family as
 	// keywords — and the alternative is worse, since a language's builtins are a
 	// mix of functions and constants (Go's `append` and `nil` are both this).
-	case t.InCategory(chroma.Keyword), t.InSubCategory(chroma.NameBuiltin):
+	case t.InCategory(chroma.Keyword), t.InSubCategory(chroma.NameBuiltin),
+		t == chroma.NameConstant:
 		return Keyword
 	case t.InSubCategory(chroma.NameFunction):
 		return Func
-	case t.InSubCategory(chroma.LiteralString):
-		return String
+	case t == chroma.NameAttribute, t == chroma.NameProperty, t == chroma.NameDecorator,
+		t.InSubCategory(chroma.NameVariable):
+		return Attr
 	case t.InSubCategory(chroma.LiteralNumber):
 		return Number
+	// The whole Literal category rather than only the string subcategory, so a bare
+	// scalar gets a colour: a YAML value is Literal with no subcategory at all, and
+	// it is half of every line in a YAML file.
+	case t.InCategory(chroma.Literal):
+		return String
 	case t.InCategory(chroma.Comment):
 		return Comment
 	case t.InCategory(chroma.Operator), t.InCategory(chroma.Punctuation):

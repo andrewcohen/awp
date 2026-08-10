@@ -15,21 +15,29 @@ import (
 // The hue each class wears, asserted on the mapping rather than on output: with no
 // TTY lipgloss strips colour, so a rendered row cannot say which token it used.
 func TestEveryTokenClassHasADecidedHue(t *testing.T) {
-	for _, tc := range []struct {
+	table := []struct {
 		tok  highlight.Token
 		want string
 	}{
 		{highlight.Keyword, charm.SyntaxKeyword},
 		{highlight.Type, charm.SyntaxType},
 		{highlight.Func, charm.SyntaxFunc},
+		{highlight.Attr, charm.SyntaxAttr},
 		{highlight.String, charm.SyntaxString},
 		{highlight.Number, charm.SyntaxNumber},
 		{highlight.Comment, charm.SyntaxComment},
 		// Both keep the colour of the line they are on. Punctuation given a hue of its
-		// own turned every `(){},.` on the screen into another colour to read past.
+		// own turned every `(){},.` on the screen into another colour to read past, and
+		// operators are punctuation too — Python's attribute access `.` is one.
 		{highlight.Plain, ""},
 		{highlight.Punct, ""},
-	} {
+	}
+	// A class added to highlight without a hue decided for it renders in whatever the
+	// zero style produces, which is indistinguishable from a deliberate "no hue".
+	if len(table) != highlight.TokenCount {
+		t.Errorf("this table covers %d classes, highlight has %d", len(table), highlight.TokenCount)
+	}
+	for _, tc := range table {
 		if got := syntaxHue(tc.tok); got != tc.want {
 			t.Errorf("token %d is hue %q, want %q", tc.tok, got, tc.want)
 		}
