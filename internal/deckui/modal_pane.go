@@ -2,6 +2,7 @@ package deckui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -142,13 +143,37 @@ func (m Model) hostsAgents() bool {
 	return m.panes != nil && m.panes.Describes(PaneKindAgent)
 }
 
+// PaneExecEnv switches a pane from being emulated to being handed the terminal.
+//
+// It exists to be measured against the emulator, because the two differ in
+// exactly the hops every open pane defect lives in. `zmx attach` run from a plain
+// shell is correct — dim text, cursor shapes, shift+enter, latency — and a pane
+// showing the same session is not; the paths are identical up to the attach
+// client and diverge only at our pty, x/vt, and the recompose into the deck's
+// frame. Handing the child the real terminal deletes those three rather than
+// re-implementing what they dropped.
+//
+// The cost is the deck's chrome: no border, no label row, no status bar, and no
+// background refresh, because the deck is suspended rather than drawing. Whether
+// that is a fair trade is the thing this flag is for.
+const PaneExecEnv = "AWP_PANE_EXEC"
+
+// paneExecDoneMsg reports that a handed-over pane has given the terminal back.
+type paneExecDoneMsg struct {
+	label string
+	err   error
+}
+
 // openPane hosts the given window kind for the selected row. It reports false
 // when there is no backend for it, so the caller can fall back to tmux.
 func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 	if m.panes == nil || !m.panes.Describes(kind) {
 		return nil, false
 	}
-	if !paneFits(m.width, m.height) {
+	handover := os.Getenv(PaneExecEnv) != ""
+	// A handed-over pane is the whole terminal, so there is no size it does not
+	// fit. The emulated one has to leave room for its own chrome.
+	if !handover && !paneFits(m.width, m.height) {
 		m.status = fmt.Sprintf("this terminal is %dx%d, too small for a pane", m.width, m.height)
 		return nil, true
 	}
@@ -158,6 +183,9 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 	if err != nil {
 		m.status = paneLabel(kind) + ": " + err.Error()
 		return nil, true
+	}
+	if handover {
+		return m.handOverTerminal(cmd, restore, paneLabel(kind)), true
 	}
 	m.paneGen++
 	term, err := vterm.Start(m.paneGen, w, h, cmd, m.hostColors)
@@ -180,6 +208,28 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 	m.active = p
 	m.status = ""
 	return tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
+}
+
+// handOverTerminal suspends the deck and gives the child the real tty.
+//
+// Nothing goes on m.active: there is no modal, because the deck is not drawing.
+// Bubble Tea stops its renderer for the duration and repaints the whole frame
+// when the child exits, which is also when the deck needs to catch up — an agent
+// you were just working in has been reporting status the whole time.
+//
+// The child's env has to be corrected on the way past. The backend built it for
+// an emulated pane, so it states TERM=xterm-256color; a child on the real
+// terminal should carry the real TERM. See vterm.HostTerm, which restores that
+// one variable and leaves the multiplexer markers dropped.
+func (m *Model) handOverTerminal(cmd *exec.Cmd, restore func(), label string) tea.Cmd {
+	cmd.Env = vterm.HostTerm(cmd.Env)
+	m.status = ""
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if restore != nil {
+			restore()
+		}
+		return paneExecDoneMsg{label: label, err: err}
+	})
 }
 
 func paneLabel(kind string) string {

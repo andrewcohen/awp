@@ -1928,6 +1928,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+	case paneExecDoneMsg:
+		// A handed-over pane has given the terminal back. The deck was suspended
+		// while it ran, so its rows are as stale as whenever you opened it — the
+		// same reason closing an emulated pane asks for a fresh read.
+		if msg.err != nil {
+			m.status = msg.label + ": " + msg.err.Error()
+		}
+		return m.requestRefresh(false)
 	// The terminal answering what it looks like. Recorded rather than acted on:
 	// the deck paints in palette tokens the terminal resolves itself, so these
 	// are only ever passed on to a pane's emulator, which has to answer the same
