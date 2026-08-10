@@ -414,15 +414,27 @@ func TestHandleDeckActionDeleteUsesForceAndKillsSession(t *testing.T) {
 	svc := &deckFakeService{}
 	item := deckui.Item{ProjectName: "repo", WorkspaceName: "qa"}
 
-	if err := handleDeckAction(client, svc, nil, deckui.ActionRequest{Item: item, Action: deckui.ActionDelete}, noopReporter{}); err != nil {
+	// A real runner, not nil: delete now also reaps the workspace's zmx
+	// sessions, and something that shells out needs something to shell out
+	// with. It used to be nil because the delete branch happened not to reach
+	// the runner, which is not the same as not needing one.
+	if err := handleDeckAction(client, svc, runner, deckui.ActionRequest{Item: item, Action: deckui.ActionDelete}, noopReporter{}); err != nil {
 		t.Fatalf("handleDeckAction: %v", err)
 	}
 	if svc.deleteName != "qa" || !svc.deleteForce {
 		t.Fatalf("unexpected delete args: name=%q force=%v", svc.deleteName, svc.deleteForce)
 	}
-	wantLast := "tmux kill-session -t [awp]repo__qa"
-	if got := strings.Join(runner.calls[len(runner.calls)-1], " "); got != wantLast {
-		t.Fatalf("unexpected final call: %q want %q", got, wantLast)
+	// The tmux kill is no longer the last call — the zmx reap follows it — so
+	// assert it happened rather than that it happened last.
+	wantKill := "tmux kill-session -t [awp]repo__qa"
+	var sawKill bool
+	for _, c := range runner.calls {
+		if strings.Join(c, " ") == wantKill {
+			sawKill = true
+		}
+	}
+	if !sawKill {
+		t.Fatalf("expected %q; calls=%#v", wantKill, runner.calls)
 	}
 }
 
