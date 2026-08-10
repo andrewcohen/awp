@@ -714,6 +714,17 @@ the dev-loop preamble: a reviewer told to work in units, run gates and commit
 starts doing the author's job on someone else's PR. No `pr description` tmux
 window is opened either — `p d` renders it in the deck.
 
+**shift+enter reaches the program.** A legacy terminal cannot say it — enter is
+CR and CR carries no modifiers, so shift+enter, ctrl+enter and enter are the
+same three bytes — which is why agents that bind it to "newline, don't submit"
+first ask the terminal for an encoding that can express it. A pane reads those
+requests out of its program's own output (`CSI > <flags> u` for the Kitty
+keyboard protocol, `CSI > 4 ; <n> m` for xterm's modifyOtherKeys; Claude Code
+sends both and pops them on exit) and answers in whichever it got, preferring
+Kitty. A program that asked for neither gets a plain CR, which is what a real
+terminal would send — a pane does not invent an escape sequence nobody is
+listening for.
+
 The mouse and the cursor follow the pane's program rather than the pane. A
 program that enables mouse reporting — an agent, jjui — gets the wheel
 forwarded to it; one that doesn't, like a shell, leaves the mouse to your
