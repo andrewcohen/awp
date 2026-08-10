@@ -21,9 +21,7 @@ import (
 // This is the exact situation zdeck creates: a session made in one terminal,
 // resumed in a deck pane whose size is the deck's, minus its chrome.
 func TestASecondClientsSizeReachesTheProgram(t *testing.T) {
-	if _, err := exec.LookPath("zmx"); err != nil {
-		t.Skip("zmx is not installed")
-	}
+	requireRealZmx(t)
 	run := func(ctx context.Context, dir, name string, args ...string) (string, error) {
 		c := exec.CommandContext(ctx, name, args...)
 		c.Dir = dir
