@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/andrewcohen/awp/internal/agenthooks"
+	"github.com/andrewcohen/awp/internal/awplog"
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
@@ -1062,6 +1064,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// panes, so it is the one whose output a pane's bytes have to survive.
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(vterm.TapTerminal(out)))
 
+	// Deferred before the teardown below so it runs after it: a crash should
+	// still let go of the panes before anyone reads about it.
+	defer logDeckPanic()
+
 	// Nothing this deck hosted may outlive it. Deferred rather than done after
 	// Run so a panic unwinding through here is covered too; SIGINT and SIGTERM
 	// already come back as messages, and the SIGHUP below joins them.
@@ -1071,6 +1077,29 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 
 	_, err = program.Run()
 	return err
+}
+
+// logDeckPanic records a crash where it can still be read, then lets it carry
+// on unwinding.
+//
+// The deck is an alt-screen program. Bubble Tea restores the terminal on the way
+// out and the runtime prints the trace to stderr — onto the screen the terminal
+// has just swapped away from. So what is left of a crash is the deck
+// disappearing: nothing in scrollback, and nothing in the log either, because
+// the log is only written by code that chose to write to it. "It crashes" was
+// the whole bug report available.
+//
+// It re-panics rather than swallowing. A crash is a bug and the process should
+// still die of it; this only makes sure it says so somewhere durable first. The
+// re-panic's own trace is the useful one either way — awplog gets the stack from
+// the original, captured here while the panicking frames are still below us.
+func logDeckPanic() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	awplog.Errorf("deck: panic: %v\n%s", r, debug.Stack())
+	panic(r)
 }
 
 // quitOnHangup turns a SIGHUP into an ordinary quit, and returns the func that
