@@ -134,7 +134,7 @@ func (m Model) renderStreamRowAt(i, width int) string {
 	// the same thing — the brighter variant of the tint.
 	fill, filled := styleCursorFill, band
 	if t, ok := m.paintedLine(i); ok && (t == '+' || t == '-') {
-		fill, filled = fillStyle(t, band), true
+		fill, filled = paintTable().line(t, band).fill, true
 	}
 	if !filled {
 		return row
@@ -331,27 +331,18 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	// alternative is re-deriving in bytes where a wrap segment or a pan starts, which
 	// is a second copy of arithmetic that already exists here and would have to be
 	// kept in step with it by hand.
+	spans := m.hl.spansFor(lexPath(m.filtered[r.file]), l)
 	var content string
-	if spans := m.hl.spansFor(lexPath(m.filtered[r.file]), l); len(spans) > 0 {
+	if len(spans) > 0 {
 		content = m.visibleSlice(paintCode(l.Content, spans, l.Type, cursor), r.seg, avail)
 	} else {
 		content = base.Render(m.visibleSlice(l.Content, r.seg, avail))
 	}
 
-	// Continuation rows carry no gutter, just its width as padding.
-	if r.seg > 0 {
-		pad := strings.Repeat(" ", meta.prefixWidth)
-		if cursor {
-			pad = styleCursorFill.Render(pad)
-		}
-		return truncateStyled(pad+content, width)
-	}
-	numbers := fmt.Sprintf("%*s %*s ", meta.oldWidth, lineNoText(r.oldNo), meta.newWidth, lineNoText(r.newNo))
 	numberStyle := styleLineNo
 	if cursor {
 		// The bar marks the row; tinting the numbers too makes the cursor
-		// readable when the bar is at the edge of vision. No background fill,
-		// per the design system.
+		// readable when the bar is at the edge of vision.
 		numberStyle = styleCursorLineNo
 	}
 	gutter := string(l.Type)
@@ -364,6 +355,27 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	default:
 		gutter = "│"
 	}
+	// Painted, the columns either side of the code come from the paint table so they
+	// carry the line's background as well as their own hue — the backwash is a
+	// property of the whole row, and starting it at the code left the gutter as an
+	// untinted notch.
+	padStyle := styleCursorFill
+	if len(spans) > 0 {
+		lp := paintTable().line(l.Type, cursor)
+		numberStyle, gutterStyle, padStyle = lp.number, lp.glyph, lp.fill
+	}
+
+	// Continuation rows carry no gutter, just its width as padding — in the line's own
+	// background, so a wrapped change is one field rather than a tinted body under an
+	// untinted indent.
+	if r.seg > 0 {
+		pad := strings.Repeat(" ", meta.prefixWidth)
+		if cursor || len(spans) > 0 {
+			pad = padStyle.Render(pad)
+		}
+		return truncateStyled(pad+content, width)
+	}
+	numbers := fmt.Sprintf("%*s %*s ", meta.oldWidth, lineNoText(r.oldNo), meta.newWidth, lineNoText(r.newNo))
 	prefix := numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
 	return truncateStyled(prefix+content, width)
 }
@@ -443,16 +455,17 @@ func (m Model) splitCell(h diff.Hunk, path string, li, no, prefixWidth, colWidth
 		numberStyle = styleCursorLineNo
 	}
 	numbers := fmt.Sprintf("%*s ", max(0, prefixWidth-3), lineNoText(no))
-	prefix := numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ")
 	if len(spans) == 0 {
 		// One Render over text and its padding together, as before.
-		return prefix + body.Render(text+pad)
+		return numberStyle.Render(numbers) + gutterStyle.Render(gutter+" ") + body.Render(text+pad)
 	}
-	// The padding is not part of the painted text, so it has to carry the line's own
-	// background — the cursorline's, or the change tint — or the fill stops where the
-	// code happens to end, which reads as a rendering fault.
+	// Painted: the columns carry the line's background too, and so does the padding —
+	// otherwise the fill stops where the code happens to end, which reads as a
+	// rendering fault.
+	lp := paintTable().line(l.Type, cursor)
+	prefix := lp.number.Render(numbers) + lp.glyph.Render(gutter+" ")
 	if pad != "" {
-		pad = fillStyle(l.Type, cursor).Render(pad)
+		pad = lp.fill.Render(pad)
 	}
 	return prefix + text + pad
 }
