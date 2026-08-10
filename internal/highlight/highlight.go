@@ -37,6 +37,13 @@ const (
 	Punct
 )
 
+// TokenCount is how many Tokens there are, for a table indexed by one.
+//
+// Here rather than at the call site so adding a Token above cannot leave a
+// renderer's colour table one entry short — which would not fail, it would paint
+// the new class in whatever the zero style renders as.
+const TokenCount = int(Punct) + 1
+
 // Span is a run of one token class, as byte offsets into the line it came from.
 //
 // Half-open, so line[s.Start:s.End] is the text. Byte offsets rather than runes

@@ -32,6 +32,28 @@ const (
 	Link = Info
 )
 
+// Syntax token roles, for code shown inside a diff body.
+//
+// Named separately from the status tokens above even where they land on the same
+// ANSI slot, because the two are retuned for different reasons: changing what a
+// keyword looks like must not change what a failing check looks like. Same 16
+// slots, so the user's terminal theme still supplies every hue — a chroma style
+// would emit its own 256/truecolour codes, which is the thing this file exists to
+// prevent.
+//
+// There is no token for punctuation or for an identifier. Both stay at the base
+// colour of the line they are on: at ANSI-16 resolution the palette runs out of
+// distinguishable hues long before a lexer runs out of token types, and the ones
+// worth spending a hue on are the ones you scan for.
+const (
+	SyntaxKeyword = "5" // magenta — keywords, and the builtins that read like them
+	SyntaxType    = "3" // yellow — type names
+	SyntaxFunc    = "4" // blue — function names
+	SyntaxString  = "2" // green — string literals
+	SyntaxNumber  = "5" // magenta — literals read as one family with keywords
+	SyntaxComment = "8" // bright black — the same dimming hints wear
+)
+
 // Cursorline is the background behind the row a line cursor is on.
 //
 // This is the one deliberate exception to the ANSI-16-only rule above, and
