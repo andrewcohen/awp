@@ -259,6 +259,27 @@ func (t *Term) AwaitExit() tea.Cmd {
 // ready to drop into a lipgloss layout.
 func (t *Term) View() string { return t.emu.Render() }
 
+// LastLine is the lowest line with anything on it, as plain text.
+//
+// It exists for the moment the hosted process has just died. A program that
+// refuses to start says why on its way out — `zmx attach` writes its complaint
+// to the pty like everything else — and that complaint is only ever on this
+// screen, which goes away with the terminal. A caller reporting the exit has
+// nowhere else to read the reason from.
+//
+// The lowest rather than the last written: the emulator renders every row, so
+// the rows below the output are blank and the interesting one is the last that
+// is not.
+func (t *Term) LastLine() string {
+	lines := strings.Split(ansi.Strip(t.View()), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
 // Send writes bytes to the process as if they had been typed.
 func (t *Term) Send(b []byte) error {
 	t.mu.Lock()
