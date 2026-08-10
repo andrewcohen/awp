@@ -16,9 +16,7 @@ import (
 // not that it agrees with the real zmx. This one drives the actual binary. It
 // skips when zmx is not installed, so it costs nothing on a machine without it.
 func TestAgainstRealZmx(t *testing.T) {
-	if _, err := exec.LookPath("zmx"); err != nil {
-		t.Skip("zmx is not installed")
-	}
+	requireRealZmx(t)
 	realRun := func(ctx context.Context, dir, name string, args ...string) (string, error) {
 		c := exec.CommandContext(ctx, name, args...)
 		c.Dir = dir

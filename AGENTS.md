@@ -449,6 +449,32 @@ When applicable, run:
 
 If you cannot run something, state what was not run and why.
 
+### `zmx attach` means two different things
+
+Three tests in `internal/zmx` drive the real zmx binary. They skip when
+`ZMX_SESSION` is set, and that guard is not optional politeness — it is the
+difference between a test and an outage.
+
+`zmx attach` branches on `ZMX_SESSION`. From outside a session it creates an
+independent client. From **inside** one it tells the daemon to switch the
+*calling* client's session; the daemon log records those as
+`switch session cur=<yours> next=<theirs>`. So an attach issued from inside a
+zmx-hosted terminal does not nest — it steals that terminal, and the session it
+was pulled off is re-created empty afterwards, losing whatever agent was in it.
+
+This repo is normally developed from inside a zdeck pane, which is a zmx
+session. `go test ./...` there used to kill the session the work was happening
+in. `requireRealZmx` in `internal/zmx/real_zmx_test.go` is what stops it, and
+`TestEveryRealZmxTestAsksFirst` checks every real-zmx test goes through it.
+
+To actually run them, use a terminal that is not inside zmx. The cost is that
+the only tests proving awp agrees with the real zmx do not run by default; that
+is the trade.
+
+The same branch is a live hazard in product code, not just tests — anything
+spawning `zmx attach` has to give the child an environment with `ZMX_SESSION`
+removed, or it hijacks awp's own client instead of making a new one.
+
 ## Version Control
 
 - Prefer **Jujutsu (`jj`)** workflows by default.

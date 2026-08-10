@@ -24,9 +24,7 @@ import (
 // While it passes, anything wrong with how a pane looks is awp's own emulator
 // (see internal/vterm/fidelity_test.go) or the layout around it.
 func TestASessionCostsNothingInFidelity(t *testing.T) {
-	if _, err := exec.LookPath("zmx"); err != nil {
-		t.Skip("zmx is not installed")
-	}
+	requireRealZmx(t)
 
 	payload := strings.Join([]string{
 		"\x1b[38;2;255;100;50mtruecolor\x1b[0m",
