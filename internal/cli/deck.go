@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -1059,8 +1061,41 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// is where this belongs rather than every program: it is the one that hosts
 	// panes, so it is the one whose output a pane's bytes have to survive.
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(vterm.TapTerminal(out)))
+
+	// Nothing this deck hosted may outlive it. Deferred rather than done after
+	// Run so a panic unwinding through here is covered too; SIGINT and SIGTERM
+	// already come back as messages, and the SIGHUP below joins them.
+	defer vterm.CloseAll()
+	stopHangup := quitOnHangup(program)
+	defer stopHangup()
+
 	_, err = program.Run()
 	return err
+}
+
+// quitOnHangup turns a SIGHUP into an ordinary quit, and returns the func that
+// stops listening.
+//
+// Closing the terminal window is one of the ways the deck "goes away", and it
+// is the one Bubble Tea does not already cover: it turns SIGINT and SIGTERM into
+// messages and returns from Run, but SIGHUP keeps its default disposition and
+// kills the process outright — so the deferred teardown never runs and each
+// hosted pane's client is left holding a pty for a deck that no longer exists.
+func quitOnHangup(program *tea.Program) (stop func()) {
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-hup:
+			program.Quit()
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(hup)
+		close(done)
+	}
 }
 
 // startDeckProfile writes a CPU profile of the whole deck session when
