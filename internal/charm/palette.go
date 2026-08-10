@@ -47,9 +47,10 @@ const (
 // worth spending a hue on are the ones you scan for.
 const (
 	SyntaxKeyword = "5" // magenta — keywords, and the builtins that read like them
-	SyntaxType    = "3" // yellow — type names
+	SyntaxType    = "3" // yellow — type names, tags, YAML keys, markdown headings
 	SyntaxFunc    = "4" // blue — function names
-	SyntaxString  = "2" // green — string literals
+	SyntaxAttr    = "6" // teal — attributes, properties, variables, decorators
+	SyntaxString  = "2" // green — string and other non-numeric literals
 	SyntaxNumber  = "5" // magenta — literals read as one family with keywords
 	SyntaxComment = "8" // bright black — the same dimming hints wear
 )

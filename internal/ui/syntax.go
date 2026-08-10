@@ -209,6 +209,8 @@ func syntaxHue(t highlight.Token) string {
 		return charm.SyntaxType
 	case highlight.Func:
 		return charm.SyntaxFunc
+	case highlight.Attr:
+		return charm.SyntaxAttr
 	case highlight.String:
 		return charm.SyntaxString
 	case highlight.Number:
