@@ -54,19 +54,45 @@ const (
 	SyntaxComment = "8" // bright black — the same dimming hints wear
 )
 
-// Cursorline is the background behind the row a line cursor is on.
+// Background tints. These are the exception to the ANSI-16 rule above, and the
+// rule is narrower than it first looked: it is about *foreground* semantics,
+// where being remapped by the user's theme is the whole point. A low-contrast
+// background has no ANSI 16 slot at all — the nearest, BgPanel ("0", surface),
+// is sized for chip and badge fills where contrast is the point, and reads far
+// too strong for a tint you are meant to read code through.
 //
-// This is the one deliberate exception to the ANSI-16-only rule above, and
-// the reason is structural rather than aesthetic: a cursorline has to sit a
-// *hair* off the terminal background, and the 16-slot palette has no such
-// slot. BgPanel ("0", surface) is the closest and reads as far too strong —
-// it is sized for chip and badge fills, where the contrast is the point.
+// So: foregrounds are ANSI 16, background tints are adaptive and off-palette.
+// Cursorline was the first, and its comment used to say a second one should
+// trigger revisiting the constraint wholesale rather than eroding it case by
+// case. That is this block — the revisit, done once, with the tints named here
+// beside everything else rather than inlined at a call site.
 //
-// Adaptive so it works against a light or dark terminal: lipgloss picks the
-// variant from the detected background. Keep this the only non-ANSI-16 value
-// in the palette; if a second one shows up, that is a signal the 16-slot
-// constraint needs revisiting wholesale rather than eroding case by case.
-var Cursorline = compat.AdaptiveColor{Light: lipgloss.Color("254"), Dark: lipgloss.Color("236")}
+// Adaptive so they work against a light or a dark terminal; lipgloss picks the
+// variant from the detected background.
+var (
+	// Cursorline is the background behind the row a line cursor is on.
+	Cursorline = compat.AdaptiveColor{Light: lipgloss.Color("254"), Dark: lipgloss.Color("236")}
+
+	// AddedBg and RemovedBg sit behind a syntax-highlighted diff line, because
+	// highlighting spends the foreground on the lexer and the change type has to go
+	// somewhere. Without them a + line and a - line differ only in the gutter glyph.
+	//
+	// Not used when the body is unpainted: there the change type is already the
+	// foreground of every character on the line, and a tint under it is two signals
+	// for one fact.
+	AddedBg   = compat.AdaptiveColor{Light: lipgloss.Color("#e4f5e4"), Dark: lipgloss.Color("#23331f")}
+	RemovedBg = compat.AdaptiveColor{Light: lipgloss.Color("#f8e4e6"), Dark: lipgloss.Color("#361f24")}
+
+	// AddedBgCursor and RemovedBgCursor are the same lines with the cursor on them.
+	//
+	// A step brighter rather than replaced by Cursorline: the cheap version lets the
+	// cursorline win, and then a + row loses its tint for exactly as long as the
+	// cursor is on it, so the tint blinks off and on down the whole file as you
+	// scroll. Brighter variants keep one rule — the cursor's row is a step up from
+	// the row beneath it — true of added, removed and unchanged alike.
+	AddedBgCursor   = compat.AdaptiveColor{Light: lipgloss.Color("#cceccc"), Dark: lipgloss.Color("#2f4429")}
+	RemovedBgCursor = compat.AdaptiveColor{Light: lipgloss.Color("#f2ccd2"), Dark: lipgloss.Color("#472830")}
+)
 
 // BorderCells is how many columns a single-cell border adds to a style's
 // width.

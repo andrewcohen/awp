@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
@@ -49,8 +50,14 @@ func TestPaintingKeepsEveryByte(t *testing.T) {
 		if len(spans) == 0 {
 			t.Fatalf("no spans for %q", line)
 		}
-		if got := ansi.Strip(paintCode(line, spans, false)); got != line {
-			t.Errorf("painting %q produced %q", line, got)
+		// Every background a painted line can sit on, since each is a different set of
+		// escapes wrapped around the same bytes.
+		for _, lineType := range []byte{' ', '+', '-'} {
+			for _, cursor := range []bool{false, true} {
+				if got := ansi.Strip(paintCode(line, spans, lineType, cursor)); got != line {
+					t.Errorf("painting %q as %q (cursor %v) produced %q", line, lineType, cursor, got)
+				}
+			}
 		}
 	}
 }
@@ -63,11 +70,95 @@ func TestPaintingASpanIsWhatLipglossWouldRender(t *testing.T) {
 	line := "some plain code"
 	whole := []highlight.Span{{Start: 0, End: len(line), Tok: highlight.Plain}}
 
-	if got, want := paintCode(line, whole, false), styleCode.Render(line); got != want {
-		t.Errorf("painted %q, lipgloss renders %q", got, want)
+	for _, tc := range []struct {
+		name     string
+		lineType byte
+		cursor   bool
+		style    lipgloss.Style
+	}{
+		{"context", ' ', false, styleCode},
+		{"context, cursor", ' ', true, styleCodeCursor},
+		{"added", '+', false, styleCodeAdded},
+		{"added, cursor", '+', true, styleCodeAddedCursor},
+		{"removed", '-', false, styleCodeRemoved},
+		{"removed, cursor", '-', true, styleCodeRemovedCursor},
+	} {
+		got := paintCode(line, whole, tc.lineType, tc.cursor)
+		if want := tc.style.Render(line); got != want {
+			t.Errorf("%s: painted %q, lipgloss renders %q", tc.name, got, want)
+		}
 	}
-	if got, want := paintCode(line, whole, true), styleCodeCursor.Render(line); got != want {
-		t.Errorf("on a cursor row painted %q, lipgloss renders %q", got, want)
+}
+
+// The backwash: highlighting spends the foreground on the lexer, so a + line and a
+// - line would otherwise differ only in the gutter glyph. Six distinct backgrounds,
+// because the cursor's row is a step brighter than the row beneath it whichever kind
+// of line it is — letting the cursorline simply win means a + row loses its tint for
+// as long as the cursor sits on it, which blinks down the file as you scroll.
+func TestEveryKindOfPaintedLineHasItsOwnBackground(t *testing.T) {
+	line := "code"
+	whole := []highlight.Span{{Start: 0, End: len(line), Tok: highlight.Plain}}
+
+	seen := map[string]string{}
+	for _, tc := range []struct {
+		name     string
+		lineType byte
+		cursor   bool
+	}{
+		{"context", ' ', false},
+		{"context, cursor", ' ', true},
+		{"added", '+', false},
+		{"added, cursor", '+', true},
+		{"removed", '-', false},
+		{"removed, cursor", '-', true},
+	} {
+		got := paintCode(line, whole, tc.lineType, tc.cursor)
+		if prev, dup := seen[got]; dup {
+			t.Errorf("%s renders identically to %s — the two are indistinguishable on screen", tc.name, prev)
+		}
+		seen[got] = tc.name
+	}
+}
+
+// The tint has to reach the pane's edge. A background that stops where the code
+// happens to end is not a property of the line, and reads as a rendering fault —
+// the length of a line is not something the reader is meant to notice.
+func TestAPaintedChangeFillsThePane(t *testing.T) {
+	t.Setenv(SyntaxEnv, "all")
+	m := goFileModel(t, false)
+
+	const width = 100
+	painted := 0
+	for i := range m.stream.rows {
+		lineType, ok := m.paintedLine(i)
+		if !ok || (lineType != '+' && lineType != '-') {
+			continue
+		}
+		painted++
+		if got := ansi.StringWidth(m.renderStreamRowAt(i, width)); got != width {
+			t.Errorf("row %d is a painted %q line but spans %d of %d columns", i, lineType, got, width)
+		}
+	}
+	if painted == 0 {
+		t.Fatal("the fixture has no painted added or removed lines, so this proves nothing")
+	}
+}
+
+// Unpainted, nothing changes: the change type is already the foreground of every
+// character on the line, so a context row still ends where its text does.
+func TestAnUnpaintedRowIsNotFilled(t *testing.T) {
+	t.Setenv(SyntaxEnv, "")
+	m := goFileModel(t, false)
+
+	for i, r := range m.stream.rows {
+		// Only code lines. A file divider and a hunk header are full-width bands by
+		// design, and the cursorline band has always filled the pane.
+		if r.kind != rowLine || m.rowBanded(i) {
+			continue
+		}
+		if got := ansi.StringWidth(m.renderStreamRowAt(i, 100)); got == 100 {
+			t.Errorf("row %d fills the pane with the flag off", i)
+		}
 	}
 }
 
@@ -191,16 +282,19 @@ func TestAPaintedRowIsTheSameWidth(t *testing.T) {
 			t.Fatalf("%s: %d rows unpainted, %d painted — highlighting changed the geometry",
 				layout.name, len(plain.stream.rows), len(painted.stream.rows))
 		}
+		const width = 100
 		for i := range plain.stream.rows {
-			want := plain.renderStreamRowAt(i, 100)
-			got := painted.renderStreamRowAt(i, 100)
-			if ansi.StringWidth(got) != ansi.StringWidth(want) {
-				t.Errorf("%s row %d: painted is %d columns, unpainted %d",
-					layout.name, i, ansi.StringWidth(got), ansi.StringWidth(want))
+			want := plain.renderStreamRowAt(i, width)
+			got := painted.renderStreamRowAt(i, width)
+			// Never wider than the pane. An escape cut through the middle leaks its bytes
+			// into the visible text, which is what puts a row past its border.
+			if w := ansi.StringWidth(got); w > width {
+				t.Errorf("%s row %d: painted spans %d of %d columns", layout.name, i, w, width)
 			}
-			if ansi.Strip(got) != ansi.Strip(want) {
-				t.Errorf("%s row %d: painted reads %q, unpainted %q",
-					layout.name, i, ansi.Strip(got), ansi.Strip(want))
+			// Trailing space only, since a painted change fills the pane and its unpainted
+			// counterpart stops at its text — see TestAPaintedChangeFillsThePane.
+			if g, w := trimEnd(got), trimEnd(want); g != w {
+				t.Errorf("%s row %d: painted reads %q, unpainted %q", layout.name, i, g, w)
 			}
 		}
 	}
@@ -218,12 +312,18 @@ func TestPanningAPaintedLineCutsTheSameText(t *testing.T) {
 	painted.hunkHScroll = 8
 
 	for i := range plain.stream.rows {
-		want := ansi.Strip(plain.renderStreamRowAt(i, 100))
-		got := ansi.Strip(painted.renderStreamRowAt(i, 100))
+		want := trimEnd(plain.renderStreamRowAt(i, 100))
+		got := trimEnd(painted.renderStreamRowAt(i, 100))
 		if got != want {
 			t.Errorf("row %d panned to %q, want %q", i, got, want)
 		}
 	}
+}
+
+// trimEnd is a row's visible text without its styling or its fill, which is what
+// two rows have to agree on when only one of them is painted.
+func trimEnd(row string) string {
+	return strings.TrimRight(ansi.Strip(row), " ")
 }
 
 // goFileModel is a viewer over one Go file with real code in it, so there is

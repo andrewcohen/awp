@@ -230,11 +230,32 @@ The `awp deck` title is plain bold (terminal-default fg / white) — it delibera
   role.
 - Prefer leaving body and padding cells unpainted — they pick up the
   terminal's default bg, which is what blends with the rest of the
-  app surface. Background fills are reserved for buttons, chips, and
-  selection treatments where the contrast is intentional. (The
-  historical "never .Background()" rule applied to inline mode; the
-  deck now runs alt-screen so painted bg cells are no longer load-
-  bearing for blending with the surrounding tmux pane.)
+  app surface. Background fills are reserved for buttons, chips,
+  selection treatments, and diff change tints, where the contrast is
+  intentional. (The historical "never .Background()" rule applied to
+  inline mode; the deck now runs alt-screen so painted bg cells no
+  longer matter for blending with the surrounding tmux pane.)
+
+**Foregrounds are ANSI 16; background tints are not.** The 16-slot rule
+above is about foreground semantics, where being remapped by the user's
+theme is the whole point. A low-contrast *background* has no ANSI 16 slot
+at all — the nearest, `BgPanel` ("0", surface), is sized for chip and badge
+fills where contrast is the point, and reads far too strong for a tint you
+are meant to read text through. So the background tints in
+`internal/charm/palette.go` (`Cursorline`, `AddedBg`, `RemovedBg`, and
+their `*Cursor` variants) are adaptive off-palette values, declared there
+beside everything else rather than inlined at a call site. That block is
+the whole set; a new one belongs in it, not next to the style that wanted
+it.
+
+The diff tints exist because syntax highlighting spends the foreground on
+the lexer, so the change type has to move to the background or a `+` line
+and a `-` line differ only in the gutter glyph. Each has a brighter
+`*Cursor` variant rather than letting `Cursorline` win outright: the cheap
+version makes a `+` row lose its tint for exactly as long as the cursor
+sits on it, so the tint blinks off and on down the file as you scroll. One
+rule instead — the cursor's row is a step up from the row beneath it —
+true of added, removed and unchanged alike.
 
 **Selection style.** Every list / picker / overlay uses the same
 selection treatment so the eye instantly recognizes "this is the active
