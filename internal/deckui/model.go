@@ -5228,7 +5228,7 @@ func deckKeyGroups() []keyGroup {
 			Keys: [][2]string{
 				{"J", "jobs overlay (list, cancel, retry, dismiss, open log)"},
 				{"w", "watch dev-loop progress for the selected workspace"},
-				{"z", "hosted sessions (zdeck only) · enter attaches one in a pane"},
+				{"z", "hosted sessions (zdeck only) · enter attaches one in a pane, x ends one"},
 			},
 		},
 		{

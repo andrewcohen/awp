@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -15,11 +16,30 @@ type sessionBackend struct {
 	sessions []PaneSession
 	err      error
 	sawItems []Item
+	// ended records the names EndSession was asked for, and endErr makes it fail.
+	ended  []string
+	endErr error
 }
 
 func (b *sessionBackend) Sessions(items []Item) ([]PaneSession, error) {
 	b.sawItems = items
 	return b.sessions, b.err
+}
+
+func (b *sessionBackend) EndSession(name string) error {
+	if b.endErr != nil {
+		return b.endErr
+	}
+	b.ended = append(b.ended, name)
+	// The row goes when the session does, which is what a reload would show.
+	kept := b.sessions[:0]
+	for _, s := range b.sessions {
+		if s.Name != name {
+			kept = append(kept, s)
+		}
+	}
+	b.sessions = kept
+	return nil
 }
 
 func sessionDeck(t *testing.T, b PaneBackend) Model {
@@ -153,6 +173,171 @@ func TestAnEmptySessionListSaysSo(t *testing.T) {
 	left, _ := p.view(&m)
 	if out := ansi.Strip(left); !strings.Contains(out, "No sessions") {
 		t.Errorf("an empty list renders nothing useful:\n%s", out)
+	}
+}
+
+// endableDeck is the overlay open on one live agent, ready for an x.
+func endableDeck(t *testing.T) (Model, *sessionPicker, *sessionBackend) {
+	t.Helper()
+	b := &sessionBackend{fakePanes: *allKinds(), sessions: []PaneSession{
+		{Name: "awp.awp.test.agent", Label: "awp/test", Kind: "agent", Live: true, HasItem: true,
+			Item: Item{ProjectName: "awp", WorkspaceName: "test"}, Started: time.Now()},
+	}}
+	m, p := openSessions(t, sessionDeck(t, b))
+	return m, p, b
+}
+
+// x asks before it ends anything: a live agent's session is its whole context —
+// the conversation, what it has read, what it was part-way through — and none of
+// it comes back.
+func TestEndingASessionAsksFirst(t *testing.T) {
+	m, p, b := endableDeck(t)
+
+	if cmd := p.update(&m, runeKey("x")); cmd != nil {
+		t.Error("x ran something before the question was answered")
+	}
+	if p.pendingEnd == nil {
+		t.Fatal("x did not ask")
+	}
+	if len(b.ended) != 0 {
+		t.Errorf("x ended %v without asking", b.ended)
+	}
+	for _, want := range []string{"awp/test", "agent", "[y/N]"} {
+		if !strings.Contains(m.status, want) {
+			t.Errorf("the question %q does not mention %q", m.status, want)
+		}
+	}
+	if !strings.Contains(m.status, "context is lost") {
+		t.Errorf("the question does not say what is at stake: %q", m.status)
+	}
+}
+
+func TestConfirmingEndsTheSession(t *testing.T) {
+	m, p, b := endableDeck(t)
+	p.update(&m, runeKey("x"))
+
+	cmd := p.update(&m, runeKey("y"))
+	if cmd == nil {
+		t.Fatal("y scheduled nothing, so the session is never ended")
+	}
+	// Ending runs as a command, not inline: it is a subprocess and a frame must
+	// not wait on one.
+	msg := cmd()
+	if len(b.ended) != 1 || b.ended[0] != "awp.awp.test.agent" {
+		t.Fatalf("the backend was asked to end %v, want [awp.awp.test.agent]", b.ended)
+	}
+
+	// The outcome reloads the list, so the row goes without a manual refresh.
+	if reload := p.update(&m, msg); reload == nil {
+		t.Error("the list was not reloaded after a session ended")
+	} else if next := reload(); next != nil {
+		p.update(&m, next)
+	}
+	if n := len(p.list.Items()); n != 0 {
+		t.Errorf("the ended session is still listed (%d rows)", n)
+	}
+	if !strings.Contains(m.status, "ended awp/test agent") {
+		t.Errorf("the status does not report the outcome: %q", m.status)
+	}
+}
+
+// The question names one row, so anything but a yes is a no — including the keys
+// that would otherwise move the cursor, which would answer it about a different
+// session than the one it asked about.
+func TestAnythingButAYesCancelsTheEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"n", runeKey("n")},
+		{"q", runeKey("q")},
+		{"j", runeKey("j")},
+		{"k", runeKey("k")},
+		{"esc", tea.KeyPressMsg{Code: tea.KeyEscape}},
+	} {
+		m, p, b := endableDeck(t)
+		p.update(&m, runeKey("x"))
+		p.update(&m, tc.key)
+		if len(b.ended) != 0 {
+			t.Errorf("%s ended %v", tc.name, b.ended)
+		}
+		if p.pendingEnd != nil {
+			t.Errorf("%s left the question hanging", tc.name)
+		}
+		if m.status != "" {
+			t.Errorf("%s left %q in the status bar instead of clearing it", tc.name, m.status)
+		}
+		// And a cancel is not a close: the overlay is still where you were.
+		if m.active != p {
+			t.Errorf("%s closed the overlay as well as cancelling", tc.name)
+		}
+	}
+}
+
+// An exited session holds no agent, so there is nothing to lose. It still asks —
+// the row goes either way — but saying the same thing about both would make the
+// warning meaningless.
+func TestEndingAnExitedSessionSaysThereIsNothingToLose(t *testing.T) {
+	b := &sessionBackend{fakePanes: *allKinds(), sessions: []PaneSession{
+		{Name: "awp.awp.test.agent", Label: "awp/test", Kind: "agent", Live: false, HasItem: true,
+			Item: Item{ProjectName: "awp", WorkspaceName: "test"}, Started: time.Now()},
+	}}
+	m, p := openSessions(t, sessionDeck(t, b))
+	p.update(&m, runeKey("x"))
+	if !strings.Contains(m.status, "already exited") {
+		t.Errorf("the question warns about context on a dead session: %q", m.status)
+	}
+	if strings.Contains(m.status, "context is lost") {
+		t.Errorf("the question claims a dead session has context to lose: %q", m.status)
+	}
+}
+
+// A session that outlived its workspace is exactly the one nothing else will
+// ever clean up, so x has to reach it.
+func TestASessionWithNoRowCanStillBeEnded(t *testing.T) {
+	b := &sessionBackend{fakePanes: *allKinds(), sessions: []PaneSession{
+		{Name: "awp.gone.ws.agent", Label: "gone/ws", Kind: "agent", Live: true, HasItem: false,
+			Started: time.Now()},
+	}}
+	m, p := openSessions(t, sessionDeck(t, b))
+	p.update(&m, runeKey("x"))
+	cmd := p.update(&m, runeKey("y"))
+	if cmd == nil {
+		t.Fatal("a session with no workspace row could not be ended")
+	}
+	cmd()
+	if len(b.ended) != 1 || b.ended[0] != "awp.gone.ws.agent" {
+		t.Errorf("the backend was asked to end %v", b.ended)
+	}
+}
+
+// A kill that failed must say so. The session is still there and the user's next
+// move depends on knowing that.
+func TestAFailedEndIsReported(t *testing.T) {
+	m, p, b := endableDeck(t)
+	b.endErr = errors.New("zmx is not answering")
+	p.update(&m, runeKey("x"))
+	msg := p.update(&m, runeKey("y"))()
+	p.update(&m, msg)
+	for _, want := range []string{"awp/test", "zmx is not answering"} {
+		if !strings.Contains(m.status, want) {
+			t.Errorf("the status %q does not mention %q", m.status, want)
+		}
+	}
+}
+
+// The footer has to name the key, or the only way to find it is reading the
+// source.
+func TestTheOverlayFooterOffersTheEndKey(t *testing.T) {
+	m, p, _ := endableDeck(t)
+	if got := ansi.Strip(p.footerHelp()); !strings.Contains(got, "x") || !strings.Contains(got, "end") {
+		t.Errorf("the footer does not offer x: %q", got)
+	}
+	// While a question is pending the status bar is what is asking, and offering
+	// the ordinary keys would suggest they still work.
+	p.update(&m, runeKey("x"))
+	if got := p.footerHelp(); got != "" {
+		t.Errorf("the footer still shows keys while the question is up: %q", got)
 	}
 }
 
