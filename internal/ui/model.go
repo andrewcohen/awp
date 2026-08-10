@@ -1480,25 +1480,33 @@ var (
 	// Muted, not the header's accent: the stand-in is a hint about a section with
 	// nothing in it, and it sits at the top of every diff. Anything brighter would
 	// be the first thing the eye lands on, every time, saying nothing happened.
-	styleReviewEmpty      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
-	styleAddedCursor      = styleAdded.Background(cursorlineBg)
-	styleDeletedCursor    = styleDeleted.Background(cursorlineBg)
-	styleContextCursor    = styleContext.Background(cursorlineBg)
-	styleCodeCursor       = styleCode.Background(cursorlineBg)
-	styleHunkHeaderCursor = styleHunkHeader.Background(cursorlineBg)
-	styleSelectedCursor   = styleSelected.Background(cursorlineBg)
-	styleStatus           = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Padding(0, 1)
-	styleStatusErr        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Padding(0, 1)
-	styleHunkHeader       = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
-	styleFocusBorder      = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(charm.Accent))
-	styleNormalBorder     = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(charm.Muted))
-	styleAddedBadge       = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success)).Bold(true).Padding(0, 1)
-	styleDeletedBadge     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true).Padding(0, 1)
-	styleModifiedBadge    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
-	styleRenameBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true).Padding(0, 1)
-	styleSelectedBadge    = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
-	styleSelectedPathDir  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
-	styleSelectedPathBase = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleReviewEmpty   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted))
+	styleAddedCursor   = styleAdded.Background(cursorlineBg)
+	styleDeletedCursor = styleDeleted.Background(cursorlineBg)
+	styleContextCursor = styleContext.Background(cursorlineBg)
+	styleCodeCursor    = styleCode.Background(cursorlineBg)
+	// The backwash. A painted line's change type lives in its background, because
+	// the lexer has taken the foreground — see charm.AddedBg. Four, because the
+	// cursor's row is a step brighter than the row beneath it whatever kind of line
+	// it is.
+	styleCodeAdded         = styleCode.Background(charm.AddedBg)
+	styleCodeRemoved       = styleCode.Background(charm.RemovedBg)
+	styleCodeAddedCursor   = styleCode.Background(charm.AddedBgCursor)
+	styleCodeRemovedCursor = styleCode.Background(charm.RemovedBgCursor)
+	styleHunkHeaderCursor  = styleHunkHeader.Background(cursorlineBg)
+	styleSelectedCursor    = styleSelected.Background(cursorlineBg)
+	styleStatus            = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Muted)).Padding(0, 1)
+	styleStatusErr         = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Padding(0, 1)
+	styleHunkHeader        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
+	styleFocusBorder       = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(charm.Accent))
+	styleNormalBorder      = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(charm.Muted))
+	styleAddedBadge        = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success)).Bold(true).Padding(0, 1)
+	styleDeletedBadge      = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Danger)).Bold(true).Padding(0, 1)
+	styleModifiedBadge     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
+	styleRenameBadge       = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true).Padding(0, 1)
+	styleSelectedBadge     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true).Padding(0, 1)
+	styleSelectedPathDir   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
+	styleSelectedPathBase  = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	// The left column's rows carry the same cursorline band the diff's do, so
 	// every style that can land on a selected row needs a variant holding the
 	// background — including the muted ones, since a rename arrow or an index

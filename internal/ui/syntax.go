@@ -120,11 +120,35 @@ func lexPath(f diff.FileDiff) string {
 // spanPaint is the escape pair one token class's text is wrapped in.
 type spanPaint struct{ prefix, suffix string }
 
-// syntaxPaint is the token classes' escapes, for a row with and without the
-// cursorline behind it.
+// syntaxPaint is the token classes' escapes, one set per background a painted
+// line can sit on: its change type, and whether the cursorline is behind it.
+//
+// Six rather than two because the backwash moved the change type into the
+// background — see charm.AddedBg — so a span's escapes now depend on the kind of
+// line it is on as well as on its own token class.
 type syntaxPaint struct {
-	normal []spanPaint
-	cursor []spanPaint
+	context, added, removed          []spanPaint
+	contextCur, addedCur, removedCur []spanPaint
+}
+
+// row is the escapes for a line of this change type, cursor or not.
+func (p syntaxPaint) row(lineType byte, cursor bool) []spanPaint {
+	switch lineType {
+	case '+':
+		if cursor {
+			return p.addedCur
+		}
+		return p.added
+	case '-':
+		if cursor {
+			return p.removedCur
+		}
+		return p.removed
+	}
+	if cursor {
+		return p.contextCur
+	}
+	return p.context
 }
 
 // paintTable is captured once, on first use.
@@ -137,9 +161,38 @@ var paintTable = sync.OnceValue(buildPaintTable)
 
 func buildPaintTable() syntaxPaint {
 	return syntaxPaint{
-		normal: paintRow(styleCode),
-		cursor: paintRow(styleCodeCursor),
+		context:    paintRow(styleCode),
+		added:      paintRow(styleCodeAdded),
+		removed:    paintRow(styleCodeRemoved),
+		contextCur: paintRow(styleCodeCursor),
+		addedCur:   paintRow(styleCodeAddedCursor),
+		removedCur: paintRow(styleCodeRemovedCursor),
 	}
+}
+
+// fillStyle is what pads a painted line out to the width it should span.
+//
+// The tint has to reach the edge of the pane, or it reads as a highlight on the
+// code rather than as a property of the line — and a row whose tint stops where
+// its text does looks like a rendering fault, since the length of the code is not
+// something the reader is meant to notice.
+func fillStyle(lineType byte, cursor bool) lipgloss.Style {
+	switch lineType {
+	case '+':
+		if cursor {
+			return styleCodeAddedCursor
+		}
+		return styleCodeAdded
+	case '-':
+		if cursor {
+			return styleCodeRemovedCursor
+		}
+		return styleCodeRemoved
+	}
+	if cursor {
+		return styleCursorFill
+	}
+	return styleCode
 }
 
 // syntaxHue is a token class's palette token, empty for the classes that keep the
@@ -215,12 +268,8 @@ func capture(style lipgloss.Style) spanPaint {
 // spans must tile text, which is highlight.Spans' documented guarantee: this walks
 // them and writes nothing else, so a gap would be text that never reaches the
 // screen.
-func paintCode(text string, spans []highlight.Span, cursor bool) string {
-	table := paintTable()
-	row := table.normal
-	if cursor {
-		row = table.cursor
-	}
+func paintCode(text string, spans []highlight.Span, lineType byte, cursor bool) string {
+	row := paintTable().row(lineType, cursor)
 	var b strings.Builder
 	// The escapes roughly double a short line; one allocation beats growing.
 	b.Grow(len(text) * 2)

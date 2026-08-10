@@ -125,15 +125,54 @@ func (m Model) renderStreamRowAt(i, width int) string {
 	}
 	body := m.renderStreamRow(m.stream.rows[i], width-lipgloss.Width(selectionPrefixBlank), band)
 	row := prefix + body
-	if !band {
+
+	// The cursorline is extended to the full pane width so it reads as a band rather
+	// than as highlighting only the text. A syntax-painted added or removed line is
+	// filled for the same reason: highlighting spends the foreground on the lexer, so
+	// the change type lives in the background, and a background that stops where the
+	// code does is not a property of the line. On the cursor's row the two fills are
+	// the same thing — the brighter variant of the tint.
+	fill, filled := styleCursorFill, band
+	if t, ok := m.paintedLine(i); ok && (t == '+' || t == '-') {
+		fill, filled = fillStyle(t, band), true
+	}
+	if !filled {
 		return row
 	}
-	// Extend the cursorline to the full pane width so it reads as a band
-	// rather than as highlighting only the text.
 	if pad := width - lipgloss.Width(row); pad > 0 {
-		row += styleCursorFill.Render(strings.Repeat(" ", pad))
+		row += fill.Render(strings.Repeat(" ", pad))
 	}
 	return row
+}
+
+// paintedLine is the change type of row i when it is a syntax-painted code line,
+// and false otherwise.
+//
+// Asked by the row filler rather than derived inside the line renderer, because
+// the fill is the row's business: renderStreamRow is handed a width and returns
+// text of whatever length it needs, and the padding out to the pane's edge happens
+// one level up.
+//
+// False for a paired row. Side by side, a row is an old line and a new one with
+// different change types and no single answer — and it needs none, because each
+// cell is already padded to its own column width.
+func (m Model) paintedLine(i int) (byte, bool) {
+	if m.hl == nil || i < 0 || i >= len(m.stream.rows) {
+		return 0, false
+	}
+	r := m.stream.rows[i]
+	if r.kind != rowLine || r.paired {
+		return 0, false
+	}
+	h, _, ok := m.stream.hunkAt(m.filtered, r)
+	if !ok || r.line < 0 || r.line >= len(h.Lines) {
+		return 0, false
+	}
+	l := h.Lines[r.line]
+	if len(m.hl.spansFor(lexPath(m.filtered[r.file]), l)) == 0 {
+		return 0, false
+	}
+	return l.Type, true
 }
 
 func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
@@ -294,7 +333,7 @@ func (m Model) renderStreamLine(r rowRef, width int, cursor bool) string {
 	// kept in step with it by hand.
 	var content string
 	if spans := m.hl.spansFor(lexPath(m.filtered[r.file]), l); len(spans) > 0 {
-		content = m.visibleSlice(paintCode(l.Content, spans, cursor), r.seg, avail)
+		content = m.visibleSlice(paintCode(l.Content, spans, l.Type, cursor), r.seg, avail)
 	} else {
 		content = base.Render(m.visibleSlice(l.Content, r.seg, avail))
 	}
@@ -391,7 +430,7 @@ func (m Model) splitCell(h diff.Hunk, path string, li, no, prefixWidth, colWidth
 	spans := m.hl.spansFor(path, l)
 	text := l.Content
 	if len(spans) > 0 {
-		text = paintCode(text, spans, cursor)
+		text = paintCode(text, spans, l.Type, cursor)
 	}
 	if m.hunkHScroll > 0 {
 		text = ansi.TruncateLeft(text, m.hunkHScroll, "")
@@ -409,10 +448,11 @@ func (m Model) splitCell(h diff.Hunk, path string, li, no, prefixWidth, colWidth
 		// One Render over text and its padding together, as before.
 		return prefix + body.Render(text+pad)
 	}
-	// The padding is not part of the painted text, so on a cursor row it has to carry
-	// the background itself or the cursorline has a hole at the end of every line.
-	if cursor {
-		pad = styleCursorFill.Render(pad)
+	// The padding is not part of the painted text, so it has to carry the line's own
+	// background — the cursorline's, or the change tint — or the fill stops where the
+	// code happens to end, which reads as a rendering fault.
+	if pad != "" {
+		pad = fillStyle(l.Type, cursor).Render(pad)
 	}
 	return prefix + text + pad
 }

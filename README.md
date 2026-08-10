@@ -319,6 +319,15 @@ string green, comment muted), so your terminal theme supplies the actual hues.
 Punctuation and identifiers deliberately get none — at 16 slots the palette runs
 out of distinguishable hues long before a lexer runs out of token types.
 
+Added and removed lines get a **background tint** the full width of the pane,
+because highlighting spends the foreground on the lexer and the change type has
+to live somewhere — without it a `+` line and a `-` line differ only in the
+gutter glyph. The row under the cursor uses a brighter variant of the same tint
+rather than the ordinary cursorline, so the change is still readable on the line
+you are on; letting the cursorline win outright makes the tint blink off and on
+down the file as you scroll. The tint appears only when highlighting is on:
+unpainted, the change type is already the colour of every character on the line.
+
 Two limitations worth knowing. Each line is lexed on its own, because a hunk
 interleaves the old and new sides and joining them would be lexing text that was
 never source — so a line in the middle of a block comment or a multi-line string
