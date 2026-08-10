@@ -608,9 +608,19 @@ clients — there is no other client to switch to, and outside tmux that
 handoff silently does nothing.
 
 Because it hosts its panes, zdeck is the one deck that can be the outermost
-program: it does not require running inside tmux. Window kinds it does not
-handle still do — `C` (review window) and `p D` (PR description) open tmux
-windows, so they need a tmux client to switch to.
+program: it does not require running inside tmux.
+
+**Window kinds it does not handle are refused, not handed to tmux.** `C` (review
+window), `p D` (PR description) and `x` (user actions) all reached code that
+opens with *"no tmux session for this workspace? make one"* — which starts a
+tmux server from nothing and launches the coding agent in it. On a deck that
+hosts the agent there is never a tmux session, so that fired every time: a
+second agent, invisible to the deck, with the same `AWP_WORKSPACE`, reporting
+status and recording gates, while `switch-client` no-opped so nothing appeared
+to happen. Refusing loses very little, because the two windows have in-deck
+equivalents already and the error names them: `c` reviews the change in the
+deck, `p d` reads the PR description in the deck. User actions have no
+equivalent yet — they need a pane kind of their own.
 
 | Key | Pane | Behind it |
 |---|---|---|

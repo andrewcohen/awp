@@ -14,8 +14,8 @@ func TestTheWindowKindIsTheNameNotTheCommand(t *testing.T) {
 		"editor":                     "editor",
 		"":                           "",
 	} {
-		if got := windowKind(arg); got != want {
-			t.Errorf("windowKind(%q) = %q, want %q", arg, got, want)
+		if got := WindowKind(arg); got != want {
+			t.Errorf("WindowKind(%q) = %q, want %q", arg, got, want)
 		}
 	}
 }

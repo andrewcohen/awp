@@ -475,8 +475,66 @@ func paneHostAction(panes paneHost, req deckui.ActionRequest, reporter deckui.Re
 		// `tmux switch-client -l` from outside tmux exits 0 having done
 		// nothing, so without this the key is a silent no-op.
 		return errors.New("last session: nothing to switch to — this deck hosts its own panes"), true
+	case deckui.ActionOpenWindow, deckui.ActionCustom, deckui.ActionSummon, deckui.ActionCI:
+		// Everything here reaches openNamedWindow or openCustomActionWindow,
+		// and both open with "no tmux session for this workspace? make one" —
+		// createWorkspaceSession, which runs `tmux new-session` and then sends
+		// the coding agent's invocation into it.
+		//
+		// On a deck that hosts the workspace's agent there is never a tmux
+		// session, so that fired every time: a second coding agent, in a tmux
+		// server started from nothing, invisible to the deck, with the same
+		// AWP_WORKSPACE, reporting status and recording gates. Then
+		// SwitchClient no-ops because there is no client, so the user sees
+		// nothing happen and presses the key again.
+		//
+		// Kinds the host handles never get here — openPane claims them in
+		// Model.trigger. What is left is the kinds it declines, and the answer
+		// for those is to say so. A silent no-op would be an improvement over
+		// forking an agent; naming the limitation is better than both.
+		if !panes.Describes(deckui.PaneKindAgent) {
+			// A host that does not host agents has no agent to double, so the
+			// tmux path is still the right one for it.
+			return nil, false
+		}
+		return fmt.Errorf("%s is not available on a deck that hosts its own panes%s", paneHostActionLabel(req), paneHostInstead(req)), true
 	}
 	return nil, false
+}
+
+// paneHostActionLabel names the key the user pressed, for the error above.
+func paneHostActionLabel(req deckui.ActionRequest) string {
+	switch req.Action {
+	case deckui.ActionCustom:
+		return "user action " + strings.TrimSpace(req.Arg)
+	case deckui.ActionSummon:
+		return "summon"
+	case deckui.ActionCI:
+		return "ci"
+	}
+	if k := strings.TrimSpace(deckui.WindowKind(req.Arg)); k != "" {
+		return "the " + k + " window"
+	}
+	return "opening a window"
+}
+
+// paneHostInstead names the in-deck equivalent, where there is one.
+//
+// Both windows the pane host declines already have one, which is why declining
+// them costs nothing: the deck grew its own review surface and its own PR
+// description view, and the tmux windows are what those replaced. Saying so is
+// the difference between a key that is unavailable and a key that is broken.
+func paneHostInstead(req deckui.ActionRequest) string {
+	switch deckui.WindowKind(req.Arg) {
+	case "review":
+		return " — press c to review the change in the deck"
+	case "pr-description":
+		return " — press p d to read the PR description in the deck"
+	}
+	if req.Action == deckui.ActionCustom {
+		return " — user actions need a pane kind of their own, which awp does not have yet"
+	}
+	return ""
 }
 
 // hostFirst wraps the deck's tmux action handler so the pane host is offered
