@@ -443,6 +443,16 @@ type paneHost interface {
 	deckui.PaneBackend
 	// SendPrompt delivers text to the agent the backend hosts.
 	SendPrompt(item deckui.Item, text string, reporter deckui.Reporter) error
+	// sessionSource reads the substrate this host's long-lived processes live
+	// on, for the row decorations that describe them.
+	//
+	// The deck asks its host instead of choosing, because the two answers have
+	// to be the same one: a deck that hosted panes on zmx while reading tmux
+	// would render every row's status from sessions its own keys never touch,
+	// and nothing about that fails — the rows are just describing someone
+	// else's terminal. Required on the interface so a second host cannot be
+	// added without saying which substrate it reads.
+	sessionSource() deckSessions
 }
 
 // paneHostAction routes the actions that address a workspace's agent, or a
@@ -548,9 +558,13 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// session name so the initial cursor lands on the workspace the
 	// user launched from. The full enrichment refresh follows ~50 ms
 	// later and fills in caution glyphs / stale decorations.
-	// awp deck's processes live in tmux, so tmux is what it asks. zdeck swaps
-	// this for the zmx source; nothing below here knows which it got.
+	// A deck reads the substrate it runs its processes on: awp deck's live in
+	// tmux, and a pane host's live wherever it hosts them. Nothing below here
+	// knows which it got.
 	sessionSource := deckSessions(tmuxSessions{client: tmuxClient})
+	if panes != nil {
+		sessionSource = panes.sessionSource()
+	}
 	items, err := loadDeckItems(nil, sessionSource, true, svc, repoRoot, projectName, nil, nil)
 	if err != nil {
 		return err
@@ -1767,13 +1781,18 @@ func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc w
 
 	// Live sessions for the current project that aren't in state — show them as
 	// "unmanaged" rows so the user can adopt or kill them.
+	//
+	// The copy names no substrate: which one this is came from the session
+	// source, and a zdeck row saying "tmux" would be describing something that
+	// is not there. The session's own name is on the row for anyone who wants
+	// to know which it is.
 	for ref, facts := range adoptable {
 		items = append(items, deckui.Item{
 			ProjectName:   ref.project,
 			WorkspaceName: ref.workspace,
 			Path:          "",
 			Status:        "unmanaged",
-			PromptPreview: "(live tmux session, not in store)",
+			PromptPreview: "(live session, not in store)",
 			TmuxWindow:    facts.name,
 			SessionName:   facts.name,
 			Active:        true,

@@ -585,6 +585,17 @@ instead of handing off to a tmux window.
 
 `awp deck` is unchanged and remains the one to use for work.
 
+**Each deck reads its own substrate.** A row's status — is there a session,
+did the agent exit, which workspace are you looking at — comes from wherever
+that deck runs its processes: tmux for `awp deck`, zmx for zdeck. They are
+deliberately not merged. A workspace whose agent is in a tmux session started
+earlier by `awp deck` reads under zdeck as having no session at all, which is
+the honest answer: zdeck cannot show it to you and `a` will not take you to
+it. The flip side is that the same workspace can look idle in one deck and
+busy in the other; the two are different views of different terminals, not
+two views of one truth. `z` lists zmx's sessions directly when you want to
+see what is actually there.
+
 The point it tests is that awp can own the pty, and therefore the layout,
 without negotiating with a multiplexer for it. Attaching to a tmux session
 hands you a *client* — a status bar, a current window, its own key routing —

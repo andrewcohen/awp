@@ -28,11 +28,10 @@ func TestAddOptimisticCreateMergesIntoItems(t *testing.T) {
 }
 
 func TestMergedItemsDropsUnmanagedRowMidDelete(t *testing.T) {
-	// After a delete job finishes, the state row is gone but the tmux session
+	// After a delete job finishes, the state row is gone but the session
 	// lingers (kill deferred to popup exit), so loadDeckItems surfaces it as
 	// an "unmanaged" adoptable row. A delete job for that workspace should
-	// suppress it so it doesn't flash back as "(live tmux session, not in
-	// store)".
+	// suppress it so it doesn't flash back as "(live session, not in store)".
 	m := New(nil, func(ActionRequest) error { return nil })
 	m.itemsAll = []Item{
 		{ProjectName: "alpha", WorkspaceName: "feat-x", Status: "unmanaged", SessionName: "[awp]alpha__feat-x"},
