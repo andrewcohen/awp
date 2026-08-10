@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/diff"
+	"github.com/andrewcohen/awp/internal/highlight"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -249,6 +250,65 @@ func BenchmarkRenderBody(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.Body(160, 46)
+	}
+}
+
+// BenchmarkColdFrame is the first frame of a diff you have just opened: nothing
+// lexed, nothing cached.
+//
+// The number that decides whether syntax highlighting belongs on by default.
+// BenchmarkRenderBody measures the warm frame, where every visible row's spans are
+// already in hand — but lexing is lazy per row, so the cost of a language's lexer
+// lands on the frame that first shows the line, and this is the frame that shows
+// the most of them at once.
+//
+// Compare against itself with AWP_DIFF_SYNTAX=off for the delta.
+func BenchmarkColdFrame(b *testing.B) {
+	comments := benchComments(benchFiles(b), benchCommentCount(b))
+	for i := 0; i < b.N; i++ {
+		// Rebuilt per iteration rather than reset, because a cold frame means a cold
+		// highlighter as well as a cold render cache, and the highlighter is where the
+		// lexing lives. The rebuild is outside the measurement.
+		b.StopTimer()
+		m := benchModel(b, comments)
+		b.StartTimer()
+		_ = m.Body(160, 46)
+	}
+}
+
+// BenchmarkLexWholeDiff is every line of the fixture lexed once — the bound on
+// what highlighting can cost you across a whole reading session, since a line is
+// lexed the first time it is shown and never again.
+//
+// Not a frame cost. It is here to say how much work is waiting in the file if you
+// scroll through all of it, which is the honest way to read the cheap cold frame:
+// the work is not absent, it is spread a screenful at a time.
+func BenchmarkLexWholeDiff(b *testing.B) {
+	files := benchFiles(b)
+	lines := 0
+	for _, f := range files {
+		for _, h := range f.Hunks {
+			lines += len(h.Lines)
+		}
+	}
+	// After the loop: a metric reported before it is overwritten by the framework's
+	// own accounting when the benchmark re-runs at a larger b.N.
+	defer func() { b.ReportMetric(float64(lines), "lines") }()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h := &highlighter{
+			mode:   syntaxAll,
+			lexers: map[string]highlight.Lexer{},
+			spans:  map[spanKey][]highlight.Span{},
+		}
+		for _, f := range files {
+			path := lexPath(f)
+			for _, hunk := range f.Hunks {
+				for _, l := range hunk.Lines {
+					h.spansFor(path, l)
+				}
+			}
+		}
 	}
 }
 
