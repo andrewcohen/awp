@@ -210,9 +210,17 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	if !ok {
 		return nil, nil, fmt.Errorf("zdeck has no pane for %q", kind)
 	}
-	dir := item.Path
+	// No fallback. A pane's directory is the workspace's working copy or it is
+	// nothing — the previous `if dir == "" { dir = item.RepoRoot }` is what made
+	// a wrong directory silent instead of an error, and a program started in the
+	// source repo instead of the workspace looks entirely normal until you read
+	// what it wrote. The two rows that reach here without a Path are a workspace
+	// still being created (#243 stops that upstream) and an unmanaged row, which
+	// under a pane host is a leftover tmux session a zmx pane has no business
+	// guessing about.
+	dir := strings.TrimSpace(item.Path)
 	if dir == "" {
-		dir = item.RepoRoot
+		return nil, nil, fmt.Errorf("open the %s pane for %q: the workspace has no working copy on disk yet — wait for it to finish setting up, or press enter to create it", spec.label, item.WorkspaceName)
 	}
 	argv := spec.argv(item)
 
