@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -27,6 +28,12 @@ type sessionPicker struct {
 	list    list.Model
 	loading bool
 	err     error
+	// pendingEnd is the session `x` has asked about and is waiting on a y for.
+	//
+	// The question goes in the status bar and the picker stays up, rather than a
+	// popover replacing it: ending sessions is something you do to several in a
+	// row, and a modal would drop the list and the cursor each time.
+	pendingEnd *PaneSession
 }
 
 // sessionItem is one row. It keeps the whole PaneSession because the delegate
@@ -46,6 +53,14 @@ func (loadingSession) FilterValue() string { return "" }
 type sessionsLoadedMsg struct {
 	sessions []PaneSession
 	err      error
+}
+
+// sessionEndedMsg reports the outcome of an `x`. It carries the label and kind
+// rather than just the name so the status line reads the way the row did.
+type sessionEndedMsg struct {
+	label string
+	kind  string
+	err   error
 }
 
 // age renders how long a session has been alive, in the largest unit that
@@ -171,7 +186,15 @@ func (p *sessionPicker) footerHelp() string {
 	if p.loading {
 		return ""
 	}
-	return p.list.Help.ShortHelpView(pickerShortHelp(p.list))
+	// While a question is pending the footer is the wrong place to look — the
+	// status bar is asking, and offering the ordinary keys would suggest they
+	// still work.
+	if p.pendingEnd != nil {
+		return ""
+	}
+	bindings := append(pickerShortHelp(p.list),
+		key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "end")))
+	return p.list.Help.ShortHelpView(bindings)
 }
 
 func (p *sessionPicker) update(m *Model, msg tea.Msg) tea.Cmd {
@@ -182,11 +205,36 @@ func (p *sessionPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 		p.setSessions(m, msg.sessions)
 		return nil
 
+	case sessionEndedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("end %s %s: %v", msg.label, msg.kind, msg.err)
+		} else {
+			m.status = fmt.Sprintf("ended %s %s", msg.label, msg.kind)
+		}
+		// Reload either way: a failed kill may still have changed something, and
+		// the list is the only place the answer shows.
+		p.loading = true
+		return loadPaneSessions(m.panes, m.itemsAll)
+
 	case tea.KeyPressMsg:
 		if p.list.SettingFilter() {
 			var cmd tea.Cmd
 			p.list, cmd = p.list.Update(msg)
 			return cmd
+		}
+		if p.pendingEnd != nil {
+			// Anything but a yes is a no, including the keys that would otherwise
+			// move the cursor — the question names one row and answering it must
+			// not be able to apply to another.
+			target := *p.pendingEnd
+			p.pendingEnd = nil
+			switch strings.ToLower(msg.String()) {
+			case "y", "enter":
+				return p.endSession(m, target)
+			default:
+				m.status = ""
+				return nil
+			}
 		}
 		switch msg.String() {
 		case "esc", "q", "ctrl+c":
@@ -194,6 +242,8 @@ func (p *sessionPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 			return nil
 		case "enter":
 			return p.attachSelected(m)
+		case "x":
+			return p.askToEndSelected(m)
 		}
 	}
 	var cmd tea.Cmd
@@ -245,6 +295,53 @@ func (p *sessionPicker) attachSelected(m *Model) tea.Cmd {
 		m.status = fmt.Sprintf("this deck has no pane for %q", it.s.Kind)
 	}
 	return cmd
+}
+
+// askToEndSelected puts the question in the status bar. It asks rather than just
+// doing it because a live agent's session is its whole context — the
+// conversation, what it has read, what it was part-way through — and none of
+// that comes back.
+func (p *sessionPicker) askToEndSelected(m *Model) tea.Cmd {
+	it, ok := p.list.SelectedItem().(sessionItem)
+	if !ok {
+		return nil
+	}
+	if strings.TrimSpace(it.s.Name) == "" {
+		// A backend that lists sessions without naming them cannot be asked to
+		// end one, and silently doing nothing would read as a broken key.
+		m.status = "end: this deck's sessions have no name to end them by"
+		return nil
+	}
+	if _, ok := m.panes.(PaneSessioner); !ok {
+		m.status = "end: this deck does not host its own sessions"
+		return nil
+	}
+	s := it.s
+	p.pendingEnd = &s
+	what := s.Label + " " + s.Kind
+	if !s.Live {
+		// An exited session holds no agent, so there is nothing to lose — say so,
+		// or the same y/N reads as the same risk.
+		m.status = fmt.Sprintf("end %s? it has already exited [y/N]", what)
+		return nil
+	}
+	m.status = fmt.Sprintf("end %s? the agent's context is lost [y/N]", what)
+	return nil
+}
+
+// endSession runs the kill on a command: it is a subprocess, and a frame must
+// not wait on one.
+func (p *sessionPicker) endSession(m *Model, s PaneSession) tea.Cmd {
+	sessioner, ok := m.panes.(PaneSessioner)
+	if !ok {
+		m.status = "end: this deck does not host its own sessions"
+		return nil
+	}
+	m.status = "ending " + s.Label + " " + s.Kind + "…"
+	name, label, kind := s.Name, s.Label, s.Kind
+	return func() tea.Msg {
+		return sessionEndedMsg{label: label, kind: kind, err: sessioner.EndSession(name)}
+	}
 }
 
 func (p *sessionPicker) view(m *Model) (left, right string) {

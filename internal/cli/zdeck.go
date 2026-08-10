@@ -158,6 +158,7 @@ func (z zmxPanes) Sessions(items []deckui.Item) ([]deckui.PaneSession, error) {
 		out = append(out, deckui.PaneSession{
 			Item:     item,
 			HasItem:  hasItem,
+			Name:     s.Name,
 			Label:    project + "/" + workspace,
 			Kind:     kind,
 			Live:     s.Live(),
@@ -168,6 +169,16 @@ func (z zmxPanes) Sessions(items []deckui.Item) ([]deckui.PaneSession, error) {
 		})
 	}
 	return out, nil
+}
+
+// EndSession kills a zmx session by the name the deck was given in Sessions.
+//
+// --force, which zmx.Client.Kill supplies: the whole point of ending a session
+// from the deck is that its agent is not going to be asked nicely, and a kill
+// that waits for a program to agree would hang on exactly the session you most
+// want gone.
+func (z zmxPanes) EndSession(name string) error {
+	return z.client.Kill(context.Background(), name)
 }
 
 // deliverPending routes a parked prompt to the agent, and returns the argv to

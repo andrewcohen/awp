@@ -668,10 +668,20 @@ zmx keeps a session listed after its command exits, so *listed* and *running*
 are different questions). `/` filters, and `enter` attaches the selected
 session in a pane, which is the thing the raw command cannot do.
 
+`x` ends the selected session. It asks first — `end proj/ws agent? the agent's
+context is lost [y/N]`, or `it has already exited` when there is nothing to lose
+— and the question names one row, so anything other than `y` is a no, including
+the keys that would otherwise move the cursor. The list stays up rather than
+being replaced by a popover, because ending sessions is something you do to
+several in a row. Deleting a workspace already reaps its own sessions; this is
+for the ones no delete will ever reach — a session whose workspace is gone, or
+an agent you just want stopped.
+
 A session whose workspace has since been deleted is marked `no workspace` and
 will not attach: a pane is opened for a workspace row, and there is nowhere to
-put one without it. `z` is bound only under zdeck — `awp deck` hosts no
-sessions of its own, so there the key stays free.
+put one without it. It can still be ended with `x`, which is the only thing left
+to do with it. `z` is bound only under zdeck — `awp deck` hosts no sessions of
+its own, so there the key stays free.
 
 **One agent per workspace.** Sending a prompt goes to the zmx agent — the same
 process `a` shows. In `awp deck` a prompt is typed into the workspace's tmux

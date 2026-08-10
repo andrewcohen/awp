@@ -52,6 +52,14 @@ type PaneSession struct {
 	// that drifts. HasItem says whether it found one.
 	Item    Item
 	HasItem bool
+	// Name is the backend's own identifier for this session, opaque to the deck
+	// and only ever handed straight back to the backend — EndSession takes it.
+	//
+	// Separate from Label because they answer different questions: Label is what
+	// a human reads on a row, Name is what the substrate will accept. Deriving
+	// one from the other would put the naming scheme in a second place, which is
+	// what resolving Item in the backend already exists to avoid.
+	Name string
 	// Label is what to call this session on screen, from the session's own
 	// name — so a session with no surviving row is still nameable.
 	Label string
@@ -84,6 +92,16 @@ type PaneSessioner interface {
 	// session to a row using its own naming scheme, which is the only place
 	// that scheme is written down.
 	Sessions(items []Item) ([]PaneSession, error)
+	// EndSession stops the session with this PaneSession.Name, killing whatever
+	// is running in it.
+	//
+	// The deck needs this because a session outlives every deck that opened it:
+	// nothing else removes one, so without it the only way to stop an agent is to
+	// leave awp and run the multiplexer's own command. Deleting a workspace reaps
+	// its sessions as part of the delete, so this is for the ones no delete will
+	// ever cover — a session whose workspace is already gone, or an agent you
+	// just want stopped.
+	EndSession(name string) error
 }
 
 // panePopover is a hosted process shown in place of the deck body.
