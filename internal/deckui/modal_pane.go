@@ -134,6 +134,36 @@ const (
 	PaneKindWatch = "watch"
 )
 
+// PaneKindActionPrefix namespaces the kind of a user action's pane.
+//
+// A user action is named by whoever wrote the config, so without a namespace an
+// action called "agent" would address the workspace's agent session — the
+// prefix is what makes the two unspellable as one.
+//
+// An underscore rather than a colon because a kind has to survive being written
+// into a session name and read back out of one: the substrate sanitizes a name
+// to a conservative set, so a separator outside it would come back as something
+// else and the round trip would not find the action again.
+const PaneKindActionPrefix = "action_"
+
+// PaneKindForAction is the pane kind that runs the named user action.
+func PaneKindForAction(name string) string { return PaneKindActionPrefix + name }
+
+// ActionFromPaneKind is the inverse, and reports whether the kind was a user
+// action's at all.
+//
+// The name it returns is whatever the kind carried, which for a kind read back
+// out of a session name is the sanitized spelling rather than the one in the
+// config. Matching it against the configured actions is the resolver's job, and
+// it is the one place that knows the sanitizing rule.
+func ActionFromPaneKind(kind string) (string, bool) {
+	name, ok := strings.CutPrefix(kind, PaneKindActionPrefix)
+	if !ok || name == "" {
+		return "", false
+	}
+	return name, true
+}
+
 // hostsAgents says the workspace's agent runs on a pty this deck owns.
 //
 // It is the one question the create flow has to get right: a deck that hosts
@@ -181,11 +211,11 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 	w, h := paneDims(m.width, m.height)
 	cmd, restore, err := m.panes.Open(item, kind, w, h)
 	if err != nil {
-		m.status = paneLabel(kind) + ": " + err.Error()
+		m.status = PaneLabel(kind) + ": " + err.Error()
 		return nil, true
 	}
 	if handover {
-		return m.handOverTerminal(cmd, restore, paneLabel(kind)), true
+		return m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
 	term, err := vterm.Start(m.paneGen, w, h, cmd, m.hostColors)
@@ -193,13 +223,13 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		if restore != nil {
 			restore()
 		}
-		m.status = paneLabel(kind) + ": " + err.Error()
+		m.status = PaneLabel(kind) + ": " + err.Error()
 		return nil, true
 	}
 
 	p := &panePopover{
 		term:    term,
-		label:   paneLabel(kind) + " · " + item.ProjectName + "/" + item.WorkspaceName,
+		label:   PaneLabel(kind) + " · " + item.ProjectName + "/" + item.WorkspaceName,
 		restore: restore,
 		setW:    w,
 		setH:    h,
@@ -232,9 +262,16 @@ func (m *Model) handOverTerminal(cmd *exec.Cmd, restore func(), label string) te
 	})
 }
 
-func paneLabel(kind string) string {
+// paneLabel is what the pane's chrome and its errors call it.
+//
+// A user action drops its namespace here: the prefix exists so two kinds cannot
+// collide, and the user typed the name without it.
+func PaneLabel(kind string) string {
 	if kind == "" {
 		return "shell"
+	}
+	if name, ok := ActionFromPaneKind(kind); ok {
+		return name
 	}
 	return kind
 }

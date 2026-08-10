@@ -28,20 +28,28 @@ const (
 	ephemeral
 )
 
+// paneSpec is how zdeck hosts one window kind: what to call its session, whether
+// that session outlives the pane, and the process to put in it.
+type paneSpec struct {
+	label    string
+	lifetime paneLifetime
+	argv     func(it deckui.Item) []string
+}
+
 // panes maps a deck window kind to how zdeck hosts it. Kinds absent from this
 // map fall through to the ordinary tmux window — which is how the review and
 // PR-description windows keep working.
+//
+// It is not the whole answer: a user action's pane is spelled by the workspace's
+// own config rather than here, so kinds are resolved through specFor and not by
+// indexing this directly.
 //
 // Andrew's call on lifetimes: the agent and the editor are worth keeping alive
 // between glances; a shell, jjui, CI and the watch view are not, since you open
 // those to do one thing and the next one can start fresh. CI and watch are the
 // clearest ephemerals of the set — each runs one foreground program you watch
 // until it says something, and a stale one is worse than no one at all.
-var panes = map[string]struct {
-	label    string
-	lifetime paneLifetime
-	argv     func(it deckui.Item) []string
-}{
+var panes = map[string]paneSpec{
 	// codingAgentArgv, not config.AgentInvocation: the latter omits the
 	// dev-loop preamble, so a pane agent would not know to work in units, run
 	// gates or commit — the same instruction the tmux path has always sent.
@@ -96,6 +104,64 @@ type zmxPanes struct {
 	// Used for the prompt a workspace was created with and has not delivered
 	// yet — see Entry.PendingPrompt.
 	svcFor func(repoRoot string) workspace.Service
+	// actionsFor reads the user actions configured for a repo. Per-repo for the
+	// same reason as svcFor: a cross-project deck resolves `x` against the
+	// selected row's config, not the one the deck started in.
+	actionsFor func(repoRoot string) []deckui.UserAction
+}
+
+// specFor resolves a window kind to the pane that hosts it.
+//
+// Two sources, because a user action is named by whoever wrote the config: the
+// fixed kinds are in the panes map, and an action's command can only come from
+// the workspace's own config. Hence a method rather than a map lookup.
+func (z zmxPanes) specFor(item deckui.Item, kind string) (paneSpec, error) {
+	if name, ok := deckui.ActionFromPaneKind(kind); ok {
+		return z.actionSpec(item, name)
+	}
+	spec, ok := panes[kind]
+	if !ok {
+		return paneSpec{}, fmt.Errorf("zdeck has no pane for %q", kind)
+	}
+	return spec, nil
+}
+
+// actionSpec is the pane for the user action named by a kind.
+//
+// Long-lived, and that is the point of it: the case this exists for is a dev
+// server, which you start once and leave running while you work in the agent
+// pane. It also makes "is it still up?" answerable — the command is the
+// session's own process, so a live session *is* a running server, the same
+// property that lets the deck read an agent's state off its session.
+//
+// The name is matched after sanitizing because a kind read back out of a session
+// name has already been through it: an action called "dev server" is `dev_server`
+// there, and comparing that against the config's spelling would never match.
+func (z zmxPanes) actionSpec(item deckui.Item, name string) (paneSpec, error) {
+	root := strings.TrimSpace(item.RepoRoot)
+	if z.actionsFor == nil || root == "" {
+		return paneSpec{}, fmt.Errorf("run the %q action for %q: this deck cannot read the workspace's user actions", name, item.WorkspaceName)
+	}
+	for _, a := range z.actionsFor(root) {
+		if zmx.Sanitize(a.Name) != name {
+			continue
+		}
+		command := strings.TrimSpace(a.Command)
+		if command == "" {
+			return paneSpec{}, fmt.Errorf("run the %q action for %q: it has no command — give it one under \"actions\" in %s/.awp/config.json", a.Name, item.WorkspaceName, root)
+		}
+		return paneSpec{
+			label:    deckui.PaneKindForAction(a.Name),
+			lifetime: longLived,
+			// A shell, unlike every other pane here. A user action's command has
+			// always been a shell line: the tmux path types it at a prompt and a
+			// background action runs it under `sh -c`, so splitting it on
+			// whitespace instead would make one config field mean two different
+			// things depending on which deck read it.
+			argv: func(deckui.Item) []string { return []string{"sh", "-c", command} },
+		}, nil
+	}
+	return paneSpec{}, fmt.Errorf("run the %q action for %q: no user action by that name in %s — add it under \"actions\" in .awp/config.json", name, item.WorkspaceName, root)
 }
 
 // takePendingPrompt returns the prompt parked for this workspace, once.
@@ -115,7 +181,18 @@ func (z zmxPanes) takePendingPrompt(item deckui.Item) workspace.PendingPrompt {
 	return p
 }
 
+// Describes claims a kind for the pane path rather than tmux.
+//
+// Every user action is claimed on the strength of the prefix alone, without
+// checking that one is configured: Describes is asked before there is a row in
+// hand, so the config it would have to read is not reachable here. An action
+// that does not resolve fails in Open, which can say which repo it looked in —
+// a better answer than falling through to tmux, where the key would start a
+// second agent in a server nobody is looking at.
 func (zmxPanes) Describes(kind string) bool {
+	if _, ok := deckui.ActionFromPaneKind(kind); ok {
+		return true
+	}
 	_, ok := panes[kind]
 	return ok
 }
@@ -145,6 +222,14 @@ func (z zmxPanes) Sessions(items []deckui.Item) ([]deckui.PaneSession, error) {
 		}
 		for _, spec := range panes {
 			byName[zmx.SessionName(it.ProjectName, it.WorkspaceName, spec.label)] = it
+		}
+		// And the workspace's user actions, which are kinds like any other. Left
+		// out, a dev server's session still listed — it is awp's by name — but as
+		// one belonging to no row, so `enter` on it could not reopen it.
+		if z.actionsFor != nil && strings.TrimSpace(it.RepoRoot) != "" {
+			for _, a := range z.actionsFor(it.RepoRoot) {
+				byName[zmx.SessionName(it.ProjectName, it.WorkspaceName, deckui.PaneKindForAction(a.Name))] = it
+			}
 		}
 	}
 
@@ -217,10 +302,6 @@ func (z zmxPanes) deliverPending(item deckui.Item, name string, argv []string, p
 }
 
 func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func(), error) {
-	spec, ok := panes[kind]
-	if !ok {
-		return nil, nil, fmt.Errorf("zdeck has no pane for %q", kind)
-	}
 	// No fallback. A pane's directory is the workspace's working copy or it is
 	// nothing — the previous `if dir == "" { dir = item.RepoRoot }` is what made
 	// a wrong directory silent instead of an error, and a program started in the
@@ -229,9 +310,17 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	// still being created (#243 stops that upstream) and an unmanaged row, which
 	// under a pane host is a leftover tmux session a zmx pane has no business
 	// guessing about.
+	//
+	// Asked before the kind is resolved, because a row with no working copy has
+	// nowhere to run anything and that is the more useful thing to say — it holds
+	// for every kind, including one the config turns out not to name.
 	dir := strings.TrimSpace(item.Path)
 	if dir == "" {
-		return nil, nil, fmt.Errorf("open the %s pane for %q: the workspace has no working copy on disk yet — wait for it to finish setting up, or press enter to create it", spec.label, item.WorkspaceName)
+		return nil, nil, fmt.Errorf("open the %s pane for %q: the workspace has no working copy on disk yet — wait for it to finish setting up, or press enter to create it", deckui.PaneLabel(kind), item.WorkspaceName)
+	}
+	spec, err := z.specFor(item, kind)
+	if err != nil {
+		return nil, nil, err
 	}
 	argv := spec.argv(item)
 
@@ -497,6 +586,9 @@ func runZdeck(runner Runner, svc workspace.Service, in io.Reader, out io.Writer)
 		svcFor: func(repoRoot string) workspace.Service {
 			return newDeckActionService(runner, repoRoot, nil)
 		},
+		// The same reader the deck's own action menu uses, so the pane that opens
+		// is the action the menu offered.
+		actionsFor: userActionsForRepo,
 	}
 	return runDeckWithCharm(runner, svc, in, out, deckui.ScopeAll, backend)
 }

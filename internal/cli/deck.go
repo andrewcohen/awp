@@ -436,6 +436,44 @@ func newDeckActionService(runner Runner, repoRoot string, in io.Reader) workspac
 	return newDeckActionServiceWithIO(runner, repoRoot, in, io.Discard)
 }
 
+// userActionsForRepo is the user actions configured for a repo, in the deck's
+// own terms.
+//
+// Per-repo rather than read once at startup: the deck consults it each time the
+// action menu opens, so a cross-project deck resolves `x` against the SELECTED
+// workspace's config instead of showing the deck-startup repo's actions for
+// every row.
+//
+// One reader for all of it — the deck's list, the resolver behind the menu, and
+// the pane host that needs an action's command to run it. There were two copies
+// of this loop before, and the third caller that needed it did not exist, which
+// is how a pane-hosting deck could offer `x` and then have nothing to open.
+//
+// Sorted, because the config is a JSON object and Go randomizes map iteration: a
+// menu that reordered itself on every open is not a menu you can learn.
+func userActionsForRepo(root string) []deckui.UserAction {
+	cfg, err := config.Load(root)
+	if err != nil {
+		return nil
+	}
+	out := make([]deckui.UserAction, 0, len(cfg.Actions))
+	for name, act := range cfg.Actions {
+		focus := true
+		if act.Focus != nil {
+			focus = *act.Focus
+		}
+		out = append(out, deckui.UserAction{
+			Name:       name,
+			Command:    act.Command,
+			Alias:      act.Alias,
+			Background: act.Background,
+			Focus:      focus,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // paneHost is where a workspace's processes live when awp owns them instead of
 // handing them to tmux.
 //
@@ -537,7 +575,10 @@ func paneHostInstead(req deckui.ActionRequest) string {
 		return " — press p d to read the PR description in the deck"
 	}
 	if req.Action == deckui.ActionCustom {
-		return " — user actions need a pane kind of their own, which awp does not have yet"
+		// A user action has a pane kind now, and the deck claims it in
+		// Model.trigger — so reaching here means the deck could not tell which
+		// action was meant, not that there is nowhere to run one.
+		return " — this deck runs a user action as a pane and could not resolve that name; press x to pick one from the menu"
 	}
 	return ""
 }
@@ -634,46 +675,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	}
 
 	cfg, _ := config.Load(repoRoot)
-	var userActions []deckui.UserAction
-	for name, act := range cfg.Actions {
-		focus := true
-		if act.Focus != nil {
-			focus = *act.Focus
-		}
-		userActions = append(userActions, deckui.UserAction{
-			Name:       name,
-			Command:    act.Command,
-			Alias:      act.Alias,
-			Background: act.Background,
-			Focus:      focus,
-		})
-	}
-	// userActionsForRepo loads the merged global+per-repo actions for
-	// the workspace at repoRoot. Returning a fresh list lets the deck
-	// resolve actions against the SELECTED workspace's repo each time
-	// the action menu opens — cross-project decks would otherwise show
-	// the deck-startup repo's actions for every selection.
-	userActionsForRepo := func(root string) []deckui.UserAction {
-		c, err := config.Load(root)
-		if err != nil {
-			return nil
-		}
-		out := make([]deckui.UserAction, 0, len(c.Actions))
-		for name, act := range c.Actions {
-			focus := true
-			if act.Focus != nil {
-				focus = *act.Focus
-			}
-			out = append(out, deckui.UserAction{
-				Name:       name,
-				Command:    act.Command,
-				Alias:      act.Alias,
-				Background: act.Background,
-				Focus:      focus,
-			})
-		}
-		return out
-	}
+	userActions := userActionsForRepo(repoRoot)
 	resolveUserAction := func(root, name string) (deckui.UserAction, bool) {
 		for _, a := range userActionsForRepo(root) {
 			if a.Name == name {
