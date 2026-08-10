@@ -14,7 +14,7 @@ import (
 // that no longer exists — one per pane per deck run, and one of them was found
 // holding a defunct agent nobody reaped.
 //
-// Both halves have to be present and both have to be deferred:
+// All three have to be present and all three have to be deferred:
 //
 //   - vterm.CloseAll closes every Term still open. Deferred rather than called
 //     after Run so a panic unwinding through here is covered too.
@@ -22,6 +22,9 @@ import (
 //     SIGTERM into messages and returns from Run, but SIGHUP keeps its default
 //     disposition and kills the process outright, so a closed terminal window
 //     would skip the teardown entirely.
+//   - logDeckPanic writes a crash to awplog on its way past. The trace otherwise
+//     goes to stderr, which for an alt-screen program means the screen the
+//     terminal has just swapped away from.
 //
 // Pinned structurally because nothing fails when it goes: the deck exits
 // cleanly either way and the orphan is only visible in ps, days later.
@@ -49,8 +52,9 @@ func TestTheDeckCannotExitWithoutTearingDownItsPanes(t *testing.T) {
 	// stopHangup is quitOnHangup's own returned stopper, so its presence in the
 	// deferred set is how the listener being installed shows up here.
 	for name, why := range map[string]string{
-		"CloseAll":   "nothing closes a hosted pane when the deck exits, so its client outlives the deck",
-		"stopHangup": "quitOnHangup is not installed, so closing the terminal window skips the teardown",
+		"CloseAll":     "nothing closes a hosted pane when the deck exits, so its client outlives the deck",
+		"stopHangup":   "quitOnHangup is not installed, so closing the terminal window skips the teardown",
+		"logDeckPanic": "a crash prints its trace onto the screen alt-screen has just swapped away from, so nothing records it",
 	} {
 		if !deferred[name] {
 			t.Errorf("runDeckWithCharm does not defer %s — %s", name, why)
