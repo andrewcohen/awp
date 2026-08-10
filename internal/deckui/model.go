@@ -3423,6 +3423,19 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 			// like any other: a program you watch and then leave. Naming it as
 			// a kind is what lets a pane host claim it.
 			kind, isPane = PaneKindCI, true
+		case ActionCustom:
+			// A user action is a window too — under tmux `x` opens one named
+			// after the action and runs its command in it — so it is a kind
+			// like the rest, resolved by the host from the workspace's own
+			// config since only the config knows the command.
+			//
+			// Not a background action, which is not a window at all: those are
+			// jobs, and startAction routes them to the job substrate below.
+			// Claiming one here would open a pane instead, and the point of
+			// marking an action background is that it runs without one.
+			if ua, ok := m.findUserAction(arg); ok && !ua.Background {
+				kind, isPane = PaneKindForAction(ua.Name), true
+			}
 		}
 		if isPane {
 			if cmd, handled := m.openPane(item, kind); handled {

@@ -474,6 +474,10 @@ Set `"background": true` to run the action detached via the jobs subsystem inste
 
 Set `"focus": false` to keep the action foregrounded (it gets a real tmux window, runs interactively, scrollback intact) but **don't** switch the tmux client to it on launch. Useful for spawning a long-running watcher you'll check on later without losing your place in the deck. Ignored when `background` is true.
 
+The action menu lists actions alphabetically, so an alias stays where you learned it.
+
+Under `awp zdeck` a foreground action gets a **pane** instead of a tmux window, and a long-lived zmx session behind it — see [zdeck](#zdeck-proof-of-concept) for what that changes, including the fact that `focus` has no meaning there.
+
 ### `hooks.bootstrap`
 
 Shell commands run after a workspace's jj layout exists but before the agent starts. Used for things like `pnpm install` or `make seed`.
@@ -682,21 +686,21 @@ Because it hosts its panes, zdeck is the one deck that can be the outermost
 program: it does not require running inside tmux.
 
 **Window kinds it does not handle are refused, not handed to tmux.** `C` (review
-window), `p D` (PR description) and `x` (user actions) all reached code that
-opens with *"no tmux session for this workspace? make one"* — which starts a
-tmux server from nothing and launches the coding agent in it. On a deck that
-hosts the agent there is never a tmux session, so that fired every time: a
-second agent, invisible to the deck, with the same `AWP_WORKSPACE`, reporting
-status and recording gates, while `switch-client` no-opped so nothing appeared
-to happen. Refusing loses very little, because the two windows have in-deck
-equivalents already and the error names them: `c` reviews the change in the
-deck, `p d` reads the PR description in the deck. User actions have no
-equivalent yet — they need a pane kind of their own.
+window) and `p D` (PR description) reached code that opens with *"no tmux
+session for this workspace? make one"* — which starts a tmux server from nothing
+and launches the coding agent in it. On a deck that hosts the agent there is
+never a tmux session, so that fired every time: a second agent, invisible to the
+deck, with the same `AWP_WORKSPACE`, reporting status and recording gates, while
+`switch-client` no-opped so nothing appeared to happen. Refusing loses very
+little, because both windows have in-deck equivalents already and the error names
+them: `c` reviews the change in the deck, `p d` reads the PR description in the
+deck.
 
 | Key | Pane | Behind it |
 |---|---|---|
 | `a` | agent | **zmx session.** Survives closing the pane, and awp. |
 | `e` | editor | **zmx session.** Keeps its buffers between glances. |
+| `x` | a user action | **zmx session.** Survives closing the pane, and awp. |
 | `s` | shell | **Spawned by awp.** Dies with the pane. |
 | `v` | vcs (jjui) | **Spawned by awp.** Dies with the pane. |
 | `i` | ci | **Spawned by awp.** Dies with the pane. |
@@ -705,6 +709,23 @@ equivalent yet — they need a pane kind of their own.
 Whether the process outlives the view is the only thing the two groups differ
 by; the difference in code is which command awp runs. Everything downstream —
 the emulator, the keys, the rendering — is identical.
+
+**A user action gets a pane of its own.** `x` picks one from the `actions`
+config, and under zdeck it opens as a pane running `sh -c <command>` in the
+workspace — the same shell the tmux window types it at, so one config field means
+the same thing on both decks. Its session is `awp.<project>.<workspace>.action_<name>`,
+long-lived, which is what the case this exists for needs: a dev server you start
+once and leave up while you work in the agent's pane. It survives closing the
+pane and closing the deck, `z` lists it and reattaches, and deleting the
+workspace reaps it along with the rest.
+
+Because the command is the session's own process rather than a line typed at a
+shell, *listed* and *running* stay different questions — a live session is a
+running server, and `z` marks it `✗` once it exits. The trade is that `focus`
+means nothing under zdeck: zmx cannot create a session without attaching to it,
+so `x` always opens the pane. `esc` returns to the deck and leaves the command
+running. An action marked `"background": true` is unaffected — it is not a window
+at all, it runs as a detached job and appears in the activity bar and `J`.
 
 `i` and `W` are the clearest ephemerals of the set: each runs one foreground
 program you watch until it says something, and a stale one is worse than none.

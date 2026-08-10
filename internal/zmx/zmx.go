@@ -61,7 +61,7 @@ func (s Session) Live() bool { return !s.Ended }
 // create the session — so segments are joined with dots and anything outside
 // a conservative set is replaced.
 func SessionName(project, workspace, kind string) string {
-	return "awp." + sanitize(project) + "." + sanitize(workspace) + "." + sanitize(kind)
+	return "awp." + Sanitize(project) + "." + Sanitize(workspace) + "." + Sanitize(kind)
 }
 
 // ParseSessionName reads a name SessionName produced back into its parts, and
@@ -80,7 +80,13 @@ func ParseSessionName(name string) (project, workspace, kind string, ok bool) {
 	return parts[1], parts[2], parts[3], true
 }
 
-func sanitize(s string) string {
+// Sanitize is the spelling of a name segment that survives being written into a
+// session name and read back out of one.
+//
+// Exported because a caller that has to recognise a segment coming back — a
+// user-action pane matching its kind against the configured actions — has to
+// compare against the same reduction, not against the original name.
+func Sanitize(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {

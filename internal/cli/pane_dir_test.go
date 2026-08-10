@@ -31,8 +31,13 @@ func TestAPaneWillNotGuessItsDirectory(t *testing.T) {
 			deckui.Item{ProjectName: "repo", WorkspaceName: "stray"},
 		},
 	} {
-		for _, kind := range []string{deckui.PaneKindAgent, "editor", "vcs", deckui.PaneKindCI, deckui.PaneKindWatch, ""} {
-			panes := zmxPanes{client: zmx.New((&fakeZmx{}).run)}
+		// The user action is in the list because its kind is resolved from the
+		// workspace's config rather than from a fixed map, and the directory is
+		// the more useful thing to say either way: a row with no working copy has
+		// nowhere to run anything, whether or not the config still names the
+		// action.
+		for _, kind := range []string{deckui.PaneKindAgent, "editor", "vcs", deckui.PaneKindCI, deckui.PaneKindWatch, deckui.PaneKindForAction("dev"), ""} {
+			panes := devHost()
 			cmd, _, err := panes.Open(tc.item, kind, 80, 24)
 			if err == nil {
 				t.Errorf("%s: the %q pane opened in %q instead of refusing", tc.name, kind, cmd.Dir)
