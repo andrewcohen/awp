@@ -18,6 +18,10 @@ type zmxLsRunner struct {
 	killErr error
 	killed  []string
 	tmux    [][]string
+	// ended marks every listed session as exited. zmx keeps a session listed
+	// after its command dies, so "listed" and "running" are different
+	// questions, and the guards that ask them have to disagree.
+	ended bool
 }
 
 func (r *zmxLsRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
@@ -34,7 +38,11 @@ func (r *zmxLsRunner) Run(_ context.Context, _ string, name string, args ...stri
 		case "ls":
 			var b strings.Builder
 			for _, n := range r.names {
-				b.WriteString("name=" + n + "\tpid=1\n")
+				b.WriteString("name=" + n + "\tpid=1")
+				if r.ended {
+					b.WriteString("\tended=1\texit_code=0")
+				}
+				b.WriteString("\n")
 			}
 			return b.String(), nil
 		case "kill":
