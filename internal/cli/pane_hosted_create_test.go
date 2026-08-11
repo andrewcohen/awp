@@ -132,12 +132,15 @@ func (f *fakeZmx) run(_ context.Context, _ string, name string, args ...string) 
 	return "", nil
 }
 
-// promptSvc is a workspace.Service that only answers the pending-prompt
-// questions — the rest of the interface is not reached by pane opening.
+// promptSvc is a workspace.Service that only answers what pane opening asks —
+// the pending-prompt questions and the unread mark. The rest of the interface is
+// never reached, so the embedded nil is the guard: a pane that grew a new call
+// into the service panics here rather than reaching a real state file.
 type promptSvc struct {
 	workspace.Service
 	pending  workspace.PendingPrompt
 	reparked workspace.PendingPrompt
+	read     []string
 }
 
 func (p *promptSvc) TakePendingPrompt(string) (workspace.PendingPrompt, error) {
@@ -148,6 +151,11 @@ func (p *promptSvc) TakePendingPrompt(string) (workspace.PendingPrompt, error) {
 
 func (p *promptSvc) RecordPendingPrompt(_ string, pp workspace.PendingPrompt) error {
 	p.reparked = pp
+	return nil
+}
+
+func (p *promptSvc) MarkRead(workspaceName string) error {
+	p.read = append(p.read, workspaceName)
 	return nil
 }
 
