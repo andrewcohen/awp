@@ -540,3 +540,43 @@ func TestClosingAPaneAsksForAFreshRead(t *testing.T) {
 		t.Errorf("closing a pane asked for %d fresh reads, want 1", reads)
 	}
 }
+
+// ranAndDied runs a script and hands back however it ended.
+func ranAndDied(t *testing.T, script string) error {
+	t.Helper()
+	return exec.Command("sh", "-c", script).Run() //nolint:gosec // the script is this test's own
+}
+
+// TestALeaveKeySignalIsNotAFailure. Under handover there is no deck in front of
+// the child, so ctrl+\ reaches the terminal — and a child in cooked mode gets
+// the line discipline's reading of it, SIGQUIT, rather than the byte. `i`'s CI
+// watch is a `bash -c`, so that is how it ends, and the pane comes back saying
+// `ci: exited: signal: quit`: the way out of a pane, reported as a crash.
+func TestALeaveKeySignalIsNotAFailure(t *testing.T) {
+	if err := ranAndDied(t, "kill -QUIT $$"); !leftByLeaveKey(err) {
+		t.Errorf("a child killed by the leave key reported %v as a failure", err)
+	}
+}
+
+// TestEveryOtherEndingStillReports. The point of the exception is that ctrl+\ is
+// awp's own key; nothing else about a pane's death becomes less interesting. A
+// program that could not start, or one something else killed, is exactly what
+// the status line is for — and swallowing those would leave a pane that closes
+// instantly with no explanation anywhere.
+func TestEveryOtherEndingStillReports(t *testing.T) {
+	cases := map[string]string{
+		"a different signal": "kill -TERM $$",
+		"a nonzero exit":     "exit 3",
+	}
+	for what, script := range cases {
+		if err := ranAndDied(t, script); leftByLeaveKey(err) {
+			t.Errorf("%s (%v) was read as the leave key", what, err)
+		}
+	}
+	if leftByLeaveKey(nil) {
+		t.Error("a clean exit was read as the leave key")
+	}
+	if leftByLeaveKey(errors.New("could not start")) {
+		t.Error("a failure to start was read as the leave key")
+	}
+}

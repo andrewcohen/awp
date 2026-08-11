@@ -752,7 +752,7 @@ child's business:
 |------|------------------------------------------|
 | agent, editor, user actions | Detaches. These run under `zmx attach`, and zmx's own detach key is also `ctrl+\` — the session keeps running, exactly as when the pane closes |
 | `W` watch | Leaves. It is awp's own program, so it binds the key itself |
-| `i` CI | Exits, by signal: a cooked-mode `bash -c`, so the line discipline turns the key into SIGQUIT |
+| `i` CI | Exits, by signal: a cooked-mode `bash -c`, so the line discipline turns the key into SIGQUIT. The deck reads that as leaving rather than as a failure, so no error lands in the status bar |
 | `v` vcs | Nothing — jjui is in raw mode with nobody in front of it. Use jjui's own `q` |
 | shell | Nothing: interactive shells ignore SIGQUIT. Use `exit` / `ctrl+d` |
 

@@ -1,10 +1,12 @@
 package deckui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -263,8 +265,33 @@ func (m *Model) handOverTerminal(cmd *exec.Cmd, restore func(), label string) te
 		if restore != nil {
 			restore()
 		}
+		if leftByLeaveKey(err) {
+			err = nil
+		}
 		return paneExecDoneMsg{label: label, err: err}
 	})
+}
+
+// leftByLeaveKey reports whether a handed-over child died of the leave key.
+//
+// ctrl+\ is SIGQUIT, which is exactly why it was chosen — nothing interactive
+// binds it. But a handed-over pane has no deck reading keys in front of the
+// child, so the key reaches the terminal, and a child that left it in cooked
+// mode gets the line discipline's interpretation rather than the byte: `i`'s CI
+// watch is a `bash -c`, so ctrl+\ ends it. That is the leave key working, and
+// reporting it as `ci: exited: signal: quit` describes the way out of a pane as
+// a crash.
+//
+// Only for the handed-over case. In an emulated pane the deck takes ctrl+\
+// before anything is forwarded, so a SIGQUIT reaching that child came from
+// somewhere else entirely and is worth saying out loud.
+func leftByLeaveKey(err error) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return false
+	}
+	status, ok := exit.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled() && status.Signal() == syscall.SIGQUIT
 }
 
 // paneLabel is what the pane's chrome and its errors call it.
