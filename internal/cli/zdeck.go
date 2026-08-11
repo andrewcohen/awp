@@ -575,6 +575,73 @@ func killWorkspaceSessions(runner Runner, project, workspaceName string, reporte
 	return nil
 }
 
+// hostedAgent is a workspace's agent, and the prompt it is being started for.
+type hostedAgent struct {
+	project   string
+	workspace string
+	repoRoot  string
+	// dir is the workspace's working copy — where the agent runs, and never the
+	// source repo. Same rule as a pane's directory, and for the same reason.
+	dir    string
+	prompt string
+	// review says the recipient reviews someone else's change, so it must start
+	// without the dev-loop preamble. A reviewer told to work in units, run gates
+	// and commit starts doing the author's job on their PR.
+	review bool
+}
+
+// startHostedAgent starts the workspace's agent on a session of its own and
+// delivers the prompt as its argument.
+//
+// This is the pane host's answer to the last thing the tmux create does: start
+// the agent and switch to it. A create runs detached, so there is no terminal to
+// hand over — but there does not need to be one, since the agent's session is not
+// where the user is looking (see zmx.StartDetached). Without it the prompt sits
+// parked until someone opens the pane, so "create five workspaces with prompts
+// and come back to five agents working" held under tmux and not here.
+//
+// Only ever called with a prompt. A workspace created without one has nothing for
+// an agent to do yet, and starting an idle one per create would spend a process
+// and a row's worth of "running" on a workspace nobody has asked anything of.
+//
+// The prompt goes in as argv rather than a paste for the reason the pane path
+// documents: the session is being created, so the agent's own argument is the one
+// delivery that cannot race its input box.
+func startHostedAgent(runner Runner, a hostedAgent, reporter deckui.Reporter) error {
+	if reporter == nil {
+		reporter = noopReporter{}
+	}
+	prompt := strings.TrimSpace(a.prompt)
+	if prompt == "" {
+		return fmt.Errorf("start the agent for %q: no prompt to start it with", a.workspace)
+	}
+	dir := strings.TrimSpace(a.dir)
+	if dir == "" {
+		return fmt.Errorf("start the agent for %q: the workspace has no working copy to run it in", a.workspace)
+	}
+	// On disk, not merely named. An agent started in a directory that is not there
+	// fails inside the attach, where the reason goes to a pty nobody reads — and
+	// this runs at the end of a create, which is exactly when a path can be
+	// predicted but not yet real.
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("start the agent for %q: %s is not a directory to run it in (%v)", a.workspace, dir, err)
+	}
+	if _, err := exec.LookPath("zmx"); err != nil {
+		return fmt.Errorf("start the agent for %q: zmx is not on PATH: %w", a.workspace, err)
+	}
+	argv := codingAgentArgv(a.repoRoot)
+	if a.review {
+		argv = reviewAgentArgv(a.repoRoot)
+	}
+	argv = append(argv, prompt)
+	// The same env a pane gives an agent. Without it the hooks report nothing, so
+	// the deck shows the row idle while the agent works.
+	env := append(os.Environ(), workspaceEnvPairs(a.project, a.workspace, a.repoRoot)...)
+	name := zmx.SessionName(a.project, a.workspace, deckui.PaneKindAgent)
+	reporter.Step("Start the agent in " + name)
+	return zmxClientFor(runner).StartDetached(context.Background(), dir, name, argv, env)
+}
+
 // liveZmxAgent names the workspace's zmx agent session if its process is still
 // running, and "" if there is none. It is the zmx half of the question the
 // rename guard asks tmux with PaneCurrentCommand.

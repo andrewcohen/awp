@@ -781,32 +781,47 @@ its own, so there the key stays free.
 process `a` shows. In `awp deck` a prompt is typed into the workspace's tmux
 session, and doing that under zdeck would give a workspace two agents: the one
 on screen and an invisible tmux one receiving everything you send it. zdeck
-will not *start* an agent that isn't running, because zmx has no way to create
-a session detached with a real command as its own process; it says
-`no agent running for <workspace> — press a to start one`. `,` (switch to the
+will not *start* an agent that isn't running from the send-prompt key; it says
+`no agent running for <workspace> — press a to start one`. (A create with a
+prompt does start one — see below — but `A` is for talking to an agent that is
+already there, and starting one to receive a message you could have opened the
+pane to type would be a surprise.) `,` (switch to the
 last tmux session) reports that there is nothing to switch to, rather than
 appearing to work — `tmux switch-client -l` from outside tmux exits 0 having
 done nothing.
 
-**Creating a workspace does not start an agent.** In `awp deck` one call makes
-the tmux session and launches the agent in it, because the same call could do
-both. zdeck cannot: the create runs as a detached subprocess with no terminal
-for a hosted agent to start on, so doing it that way gave the workspace two —
-the zmx one you would open later, and an invisible tmux one holding the prompt
-you typed. Under zdeck, `n` prepares the jj workspace and stops; the prompt is
-parked on the workspace, and `a` starts the agent and delivers it. A parked
-prompt arrives as the agent's own argument, so there is no waiting for it to
-boot, and it is delivered once. Everything else about the create is unchanged —
-the bookmark, the PR pin, and the row appearing in the list.
+**Creating a workspace with a prompt starts its agent.** The create runs as a
+detached subprocess, so there is no terminal to hand a hosted agent — but it does
+not need one: the agent's session is not where you are looking. awp allocates a
+pty, attaches on it, waits for the session to exist and throws the client away,
+which leaves the agent running as the session's own process with nobody watching.
+So `n` with a prompt means the work is under way before you open anything, the
+same as under tmux, and `zmx ls` shows the session immediately.
 
-**`r` works the same way.** A review under zdeck does the whole setup — fetches
-the PR, prepares the `pr-<n>-<branch>` workspace, pins it, mirrors the existing
-review threads, writes the review brief — and parks the brief instead of
-launching a reviewer. Press `a` on the new row and the reviewer starts with it.
-The parked brief remembers that it is a review, so the agent launches *without*
-the dev-loop preamble: a reviewer told to work in units, run gates and commit
-starts doing the author's job on someone else's PR. No `pr description` tmux
-window is opened either — `p d` renders it in the deck.
+The prompt arrives as the agent's own argument rather than as a paste, so there
+is no waiting for it to boot and nothing races its input box. A create with **no**
+prompt starts nothing — there is nothing for an agent to do yet, and an idle one
+per workspace would spend a process and a row that reads as running.
+
+If the start fails — no zmx, no daemon, a working copy that is not there yet —
+the prompt is **parked** on the workspace instead and the job log says why. A
+parked prompt is delivered by the first agent pane you open, which is what always
+happened before anything started an agent here, so nothing is lost either way.
+
+**`r` works the same way**, and more so: a review workspace exists to be reviewed
+now. The review does the whole setup — fetches the PR, prepares the
+`pr-<n>-<branch>` workspace, pins it, mirrors the existing review threads, writes
+the review brief — and then starts the reviewer with it. The reviewer launches
+*without* the dev-loop preamble, whether it starts here or from a parked brief: a
+reviewer told to work in units, run gates and commit starts doing the author's job
+on someone else's PR. No `pr description` tmux window is opened either — `p d`
+renders it in the deck.
+
+A detached start allocates a 120x40 pty, because a session takes its size from
+the single client looking at it and this one exists for about a tenth of a second.
+That is the shape the agent's first output is laid out at, until the first real
+pane resizes it; there is no size that avoids a reflow, and a common terminal
+shape makes it the smallest.
 
 **shift+enter reaches the program.** A legacy terminal cannot say it — enter is
 CR and CR carries no modifiers, so shift+enter, ctrl+enter and enter are the

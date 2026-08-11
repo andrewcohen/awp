@@ -490,9 +490,29 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 	// that deck can see.
 	if req.PaneHosted {
 		if promptArg := strings.TrimSpace(req.Prompt); promptArg != "" {
-			step("Park prompt for the agent")
-			if err := svc.RecordPendingPrompt(normalized, workspace.PendingPrompt{Text: promptArg}); err != nil {
-				return fmt.Errorf("park the prompt for %s: %w", normalized, err)
+			// Start the agent rather than only parking the prompt: this is what the
+			// tmux half below ends with, and a create with a prompt is a request for
+			// work to be under way, not for it to be waiting.
+			err := startHostedAgent(runner, hostedAgent{
+				project:   filepath.Base(repoRoot),
+				workspace: normalized,
+				repoRoot:  repoRoot,
+				dir:       wsPath,
+				prompt:    promptArg,
+			}, reporter)
+			if err != nil {
+				// Parking is the fallback, and it is a complete one: the agent pane
+				// delivers a parked prompt on first open, which is what happened before
+				// anything started an agent here. Say why it fell back, because a prompt
+				// that waits when it should not is otherwise indistinguishable from one
+				// that arrived.
+				if reporter != nil {
+					reporter.Log(fmt.Sprintf("could not start the agent (%v) — parking the prompt for the first pane instead", err))
+				}
+				step("Park prompt for the agent")
+				if perr := svc.RecordPendingPrompt(normalized, workspace.PendingPrompt{Text: promptArg}); perr != nil {
+					return fmt.Errorf("park the prompt for %s: %w", normalized, perr)
+				}
 			}
 		}
 		if err := invalidatePRStatusCacheRepo(repoRoot); err != nil && reporter != nil {
