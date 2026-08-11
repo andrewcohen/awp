@@ -912,11 +912,37 @@ func publishReviewFor(runner Runner) func(deckui.Item, string, string, bool) (st
 	}
 }
 
+// mergePRFor wires the viewer's `M` to the same `gh pr merge` the deck's `p m`
+// runs, against the PR the row is pinned to.
+//
+// The dry run is the command line rather than a gh call: what makes a merge
+// worth confirming is which PR and which strategy, both of which are known
+// locally — and asking GitHub to describe a merge before making it would put a
+// network round-trip between the keystroke and the box.
+//
+// Which means the viewer, unlike `p m`, does not refuse a PR that is already
+// closed before offering: that check reads the deck's cached PR status, which
+// the review surface does not have. gh refuses it, and the refusal is what the
+// report shows.
+func mergePRFor(runner Runner) func(deckui.Item, bool) (string, error) {
+	return func(item deckui.Item, dryRun bool) (string, error) {
+		if item.PRNumber <= 0 {
+			return "", errors.New("this workspace isn't linked to a PR (link one with `p #`)")
+		}
+		if dryRun {
+			return fmt.Sprintf("Runs:\n  gh pr merge %d --squash\n"+
+				"  squash by default; falls back to the merge queue if required", item.PRNumber), nil
+		}
+		return github.New(runner, item.RepoRoot).MergePR(item.PRNumber, nil)
+	}
+}
+
 // reviewStoreWithSend is the full store seam: load, save, and hand to the agent.
 func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentStore {
 	cs := reviewStoreFor(runner)
 	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
 	cs.Publish = publishReviewFor(runner)
+	cs.MergePR = mergePRFor(runner)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
 	cs.LoadThreads, cs.Resolve, cs.ReplyToThread = threadActionsFor(runner)
 	cs.LastSaved = lastSavedComment

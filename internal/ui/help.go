@@ -78,6 +78,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"T", "cycle GitHub threads shown: unresolved → all → none"},
 				{"enter", "fold / unfold the GitHub thread at the cursor"},
 				{"P", "publish: verdict → summary → preview of every call → send"},
+				{"M", "merge the PR: the exact call, then y — the deck's p m, from here"},
 			},
 		},
 		{
