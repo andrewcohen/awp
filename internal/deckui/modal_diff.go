@@ -127,6 +127,18 @@ type CommentStore struct {
 	// dryRun asks for the plan — the calls it would make — without making any of
 	// them, which is what the viewer shows before it will post anything.
 	Publish func(item Item, verdict, summary string, dryRun bool) (string, error)
+	// MergePR merges the item's PR and returns what gh reported. Nil leaves the
+	// viewer's `M` unavailable.
+	//
+	// dryRun asks for the call it would make without making it — the same
+	// contract Publish has, and what the viewer's confirm screen shows.
+	//
+	// Not a review-store operation, and here anyway: this struct is in practice
+	// the whole set of seams a host lends the review surface, and the alternative
+	// was a second bundle threaded through the same two call sites for one field.
+	// The deck's own `p m` does not go through it — that path has the row's
+	// cached PR status and the jobs subsystem, neither of which the viewer has.
+	MergePR func(item Item, dryRun bool) (string, error)
 }
 
 // CommentSender delivers a comment to a workspace's agent.
@@ -372,6 +384,12 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 		inner.PublishReview = func(verdict, summary string, dryRun bool) (string, error) {
 			return comments.Publish(item, verdict, summary, dryRun)
 		}
+	}
+	if comments.MergePR != nil && item.PRNumber > 0 {
+		// Gated on the PR here rather than refused later, because "this review has
+		// no PR" and "this host offers no merging" are one fact from the keyboard —
+		// the key does nothing — and the viewer says exactly that for a nil seam.
+		inner.MergePR = func(dryRun bool) (string, error) { return comments.MergePR(item, dryRun) }
 	}
 	if comments.SaveReviewed != nil {
 		inner.MarkReviewed = func(path, hash string) error { return comments.SaveReviewed(item, path, hash) }

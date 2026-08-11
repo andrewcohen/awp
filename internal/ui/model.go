@@ -144,6 +144,14 @@ type Model struct {
 	publishStage  publishStage
 	publishReport []string
 	publishScroll int
+	// The merge prompt (see merge.go), the same shape one screen shorter: merging
+	// is the prompt being up, mergeBusy a merge in flight — which blocks a second
+	// one, since gh has already been asked.
+	merging     bool
+	mergeBusy   bool
+	mergeStage  mergeStage
+	mergeReport []string
+	mergeScroll int
 	// summaryEditor is the review-body box inside that flow — the same compose box
 	// the stream uses, so a summary is written with the keys already learnt here.
 	summaryEditor commentEditor
@@ -244,6 +252,16 @@ type Model struct {
 	// publish prints. Nil leaves `P` unavailable, which it says rather than
 	// silently doing nothing.
 	PublishReview func(verdict, summary string, dryRun bool) (string, error)
+	// MergePR merges the PR this review is on, returning what gh reported —
+	// which is the whole outcome, since a squash that falls back to the merge
+	// queue says so there and nowhere else. Nil leaves `M` unavailable, which
+	// covers both reasons for it: no PR, or a host that offers no merging.
+	//
+	// dryRun asks for the call it would make without making it, the same
+	// contract PublishReview has. That is what the confirm screen shows, and it
+	// is also where a refusal that can be known in advance belongs — the
+	// reviewer finds out before the box appears rather than after confirming.
+	MergePR func(dryRun bool) (string, error)
 	// LoadComments re-reads the review's comments, so findings filed while the
 	// view is open appear without reopening it.
 	LoadComments func() ([]review.Comment, error)
@@ -470,7 +488,11 @@ func (m Model) Filtering() bool {
 	// view out from under someone typing a query. So does the publish prompt, where
 	// `esc` and `q` mean "don't publish" and a host that took them would close the
 	// whole view on someone who was declining to.
-	return m.focus == FocusFilter || m.focus == FocusSearch || m.editing || m.publishing
+	// The merge prompt is the same bargain with a worse failure: `q` there means
+	// "don't merge", and a host that closed the view instead would leave the
+	// reviewer unsure which of the two had happened.
+	return m.focus == FocusFilter || m.focus == FocusSearch || m.editing ||
+		m.publishing || m.merging
 }
 
 // HelpVisible reports whether the `?` overlay is up. Like Filtering, it tells a
@@ -640,6 +662,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case publishDoneMsg:
 		return m.applyPublishDone(msg)
+	case mergeDoneMsg:
+		return m.applyMergeDone(msg)
 	case threadReplyDoneMsg:
 		return m.applyThreadReplyDone(msg)
 	case tea.KeyPressMsg:
@@ -698,6 +722,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// "don't publish".
 	if m.publishing {
 		return m.handlePublishKey(msg)
+	}
+	// And so does the merge prompt, for the same reason: its `esc` means "don't
+	// merge", and nothing behind it is navigable.
+	if m.merging {
+		return m.handleMergeKey(msg)
 	}
 	// The overlay owns the keyboard while it is up: nothing behind it is
 	// navigable, so forwarding keys would move a cursor nobody can see. Scroll
@@ -835,6 +864,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "P":
 		m.beginPublish()
 		return m, nil
+	// Merging is about the PR as a whole, so it works from any pane too. Capital
+	// for the same reason `P` is: it leaves the machine, and it is the one key here
+	// that ends the change rather than describing it.
+	case "M":
+		return m, m.beginMerge()
 	case "tab", "shift+tab":
 		m.cycleFocus(key == "tab")
 		return m, nil
@@ -1386,6 +1420,9 @@ func (m Model) Body(width, height int) string {
 	}
 	if m.publishing {
 		return m.renderPublishOverlay(width, height)
+	}
+	if m.merging {
+		return m.renderMergeOverlay(width, height)
 	}
 	leftWidth, rightWidth := m.paneWidthsFor(width)
 	if m.hideLeft {
