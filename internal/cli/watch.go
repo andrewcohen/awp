@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/andrewcohen/awp/internal/config"
+	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
 
@@ -367,6 +368,14 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
+			return m, tea.Quit
+		case deckui.PaneLeaveKey:
+			// The watch view is what `W` runs, so under a deck that hands the
+			// terminal over it is the program holding the pane — and the deck,
+			// suspended, is not there to intercept its own leave key. Quitting
+			// here is what makes the pane come back, and it is only spellable
+			// in programs awp wrote: a third-party one in raw mode swallows the
+			// key with nobody in front of it to notice.
 			return m, tea.Quit
 		}
 	case tea.WindowSizeMsg:

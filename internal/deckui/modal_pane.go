@@ -13,13 +13,18 @@ import (
 	"github.com/andrewcohen/awp/internal/vterm"
 )
 
-// paneLeaveKey gives the keyboard back to the deck.
+// PaneLeaveKey gives the keyboard back to the deck.
 //
 // It has to be a key nothing inside the pane wants, because everything else
 // belongs to the program: esc, q and ctrl+c all mean something to an agent.
 // ctrl+\ is normally SIGQUIT, which is exactly why nothing interactive binds
 // it, and the deck reads it as a key because its own terminal is in raw mode.
-const paneLeaveKey = "ctrl+\\"
+//
+// Exported because a pane the deck has handed the terminal to is not reading
+// keys through here, so anything of awp's own that can be the program in one
+// has to answer for the key itself — see the watch view. One spelling, so the
+// hint the pane's chrome prints and the key those programs bind cannot drift.
+const PaneLeaveKey = "ctrl+\\"
 
 // PaneBackend turns a workspace and a window kind into a process the deck can
 // host on a pty it owns, instead of handing off to a tmux window.
@@ -357,7 +362,7 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.KeyPressMsg:
-		if msg.String() == paneLeaveKey {
+		if msg.String() == PaneLeaveKey {
 			return p.close(m)
 		}
 		p.term.SendKey(msg)
@@ -508,7 +513,7 @@ func (p *panePopover) renderPopover(m *Model) string {
 // how to leave on the right. It doubles as the status line the hint used to
 // have a row of its own for.
 func (p *panePopover) header(m *Model, w int) string {
-	hint := m.styles.PaneHint.Render(paneLeaveKey + " deck")
+	hint := m.styles.PaneHint.Render(PaneLeaveKey + " deck")
 	label := m.styles.PaneTitle.Render(truncate(p.label, w-lipgloss.Width(hint)-1))
 	gap := w - lipgloss.Width(label) - lipgloss.Width(hint)
 	if gap < 1 {
