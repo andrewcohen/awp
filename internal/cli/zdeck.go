@@ -118,8 +118,8 @@ type zmxPanes struct {
 // fixed kinds are in the panes map, and an action's command can only come from
 // the workspace's own config. Hence a method rather than a map lookup.
 func (z zmxPanes) specFor(item deckui.Item, kind string) (paneSpec, error) {
-	if name, ok := deckui.ActionFromPaneKind(kind); ok {
-		return z.actionSpec(item, name)
+	if _, ok := deckui.ActionFromPaneKind(kind); ok {
+		return z.actionSpec(item, kind)
 	}
 	spec, ok := panes[kind]
 	if !ok {
@@ -136,16 +136,23 @@ func (z zmxPanes) specFor(item deckui.Item, kind string) (paneSpec, error) {
 // session's own process, so a live session *is* a running server, the same
 // property that lets the deck read an agent's state off its session.
 //
-// The name is matched after sanitizing because a kind read back out of a session
-// name has already been through it: an action called "dev server" is `dev_server`
-// there, and comparing that against the config's spelling would never match.
-func (z zmxPanes) actionSpec(item deckui.Item, name string) (paneSpec, error) {
+// Matched as a whole kind reduced by zmx.SessionKind, on both sides, because a
+// kind that came back out of a session name has already been through that
+// reduction: an action called "dev server" is `action_dev_server` there, and one
+// with a name long enough to need shortening comes back shortened. Comparing
+// against the config's own spelling would miss both. Reducing the config's kind
+// the same way is what makes a shortened one still resolve to the action it was
+// made from — the rule holds by construction rather than by the two sides
+// agreeing to truncate identically.
+func (z zmxPanes) actionSpec(item deckui.Item, kind string) (paneSpec, error) {
+	name, _ := deckui.ActionFromPaneKind(kind)
 	root := strings.TrimSpace(item.RepoRoot)
 	if z.actionsFor == nil || root == "" {
 		return paneSpec{}, fmt.Errorf("run the %q action for %q: this deck cannot read the workspace's user actions", name, item.WorkspaceName)
 	}
+	want := zmx.SessionKind(kind)
 	for _, a := range z.actionsFor(root) {
-		if zmx.Sanitize(a.Name) != name {
+		if zmx.SessionKind(deckui.PaneKindForAction(a.Name)) != want {
 			continue
 		}
 		command := strings.TrimSpace(a.Command)
@@ -525,9 +532,9 @@ func (z zmxSessions) sessions(fast bool) deckSessionSnapshot {
 		return snap
 	}
 	snap.known = true
-	byStem := z.stems()
+	rows := z.knownRows()
 	for _, s := range list {
-		ref, kind, ok := z.refFor(s, byStem)
+		ref, kind, ok := z.refFor(s, rows)
 		if !ok {
 			// Not a session awp made. The deck has nothing to say about the
 			// rest of the user's zmx.
@@ -554,19 +561,28 @@ func (z zmxSessions) sessions(fast bool) deckSessionSnapshot {
 	return snap
 }
 
-// stems indexes the deck's own workspaces by the session-name stem each would
-// generate. Empty when no rows are wired, which leaves every session to the
-// name-reading fallback.
-func (z zmxSessions) stems() map[string]workspaceRef {
+// knownRows is the deck's workspaces, or nothing when none are wired — which
+// leaves every session to the name-reading fallback.
+func (z zmxSessions) knownRows() []workspaceRef {
 	if z.rows == nil {
 		return nil
 	}
-	rows := z.rows()
-	byStem := make(map[string]workspaceRef, len(rows))
+	return z.rows()
+}
+
+// rowForStem finds the workspace whose sessions carry this stem.
+//
+// A loop rather than a map lookup because a stem can be a shortened one, and
+// which shortening it is depends on how much room the kind left — so the question
+// is "could this row have produced it", which only the row can answer. See
+// zmx.StemMatches.
+func rowForStem(rows []workspaceRef, stem string) (workspaceRef, bool) {
 	for _, ref := range rows {
-		byStem[zmx.SessionStem(ref.project, ref.workspace)] = ref
+		if zmx.StemMatches(ref.project, ref.workspace, stem) {
+			return ref, true
+		}
 	}
-	return byStem
+	return workspaceRef{}, false
 }
 
 // refFor says which workspace a session belongs to, and which kind it is.
@@ -578,12 +594,12 @@ func (z zmxSessions) stems() map[string]workspaceRef {
 // deleted. Reading the name is last: lossy for a shortened or dot-containing
 // name, but it is what recognises a session as awp's at all, and being wrong
 // about which workspace a leftover belongs to is better than not seeing it.
-func (z zmxSessions) refFor(s zmx.Session, byStem map[string]workspaceRef) (workspaceRef, string, bool) {
+func (z zmxSessions) refFor(s zmx.Session, rows []workspaceRef) (workspaceRef, string, bool) {
 	stem, kind, ok := zmx.SplitSessionName(s.Name)
 	if !ok {
 		return workspaceRef{}, "", false
 	}
-	if ref, found := byStem[stem]; found {
+	if ref, found := rowForStem(rows, stem); found {
 		return ref, kind, true
 	}
 	project, workspace, labelKind, ok := s.Identity()
