@@ -772,6 +772,27 @@ in `zmx ls`, so they can be inspected and killed from outside awp. Requires
 zmx on PATH; zdeck refuses to start without it rather than failing on the
 first pane.
 
+**A session name is bounded, so a long one is shortened.** zmx turns a name into
+a socket path, and a unix socket address holds 104 bytes — with the daemon's
+socket directory under a macOS per-user TMPDIR that leaves **46** for the name.
+`awp.<project>.<workspace>.<kind>` passes that for ordinary input: a workspace
+named after a PR's head branch spends 24 bytes on its own, so
+`awp.alpha.pr-2336-dev-mlwzqyrmxslo.action_dev` is 47 and the pane could not
+open at all. When a name would not fit, the workspace part is cut short and a
+four-character fingerprint of the full name is appended —
+`awp.alpha.pr-2336-dev-mlwzqy-5118.action_dev`. The fingerprint is what keeps
+two workspaces named after the same PR from addressing one session; the kind is
+never touched, because it is what reopens the pane and what finds a user action's
+command. **A name that already fits is never rewritten**, so nothing running is
+renamed.
+
+Since a shortened name no longer contains the workspace's name, awp also writes
+the identity as zmx **labels** — `awp_project`, `awp_workspace`, `awp_kind` —
+which `zmx ls` prints inline. The deck matches a session to a row by generating
+the name that row would have rather than by reading the name it got, so row
+state is right whether or not a name was shortened; the labels are what still
+identify a session whose workspace has since been renamed or deleted.
+
 **`z` lists what is running.** A hosted session outlives the deck that opened
 it, so the set of live agents is real state — and until now the only way to
 see it was `zmx ls`, which prints dotted names, a unix timestamp and a full

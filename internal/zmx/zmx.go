@@ -12,6 +12,8 @@ package zmx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os/exec"
@@ -65,8 +67,23 @@ func (s Session) Live() bool { return !s.Ended }
 // create the session — so segments are joined with dots and anything outside
 // a conservative set is replaced.
 func SessionName(project, workspace, kind string) string {
-	return SessionStem(project, workspace) + "." + Sanitize(kind)
+	kind = SessionKind(kind)
+	// The stem gets whatever the kind does not need, so a name only loses
+	// anything when it would not otherwise exist. Every session in the socket
+	// directory today is one that fits, and a spelling that changed for no reason
+	// would leave all of them unrecognised — awp would start a second of each.
+	return shortenTo(SessionStem(project, workspace), MaxSessionName-1-len(kind)) + "." + kind
 }
+
+// SessionKind is the spelling of a kind inside a session name.
+//
+// Bounded like the stem, and for the same reason — but the reduction matters more
+// here, because a kind is read back and acted on: the sessions overlay reopens a
+// pane from it, and a user action's pane finds its command by matching it against
+// the config. So a caller holding a kind must compare against this rather than
+// against the kind it started with, which is what keeps a shortened one resolving
+// to the action it came from.
+func SessionKind(kind string) string { return shortenTo(Sanitize(kind), maxKind) }
 
 // SessionStem is the part of the name every one of a workspace's sessions
 // shares: awp, the project and the workspace, with only the kind still to come.
@@ -76,8 +93,96 @@ func SessionName(project, workspace, kind string) string {
 // since a name too long for zmx has to be shortened to exist and a shortened
 // segment is no longer the workspace's name. Generating the stem from the row is
 // right by construction either way.
+// Unshortened: this is the stem a name would have if it fit, and SessionName
+// shortens it against the room the kind leaves. A caller matching a session back
+// to a workspace uses StemMatches rather than comparing against this, because
+// the stem it holds may be a shortened one.
 func SessionStem(project, workspace string) string {
 	return "awp." + Sanitize(project) + "." + Sanitize(workspace)
+}
+
+// StemMatches reports whether stem — read off a session name — is the one this
+// workspace would produce.
+//
+// Two spellings can be right, and which one depends on how much room the kind
+// left, which the stem alone does not say. So the comparison reproduces the
+// shortening at the length the stem actually has: shortenTo is deterministic
+// given an input and a budget, so a stem this workspace generated matches at
+// exactly one length and no other workspace's does.
+//
+// This is why the deck asks per row rather than looking a stem up in a map. With
+// a handful of workspaces the loop costs nothing, and it means the name generator
+// is free to spend the budget however it likes without a second place having to
+// agree on the arithmetic.
+func StemMatches(project, workspace, stem string) bool {
+	full := SessionStem(project, workspace)
+	if stem == full {
+		return true
+	}
+	return len(stem) < len(full) && stem == shortenTo(full, len(stem))
+}
+
+// The budget a session name has, and how it is split.
+//
+// zmx turns a name into a socket path, so the name is bounded by what a unix
+// socket address can hold: sun_path is 104 bytes on darwin, and the daemon's
+// socket directory under a macOS per-user TMPDIR spends 56 of them. Measured
+// against the real daemon, which reports the number itself — 47 bytes is refused
+// with "max 46 for socket directory /var/folders/…/T/zmx-502".
+//
+// 46 is the floor rather than a guess at every machine: that TMPDIR is a fixed
+// width by construction, and a Linux socket dir (/run/user/<uid>, /tmp/zmx-<uid>)
+// is shorter, so a name that fits here fits there. If some environment is tighter
+// still, zmx's own error names its max and the directory, which is a better
+// message than any check here would write.
+//
+// The kind is bounded on its own and the stem gets the rest. The kind has to be
+// the fixed one because it is compared without reference to a workspace — a pane
+// resolves its user action by matching kinds — whereas a stem is only ever
+// compared against a workspace that can reproduce it.
+const (
+	// MaxSessionName is the longest name zmx will accept.
+	MaxSessionName = 46
+	// maxKind leaves room for `action_` plus a nine-character action name, which
+	// covers the ones anybody writes; longer ones are shortened like a stem. No
+	// kind in use today is anywhere near it, so nothing existing is renamed.
+	maxKind = 16
+)
+
+// shortenHashLen is how much of a name's fingerprint survives shortening: 4 hex
+// characters, 65536 buckets. It is not there to make collisions impossible, only
+// to make them not happen between the handful of workspaces one project has —
+// what it replaces is a plain truncation, under which every workspace sharing a
+// prefix collapses onto one session, and two agents would be one agent.
+const shortenHashLen = 4
+
+// shortenTo bounds a name segment, keeping the front of it and a fingerprint of
+// the whole.
+//
+// Truncation alone cannot be used: two workspaces named after the same PR (say
+// pr-2336-dev-mlwzqyrmxslo and pr-2336-dev-qqtnvbdlrxzz) share every character
+// the budget has room for, and would address one session — so one workspace's
+// `a` would open the other's agent. The fingerprint is of the untruncated input,
+// so it differs exactly when the inputs do.
+//
+// Deterministic, because the name is an address: the same row and kind have to
+// resolve to the same session on every pass, across restarts, from the deck and
+// from a detached create alike.
+func shortenTo(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	sum := sha256.Sum256([]byte(s))
+	fingerprint := hex.EncodeToString(sum[:])[:shortenHashLen]
+	// The separator is what stops a truncated name from reading as a real one
+	// that happens to end in hex.
+	keep := max - shortenHashLen - 1
+	if keep < 1 {
+		// No room to keep anything recognisable; the fingerprint alone is still a
+		// unique address, which is the part that cannot be given up.
+		return fingerprint
+	}
+	return strings.TrimRight(s[:keep], "-_.") + "-" + fingerprint
 }
 
 // SplitSessionName separates a name into the stem and the kind, for a caller
