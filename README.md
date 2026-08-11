@@ -743,6 +743,24 @@ every other key belongs to the program: `esc`, `q` and `ctrl+c` all mean
 something to an agent. Any window kind zdeck does not handle — the review
 window, the PR-description window — falls through to tmux exactly as before.
 
+Emulated panes all answer that key, because the deck reads it before forwarding
+anything to the program. Under `AWP_PANE_EXEC=1` the deck is suspended and not
+reading keys at all, so the key reaches the child, and what happens is the
+child's business:
+
+| pane | what ctrl+\ does under `AWP_PANE_EXEC=1` |
+|------|------------------------------------------|
+| agent, editor, user actions | Detaches. These run under `zmx attach`, and zmx's own detach key is also `ctrl+\` — the session keeps running, exactly as when the pane closes |
+| `W` watch | Leaves. It is awp's own program, so it binds the key itself |
+| `i` CI | Exits, by signal: a cooked-mode `bash -c`, so the line discipline turns the key into SIGQUIT |
+| `v` vcs | Nothing — jjui is in raw mode with nobody in front of it. Use jjui's own `q` |
+| shell | Nothing: interactive shells ignore SIGQUIT. Use `exit` / `ctrl+d` |
+
+The two that don't answer are third-party programs reading the real terminal,
+which is what handover means. Giving them the key needs something in front of
+them that reads the terminal first — either the emulator, or a `zmx` session of
+their own.
+
 A pane costs two columns and three rows: a border, and one header row carrying
 the workspace on the left and `ctrl+\ deck` on the right. There is no padding —
 unlike the deck's other overlays, which frame a fixed amount of awp's own text,

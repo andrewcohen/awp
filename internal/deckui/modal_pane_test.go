@@ -181,13 +181,13 @@ func TestOnlyTheLeaveKeyIsInterceptedInAPane(t *testing.T) {
 	} {
 		p.update(&m, k)
 		if m.active == nil {
-			t.Fatalf("%q closed the pane; only %s may", k.String(), paneLeaveKey)
+			t.Fatalf("%q closed the pane; only %s may", k.String(), PaneLeaveKey)
 		}
 	}
 
 	p.update(&m, tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl})
 	if m.active != nil {
-		t.Errorf("%s did not close the pane", paneLeaveKey)
+		t.Errorf("%s did not close the pane", PaneLeaveKey)
 	}
 }
 
@@ -314,7 +314,7 @@ func TestTheHeaderKeepsTheLeaveKeyEvenWhenNarrow(t *testing.T) {
 		if strings.Contains(header, "\n") {
 			t.Errorf("at %d columns the header wrapped onto a second row: %q", w, header)
 		}
-		if !strings.Contains(header, paneLeaveKey) {
+		if !strings.Contains(header, PaneLeaveKey) {
 			t.Errorf("at %d columns the header dropped the leave key: %q", w, header)
 		}
 	}
