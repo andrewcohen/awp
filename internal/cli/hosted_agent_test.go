@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,9 +43,13 @@ func zmxShim(t *testing.T) string {
 type liveSessionRunner struct {
 	name  string
 	after string
+	// calls is every zmx invocation, so a test can state the command awp made
+	// rather than infer it from a daemon it is not talking to.
+	calls [][]string
 }
 
 func (r *liveSessionRunner) Run(_ context.Context, _, name string, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string{name}, args...))
 	if name != "zmx" || len(args) == 0 || args[0] != "ls" {
 		return "", nil
 	}
@@ -206,6 +211,65 @@ func TestStartingTheAgentNeedsAPrompt(t *testing.T) {
 	}, nil); err == nil {
 		t.Fatal("started an agent with no prompt to start it for")
 	}
+}
+
+// TestTheStartedAgentSaysWhichWorkspaceItIsFor. A session name is bounded by the
+// socket path it becomes — 46 bytes against a macOS TMPDIR — so a workspace named
+// after a PR's head branch cannot fit its own name into one, and the name will
+// have to be shortened to exist. Identity therefore has to be stated rather than
+// spelled: the labels are what will still say which row this session belongs to
+// once its name no longer does.
+//
+// This is the one creation path that can label immediately, because StartDetached
+// waits for the daemon to list the session.
+func TestTheStartedAgentSaysWhichWorkspaceItIsFor(t *testing.T) {
+	argvLog := zmxShim(t)
+	dir := t.TempDir()
+	runner := &liveSessionRunner{name: "awp.repo.qa.agent", after: argvLog}
+	if err := startHostedAgent(runner, hostedAgent{
+		project: "repo", workspace: "qa", repoRoot: dir, dir: dir, prompt: "fix the tests",
+	}, nil); err != nil {
+		t.Fatalf("start the agent: %v", err)
+	}
+	var labelled string
+	for _, call := range runner.calls {
+		if len(call) > 2 && call[0] == "zmx" && call[1] == "set" {
+			labelled = strings.Join(call, " ")
+		}
+	}
+	if labelled == "" {
+		t.Fatalf("the agent's session was never labelled; calls: %v", runner.calls)
+	}
+	for _, want := range []string{"awp.repo.qa.agent", "awp_project=repo", "awp_workspace=qa", "awp_kind=agent"} {
+		if !strings.Contains(labelled, want) {
+			t.Errorf("the label call %q is missing %q", labelled, want)
+		}
+	}
+}
+
+// TestAnUnlabelledAgentIsStillStarted: the labels are bookkeeping, and the agent
+// is the point. A daemon that took the session but refused the labels has given
+// us a working agent addressable by name — failing the create there would throw
+// it away over a record of something we already know.
+func TestAnUnlabelledAgentIsStillStarted(t *testing.T) {
+	argvLog := zmxShim(t)
+	dir := t.TempDir()
+	runner := &refusesLabels{liveSessionRunner{name: "awp.repo.qa.agent", after: argvLog}}
+	if err := startHostedAgent(runner, hostedAgent{
+		project: "repo", workspace: "qa", repoRoot: dir, dir: dir, prompt: "fix the tests",
+	}, nil); err != nil {
+		t.Fatalf("a refused label failed the whole start: %v", err)
+	}
+}
+
+// refusesLabels answers `zmx set` with an error and everything else normally.
+type refusesLabels struct{ liveSessionRunner }
+
+func (r *refusesLabels) Run(ctx context.Context, dir, name string, args ...string) (string, error) {
+	if name == "zmx" && len(args) > 0 && args[0] == "set" {
+		return "", errors.New("no such session")
+	}
+	return r.liveSessionRunner.Run(ctx, dir, name, args...)
 }
 
 func slicesContains(haystack []string, want string) bool {

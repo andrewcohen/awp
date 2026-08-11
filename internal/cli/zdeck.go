@@ -650,7 +650,19 @@ func startHostedAgent(runner Runner, a hostedAgent, reporter deckui.Reporter) er
 	env := append(os.Environ(), workspaceEnvPairs(a.project, a.workspace, a.repoRoot)...)
 	name := zmx.SessionName(a.project, a.workspace, deckui.PaneKindAgent)
 	reporter.Step("Start the agent in " + name)
-	return zmxClientFor(runner).StartDetached(context.Background(), dir, name, argv, env)
+	client := zmxClientFor(runner)
+	if err := client.StartDetached(context.Background(), dir, name, argv, env); err != nil {
+		return err
+	}
+	// The session exists by here — StartDetached waits for the daemon to list it
+	// — so this is the one creation path that can state the identity immediately.
+	// Best-effort: a session whose labels did not land is still found by its
+	// name, and failing the create over bookkeeping would throw away a working
+	// agent.
+	if err := client.SetLabels(context.Background(), name, zmx.IdentityLabels(a.project, a.workspace, deckui.PaneKindAgent)); err != nil {
+		reporter.Log(fmt.Sprintf("could not label %s (%v) — it is still addressable by name", name, err))
+	}
+	return nil
 }
 
 // liveZmxAgent names the workspace's zmx agent session if its process is still
