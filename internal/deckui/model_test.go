@@ -2372,7 +2372,17 @@ func TestPRRepairPrompt(t *testing.T) {
 		{"approved — no review repair", PRStatus{Number: 17, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved}, "", true, "", nil},
 		{"review comments only (no formal verdict) — gated", PRStatus{Number: 18, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewRequired, HasReviewComments: true}, "", true, "",
 			[]string{"PR #18 has review comments from a reviewer", "understand each point", "wait for my approval", "Once I approve", "re-request review"}},
-		{"review comments but approved — suppressed", PRStatus{Number: 19, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved, HasReviewComments: true}, "", true, "", nil},
+		// Approving and still wanting something are not exclusive: a reviewer can
+		// approve with comments. Answering `p r` on such a PR with "nothing to
+		// repair" was the deck deciding on the user's behalf that a reviewer's
+		// remarks were settled. It is offered, and the prompt says the PR is
+		// approved so the agent checks which points are still open — the signal is
+		// "a COMMENTED review exists", which never says whether it was addressed.
+		{"review comments and approved — still offered, as points to check", PRStatus{Number: 19, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved, HasReviewComments: true}, "", true, "",
+			[]string{"PR #19 has review comments from a reviewer, on a PR that is already approved", "which points are still open at the current head", "wait for my approval"}},
+		// Still not a reviewer's prompt. Approval changed which PRs the issue is
+		// raised for, not whose issue it is.
+		{"review · comments on an approved PR — not the reviewer's to answer", PRStatus{Number: 20, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean, ReviewDecision: PRReviewApproved, HasReviewComments: true}, "", false, "", nil},
 
 		// Review tone (mine=false): investigate + report, no mutations.
 		{"review · merge conflicts only",
