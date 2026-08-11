@@ -110,6 +110,24 @@ func TestAWindowKeyHostsAPaneWhenABackendIsWired(t *testing.T) {
 	}
 }
 
+// TestClosingAPaneRunsTheBackendsCloseHook. The func the backend hands back with
+// the command is its only notice that the pane is over, and it carries work now
+// rather than only bookkeeping — under zdeck the agent pane's hook is what marks
+// the workspace read on the way out, which is the only thing that clears a badge
+// the agent raised while you were watching it. Leaving it uncalled loses that
+// silently: the pane still closes and the deck still refreshes.
+func TestClosingAPaneRunsTheBackendsCloseHook(t *testing.T) {
+	backend := allKinds()
+	m, p := openedPane(t, backend)
+	if backend.restored != 0 {
+		t.Fatalf("the close hook ran %d times while the pane was still open", backend.restored)
+	}
+	p.close(&m)
+	if backend.restored != 1 {
+		t.Errorf("the close hook ran %d times on close, want once", backend.restored)
+	}
+}
+
 // Without a backend the deck is exactly what it was: the key reaches the
 // handler and opens a tmux window.
 func TestWithoutABackendTheDeckIsUnchanged(t *testing.T) {

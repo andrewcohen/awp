@@ -37,6 +37,51 @@ func TestOpeningTheAgentClearsTheUnreadMark(t *testing.T) {
 	}
 }
 
+// TestLeavingTheAgentPaneClearsTheMarkAgain is the half that entry cannot cover.
+//
+// An agent going idle is an attention state, so the hook marks the workspace
+// unread — and the write-time suppression that exists for exactly this case ("do
+// not badge a workspace the user is looking at") asks tmux whether a client is
+// attached, which under a deck that hosts its own panes is nobody. So the mark
+// lands while you are sitting in the pane watching the agent finish, after the
+// entry that would have cleared it, and no later gesture clears it either: you
+// are already inside. Closing the pane is the moment the reading finished.
+func TestLeavingTheAgentPaneClearsTheMarkAgain(t *testing.T) {
+	svc := &promptSvc{}
+	_, onClose, err := unreadHost(svc, nil).Open(paneItem(), deckui.PaneKindAgent, 80, 24)
+	if err != nil {
+		t.Fatalf("open the agent pane: %v", err)
+	}
+	// Whatever entry cleared is not the point — this is a mark that arrived
+	// afterwards, while the pane was up.
+	svc.read = nil
+	if onClose == nil {
+		t.Fatal("the agent pane came back with nothing to run when it closes")
+	}
+	onClose()
+	if !slices.Contains(svc.read, paneItem().WorkspaceName) {
+		t.Errorf("marked read on close: %v, want the %q row", svc.read, paneItem().WorkspaceName)
+	}
+}
+
+// TestLeavingAnyOtherPaneLeavesTheMark: same reason the entry rule is narrow.
+// Closing jjui is not evidence anyone read what the agent said.
+func TestLeavingAnyOtherPaneLeavesTheMark(t *testing.T) {
+	for _, kind := range []string{"editor", "vcs", deckui.PaneKindCI, deckui.PaneKindWatch, ""} {
+		svc := &promptSvc{}
+		_, onClose, err := unreadHost(svc, nil).Open(paneItem(), kind, 80, 24)
+		if err != nil {
+			t.Fatalf("open the %q pane: %v", kind, err)
+		}
+		if onClose != nil {
+			onClose()
+		}
+		if len(svc.read) != 0 {
+			t.Errorf("closing the %q pane marked %v read, but it showed none of the agent's output", kind, svc.read)
+		}
+	}
+}
+
 // TestOnlyTheAgentPaneClearsTheMark is why this is narrower than the tmux rule.
 // The mark means the agent produced output you have not seen, and its own pane is
 // the only one that shows it. Under tmux any window switch cleared it because a

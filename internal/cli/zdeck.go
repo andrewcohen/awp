@@ -396,7 +396,18 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	// The session's env is fixed at creation, so a workspace renamed later
 	// leaves AWP_WORKSPACE stale here — the tmux path re-reads it from the
 	// session, and there is no zmx equivalent yet.
-	return zmx.AttachCmd(dir, name, argv, env), func() {}, nil
+	//
+	// Leaving the pane is the other half of reading it. An agent that goes idle
+	// while you sit in its pane marks the workspace unread from the hook, because
+	// the write-time suppression that would have stopped it asks tmux whether a
+	// client is attached and under this deck the answer is always nobody — and
+	// entry is already behind us, so nothing else would ever clear that mark.
+	// Closing the pane is the moment the reading finished.
+	onClose := func() {}
+	if kind == deckui.PaneKindAgent {
+		onClose = func() { z.markRead(item) }
+	}
+	return zmx.AttachCmd(dir, name, argv, env), onClose, nil
 }
 
 // SendPrompt delivers text to the workspace's agent — the same process `a`
