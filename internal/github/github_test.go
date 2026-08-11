@@ -371,9 +371,11 @@ func TestGetPRStatusParses(t *testing.T) {
 		Number: 1717, HeadRefName: "old/branch", HeadRefOid: "oldsha", Title: "Old PR",
 		URL: "https://github.com/o/r/pull/1717", State: PRStateOpen,
 		ReviewDecision: ReviewApproved, CIState: CIPassing, MergeStateStatus: MergeStateBehind,
-		// The team request carries no login and is dropped.
-		ReviewRequests: []string{"andrewcohen"},
-		Reviewers:      []string{"andrewcohen"},
+		// The two node kinds split by which field they carry: a user request
+		// has a login, a team request a slug.
+		ReviewRequests:     []string{"andrewcohen"},
+		ReviewRequestTeams: []string{"platform-team"},
+		Reviewers:          []string{"andrewcohen"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("GetPRStatus: got %+v want %+v", got, want)

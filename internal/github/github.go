@@ -226,12 +226,19 @@ type PRStatus struct {
 	ReviewDecision   ReviewDecision
 	CIState          CIState
 	MergeStateStatus MergeStateStatus
-	// ReviewRequests is the logins whose review is currently requested
-	// (team requests are skipped — they can't match a viewer login).
+	// ReviewRequests is the logins whose review is currently requested.
 	// GitHub puts a reviewer back in this set when the author
 	// re-requests their review, so "viewer ∈ ReviewRequests" covers both
 	// first requests and re-requests.
 	ReviewRequests []string
+	// ReviewRequestTeams is the teams whose review is requested, as slugs.
+	// GitHub reports them org-qualified ("acme-corp/consumer-team"), and a
+	// request can name a team instead of any individual — which is how
+	// whole repos assign review, and how a PR can be waiting on you while
+	// naming nobody. Reading a request means asking whether the viewer is
+	// in one of these as well as whether they are in ReviewRequests; see
+	// Viewer.ReviewRequested.
+	ReviewRequestTeams []string
 	// Reviewers is the logins with a latest review on record. A login in
 	// both Reviewers and ReviewRequests has been asked to review AGAIN —
 	// the re-request signal.
@@ -277,9 +284,11 @@ type rawPRStatus struct {
 	ReviewDecision    ReviewDecision   `json:"reviewDecision"`
 	StatusCheckRollup []rawCheck       `json:"statusCheckRollup"`
 	MergeStateStatus  MergeStateStatus `json:"mergeStateStatus"`
-	// reviewRequests mixes Users (login) and Teams (name/slug only).
+	// reviewRequests mixes Users (login) and Teams (name/slug, no login), so
+	// which field is set is what says which kind of node this is.
 	ReviewRequests []struct {
 		Login string `json:"login"`
+		Slug  string `json:"slug"`
 	} `json:"reviewRequests"`
 	LatestReviews []struct {
 		Author struct {
@@ -313,12 +322,24 @@ func (r rawPRStatus) hasReviewComments() bool {
 }
 
 // requestedLogins extracts the user logins whose review is requested,
-// dropping empties (team review requests carry no login).
+// dropping empties (a team review request carries no login).
 func (r rawPRStatus) requestedLogins() []string {
 	var out []string
 	for _, rr := range r.ReviewRequests {
 		if l := strings.TrimSpace(rr.Login); l != "" {
 			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// requestedTeams extracts the team slugs whose review is requested,
+// dropping empties (a user review request carries no slug).
+func (r rawPRStatus) requestedTeams() []string {
+	var out []string
+	for _, rr := range r.ReviewRequests {
+		if s := strings.TrimSpace(rr.Slug); s != "" {
+			out = append(out, s)
 		}
 	}
 	return out
@@ -366,22 +387,23 @@ func (c *Client) ListPRStatus() ([]PRStatus, error) {
 	statuses := make([]PRStatus, len(raws))
 	for i, r := range raws {
 		statuses[i] = PRStatus{
-			Number:            r.Number,
-			HeadRefName:       r.HeadRefName,
-			HeadRefOid:        r.HeadRefOid,
-			BaseRefName:       r.BaseRefName,
-			Title:             r.Title,
-			Author:            r.Author.Login,
-			URL:               r.URL,
-			State:             r.State,
-			IsDraft:           r.IsDraft,
-			ReviewDecision:    r.ReviewDecision,
-			CIState:           rollupCIState(r.StatusCheckRollup),
-			MergeStateStatus:  r.MergeStateStatus,
-			ReviewRequests:    r.requestedLogins(),
-			Reviewers:         r.reviewerLogins(),
-			HasReviewComments: r.hasReviewComments(),
-			Labels:            labelNames(r.Labels),
+			Number:             r.Number,
+			HeadRefName:        r.HeadRefName,
+			HeadRefOid:         r.HeadRefOid,
+			BaseRefName:        r.BaseRefName,
+			Title:              r.Title,
+			Author:             r.Author.Login,
+			URL:                r.URL,
+			State:              r.State,
+			IsDraft:            r.IsDraft,
+			ReviewDecision:     r.ReviewDecision,
+			CIState:            rollupCIState(r.StatusCheckRollup),
+			MergeStateStatus:   r.MergeStateStatus,
+			ReviewRequests:     r.requestedLogins(),
+			ReviewRequestTeams: r.requestedTeams(),
+			Reviewers:          r.reviewerLogins(),
+			HasReviewComments:  r.hasReviewComments(),
+			Labels:             labelNames(r.Labels),
 		}
 	}
 	return statuses, nil
@@ -571,22 +593,23 @@ func (c *Client) GetPRStatus(n int) (PRStatus, error) {
 		return PRStatus{}, fmt.Errorf("parse gh pr view %d: %w", n, err)
 	}
 	return PRStatus{
-		Number:            r.Number,
-		HeadRefName:       r.HeadRefName,
-		HeadRefOid:        r.HeadRefOid,
-		BaseRefName:       r.BaseRefName,
-		Title:             r.Title,
-		Author:            r.Author.Login,
-		URL:               r.URL,
-		State:             r.State,
-		IsDraft:           r.IsDraft,
-		ReviewDecision:    r.ReviewDecision,
-		CIState:           rollupCIState(r.StatusCheckRollup),
-		MergeStateStatus:  r.MergeStateStatus,
-		ReviewRequests:    r.requestedLogins(),
-		Reviewers:         r.reviewerLogins(),
-		HasReviewComments: r.hasReviewComments(),
-		Labels:            labelNames(r.Labels),
+		Number:             r.Number,
+		HeadRefName:        r.HeadRefName,
+		HeadRefOid:         r.HeadRefOid,
+		BaseRefName:        r.BaseRefName,
+		Title:              r.Title,
+		Author:             r.Author.Login,
+		URL:                r.URL,
+		State:              r.State,
+		IsDraft:            r.IsDraft,
+		ReviewDecision:     r.ReviewDecision,
+		CIState:            rollupCIState(r.StatusCheckRollup),
+		MergeStateStatus:   r.MergeStateStatus,
+		ReviewRequests:     r.requestedLogins(),
+		ReviewRequestTeams: r.requestedTeams(),
+		Reviewers:          r.reviewerLogins(),
+		HasReviewComments:  r.hasReviewComments(),
+		Labels:             labelNames(r.Labels),
 	}, nil
 }
 
@@ -604,6 +627,39 @@ func (c *Client) ViewerLogin() (string, error) {
 		return "", fmt.Errorf("gh api user: %w: %s", err, out)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// ViewerTeams returns the org-qualified slugs of the teams the
+// authenticated user belongs to — "acme-corp/consumer-team" — which is the
+// spelling review requests use. The API reports the org and the slug
+// separately, so they are joined here rather than at each comparison.
+//
+// Needed because a review request can name a team instead of a person: on a
+// PR requested from a team, nobody is in reviewRequests by login, and
+// without the viewer's own membership there is nothing to compare against.
+//
+// Reading teams needs the read:org scope, which `gh auth login` does not
+// grant by default. Callers treat any error as "teams unknown" and fall
+// back to login-only matching, so the cost of a token without it is that
+// team-assigned reviews stay quiet — the error says how to fix that.
+func (c *Client) ViewerTeams() ([]string, error) {
+	out, err := c.runner.Run(
+		context.Background(), c.dir,
+		"gh", "api", "user/teams", "--paginate",
+		"--jq", `.[] | (.organization.login + "/" + .slug)`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"gh api user/teams: %w: %s (a 403 here means the token lacks read:org — "+
+				"`gh auth refresh -s read:org` grants it)", err, out)
+	}
+	var teams []string
+	for _, line := range strings.Split(out, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			teams = append(teams, t)
+		}
+	}
+	return teams, nil
 }
 
 // rollupCIState reduces gh's heterogeneous statusCheckRollup list to a single
