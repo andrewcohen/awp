@@ -64,27 +64,59 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	// matter how it nests (repo → list/merge-queue → per-pin top-up).
 	sem := make(chan struct{}, prStatusMaxConcurrency)
 
-	// Resolve the viewer login concurrently with the per-repo fetches.
-	// The login is account-global and only feeds the viewer-relative
-	// review-requested signals, so its latency should overlap the bulk
-	// list calls rather than serialize in front of them. Repo goroutines
-	// block on getViewer() before projecting (the projection needs it),
-	// by which point this single fast `gh api user` call is usually done.
-	// A failure just disables those signals for this fetch; it must not
-	// fail the job.
-	var viewer string
+	// Resolve who the deck is being rendered for, concurrently with the
+	// per-repo fetches. The identity is account-global and only feeds the
+	// viewer-relative review-requested signals, so its latency should
+	// overlap the bulk list calls rather than serialize in front of them.
+	// Repo goroutines block on getViewer() before projecting (the
+	// projection needs it), by which point these two fast `gh api` calls
+	// are usually done. A failure just disables those signals for this
+	// fetch; it must not fail the job.
+	//
+	// The teams are fetched even though most requests name a person,
+	// because the case they cover is the one nothing else can see: a PR
+	// requested from a team names nobody, so without them it reads as
+	// wanting nothing. They come from a separate call that needs the
+	// read:org scope, so its failure is independent of the login's and is
+	// logged separately — a token without the scope leaves team-assigned
+	// reviews quiet exactly as they were before.
+	var viewer github.Viewer
 	viewerReady := make(chan struct{})
 	go func() {
 		defer close(viewerReady)
-		sem <- struct{}{}
-		defer func() { <-sem }()
-		if login, err := github.New(runner, repos[0]).ViewerLogin(); err == nil {
-			viewer = login
-		} else {
-			deckDebugLogf("prStatus viewer-login err: %v", err)
-		}
+		identity := github.New(runner, repos[0])
+		var (
+			login string
+			teams []string
+			wg    sync.WaitGroup
+		)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			l, err := identity.ViewerLogin()
+			if err != nil {
+				deckDebugLogf("prStatus viewer-login err: %v", err)
+				return
+			}
+			login = l
+		}()
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			t, err := identity.ViewerTeams()
+			if err != nil {
+				deckDebugLogf("prStatus viewer-teams err: %v", err)
+				return
+			}
+			teams = t
+		}()
+		wg.Wait()
+		viewer = github.Viewer{Login: login, Teams: teams}
 	}()
-	getViewer := func() string {
+	getViewer := func() github.Viewer {
 		<-viewerReady
 		return viewer
 	}
@@ -107,7 +139,7 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 // top-ups; every gh exec draws a slot from the shared sem so total
 // concurrency across all repos stays bounded. Errors are reported as job
 // Steps and logged but never abort sibling repos' fetches.
-func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem chan struct{}, getViewer func() string, reporter deckui.Reporter) {
+func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem chan struct{}, getViewer func() github.Viewer, reporter deckui.Reporter) {
 	started := time.Now()
 	gh := github.New(runner, repo)
 
@@ -298,7 +330,7 @@ func mirrorPinnedReviewThreads(gh *github.Client, repo string, byPR map[int][]st
 // repo can have hundreds of PRs more recent than the one a user is
 // trying to surface, and `gh pr list --limit 100` cuts them off. This
 // helper closes that gap.
-func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]deckui.PRStatus, pinned map[int]bool, viewer string, sem chan struct{}) map[string]deckui.PRStatus {
+func topUpMissingOverrides(gh *github.Client, repo string, byHead map[string]deckui.PRStatus, pinned map[int]bool, viewer github.Viewer, sem chan struct{}) map[string]deckui.PRStatus {
 	if len(pinned) == 0 {
 		return nil
 	}
