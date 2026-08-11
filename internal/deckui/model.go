@@ -6136,25 +6136,44 @@ func prRepairPrompt(s PRStatus, localCommitID string, mine bool) string {
 			// finding.
 		})
 	}
-	// Same gate as prReviewReqGlyph's owner branch so the chat glyph and
-	// the `p r` repair prompt never disagree: formal changes-requested OR
-	// plain review comments (which leave reviewDecision at REVIEW_REQUIRED),
-	// dropped once the PR is approved. The label adapts because "changes
+	// Formal changes-requested OR plain review comments, which leave
+	// reviewDecision at REVIEW_REQUIRED. The label adapts because "changes
 	// requested" misreads a COMMENTED review. Owner tone gates this issue
 	// (gated: true): the fix text only asks the agent to read and
 	// understand the feedback — proposing solutions, then acting (address /
 	// push / reply / re-request) after approval is driven by the
 	// approval-gated owner template below, so the fix text deliberately
 	// stops short of "push" / "re-request".
-	if s.ReviewDecision != PRReviewApproved &&
-		(s.ReviewDecision == PRReviewChangesRequested || s.HasReviewComments) {
+	//
+	// Approval does not drop it. Approving and still wanting something are not
+	// exclusive — a reviewer can approve with comments, and this used to answer
+	// `p r` on such a PR with "nothing to repair", which is the deck deciding on
+	// the user's behalf that a reviewer's remarks were settled.
+	//
+	// It does change what the agent is asked to do, because HasReviewComments is
+	// "a COMMENTED or CHANGES_REQUESTED review exists", not "it is still open" —
+	// so on an approved PR the feedback may well be addressed already, and the
+	// honest instruction is to check each point rather than to assume all of
+	// them. This is deliberately no longer the same condition as
+	// prReviewReqGlyph's: a glyph nobody asked for must not read as "act on
+	// this" for a PR that is ready to merge, while `p r` was asked for, and a
+	// prompt is one esc away.
+	if s.ReviewDecision == PRReviewChangesRequested || s.HasReviewComments {
+		approved := s.ReviewDecision == PRReviewApproved
 		label := "review comments from a reviewer"
-		if s.ReviewDecision == PRReviewChangesRequested {
+		switch {
+		case s.ReviewDecision == PRReviewChangesRequested:
 			label = "changes requested by a reviewer"
+		case approved:
+			label = "review comments from a reviewer, on a PR that is already approved"
+		}
+		fix := "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads) and understand each point"
+		if approved {
+			fix += ", then say which points are still open at the current head — the approval means some may already be addressed, and the ones that are need no further work"
 		}
 		issues = append(issues, issue{
 			label: label,
-			fix:   "read the review feedback (`gh pr view --comments`; `gh api repos/{owner}/{repo}/pulls/{n}/comments` for inline threads) and understand each point",
+			fix:   fix,
 			// No review action. Someone else's review of someone else's PR is not
 			// yours to answer, and asking you to summarize what they asked for read
 			// as being handed their work. Where it genuinely matters — a re-request,
@@ -6340,6 +6359,13 @@ func prLocalStaleGlyph(s PRStatus, localCommitID string) string {
 //     formal case, so HasReviewComments covers the comments that leave
 //     the verdict at REVIEW_REQUIRED. Suppressed once the PR is APPROVED
 //     — feedback on an approved PR is no longer the blocker.
+//
+// The last clause is where this parts company with prRepairPrompt, which
+// offers the same feedback as an issue even on an approved PR. The asymmetry
+// is the point: a glyph is unsolicited and sits on the row every frame, so
+// on a PR that is ready to merge it would read as "act on this" every time
+// you looked at the deck. `p r` is a key someone pressed, and answering it
+// with "nothing to repair" is worse than a prompt they can esc out of.
 //   - Someone else's PR + your review is requested (or re-requested —
 //     GitHub re-adds you to reviewRequests either way) → outline chat
 //     bubble (they want your eyes).
