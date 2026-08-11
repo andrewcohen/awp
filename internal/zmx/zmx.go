@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,14 +68,67 @@ func SessionName(project, workspace, kind string) string {
 	return "awp." + Sanitize(project) + "." + Sanitize(workspace) + "." + Sanitize(kind)
 }
 
+// The labels awp writes on every session it creates, holding the identity the
+// name used to be read for.
+//
+// A name cannot keep carrying it. zmx's names are bounded by the socket path
+// they become — measured at 46 bytes for a socket directory under a macOS
+// per-user TMPDIR — and awp.<project>.<workspace>.<kind> passes that for
+// ordinary input: a workspace named after a PR's head branch spends 24 of those
+// bytes on its own, and awp.alpha.pr-2336-dev-mlwzqyrmxslo.action_dev is 47.
+// A name that has to be shortened to exist can no longer be split back into the
+// parts it was made from, so the parts are stated separately.
+//
+// Labels rather than a file awp keeps: they live and die with the session, so
+// there is nothing to reconcile when one is killed from outside awp, and
+// `zmx ls` prints them inline — the read costs no extra call.
+const (
+	LabelProject   = "awp_project"
+	LabelWorkspace = "awp_workspace"
+	LabelKind      = "awp_kind"
+)
+
+// IdentityLabels is what awp sets on a session so it can be recognised later.
+//
+// Unsanitized, deliberately: a label is data rather than an address, so it can
+// hold the workspace's real name — which is what has to be matched against a
+// deck row, and what a human reading `zmx ls` wants to see.
+func IdentityLabels(project, workspace, kind string) map[string]string {
+	return map[string]string{
+		LabelProject:   strings.TrimSpace(project),
+		LabelWorkspace: strings.TrimSpace(workspace),
+		LabelKind:      strings.TrimSpace(kind),
+	}
+}
+
+// Identity says which workspace and kind this session belongs to, and whether
+// it is awp's at all.
+//
+// Labels first, then the name. The fallback is not only for sessions that
+// pre-date the labels — a session is created by an attach awp does not run
+// itself (the deck hands the command to a pane), so there is a window between
+// the session existing and its labels being set, and during it the name is all
+// there is.
+//
+// The name's answer is lossy in two ways worth knowing: a project or workspace
+// whose real name contained a dot comes back with an underscore, and one whose
+// name was shortened to fit comes back shortened. Both match no deck row, which
+// is why anything that must find the row should generate the name it expects
+// rather than read the name it got.
+func (s Session) Identity() (project, workspace, kind string, ok bool) {
+	if p, w := s.Labels[LabelProject], s.Labels[LabelWorkspace]; p != "" && w != "" {
+		return p, w, s.Labels[LabelKind], true
+	}
+	return ParseSessionName(s.Name)
+}
+
 // ParseSessionName reads a name SessionName produced back into its parts, and
 // reports whether it was one of ours at all — `zmx ls` lists every session on
 // the machine, including ones awp did not create.
 //
 // The split is safe because sanitize replaces a dot with an underscore, so no
-// segment can contain one. The cost is that a project or workspace whose real
-// name had a dot comes back with an underscore; the parts are for display and
-// for finding the matching deck row, not for addressing anything.
+// segment can contain one. Prefer Session.Identity, which asks the labels
+// first; this is the fallback for a session that has none.
 func ParseSessionName(name string) (project, workspace, kind string, ok bool) {
 	parts := strings.Split(name, ".")
 	if len(parts) != 4 || parts[0] != "awp" {
@@ -267,6 +321,41 @@ func (c Client) Paste(ctx context.Context, name, text string) error {
 	time.Sleep(pasteSettle)
 	if _, err := c.run(ctx, "", "zmx", "send", name, "\r"); err != nil {
 		return fmt.Errorf("submit the paste in zmx session %q: %w", name, err)
+	}
+	return nil
+}
+
+// SetLabels records key=value pairs on a session.
+//
+// Nothing here waits for the session to exist. The one caller that can be sure
+// it does is the detached start, which polls; the pane path hands its attach to
+// the deck to run, so its labels are written on a later pass once the session is
+// listed. That is why the labels are a refinement of the identity rather than
+// the only source of it — see Session.Identity.
+//
+// An empty value removes the label, which is zmx's own convention (`k=`), so a
+// caller does not need a second method to unset one.
+func (c Client) SetLabels(ctx context.Context, name string, labels map[string]string) error {
+	if err := named("label", name); err != nil {
+		return err
+	}
+	if len(labels) == 0 {
+		return nil
+	}
+	// Sorted, so the command is the same every time it is built from the same
+	// map — a test can state what it expects, and a log line does not shuffle.
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	args := make([]string, 0, len(keys)+2)
+	args = append(args, "set", name)
+	for _, k := range keys {
+		args = append(args, k+"="+labels[k])
+	}
+	if _, err := c.run(ctx, "", "zmx", args...); err != nil {
+		return fmt.Errorf("label zmx session %q: %w", name, err)
 	}
 	return nil
 }
