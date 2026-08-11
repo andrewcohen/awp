@@ -201,6 +201,36 @@ type paneExecDoneMsg struct {
 	err   error
 }
 
+// paneRef names a pane by the row it belongs to and the kind of program it
+// runs, which is everything openPane needs to open it again.
+//
+// The row's identity rather than the Item itself, because the Item captured at
+// open time is a snapshot: a rename changes the workspace's path and its
+// session name, and a delete leaves nothing to open at all. Resolving the row
+// again when the key is pressed means a workspace that has moved is followed
+// and one that is gone is a refusal — where a stored Item would open a pane on
+// a directory that is no longer there.
+type paneRef struct {
+	project   string
+	workspace string
+	kind      string
+}
+
+// set reports whether a pane has been opened yet, so L can say so rather than
+// opening the zero row's shell.
+func (r paneRef) set() bool { return strings.TrimSpace(r.workspace) != "" }
+
+// matches is the row-identity comparison, in one place because the deck asks it
+// of both the scoped list and the unscoped one.
+func (r paneRef) matches(it Item) bool {
+	return it.ProjectName == r.project && it.WorkspaceName == r.workspace
+}
+
+// label is the pane in the words a status line uses: the program, then the row.
+func (r paneRef) label() string {
+	return PaneLabel(r.kind) + " · " + r.project + "/" + r.workspace
+}
+
 // openPane hosts the given window kind for the selected row. It reports false
 // when there is no backend for it, so the caller can fall back to tmux.
 func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
@@ -221,7 +251,15 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		m.status = PaneLabel(kind) + ": " + err.Error()
 		return nil, true
 	}
+	// Recorded here rather than at the top, so a kind the backend refused or an
+	// open that failed is not somewhere L claims you can go back to. Recorded on
+	// the way in rather than on the way out because the two are the same answer —
+	// the pane you are in is the pane you last left — and leaving happens down
+	// several paths (ctrl+\, the program exiting, a handover returning) that
+	// would each have to remember.
+	ref := paneRef{project: item.ProjectName, workspace: item.WorkspaceName, kind: kind}
 	if handover {
+		m.lastPane = ref
 		return m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
@@ -243,8 +281,63 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		opened:  time.Now(),
 	}
 	m.active = p
+	m.lastPane = ref
 	m.status = ""
 	return tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
+}
+
+// reopenLastPane puts you back in the pane you were last in, which is what L
+// means on a deck that hosts its own panes.
+//
+// `tmux switch-client -l` is the same gesture one substrate over — you left
+// where you were working to look at something, and this is the way back without
+// having to find the row again. It reports false only when there is no pane
+// backend at all, so the tmux deck's L keeps going to tmux; every other outcome
+// is handled here, because a key that silently does nothing reads as broken.
+func (m *Model) reopenLastPane() (tea.Cmd, bool) {
+	if m.panes == nil {
+		return nil, false
+	}
+	ref := m.lastPane
+	if !ref.set() {
+		m.status = "no pane to go back to yet — open one first (a agent, e editor, v vcs, s shell)"
+		return nil, true
+	}
+	// The scoped list first, so the cursor can land on the row: leaving the pane
+	// again has to put you on the row the pane was, or L and ctrl+\ disagree
+	// about where you are.
+	for i, it := range m.items() {
+		if ref.matches(it) {
+			m.cursor = i
+			return m.openLastPaneRow(it, ref)
+		}
+	}
+	// Not in the current scope — an agent that exited drops out of attention —
+	// but the pane is still the one you were in, and refusing to go back to it
+	// because of a filter would make L depend on which list you are looking at.
+	// No cursor move: there is no row here to move it to.
+	for _, it := range m.itemsAll {
+		if ref.matches(it) {
+			return m.openLastPaneRow(it, ref)
+		}
+	}
+	m.status = ref.label() + ": that workspace is not on the deck any more"
+	return nil, true
+}
+
+// openLastPaneRow is the tail of reopenLastPane, shared by the two lookups.
+func (m *Model) openLastPaneRow(it Item, ref paneRef) (tea.Cmd, bool) {
+	if m2, blocked := m.blockIfSettingUp(it); blocked {
+		*m = m2
+		return nil, true
+	}
+	cmd, handled := m.openPane(it, ref.kind)
+	if !handled {
+		// The backend has stopped describing the kind since — a user action
+		// deleted from the config is the way this happens.
+		m.status = ref.label() + ": this deck has no pane for that any more"
+	}
+	return cmd, true
 }
 
 // handOverTerminal suspends the deck and gives the child the real tty.
