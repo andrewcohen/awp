@@ -517,6 +517,14 @@ func paneHostAction(panes paneHost, req deckui.ActionRequest, reporter deckui.Re
 	case deckui.ActionLastSession:
 		// `tmux switch-client -l` from outside tmux exits 0 having done
 		// nothing, so without this the key is a silent no-op.
+		//
+		// L no longer arrives here: a deck with a pane backend answers it itself
+		// by reopening the pane you were last in, which is the same gesture with
+		// the tmux client removed. This stays because the refusal, not the
+		// no-op, is the right answer for an ActionLastSession that reaches a
+		// pane host by some other route — and it is the one switch that decides
+		// which actions tmux gets, so an action being absent from it is what
+		// "falls through" means.
 		return errors.New("last session: nothing to switch to — this deck hosts its own panes"), true
 	case deckui.ActionOpenWindow, deckui.ActionCustom, deckui.ActionSummon, deckui.ActionCI:
 		// Everything here reaches openNamedWindow or openCustomActionWindow,

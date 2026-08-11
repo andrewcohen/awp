@@ -285,7 +285,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
 | `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
-| `L` | Switch to last tmux session |
+| `L` | Back to the pane you were last in — the way in from the row list without finding the row again, after you left a pane with `ctrl+\` to look something up. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving the pane again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and `L` is about where you have been, not about which list you are looking at. Under `awp deck`, which hosts no panes, `L` is `tmux switch-client -l` as before. |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
 | `d` | Open the selected workspace's auto-discovered dev URL in your default browser |
@@ -830,10 +830,16 @@ will not *start* an agent that isn't running from the send-prompt key; it says
 `no agent running for <workspace> — press a to start one`. (A create with a
 prompt does start one — see below — but `A` is for talking to an agent that is
 already there, and starting one to receive a message you could have opened the
-pane to type would be a surprise.) `,` (switch to the
-last tmux session) reports that there is nothing to switch to, rather than
-appearing to work — `tmux switch-client -l` from outside tmux exits 0 having
-done nothing.
+pane to type would be a surprise.)
+
+**`L` goes back to the last pane.** Under `awp deck` the key is `tmux
+switch-client -l`, which from outside tmux exits 0 having done nothing — so
+under zdeck it used to say there was nothing to switch to. The gesture is worth
+just as much with panes, though: you left the agent with `ctrl+\` to check a row
+and `L` is the way back. The deck records the workspace and kind of every pane it
+opens and reopens that one, resolving the row at press time — see the key table
+above. Before any pane has been opened it says so rather than opening the
+selected row's shell.
 
 **Creating a workspace with a prompt starts its agent.** The create runs as a
 detached subprocess, so there is no terminal to hand a hosted agent — but it does

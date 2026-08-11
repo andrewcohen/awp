@@ -852,6 +852,10 @@ type Model struct {
 	// way; only where the process lives differs.
 	panes   PaneBackend
 	paneGen int
+	// lastPane is the pane the deck most recently opened, which is where L goes
+	// back to. Zero until one has been opened. See paneRef for why it is the
+	// row's identity rather than the row.
+	lastPane paneRef
 	// hostColors is what this deck's own terminal looks like, asked for at boot
 	// and answered asynchronously. A pane hands it to its emulator so a hosted
 	// program that asks what colour its background is gets the real one — see
@@ -2675,6 +2679,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		case key.Matches(msg, km.CIWindow):
 			return m.trigger(ActionCI, "")
 		case key.Matches(msg, km.LastSession):
+			// A deck that hosts its own panes answers this itself: there is no
+			// other tmux client to switch to, and the pane you were in is
+			// something only the deck knows about. Everything below is the tmux
+			// deck, where L is `tmux switch-client -l`.
+			if cmd, handled := (&m).reopenLastPane(); handled {
+				return m, cmd
+			}
 			if m.handler == nil {
 				return m, nil
 			}
@@ -5216,7 +5227,7 @@ func deckKeyGroups() []keyGroup {
 				{"/", "filter rows · esc clears"},
 				{"f", "find: collapse to sections → expand one → jump"},
 				{"P", "cycle scope (all → attention → inbox)"},
-				{"L", "switch to last tmux session"},
+				{"L", "back to the last pane (tmux: last session)"},
 			},
 		},
 		{
