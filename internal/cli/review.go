@@ -232,9 +232,25 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 	// The PR description is not lost with the window: `p d` renders it in the
 	// deck, which is where a pane-hosted deck was always going to read it.
 	if opts.paneHosted {
-		reporter.Step("Park the review prompt for the agent")
-		if err := svc.RecordPendingPrompt(name, workspace.PendingPrompt{Text: prompt, Review: true}); err != nil {
-			return fmt.Errorf("park the review prompt for %s: %w", name, err)
+		// Start the reviewer, the way the tmux half below does. A review workspace
+		// exists to be reviewed now, so the case for starting the agent rather than
+		// waiting to be looked at is stronger here than for a plain create.
+		err := startHostedAgent(runner, hostedAgent{
+			project:   project,
+			workspace: name,
+			repoRoot:  repoRoot,
+			dir:       wsPath,
+			prompt:    prompt,
+			review:    true,
+		}, reporter)
+		if err != nil {
+			// Parked instead, which the agent pane delivers on first open — and it
+			// carries the review flavor, so the agent it starts is still a reviewer.
+			reporter.Log(fmt.Sprintf("could not start the reviewer (%v) — parking the review prompt for the first pane instead", err))
+			reporter.Step("Park the review prompt for the agent")
+			if perr := svc.RecordPendingPrompt(name, workspace.PendingPrompt{Text: prompt, Review: true}); perr != nil {
+				return fmt.Errorf("park the review prompt for %s: %w", name, perr)
+			}
 		}
 		return nil
 	}

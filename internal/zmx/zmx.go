@@ -13,10 +13,13 @@ package zmx
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/creack/pty"
 
 	"github.com/andrewcohen/awp/internal/vterm"
 )
@@ -311,6 +314,104 @@ func AttachCmd(dir, name string, argv, env []string) *exec.Cmd {
 	cmd.Dir = dir
 	cmd.Env = vterm.Env(env)
 	return cmd
+}
+
+// The size of the pty a detached start allocates, and how long it waits for the
+// daemon to report the session.
+//
+// A session takes its size from the single client looking at it, and this client
+// exists for about a tenth of a second — so the numbers here are what the
+// program's first output is laid out at, until the first real client resizes it.
+// A common terminal shape rather than the 80x24 default, because that is what
+// makes the reflow on first attach small; there is no size that avoids one.
+const (
+	detachedCols       = 120
+	detachedRows       = 40
+	detachedPoll       = 100 * time.Millisecond
+	detachedAppearWait = 5 * time.Second
+)
+
+// StartDetached creates a session running argv and leaves it running with no
+// client attached.
+//
+// This is how a process gets started for someone who is not watching: a
+// workspace created with a prompt should have its agent working on it before
+// anyone opens a pane, which is what the tmux path does by starting the agent in
+// a session and switching to it.
+//
+// It goes through attach and a pty because the two obvious shortcuts are both
+// wrong. `zmx run -d` creates the session detached, but its process is a login
+// bash with the command typed at the prompt — so "is the agent still running"
+// stops being answerable (see AttachCmd), which is the property the deck reads a
+// row's agent state from. And attach needs a tty on stdin: measured, `setsid zmx
+// attach <name> <cmd> </dev/null` creates nothing at all.
+//
+// So: allocate a pty, attach on it, wait for the daemon to list the session, and
+// throw the client away. Losing a client is not losing the session — that is what
+// long-lived means, and it is what closing a pane does every day.
+//
+// The client is always ended before this returns, on every path. A detached
+// create runs in a subprocess that exits moments later, and an attach client
+// left behind reparents to init holding a pty nobody will ever read.
+func (c Client) StartDetached(ctx context.Context, dir, name string, argv, env []string) error {
+	if err := named("start", name); err != nil {
+		return err
+	}
+	if len(argv) == 0 {
+		return fmt.Errorf("start zmx session %q: no command to run in it", name)
+	}
+	cmd := AttachCmd(dir, name, argv, env)
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: detachedCols, Rows: detachedRows})
+	if err != nil {
+		return fmt.Errorf("start zmx session %q on a pty: %w", name, err)
+	}
+	defer func() { _ = ptmx.Close() }()
+	// Read the pty and drop what comes out. Without a reader the program blocks
+	// on a full buffer as soon as it prints more than a pipe's worth, which for an
+	// agent's banner is immediately.
+	go func() { _, _ = io.Copy(io.Discard, ptmx) }()
+
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	appeared := time.After(detachedAppearWait)
+	tick := time.NewTicker(detachedPoll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			endClient(cmd)
+			return fmt.Errorf("start zmx session %q: %w", name, ctx.Err())
+		case err := <-exited:
+			// The client is gone and the session never appeared, so the reason went
+			// to the pty we are discarding. Name the likeliest cause instead.
+			return fmt.Errorf("start zmx session %q: the attach exited before the session appeared (%v) — is the zmx daemon running?", name, err)
+		case <-appeared:
+			endClient(cmd)
+			return fmt.Errorf("start zmx session %q: the daemon did not list it within %s", name, detachedAppearWait)
+		case <-tick.C:
+			// Live, not merely listed: a session whose command has already exited is
+			// one this failed to start, and reporting success would leave the caller
+			// thinking an agent is working.
+			s, found, err := c.Lookup(ctx, name)
+			if err != nil || !found || !s.Live() {
+				continue
+			}
+			endClient(cmd)
+			return nil
+		}
+	}
+}
+
+// endClient stops the attach client without waiting on the session it made.
+func endClient(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	// Reaped by the Wait already running in StartDetached, so nothing here has to
+	// collect it — and nothing here may, since two Waits on one process is an
+	// error.
 }
 
 // Command is a process awp hosts directly, with no session behind it, for
