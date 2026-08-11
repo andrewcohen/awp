@@ -1049,7 +1049,12 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithJobRetryHandler(asyncRetry).
 		WithJobDeleteWorkspaceRetryHandler(asyncDeleteRetry)
 	if stop, perr := startDeckProfile(); perr != nil {
-		// Diagnostics must never stop the deck opening.
+		// Diagnostics must never stop the deck opening — but the operator
+		// asked for a profile and is not getting one, and the trace log they
+		// would have to read to find that out is itself behind another
+		// variable. The deck's alt-screen restores the primary screen on
+		// exit, so a line here is still on screen when they come back.
+		fmt.Fprintf(os.Stderr, "awp: %v\n", perr)
 		deckDebugLogf("pprof: %v", perr)
 	} else if stop != nil {
 		defer stop()
@@ -1130,7 +1135,8 @@ func quitOnHangup(program *tea.Program) (stop func()) {
 }
 
 // startDeckProfile writes a CPU profile of the whole deck session when
-// AWP_PPROF names a path, and returns the func that closes it.
+// AWP_PPROF names a path, and returns the func that closes it. A value that
+// is plainly a boolean is refused rather than used as a filename.
 //
 //	AWP_PPROF=/tmp/deck.out awp deck    # do the slow thing, then quit
 //	go tool pprof -top -nodecount=30 /tmp/deck.out
@@ -1143,6 +1149,21 @@ func startDeckProfile() (func(), error) {
 	path := strings.TrimSpace(os.Getenv("AWP_PPROF"))
 	if path == "" {
 		return nil, nil
+	}
+	// The variable reads like a switch and is a path, so the plausible
+	// spellings of "on" are also perfectly good filenames: AWP_PPROF=true
+	// wrote a profile to ./true, which then got committed. Each half of this
+	// does what the value meant as far as it can — an off-ish value is a
+	// request for no profile, which needs no path and no complaint, while an
+	// on-ish one is a request this cannot honour without being told where.
+	switch strings.ToLower(path) {
+	case "0", "false", "no", "off", "n":
+		return nil, nil
+	case "1", "true", "yes", "on", "y":
+		return nil, fmt.Errorf(
+			"AWP_PPROF=%s: AWP_PPROF is the file to write the CPU profile to, not a switch — "+
+				"give it a path (AWP_PPROF=$TMPDIR/deck.pprof awp deck), then read it with "+
+				"`go tool pprof -top $TMPDIR/deck.pprof`", path)
 	}
 	f, err := os.Create(path) //nolint:gosec // the path is the operator's own choice
 	if err != nil {

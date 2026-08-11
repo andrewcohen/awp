@@ -921,3 +921,12 @@ AWP_PANE_LOG=/tmp/awp.log AWP_FRAME_LOG=/tmp/awp.log awp zdeck
 
 Escape sequences are written quoted (`"\x1b[2mdim"`), so the file is safe to
 `cat` — a log of raw escapes would reprogram whichever terminal read it.
+
+Two more diagnostics, both off unless set:
+
+| Variable | Records |
+|----------|---------|
+| `AWP_TRACE=1` | One line per frame into `/tmp/awp-deck.log`: what awp's own render cost, and the gap since the previous frame. Also where best-effort failures the deck deliberately doesn't surface get written. |
+| `AWP_PPROF=<path>` | A CPU profile of the whole deck session, written to that path on exit. Read it with `go tool pprof -top -nodecount=30 <path>`. |
+
+`AWP_PPROF` is **a path, not a switch** — and it is refused if you give it one, because every spelling of "on" is also a valid filename. `AWP_PPROF=true awp deck` wrote a 26 KB profile to a file called `true` in whatever directory you launched from, which is how one ended up committed to this repo. An off-ish value (`0`, `false`, `no`, `off`) is honoured as "no profile"; an on-ish one (`1`, `true`, `yes`, `on`) prints what it wanted instead and opens the deck without profiling.
