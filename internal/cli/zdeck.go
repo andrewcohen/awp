@@ -181,6 +181,30 @@ func (z zmxPanes) takePendingPrompt(item deckui.Item) workspace.PendingPrompt {
 	return p
 }
 
+// markRead clears the workspace's unread mark, because the user is now looking
+// at the thing it was pointing at.
+//
+// Every tmux window switch does this — openWorkspaceSession, openNamedWindow,
+// the CI window, a focused user action — so under tmux reading the agent's
+// output clears the badge. No pane path did, so the dot and the attention count
+// survived reading the very output they were about.
+//
+// Narrower than the tmux rule on purpose: only the agent pane. The mark means
+// the agent produced output you have not seen, and the agent's pane is the only
+// one that shows it. Under tmux any window switch cleared it because a switch
+// puts you in the session with the agent one key away; here the panes are
+// separate surfaces, so opening jjui is not evidence you read anything.
+//
+// Best-effort, and deliberately silent: the pane is already opening, there is
+// nowhere to report to, and an unread dot that outlives its output is a smaller
+// problem than a pane that refuses to open over a state write.
+func (z zmxPanes) markRead(item deckui.Item) {
+	if z.svcFor == nil || strings.TrimSpace(item.RepoRoot) == "" {
+		return
+	}
+	_ = z.svcFor(item.RepoRoot).MarkRead(item.WorkspaceName)
+}
+
 // Describes claims a kind for the pane path rather than tmux.
 //
 // Every user action is claimed on the strength of the prefix alone, without
@@ -357,6 +381,10 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 				return nil, nil, err
 			}
 		}
+		// Opening the agent is reading what it said, so the mark it said it with
+		// goes. Last, after the delivery that can still fail: a pane that did not
+		// open has shown nobody anything.
+		z.markRead(item)
 	}
 	// One command both creates and attaches. Nothing labels the session,
 	// because SessionName already spells the project, the workspace and the
