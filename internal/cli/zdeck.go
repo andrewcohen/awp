@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/workspace"
 	"github.com/andrewcohen/awp/internal/zmx"
 )
@@ -450,7 +452,32 @@ func (z zmxPanes) SendPrompt(item deckui.Item, text string, reporter deckui.Repo
 // sessionSource is the substrate zdeck's long-lived processes live on, so the
 // deck reads zmx rather than tmux. Same client, so a row cannot describe one
 // substrate while the keys act on the other.
-func (z zmxPanes) sessionSource() deckSessions { return zmxSessions{client: z.client} }
+func (z zmxPanes) sessionSource() deckSessions {
+	return zmxSessions{client: z.client, rows: knownWorkspaceRefs}
+}
+
+// knownWorkspaceRefs is every workspace in the global store, as the deck's own
+// (project, workspace) pairs.
+//
+// The same read loadDeckItems does. Duplicating it costs one JSON file per
+// refresh and buys the session source the one thing it cannot get from a session
+// name: which workspaces exist, so a name can be generated and matched instead
+// of parsed. A read that fails returns nothing, which leaves every session to
+// the name-reading fallback rather than emptying the deck.
+func knownWorkspaceRefs() []workspaceRef {
+	byRepo, err := state.NewJSONStore().LoadAll()
+	if err != nil {
+		return nil
+	}
+	var refs []workspaceRef
+	for root, entries := range byRepo {
+		project := strings.TrimSpace(filepath.Base(filepath.Clean(root)))
+		for _, e := range entries {
+			refs = append(refs, workspaceRef{project: project, workspace: e.Name})
+		}
+	}
+	return refs
+}
 
 // zmxSessions answers the deck's session questions from `zmx ls`.
 //
@@ -459,7 +486,25 @@ func (z zmxPanes) sessionSource() deckSessions { return zmxSessions{client: z.cl
 // here, and that is the honest answer: zdeck cannot show it to you, `a` will
 // not take you to it, and calling it active is exactly the stale read the
 // session-truth seam exists to remove.
-type zmxSessions struct{ client zmx.Client }
+type zmxSessions struct {
+	client zmx.Client
+	// rows names the workspaces the deck knows about, so a session can be
+	// matched to one by generating the name that workspace would have rather
+	// than by reading the name it got.
+	//
+	// The direction matters because a name too long for zmx has to be shortened
+	// to exist, and a shortened name no longer contains the workspace's name —
+	// so reading it back would fail to match exactly the workspaces the
+	// shortening is for, and their agents would read as having no session at
+	// all. Generating is right whether or not the name was shortened.
+	//
+	// A func rather than a value: workspaces come and go while the deck is open,
+	// and a snapshot taken at construction would stop including new ones. Nil
+	// falls back to reading the name, which is also what happens for a session
+	// no row claims — that is how a leftover session with no workspace behind it
+	// is still recognised as awp's.
+	rows func() []workspaceRef
+}
 
 // sessions reads every awp session and folds it onto the workspace it names.
 //
@@ -480,14 +525,14 @@ func (z zmxSessions) sessions(fast bool) deckSessionSnapshot {
 		return snap
 	}
 	snap.known = true
+	byStem := z.stems()
 	for _, s := range list {
-		project, ws, kind, ok := zmx.ParseSessionName(s.Name)
+		ref, kind, ok := z.refFor(s, byStem)
 		if !ok {
 			// Not a session awp made. The deck has nothing to say about the
 			// rest of the user's zmx.
 			continue
 		}
-		ref := workspaceRef{project: project, workspace: ws}
 		f := snap.byWorkspace[ref]
 		f.present = true
 		switch {
@@ -507,6 +552,48 @@ func (z zmxSessions) sessions(fast bool) deckSessionSnapshot {
 		snap.byWorkspace[ref] = f
 	}
 	return snap
+}
+
+// stems indexes the deck's own workspaces by the session-name stem each would
+// generate. Empty when no rows are wired, which leaves every session to the
+// name-reading fallback.
+func (z zmxSessions) stems() map[string]workspaceRef {
+	if z.rows == nil {
+		return nil
+	}
+	rows := z.rows()
+	byStem := make(map[string]workspaceRef, len(rows))
+	for _, ref := range rows {
+		byStem[zmx.SessionStem(ref.project, ref.workspace)] = ref
+	}
+	return byStem
+}
+
+// refFor says which workspace a session belongs to, and which kind it is.
+//
+// Three answers in order of how much they can be trusted. A stem this deck
+// generated is exact — the row is where the name came from. The session's own
+// labels are next, and hold the workspace's real name even when the stem was
+// shortened, which covers a session whose row has since been renamed or
+// deleted. Reading the name is last: lossy for a shortened or dot-containing
+// name, but it is what recognises a session as awp's at all, and being wrong
+// about which workspace a leftover belongs to is better than not seeing it.
+func (z zmxSessions) refFor(s zmx.Session, byStem map[string]workspaceRef) (workspaceRef, string, bool) {
+	stem, kind, ok := zmx.SplitSessionName(s.Name)
+	if !ok {
+		return workspaceRef{}, "", false
+	}
+	if ref, found := byStem[stem]; found {
+		return ref, kind, true
+	}
+	project, workspace, labelKind, ok := s.Identity()
+	if !ok {
+		return workspaceRef{}, "", false
+	}
+	if labelKind != "" {
+		kind = labelKind
+	}
+	return workspaceRef{project: project, workspace: workspace}, kind, true
 }
 
 // zmxWorkspaceRef reads the workspace out of a zmx session name, for the

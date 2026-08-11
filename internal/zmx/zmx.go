@@ -65,7 +65,34 @@ func (s Session) Live() bool { return !s.Ended }
 // create the session — so segments are joined with dots and anything outside
 // a conservative set is replaced.
 func SessionName(project, workspace, kind string) string {
-	return "awp." + Sanitize(project) + "." + Sanitize(workspace) + "." + Sanitize(kind)
+	return SessionStem(project, workspace) + "." + Sanitize(kind)
+}
+
+// SessionStem is the part of the name every one of a workspace's sessions
+// shares: awp, the project and the workspace, with only the kind still to come.
+//
+// Named because it is how a session is matched back to the deck row that owns
+// it. Going the other way — splitting a name into parts — cannot be relied on,
+// since a name too long for zmx has to be shortened to exist and a shortened
+// segment is no longer the workspace's name. Generating the stem from the row is
+// right by construction either way.
+func SessionStem(project, workspace string) string {
+	return "awp." + Sanitize(project) + "." + Sanitize(workspace)
+}
+
+// SplitSessionName separates a name into the stem and the kind, for a caller
+// holding a name and a set of stems it knows.
+//
+// The kind is whatever followed the last dot, so this is safe on a shortened
+// name: shortening only ever touches the stem, because the kind is what reopens
+// a pane and what resolves a user action's command.
+func SplitSessionName(name string) (stem, kind string, ok bool) {
+	name = strings.TrimSpace(name)
+	i := strings.LastIndex(name, ".")
+	if i <= 0 || !strings.HasPrefix(name, "awp.") {
+		return "", "", false
+	}
+	return name[:i], name[i+1:], true
 }
 
 // The labels awp writes on every session it creates, holding the identity the
