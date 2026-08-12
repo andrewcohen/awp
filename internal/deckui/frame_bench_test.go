@@ -122,7 +122,7 @@ func BenchmarkFrameSteps(b *testing.B) {
 	if !ok {
 		b.Fatal("expected a body modal")
 	}
-	body, _ := bm.view(&m)
+	body, _ := bm.view(&m, m.childBox())
 	footer := lipgloss.NewStyle().Padding(1, 1, 1, 1).Render(
 		composeStatusBar(m.activities, m.spinner.View(), "", "", m.width-2))
 	b.ReportMetric(float64(len(body)), "body_bytes")

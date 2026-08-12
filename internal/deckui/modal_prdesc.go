@@ -168,10 +168,10 @@ func (pd *prDescModal) prDescHeader() string {
 	return line + "\n" + muted.Render(strings.Join(meta, " · "))
 }
 
-func (pd *prDescModal) renderPopover(m *Model) string {
-	boxWidth, innerWidth := helpBoxDims(m.width)
+func (pd *prDescModal) renderPopover(m *Model, b box) string {
+	boxWidth, innerWidth := helpBoxDims(b.w)
 	pd.vp.SetWidth(innerWidth)
-	vpHeight := m.height - 9
+	vpHeight := b.h - 9
 	if vpHeight < 3 {
 		vpHeight = 3
 	}

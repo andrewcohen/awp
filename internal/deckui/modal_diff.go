@@ -342,14 +342,14 @@ func (dm *diffModal) forward(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (dm *diffModal) view(m *Model) (string, string) {
+func (dm *diffModal) view(m *Model, b box) (string, string) {
 	// Panel padding matches every other deck body panel; the inner width
 	// accounts for the 1 col of padding on each side.
-	innerWidth := m.width - 2
+	innerWidth := b.w - 2
 	if innerWidth < 1 {
 		return "", ""
 	}
-	bodyHeight := m.height - diffModalChrome
+	bodyHeight := b.h - diffModalChrome
 	dm.inner.SetSize(innerWidth, bodyHeight)
 	if Trace == nil {
 		return dm.panel.Render(dm.inner.Body(innerWidth, bodyHeight)), ""

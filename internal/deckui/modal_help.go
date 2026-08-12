@@ -49,8 +49,8 @@ func (h *helpModal) update(m *Model, msg tea.Msg) tea.Cmd {
 
 func (h *helpModal) footerHelp() string { return "" }
 
-func (h *helpModal) renderPopover(m *Model) string {
-	boxWidth, innerWidth := helpBoxDims(m.width)
+func (h *helpModal) renderPopover(m *Model, b box) string {
+	boxWidth, innerWidth := helpBoxDims(b.w)
 	// Rebuild the (static) content only when the inner width changes;
 	// SetContent preserves the scroll offset otherwise.
 	if innerWidth != h.lastW {
@@ -61,7 +61,7 @@ func (h *helpModal) renderPopover(m *Model) string {
 	// Box chrome eats: border+padding (border 2 + vertical padding 2) plus
 	// title (1) + blank (1) + blank (1) + hint (1) = 8 rows around the
 	// viewport. Size the viewport to what's left so the box fits the height.
-	vpHeight := m.height - 8
+	vpHeight := b.h - 8
 	if vpHeight < 3 {
 		vpHeight = 3
 	}

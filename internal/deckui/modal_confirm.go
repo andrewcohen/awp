@@ -98,12 +98,12 @@ func (c *confirmDeleteModal) update(m *Model, msg tea.Msg) tea.Cmd {
 
 func (c *confirmDeleteModal) footerHelp() string { return "" }
 
-func (c *confirmDeleteModal) renderPopover(m *Model) string {
-	box := lipgloss.NewStyle().
+func (c *confirmDeleteModal) renderPopover(m *Model, b box) string {
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colDanger)).
 		Padding(1, 2).
-		Width(60 + borderCells)
+		Width(fit(60+borderCells, b))
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colDanger))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
@@ -128,7 +128,7 @@ func (c *confirmDeleteModal) renderPopover(m *Model) string {
 			lines = append(lines, "", errStyle.Render(c.err))
 		}
 		lines = append(lines, "", hintStyle.Render("enter confirm · esc cancel"))
-		return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+		return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 	}
 
 	name := strings.TrimSpace(c.target.WorkspaceName)
@@ -140,7 +140,7 @@ func (c *confirmDeleteModal) renderPopover(m *Model) string {
 		"",
 		hintStyle.Render("y confirm · n / esc cancel"),
 	}
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 // confirmMergeModal is the merge-PR confirmation popover (y/N).
@@ -179,12 +179,12 @@ func (c *confirmMergeModal) update(m *Model, msg tea.Msg) tea.Cmd {
 
 func (c *confirmMergeModal) footerHelp() string { return "" }
 
-func (c *confirmMergeModal) renderPopover(m *Model) string {
-	box := lipgloss.NewStyle().
+func (c *confirmMergeModal) renderPopover(m *Model, b box) string {
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(64 + borderCells)
+		Width(fit(64+borderCells, b))
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	prStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)).Bold(true)
@@ -220,5 +220,5 @@ func (c *confirmMergeModal) renderPopover(m *Model) string {
 		"",
 		hintStyle.Render("y confirm · n / esc cancel"),
 	)
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }

@@ -174,6 +174,6 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (prMenuModal) view(m *Model) (left, right string) { return m.renderList(m.width), "" }
+func (prMenuModal) view(m *Model, b box) (left, right string) { return m.renderList(b.w), "" }
 
 func (prMenuModal) footerHelp() string { return "" }

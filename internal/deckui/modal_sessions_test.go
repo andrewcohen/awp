@@ -107,7 +107,7 @@ func TestTheOverlayListsWhatTheBackendHolds(t *testing.T) {
 		t.Errorf("first row is %q, want the newest (alpha/probe)", first.s.Label)
 	}
 
-	left, _ := p.view(&m)
+	left, _ := p.view(&m, m.childBox())
 	out := ansi.Strip(left)
 	for _, want := range []string{"awp/test", "agent", "alpha/probe", "editor", "1h", "30s"} {
 		if !strings.Contains(out, want) {
@@ -161,7 +161,7 @@ func TestAnExitedSessionRefusesToAttach(t *testing.T) {
 func TestABackendErrorIsShownNotSwallowed(t *testing.T) {
 	b := &sessionBackend{fakePanes: *allKinds(), err: errors.New("zmx is not on PATH")}
 	m, p := openSessions(t, sessionDeck(t, b))
-	left, _ := p.view(&m)
+	left, _ := p.view(&m, m.childBox())
 	if out := ansi.Strip(left); !strings.Contains(out, "zmx is not on PATH") {
 		t.Errorf("the error is not on screen:\n%s", out)
 	}
@@ -170,7 +170,7 @@ func TestABackendErrorIsShownNotSwallowed(t *testing.T) {
 func TestAnEmptySessionListSaysSo(t *testing.T) {
 	b := &sessionBackend{fakePanes: *allKinds()}
 	m, p := openSessions(t, sessionDeck(t, b))
-	left, _ := p.view(&m)
+	left, _ := p.view(&m, m.childBox())
 	if out := ansi.Strip(left); !strings.Contains(out, "No sessions") {
 		t.Errorf("an empty list renders nothing useful:\n%s", out)
 	}

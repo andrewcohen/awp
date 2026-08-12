@@ -195,10 +195,10 @@ func (wm *watchModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (wm *watchModal) renderPopover(m *Model) string {
-	boxWidth, innerWidth := helpBoxDims(m.width)
+func (wm *watchModal) renderPopover(m *Model, b box) string {
+	boxWidth, innerWidth := helpBoxDims(b.w)
 	wm.vp.SetWidth(innerWidth)
-	vpHeight := m.height - 8
+	vpHeight := b.h - 8
 	if vpHeight < 3 {
 		vpHeight = 3
 	}

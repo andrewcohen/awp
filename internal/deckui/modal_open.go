@@ -93,9 +93,9 @@ func (p *openPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (p *openPicker) view(m *Model) (left, right string) {
-	leftW, rightW := pickerSplit(m.width, m.deckStacked())
-	left = p.renderList(m, leftW)
+func (p *openPicker) view(m *Model, b box) (left, right string) {
+	leftW, rightW := pickerSplit(b.w, b.stacked())
+	left = p.renderList(m, box{w: leftW, h: b.h})
 	if rightW > 0 {
 		right = p.renderDetails(rightW)
 	}
@@ -109,8 +109,8 @@ func (p *openPicker) footerHelp() string {
 	return p.list.Help.ShortHelpView(pickerShortHelp(p.list))
 }
 
-func (p *openPicker) renderList(m *Model, width int) string {
-	return renderPickerPanel(m, &p.list, width)
+func (p *openPicker) renderList(m *Model, b box) string {
+	return renderPickerPanel(m, &p.list, b)
 }
 
 func (p *openPicker) renderDetails(width int) string {

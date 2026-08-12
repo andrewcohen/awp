@@ -137,8 +137,8 @@ func filterStartMsg(l list.Model) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: '/', Text: "/"}
 }
 
-func (p *reviewPicker) view(m *Model) (left, right string) {
-	return p.renderList(m, m.width), ""
+func (p *reviewPicker) view(m *Model, b box) (left, right string) {
+	return p.renderList(m, b), ""
 }
 
 func (p *reviewPicker) footerHelp() string {
@@ -148,6 +148,6 @@ func (p *reviewPicker) footerHelp() string {
 	return p.list.Help.ShortHelpView(pickerShortHelp(p.list))
 }
 
-func (p *reviewPicker) renderList(m *Model, width int) string {
-	return renderPickerPanel(m, &p.list, width)
+func (p *reviewPicker) renderList(m *Model, b box) string {
+	return renderPickerPanel(m, &p.list, b)
 }
