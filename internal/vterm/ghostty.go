@@ -328,11 +328,24 @@ func (t *ghosttyTerm) Send(b []byte) error {
 // otherwise has to sniff out of the output stream by hand. Asking the terminal
 // is the difference between shift+enter arriving and not.
 func (t *ghosttyTerm) SendKey(k tea.KeyPressMsg) {
+	if b := t.encodeKey(k); len(b) > 0 {
+		_ = t.Send(b)
+	}
+}
+
+// encodeKey is the encoding on its own, returning what the program would receive
+// and nil for a key that encodes to nothing.
+//
+// Separate from SendKey so a test can pin the bytes. Every input defect in a pane
+// is either the encoding or the delivery, and until this was separable the only
+// way to tell them apart was to type into a real pane and see whether anything
+// happened — which is how three dead keys shipped.
+func (t *ghosttyTerm) encodeKey(k tea.KeyPressMsg) []byte {
 	key := tea.Key(k)
 
 	var ev C.GhosttyKeyEvent
 	if rc := C.ghostty_key_event_new(nil, &ev); rc != C.GHOSTTY_SUCCESS {
-		return
+		return nil
 	}
 	defer C.ghostty_key_event_free(ev)
 
@@ -344,8 +357,8 @@ func (t *ghosttyTerm) SendKey(k tea.KeyPressMsg) {
 		defer C.free(unsafe.Pointer(utf8))
 		C.ghostty_key_event_set_utf8(ev, utf8, C.size_t(len(key.Text)))
 	}
-	if key.BaseCode != 0 {
-		C.ghostty_key_event_set_unshifted_codepoint(ev, C.uint32_t(key.BaseCode))
+	if cp := unshiftedCodepoint(key); cp != 0 {
+		C.ghostty_key_event_set_unshifted_codepoint(ev, C.uint32_t(cp))
 	}
 
 	var buf [128]C.char
@@ -353,16 +366,27 @@ func (t *ghosttyTerm) SendKey(k tea.KeyPressMsg) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		return
+		return nil
 	}
 	C.ghostty_key_encoder_setopt_from_terminal(t.keyEnc, t.vt)
+	// Everything else the encoder needs comes from the terminal; this one cannot,
+	// and the call above resets it, so it has to be re-stated on every press.
+	//
+	// It has to be TRUE here. The option is for a native macOS app, which is
+	// handed a raw modifier and has to decide whether the user meant alt or meant
+	// to type ø — awp is downstream of a terminal that already decided, so a key
+	// arriving with alt set is alt. Left FALSE, the modifier is dropped and every
+	// alt binding in the hosted program is dead: alt+b and alt+f, which is
+	// word-motion in readline, so in every shell and every agent prompt.
+	asAlt := C.GhosttyOptionAsAlt(C.GHOSTTY_OPTION_AS_ALT_TRUE)
+	C.ghostty_key_encoder_setopt(t.keyEnc, C.GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, unsafe.Pointer(&asAlt))
 	rc := C.ghostty_key_encoder_encode(t.keyEnc, ev, &buf[0], C.size_t(len(buf)), &n)
 	t.mu.Unlock()
 
 	if rc != C.GHOSTTY_SUCCESS || n == 0 {
-		return
+		return nil
 	}
-	_ = t.Send([]byte(C.GoStringN(&buf[0], C.int(n))))
+	return []byte(C.GoStringN(&buf[0], C.int(n)))
 }
 
 // SendText delivers printable text, as a paste would.
@@ -374,17 +398,25 @@ func (t *ghosttyTerm) SendText(s string) {
 }
 
 func (t *ghosttyTerm) SendMouse(msg tea.MouseMsg) {
+	if b := t.encodeMouse(msg); len(b) > 0 {
+		_ = t.Send(b)
+	}
+}
+
+// encodeMouse is SendMouse's encoding on its own, for the reason encodeKey is
+// separate from SendKey: so a test can say what the program receives.
+func (t *ghosttyTerm) encodeMouse(msg tea.MouseMsg) []byte {
 	m := msg.Mouse()
 
 	var ev C.GhosttyMouseEvent
 	if rc := C.ghostty_mouse_event_new(nil, &ev); rc != C.GHOSTTY_SUCCESS {
-		return
+		return nil
 	}
 	defer C.ghostty_mouse_event_free(ev)
 
 	action, ok := ghosttyMouseAction(msg)
 	if !ok {
-		return
+		return nil
 	}
 	C.ghostty_mouse_event_set_action(ev, action)
 	if button, known := ghosttyMouseButton(m.Button); known {
@@ -393,8 +425,10 @@ func (t *ghosttyTerm) SendMouse(msg tea.MouseMsg) {
 		C.ghostty_mouse_event_clear_button(ev)
 	}
 	C.ghostty_mouse_event_set_mods(ev, ghosttyMods(m.Mod))
-	// The position is in cells but typed as float, because libghostty's mouse
-	// events carry sub-cell precision a terminal never sees. A pane has cells.
+	// A position here is a pixel on the surface, not a cell: libghostty's mouse
+	// encoder is written for a renderer that knows where its glyphs are, and it
+	// divides by the cell geometry itself. awp only ever has cells, so it declares
+	// a cell one pixel square below and this is the identity.
 	C.ghostty_mouse_event_set_position(ev, C.GhosttyMousePosition{
 		x: C.float(max(m.X, 0)),
 		y: C.float(max(m.Y, 0)),
@@ -405,16 +439,39 @@ func (t *ghosttyTerm) SendMouse(msg tea.MouseMsg) {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		return
+		return nil
 	}
 	C.ghostty_mouse_encoder_setopt_from_terminal(t.mouseNc, t.vt)
+	// The terminal supplies the tracking mode and the report format; the geometry
+	// and the button state it cannot know, and are not reset by the call above —
+	// but the encoder starts with a zero cell size, which is how every event was
+	// arriving at cell 1;1 no matter where the pointer was.
+	//
+	// One pixel per cell. The encoder wants a renderer's geometry and awp is not
+	// one: there are no glyphs here to be halfway across, so the pane declares the
+	// smallest cell there is and its pixels and its cells are the same numbers.
+	// The one thing this gives up is SGR-pixel reporting (DEC mode 1016), where a
+	// program asking for sub-cell precision is told the cell — which is all a pane
+	// knows, and what the other emulator reports too.
+	size := C.GhosttyMouseEncoderSize{
+		size:          C.size_t(C.sizeof_GhosttyMouseEncoderSize),
+		screen_width:  C.uint32_t(t.w),
+		screen_height: C.uint32_t(t.h),
+		cell_width:    1,
+		cell_height:   1,
+	}
+	C.ghostty_mouse_encoder_setopt(t.mouseNc, C.GHOSTTY_MOUSE_ENCODER_OPT_SIZE, unsafe.Pointer(&size))
+	// Whether a button is down is the embedder's to report, and it is what turns a
+	// bare pointer move into a drag.
+	pressed := C.bool(m.Button != tea.MouseNone)
+	C.ghostty_mouse_encoder_setopt(t.mouseNc, C.GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED, unsafe.Pointer(&pressed))
 	rc := C.ghostty_mouse_encoder_encode(t.mouseNc, ev, &buf[0], C.size_t(len(buf)), &n)
 	t.mu.Unlock()
 
 	if rc != C.GHOSTTY_SUCCESS || n == 0 {
-		return
+		return nil
 	}
-	_ = t.Send([]byte(C.GoStringN(&buf[0], C.int(n))))
+	return []byte(C.GoStringN(&buf[0], C.int(n)))
 }
 
 func (t *ghosttyTerm) Cursor() (int, int, bool) {
