@@ -681,6 +681,22 @@ func (c Comment) Mutable() bool {
 	}
 }
 
+// Unsent reports whether this is a remark of yours that the agent has not been
+// given yet — the set `ctrl+s` hands over from the viewer.
+//
+// Your own words, still yours to change, still awaiting triage. Mutable covers
+// the first two: a mirrored comment is GitHub's record and a published one has
+// left, and neither is something to send an agent now. Open covers the third,
+// since Sent is exactly "already handed over" and Addressed is further on still.
+//
+// !ByRobot is the one that has to be said out loud, because an agent's own
+// finding is Local and Open too — the deck counts those as awaiting *your*
+// triage. Sending them back to the agent that filed them is the failure this
+// predicate exists to not have, and it would look like the feature working.
+func (c Comment) Unsent() bool {
+	return c.Mutable() && !c.ByRobot() && c.State == Open
+}
+
 // ThreadIDOf recovers the thread a mirrored comment belongs to. False for one of
 // ours.
 //

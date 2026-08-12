@@ -78,6 +78,58 @@ func commentPromptFor(c review.Comment, revision string) string {
 	return b.String()
 }
 
+// unsentPromptFor renders one prompt covering every remark the reviewer has
+// written and not sent — what `ctrl+s` hands over from the viewer.
+//
+// One message rather than one per comment, and that is the whole reason this
+// exists next to commentPromptFor. A prompt arrives at an agent as a paste and a
+// return, so N sends is N turns, started within milliseconds of each other,
+// racing over the same working copy: the second one reads files the first is
+// halfway through rewriting. Batched, the agent sees the review the way the
+// reviewer wrote it — a set of remarks about one change — and decides an order.
+//
+// The address, the remark, and the two rules, per comment, exactly as the
+// single-comment prompt says them. The rules are stated once at the end rather
+// than repeated under each: they are the same rules, and an agent reading them
+// five times has been told nothing extra.
+func unsentPromptFor(cs []review.Comment, revision string) string {
+	if len(cs) == 1 {
+		// Not a list of one. The single-comment prompt is the established shape and
+		// the one the agent has seen before; wrapping it in batch framing would make
+		// the commonest case read as the unusual one.
+		return commentPromptFor(cs[0], revision)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d review comments", len(cs))
+	if strings.TrimSpace(revision) != "" {
+		fmt.Fprintf(&b, " on %s", strings.TrimSpace(revision))
+	}
+	b.WriteString("\n")
+
+	for i, c := range cs {
+		where := c.Anchor.Where()
+		if c.Anchor.Side == review.SideOld {
+			where += " (removed line, old side)"
+		}
+		fmt.Fprintf(&b, "\n%d. %s", i+1, where)
+		if c.ID != "" {
+			fmt.Fprintf(&b, " — id %s", c.ID)
+		}
+		b.WriteString("\n")
+		for _, l := range strings.Split(strings.TrimRight(c.Body, "\n"), "\n") {
+			// Indented under its number, so a remark that runs to several lines cannot
+			// be read as the start of the next one.
+			b.WriteString("   " + l + "\n")
+		}
+	}
+
+	b.WriteString("\nRead the files yourself; these are pointers, not pastes.\n")
+	b.WriteString("Reply on each before changing anything:\n" +
+		"  awp review reply --to <id> --body-file <path>\n")
+	b.WriteString(proposalGate)
+	return b.String()
+}
+
 // proposalGate is the rule an agent is held to when a finding reaches it. The
 // gate is about changing code, not about replying: an answer or an explanation is
 // an ordinary reply, and only an offer to change something waits for a yes.

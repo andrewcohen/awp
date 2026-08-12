@@ -121,6 +121,15 @@ type CommentStore struct {
 	// send-to-agent exit unavailable, which the editor reports rather than
 	// silently doing nothing.
 	Send CommentSender
+	// SendUnsent hands the agent every remark the reviewer has written and not
+	// sent, and answers with how many that was. Nil leaves ctrl+s outside the
+	// compose box unavailable.
+	//
+	// It selects the records itself rather than taking a list, because the viewer's
+	// copy of the comments is for drawing and is a frame behind the store — a
+	// finding filed while you were reading arrives on a refresh tick. What is on
+	// disk is the review; what is on screen is a picture of it.
+	SendUnsent func(item Item) (int, error)
 	// Publish sends the review to its PR with a verdict — "approve",
 	// "request-changes", "comment", or empty for the comments alone — and returns
 	// what happened. Nil leaves the viewer's `P` unavailable.
@@ -380,6 +389,9 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 	}
 	if comments.Send != nil {
 		inner.SendComment = func(c review.Comment) error { return comments.Send(item, c) }
+	}
+	if comments.SendUnsent != nil {
+		inner.SendUnsent = func() (int, error) { return comments.SendUnsent(item) }
 	}
 	if comments.Approve != nil {
 		inner.ApproveProposal = func(id string) (review.Comment, error) { return comments.Approve(item, id) }
