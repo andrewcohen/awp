@@ -992,18 +992,40 @@ tag, not a quiet fall back to the default: the point of choosing is to compare,
 and a comparison that silently ran the default twice would report that the two
 agree.
 
-The ghostty build needs an archive, which Ghostty's own build produces:
+A pane also says which emulator it is on, in its header — but only when it is not
+the default. Reading "x/vt" on every pane forever would be a column of a one-row
+header spent on what is almost always true; reading "ghostty" is the only way to
+know a comparison is really running what you asked for.
+
+The ghostty build needs an archive built from Ghostty's source, and `make` does
+the whole thing:
 
 ```sh
-# in a libghostty-vt source tree (the `tip` release ships libghostty-vt-source.tar.gz)
+make ghostty     # fetch libghostty-vt, build it, install awp with -tags ghosttyvt
+make install     # back to the ordinary build
+```
+
+Both install the same way this repo always has (`go install`), so they are one
+command apart in both directions — the ghostty build is the experiment and the
+default is what it is being compared against, so returning must not be a research
+task. The archive is cached under `~/.cache/awp/libghostty-vt`; `make
+clean-ghostty` re-fetches it.
+
+Under the hood it is Zig (pinned to 0.16.0, which `build.zig.zon` requires)
+followed by a tagged `go install`:
+
+```sh
 zig build -Demit-lib-vt=true -Demit-xcframework=false -Dsimd=false \
   -Doptimize=ReleaseFast --prefix $DIR
 
 CGO_CFLAGS=-I$DIR/include CGO_LDFLAGS=$DIR/lib/libghostty-vt.a \
-  go build -tags ghosttyvt -o /tmp/awp-ghostty ./cmd/awp
+  go install -tags ghosttyvt ./...
 ```
 
 `-Demit-xcframework=false` is required on macOS or the install step fails in
-`xcodebuild` after the library itself has already built; `-Dsimd=false` keeps the
-C++ SIMD dependency out, which is why the archive needs nothing but libc to link.
-Nothing about the default build changes: `go build ./...` stays cgo-free.
+`xcodebuild` after the library itself has already built — which reads as a failed
+build when it is not one. `-Dsimd=false` keeps the C++ SIMD dependency out, which
+is why the archive links against nothing but libc. Zig is invoked through `mise
+exec zig@0.16.0` rather than listed in `mise.toml`, so nobody who will never make
+this build has a toolchain fetched on their behalf. Nothing about the default
+build changes: `go build ./...` stays cgo-free.
