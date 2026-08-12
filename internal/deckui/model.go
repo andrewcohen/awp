@@ -2277,6 +2277,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.status = ""
 		return m, nil
 	case PRStatusRepoDoneMsg:
+		// A repo's PR status is a sort key in the attention scope and a section
+		// key in the inbox, so a fan-out landing re-orders the list for the same
+		// reason a refresh does.
+		prevRow, hadPrevRow := m.selected()
 		if m.prStatusByRepo == nil {
 			m.prStatusByRepo = make(map[string]map[string]PRStatus)
 		}
@@ -2290,6 +2294,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.status = "PR status: " + msg.Err.Error()
 		}
 		m = m.tickActivity("pr-status", 1)
+		m = m.keepCursorOn(prevRow, hadPrevRow)
 		return m, nil
 	case PRStatusDoneMsg:
 		// Per-repo updates have already landed via PRStatusRepoDoneMsg.
@@ -2314,6 +2319,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.status = rp.setPRs(msg.PRs)
 		return m, nil
 	case refreshDoneMsg:
+		// The row the cursor is on, read before the swap: the refresh is about to
+		// replace the signals the attention scope sorts by, so the index the
+		// cursor holds is about to mean a different workspace.
+		prevRow, hadPrevRow := m.selected()
 		m.refreshing = false
 		var enrichExpireCmd tea.Cmd
 		m, enrichExpireCmd = m.finishActivity("enrich")
@@ -2343,6 +2352,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				}
 			}
 			m.pendingSelect = Item{}
+		} else {
+			// pendingSelect is an explicit "go here" and wins; this is "stay where
+			// you are", which is the answer whenever nobody asked to move.
+			m = m.keepCursorOn(prevRow, hadPrevRow)
 		}
 		if len(items) == 0 {
 			m.cursor = 0
@@ -5358,6 +5371,56 @@ func (m Model) selected() (Item, bool) {
 		return Item{}, false
 	}
 	return items[m.cursor], true
+}
+
+// sameRow reports whether two items are the same deck row, which is what the
+// cursor is on as far as the user is concerned.
+//
+// A workspace's name is unique within its project and survives everything a
+// refresh can change about the row. A virtual inbox row has no workspace to
+// name, so its PR number is its identity — and the two kinds are never each
+// other, since a virtual row appearing as a real one is a workspace that now
+// exists.
+func sameRow(a, b Item) bool {
+	if a.ProjectName != b.ProjectName {
+		return false
+	}
+	if a.Virtual || b.Virtual {
+		return a.Virtual == b.Virtual && a.PRNumber == b.PRNumber
+	}
+	return a.WorkspaceName == b.WorkspaceName
+}
+
+// keepCursorOn puts the cursor back on the row it was on, and is for the
+// handlers that replace the data the row order is computed from.
+//
+// The cursor is an index into a list sorted on live signals: in the attention
+// scope the sort key is what each row wants from you, so an agent finishing a
+// turn or a PR going red re-orders the list. Without this the index stays put
+// while the rows move under it, and the selection silently becomes a different
+// workspace — which is worse than a list that moves, because the next key you
+// press is aimed at whatever slid into place. `D` was the reason to fix it.
+//
+// Only the data handlers call it. A cursor moved by a keystroke, by a filter, or
+// by an explicit jump is intent, and re-anchoring after those would be the deck
+// arguing with the user — which is also why the row is captured inside the
+// handler rather than remembered across Updates: what it captures is where the
+// cursor was left, whoever left it there.
+//
+// A row that is gone leaves the cursor at its index, where the caller's clamp
+// finds it. Staying at the same place in the list is the best answer available
+// once the row the cursor named does not exist.
+func (m Model) keepCursorOn(row Item, had bool) Model {
+	if !had {
+		return m
+	}
+	for i, it := range m.items() {
+		if sameRow(row, it) {
+			m.cursor = i
+			break
+		}
+	}
+	return m
 }
 
 // applyPinGroup pins, moves, or unpins the selected workspace. target
