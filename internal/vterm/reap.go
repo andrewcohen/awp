@@ -16,21 +16,25 @@ import "sync"
 // slot, so any Term reached by another path, or dropped by a future one, is
 // invisible to it. Registering at the only place a Term is created is the one
 // spelling that cannot be forgotten.
+// The registry holds closers rather than *Term, because the invariant is about
+// every hosted terminal and not about one emulator's implementation of one. A
+// registry that only knew x/vt would leave a pane on a different emulator to
+// outlive the deck — the exact failure this file exists to prevent.
 var live struct {
 	sync.Mutex
-	terms map[*Term]struct{}
+	terms map[interface{ Close() error }]struct{}
 }
 
-func register(t *Term) {
+func register(t interface{ Close() error }) {
 	live.Lock()
 	defer live.Unlock()
 	if live.terms == nil {
-		live.terms = map[*Term]struct{}{}
+		live.terms = map[interface{ Close() error }]struct{}{}
 	}
 	live.terms[t] = struct{}{}
 }
 
-func unregister(t *Term) {
+func unregister(t interface{ Close() error }) {
 	live.Lock()
 	defer live.Unlock()
 	delete(live.terms, t)
@@ -46,7 +50,7 @@ func unregister(t *Term) {
 // master closing under it.
 func CloseAll() {
 	live.Lock()
-	terms := make([]*Term, 0, len(live.terms))
+	terms := make([]interface{ Close() error }, 0, len(live.terms))
 	for t := range live.terms {
 		terms = append(terms, t)
 	}
