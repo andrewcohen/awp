@@ -354,18 +354,18 @@ func TestTheChordSaysWhatItCanDo(t *testing.T) {
 
 // TestThePrefixIsVisibleWhileItIsArmed. A split renders no deck footer, so
 // arming the prefix changed only a bool and pressing the reserved key looked
-// exactly like pressing a dead key — which is how it was reported. The menu is
-// written over the frame's bottom row rather than given one of its own, so the
+// exactly like pressing a dead key — which is how it was reported. The menu
+// takes over the deck's bar rather than being given a row of its own, so the
 // halves' boxes do not change and no pty is resized by a modifier keypress.
 func TestThePrefixIsVisibleWhileItIsArmed(t *testing.T) {
-	m, s := openedSplit(t, "v")
-	before := s.renderPopover(&m, m.childBox())
+	m, _ := openedSplit(t, "v")
+	before := m.render()
 	if strings.Contains(ansi.Strip(before), "zoom") {
 		t.Fatal("the prefix menu is on screen before the prefix was armed")
 	}
 
 	m = pressDeck(t, m, leaveKey())
-	armed := ansi.Strip(s.renderPopover(&m, m.childBox()))
+	armed := ansi.Strip(m.render())
 	for _, want := range []string{"focus", "zoom", "q leave"} {
 		if !strings.Contains(armed, want) {
 			t.Errorf("the armed prefix does not say %q:\n%s", want, lastLine(armed))
@@ -396,8 +396,11 @@ func TestTheDiffHalfFillsItsHeight(t *testing.T) {
 	if got, want := lipgloss.Height(diff), lipgloss.Height(agent); got != want {
 		t.Errorf("the diff half is %d rows and the agent half is %d", got, want)
 	}
-	if got := lipgloss.Height(s.renderPopover(&m, m.childBox())); got != m.height {
-		t.Errorf("the split is %d rows tall in a %d-row terminal", got, m.height)
+	if got, want := lipgloss.Height(s.renderPopover(&m, m.childBox())), m.height-hostBarRows; got != want {
+		t.Errorf("the split is %d rows tall, want %d — the terminal less the deck's bar", got, want)
+	}
+	if got := lipgloss.Height(m.render()); got != m.height {
+		t.Errorf("the frame is %d rows tall in a %d-row terminal", got, m.height)
 	}
 }
 
@@ -441,40 +444,26 @@ const sampleSplitDiff = `diff --git a/a.go b/a.go
  delta
 `
 
-// TestTheSplitCarriesOneStatusRowAboveBothHalves. The badge and the leave key
-// answer for the screen, not for either half, so they live on a row the split
-// owns — and that row is the only place they appear, since a copy in each half's
-// header said the same numbers twice and could not mark which half was which.
-func TestTheSplitCarriesOneStatusRowAboveBothHalves(t *testing.T) {
+// TestTheSplitLeavesTheBarItsRowAndFillsTheRest. The row above both halves is
+// the deck's (see host_bar.go and TestTheBarIsInTheSameCellsWhicheverArrangementIsUp),
+// so what the split owes is the rest of the terminal exactly — a row short leaves
+// a band of dead cells, a row over pushes a half's border off the bottom.
+func TestTheSplitLeavesTheBarItsRowAndFillsTheRest(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	m.itemsAll = waitingRows()
 
-	frame := ansi.Strip(s.renderPopover(&m, m.childBox()))
-	rows := strings.Split(frame, "\n")
-	bar := rows[0]
-
-	if !strings.Contains(bar, "2") {
-		t.Errorf("the split's status row does not carry the attention badge: %q", bar)
+	body := ansi.Strip(s.renderPopover(&m, m.childBox()))
+	if got, want := lipgloss.Height(body), m.height-hostBarRows; got != want {
+		t.Errorf("the halves are %d rows, want %d", got, want)
 	}
-	if !strings.Contains(bar, PaneLeaveKey) {
-		t.Errorf("the split's status row does not say how to leave: %q", bar)
+	rows := strings.Split(ansi.Strip(m.render()), "\n")
+	if len(rows) != m.height {
+		t.Fatalf("the frame is %d rows, the terminal is %d", len(rows), m.height)
 	}
-	for _, half := range []string{PaneKindAgent, "vcs"} {
-		if !strings.Contains(bar, half) {
-			t.Errorf("the status row does not name the %s half: %q", half, bar)
+	for _, i := range []int{0, len(rows) - 1} {
+		if got := lipgloss.Width(rows[i]); got != m.width {
+			t.Errorf("frame row %d is %d columns in a %d-column terminal: %q", i, got, m.width, rows[i])
 		}
-	}
-	// The focused half wears the selection bar, the same treatment every other
-	// active row in the deck wears.
-	if !strings.Contains(bar, "┃") {
-		t.Errorf("the status row does not mark which half has the keys: %q", bar)
-	}
-	// And it is one row, spanning the terminal — not a box, not two.
-	if got := lipgloss.Width(rows[0]); got != m.width {
-		t.Errorf("the status row is %d columns in a %d-column terminal", got, m.width)
-	}
-	if got := lipgloss.Height(frame); got != m.height {
-		t.Errorf("the split with its status row is %d rows in a %d-row terminal", got, m.height)
 	}
 }
 
@@ -617,14 +606,15 @@ func mustBox(t *testing.T, s *splitModal, m *Model, child modal) box {
 
 // TestAHalfSitsWhereTheCursorThinksItDoes. boxOf is what the hosted program's
 // cursor and its mouse translation are derived from, and renderPopover is where
-// the half is actually drawn. They have to subtract the status row the same
+// the half is actually drawn. They have to subtract the bar's row the same
 // number of times: the renderer remembered it and boxOf did not, so a program's
 // cursor was drawn one row above the cell it was in, and a click was reported
-// one row below the cell it hit.
+// one row below the cell it hit. Both derive from childBox now, which is the one
+// place that subtraction happens.
 func TestAHalfSitsWhereTheCursorThinksItDoes(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	full := m.childBox()
-	wantLeft, wantRight := s.boxes(s.bodyBox(full))
+	wantLeft, wantRight := s.boxes(full)
 	for _, half := range []struct {
 		name  string
 		child modal
@@ -637,28 +627,34 @@ func TestAHalfSitsWhereTheCursorThinksItDoes(t *testing.T) {
 			t.Errorf("the %s half is drawn in %+v but addressed as %+v", half.name, half.want, got)
 		}
 	}
-	if got := wantLeft.y; got != splitBarRows {
-		t.Errorf("the halves start on row %d, want %d — below the status row", got, splitBarRows)
+	if got := wantLeft.y; got != hostBarRows {
+		t.Errorf("the halves start on row %d, want %d — below the deck's bar", got, hostBarRows)
 	}
-	if got, want := wantLeft.h, m.height-splitBarRows; got != want {
+	if got, want := wantLeft.h, m.height-hostBarRows; got != want {
 		t.Errorf("the halves are %d rows tall, want %d", got, want)
 	}
 }
 
-// TestAHalfsOwnHeaderStopsRepeatingTheSplitsRow. The badge and the leave key are
-// above; a half's header is left with the one thing that differs between them.
-func TestAHalfsOwnHeaderStopsRepeatingTheSplitsRow(t *testing.T) {
+// TestAHalfHasNoHeaderOfItsOwn. Everything a pane's header used to carry is on
+// the deck's bar above both halves, so a half that still drew one would be
+// spending a row of someone else's program on a second copy — which is what the
+// first cut of the split did, and why neither copy could be relied on.
+//
+// Asserted as a height: the box is the border plus the terminal, and a header
+// would be one row more.
+func TestAHalfHasNoHeaderOfItsOwn(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	m.itemsAll = waitingRows()
 
-	header := ansi.Strip(s.left.(*panePopover).header(&m, 60))
-	if strings.Contains(header, PaneLeaveKey) {
-		t.Errorf("a half's header repeats the leave key: %q", header)
+	left := mustBox(t, s, &m, s.left)
+	p := s.left.(*panePopover)
+	rendered := p.renderPopover(&m, left)
+	tw, th := paneDims(left.w, left.h)
+	if _, wantH := paneBox(tw, th); lipgloss.Height(rendered) != wantH {
+		t.Errorf("the half rendered %d rows, want %d — the border and the program, nothing else",
+			lipgloss.Height(rendered), wantH)
 	}
-	if strings.ContainsAny(header, "0123456789") {
-		t.Errorf("a half's header repeats the badge: %q", header)
-	}
-	if !strings.Contains(header, PaneKindAgent) {
-		t.Errorf("a half's header lost its label: %q", header)
+	if th != left.h-borderCells {
+		t.Errorf("the program got %d of the half's %d rows, want %d", th, left.h, left.h-borderCells)
 	}
 }

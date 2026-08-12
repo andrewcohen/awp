@@ -2,7 +2,6 @@ package deckui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -165,10 +164,13 @@ const splitResizeStep = 0.05
 // collapsing a half you would then have to re-open.
 const splitHalfMinW = paneMinW + paneChromeW
 
-// resize moves the divider by frac of the width, clamped, and says where it
-// ended up. It reports the new share rather than staying silent because the
-// divider has no gutter to grab and no number on it — the status line is where
-// you see that the key did anything at all.
+// resize moves the divider by frac of the width, clamped.
+//
+// It says nothing about where the divider ended up. It used to print "split: 84
+// / 42 columns", which is a sentence restating a thing already on screen: you
+// pressed the key and the divider moved. The bar above reports state in glyphs
+// and numbers precisely so it can be glanced at, and prose about a resize is
+// what that rule exists to keep off it.
 func (s *splitModal) resize(m *Model, frac float64) {
 	before := s.splitCol(m.childBox())
 	s.leftFrac = splitLeftFrac(s.leftFrac) + frac
@@ -179,7 +181,6 @@ func (s *splitModal) resize(m *Model, frac float64) {
 		// undone one by one on the way back.
 		s.leftFrac = float64(after) / float64(max(1, m.width))
 	}
-	m.status = fmt.Sprintf("split: %d / %d columns", after, max(0, m.width-after))
 }
 
 // splitLeftFrac is the left half's share, reading the zero value as even.
@@ -237,7 +238,7 @@ func (s *splitModal) focused() modal {
 // the mouse and the cursor. A child that is not one of the halves — or is the
 // zoomed-away one — gets the empty box, which both callers read as "nowhere".
 func (s *splitModal) boxOf(child modal, full box) box {
-	left, right := s.boxes(s.bodyBox(full))
+	left, right := s.boxes(full)
 	switch child {
 	case s.left:
 		return left
@@ -364,8 +365,6 @@ func (s *splitModal) dragDivider(m *Model, msg tea.MouseMsg) bool {
 			return false
 		}
 		s.leftFrac = float64(x) / float64(max(1, m.width))
-		col := s.splitCol(m.childBox())
-		m.status = fmt.Sprintf("split: %d / %d columns", col, max(0, m.width-col))
 		return true
 	case tea.MouseClickMsg:
 		col := s.splitCol(m.childBox())
@@ -432,104 +431,22 @@ func (s *splitModal) close(m *Model) tea.Cmd {
 
 func (s *splitModal) footerHelp() string { return s.focused().footerHelp() }
 
-// splitBarRows is the one row of chrome the split keeps for itself, above both
-// halves and spanning the terminal.
-const splitBarRows = 1
-
-// bodyBox is what is left for the halves once the status row has taken its own.
+// renderPopover draws both halves, side by side, filling the box.
 //
-// Both the renderer and boxOf go through this. They used to each do the
-// arithmetic, and only the renderer remembered the status row — so a hosted
-// program painted one row lower than the deck thought its terminal started,
-// which is where its cursor was drawn and where a click was translated from.
-func (s *splitModal) bodyBox(b box) box {
-	b.y += splitBarRows
-	b.h -= splitBarRows
-	return b
-}
-
-// renderPopover draws the status row, then both halves beneath it.
+// The row above them is the deck's, not the split's — see host_bar.go, and
+// childBox, which is what has already taken its row out of this box.
 //
-// A popover rather than a body modal because the halves carry their own inner
-// chrome and the deck's footer beneath them would be a third status line on a
-// screen that already has two.
+// A popover rather than a body modal because the halves are someone else's
+// full-screen programs and the deck's footer beneath them would be a second
+// status line on a screen whose first one is at the top.
 func (s *splitModal) renderPopover(m *Model, b box) string {
-	bar := s.statusBar(m, b)
-	body := s.bodyBox(b)
 	if s.zoomed {
-		return bar + "\n" + renderChild(m, s.focused(), body.focus(true))
+		return renderChild(m, s.focused(), b.focus(true))
 	}
-	left, right := s.boxes(body)
-	return bar + "\n" + lipgloss.JoinHorizontal(lipgloss.Top,
+	left, right := s.boxes(b)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
 		renderChild(m, s.left, left),
 		renderChild(m, s.right, right))
-}
-
-// statusBar is the split's one row: what needs you, what the two halves are and
-// which of them has the keys, and how to leave.
-//
-// It is above the halves rather than inside them because it answers for the
-// screen rather than for either half — the attention badge is the deck's, and the
-// leave key leaves the whole arrangement. A copy in each half's own header said
-// the same numbers twice and the same key twice, and neither copy could mark
-// which half was which.
-//
-// It is also where the armed prefix's menu goes. That went over the bottom
-// border in the first cut, for want of a row the split owned; this is that row,
-// so nothing is painted over a border any more.
-func (s *splitModal) statusBar(m *Model, b box) string {
-	if s.prefixArmed {
-		return padBar(m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, b.w))), b.w)
-	}
-	segs := make([]string, 0, 3)
-	if badge := m.renderAttentionSummary(countAttention(m.mergedItemsAll())); badge != "" {
-		segs = append(segs, badge)
-	}
-	segs = append(segs, s.halfNames(m))
-	left := strings.Join(segs, m.styles.PaneHint.Render(" · "))
-
-	hint := m.styles.PaneHint.Render(PaneLeaveKey + " keys · " + PaneLeaveKey + " q deck")
-	gap := b.w - lipgloss.Width(left) - lipgloss.Width(hint)
-	if gap < 1 {
-		// Too narrow for both. The hint is how you get out of an arrangement whose
-		// keys are not the ones any half would suggest; the labels are readable off
-		// the halves themselves.
-		return padBar(hint, b.w)
-	}
-	return padBar(left+strings.Repeat(" ", gap)+hint, b.w)
-}
-
-// halfNames is the two halves, with the focused one marked by the selection
-// treatment the rest of the deck uses for "this is the active row".
-func (s *splitModal) halfNames(m *Model) string {
-	name := func(child modal, fallback string, focused bool) string {
-		label := fallback
-		if p, ok := child.(*panePopover); ok {
-			// A pane's own label is "<kind> · <project>/<workspace>". Only the kind
-			// belongs here: both halves are the same workspace, so naming it twice
-			// spends the row on the one thing that cannot distinguish them.
-			if kind, _, found := strings.Cut(p.label, " · "); found {
-				label = kind
-			} else {
-				label = p.label
-			}
-		}
-		if focused {
-			return m.styles.Bar.Render("┃") + " " + m.styles.Selected.Render(label)
-		}
-		return m.styles.Muted.Render("  " + label)
-	}
-	return name(s.left, PaneKindAgent, !s.rightFocused) +
-		name(s.right, s.label, s.rightFocused)
-}
-
-// padBar fills a bar row out to the width, so the row is opaque rather than
-// letting the frame beneath show through the cells it did not write.
-func padBar(bar string, w int) string {
-	if pad := w - lipgloss.Width(bar); pad > 0 {
-		return bar + strings.Repeat(" ", pad)
-	}
-	return bar
 }
 
 // renderChild renders one modal into one box, whichever kind of modal it is.
@@ -578,7 +495,7 @@ func (m *Model) openSplit(item Item, kind string) (tea.Cmd, bool) {
 	// throwaway split so the arithmetic is the same one the renderer will do,
 	// rather than a second copy of it that agrees today.
 	probe := &splitModal{}
-	leftBox, rightBox := probe.boxes(probe.bodyBox(full))
+	leftBox, rightBox := probe.boxes(full)
 
 	left, cmdLeft, ok := m.openChild(item, PaneKindAgent, leftBox)
 	if !ok {

@@ -55,9 +55,11 @@ func screenCursorFor(deckW, deckH, cx, cy int) (int, int) {
 	return originX + paneInsetX + cx, originY + paneInsetY + cy
 }
 
-// TestChromeClicksAreNotTheProgramsBusiness: the border and the header row are
-// awp's cells. Forwarding them would send the program a negative coordinate,
-// which is not a position it can do anything sensible with.
+// TestChromeClicksAreNotTheProgramsBusiness: the border is awp's cells.
+// Forwarding one would send the program a negative coordinate, which is not a
+// position it can do anything sensible with. (The header row used to be awp's
+// too; it is the deck's own bar now, above the box entirely — and a click on it
+// never reaches paneMouse, because the box it is handed starts below it.)
 func TestChromeClicksAreNotTheProgramsBusiness(t *testing.T) {
 	const deckW, deckH = 100, 30
 	for _, tc := range []struct {
@@ -65,7 +67,6 @@ func TestChromeClicksAreNotTheProgramsBusiness(t *testing.T) {
 		x, y int
 	}{
 		{"top border", 5, 0},
-		{"header row", 5, 1},
 		{"left border", 0, 5},
 		{"past the right edge", deckW - 1, 5},
 		{"past the bottom edge", 5, deckH - 1},

@@ -582,27 +582,29 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// The popover's chrome is one row and the border, and no more. Every cell it
-// takes is one the hosted program does not get, and unlike the deck's other
-// overlays — which frame a fixed amount of awp's own text — a pane is showing
-// someone else's full-screen program.
+// The popover's chrome is the border, and no more. Every cell it takes is one
+// the hosted program does not get, and unlike the deck's other overlays — which
+// frame a fixed amount of awp's own text — a pane is showing someone else's
+// full-screen program.
 //
-// So there is no padding, and the leave hint shares the header row with the
-// label instead of costing two more rows of its own. The border stays: it is
-// what says where the pane ends when its program does not fill it.
+// So there is no padding and no header. The pane used to carry its own row for
+// the label, the attention badge and the leave hint; all three are the deck's
+// questions rather than the pane's, and they now sit on the deck's bar above it
+// — in the same cells whether one pane is up or a split of two (see
+// host_bar.go). The border stays: it is what says where the pane ends when its
+// program does not fill it.
 const (
-	paneHeaderRows = 1
-	paneChromeW    = borderCells
-	paneChromeH    = borderCells + paneHeaderRows
-	paneMinW       = 20
-	paneMinH       = 5
+	paneChromeW = borderCells
+	paneChromeH = borderCells
+	paneMinW    = 20
+	paneMinH    = 5
 )
 
-// paneInsetX / paneInsetY are where the terminal starts inside the popover:
-// past the left border, and past the top border and the header row.
+// paneInsetX / paneInsetY are where the terminal starts inside the popover: past
+// the border, on both axes.
 const (
 	paneInsetX = 1
-	paneInsetY = 1 + paneHeaderRows
+	paneInsetY = 1
 )
 
 func paneDims(deckW, deckH int) (w, h int) { return deckW - paneChromeW, deckH - paneChromeH }
@@ -705,81 +707,9 @@ func (p *panePopover) renderPopover(m *Model, b box) string {
 	if b.blurred {
 		border = colMuted
 	}
-	body := lipgloss.JoinVertical(lipgloss.Left, p.header(m, w), p.term.View())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(border)).
 		Width(boxW).
-		Render(body)
-}
-
-// paneLabelMin is the narrowest the pane's label is worth showing at. Below it
-// there is room for a word and an ellipsis, which names nothing.
-const paneLabelMin = 10
-
-// header is the pane's one row of chrome: what needs you and what you are looking
-// at on the left, how to leave on the right. It doubles as the status line the
-// hint used to have a row of its own for.
-//
-// The attention badge is here because the deck is where you live now rather than
-// something you pass through, and a pane is most of that time. Its numbers are the
-// reason to go back to the row list at all, so they were exactly the wrong thing
-// to only be visible from it.
-//
-// One row for three things, so they go on in the order of what cannot be done
-// without: the way out, then what needs you, then the name of what is on screen —
-// which is the one you can read off the screen itself. The scope label the deck's
-// own title row carries stays behind; which slice of the list you were looking
-// through is not a question a pane raises.
-func (p *panePopover) header(m *Model, w int) string {
-	if _, split := m.active.(*splitModal); split {
-		// In a split the badge and the leave key live on the split's own row above
-		// both halves, where they answer for the screen rather than for one half of
-		// it. Repeating them here printed the same numbers and the same key twice
-		// and left the label — the one thing that differs between the halves — with
-		// whatever room the duplicates had not taken.
-		return p.splitHeader(m, w)
-	}
-	hint := m.styles.PaneHint.Render(PaneLeaveKey + " deck")
-	// Which emulator is behind the pane, but only when it is not the default one.
-	// Running on an alternative is a thing you need to see to trust a comparison;
-	// running on the usual one is not news, and the pane's chrome is one row.
-	if vt := p.term.Emulator(); vt != vterm.EmulatorXVT {
-		hint = m.styles.PaneHint.Render(vt+" · ") + hint
-	}
-
-	// Counted every frame rather than cached, and deliberately: an agent finishing
-	// its turn while you are in another pane is the whole point of putting this
-	// here, so a number that only moved when the row list was on screen would be
-	// worse than no number. The tally is a pass over the rows the deck already
-	// holds — see countAttention.
-	left := m.renderAttentionSummary(countAttention(m.mergedItemsAll()))
-	sep := m.styles.PaneHint.Render(" · ")
-
-	room := w - lipgloss.Width(left) - lipgloss.Width(hint) - lipgloss.Width(sep) - 1
-	if room >= paneLabelMin {
-		if left != "" {
-			left += sep
-		}
-		left += m.styles.PaneTitle.Render(truncate(p.label, room))
-	}
-
-	gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
-	if gap < 1 {
-		// Too narrow for both. The badge is a thing leaving the pane will show you;
-		// the leave key is how you leave.
-		return hint
-	}
-	return left + strings.Repeat(" ", gap) + hint
-}
-
-// splitHeader is the header for a pane that is one half of a split: the label,
-// and the emulator when it is not the usual one. Everything else it would say is
-// said once, above, for both halves.
-func (p *panePopover) splitHeader(m *Model, w int) string {
-	label := p.label
-	if vt := p.term.Emulator(); vt != vterm.EmulatorXVT {
-		label = vt + " · " + label
-	}
-	return m.styles.PaneTitle.Render(truncate(label, max(1, w)))
+		Render(p.term.View())
 }

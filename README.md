@@ -85,14 +85,31 @@ pressing `P` changes which rows you see without changing what the badge says is
 waiting.
 
 Under `awp zdeck` the badge **stays on screen inside a pane**, at the left of the
-pane's header row, ahead of the pane's label and the `ctrl+\ deck` hint. A pane is
-where most of the time goes, and the counts are the reason to go back to the row
-list — so they follow you into it, and they keep counting while you are there: an
-agent that finishes its turn behind the pane shows up without your leaving. The
-row is one row for three things, so a narrow terminal drops the label first and
-the badge second; the leave key never goes. The scope label stays behind on the
-deck's own title row — which slice of the list you were looking through is not a
-question a pane raises.
+deck's top row, ahead of the label of what is on screen and the `ctrl+\ deck`
+hint. A pane is where most of the time goes, and the counts are the reason to go
+back to the row list — so they follow you into it, and they keep counting while
+you are there: an agent that finishes its turn behind the pane shows up without
+your leaving. The row is one row for three things, so a narrow terminal drops the
+label first and the badge second; the leave key never goes. The scope label stays
+behind on the deck's own title row — which slice of the list you were looking
+through is not a question a pane raises.
+
+**That row is in the same cells whether one pane is up or a split of two.** It is
+the deck's row, not the pane's: it spans the terminal, sits above the pane's
+border rather than inside it, and every pane below it renders no header of its
+own. It used to be two separate things — a header the pane drew inside its own
+border, and a second copy the split drew above both halves — so the same three
+items moved by a row and a column depending on how many programs were on screen.
+One row, one address, and a pane gets the row back that its header was spending.
+
+Everything the row says about **state** is a glyph and a number, never a word —
+starting with the badge's coloured dots and counts. The only prose on it is the
+name of what is on screen and the key that leaves. A split does not list its two
+halves there — the
+accent-vs-muted border already says which half has the keys, so naming both of
+them spent the row's best columns on the one thing that cannot tell them apart.
+Resizing the divider likewise reports nothing: you pressed the key, and the
+divider moved.
 
 ### Mini deck (quick-jump)
 
@@ -841,12 +858,19 @@ and comment index would spend a third of half a terminal on navigation, and the
 diff is what you opened the half to read. `\` brings them back for the file you
 need to jump around in, and the cursors they hold were never lost.
 
-A split keeps **one status row across the top**, outside both halves: the
-attention badge, the two halves named with the focused one wearing the usual
-`┃` selection bar, and how to leave. It is outside them because it answers for
-the screen rather than for either half — and it costs nothing, because each
-half's own header gave up the badge and the leave key to it and kept only its
-label. While the `ctrl+\` prefix is armed, that same row becomes the verb menu.
+A split wears **the same top row a single pane does** — see [the top
+row](#the-top-row), which is where it is described:
+the badge, the name of the half the keys are in, and how to leave, spanning the
+terminal above both halves. It is the deck's row rather than either half's,
+because it answers for the screen; the halves render no header of their own.
+While the `ctrl+\` prefix is armed, that same row becomes the verb menu.
+
+It does **not** list both halves. That was the first cut, with the focused one
+wearing the usual `┃` selection bar — but the halves are the same workspace, so
+naming both spent the row's best columns on the one thing that cannot distinguish
+them, and the border already says which has the keys. Resizing the divider used
+to print `split: 84 / 42 columns` there too, and no longer says anything: you
+pressed the key, and the divider moved.
 
 Both halves are live. The one without the keyboard keeps painting: an agent's
 output, a `watch` view, a diff refreshing itself on its own tick. Only the keys
