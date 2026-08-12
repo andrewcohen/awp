@@ -56,6 +56,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"0 / $", "start / end of the line"},
 				{"w", "toggle line wrap (off in side-by-side)"},
 				{"|", "toggle side-by-side vs unified"},
+				{"+ / _", "more / less code around each hunk (0 → 48 lines)"},
 				{`\`, "show / hide the left column"},
 				{"/", "search the diff · filter files from the lists"},
 				{"n / N", "next / previous match, wrapping"},

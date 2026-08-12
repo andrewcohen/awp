@@ -62,7 +62,7 @@ machinery. What's missing is a store it owns and a comment gesture.
 - **Live refresh** — the diff follows the working copy while the agent edits.
 - **`r` marks the current file reviewed and collapses it** (once live refresh
   makes manual refresh redundant).
-- **Contextual expansion** — pull more context around a hunk from file content.
+- **Contextual expansion** — more or less code around a hunk, by re-asking jj with a bigger `--context` rather than from file content (see the decision at the end).
 - **Review scope** — working copy, change-vs-stack-base (retiring `C`'s tuicr
   window), and PR mode (retiring `awp review`'s tuicr window).
 - **Remote PR threads** — existing review threads pulled and rendered inline
@@ -412,7 +412,7 @@ identical — the case where this is a novelty rather than a feature.
 | `C` (in comment editor) | save **and** send to the agent with context + reply instructions |
 | `r` | mark current file reviewed and collapse it |
 | `]`/`[` | next / previous comment or thread |
-| `+`/`-` | expand / collapse context around the hunk |
+| `+`/`_` | more / less code around each hunk (0 → 48 lines) |
 | `R` | resolve / unresolve the thread at the cursor (phase 7) |
 | `T` | cycle remote-thread visibility: unresolved only → all → none |
 | `F` | toggle follow mode (phase 8) |
@@ -507,6 +507,15 @@ Deferred, after the finish line:
    2026-07-30.*
 9. **Unit grouping.** Per the mechanism above, after verifying against real
    transcripts.
+
+**Contextual expansion** — landed. `+` and `_` step a ladder of 0 / 3 / 6 / 12 /
+24 / 48 lines, by re-asking jj with a bigger `--context` rather than splicing file
+content into the parsed hunks: jj already merges hunks that grow into each other
+and stops at the ends of a file, and it answers for the revision being read rather
+than for the working copy on disk, which is a different question for any scope that
+does not end at `@`. `jj.DiffGit` takes the count as a required argument so no
+caller can silently get three. The key is `_` and not `-` because `-` became the
+scope chord in the meantime. Its original note said:
 
 **Contextual expansion** has no phase of its own: it is a small addition once
 the line cursor exists, so it lands with whichever phase first wants it

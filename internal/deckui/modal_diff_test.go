@@ -64,7 +64,7 @@ func drain(m Model, cmd tea.Cmd) Model {
 }
 
 func TestDiffModalOpensOnC(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	if _, ok := m.active.(*diffModal); !ok {
 		t.Fatalf("expected diff modal active, got %T", m.active)
@@ -98,7 +98,7 @@ func TestDiffModalFallsBackToReviewWindowWhenUnwired(t *testing.T) {
 func TestDiffModalFallsBackForVirtualRow(t *testing.T) {
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "pr-1", Virtual: true, PRNumber: 1}},
 		func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil)
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil)
 	m.width, m.height = 120, 40
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
@@ -109,7 +109,7 @@ func TestDiffModalFallsBackForVirtualRow(t *testing.T) {
 
 func TestDiffModalClosesOnEscAndQ(t *testing.T) {
 	for _, key := range []string{"esc", "q"} {
-		m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+		m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 		m, _ = pressKey(m, "c")
 		if m.active == nil {
 			t.Fatalf("%s: expected modal open before close", key)
@@ -131,7 +131,7 @@ func TestDiffModalClosesOnEscAndQ(t *testing.T) {
 // viewer here. The viewer binds it too, for when it is the whole program in a
 // pane; this is the same key doing the same thing when it is a modal.
 func TestDiffModalClosesOnThePaneLeaveKey(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, _ = pressKey(m, "c")
 	if m.active == nil {
 		t.Fatal("expected the modal open before closing it")
@@ -145,7 +145,7 @@ func TestDiffModalClosesOnThePaneLeaveKey(t *testing.T) {
 // While the viewer's filter has focus, keys belong to the filter — `q` and
 // `c` must type into it rather than close the modal.
 func TestDiffModalFilterSwallowsCloseKeys(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, _ = pressKey(m, "c")
 	m, _ = pressKey(m, "/")
 	dm, ok := m.active.(*diffModal)
@@ -164,7 +164,7 @@ func TestDiffModalFilterSwallowsCloseKeys(t *testing.T) {
 // The modal renders through the deck's body/footer composition, so its
 // frame must fit the viewport — otherwise the footer scrolls off.
 func TestDiffModalViewFitsViewport(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	// Run the load command and feed the result back, so the modal renders
 	// a populated diff rather than the loading state.
@@ -202,7 +202,7 @@ func blankRowsAboveFooter(view string) int {
 // the viewer's bottom border, then the status bar. Three was the original bug,
 // one was the padding this cleanup removed.
 func TestDiffModalLeavesNoDeadRowsAboveTheFooter(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	view := m.render()
@@ -217,7 +217,7 @@ func TestDiffModalLeavesNoDeadRowsAboveTheFooter(t *testing.T) {
 }
 
 func TestDiffModalSurfacesLoadError(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return "", errors.New("boom") })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return "", errors.New("boom") })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	dm, ok := m.active.(*diffModal)
@@ -233,7 +233,7 @@ func TestDiffModalSurfacesLoadError(t *testing.T) {
 // `c` opened the modal from the row list, but inside it the key belongs to the
 // viewer's comment gesture — intercepting it here made commenting unreachable.
 func TestDiffModalDoesNotCloseOnC(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	if _, ok := m.active.(*diffModal); !ok {
@@ -250,7 +250,7 @@ func TestDiffModalDoesNotCloseOnC(t *testing.T) {
 func TestDiffModalFooterNamesTheResolvedBase(t *testing.T) {
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
 		func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil).
 		WithDiffBaseResolver(func(_ Item, scope DiffScope) string {
 			if scope == ScopeStackBase {
 				return "andrew/parent-change"
@@ -277,7 +277,7 @@ func TestDiffModalFooterNamesTheResolvedBase(t *testing.T) {
 // Until the resolver answers — and forever, when none is installed — the footer
 // falls back to the scope's own wording rather than showing a blank.
 func TestDiffModalFooterFallsBackBeforeTheBaseResolves(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	// Deliberately not drained: this is the state right after open, before any
 	// command has run.
 	m, _ = pressKey(m, "c")
@@ -295,16 +295,16 @@ func TestDiffModalFooterFallsBackBeforeTheBaseResolves(t *testing.T) {
 func TestDiffModalWorkingScopeKeepsItsWording(t *testing.T) {
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
 		func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil).
 		WithDiffScopes(func(Item) []ui.ScopeOption {
 			return []ui.ScopeOption{
 				// A base for the stack scope, none for the working copy: the working copy
 				// is diffed against @ itself, which its own wording already says.
 				{Key: "c", Label: "vs stack base",
-					Load: func() (string, error) { return diffModalSample, nil },
+					Load: func(int) (string, error) { return diffModalSample, nil },
 					Base: func() string { return "andrew/parent-change" }},
 				{Key: "w", Label: "working copy",
-					Load: func() (string, error) { return diffModalSample, nil }},
+					Load: func(int) (string, error) { return diffModalSample, nil }},
 			}
 		})
 	m.width, m.height = 120, 40
@@ -338,7 +338,7 @@ func TestDiffModalFooterNamesThePR(t *testing.T) {
 		Path:          "/repo/ws",
 		PRNumber:      1234,
 	}}, func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil)
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil)
 	m.width, m.height = 120, 40
 
 	// Not drained: the label comes from the item, so it is there from the frame
@@ -356,7 +356,7 @@ func TestDiffModalFooterNamesThePR(t *testing.T) {
 // And says nothing when there is no PR — an empty segment would leave a stray
 // separator in the footer.
 func TestDiffModalFooterOmitsAnAbsentPR(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, _ = pressKey(m, "c")
 	dm, ok := m.active.(*diffModal)
 	if !ok {
@@ -375,7 +375,7 @@ func TestDiffModalFooterOmitsAnAbsentPR(t *testing.T) {
 // — what a review is normally of — rather than the working copy alone.
 func TestDiffModalOpensAtTheStackBase(t *testing.T) {
 	var asked []DiffScope
-	m := diffModalModel(t, func(_ Item, scope DiffScope) (string, error) {
+	m := diffModalModel(t, func(_ Item, scope DiffScope, _ int) (string, error) {
 		asked = append(asked, scope)
 		return diffModalSample, nil
 	})
@@ -400,7 +400,7 @@ func TestShiftCOpensTheReviewWindowRatherThanTheModal(t *testing.T) {
 	var got ActionRequest
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
 		func(r ActionRequest) error { got = r; return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil)
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil)
 	m.width, m.height = 120, 40
 
 	m, cmd := pressKey(m, "C")
@@ -422,11 +422,11 @@ func TestScopeProviderInstallsTheMenu(t *testing.T) {
 	var asked []string
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
 		func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return diffModalSample, nil }, nil).
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil).
 		WithDiffScopes(func(item Item) []ui.ScopeOption {
 			return []ui.ScopeOption{
-				{Key: "c", Label: "vs stack base", Load: func() (string, error) { asked = append(asked, "base"); return diffModalSample, nil }},
-				{Key: "w", Label: "working copy", Load: func() (string, error) { asked = append(asked, "working"); return diffModalSample, nil }},
+				{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { asked = append(asked, "base"); return diffModalSample, nil }},
+				{Key: "w", Label: "working copy", Load: func(int) (string, error) { asked = append(asked, "working"); return diffModalSample, nil }},
 			}
 		})
 	m.width, m.height = 120, 40
@@ -464,7 +464,7 @@ func TestScopeProviderInstallsTheMenu(t *testing.T) {
 // Without a provider there is nothing to offer, so `-` does nothing rather than
 // opening a menu with one answer in it.
 func TestNoScopeProviderLeavesTheChordInert(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	m, cmd = pressKey(m, "-")
@@ -486,7 +486,7 @@ func TestNoScopeProviderLeavesTheChordInert(t *testing.T) {
 // The deck's own overlay is unreachable while the diff is open, so this is the
 // only place they can be found.
 func TestDiffModalDocumentsTheDeckSKeys(t *testing.T) {
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)
 	dm, ok := m.active.(*diffModal)

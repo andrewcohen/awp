@@ -179,7 +179,7 @@ func benchComments(files []diff.FileDiff, n int) []review.Comment {
 func benchModel(tb testing.TB, comments []review.Comment) Model {
 	tb.Helper()
 	files := benchFiles(tb)
-	m := New("/repo", func() (string, error) { return "", nil }, nil)
+	m := New("/repo", func(int) (string, error) { return "", nil }, nil)
 	m.SetSize(160, 46)
 	m.focus = FocusHunks
 	m.files = files

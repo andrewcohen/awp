@@ -16,6 +16,7 @@ import (
 	"github.com/andrewcohen/awp/internal/awplog"
 	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/diff"
+	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/review"
 )
 
@@ -86,11 +87,33 @@ const cursorScrollMargin = 2
 // editor infers from cwd is about another project.
 type OpenFunc func(dir, filePath string, line int) tea.Cmd
 
+// The rungs `+` and `_` step between: how many unchanged lines come with each
+// hunk.
+//
+// A ladder rather than a fixed increment because the useful sizes are not evenly
+// spaced — three lines is "which line is it", a dozen is "what is this function
+// doing", fifty is "the whole file, effectively" — and stepping by three would put
+// seven presses between the first two answers. Doubling gets anywhere in four.
+//
+// Zero is on it. Hunks with nothing around them is a real way to read a diff you
+// have already read once and want only the changes from.
+var contextSteps = []int{0, 3, 6, 12, 24, 48}
+
+// contextDefault is the rung the viewer opens on, and it is jj's own default, so
+// the view you get without pressing anything is the diff jj would have printed.
+const contextDefault = jj.DiffContextDefault
+
 type Model struct {
 	RepoRoot        string
 	RefreshInterval time.Duration
-	LoadDiff        func() (string, error)
-	OpenFile        OpenFunc
+	// LoadDiff reads the diff with the given number of context lines around each
+	// hunk.
+	//
+	// The count is an argument rather than something the host closes over because
+	// it is the viewer's to change — `+` and `_` move it — and a closure that had
+	// already decided would make the keys unimplementable without a second seam.
+	LoadDiff func(contextLines int) (string, error)
+	OpenFile OpenFunc
 	// ResolveBase names what the diff is against — "main", "andrew/parent" —
 	// for a host that wants to say so in its chrome. Optional.
 	//
@@ -192,6 +215,13 @@ type Model struct {
 	// A reading preference for the change in front of you, like the scope menu, so
 	// it is not persisted.
 	sideBySide bool
+	// contextLines is how much unchanged code comes with each hunk — a rung of
+	// contextSteps, moved by `+` and `_`.
+	//
+	// Not persisted, for the same reason sideBySide is not: how much of the file
+	// you need to see is a question about the change in front of you, and the
+	// answer for the last one is not evidence about this one.
+	contextLines int
 	// hunkHScroll is how many columns the hunk pane's line content is panned
 	// left. Only meaningful when wrap is off — wrapped lines have no
 	// horizontal overflow.
@@ -551,7 +581,7 @@ type diffLoadedMsg struct {
 
 type autoRefreshTickMsg struct{}
 
-func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model {
+func New(repoRoot string, loadFn func(contextLines int) (string, error), openFn OpenFunc) Model {
 	ti := textinput.New()
 	ti.Placeholder = "filter..."
 	ti.CharLimit = 128
@@ -563,6 +593,7 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 		RefreshInterval: DefaultRefreshInterval,
 		LoadDiff:        loadFn,
 		OpenFile:        openFn,
+		contextLines:    contextDefault,
 		filterInput:     ti,
 		searchInput:     si,
 		visualAnchor:    visualNone,
@@ -576,7 +607,7 @@ func New(repoRoot string, loadFn func() (string, error), openFn OpenFunc) Model 
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadDiffCmd(m.LoadDiff), resolveBaseCmd(m.ResolveBase), scheduleRefresh(m.RefreshInterval))
+	return tea.Batch(loadDiffCmd(m.LoadDiff, m.contextLines), resolveBaseCmd(m.ResolveBase), scheduleRefresh(m.RefreshInterval))
 }
 
 // Base names what the diff is against, empty until the host's resolver answers
@@ -601,9 +632,9 @@ func scheduleRefresh(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return autoRefreshTickMsg{} })
 }
 
-func loadDiffCmd(fn func() (string, error)) tea.Cmd {
+func loadDiffCmd(fn func(contextLines int) (string, error), contextLines int) tea.Cmd {
 	return func() tea.Msg {
-		raw, err := fn()
+		raw, err := fn(contextLines)
 		if err != nil {
 			return diffLoadedMsg{err: err}
 		}
@@ -673,7 +704,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reloadThreads()
 		if !m.refreshing {
 			m.refreshing = true
-			return m, loadDiffCmd(m.LoadDiff)
+			return m, loadDiffCmd(m.LoadDiff, m.contextLines)
 		}
 		return m, scheduleRefresh(m.RefreshInterval)
 	case composeEditedMsg:
@@ -868,7 +899,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// An explicit refresh re-resolves the base too: a rebase is exactly the
 		// kind of thing you press this after, and it is the only thing that moves
 		// the base.
-		return m, tea.Batch(loadDiffCmd(m.LoadDiff), resolveBaseCmd(m.ResolveBase))
+		return m, tea.Batch(loadDiffCmd(m.LoadDiff, m.contextLines), resolveBaseCmd(m.ResolveBase))
 	case "/":
 		// `/` means search to anyone who has used vim or less, and from the diff —
 		// where nearly all the time goes — it used to mean "filter the file list".
@@ -900,6 +931,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "|":
 		return m.toggleSideBySide()
+	// More and less of the code around each hunk. `+` and `_` rather than `+` and
+	// `-`, because `-` is the scope chord and a diff has two "widen" axes — which
+	// revisions it covers, and how much of each file comes with it. They are the
+	// shifted halves of the two keys next to each other, which is as close to the
+	// obvious pair as the taken key leaves.
+	case "+":
+		return m, m.stepContext(+1)
+	case "_":
+		return m, m.stepContext(-1)
 	case "T":
 		m.cycleThreadVisibility()
 		return m, nil
@@ -1662,6 +1702,12 @@ func (m Model) renderHeader() string {
 	case m.ScopeLabel() != "":
 		// Until the resolve lands, and permanently for a scope with no base to name.
 		segs = append(segs, m.ScopeLabel())
+	}
+	// How much code came with each hunk, when it is not the usual amount. The
+	// widened diff looks like a different change if you have forgotten you widened
+	// it, and this is the one line that can say otherwise.
+	if ctx := m.contextChrome(); ctx != "" {
+		segs = append(segs, ctx)
 	}
 	return styleHeader.Render(" " + strings.Join(segs, " · ") + " ")
 }

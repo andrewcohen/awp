@@ -47,7 +47,7 @@ func (s DiffScope) String() string {
 // DiffLoader returns git-format diff text for a workspace at the given scope
 // (`jj diff --git` with the matching revision). Installed by the CLI layer via
 // WithDiffViewer so the deck package doesn't shell out itself.
-type DiffLoader func(item Item, scope DiffScope) (string, error)
+type DiffLoader func(item Item, scope DiffScope, contextLines int) (string, error)
 
 // DiffOpener returns the command that opens filePath at line for a
 // workspace — an external $EDITOR process, which tea.ExecProcess handles.
@@ -203,7 +203,7 @@ type diffModal struct {
 // first diff.
 func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, base DiffBaseResolver, scopes DiffScopeProvider, comments CommentStore) (*diffModal, tea.Cmd) {
 	inner := ui.New(item.Path,
-		func() (string, error) { return load(item, scope) },
+		func(contextLines int) (string, error) { return load(item, scope, contextLines) },
 		func(dir, filePath string, line int) tea.Cmd {
 			if open == nil {
 				return nil
@@ -296,6 +296,11 @@ func (dm *diffModal) footerHelp() string {
 		segs = append(segs, dm.pr)
 	}
 	segs = append(segs, against)
+	// How much code came with each hunk, when it is not the usual amount — see
+	// ui.Model.ContextChrome.
+	if ctx := dm.inner.ContextChrome(); ctx != "" {
+		segs = append(segs, ctx)
+	}
 	if status != "" {
 		segs = append(segs, status)
 	}

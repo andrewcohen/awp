@@ -9,7 +9,7 @@ import (
 // enough that a match can be centred.
 func searchModel(t *testing.T) Model {
 	t.Helper()
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 20)
 	m.focus = FocusHunks
 	return loadWith(m, 1, fileWith("a.go", 1,
@@ -181,7 +181,7 @@ func TestNoMatchAccountsForFoldedFiles(t *testing.T) {
 // one long line as though it were several hits.
 func TestSearchMatchesAWrappedLineOnce(t *testing.T) {
 	long := strings.Repeat("needle and more text ", 12)
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(80, 20)
 	m.focus = FocusHunks
 	m.wrap = true

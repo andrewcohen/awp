@@ -21,7 +21,7 @@ const sampleDiff = `diff --git a/foo.go b/foo.go
 `
 
 func TestModelInitReturnsCmd(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("expected init cmd")
 	}
@@ -30,7 +30,7 @@ func TestModelInitReturnsCmd(t *testing.T) {
 // `r` marks a file reviewed now that live refresh made manual refresh redundant;
 // ctrl+r is the explicit refresh that remains.
 func TestCtrlRForcesARefresh(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("expected ctrl+r to issue a refresh command")
@@ -38,7 +38,7 @@ func TestCtrlRForcesARefresh(t *testing.T) {
 }
 
 func TestRDoesNotRefresh(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	_, cmd := m.Update(runeKey("r"))
 	if cmd != nil {
 		t.Fatal("expected r to mark reviewed, not refresh")
@@ -48,7 +48,7 @@ func TestRDoesNotRefresh(t *testing.T) {
 // `/` filters from the file list. (From the diff it searches the diff instead —
 // see search_test.go.)
 func TestModelFilterMode(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
 	withFiles := updated.(Model)
 	withFiles.focus = FocusFiles
@@ -67,7 +67,7 @@ func TestModelFilterMode(t *testing.T) {
 // row it drills into the hunk pane instead.
 func TestModelEnterFocusesHunkPaneWithoutOpening(t *testing.T) {
 	opened := false
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(string, string, int) tea.Cmd {
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, func(string, string, int) tea.Cmd {
 		opened = true
 		return nil
 	})
@@ -84,7 +84,7 @@ func TestModelEnterFocusesHunkPaneWithoutOpening(t *testing.T) {
 
 // Filter-mode enter still confirms the filter rather than changing panes.
 func TestFilterEnterConfirmsAndReturnsToFiles(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M"}}})
 	withFiles := updated.(Model)
 	withFiles.focus = FocusFiles
@@ -104,7 +104,7 @@ func TestModelEAlsoOpensCurrentFile(t *testing.T) {
 	openedDir := ""
 	openedPath := ""
 	openedLine := 0
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(dir, path string, line int) tea.Cmd {
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, func(dir, path string, line int) tea.Cmd {
 		openedDir, openedPath, openedLine = dir, path, line
 		return nil
 	})
@@ -123,7 +123,7 @@ func TestModelEAlsoOpensCurrentFile(t *testing.T) {
 }
 
 func TestModelErrorStatus(t *testing.T) {
-	m := New("/repo", func() (string, error) { return "", errors.New("boom") }, nil)
+	m := New("/repo", func(int) (string, error) { return "", errors.New("boom") }, nil)
 	updated, _ := m.Update(diffLoadedMsg{err: errors.New("boom")})
 	got := updated.(Model)
 	if !got.statusErr || !strings.Contains(got.status, "boom") {
@@ -132,7 +132,7 @@ func TestModelErrorStatus(t *testing.T) {
 }
 
 func TestScheduleRefreshDisabledWhenZero(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.RefreshInterval = 0
 	m.loaded = true
 	updated, cmd := m.Update(diffLoadedMsg{})
@@ -144,14 +144,14 @@ func TestScheduleRefreshDisabledWhenZero(t *testing.T) {
 
 // The viewer opens on the diff pane, so tab's first press goes to the file list.
 func TestOpensOnTheDiffPane(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	if m.focus != FocusHunks {
 		t.Fatalf("expected the diff pane focused on open, got %v", m.focus)
 	}
 }
 
 func TestTabTogglesPaneFocusBothWays(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	got := updated.(Model)
 	if got.focus != FocusFiles {
@@ -170,7 +170,7 @@ func TestTabTogglesPaneFocusBothWays(t *testing.T) {
 
 // h/l no longer switch panes — they pan the diff.
 func TestHAndLDoNotSwitchPanes(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.focus = FocusFiles
 	updated, _ := m.Update(runeKey("l"))
 	if got := updated.(Model).focus; got != FocusFiles {
@@ -181,7 +181,7 @@ func TestHAndLDoNotSwitchPanes(t *testing.T) {
 // Both prompts occupy the same reserved row, so opening one never moves the
 // footer under the panes.
 func TestPromptFooterIsStableHeight(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.width = 100
 	m.bodyHeight = 16
 	base := m.renderFooter()
@@ -211,7 +211,7 @@ func TestPromptFooterIsStableHeight(t *testing.T) {
 
 // Live refresh is on by default now that reloads preserve the reading position.
 func TestLiveRefreshOnByDefault(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	if m.RefreshInterval != DefaultRefreshInterval {
 		t.Fatalf("got %v want %v", m.RefreshInterval, DefaultRefreshInterval)
 	}
@@ -248,7 +248,7 @@ func stripANSI(s string) string {
 // carries the app-wide `┃ ` bar, and unselected rows reserve the same width
 // so labels stay aligned.
 func TestSelectedFileRowCarriesSelectionBar(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 12)
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{
 		{NewPath: "internal/ui/model.go", Status: "M"},
@@ -291,7 +291,7 @@ func TestSelectedFileRowCarriesSelectionBar(t *testing.T) {
 // and the answer arrives as its own message, so a slow jj cannot delay the
 // first frame of the diff.
 func TestBaseIsEmptyUntilResolved(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.ResolveBase = func() string { return "andrew/parent" }
 	if got := m.Base(); got != "" {
 		t.Fatalf("expected no label before resolving, got %q", got)
@@ -306,7 +306,7 @@ func TestBaseIsEmptyUntilResolved(t *testing.T) {
 // failing once in a workspace that was fine a moment ago should leave the chrome
 // saying what it said.
 func TestEmptyResolveKeepsTheKnownBase(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	updated, _ := m.Update(baseResolvedMsg{label: "main"})
 	m = updated.(Model)
 	updated, _ = m.Update(baseResolvedMsg{label: ""})
@@ -322,7 +322,7 @@ func TestEmptyResolveKeepsTheKnownBase(t *testing.T) {
 // No resolver means no command to run — Init must not schedule one, or a nil
 // call would panic on the first frame.
 func TestInitWithoutAResolverIsSafe(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	if cmd := resolveBaseCmd(m.ResolveBase); cmd != nil {
 		t.Fatal("expected no command without a resolver")
 	}

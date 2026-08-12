@@ -401,6 +401,35 @@ never source — so a line in the middle of a block comment or a multi-line stri
 is coloured as if it were code. And a file whose extension no lexer claims
 renders exactly as it does today rather than being guessed at.
 
+### More or less code around a hunk (`+` / `_`)
+
+A hunk on its own says what changed, not what it does. `+` widens the unchanged
+code that comes with each hunk and `_` narrows it, on both diff surfaces — `c` in
+the deck and standalone `awp diff`.
+
+The rungs are **0 → 3 → 6 → 12 → 24 → 48** lines. A ladder rather than a fixed
+step, because the useful sizes are not evenly spaced: three lines is "which line
+is it", a dozen is "what is this function doing", fifty is effectively the whole
+file — and stepping by three would put seven presses between the first two
+answers. Zero is on it, which is a real way to re-read a diff you have read once
+and want only the changes from. The view opens on 3, which is `jj diff`'s own
+default, so what you see before pressing anything is the diff jj would have
+printed. The ends of the ladder refuse out loud rather than doing nothing.
+
+`+` and `_`, not `+` and `-`: `-` is already the scope menu, and a diff has two
+widening axes — which revisions it covers, and how much of each file comes with
+them. These are the shifted halves of the two keys next to each other, which is
+as close to the obvious pair as the taken key leaves.
+
+Widening re-asks jj with a bigger `--context` rather than splicing file content
+into the parsed hunks. jj already knows how to widen a hunk, merge two that grow
+into each other, and stop at the start and end of a file, and it answers for the
+revision being read — where the working copy on disk is a different question for
+any scope that does not end at `@`. Your cursor stays on the line it was on
+across the reload, and the header names the width whenever it is not the default,
+since a widened diff looks like a different change once you have forgotten you
+widened it.
+
 ## CLI reference (highlights)
 
 | Command | Purpose |

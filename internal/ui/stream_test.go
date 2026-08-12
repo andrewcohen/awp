@@ -24,7 +24,7 @@ func hunkOf(start int, spec string, content string) diff.Hunk {
 // streamModel is a viewer over the given files, hunk pane focused.
 func streamModel(t *testing.T, files ...diff.FileDiff) Model {
 	t.Helper()
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 8)
 	updated, _ := m.Update(diffLoadedMsg{files: files})
 	got := updated.(Model)
@@ -602,7 +602,7 @@ func TestCursorSurvivesRebuild(t *testing.T) {
 // The editor jump follows the cursor, not the top of the viewport.
 func TestOpenAtCursorFollowsTheCursorRow(t *testing.T) {
 	var gotLine int
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(_, _ string, line int) tea.Cmd {
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, func(_, _ string, line int) tea.Cmd {
 		gotLine = line
 		return nil
 	})
