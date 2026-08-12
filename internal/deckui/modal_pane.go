@@ -724,14 +724,15 @@ const paneLabelMin = 10
 // own title row carries stays behind; which slice of the list you were looking
 // through is not a question a pane raises.
 func (p *panePopover) header(m *Model, w int) string {
-	leave := PaneLeaveKey + " deck"
 	if _, split := m.active.(*splitModal); split {
-		// In a split the reserved key is a prefix, so one press does not leave.
-		// The hint has to say the keystrokes that do, or it is describing a
-		// different arrangement of the screen than the one you are looking at.
-		leave = PaneLeaveKey + " q deck"
+		// In a split the badge and the leave key live on the split's own row above
+		// both halves, where they answer for the screen rather than for one half of
+		// it. Repeating them here printed the same numbers and the same key twice
+		// and left the label — the one thing that differs between the halves — with
+		// whatever room the duplicates had not taken.
+		return p.splitHeader(m, w)
 	}
-	hint := m.styles.PaneHint.Render(leave)
+	hint := m.styles.PaneHint.Render(PaneLeaveKey + " deck")
 	// Which emulator is behind the pane, but only when it is not the default one.
 	// Running on an alternative is a thing you need to see to trust a comparison;
 	// running on the usual one is not news, and the pane's chrome is one row.
@@ -762,4 +763,15 @@ func (p *panePopover) header(m *Model, w int) string {
 		return hint
 	}
 	return left + strings.Repeat(" ", gap) + hint
+}
+
+// splitHeader is the header for a pane that is one half of a split: the label,
+// and the emulator when it is not the usual one. Everything else it would say is
+// said once, above, for both halves.
+func (p *panePopover) splitHeader(m *Model, w int) string {
+	label := p.label
+	if vt := p.term.Emulator(); vt != vterm.EmulatorXVT {
+		label = vt + " · " + label
+	}
+	return m.styles.PaneTitle.Render(truncate(label, max(1, w)))
 }
