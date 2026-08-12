@@ -8,18 +8,79 @@ package vterm
 import "C"
 
 import (
+	"unicode"
+
 	tea "charm.land/bubbletea/v2"
 )
 
 // The translation between Bubble Tea's key vocabulary and libghostty's.
 //
 // libghostty's GhosttyKey is a physical-key enum in the W3C style — 181 entries,
-// one per key on a keyboard. Only the ones a terminal program reads as a named
-// key are mapped: for everything printable the encoder works from the event's
-// utf8 and unshifted codepoint, which is what a terminal actually puts on the
-// wire. An unmapped key is GHOSTTY_KEY_UNIDENTIFIED, which is honest — it says
-// "text, no named key" rather than naming the wrong one.
+// one per key on a keyboard — and it is not only for the keys with names. A
+// modified printable key is encoded from the key rather than from its text,
+// because there is no text: ctrl+w produces no character, so an event that names
+// no key and carries no codepoint gives the encoder nothing to work from and it
+// emits nothing at all. That is exactly how ctrl+a, ctrl+e and ctrl+w came to do
+// nothing in a pane while unmodified typing worked.
+//
+// So the writing-system keys are mapped too, spelled out rather than derived
+// from the enum's order. GHOSTTY_KEY_A through _Z are contiguous today and
+// arithmetic over them would be shorter, but this is another project's ABI: a
+// key inserted mid-block would not fail here, it would silently send the letter
+// next to the one that was pressed.
 var ghosttyKeys = map[rune]C.GhosttyKey{
+	'a': C.GHOSTTY_KEY_A,
+	'b': C.GHOSTTY_KEY_B,
+	'c': C.GHOSTTY_KEY_C,
+	'd': C.GHOSTTY_KEY_D,
+	'e': C.GHOSTTY_KEY_E,
+	'f': C.GHOSTTY_KEY_F,
+	'g': C.GHOSTTY_KEY_G,
+	'h': C.GHOSTTY_KEY_H,
+	'i': C.GHOSTTY_KEY_I,
+	'j': C.GHOSTTY_KEY_J,
+	'k': C.GHOSTTY_KEY_K,
+	'l': C.GHOSTTY_KEY_L,
+	'm': C.GHOSTTY_KEY_M,
+	'n': C.GHOSTTY_KEY_N,
+	'o': C.GHOSTTY_KEY_O,
+	'p': C.GHOSTTY_KEY_P,
+	'q': C.GHOSTTY_KEY_Q,
+	'r': C.GHOSTTY_KEY_R,
+	's': C.GHOSTTY_KEY_S,
+	't': C.GHOSTTY_KEY_T,
+	'u': C.GHOSTTY_KEY_U,
+	'v': C.GHOSTTY_KEY_V,
+	'w': C.GHOSTTY_KEY_W,
+	'x': C.GHOSTTY_KEY_X,
+	'y': C.GHOSTTY_KEY_Y,
+	'z': C.GHOSTTY_KEY_Z,
+
+	'0': C.GHOSTTY_KEY_DIGIT_0,
+	'1': C.GHOSTTY_KEY_DIGIT_1,
+	'2': C.GHOSTTY_KEY_DIGIT_2,
+	'3': C.GHOSTTY_KEY_DIGIT_3,
+	'4': C.GHOSTTY_KEY_DIGIT_4,
+	'5': C.GHOSTTY_KEY_DIGIT_5,
+	'6': C.GHOSTTY_KEY_DIGIT_6,
+	'7': C.GHOSTTY_KEY_DIGIT_7,
+	'8': C.GHOSTTY_KEY_DIGIT_8,
+	'9': C.GHOSTTY_KEY_DIGIT_9,
+
+	// The punctuation keys carry control codes of their own: ctrl+[ is escape,
+	// ctrl+/ is 0x1f, ctrl+] is 0x1d.
+	'`':  C.GHOSTTY_KEY_BACKQUOTE,
+	'-':  C.GHOSTTY_KEY_MINUS,
+	'=':  C.GHOSTTY_KEY_EQUAL,
+	'[':  C.GHOSTTY_KEY_BRACKET_LEFT,
+	']':  C.GHOSTTY_KEY_BRACKET_RIGHT,
+	'\\': C.GHOSTTY_KEY_BACKSLASH,
+	';':  C.GHOSTTY_KEY_SEMICOLON,
+	'\'': C.GHOSTTY_KEY_QUOTE,
+	',':  C.GHOSTTY_KEY_COMMA,
+	'.':  C.GHOSTTY_KEY_PERIOD,
+	'/':  C.GHOSTTY_KEY_SLASH,
+
 	tea.KeyEnter:     C.GHOSTTY_KEY_ENTER,
 	tea.KeyTab:       C.GHOSTTY_KEY_TAB,
 	tea.KeyBackspace: C.GHOSTTY_KEY_BACKSPACE,
@@ -49,11 +110,41 @@ var ghosttyKeys = map[rune]C.GhosttyKey{
 	tea.KeyF12:       C.GHOSTTY_KEY_F12,
 }
 
+// ghosttyKey names the physical key an event came from, or
+// GHOSTTY_KEY_UNIDENTIFIED for one this does not know — which is honest, and says
+// "text, no named key" rather than naming the wrong key.
+//
+// Lowercased first because a key is a place on the keyboard, not a character:
+// there is no upper-case key, and shift is already carried in the mods.
 func ghosttyKey(code rune) C.GhosttyKey {
-	if k, ok := ghosttyKeys[code]; ok {
+	if k, ok := ghosttyKeys[unicode.ToLower(code)]; ok {
 		return k
 	}
 	return C.GHOSTTY_KEY_UNIDENTIFIED
+}
+
+// unshiftedCodepoint is what the key would produce with no modifiers held, which
+// is the other half of what the encoder needs to derive a control byte: ctrl+w is
+// 0x17 because the key under it is 'w'.
+//
+// BaseCode when Bubble Tea supplies one — it is the PC-101 key under a layout
+// that renames it, which is precisely this question — and otherwise the code
+// itself, since for a latin layout the key and what it would type are the same.
+// Returning it for every printable key rather than only the renamed ones is the
+// fix: the codepoint used to be sent only when BaseCode was set, which on a US
+// layout is never.
+//
+// Zero for a named key. Bubble Tea's sentinels live above unicode.MaxRune
+// exactly so they cannot be mistaken for characters, and passing one through as
+// a codepoint would claim ctrl+F5 types something.
+func unshiftedCodepoint(k tea.Key) rune {
+	if k.BaseCode != 0 {
+		return k.BaseCode
+	}
+	if k.Code > unicode.MaxRune {
+		return 0
+	}
+	return unicode.ToLower(k.Code)
 }
 
 // ghosttyMods drops the side bits: awp is told a modifier is held, not which of
