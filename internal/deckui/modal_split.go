@@ -157,7 +157,7 @@ func (s *splitModal) focused() modal {
 // the mouse and the cursor. A child that is not one of the halves — or is the
 // zoomed-away one — gets the empty box, which both callers read as "nowhere".
 func (s *splitModal) boxOf(child modal, full box) box {
-	left, right := s.boxes(full)
+	left, right := s.boxes(s.bodyBox(full))
 	switch child {
 	case s.left:
 		return left
@@ -301,6 +301,18 @@ func (s *splitModal) footerHelp() string { return s.focused().footerHelp() }
 // halves and spanning the terminal.
 const splitBarRows = 1
 
+// bodyBox is what is left for the halves once the status row has taken its own.
+//
+// Both the renderer and boxOf go through this. They used to each do the
+// arithmetic, and only the renderer remembered the status row — so a hosted
+// program painted one row lower than the deck thought its terminal started,
+// which is where its cursor was drawn and where a click was translated from.
+func (s *splitModal) bodyBox(b box) box {
+	b.y += splitBarRows
+	b.h -= splitBarRows
+	return b
+}
+
 // renderPopover draws the status row, then both halves beneath it.
 //
 // A popover rather than a body modal because the halves carry their own inner
@@ -308,9 +320,7 @@ const splitBarRows = 1
 // screen that already has two.
 func (s *splitModal) renderPopover(m *Model, b box) string {
 	bar := s.statusBar(m, b)
-	body := b
-	body.y += splitBarRows
-	body.h -= splitBarRows
+	body := s.bodyBox(b)
 	if s.zoomed {
 		return bar + "\n" + renderChild(m, s.focused(), body.focus(true))
 	}

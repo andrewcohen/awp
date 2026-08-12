@@ -478,6 +478,36 @@ func TestTheSplitCarriesOneStatusRowAboveBothHalves(t *testing.T) {
 	}
 }
 
+// TestAHalfSitsWhereTheCursorThinksItDoes. boxOf is what the hosted program's
+// cursor and its mouse translation are derived from, and renderPopover is where
+// the half is actually drawn. They have to subtract the status row the same
+// number of times: the renderer remembered it and boxOf did not, so a program's
+// cursor was drawn one row above the cell it was in, and a click was reported
+// one row below the cell it hit.
+func TestAHalfSitsWhereTheCursorThinksItDoes(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	full := m.childBox()
+	wantLeft, wantRight := s.boxes(s.bodyBox(full))
+	for _, half := range []struct {
+		name  string
+		child modal
+		want  box
+	}{
+		{"left", s.left, wantLeft},
+		{"right", s.right, wantRight},
+	} {
+		if got := s.boxOf(half.child, full); got != half.want {
+			t.Errorf("the %s half is drawn in %+v but addressed as %+v", half.name, half.want, got)
+		}
+	}
+	if got := wantLeft.y; got != splitBarRows {
+		t.Errorf("the halves start on row %d, want %d — below the status row", got, splitBarRows)
+	}
+	if got, want := wantLeft.h, m.height-splitBarRows; got != want {
+		t.Errorf("the halves are %d rows tall, want %d", got, want)
+	}
+}
+
 // TestAHalfsOwnHeaderStopsRepeatingTheSplitsRow. The badge and the leave key are
 // above; a half's header is left with the one thing that differs between them.
 func TestAHalfsOwnHeaderStopsRepeatingTheSplitsRow(t *testing.T) {
