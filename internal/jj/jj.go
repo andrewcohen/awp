@@ -18,6 +18,11 @@ type Client struct {
 	runner Runner
 }
 
+// DiffContextDefault is jj's own default number of context lines, named here so a
+// caller that wants the usual amount says so instead of writing 3 and leaving the
+// next reader to wonder what is special about three.
+const DiffContextDefault = 3
+
 func New(runner Runner) *Client {
 	return &Client{runner: runner}
 }
@@ -63,8 +68,24 @@ func (c *Client) SourceRepoRoot() (string, error) {
 	return pointer, nil
 }
 
-func (c *Client) DiffGit(dir string, revision string) (string, error) {
-	args := []string{"diff", "--git"}
+// DiffGit is the git-format diff of a revision, with contextLines of unchanged
+// code around each hunk.
+//
+// The context is a required argument rather than an option or a second method
+// because it is half of what a diff read is: which revision, and how much of the
+// code around the change comes with it. A caller that could leave it out would
+// get jj's default of three lines and no indication that it had chosen anything —
+// which is how every awp diff surface came to be stuck at three. Same reasoning
+// as github.New taking its directory.
+//
+// DiffContextDefault is the value to pass to mean "the usual amount".
+//
+// Always passed on, and clamped rather than rejected: a negative number of lines
+// is not a request this can honour and not worth an error return at every call
+// site, and zero — hunks with no surrounding code at all — is a real thing to ask
+// for.
+func (c *Client) DiffGit(dir string, revision string, contextLines int) (string, error) {
+	args := []string{"diff", "--git", "--context", strconv.Itoa(max(contextLines, 0))}
 	revision = strings.TrimSpace(revision)
 	if revision != "" {
 		args = append(args, "-r", revision)
