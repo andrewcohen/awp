@@ -207,7 +207,7 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 	// now, and documents it itself.
 	inner.HostKeys = []charm.KeyGroup{{
 		Title: "In the deck",
-		Keys:  [][2]string{{"esc / q", "back to the deck"}},
+		Keys:  [][2]string{{"esc / q / " + PaneLeaveKey, "back to the deck"}},
 	}}
 	ApplyCommentStore(&inner, item, comments)
 	dm := &diffModal{
@@ -298,7 +298,11 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		// Deliberately not `c`: that opens the comment box inside the viewer.
 		// `c` opened this modal from the row list, but once it is up the key
 		// belongs to the surface, not to closing it.
-		case "esc", "q", "ctrl+c":
+		case "esc", "q", "ctrl+c", PaneLeaveKey:
+			// ctrl+\ means "give the keyboard back to whatever put me here"
+			// everywhere else in awp, and the deck is what put this here. The
+			// viewer binds it too, for when it is the whole program in a pane; this
+			// arm is what makes the same key do the same thing when it is a modal.
 			m.active = nil
 			return nil
 		}

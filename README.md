@@ -770,9 +770,12 @@ child's business:
 |------|------------------------------------------|
 | agent, editor, user actions | Detaches. These run under `zmx attach`, and zmx's own detach key is also `ctrl+\` — the session keeps running, exactly as when the pane closes |
 | `W` watch | Leaves. It is awp's own program, so it binds the key itself |
+| the diff viewer (`awp diff`, the review window) | Leaves, same reason — see **the diff viewer** below |
 | `i` CI | Exits, by signal: a cooked-mode `bash -c`, so the line discipline turns the key into SIGQUIT. The deck reads that as leaving rather than as a failure, so no error lands in the status bar |
 | `v` vcs | Nothing — jjui is in raw mode with nobody in front of it. Use jjui's own `q` |
 | shell | Nothing: interactive shells ignore SIGQUIT. Use `exit` / `ctrl+d` |
+
+**`ctrl+\` leaves the diff viewer too**, in both hosts: standalone `awp diff` quits on it the way it quits on `q`, and the deck's `c` modal closes on it the way it closes on `esc`. The key means "give the keyboard back to whatever put me here" everywhere else in awp, and the review surface is the one you spend the longest in — it had no reason to be the exception. It matters most in a handed-over pane, where the deck is suspended and reading nothing, so a program that does not bind the key itself cannot be left at all. The spelling lives in `internal/charm` for that reason: `internal/ui` cannot import `internal/deckui`, and a second copy of the string is how the hint a pane prints stops matching the key that works.
 
 The two that don't answer are third-party programs reading the real terminal,
 which is what handover means. Giving them the key needs something in front of

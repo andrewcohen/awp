@@ -785,7 +785,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "q", "ctrl+c":
+	case "q", "ctrl+c", charm.PaneLeaveKey:
+		// ctrl+\ because this view can be the program inside a pane — `awp diff`
+		// in one, or the review window a workspace opens — and there the key that
+		// gives the terminal back is the pane's, not q's. Under a handed-over pane
+		// the deck is suspended and reading nothing, so if this switch does not
+		// answer for it, nothing does.
 		return m, tea.Quit
 	case `\`:
 		m.hideLeft = !m.hideLeft

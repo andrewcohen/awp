@@ -12,21 +12,18 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/andrewcohen/awp/internal/charm"
 	"github.com/andrewcohen/awp/internal/vterm"
 )
 
-// PaneLeaveKey gives the keyboard back to the deck.
+// PaneLeaveKey gives the keyboard back to the deck. See charm.PaneLeaveKey for
+// why it is that key and why it is declared a package down.
 //
-// It has to be a key nothing inside the pane wants, because everything else
-// belongs to the program: esc, q and ctrl+c all mean something to an agent.
-// ctrl+\ is normally SIGQUIT, which is exactly why nothing interactive binds
-// it, and the deck reads it as a key because its own terminal is in raw mode.
-//
-// Exported because a pane the deck has handed the terminal to is not reading
-// keys through here, so anything of awp's own that can be the program in one
-// has to answer for the key itself — see the watch view. One spelling, so the
-// hint the pane's chrome prints and the key those programs bind cannot drift.
-const PaneLeaveKey = "ctrl+\\"
+// Kept here as well because this is where the deck's readers look, and because
+// every reference in this package predates the move. Re-exported rather than
+// re-spelled: the pane chrome's hint and the key awp's own hosted programs bind
+// have to be one string or the hint is a lie.
+const PaneLeaveKey = charm.PaneLeaveKey
 
 // PaneBackend turns a workspace and a window kind into a process the deck can
 // host on a pty it owns, instead of handing off to a tmux window.
