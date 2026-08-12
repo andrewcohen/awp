@@ -111,7 +111,9 @@ type PaneSessioner interface {
 
 // panePopover is a hosted process shown in place of the deck body.
 type panePopover struct {
-	term    *vterm.Term
+	// term is the interface rather than *vterm.Term so which emulator interprets
+	// the pane is vterm.Open's decision, not this struct's. See vterm.Hosted.
+	term    vterm.Hosted
 	label   string
 	restore func()
 	setW    int
@@ -256,7 +258,7 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		return m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
-	term, err := vterm.Start(m.paneGen, w, h, cmd, m.hostColors)
+	term, err := vterm.Open(m.paneGen, w, h, cmd, m.hostColors)
 	if err != nil {
 		if restore != nil {
 			restore()
