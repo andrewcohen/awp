@@ -478,6 +478,76 @@ func TestTheSplitCarriesOneStatusRowAboveBothHalves(t *testing.T) {
 	}
 }
 
+// TestTheDividerMoves. The keys are behind the prefix, and the halves have to
+// follow — a ratio nothing renders from is a number that only looks like a
+// resize.
+func TestTheDividerMoves(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	even := s.splitCol(m.childBox())
+	if want := m.width / 2; even != want {
+		t.Fatalf("a fresh split divides at %d, want %d", even, want)
+	}
+	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, runeKey(">"))
+	wider := s.splitCol(m.childBox())
+	if wider <= even {
+		t.Errorf("> put the divider at %d, no further right than %d", wider, even)
+	}
+	if got := lipgloss.Width(renderChild(&m, s.left, mustBox(t, s, &m, s.left))); got != wider {
+		t.Errorf("the left half rendered %d columns with the divider at %d", got, wider)
+	}
+	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, runeKey("="))
+	if got := s.splitCol(m.childBox()); got != even {
+		t.Errorf("= left the divider at %d, want %d", got, even)
+	}
+}
+
+// TestTheDividerStopsBeforeAHalfDisappears. Held at the wall the key does
+// nothing, rather than squeezing a half down to a border around nothing and
+// resizing a pty to a width its program cannot lay out.
+func TestTheDividerStopsBeforeAHalfDisappears(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	for range 40 {
+		s.resize(&m, splitResizeStep)
+	}
+	col := s.splitCol(m.childBox())
+	if col > m.width-splitHalfMinW {
+		t.Errorf("the right half was squeezed to %d columns, minimum %d", m.width-col, splitHalfMinW)
+	}
+	// And back the same number of taps: a clamped tap must not bank a fraction
+	// that has to be spent again on the way out.
+	for range 40 {
+		s.resize(&m, -splitResizeStep)
+	}
+	if got := s.splitCol(m.childBox()); got > splitHalfMinW+int(splitResizeStep*float64(m.width))+1 {
+		t.Errorf("coming back left the divider at %d, want it against the left wall", got)
+	}
+}
+
+// TestTheDividerHoldsItsPlaceAcrossAResize. The fraction is stored, not the
+// column, so a terminal that gets wider keeps the proportion you chose.
+func TestTheDividerHoldsItsPlaceAcrossAResize(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	s.resize(&m, splitResizeStep*2)
+	before := float64(s.splitCol(m.childBox())) / float64(m.width)
+	m.width = 300
+	after := float64(s.splitCol(m.childBox())) / float64(m.width)
+	if diff := after - before; diff > 0.01 || diff < -0.01 {
+		t.Errorf("the divider was at %.2f of the width and is now at %.2f", before, after)
+	}
+}
+
+// mustBox is boxOf, failing the test rather than returning nowhere.
+func mustBox(t *testing.T, s *splitModal, m *Model, child modal) box {
+	t.Helper()
+	b := s.boxOf(child, m.childBox())
+	if b.w <= 0 {
+		t.Fatalf("the half is addressed as nowhere: %+v", b)
+	}
+	return b
+}
+
 // TestAHalfSitsWhereTheCursorThinksItDoes. boxOf is what the hosted program's
 // cursor and its mouse translation are derived from, and renderPopover is where
 // the half is actually drawn. They have to subtract the status row the same

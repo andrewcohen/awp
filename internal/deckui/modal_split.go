@@ -40,6 +40,14 @@ type splitModal struct {
 	// label is what the right half is, for the chrome. The left half is the
 	// agent by construction and names itself.
 	label string
+	// leftFrac is how much of the width the left half gets, as a fraction rather
+	// than a column count so a terminal resize keeps the divider where you put it
+	// instead of leaving it wherever it happened to be in the old width.
+	//
+	// The zero value is not 0.5 — a split built without an opinion should be even,
+	// and a struct literal that forgets the field would otherwise open with the
+	// left half at zero columns. splitLeftFrac reads it, and treats zero as even.
+	leftFrac float64
 	// prefixArmed is whether the last key was the reserved one, so the next key
 	// is read as a verb rather than typed at whichever program has focus.
 	//
@@ -53,7 +61,7 @@ type splitModal struct {
 
 // splitPrefixHint is the verb menu, shown in the status bar while the prefix is
 // up.
-const splitPrefixHint = PaneLeaveKey + ": h/l/tab focus · o zoom · x close this half · q leave · esc cancel"
+const splitPrefixHint = PaneLeaveKey + ": h/l/tab focus · < > = size · o zoom · x close this half · q leave · esc cancel"
 
 // prefixKey reads one key while the prefix is armed. It returns the command to
 // run; the prefix is always disarmed by it, since every key either is a verb or
@@ -83,6 +91,12 @@ func (s *splitModal) prefixKey(m *Model, pressed string) tea.Cmd {
 		s.rightFocused = false
 	case "tab":
 		s.rightFocused = !s.rightFocused
+	case "<":
+		s.resize(m, -splitResizeStep)
+	case ">":
+		s.resize(m, splitResizeStep)
+	case "=":
+		s.leftFrac = splitEvenFrac
 	case "o":
 		s.zoomed = !s.zoomed
 	case "x":
@@ -126,8 +140,70 @@ const splitMinW = 120
 // splitFits reports whether a box can carry a split at all.
 func splitFits(b box) bool { return b.w >= splitMinW && paneFits(b.w/2, b.h) }
 
+// splitEvenFrac is the divider's resting place, and what `=` restores.
+const splitEvenFrac = 0.5
+
+// splitResizeStep is how far one `<` or `>` moves the divider, as a fraction of
+// the width.
+//
+// A fraction rather than a column count so the same keypress feels the same on
+// a 120-column terminal and a 400-column one. At 5% a wide terminal still moves
+// by several columns a tap, which is what a resize key is for; a column at a
+// time would be a key you hold, and holding a key behind a prefix does nothing
+// (see prefixKey).
+const splitResizeStep = 0.05
+
+// splitHalfMinW is the narrowest a half may be squeezed to.
+//
+// The pane minimum plus its own chrome: below this a half is a border around
+// nothing, and the pty behind it would be resized to a width its program cannot
+// lay out. The clamp is why `<` held at the wall does nothing rather than
+// collapsing a half you would then have to re-open.
+const splitHalfMinW = paneMinW + paneChromeW
+
+// resize moves the divider by frac of the width, clamped, and says where it
+// ended up. It reports the new share rather than staying silent because the
+// divider has no gutter to grab and no number on it — the status line is where
+// you see that the key did anything at all.
+func (s *splitModal) resize(m *Model, frac float64) {
+	before := s.splitCol(m.childBox())
+	s.leftFrac = splitLeftFrac(s.leftFrac) + frac
+	after := s.splitCol(m.childBox())
+	if after == before {
+		// Clamped at a wall. Put the fraction back where the wall is, so repeated
+		// taps do not accumulate a fraction the clamp is hiding and then have to be
+		// undone one by one on the way back.
+		s.leftFrac = float64(after) / float64(max(1, m.width))
+	}
+	m.status = fmt.Sprintf("split: %d / %d columns", after, max(0, m.width-after))
+}
+
+// splitLeftFrac is the left half's share, reading the zero value as even.
+func splitLeftFrac(frac float64) float64 {
+	if frac <= 0 {
+		return splitEvenFrac
+	}
+	return frac
+}
+
+// splitCol is the column the divider sits in for a given box: the left half's
+// width, clamped so neither half falls under splitHalfMinW.
+//
+// One function so the renderer, the halves' boxes and the resize keys cannot
+// come to disagree about where the divider is. In a box too narrow for two
+// minimum halves it returns the middle and lets splitFits refuse the split —
+// clamping against itself here would put the divider outside the box.
+func (s *splitModal) splitCol(b box) int {
+	col := int(splitLeftFrac(s.leftFrac) * float64(b.w))
+	if b.w < 2*splitHalfMinW {
+		return b.w / 2
+	}
+	return min(max(col, splitHalfMinW), b.w-splitHalfMinW)
+}
+
 // boxes divides the box the split was given between its two halves.
 //
+// The divider is at splitCol, which is even until you move it with `<` / `>`.
 // An odd column goes to the right half. Whatever is over there was opened to be
 // read — a diff, a log, a description — and the left is an agent whose output
 // wraps to whatever it is given.
@@ -141,7 +217,7 @@ func (s *splitModal) boxes(b box) (left, right box) {
 		}
 		return b.focus(true), box{}
 	}
-	left, right = b.splitAt(b.w / 2)
+	left, right = b.splitAt(s.splitCol(b))
 	return left.focus(!s.rightFocused), right.focus(s.rightFocused)
 }
 
@@ -443,7 +519,7 @@ func (m *Model) openSplit(item Item, kind string) (tea.Cmd, bool) {
 	// throwaway split so the arithmetic is the same one the renderer will do,
 	// rather than a second copy of it that agrees today.
 	probe := &splitModal{}
-	leftBox, rightBox := probe.boxes(full)
+	leftBox, rightBox := probe.boxes(probe.bodyBox(full))
 
 	left, cmdLeft, ok := m.openChild(item, PaneKindAgent, leftBox)
 	if !ok {
