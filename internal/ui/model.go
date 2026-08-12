@@ -1588,6 +1588,11 @@ var (
 // same questions the deck's footer does. Empty fields are omitted rather than
 // shown blank.
 type Subject struct {
+	// Project is the repo the change belongs to. Given rather than derived, because
+	// RepoRoot is the *workspace* the diff's paths are rooted at — inside a secondary
+	// jj workspace its directory name is the workspace's name, not the project's.
+	// Empty falls back to that directory name, which is right for a plain repo.
+	Project string
 	// Workspace is the workspace the working directory sits in, empty in a plain
 	// repo — which is a legitimate place to read a diff, so it is not an error.
 	Workspace string
@@ -1596,7 +1601,12 @@ type Subject struct {
 }
 
 func (m Model) renderHeader() string {
-	name := filepath.Base(m.RepoRoot)
+	name := strings.TrimSpace(m.Subject.Project)
+	if name == "" {
+		// No project given: the root's own directory name, which is the answer in a
+		// plain repo and the best available one anywhere else.
+		name = filepath.Base(m.RepoRoot)
+	}
 	if name == "" || name == "." || name == string(filepath.Separator) {
 		name = m.RepoRoot
 	}

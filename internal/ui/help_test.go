@@ -318,6 +318,25 @@ func TestStandaloneHeaderNamesTheSubject(t *testing.T) {
 	}
 }
 
+// TestStandaloneHeaderNamesTheProjectNotTheWorkspaceDirectory.
+//
+// RepoRoot is the workspace the diff's paths are rooted at, so inside a PR
+// workspace its directory name is the workspace's, not the project's. Left to
+// filepath.Base the header said `pr-2336-dev` twice and never named the repo the
+// change belongs to.
+func TestStandaloneHeaderNamesTheProjectNotTheWorkspaceDirectory(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha"))
+	m.RepoRoot = "/ws/pr-2336-dev"
+	m.Subject = Subject{Project: "alpha", Workspace: "pr-2336-dev", PR: "alpha#2336"}
+	header := stripANSI(m.renderHeader())
+	if !strings.Contains(header, "alpha ·") {
+		t.Errorf("the header does not name the project:\n%s", header)
+	}
+	if strings.Count(header, "pr-2336-dev") != 1 {
+		t.Errorf("the workspace is named %d times:\n%s", strings.Count(header, "pr-2336-dev"), header)
+	}
+}
+
 // A plain repo is a legitimate place to read a change, so the segments that have
 // no answer are dropped rather than shown blank.
 func TestStandaloneHeaderOmitsWhatItDoesNotKnow(t *testing.T) {
