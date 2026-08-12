@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -426,33 +425,10 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 // opens, so a workspace ends up with two agents: the zmx one on screen and an
 // invisible tmux one receiving everything you type at it.
 //
-// It will not start an agent that is not running. zmx has no way to create a
-// session detached with a real command as its own process (see zmx.AttachCmd),
-// so the honest answer is to say so and name the key that fixes it.
+// The send itself is shared with the surfaces that have no host object to ask —
+// see agentPromptSender, which is what decides that this is the agent to send to.
 func (z zmxPanes) SendPrompt(item deckui.Item, text string, reporter deckui.Reporter) error {
-	if reporter == nil {
-		reporter = noopReporter{}
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return errors.New("send prompt: nothing to send")
-	}
-	ws := strings.TrimSpace(item.WorkspaceName)
-	if ws == "" {
-		return errors.New("send prompt: select a workspace row first")
-	}
-
-	name := zmx.SessionName(item.ProjectName, ws, panes["agent"].label)
-	session, found, err := z.client.Lookup(context.Background(), name)
-	if err != nil {
-		return err
-	}
-	if !found || !session.Live() {
-		return fmt.Errorf("send prompt: no agent running for %s — press a to start one", ws)
-	}
-
-	reporter.Step("Send prompt to agent")
-	return z.client.Paste(context.Background(), name, text)
+	return sendPromptToZmxAgent(z.client, item, text, reporter)
 }
 
 // runZdeck is `awp deck` with zmx behind the window keys instead of tmux.
@@ -782,7 +758,7 @@ func liveZmxAgent(runner Runner, project, workspaceName string) (string, error) 
 	if _, err := exec.LookPath("zmx"); err != nil {
 		return "", nil
 	}
-	name := zmx.SessionName(project, workspaceName, deckui.PaneKindAgent)
+	name := agentSessionName(project, workspaceName)
 	s, found, err := zmxClientFor(runner).Lookup(context.Background(), name)
 	if err != nil {
 		// Refusing to guess: a rename that cannot tell whether an agent is

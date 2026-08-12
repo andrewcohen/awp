@@ -1031,7 +1031,11 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithDiffScopes(func(item deckui.Item) []ui.ScopeOption {
 			return scopeOptionsFor(runner, item, item.Path)
 		}).
-		WithReviewStore(reviewStoreWithSend(runner, tmuxClient, svc)).
+		// The same sender the deck's own `A` resolves to, so `c` and `A` on one row
+		// reach one agent. Wired with panes: under a pane host the review's remarks
+		// go to the agent the host shows, and nothing falls back to tmux — which
+		// would start a second one.
+		WithReviewStore(reviewStoreWithSend(runner, agentPromptSender(panes, runner, tmuxClient, svc))).
 		WithTrunkResolver(func(repo string) string {
 			fr := fixedDirRunner{base: runner, dir: repo}
 			name, _ := jj.New(fr).Trunk()
@@ -2147,7 +2151,12 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		}
 		return nil
 	case deckui.ActionSendPrompt:
-		return sendPromptToAgent(tmuxClient, svc, item, req.Arg, reporter)
+		// nil panes, because a deck that has one never reaches here — hostFirst
+		// intercepts ActionSendPrompt above. What is left is a deck with no host,
+		// where the agent may still be a zmx session: this is `awp deck` on a
+		// workspace whose agent zdeck started, and it is the same resolution the
+		// review store's send uses.
+		return agentPromptSender(nil, runner, tmuxClient, svc)(item, req.Arg, reporter)
 	case deckui.ActionMergePR:
 		n, err := strconv.Atoi(strings.TrimSpace(req.Arg))
 		if err != nil || n <= 0 {
