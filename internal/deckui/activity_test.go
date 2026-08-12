@@ -386,6 +386,38 @@ func TestSpinnerTickPerpetuatesEvenWhenIdle(t *testing.T) {
 	_ = updated
 }
 
+// TestTheIdleSpinnerTickIsPaced. Keeping the loop alive is not enough: the tick
+// has to be a *delayed* one.
+//
+// spinner.Tick returns its TickMsg the moment it is called — the delay lives only
+// in the spinner's Update, which schedules tea.Tick at the spinner's FPS. So
+// returning m.spinner.Tick to perpetuate the loop perpetuated it as fast as the
+// program could go: message, command, message, with a full deck frame between
+// each. A CPU profile of a completely idle zdeck was 40% render, ~6000 frames in
+// 14 seconds.
+//
+// This is checked by running the command and asserting it does *not* answer
+// immediately, because "immediately" is the whole defect and the type system
+// cannot tell the two commands apart.
+func TestTheIdleSpinnerTickIsPaced(t *testing.T) {
+	m := New(nil, nil)
+	if m.busy || len(m.activities) != 0 {
+		t.Fatalf("preconditions: expected idle model")
+	}
+	_, cmd := m.Update(spinner.TickMsg{})
+	if cmd == nil {
+		t.Fatal("the idle tick scheduled nothing")
+	}
+	answered := make(chan tea.Msg, 1)
+	go func() { answered <- cmd() }()
+	select {
+	case <-answered:
+		t.Error("the idle tick came back immediately — the loop is unpaced, and the deck renders as fast as it can")
+	case <-time.After(20 * time.Millisecond):
+		// Still waiting on tea.Tick, which is the point.
+	}
+}
+
 func TestPRStatusRepoDoneTicksActivity(t *testing.T) {
 	model := New(nil, nil)
 	model = model.startActivity("pr-status", "pr-status", 3)

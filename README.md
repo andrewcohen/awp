@@ -1104,6 +1104,20 @@ Two more diagnostics, both off unless set:
 | Variable | Records |
 |----------|---------|
 | `AWP_TRACE=1` | One line per frame into `/tmp/awp-deck.log`: what awp's own render cost, and the gap since the previous frame. Also where best-effort failures the deck deliberately doesn't surface get written. |
+
+The trace log also **says when the frame rate is absurd**: over 60 frames a second
+it prints `frame rate N/s over budget` once a second. Nothing the deck draws
+changes faster than the spinner (10/s), so a rate in the hundreds means something
+is emitting messages in a loop — and that defect is otherwise invisible, since an
+idle deck rendering 430 frames a second looks exactly like an idle deck. Finding
+the first one took a CPU profile: `spinner.Tick` returns its message *immediately*
+(only the spinner's `Update` schedules a delayed one), and the idle branch of the
+tick handler returned it directly to keep the loop alive, so message and command
+chased each other as fast as the renderer could go — 40% of the process, on a deck
+doing nothing. The renderer itself is capped at 30 fps (`tea.WithFPS`), which
+bounds the terminal writes but not how often `View` is called; Bubble Tea renders
+after every message, so a message loop still costs a full render even when the
+screen is not repainted. The cap is the backstop; the source is the fix.
 | `AWP_PPROF=<path>` | A CPU profile of the whole deck session, written to that path on exit. Read it with `go tool pprof -top -nodecount=30 <path>`. |
 
 `AWP_PPROF` is **a path, not a switch** — and it is refused if you give it one, because every spelling of "on" is also a valid filename. `AWP_PPROF=true awp deck` wrote a 26 KB profile to a file called `true` in whatever directory you launched from, which is how one ended up committed to this repo. An off-ish value (`0`, `false`, `no`, `off`) is honoured as "no profile"; an on-ish one (`1`, `true`, `yes`, `on`) prints what it wanted instead and opens the deck without profiling.

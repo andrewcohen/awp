@@ -71,4 +71,37 @@ func traceFrame(start time.Time, bytes int) {
 	}
 	Trace("frame view %.1fms gap %.1fms bytes %d", sinceMS(start), gap, bytes)
 	lastFrameEnd = time.Now()
+	traceFrameRate(lastFrameEnd)
+}
+
+// frameBudget is how many frames a second is more than anything the deck shows
+// can justify. The spinner is the fastest thing on screen at 10/s, and a message
+// loop renders in the hundreds — there is nothing legitimate in between.
+const frameBudget = 60
+
+var (
+	frameWindow time.Time
+	frameCount  int
+)
+
+// traceFrameRate says so when frames are being drawn faster than anything on
+// screen changes.
+//
+// It exists because the defect it catches is invisible from the outside: an idle
+// deck rendering 430 frames a second looks exactly like an idle deck, and the
+// only symptom is a warm laptop. Finding it took a CPU profile; this makes the
+// next one a line in the trace log. Behind AWP_TRACE, so it costs nothing when
+// nobody is looking.
+func traceFrameRate(now time.Time) {
+	if frameWindow.IsZero() {
+		frameWindow, frameCount = now, 1
+		return
+	}
+	frameCount++
+	if elapsed := now.Sub(frameWindow); elapsed >= time.Second {
+		if rate := float64(frameCount) / elapsed.Seconds(); rate > frameBudget {
+			Trace("frame rate %.0f/s over budget %d — something is emitting messages in a loop", rate, frameBudget)
+		}
+		frameWindow, frameCount = now, 0
+	}
 }

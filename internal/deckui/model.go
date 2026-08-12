@@ -1996,11 +1996,32 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// the next pr-status fetch (or any background work) renders a
 		// frozen glyph until a foreground action / jobsListMsg
 		// bootstraps a new Tick.
-		if !m.busy && len(m.activities) == 0 {
-			return m, m.spinner.Tick
-		}
+		// Every tick goes through the spinner's own Update, idle or not, and
+		// that is not a detail: spinner.Tick returns its TickMsg *immediately*,
+		// and only Update schedules a delayed one (tea.Tick at the spinner's
+		// FPS). Returning m.spinner.Tick from here to "keep the loop alive
+		// cheaply" made the message and the command chase each other as fast as
+		// the renderer could go — an idle deck spent 40% of the process in View,
+		// ~6000 frames in 14 seconds, which is what a CPU profile of a deck
+		// doing nothing at all turned out to be.
+		//
+		// Update's own tag check is the second reason to route through it: the
+		// deck batches m.spinner.Tick alongside a dozen foreground actions, and
+		// a tick that does not go through Update cannot be recognised as a
+		// duplicate, so those would each have started a loop of their own.
+		//
+		// Advancing the glyph while nothing is spinning costs an integer and is
+		// invisible — the glyph is not rendered when there is nothing to spin
+		// for.
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
+		if !m.busy && len(m.activities) == 0 {
+			// Nothing to animate, so skip the picker glyph work below but keep
+			// the paced tick, so an activity arriving mid-session animates
+			// immediately rather than waiting for something to bootstrap a new
+			// loop.
+			return m, cmd
+		}
 		// Refresh the inline loadingItem glyph for any picker that's
 		// currently fetching. SetItems is cheap (single placeholder
 		// item, no list state reset) and re-reading m.spinner.View()
