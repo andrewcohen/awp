@@ -275,7 +275,12 @@ func composeInEditorCmd(initial string) tea.Cmd {
 		_ = os.Remove(name)
 		return fail(err)
 	}
-	return tea.ExecProcess(editor.OpenExecCmd("", name, 0), func(err error) tea.Msg {
+	// No directory, deliberately: the file being edited is a temp scratch buffer in
+	// the system temp dir, not a file in any working copy, so there is no reviewed
+	// repo it belongs to. Unlike `e`, which opens a file *in* the change and has to
+	// start where that change lives — see OpenExecCmd, which is why the parameter
+	// exists and why this "" is written out rather than omitted.
+	return tea.ExecProcess(editor.OpenExecCmd("", "", name, 0), func(err error) tea.Msg {
 		defer func() { _ = os.Remove(name) }()
 		if err != nil {
 			return composeEditedMsg{err: err}

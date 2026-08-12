@@ -75,7 +75,16 @@ const (
 // the very edge of the pane. Collapses near the stream's ends.
 const cursorScrollMargin = 2
 
-type OpenFunc func(filePath string, line int) tea.Cmd
+// OpenFunc hands a file to $EDITOR: which directory to run in, which file, which
+// line.
+//
+// dir comes from the viewer rather than from the host, because it is the same fact
+// as the path's root — resolveFilePath joins RepoRoot with the diff's relative
+// path, and the editor has to start in the working copy that path was resolved
+// against. Two hosts deriving it separately is how they would come to disagree,
+// and the wrong answer is invisible: the file still opens, and only everything the
+// editor infers from cwd is about another project.
+type OpenFunc func(dir, filePath string, line int) tea.Cmd
 
 type Model struct {
 	RepoRoot        string
@@ -1361,7 +1370,7 @@ func (m Model) openCurrentFile() tea.Cmd {
 	if !ok || m.OpenFile == nil {
 		return nil
 	}
-	return m.OpenFile(m.resolveFilePath(f), diff.FirstChangedLine(f))
+	return m.OpenFile(m.RepoRoot, m.resolveFilePath(f), diff.FirstChangedLine(f))
 }
 
 // openAtCursor opens the file for the row the cursor is on, at the line that
@@ -1390,7 +1399,7 @@ func (m Model) openAtCursor() tea.Cmd {
 			line = diff.HunkChangedLine(f.Hunks[r.hunk])
 		}
 	}
-	return m.OpenFile(m.resolveFilePath(f), line)
+	return m.OpenFile(m.RepoRoot, m.resolveFilePath(f), line)
 }
 
 func (m Model) resolveFilePath(f diff.FileDiff) string {

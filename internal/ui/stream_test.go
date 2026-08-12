@@ -602,7 +602,7 @@ func TestCursorSurvivesRebuild(t *testing.T) {
 // The editor jump follows the cursor, not the top of the viewport.
 func TestOpenAtCursorFollowsTheCursorRow(t *testing.T) {
 	var gotLine int
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(_ string, line int) tea.Cmd {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(_, _ string, line int) tea.Cmd {
 		gotLine = line
 		return nil
 	})

@@ -67,7 +67,7 @@ func TestModelFilterMode(t *testing.T) {
 // row it drills into the hunk pane instead.
 func TestModelEnterFocusesHunkPaneWithoutOpening(t *testing.T) {
 	opened := false
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(string, int) tea.Cmd {
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(string, string, int) tea.Cmd {
 		opened = true
 		return nil
 	})
@@ -101,17 +101,24 @@ func TestFilterEnterConfirmsAndReturnsToFiles(t *testing.T) {
 }
 
 func TestModelEAlsoOpensCurrentFile(t *testing.T) {
+	openedDir := ""
 	openedPath := ""
 	openedLine := 0
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(path string, line int) tea.Cmd {
-		openedPath = path
-		openedLine = line
+	m := New("/repo", func() (string, error) { return sampleDiff, nil }, func(dir, path string, line int) tea.Cmd {
+		openedDir, openedPath, openedLine = dir, path, line
 		return nil
 	})
 	updated, _ := m.Update(diffLoadedMsg{files: []diff.FileDiff{{NewPath: "foo.go", Status: "M", Hunks: []diff.Hunk{{NewStart: 7}}}}})
 	_, _ = updated.(Model).Update(runeKey("e"))
 	if openedPath == "" || openedLine != 7 {
 		t.Fatalf("unexpected open via e: %q:%d", openedPath, openedLine)
+	}
+	// The editor runs where the diff's paths are rooted. Without this the editor
+	// inherited awp's own cwd, so reviewing a row in another repo from a deck
+	// launched here handed nvim a cwd in *this* repo — the file was right and
+	// everything the editor derives from a directory was not.
+	if openedDir != "/repo" {
+		t.Errorf("the editor was given %q as its directory, want the reviewed working copy /repo", openedDir)
 	}
 }
 
