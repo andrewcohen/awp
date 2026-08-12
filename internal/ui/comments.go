@@ -1694,6 +1694,33 @@ func (m Model) cursorFile() (diff.FileDiff, bool) {
 	return m.filtered[fi], true
 }
 
+// sendUnsent hands the agent every remark written and not sent yet — ctrl+s from
+// outside the compose box.
+//
+// Nothing waiting is a normal answer rather than a failure. The reviewer asked a
+// question ("is any of this still with me?"), and zero answers it; saying so as an
+// error would put the review in the failure log for a key that had nothing to do.
+func (m *Model) sendUnsent() {
+	if m.SendUnsent == nil {
+		m.status = "sending to the agent is unavailable here"
+		return
+	}
+	n, err := m.SendUnsent()
+	if err != nil {
+		m.fail("send to the agent: %v", err)
+		return
+	}
+	if n == 0 {
+		m.status = "nothing to send — everything you have written is already with the agent"
+		return
+	}
+	// Re-read, because the records the store just marked are on screen wearing the
+	// `unsent` chip and would go on wearing it until a refresh tick came round. A
+	// send whose only visible effect is a status line reads as not having happened.
+	m.reloadComments()
+	m.status = fmt.Sprintf("sent %d remark%s to the agent", n, plural(n))
+}
+
 // SetReviewed installs the reviewed-file marks loaded from the store.
 func (m *Model) SetReviewed(marks map[string]string) {
 	m.ReviewedFiles = marks

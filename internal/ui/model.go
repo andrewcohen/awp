@@ -221,6 +221,13 @@ type Model struct {
 	// SendComment additionally hands a comment to the workspace's agent. Nil
 	// leaves the send exit unavailable.
 	SendComment CommentSink
+	// SendUnsent hands the agent every remark written and not sent yet, and returns
+	// how many went. Nil leaves ctrl+s outside the compose box unavailable.
+	//
+	// It takes no list and returns a count: which records qualify is the store's
+	// answer, read off disk, not this model's — the comments here are a frame behind
+	// by construction, since a finding filed while you read arrives on a tick.
+	SendUnsent func() (int, error)
 	// ApproveProposal says yes to an agent's proposal, returning the record as
 	// written. Nil leaves `A` unavailable, which the viewer reports rather than
 	// appearing to approve something and recording nothing.
@@ -874,6 +881,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// that ends the change rather than describing it.
 	case "M":
 		return m, m.beginMerge()
+	// Sending is about the review as a whole too, so it works from any pane — same
+	// reasoning as T, P and M. Not capital, and it is the same key the compose box
+	// uses for the one remark in it: inside the box ctrl+s means "save and send
+	// this", out here it means "send what is waiting". One verb, one key, and the
+	// two cannot collide because the box has the keyboard when it is open.
+	case "ctrl+s":
+		m.sendUnsent()
+		return m, nil
 	case "tab", "shift+tab":
 		m.cycleFocus(key == "tab")
 		return m, nil

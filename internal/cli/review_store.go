@@ -858,6 +858,58 @@ func sendCommentToAgentFor(send promptSender) deckui.CommentSender {
 	}
 }
 
+// sendUnsentToAgentFor wires the viewer's `ctrl+s` outside the compose box: hand
+// the agent everything you have written and not sent, and say how many that was.
+//
+// The count comes back rather than the records, because the caller does not get to
+// decide which records qualify. The viewer holds a copy of the comments for
+// rendering and that copy is a frame behind the store by construction — a finding
+// filed while you were reading arrives on a refresh tick — so selecting there
+// would be selecting from a list that is nearly right. review.Comment.Unsent is
+// the definition, applied to what is actually on disk.
+func sendUnsentToAgentFor(send promptSender) func(deckui.Item) (int, error) {
+	return func(item deckui.Item) (int, error) {
+		store := review.Store{}
+		r, err := store.Open(item.RepoRoot, review.Target{
+			Kind:      review.TargetWorking,
+			Workspace: item.WorkspaceName,
+		})
+		if err != nil {
+			return 0, err
+		}
+		all, err := store.Comments(r)
+		if err != nil {
+			return 0, err
+		}
+		var unsent []review.Comment
+		for _, c := range all {
+			if c.Unsent() {
+				unsent = append(unsent, c)
+			}
+		}
+		if len(unsent) == 0 {
+			// Not an error: pressing the key with nothing waiting is a question, and
+			// zero is the answer to it. The viewer says so.
+			return 0, nil
+		}
+		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(item.Path)
+		if err := send(item, unsentPromptFor(unsent, revision), noopReporter{}); err != nil {
+			return 0, err
+		}
+		// The count is what left, and all of it left — it was one message. Marking
+		// comes after, and a failure to mark is reported alongside the count rather
+		// than instead of it: the words are with the agent whatever the store now
+		// says, and reporting zero would have the reviewer send them again.
+		var markErr error
+		for _, c := range unsent {
+			if err := markCommentSent(store, r, c); err != nil && markErr == nil {
+				markErr = fmt.Errorf("sent %d, but %s still reads as unsent: %w", len(unsent), c.ID, err)
+			}
+		}
+		return len(unsent), markErr
+	}
+}
+
 // publishReviewFor wires the viewer's `P` to the same publish path
 // `awp review publish` runs.
 //
@@ -945,6 +997,7 @@ func mergePRFor(runner Runner) func(deckui.Item, bool) (string, error) {
 func reviewStoreWithSend(runner Runner, send promptSender) deckui.CommentStore {
 	cs := reviewStoreFor(runner)
 	cs.Send = sendCommentToAgentFor(send)
+	cs.SendUnsent = sendUnsentToAgentFor(send)
 	cs.Publish = publishReviewFor(runner)
 	cs.MergePR = mergePRFor(runner)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
