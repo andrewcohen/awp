@@ -14,7 +14,7 @@ import (
 // terminal's size, leaving the chrome inset as the whole of the error.
 func TestAMouseEventArrivesInTheProgramsOwnGrid(t *testing.T) {
 	const deckW, deckH = 100, 30
-	got, ok := paneMouse(tea.MouseClickMsg{X: 10, Y: 5}, deckW, deckH)
+	got, ok := paneMouse(tea.MouseClickMsg{X: 10, Y: 5}, box{w: deckW, h: deckH})
 	if !ok {
 		t.Fatal("a click inside the terminal was dropped")
 	}
@@ -35,7 +35,7 @@ func TestTheTranslationIsScreenCursorBackwards(t *testing.T) {
 		// Where the program's cell (x,y) lands on screen.
 		screenX, screenY := screenCursorFor(deckW, deckH, tc.x, tc.y)
 		// And back again.
-		got, ok := paneMouse(tea.MouseClickMsg{X: screenX, Y: screenY}, deckW, deckH)
+		got, ok := paneMouse(tea.MouseClickMsg{X: screenX, Y: screenY}, box{w: deckW, h: deckH})
 		if !ok {
 			t.Fatalf("cell (%d,%d) mapped to screen (%d,%d), which translated back to nothing", tc.x, tc.y, screenX, screenY)
 		}
@@ -70,7 +70,7 @@ func TestChromeClicksAreNotTheProgramsBusiness(t *testing.T) {
 		{"past the right edge", deckW - 1, 5},
 		{"past the bottom edge", 5, deckH - 1},
 	} {
-		if _, ok := paneMouse(tea.MouseClickMsg{X: tc.x, Y: tc.y}, deckW, deckH); ok {
+		if _, ok := paneMouse(tea.MouseClickMsg{X: tc.x, Y: tc.y}, box{w: deckW, h: deckH}); ok {
 			t.Errorf("%s at (%d,%d) was forwarded to the program", tc.name, tc.x, tc.y)
 		}
 	}
@@ -92,7 +92,7 @@ func TestTheEventKindSurvives(t *testing.T) {
 		{"wheel", tea.MouseWheelMsg(at), tea.MouseWheelMsg{}},
 		{"motion", tea.MouseMotionMsg(at), tea.MouseMotionMsg{}},
 	} {
-		got, ok := paneMouse(tc.in, deckW, deckH)
+		got, ok := paneMouse(tc.in, box{w: deckW, h: deckH})
 		if !ok {
 			t.Fatalf("%s was dropped", tc.name)
 		}

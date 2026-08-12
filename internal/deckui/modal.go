@@ -18,14 +18,39 @@ import (
 // internal/github — one spelling, in the position where it cannot be forgotten.
 // The host decides (Model.childBox), the child is told.
 //
-// There is no origin here yet. A split needs one, to translate a mouse event
-// into the coordinates of the half it landed in, but every box today starts at
-// the screen's top-left, so an x and y would be two fields that are always zero
-// and never read — which is how a field is wrong the first time something uses
-// it. Origin lands with the split, where a test can put a click in the right
-// half and watch where it comes out.
+// x, y are where the region starts on the deck's own screen. Zero for a child
+// that has the whole thing, which is every child until a split puts one of them
+// on the right — and then the difference is a mouse click, which arrives in the
+// deck's coordinates and has to be translated into the coordinates of the half
+// it landed in.
+//
+// blurred says the keyboard is somewhere else. Spelled the way round where the
+// zero value means focused, because a box built without thinking about focus is
+// the one the keys are going to: the other case only arises where something
+// deliberately made two.
 type box struct {
-	w, h int
+	x, y, w, h int
+	blurred    bool
+}
+
+// splitAt divides the box into left and right halves at col columns from its
+// own left edge, with the right half carrying the origin that puts it there.
+//
+// No gutter between them. Each half is a bordered pane whose border is its
+// edge, so a column of canvas between two borders is a third line down the
+// middle of the screen.
+func (b box) splitAt(col int) (left, right box) {
+	left = box{x: b.x, y: b.y, w: col, h: b.h}
+	right = box{x: b.x + col, y: b.y, w: b.w - col, h: b.h}
+	return left, right
+}
+
+// focus returns the box with the keyboard's attention set as given, so a
+// renderer can hand its child a region and say whether the keys are in it
+// without the caller assembling a struct literal.
+func (b box) focus(focused bool) box {
+	b.blurred = !focused
+	return b
 }
 
 // fit is the width a popover that wants `want` columns actually gets: what it
@@ -52,11 +77,31 @@ func fit(want int, b box) int {
 // how wide the terminal happens to be.
 func (b box) stacked() bool { return b.w > 0 && b.w < deckStackThreshold }
 
-// childBox is the region the deck's current child gets: all of it.
+// childBox is the region the deck's child gets: all of it.
 //
-// The one place that answer is written down, so the split has one function to
-// change rather than fifteen call sites to find.
+// The whole screen because the deck is the outermost program in its terminal.
+// What sits in that region may itself be a split, which divides it further —
+// that is splitModal's business, not the deck's.
 func (m *Model) childBox() box { return box{w: m.width, h: m.height} }
+
+// boxOf is where a particular child lives, which is not the same question as
+// childBox once a split is up: the right half's origin is what turns a click at
+// screen column 90 into column 10 of the program in it.
+//
+// Asked by the two paths that run outside the render — the mouse translation
+// and the cursor position — since neither is handed a box the way a renderer is.
+// A child the deck is not currently showing gets the empty box rather than a
+// guess.
+func (m *Model) boxOf(child modal) box {
+	full := m.childBox()
+	if m.active == child {
+		return full
+	}
+	if s, ok := m.active.(*splitModal); ok {
+		return s.boxOf(child, full)
+	}
+	return box{}
+}
 
 // renderPickerPanel is the body panel every list picker (bookmark, open,
 // review) renders into: the shared panel inset, with the list sized to fill

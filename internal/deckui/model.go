@@ -2851,6 +2851,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "open: " + url
 			}
 			return m, nil
+		case key.Matches(msg, km.SplitChord):
+			item, ok := m.selected()
+			if !ok {
+				return m, nil
+			}
+			m.active = &splitChordModal{item: item}
+			m.status = splitChordHint()
+			return m, nil
 		case key.Matches(msg, km.PRMenu):
 			if _, ok := m.selected(); !ok {
 				return m, nil
@@ -3952,7 +3960,7 @@ func (m Model) View() tea.View {
 	// A hosted pane is the only thing in the deck that needs the terminal's
 	// mouse and cursor, so it is the only thing that asks for them. Requesting
 	// them all the time would cost drag-to-select everywhere else.
-	if p, ok := m.active.(*panePopover); ok {
+	if p, ok := m.hostedPane(); ok {
 		// Only ask when the pane's own program has enabled mouse reporting.
 		// Without it the outer terminal, being in alt-screen with no tracking
 		// asked for, turns the wheel into arrow keys and the pane gets typed
@@ -3962,8 +3970,7 @@ func (m Model) View() tea.View {
 		if p.term.WantsMouse() {
 			v.MouseMode = tea.MouseModeCellMotion
 		}
-		pb := m.childBox()
-		if x, y, ok := p.screenCursor(pb.w, pb.h); ok {
+		if x, y, ok := p.screenCursor(m.boxOf(p)); ok {
 			v.Cursor = tea.NewCursor(x, y)
 		}
 	}
@@ -5276,6 +5283,10 @@ func deckKeyGroups() []keyGroup {
 				{"W", "watch window (live `awp watch` dev-loop view for this workspace)"},
 				{"x", "user actions menu"},
 			},
+		},
+		{
+			Title: "Split (| then a window key)",
+			Keys:  splitHelpKeys(),
 		},
 		{
 			Title: "Workspace",

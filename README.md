@@ -310,6 +310,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
 | `ctrl+\` | Back into the pane you just left — the same key that leaves one, so the pair is a single gesture: out to check a row, back to carry on. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and the key is about where you have been, not about which list you are looking at. Not bound under `awp deck`, which hosts no panes: there `ctrl+\` belongs to tmux. |
+| `\|` then a window key | **Split**: the workspace's agent on the left, the key's window on the right — `\|c` diff, `\|v` vcs, `\|e` editor, `\|s` shell, `\|i` ci, `\|W` watch. `\|a` is refused (the left half is already the agent), and anything else cancels the chord. Focus starts on the right, because the right is what you asked to look at. Refused below 120 columns, naming the width it wants: two halves of a narrow terminal are two panes you cannot read. From inside a pane the same gesture is `ctrl+\` (out to the deck) then `\|c`, which re-attaches the agent's session rather than starting a second one. See **A split, and the keys inside one** below. |
 | `L` | Switch to the **previous** pane — the one before the pane you were last in. `tmux switch-client -l` one substrate over, and the point is the same: the two most recent things you were in are one keypress apart, so pressing it twice puts you back. Resuming (`ctrl+\`) does not disturb the alternate, so holding one pane open all afternoon doesn't lose the other. One pane deep it says so and names `ctrl+\` instead. Under `awp deck` it is still `tmux switch-client -l`. |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
@@ -814,6 +815,42 @@ child's business:
 | `i` CI | Exits, by signal: a cooked-mode `bash -c`, so the line discipline turns the key into SIGQUIT. The deck reads that as leaving rather than as a failure, so no error lands in the status bar |
 | `v` vcs | Nothing — jjui is in raw mode with nobody in front of it. Use jjui's own `q` |
 | shell | Nothing: interactive shells ignore SIGQUIT. Use `exit` / `ctrl+d` |
+
+### A split, and the keys inside one
+
+`|` then a window key puts two things on screen at once: the workspace's agent on
+the left, and whatever the second key named on the right. `|c` is the one to
+reach for — the agent's own account of what it did, beside the diff of what it
+actually changed, with no keystroke between them. `|v` is jjui beside the agent,
+`|s` a shell, and so on down the window keys.
+
+Both halves are live. The one without the keyboard keeps painting: an agent's
+output, a `watch` view, a diff refreshing itself on its own tick. Only the keys
+are somewhere specific, and the half that has them is the one with the teal
+border — the other drops to grey, the same tier the diff viewer's unfocused panes
+drop to.
+
+Inside a split `ctrl+\` stops meaning "leave" and becomes a **prefix**, because
+the halves keep their own complete keymaps and there is exactly one key spare to
+build on:
+
+| after `ctrl+\` | does |
+|---|---|
+| `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
+| `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
+| `x` | close the focused half; the other becomes an ordinary whole-screen pane |
+| `q` | leave the split entirely, back to the row list |
+| `ctrl+\` | nothing — it re-arms, so holding the key down cannot do anything |
+| anything else | cancels, and is swallowed rather than typed at the program |
+
+`q` rather than `ctrl+\` twice, which is what this was going to be: a key repeat
+and a deliberate double tap are the same bytes, so a held key would have left the
+split. Nothing can tell them apart without the Kitty keyboard protocol, which awp
+does not ask its own terminal for. The prefix has no timeout for the same reason
+it has no ambiguity — it is a state resolved by the next key, not by a clock.
+
+A single pane is unchanged: `ctrl+\` there leaves on one press, the way it always
+has. The prefix exists only where there is something to switch between.
 
 **`ctrl+\` leaves the diff viewer too**, in both hosts: standalone `awp diff` quits on it the way it quits on `q`, and the deck's `c` modal closes on it the way it closes on `esc`. The key means "give the keyboard back to whatever put me here" everywhere else in awp, and the review surface is the one you spend the longest in — it had no reason to be the exception. It matters most in a handed-over pane, where the deck is suspended and reading nothing, so a program that does not bind the key itself cannot be left at all. The spelling lives in `internal/charm` for that reason: `internal/ui` cannot import `internal/deckui`, and a second copy of the string is how the hint a pane prints stops matching the key that works.
 
