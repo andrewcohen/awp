@@ -1986,6 +1986,65 @@ func devLoopSnapshotEqual(a, b *workspace.DevLoopSnapshot) bool {
 	return true
 }
 
+// devLoopFolds keeps one resumable transcript fold per transcript path, so a
+// refresh reads only what the agent has written since the last one.
+//
+// It outlives any single refresh because that is the whole point: loadDeckItems
+// is called afresh every few seconds, and a fold that were rebuilt with it would
+// re-read the file from byte zero — which is what it used to do, at 25% of the
+// deck's CPU against a 251 MB transcript (#186).
+//
+// Keyed by transcript rather than by workspace: the transcript is what the offset
+// belongs to, and a workspace that starts a new agent session gets a new
+// transcript path and so a new fold, rather than resuming into a file whose bytes
+// mean something else.
+var devLoopFolds = struct {
+	mu    sync.Mutex
+	byKey map[string]*devLoopFoldEntry
+}{byKey: map[string]*devLoopFoldEntry{}}
+
+// devLoopFoldEntry is one transcript's fold plus its own lock. The deck folds
+// each row in its own goroutine, and two rows can name the same transcript if a
+// workspace is listed twice under different projects — cheaper to be correct here
+// than to prove it cannot happen.
+type devLoopFoldEntry struct {
+	mu     sync.Mutex
+	reader *watch.Reader
+	used   time.Time
+}
+
+// devLoopFoldIdleTTL is how long an untouched fold is kept. A deck left open for
+// days would otherwise accumulate one fold per agent session it ever saw; a
+// dropped fold costs one full re-read if that transcript comes back.
+const devLoopFoldIdleTTL = 30 * time.Minute
+
+// devLoopFold hands back the fold for a transcript, creating it on first sight
+// and dropping folds nothing has asked for in a while.
+func devLoopFold(transcript string) *devLoopFoldEntry {
+	now := time.Now()
+	devLoopFolds.mu.Lock()
+	defer devLoopFolds.mu.Unlock()
+	e := devLoopFolds.byKey[transcript]
+	if e == nil {
+		e = &devLoopFoldEntry{reader: watch.NewReader(transcript)}
+		devLoopFolds.byKey[transcript] = e
+	}
+	e.used = now
+	for k, other := range devLoopFolds.byKey {
+		if k != transcript && now.Sub(other.used) > devLoopFoldIdleTTL {
+			delete(devLoopFolds.byKey, k)
+		}
+	}
+	return e
+}
+
+// state folds whatever is new in this entry's transcript and derives the answer.
+func (e *devLoopFoldEntry) state(loop watch.Loop, status string) (watch.State, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.reader.State(loop, status, time.Now())
+}
+
 // buildDevLoopSummary replays the workspace's newest agent transcript into
 // the row-sized dev-loop projection rendered on the meta line. Returns nil
 // when there is no transcript, the scan fails, or the derived state has
@@ -1996,7 +2055,7 @@ func buildDevLoopSummary(loop watch.Loop, path, status string) *deckui.DevLoopSu
 	if err != nil || transcript == "" {
 		return nil
 	}
-	st, err := watch.BuildState(loop, transcript, status, time.Now())
+	st, err := devLoopFold(transcript).state(loop, status)
 	if err != nil {
 		return nil
 	}

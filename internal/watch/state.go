@@ -3,6 +3,7 @@ package watch
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -89,159 +90,283 @@ type block struct {
 var unitAnnounce = regexp.MustCompile(`(?im)^[\s*_>#-]*unit\s+(\d+)\s*[:.\-–—]\s*(.+)`)
 
 // BuildState scans a transcript from the top and derives the combined
-// todos+loop state. It is a full replay each call — transcripts are
-// append-only, so a fresh scan is simplest and correct for a POC repaint.
+// todos+loop state.
+//
+// A full replay each call, which is what a one-off caller (`awp watch`, a test)
+// wants. The deck refreshes every few seconds against transcripts that reach
+// hundreds of megabytes, so it uses a Reader instead and folds only what the
+// agent has written since the last pass — see Reader, and #186 for the profile
+// that made the difference 25% of the deck's CPU.
 func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (State, error) {
-	f, err := os.Open(transcriptPath)
-	if err != nil {
+	return NewReader(transcriptPath).State(loop, agentStatus, now)
+}
+
+// Reader folds one transcript incrementally, keeping the accumulated state and
+// the offset it stopped at so a later call folds only what the agent has written
+// since.
+//
+// The deck asks every workspace with a live agent for its dev-loop summary every
+// few seconds. Re-reading from byte zero made that cost proportional to the
+// length of the whole session rather than to what just happened: a profile of a
+// real zdeck session spent 25% of the process in this fold, ~50 MB/s of JSON,
+// against a transcript that had reached 251 MB — plus most of the scheduler
+// churn around it. A transcript is append-only, so the fold can simply carry on.
+//
+// One Reader per transcript path, held by the caller across refreshes. Not safe
+// for concurrent use: the deck folds each row's transcript in its own goroutine,
+// and each row has its own Reader.
+type Reader struct {
+	path string
+	// offset is the end of the last complete line folded. A line without its
+	// newline yet is a write in progress, so it is left for the next pass rather
+	// than folded half-parsed and skipped forever.
+	offset int64
+	fold   *folder
+}
+
+// NewReader starts a fold at the top of the named transcript.
+func NewReader(path string) *Reader {
+	return &Reader{path: path, fold: newFolder()}
+}
+
+// Path is the transcript this Reader is following.
+func (r *Reader) Path() string { return r.path }
+
+// State folds whatever is new and derives the current answer.
+//
+// Cheap when nothing has been written — the file's size is compared to the
+// offset and no read happens at all, which is the common case for a deck row
+// whose agent is thinking.
+func (r *Reader) State(loop Loop, agentStatus string, now time.Time) (State, error) {
+	if err := r.advance(loop); err != nil {
 		return State{}, err
 	}
-	defer func() { _ = f.Close() }()
+	return r.fold.state(loop, agentStatus, now), nil
+}
 
-	st := State{AgentStatus: agentStatus, Now: now}
-	gates := map[string]*GateState{}
-	pending := map[string]string{} // tool_use ID -> gate name
-	var currentTodo string
-	var started bool          // has implementation begun in the current unit?
-	units := map[int]string{} // announced "Unit N: desc"
-	maxUnit := 0
+// advance folds the bytes past the offset.
+func (r *Reader) advance(loop Loop) error {
+	f, err := os.Open(r.path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() < r.offset {
+		// Shorter than what has already been folded, so it is not the same file
+		// any more — truncated, or a new session written over the same path.
+		// Starting again is the only honest answer; continuing would fold the new
+		// content on top of a state describing content that no longer exists.
+		r.offset, r.fold = 0, newFolder()
+	}
+	if info.Size() == r.offset {
+		return nil
+	}
+	if _, err := f.Seek(r.offset, io.SeekStart); err != nil {
+		return err
+	}
+	br := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil {
+			// Either EOF or a read error, and in both cases what came back is a
+			// line with no newline — not yet a line. The offset stays behind it.
+			return nil
+		}
+		r.offset += int64(len(line))
+		r.fold.line(loop, line)
+	}
+}
+
+// folder is the mutable half of the fold: everything the scan accumulates as it
+// walks the transcript, and nothing that is derived from it afterwards.
+//
+// It is a struct rather than a closure's locals because the fold has to be
+// resumable. A transcript is append-only, so folding a line is the same
+// operation whether it is line 1 or line 900,000 — but only if the state the
+// fold carries can outlive the loop that produced it. That is the whole trick
+// behind Reader.
+type folder struct {
+	// st is the raw accumulated state. Fields derived at the end (the resolved
+	// phase, the emitted gate list, the fallback todo lists) do not live here —
+	// State copies it and derives them, so folding one more line later still
+	// starts from what the transcript actually said.
+	st      State
+	gates   map[string]*GateState
+	pending map[string]string // tool_use ID -> gate name
+
+	currentTodo string
+	started     bool           // has implementation begun in the current unit?
+	units       map[int]string // announced "Unit N: desc"
+	maxUnit     int
 	// TaskCreate/TaskUpdate reconstruction — the todo tool in this
 	// environment. IDs are assigned in creation order (matching "Task #N").
-	taskByID := map[string]*Todo{}
-	var taskOrder []string
-	taskCreates := 0
-	var currentTask string
-	var checklist []Todo // latest markdown "- [x]" checklist snapshot
+	taskByID    map[string]*Todo
+	taskOrder   []string
+	taskCreates int
+	currentTask string
+	checklist   []Todo // latest markdown "- [x]" checklist snapshot
+}
 
-	// resetUnit clears per-unit state when a new unit begins, so gate lights
-	// and the loop phase reflect only the current unit's work — not results
-	// carried over from earlier units in the same session.
-	resetUnit := func(ts time.Time) {
-		for k := range gates {
-			delete(gates, k)
-		}
-		for k := range pending {
-			delete(pending, k)
-		}
-		st.CurrentPhase = ""
-		started = false
-		if !ts.IsZero() {
-			st.UnitStart = ts
-		}
+func newFolder() *folder {
+	return &folder{
+		gates:    map[string]*GateState{},
+		pending:  map[string]string{},
+		units:    map[int]string{},
+		taskByID: map[string]*Todo{},
 	}
+}
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-	for sc.Scan() {
-		var ln rawLine
-		if err := json.Unmarshal(sc.Bytes(), &ln); err != nil {
-			continue
-		}
-		blocks := decodeBlocks(ln.Message.Content)
-		for _, b := range blocks {
-			switch b.Type {
-			case "tool_use":
-				switch b.Name {
-				case "TaskCreate":
-					var in struct {
-						Subject string `json:"subject"`
-						Content string `json:"content"`
-					}
-					_ = json.Unmarshal(b.Input, &in)
-					subject := strings.TrimSpace(in.Subject)
-					if subject == "" {
-						subject = strings.TrimSpace(in.Content)
-					}
-					if subject == "" {
-						// A subjectless TaskCreate fails validation (the tool
-						// requires `subject`) and creates nothing — e.g. the
-						// batch {"tasks":[…]} form an agent might try first.
-						// Skipping it avoids minting a phantom empty task and,
-						// crucially, keeps the synthetic ids aligned with the
-						// tool's own "Task #N" numbering so a later
-						// TaskUpdate(taskId) targets the right task.
-						break
-					}
-					taskCreates++
-					id := strconv.Itoa(taskCreates)
-					taskByID[id] = &Todo{Content: subject, Status: "pending"}
-					taskOrder = append(taskOrder, id)
-				case "TaskUpdate":
-					var in struct {
-						TaskID  string `json:"taskId"`
-						Status  string `json:"status"`
-						Subject string `json:"subject"`
-					}
-					_ = json.Unmarshal(b.Input, &in)
-					if t := taskByID[in.TaskID]; t != nil {
-						if in.Subject != "" {
-							t.Content = in.Subject
-						}
-						if in.Status != "" {
-							t.Status = in.Status
-							if in.Status == "in_progress" && in.TaskID != currentTask {
-								currentTask = in.TaskID
-								resetUnit(ln.Timestamp)
-							}
-							// Finishing the current unit resets the loop for the
-							// next one: clear the gate lights and drop back toward
-							// implement, so later work — even ad-hoc, un-tracked
-							// edits — doesn't inherit the completed unit's stale
-							// green gates.
-							if in.Status == "completed" && in.TaskID == currentTask {
-								currentTask = ""
-								resetUnit(ln.Timestamp)
-							}
-						}
-					}
-				default:
-					// A task list "exists" once any TaskCreate has landed or a
-					// live TodoWrite list is present — that's the boundary past
-					// explore.
-					hasTasks := taskCreates > 0 || len(st.Todos) > 0
-					handleToolUse(loop, b, ln.Timestamp, &st, gates, pending, &currentTodo, &started, hasTasks, resetUnit)
+// resetUnit clears per-unit state when a new unit begins, so gate lights
+// and the loop phase reflect only the current unit's work — not results
+// carried over from earlier units in the same session.
+func (f *folder) resetUnit(ts time.Time) {
+	for k := range f.gates {
+		delete(f.gates, k)
+	}
+	for k := range f.pending {
+		delete(f.pending, k)
+	}
+	f.st.CurrentPhase = ""
+	f.started = false
+	if !ts.IsZero() {
+		f.st.UnitStart = ts
+	}
+}
+
+// line folds one transcript line. A line that is not JSON is skipped, which is
+// what a partially-flushed write looks like from here.
+func (f *folder) line(loop Loop, raw []byte) {
+	st := &f.st
+	gates, pending, units := f.gates, f.pending, f.units
+	taskByID := f.taskByID
+	resetUnit := f.resetUnit
+	var ln rawLine
+	if err := json.Unmarshal(raw, &ln); err != nil {
+		return
+	}
+	blocks := decodeBlocks(ln.Message.Content)
+	for _, b := range blocks {
+		switch b.Type {
+		case "tool_use":
+			switch b.Name {
+			case "TaskCreate":
+				var in struct {
+					Subject string `json:"subject"`
+					Content string `json:"content"`
 				}
-				if !ln.Timestamp.IsZero() {
-					st.LastActivity = ln.Timestamp
+				_ = json.Unmarshal(b.Input, &in)
+				subject := strings.TrimSpace(in.Subject)
+				if subject == "" {
+					subject = strings.TrimSpace(in.Content)
 				}
-			case "tool_result":
-				if name, ok := pending[b.ToolUseID]; ok {
-					g := gates[name]
-					if b.IsError {
-						g.Result = "fail"
-						g.RedCount++
-					} else {
-						g.Result = "pass"
+				if subject == "" {
+					// A subjectless TaskCreate fails validation (the tool
+					// requires `subject`) and creates nothing — e.g. the
+					// batch {"tasks":[…]} form an agent might try first.
+					// Skipping it avoids minting a phantom empty task and,
+					// crucially, keeps the synthetic ids aligned with the
+					// tool's own "Task #N" numbering so a later
+					// TaskUpdate(taskId) targets the right task.
+					break
+				}
+				f.taskCreates++
+				id := strconv.Itoa(f.taskCreates)
+				taskByID[id] = &Todo{Content: subject, Status: "pending"}
+				f.taskOrder = append(f.taskOrder, id)
+			case "TaskUpdate":
+				var in struct {
+					TaskID  string `json:"taskId"`
+					Status  string `json:"status"`
+					Subject string `json:"subject"`
+				}
+				_ = json.Unmarshal(b.Input, &in)
+				if t := taskByID[in.TaskID]; t != nil {
+					if in.Subject != "" {
+						t.Content = in.Subject
 					}
-					delete(pending, b.ToolUseID)
-				}
-			case "text":
-				// A markdown checklist the agent renders in prose is a breadth
-				// fallback (below the task tool). Latest snapshot wins.
-				if items := parseChecklist(b.Text); len(items) >= 2 {
-					checklist = items
-				}
-				// Prose "Unit N:" announcements are only a breadth source when
-				// the agent isn't using the task tool. If tasks are in play,
-				// ignore prose mentions — otherwise the agent's own commentary
-				// ("Unit 8: …") triggers false unit boundaries and wipes the
-				// current unit's gate state.
-				if taskCreates == 0 {
-					if m := unitAnnounce.FindStringSubmatch(b.Text); m != nil {
-						num := atoi(m[1])
-						units[num] = firstLine(m[2])
-						if num > maxUnit {
-							maxUnit = num
+					if in.Status != "" {
+						t.Status = in.Status
+						if in.Status == "in_progress" && in.TaskID != f.currentTask {
+							f.currentTask = in.TaskID
 							resetUnit(ln.Timestamp)
 						}
+						// Finishing the current unit resets the loop for the
+						// next one: clear the gate lights and drop back toward
+						// implement, so later work — even ad-hoc, un-tracked
+						// edits — doesn't inherit the completed unit's stale
+						// green gates.
+						if in.Status == "completed" && in.TaskID == f.currentTask {
+							f.currentTask = ""
+							resetUnit(ln.Timestamp)
+						}
+					}
+				}
+			default:
+				// A task list "exists" once any TaskCreate has landed or a
+				// live TodoWrite list is present — that's the boundary past
+				// explore.
+				hasTasks := f.taskCreates > 0 || len(st.Todos) > 0
+				handleToolUse(loop, b, ln.Timestamp, st, gates, pending, &f.currentTodo, &f.started, hasTasks, resetUnit)
+			}
+			if !ln.Timestamp.IsZero() {
+				st.LastActivity = ln.Timestamp
+			}
+		case "tool_result":
+			if name, ok := pending[b.ToolUseID]; ok {
+				g := gates[name]
+				if b.IsError {
+					g.Result = "fail"
+					g.RedCount++
+				} else {
+					g.Result = "pass"
+				}
+				delete(pending, b.ToolUseID)
+			}
+		case "text":
+			// A markdown checklist the agent renders in prose is a breadth
+			// fallback (below the task tool). Latest snapshot wins.
+			if items := parseChecklist(b.Text); len(items) >= 2 {
+				f.checklist = items
+			}
+			// Prose "Unit N:" announcements are only a breadth source when
+			// the agent isn't using the task tool. If tasks are in play,
+			// ignore prose mentions — otherwise the agent's own commentary
+			// ("Unit 8: …") triggers false unit boundaries and wipes the
+			// current unit's gate state.
+			if f.taskCreates == 0 {
+				if m := unitAnnounce.FindStringSubmatch(b.Text); m != nil {
+					num := atoi(m[1])
+					units[num] = firstLine(m[2])
+					if num > f.maxUnit {
+						f.maxUnit = num
+						resetUnit(ln.Timestamp)
 					}
 				}
 			}
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return State{}, err
-	}
+}
+
+// state derives the answer from what has been folded so far, without disturbing
+// the fold.
+//
+// Every derived field lands on a copy, because the same folder is asked again a
+// few seconds later with more of the transcript behind it — a derivation that
+// appended to the accumulator would double its own output. The Todos copy is
+// defensive rather than demonstrably necessary (a TodoWrite replaces the list
+// wholesale, so today nothing survives to be corrupted); it is here because the
+// promotion below writes into the slice, and "derives without mutating" is the
+// property that makes resuming safe at all.
+func (f *folder) state(loop Loop, agentStatus string, now time.Time) State {
+	st := f.st
+	st.AgentStatus, st.Now = agentStatus, now
+	st.Todos = append([]Todo(nil), f.st.Todos...)
+	st.Gates = nil
+	taskOrder, taskByID, checklist, maxUnit, units, started := f.taskOrder, f.taskByID, f.checklist, f.maxUnit, f.units, f.started
 
 	// Breadth axis priority: a real TodoWrite list (set in handleToolUse) wins;
 	// otherwise reconstruct from TaskCreate/TaskUpdate in creation order.
@@ -307,13 +432,13 @@ func BuildState(loop Loop, transcriptPath, agentStatus string, now time.Time) (S
 		if g.Marker {
 			continue
 		}
-		if gs, ok := gates[g.Name]; ok {
+		if gs, ok := f.gates[g.Name]; ok {
 			st.Gates = append(st.Gates, *gs)
 		} else {
 			st.Gates = append(st.Gates, GateState{Name: g.Name, Phase: g.Phase})
 		}
 	}
-	return st, nil
+	return st
 }
 
 func handleToolUse(loop Loop, b block, ts time.Time, st *State, gates map[string]*GateState, pending map[string]string, currentTodo *string, started *bool, hasTasks bool, resetUnit func(time.Time)) {
