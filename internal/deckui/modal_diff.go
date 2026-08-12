@@ -51,7 +51,12 @@ type DiffLoader func(item Item, scope DiffScope) (string, error)
 
 // DiffOpener returns the command that opens filePath at line for a
 // workspace — an external $EDITOR process, which tea.ExecProcess handles.
-type DiffOpener func(item Item, filePath string, line int) tea.Cmd
+//
+// dir is the directory the editor runs in, and it comes from the viewer rather
+// than being derived from the item: it is the root the viewer resolved filePath
+// against, so the two are one fact and cannot disagree about which working copy
+// this file is in.
+type DiffOpener func(item Item, dir, filePath string, line int) tea.Cmd
 
 // DiffBaseResolver names what a scope's diff is against, for the modal's footer:
 // the trunk branch, or a stacked parent's bookmark. Empty when there is nothing
@@ -195,11 +200,11 @@ type diffModal struct {
 func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, base DiffBaseResolver, scopes DiffScopeProvider, comments CommentStore) (*diffModal, tea.Cmd) {
 	inner := ui.New(item.Path,
 		func() (string, error) { return load(item, scope) },
-		func(filePath string, line int) tea.Cmd {
+		func(dir, filePath string, line int) tea.Cmd {
 			if open == nil {
 				return nil
 			}
-			return open(item, filePath, line)
+			return open(item, dir, filePath, line)
 		},
 	)
 	if base != nil {

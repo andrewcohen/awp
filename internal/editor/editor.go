@@ -48,10 +48,22 @@ func BuildArgs(editorCmd, filePath string, line int) []string {
 	return append(strings.Fields(editorCmd), filePath)
 }
 
-// OpenExecCmd builds an exec.Cmd to open the file in the editor.
-func OpenExecCmd(editorCmd, filePath string, line int) *exec.Cmd {
+// OpenExecCmd builds an exec.Cmd to open the file in the editor, running in dir.
+//
+// dir comes first and is required, rather than being an optional extra a caller
+// can leave off — which is what it was, and every caller left it off, so the
+// editor inherited the directory awp happened to be started in. The file opened
+// (the path is absolute) and nothing else did: reviewing a row in another repo
+// from a deck launched in this one gave nvim a cwd in *this* one, so :Explore, the
+// fuzzy finder, :grep and the LSP root all addressed the wrong project.
+//
+// An empty dir still means "inherit", because that is what exec means by it and
+// there is no better answer for a caller that genuinely has no directory. The
+// point of the parameter is that a caller has to say so out loud.
+func OpenExecCmd(dir, editorCmd, filePath string, line int) *exec.Cmd {
 	args := BuildArgs(editorCmd, filePath, line)
 	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec
+	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

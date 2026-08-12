@@ -151,8 +151,12 @@ func diffBaseResolverFor(runner Runner) deckui.DiffBaseResolver {
 // tea.ExecProcess
 // is the right tool here — $EDITOR is an external program, not a nested
 // Bubble Tea program (see the deckui package doc).
-func openDiffFileInEditor(_ deckui.Item, filePath string, line int) tea.Cmd {
-	return tea.ExecProcess(editor.OpenExecCmd("", filePath, line), func(err error) tea.Msg {
+//
+// dir comes from the viewer, which is the only thing that knows it: it is the root
+// the diff's paths were resolved against. The row is not consulted for it — a host
+// deriving the directory a second way is how the two would come to disagree.
+func openDiffFileInEditor(_ deckui.Item, dir, filePath string, line int) tea.Cmd {
+	return tea.ExecProcess(editor.OpenExecCmd(dir, "", filePath, line), func(err error) tea.Msg {
 		if err != nil {
 			return err
 		}
@@ -218,8 +222,8 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
 	subject := diffSubjectFor(svc, repoRoot, cwd)
-	openEditor := func(filePath string, line int) tea.Cmd {
-		return tea.ExecProcess(editor.OpenExecCmd("", filePath, line), func(err error) tea.Msg {
+	openEditor := func(dir, filePath string, line int) tea.Cmd {
+		return tea.ExecProcess(editor.OpenExecCmd(dir, "", filePath, line), func(err error) tea.Msg {
 			if err != nil {
 				return err
 			}
