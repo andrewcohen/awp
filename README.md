@@ -829,6 +829,13 @@ and comment index would spend a third of half a terminal on navigation, and the
 diff is what you opened the half to read. `\` brings them back for the file you
 need to jump around in, and the cursors they hold were never lost.
 
+A split keeps **one status row across the top**, outside both halves: the
+attention badge, the two halves named with the focused one wearing the usual
+`┃` selection bar, and how to leave. It is outside them because it answers for
+the screen rather than for either half — and it costs nothing, because each
+half's own header gave up the badge and the leave key to it and kept only its
+label. While the `ctrl+\` prefix is armed, that same row becomes the verb menu.
+
 Both halves are live. The one without the keyboard keeps painting: an agent's
 output, a `watch` view, a diff refreshing itself on its own tick. Only the keys
 are somewhere specific, and the half that has them is the one with the teal

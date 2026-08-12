@@ -297,52 +297,94 @@ func (s *splitModal) close(m *Model) tea.Cmd {
 
 func (s *splitModal) footerHelp() string { return s.focused().footerHelp() }
 
-// renderPopover draws both halves beside each other.
+// splitBarRows is the one row of chrome the split keeps for itself, above both
+// halves and spanning the terminal.
+const splitBarRows = 1
+
+// renderPopover draws the status row, then both halves beneath it.
 //
-// A popover rather than a body modal because the two halves carry their own
-// chrome — a pane its header, the viewer its footer — and a deck footer beneath
-// them would be a third status line for a screen that already has two.
+// A popover rather than a body modal because the halves carry their own inner
+// chrome and the deck's footer beneath them would be a third status line on a
+// screen that already has two.
 func (s *splitModal) renderPopover(m *Model, b box) string {
-	var frame string
+	bar := s.statusBar(m, b)
+	body := b
+	body.y += splitBarRows
+	body.h -= splitBarRows
 	if s.zoomed {
-		frame = renderChild(m, s.focused(), b.focus(true))
-	} else {
-		left, right := s.boxes(b)
-		frame = lipgloss.JoinHorizontal(lipgloss.Top,
-			renderChild(m, s.left, left),
-			renderChild(m, s.right, right))
+		return bar + "\n" + renderChild(m, s.focused(), body.focus(true))
 	}
-	return s.withPrefixBar(m, frame, b)
+	left, right := s.boxes(body)
+	return bar + "\n" + lipgloss.JoinHorizontal(lipgloss.Top,
+		renderChild(m, s.left, left),
+		renderChild(m, s.right, right))
 }
 
-// withPrefixBar writes the prefix menu over the frame's last row while the
-// prefix is armed.
+// statusBar is the split's one row: what needs you, what the two halves are and
+// which of them has the keys, and how to leave.
 //
-// It has to be visible or the prefix does not exist. A split has no footer of
-// its own — each half carries its own chrome, and a third status line under two
-// of them is a row spent saying nothing most of the time — so arming the prefix
-// changed only a bool, and pressing the reserved key in a split looked exactly
-// like pressing a dead key. Which is how it was reported.
+// It is above the halves rather than inside them because it answers for the
+// screen rather than for either half — the attention badge is the deck's, and the
+// leave key leaves the whole arrangement. A copy in each half's own header said
+// the same numbers twice and the same key twice, and neither copy could mark
+// which half was which.
 //
-// Written over the bottom border rather than given a row of its own, so the
-// halves' boxes do not change: taking a row would resize both ptys on a
-// keystroke, and a program relaying itself out because you pressed a modifier is
-// worse than a border with a menu on it. It is one frame either way — the row
-// comes back as soon as the prefix resolves.
-func (s *splitModal) withPrefixBar(m *Model, frame string, b box) string {
-	if !s.prefixArmed {
-		return frame
+// It is also where the armed prefix's menu goes. That went over the bottom
+// border in the first cut, for want of a row the split owned; this is that row,
+// so nothing is painted over a border any more.
+func (s *splitModal) statusBar(m *Model, b box) string {
+	if s.prefixArmed {
+		return padBar(m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, b.w))), b.w)
 	}
-	lines := strings.Split(frame, "\n")
-	if len(lines) == 0 {
-		return frame
+	segs := make([]string, 0, 3)
+	if badge := m.renderAttentionSummary(countAttention(m.mergedItemsAll())); badge != "" {
+		segs = append(segs, badge)
 	}
-	bar := m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, b.w)))
-	if pad := b.w - lipgloss.Width(bar); pad > 0 {
-		bar += strings.Repeat(" ", pad)
+	segs = append(segs, s.halfNames(m))
+	left := strings.Join(segs, m.styles.PaneHint.Render(" · "))
+
+	hint := m.styles.PaneHint.Render(PaneLeaveKey + " keys · " + PaneLeaveKey + " q deck")
+	gap := b.w - lipgloss.Width(left) - lipgloss.Width(hint)
+	if gap < 1 {
+		// Too narrow for both. The hint is how you get out of an arrangement whose
+		// keys are not the ones any half would suggest; the labels are readable off
+		// the halves themselves.
+		return padBar(hint, b.w)
 	}
-	lines[len(lines)-1] = bar
-	return strings.Join(lines, "\n")
+	return padBar(left+strings.Repeat(" ", gap)+hint, b.w)
+}
+
+// halfNames is the two halves, with the focused one marked by the selection
+// treatment the rest of the deck uses for "this is the active row".
+func (s *splitModal) halfNames(m *Model) string {
+	name := func(child modal, fallback string, focused bool) string {
+		label := fallback
+		if p, ok := child.(*panePopover); ok {
+			// A pane's own label is "<kind> · <project>/<workspace>". Only the kind
+			// belongs here: both halves are the same workspace, so naming it twice
+			// spends the row on the one thing that cannot distinguish them.
+			if kind, _, found := strings.Cut(p.label, " · "); found {
+				label = kind
+			} else {
+				label = p.label
+			}
+		}
+		if focused {
+			return m.styles.Bar.Render("┃") + " " + m.styles.Selected.Render(label)
+		}
+		return m.styles.Muted.Render("  " + label)
+	}
+	return name(s.left, PaneKindAgent, !s.rightFocused) +
+		name(s.right, s.label, s.rightFocused)
+}
+
+// padBar fills a bar row out to the width, so the row is opaque rather than
+// letting the frame beneath show through the cells it did not write.
+func padBar(bar string, w int) string {
+	if pad := w - lipgloss.Width(bar); pad > 0 {
+		return bar + strings.Repeat(" ", pad)
+	}
+	return bar
 }
 
 // renderChild renders one modal into one box, whichever kind of modal it is.

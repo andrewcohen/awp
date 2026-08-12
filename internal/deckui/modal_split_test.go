@@ -440,3 +440,58 @@ const sampleSplitDiff = `diff --git a/a.go b/a.go
 +gamma
  delta
 `
+
+// TestTheSplitCarriesOneStatusRowAboveBothHalves. The badge and the leave key
+// answer for the screen, not for either half, so they live on a row the split
+// owns — and that row is the only place they appear, since a copy in each half's
+// header said the same numbers twice and could not mark which half was which.
+func TestTheSplitCarriesOneStatusRowAboveBothHalves(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	m.itemsAll = waitingRows()
+
+	frame := ansi.Strip(s.renderPopover(&m, m.childBox()))
+	rows := strings.Split(frame, "\n")
+	bar := rows[0]
+
+	if !strings.Contains(bar, "2") {
+		t.Errorf("the split's status row does not carry the attention badge: %q", bar)
+	}
+	if !strings.Contains(bar, PaneLeaveKey) {
+		t.Errorf("the split's status row does not say how to leave: %q", bar)
+	}
+	for _, half := range []string{PaneKindAgent, "vcs"} {
+		if !strings.Contains(bar, half) {
+			t.Errorf("the status row does not name the %s half: %q", half, bar)
+		}
+	}
+	// The focused half wears the selection bar, the same treatment every other
+	// active row in the deck wears.
+	if !strings.Contains(bar, "┃") {
+		t.Errorf("the status row does not mark which half has the keys: %q", bar)
+	}
+	// And it is one row, spanning the terminal — not a box, not two.
+	if got := lipgloss.Width(rows[0]); got != m.width {
+		t.Errorf("the status row is %d columns in a %d-column terminal", got, m.width)
+	}
+	if got := lipgloss.Height(frame); got != m.height {
+		t.Errorf("the split with its status row is %d rows in a %d-row terminal", got, m.height)
+	}
+}
+
+// TestAHalfsOwnHeaderStopsRepeatingTheSplitsRow. The badge and the leave key are
+// above; a half's header is left with the one thing that differs between them.
+func TestAHalfsOwnHeaderStopsRepeatingTheSplitsRow(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	m.itemsAll = waitingRows()
+
+	header := ansi.Strip(s.left.(*panePopover).header(&m, 60))
+	if strings.Contains(header, PaneLeaveKey) {
+		t.Errorf("a half's header repeats the leave key: %q", header)
+	}
+	if strings.ContainsAny(header, "0123456789") {
+		t.Errorf("a half's header repeats the badge: %q", header)
+	}
+	if !strings.Contains(header, PaneKindAgent) {
+		t.Errorf("a half's header lost its label: %q", header)
+	}
+}
