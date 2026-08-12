@@ -551,6 +551,14 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 
 	case tea.KeyPressMsg:
 		if msg.String() == PaneLeaveKey {
+			if msg.IsRepeat {
+				// Held, not pressed again. Swallowed rather than closed on or
+				// forwarded: the deck's own ctrl+\ goes back into the pane this
+				// would close, so a repeat that gets through flaps between the two
+				// (#307), and passing it to the program means holding the key
+				// sprays it at whatever is running.
+				return nil
+			}
 			return p.close(m)
 		}
 		p.term.SendKey(msg)

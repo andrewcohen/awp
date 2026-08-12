@@ -859,6 +859,15 @@ type Model struct {
 	// there are two.
 	lastPane paneRef
 	prevPane paneRef
+	// keysEnhanced is whether this terminal reports key repeats and releases as
+	// distinct from presses — the Kitty protocol's event-types flag, asked for in
+	// View and answered once at startup. False on a terminal that does not support
+	// it, where a repeat is indistinguishable from a tap and IsRepeat is never set.
+	//
+	// Read by the gestures that only make sense when the difference is knowable,
+	// so they can say what a plain terminal cannot do rather than misbehaving on
+	// it.
+	keysEnhanced bool
 	// hostColors is what this deck's own terminal looks like, asked for at boot
 	// and answered asynchronously. A pane hands it to its emulator so a hosted
 	// program that asks what colour its background is gets the real one — see
@@ -1956,6 +1965,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case tea.CursorColorMsg:
 		m.hostColors.Cursor = msg.Color
 		return m, nil
+	// The terminal answering which keyboard enhancements it granted. Only the
+	// event types matter to awp: with them a held key is knowable as a repeat,
+	// which is what lets ctrl+\ carry a double tap.
+	case tea.KeyboardEnhancementsMsg:
+		m.keysEnhanced = msg.SupportsEventTypes()
+		return m, nil
 	case initKickMsg:
 		cmds := []tea.Cmd{}
 		// enrich: register the activity for the cold-start refresh, then
@@ -2695,6 +2710,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		case key.Matches(msg, km.CIWindow):
 			return m.trigger(ActionCI, "")
 		case key.Matches(msg, km.ResumePane):
+			if msg.IsRepeat {
+				// A held key, not a second decision. Dropped rather than acted on:
+				// this key leaves a pane as well as resuming one, so a repeat that
+				// gets through opens the pane the next repeat closes, and the deck
+				// flaps for as long as the key is down (#307). Only knowable at all
+				// because the view asks the terminal to report event types.
+				return m, nil
+			}
 			// The key that leaves a pane also goes back into one, so the pair is one
 			// gesture. Unhandled on the tmux deck, which has no pane to resume —
 			// there ctrl+\ belongs to tmux, and swallowing it would be worse than
@@ -3957,6 +3980,20 @@ func (m Model) actionModeStatus() string {
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// Ask the terminal to say whether a key event is a press, a repeat or a
+	// release — the Kitty keyboard protocol's event-types flag.
+	//
+	// awp reserves one key, ctrl+\, and every gesture built on it was constrained
+	// by not being able to tell a held key from a deliberate second tap: they are
+	// the same bytes otherwise. That is why holding it flips between the deck and
+	// a pane as fast as the terminal repeats (#307), and why leaving a split had
+	// to be given a letter rather than the double tap it wanted.
+	//
+	// Requested unconditionally; a terminal that does not support it simply never
+	// answers, and IsRepeat stays false everywhere — which is exactly the
+	// behaviour awp had before asking. keysEnhanced records the answer so a
+	// gesture that needs the distinction can say so rather than silently degrade.
+	v.KeyboardEnhancements.ReportEventTypes = true
 	// A hosted pane is the only thing in the deck that needs the terminal's
 	// mouse and cursor, so it is the only thing that asks for them. Requesting
 	// them all the time would cost drag-to-select everywhere else.
