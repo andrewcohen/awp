@@ -254,8 +254,9 @@ func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
 		t.Errorf("a pane costs %d columns, want just the border (%d) — no horizontal padding",
 			paneChromeW, borderCells)
 	}
-	if want := borderCells + 1; paneChromeH != want {
-		t.Errorf("a pane costs %d rows, want the border plus one header row (%d)", paneChromeH, want)
+	if paneChromeH != borderCells {
+		t.Errorf("a pane costs %d rows, want just the border (%d) — its header moved to the deck's bar",
+			paneChromeH, borderCells)
 	}
 
 	// And the rendered box has to actually match those numbers, or the cursor
@@ -263,8 +264,9 @@ func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
 	m, p := openedPane(t, allKinds())
 	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
 
-	rendered := p.renderPopover(&m, m.childBox())
-	tw, th := paneDims(m.width, m.height)
+	b := m.childBox()
+	rendered := p.renderPopover(&m, b)
+	tw, th := paneDims(b.w, b.h)
 	wantW, wantH := paneBox(tw, th)
 	if got := lipgloss.Width(rendered); got != wantW {
 		t.Errorf("the box rendered %d columns wide, want %d", got, wantW)
@@ -304,26 +306,10 @@ func TestNothingSitsOutsideThePanesBorder(t *testing.T) {
 	}
 }
 
-// The hint shares the header row with the label rather than costing two more
-// rows of its own — but it is what tells you how to get out, so it survives
-// even when the label has to go.
-func TestTheHeaderKeepsTheLeaveKeyEvenWhenNarrow(t *testing.T) {
-	m, p := openedPane(t, allKinds())
-	for _, w := range []int{200, 80, 40, 24, 12, 4} {
-		header := p.header(&m, w)
-		if strings.Contains(header, "\n") {
-			t.Errorf("at %d columns the header wrapped onto a second row: %q", w, header)
-		}
-		if !strings.Contains(header, PaneLeaveKey) {
-			t.Errorf("at %d columns the header dropped the leave key: %q", w, header)
-		}
-	}
-}
-
 func TestATinyDeckRefusesAPane(t *testing.T) {
 	m := paneModel(t, allKinds())
-	// Chrome is the border plus one header row, so the smallest workable deck
-	// is paneMin plus that. 20x6 is under it on both axes.
+	// Chrome is the border, plus the deck's own bar row above it, so the smallest
+	// workable deck is paneMin plus those. 20x6 is under it on both axes.
 	m.width, m.height = 20, 6
 	next, _ := m.trigger(ActionOpenWindow, "agent")
 	got := next.(Model)

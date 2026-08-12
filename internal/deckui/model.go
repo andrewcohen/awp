@@ -4083,12 +4083,19 @@ func (m Model) view() string {
 	// help overlay on a short terminal) so their header — which carries the
 	// close hint — stays on screen instead of clipping off the top.
 	if pm, ok := m.active.(popoverModal); ok {
-		content := pm.renderPopover(&m, m.childBox())
+		b := m.childBox()
+		content := pm.renderPopover(&m, b)
 		vpos := lipgloss.Center
-		if lipgloss.Height(content) > m.height {
+		if lipgloss.Height(content) > b.h {
 			vpos = lipgloss.Top
 		}
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, vpos, content)
+		placed := lipgloss.Place(m.width, b.h, lipgloss.Center, vpos, content)
+		// A pane or a split gets the deck's own row above it — the same row, in the
+		// same cells, whichever of the two is up. See host_bar.go.
+		if m.hostsBar() {
+			return m.renderHostBar(m.width) + "\n" + placed
+		}
+		return placed
 	}
 
 	// The workspace row list runs full-width — per-row metadata lives

@@ -77,12 +77,27 @@ func fit(want int, b box) int {
 // how wide the terminal happens to be.
 func (b box) stacked() bool { return b.w > 0 && b.w < deckStackThreshold }
 
-// childBox is the region the deck's child gets: all of it.
+// childBox is the region the deck's child gets: all of it, less the host bar's
+// row when the child is one the deck draws that bar above.
 //
-// The whole screen because the deck is the outermost program in its terminal.
-// What sits in that region may itself be a split, which divides it further —
-// that is splitModal's business, not the deck's.
-func (m *Model) childBox() box { return box{w: m.width, h: m.height} }
+// Otherwise the whole screen, because the deck is the outermost program in its
+// terminal. What sits in that region may itself be a split, which divides it
+// further — that is splitModal's business, not the deck's.
+//
+// The bar's row is subtracted here and nowhere else. It used to be the split's
+// own arithmetic, done in its renderer and forgotten in its boxOf, so a hosted
+// program painted one row below where the deck thought its terminal started —
+// which is where the cursor was drawn and where a click was translated from.
+// Both of those paths derive from this function, so a bar this returns room for
+// is a bar every one of them agrees about.
+func (m *Model) childBox() box {
+	b := box{w: m.width, h: m.height}
+	if m.hostsBar() {
+		b.y += hostBarRows
+		b.h -= hostBarRows
+	}
+	return b
+}
 
 // boxOf is where a particular child lives, which is not the same question as
 // childBox once a split is up: the right half's origin is what turns a click at
