@@ -126,6 +126,22 @@ func TestDiffModalClosesOnEscAndQ(t *testing.T) {
 	}
 }
 
+// TestDiffModalClosesOnThePaneLeaveKey. ctrl+\ means "give the keyboard back to
+// whatever put me here" everywhere else in awp, and the deck is what put the
+// viewer here. The viewer binds it too, for when it is the whole program in a
+// pane; this is the same key doing the same thing when it is a modal.
+func TestDiffModalClosesOnThePaneLeaveKey(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return diffModalSample, nil })
+	m, _ = pressKey(m, "c")
+	if m.active == nil {
+		t.Fatal("expected the modal open before closing it")
+	}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl})
+	if got := updated.(Model).active; got != nil {
+		t.Fatalf("expected the modal closed, got %T", got)
+	}
+}
+
 // While the viewer's filter has focus, keys belong to the filter — `q` and
 // `c` must type into it rather than close the modal.
 func TestDiffModalFilterSwallowsCloseKeys(t *testing.T) {
@@ -486,9 +502,11 @@ func TestDiffModalDocumentsTheDeckSKeys(t *testing.T) {
 		keys = append(keys, k[0])
 	}
 	// `-` is not among them any more: the viewer owns that key and documents it
-	// itself, so listing it here would say it twice.
-	if strings.Join(keys, ",") != "esc / q" {
-		t.Fatalf("expected only the close keys, got %v", keys)
+	// itself, so listing it here would say it twice. ctrl+\ is: the deck takes it
+	// before the viewer, and it is the key that leaves a pane, so a reader looking
+	// for the way out has to find it here too.
+	if want := "esc / q / " + PaneLeaveKey; strings.Join(keys, ",") != want {
+		t.Fatalf("host keys are %v, want %q", keys, want)
 	}
 }
 

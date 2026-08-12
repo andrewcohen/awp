@@ -93,6 +93,13 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 			},
 		},
 		{
+			Title: "Leave",
+			Keys: [][2]string{
+				{"q", "leave the view"},
+				{charm.PaneLeaveKey, "the same — the key that leaves a pane, since this can be one"},
+			},
+		},
+		{
 			Title: "Here",
 			Keys: [][2]string{
 				{"j/k ctrl+d/ctrl+u", "scroll this reference"},
