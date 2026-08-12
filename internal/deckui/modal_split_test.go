@@ -351,3 +351,92 @@ func TestTheChordSaysWhatItCanDo(t *testing.T) {
 		}
 	}
 }
+
+// TestThePrefixIsVisibleWhileItIsArmed. A split renders no deck footer, so
+// arming the prefix changed only a bool and pressing the reserved key looked
+// exactly like pressing a dead key — which is how it was reported. The menu is
+// written over the frame's bottom row rather than given one of its own, so the
+// halves' boxes do not change and no pty is resized by a modifier keypress.
+func TestThePrefixIsVisibleWhileItIsArmed(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	before := s.renderPopover(&m, m.childBox())
+	if strings.Contains(ansi.Strip(before), "zoom") {
+		t.Fatal("the prefix menu is on screen before the prefix was armed")
+	}
+
+	m = pressDeck(t, m, leaveKey())
+	armed := ansi.Strip(s.renderPopover(&m, m.childBox()))
+	for _, want := range []string{"focus", "zoom", "q leave"} {
+		if !strings.Contains(armed, want) {
+			t.Errorf("the armed prefix does not say %q:\n%s", want, lastLine(armed))
+		}
+	}
+	// And it costs no rows: the frame is the same height armed or not, or the
+	// halves would reflow — and a pty relaying itself out because you pressed a
+	// modifier is worse than a border with a menu on it.
+	if got, want := lipgloss.Height(armed), lipgloss.Height(ansi.Strip(before)); got != want {
+		t.Errorf("arming the prefix changed the frame from %d rows to %d", want, got)
+	}
+}
+
+// lastLine is the bottom row of a rendered frame, for an error worth reading.
+func lastLine(frame string) string {
+	lines := strings.Split(frame, "\n")
+	return lines[len(lines)-1]
+}
+
+// TestTheDiffHalfFillsItsHeight. A body modal normally leaves room for the
+// deck's footer; a split has none, so those rows are the half's. Without it the
+// diff came up short and the frame ended in a band of dead rows.
+func TestTheDiffHalfFillsItsHeight(t *testing.T) {
+	m, s := splitWithDiff(t)
+	left, right := s.boxes(m.childBox())
+	agent := renderChild(&m, s.left, left)
+	diff := renderChild(&m, s.right, right)
+	if got, want := lipgloss.Height(diff), lipgloss.Height(agent); got != want {
+		t.Errorf("the diff half is %d rows and the agent half is %d", got, want)
+	}
+	if got := lipgloss.Height(s.renderPopover(&m, m.childBox())); got != m.height {
+		t.Errorf("the split is %d rows tall in a %d-row terminal", got, m.height)
+	}
+}
+
+// TestTheDiffHalfOpensWithTheLeftColumnCollapsed. Half a terminal, and the file
+// tree plus comment index would spend a third of it — where the diff is what the
+// half was opened to read. `\` brings them back.
+func TestTheDiffHalfOpensWithTheLeftColumnCollapsed(t *testing.T) {
+	_, s := splitWithDiff(t)
+	dm, ok := s.right.(*diffModal)
+	if !ok {
+		t.Fatalf("the right half is %T", s.right)
+	}
+	if !dm.inner.LeftColumnHidden() {
+		t.Error("the diff half opened with the left column taking a third of it")
+	}
+}
+
+// splitWithDiff is `|c`: the agent beside awp's own diff viewer.
+func splitWithDiff(t *testing.T) (Model, *splitModal) {
+	t.Helper()
+	m := splitDeck(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return sampleSplitDiff, nil }
+	m = pressDeck(t, m, runeKey("|"))
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("|c opened %T (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+	return m, s
+}
+
+// sampleSplitDiff is a one-file change, enough for the viewer to have a body.
+const sampleSplitDiff = `diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -1,3 +1,3 @@
+ alpha
+-beta
++gamma
+ delta
+`

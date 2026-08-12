@@ -396,6 +396,26 @@ func (m *Model) fail(format string, args ...any) {
 // the full width available to the body, bodyHeight the number of rows the
 // two panes may occupy. Standalone use goes through tea.WindowSizeMsg
 // instead.
+// HideLeftColumn starts the view with the left column already collapsed, the
+// state `\` toggles.
+//
+// For a host that knows the view is not getting the whole terminal — the deck's
+// `|` split gives it half — where the file tree and comment index cost a third
+// of what is left and the diff is the reason you opened it. `\` still brings
+// them back, and the cursors they hold are untouched either way.
+func (m *Model) HideLeftColumn(hidden bool) {
+	m.hideLeft = hidden
+	if hidden && m.focus != FocusHunks {
+		// Focus cannot sit on a pane that is not drawn — the same reason the key
+		// moves it.
+		m.focus = FocusHunks
+	}
+}
+
+// LeftColumnHidden reports whether the left column is collapsed, so a host can
+// check the state it asked for rather than reaching into the view.
+func (m Model) LeftColumnHidden() bool { return m.hideLeft }
+
 func (m *Model) SetSize(width, bodyHeight int) {
 	height := max(minBodyHeight, bodyHeight)
 	_, right := m.paneWidthsFor(width)

@@ -2,6 +2,7 @@ package deckui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -302,13 +303,46 @@ func (s *splitModal) footerHelp() string { return s.focused().footerHelp() }
 // chrome — a pane its header, the viewer its footer — and a deck footer beneath
 // them would be a third status line for a screen that already has two.
 func (s *splitModal) renderPopover(m *Model, b box) string {
+	var frame string
 	if s.zoomed {
-		return renderChild(m, s.focused(), b.focus(true))
+		frame = renderChild(m, s.focused(), b.focus(true))
+	} else {
+		left, right := s.boxes(b)
+		frame = lipgloss.JoinHorizontal(lipgloss.Top,
+			renderChild(m, s.left, left),
+			renderChild(m, s.right, right))
 	}
-	left, right := s.boxes(b)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		renderChild(m, s.left, left),
-		renderChild(m, s.right, right))
+	return s.withPrefixBar(m, frame, b)
+}
+
+// withPrefixBar writes the prefix menu over the frame's last row while the
+// prefix is armed.
+//
+// It has to be visible or the prefix does not exist. A split has no footer of
+// its own — each half carries its own chrome, and a third status line under two
+// of them is a row spent saying nothing most of the time — so arming the prefix
+// changed only a bool, and pressing the reserved key in a split looked exactly
+// like pressing a dead key. Which is how it was reported.
+//
+// Written over the bottom border rather than given a row of its own, so the
+// halves' boxes do not change: taking a row would resize both ptys on a
+// keystroke, and a program relaying itself out because you pressed a modifier is
+// worse than a border with a menu on it. It is one frame either way — the row
+// comes back as soon as the prefix resolves.
+func (s *splitModal) withPrefixBar(m *Model, frame string, b box) string {
+	if !s.prefixArmed {
+		return frame
+	}
+	lines := strings.Split(frame, "\n")
+	if len(lines) == 0 {
+		return frame
+	}
+	bar := m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, b.w)))
+	if pad := b.w - lipgloss.Width(bar); pad > 0 {
+		bar += strings.Repeat(" ", pad)
+	}
+	lines[len(lines)-1] = bar
+	return strings.Join(lines, "\n")
 }
 
 // renderChild renders one modal into one box, whichever kind of modal it is.
@@ -326,6 +360,12 @@ func renderChild(m *Model, child modal, b box) string {
 	case popoverModal:
 		return c.renderPopover(m, b)
 	case bodyModal:
+		// A body modal normally renders above the deck's footer and sizes itself
+		// to leave room for it. A split has no deck footer — each half carries
+		// its own chrome — so those rows are the child's after all, and without
+		// this the half comes up short by exactly the footer and the frame ends
+		// in a band of dead rows.
+		b.h += footerRows
 		left, right := c.view(m, b)
 		if right == "" {
 			return left
@@ -386,6 +426,11 @@ func (m *Model) openChild(item Item, kind string, b box) (modal, tea.Cmd, bool) 
 			return nil, nil, false
 		}
 		dm, loadCmd := newDiffModal(item, ScopeStackBase, m.diffLoad, m.diffOpen, m.diffBase, m.diffScopes, m.diffComments)
+		// Half a terminal, and the left column would spend a third of that on a
+		// file tree and a comment index — where the diff is the thing you opened
+		// the half to read. `\` brings them back for the file you need to jump
+		// around in, which is the minority of the time in a split.
+		dm.inner.HideLeftColumn(true)
 		return dm, loadCmd, true
 	}
 	p, cmd, handled := m.newPane(item, kind, b)
