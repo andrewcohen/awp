@@ -604,24 +604,51 @@ func (c Client) StartDetached(ctx context.Context, dir, name string, argv, env [
 			endClient(cmd)
 			return fmt.Errorf("start zmx session %q: %w", name, ctx.Err())
 		case err := <-exited:
-			// The client is gone and the session never appeared, so the reason went
-			// to the pty we are discarding. Name the likeliest cause instead.
+			// The client is gone, which is not the same as the session being absent —
+			// losing a client is the premise of this whole function, and killing one is
+			// what the success path below does deliberately. So ask, once, before
+			// calling this a failure. A client that created the session and then died
+			// leaves exactly the thing the caller asked for.
+			//
+			// Asking is also what stops the answer from being a coin toss. Both this
+			// case and the tick below can be ready at the same instant — an attach that
+			// makes the session and immediately exits arranges precisely that — and
+			// select picks between ready cases at random, so without this the same
+			// sequence of events reported success or "is the daemon running?" depending
+			// on the draw.
+			if live, lerr := c.lookupLive(ctx, name); lerr == nil && live {
+				return nil
+			}
+			// Nothing there, so the reason the client died went to the pty we are
+			// discarding. Name the likeliest cause instead.
 			return fmt.Errorf("start zmx session %q: the attach exited before the session appeared (%v) — is the zmx daemon running?", name, err)
 		case <-appeared:
 			endClient(cmd)
 			return fmt.Errorf("start zmx session %q: the daemon did not list it within %s", name, detachedAppearWait)
 		case <-tick.C:
-			// Live, not merely listed: a session whose command has already exited is
-			// one this failed to start, and reporting success would leave the caller
-			// thinking an agent is working.
-			s, found, err := c.Lookup(ctx, name)
-			if err != nil || !found || !s.Live() {
+			live, err := c.lookupLive(ctx, name)
+			if err != nil || !live {
 				continue
 			}
 			endClient(cmd)
 			return nil
 		}
 	}
+}
+
+// lookupLive answers the question a detached start asks over and over: is the
+// session there, and still running the command it was made for?
+//
+// Live, not merely listed: a session whose command has already exited is one this
+// failed to start, and reporting success would leave the caller thinking an agent
+// is working. Both branches that can end the wait ask it this way, so neither can
+// drift into accepting a session the other would refuse.
+func (c Client) lookupLive(ctx context.Context, name string) (bool, error) {
+	s, found, err := c.Lookup(ctx, name)
+	if err != nil || !found {
+		return false, err
+	}
+	return s.Live(), nil
 }
 
 // endClient stops the attach client without waiting on the session it made.

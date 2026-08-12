@@ -42,10 +42,15 @@ func shimZmx(t *testing.T, body string) string {
 // file, so a shim still running at the end of a test is one StartDetached forgot.
 const makesASession = "touch \"$marker\"\nsleep 5\n"
 
-// listsOnce reports a live session named `name`, but only once the shim has said
-// it made one — the same reason the daemon cannot report one earlier: it lists a
-// session because zmx made one.
-func listsOnce(name, after string) RunFunc {
+// listsOnce reports a session named `name`, but only once the shim has said it
+// made one — the same reason the daemon cannot report one earlier: it lists a
+// session because zmx made one. Live unless a caller passes fields saying
+// otherwise, which are appended to the line verbatim.
+func listsOnce(name, after string, extra ...string) RunFunc {
+	line := "name=" + name + "\tpid=4242\tclients=1\tcreated=1786124270"
+	for _, field := range extra {
+		line += "\t" + field
+	}
 	return func(_ context.Context, _, bin string, args ...string) (string, error) {
 		if bin != "zmx" || len(args) == 0 || args[0] != "ls" {
 			return "", nil
@@ -53,7 +58,7 @@ func listsOnce(name, after string) RunFunc {
 		if _, err := os.Stat(after); err != nil {
 			return "", nil
 		}
-		return "name=" + name + "\tpid=4242\tclients=1\tcreated=1786124270\n", nil
+		return line + "\n", nil
 	}
 }
 
@@ -102,6 +107,38 @@ func TestAnAttachThatDiesIsReportedNotWaitedOut(t *testing.T) {
 	}
 	if took := time.Since(start); took > detachedAppearWait/2 {
 		t.Errorf("waited %s for a client that had already exited; the whole timeout is %s", took, detachedAppearWait)
+	}
+}
+
+// TestAnAttachThatMadeTheSessionAndDiedIsASuccess. A client that exited is not
+// evidence the session is absent: losing the client is the premise of this whole
+// function, and killing one is what it does deliberately on its way out. So the
+// session is asked about rather than inferred.
+//
+// This shim arranges the ambiguous case on purpose — the session appears and the
+// client exits within a few milliseconds of each other, so both of the things
+// StartDetached waits on are ready at once and it is a coin toss which one it
+// sees. The test cannot tell which branch ran, and that is the property: the
+// answer no longer depends on the draw.
+func TestAnAttachThatMadeTheSessionAndDiedIsASuccess(t *testing.T) {
+	marker := shimZmx(t, "touch \"$marker\"\nexit 3\n")
+	if err := New(listsOnce("awp.p.w.agent", marker)).
+		StartDetached(context.Background(), t.TempDir(), "awp.p.w.agent", []string{"claude", "go"}, os.Environ()); err != nil {
+		t.Fatalf("a client that made the session and then exited was reported as a failure: %v", err)
+	}
+}
+
+// TestASessionListedButAlreadyEndedIsNotASuccess is the other half of that: the
+// branch above accepts a session, so it has to hold the same line the polling one
+// does. A session whose command has exited is one this failed to start, and
+// reporting success would leave the caller — a create job, which is about to exit
+// — believing an agent is working on the prompt it was given.
+func TestASessionListedButAlreadyEndedIsNotASuccess(t *testing.T) {
+	marker := shimZmx(t, "touch \"$marker\"\nexit 3\n")
+	err := New(listsOnce("awp.p.w.agent", marker, "ended=1", "exit_code=3")).
+		StartDetached(context.Background(), t.TempDir(), "awp.p.w.agent", []string{"claude", "go"}, os.Environ())
+	if err == nil {
+		t.Fatal("a session whose command had already exited was reported as started")
 	}
 }
 
