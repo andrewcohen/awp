@@ -676,9 +676,24 @@ func (p *panePopover) renderPopover(m *Model) string {
 		Render(body)
 }
 
-// header is the pane's one row of chrome: what you are looking at on the left,
-// how to leave on the right. It doubles as the status line the hint used to
-// have a row of its own for.
+// paneLabelMin is the narrowest the pane's label is worth showing at. Below it
+// there is room for a word and an ellipsis, which names nothing.
+const paneLabelMin = 10
+
+// header is the pane's one row of chrome: what needs you and what you are looking
+// at on the left, how to leave on the right. It doubles as the status line the
+// hint used to have a row of its own for.
+//
+// The attention badge is here because the deck is where you live now rather than
+// something you pass through, and a pane is most of that time. Its numbers are the
+// reason to go back to the row list at all, so they were exactly the wrong thing
+// to only be visible from it.
+//
+// One row for three things, so they go on in the order of what cannot be done
+// without: the way out, then what needs you, then the name of what is on screen —
+// which is the one you can read off the screen itself. The scope label the deck's
+// own title row carries stays behind; which slice of the list you were looking
+// through is not a question a pane raises.
 func (p *panePopover) header(m *Model, w int) string {
 	hint := m.styles.PaneHint.Render(PaneLeaveKey + " deck")
 	// Which emulator is behind the pane, but only when it is not the default one.
@@ -687,12 +702,28 @@ func (p *panePopover) header(m *Model, w int) string {
 	if vt := p.term.Emulator(); vt != vterm.EmulatorXVT {
 		hint = m.styles.PaneHint.Render(vt+" · ") + hint
 	}
-	label := m.styles.PaneTitle.Render(truncate(p.label, w-lipgloss.Width(hint)-1))
-	gap := w - lipgloss.Width(label) - lipgloss.Width(hint)
+
+	// Counted every frame rather than cached, and deliberately: an agent finishing
+	// its turn while you are in another pane is the whole point of putting this
+	// here, so a number that only moved when the row list was on screen would be
+	// worse than no number. The tally is a pass over the rows the deck already
+	// holds — see countAttention.
+	left := m.renderAttentionSummary(countAttention(m.mergedItemsAll()))
+	sep := m.styles.PaneHint.Render(" · ")
+
+	room := w - lipgloss.Width(left) - lipgloss.Width(hint) - lipgloss.Width(sep) - 1
+	if room >= paneLabelMin {
+		if left != "" {
+			left += sep
+		}
+		left += m.styles.PaneTitle.Render(truncate(p.label, room))
+	}
+
+	gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
 	if gap < 1 {
-		// Too narrow for both; the label is the one you can infer without. The leave
-		// key is not — it is how you get back out.
+		// Too narrow for both. The badge is a thing leaving the pane will show you;
+		// the leave key is how you leave.
 		return hint
 	}
-	return label + strings.Repeat(" ", gap) + hint
+	return left + strings.Repeat(" ", gap) + hint
 }
