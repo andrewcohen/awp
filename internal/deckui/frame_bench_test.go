@@ -72,7 +72,7 @@ func frameDeck(tb testing.TB, showThreads bool) Model {
 		Path:          "/repo/ws",
 		PRNumber:      2335,
 	}}, func(ActionRequest) error { return nil }).
-		WithDiffViewer(func(Item, DiffScope) (string, error) { return text, nil }, nil).
+		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return text, nil }, nil).
 		WithReviewStore(CommentStore{
 			LoadThreads: func(Item) ([]review.Thread, error) { return threads, nil },
 		})

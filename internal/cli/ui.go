@@ -22,11 +22,11 @@ import (
 // diffLoaderFor backs the deck's in-deck diff viewer (`c`): the git-format diff
 // of a workspace at the requested scope, the same source `awp diff` reads.
 func diffLoaderFor(runner Runner) deckui.DiffLoader {
-	return func(item deckui.Item, scope deckui.DiffScope) (string, error) {
+	return func(item deckui.Item, scope deckui.DiffScope, contextLines int) (string, error) {
 		if runner == nil {
 			runner = NewExecRunner()
 		}
-		return jj.New(runner).DiffGit(item.Path, scopeRevset(runner, item, scope), jj.DiffContextDefault)
+		return jj.New(runner).DiffGit(item.Path, scopeRevset(runner, item, scope), contextLines)
 	}
 }
 
@@ -94,7 +94,7 @@ func scopeOptionsFor(runner Runner, item deckui.Item, dir string) []ui.ScopeOpti
 		out = append(out, ui.ScopeOption{
 			Key:   s.key,
 			Label: sc.String(),
-			Load:  func() (string, error) { return load(it, sc) },
+			Load:  func(contextLines int) (string, error) { return load(it, sc, contextLines) },
 			Base:  func() string { return base(it, sc) },
 		})
 	}
@@ -254,7 +254,7 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		// Read on every refresh tick rather than pinned to a commit id here, so
 		// `-r @-` keeps meaning "the change before this one" as the stack moves
 		// under it.
-		model = ui.New(viewerRoot, func() (string, error) { return j.DiffGit(cwd, revset, jj.DiffContextDefault) }, openEditor)
+		model = ui.New(viewerRoot, func(contextLines int) (string, error) { return j.DiffGit(cwd, revset, contextLines) }, openEditor)
 		// Named as the revset rather than as a resolved commit: that is what the
 		// reader will recognise, and it stays true after the change is rewritten.
 		model.ResolveBase = func() string { return revset }

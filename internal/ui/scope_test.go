@@ -17,10 +17,10 @@ func scopeModel(t *testing.T, asked *[]string) Model {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
 	m.WithScopes([]ScopeOption{
 		{Key: "c", Label: "vs stack base",
-			Load: func() (string, error) { *asked = append(*asked, "base"); return sampleDiff, nil },
+			Load: func(int) (string, error) { *asked = append(*asked, "base"); return sampleDiff, nil },
 			Base: func() string { return "main" }},
 		{Key: "w", Label: "working copy",
-			Load: func() (string, error) { *asked = append(*asked, "working"); return sampleDiff, nil }},
+			Load: func(int) (string, error) { *asked = append(*asked, "working"); return sampleDiff, nil }},
 	})
 	return m
 }
@@ -45,7 +45,7 @@ func TestScopeChordSwitchesTheRange(t *testing.T) {
 	// LoadDiff is now the new scope's reader, so the refresh tick keeps reading the
 	// range you switched to rather than reverting to the one you opened on. Invoked
 	// directly because the reload itself rides a tea.Cmd, which press does not run.
-	if _, err := m.LoadDiff(); err != nil {
+	if _, err := m.LoadDiff(contextDefault); err != nil {
 		t.Fatalf("LoadDiff: %v", err)
 	}
 	if len(asked) != 1 || asked[0] != "working" {

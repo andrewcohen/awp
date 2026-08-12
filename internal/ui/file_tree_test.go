@@ -135,7 +135,7 @@ func TestTreeRowOfFindsTheCursorsRow(t *testing.T) {
 // A deep path costs a couple of columns of indent instead of its whole prefix,
 // which is the width this change is buying back.
 func TestTreeRowIsShorterThanTheFullPath(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 20)
 	m = loadWith(m, 1, fileAt("app/lib/navigation/menu-item.server.ts"))
 
@@ -153,7 +153,7 @@ func TestTreeRowIsShorterThanTheFullPath(t *testing.T) {
 // Every row has to fit the pane, headings included: a deep directory name cannot
 // push the column open.
 func TestTreeRowsFitTheirWidth(t *testing.T) {
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 20)
 	m = loadWith(m, 1,
 		fileAt("some/very/deeply/nested/directory/chain/with/a/long/name/file.go"),

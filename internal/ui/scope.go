@@ -27,7 +27,7 @@ type ScopeOption struct {
 	// Label names it in the menu and in the chrome — "vs stack base".
 	Label string
 	// Load reads the diff for this scope.
-	Load func() (string, error)
+	Load func(contextLines int) (string, error)
 	// Base names what the diff is read against, for the chrome. Optional; a scope
 	// diffed against the working copy has nothing to name.
 	Base func() string
@@ -116,5 +116,5 @@ func (m Model) switchScope(i int) (tea.Model, tea.Cmd) {
 	m.fingerprint = 0
 	m.status = s.Label + ": loading…"
 	m.statusErr = false
-	return m, tea.Batch(loadDiffCmd(m.LoadDiff), resolveBaseCmd(m.ResolveBase))
+	return m, tea.Batch(loadDiffCmd(m.LoadDiff, m.contextLines), resolveBaseCmd(m.ResolveBase))
 }

@@ -14,7 +14,7 @@ import (
 // list, loaded with two files.
 func indexModel(t *testing.T) Model {
 	t.Helper()
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 24)
 	m.focus = FocusHunks
 	return loadWith(m, 1,
@@ -120,7 +120,7 @@ func longFileModel(t *testing.T, lines int) Model {
 	for i := range lines {
 		body = append(body, fmt.Sprintf("line %d", i))
 	}
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 24)
 	m.focus = FocusHunks
 	return loadWith(m, 1, fileWith("a.go", 1, body...))

@@ -28,7 +28,7 @@ func fileWith(name string, start int, contents ...string) diff.FileDiff {
 
 func anchorModel(t *testing.T) Model {
 	t.Helper()
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 10)
 	m.focus = FocusHunks
 	return m

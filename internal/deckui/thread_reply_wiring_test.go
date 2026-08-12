@@ -88,7 +88,7 @@ func TestAReplyPostedFromTheDeckIsRecordedAsPublished(t *testing.T) {
 		},
 	}
 
-	m := diffModalModel(t, func(Item, DiffScope) (string, error) { return threadReplyDiff, nil })
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return threadReplyDiff, nil })
 	m = m.WithReviewStore(store)
 	m, cmd := pressKey(m, "c")
 	m = drain(m, cmd)

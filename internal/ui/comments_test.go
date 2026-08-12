@@ -16,7 +16,7 @@ import (
 
 func commentModel(t *testing.T, files ...diff.FileDiff) Model {
 	t.Helper()
-	m := New("/repo", func() (string, error) { return sampleDiff, nil }, nil)
+	m := New("/repo", func(int) (string, error) { return sampleDiff, nil }, nil)
 	m.SetSize(120, 14)
 	m.focus = FocusHunks
 	m.SaveComment = func(review.Comment) error { return nil }
