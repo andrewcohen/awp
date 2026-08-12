@@ -972,3 +972,38 @@ Two more diagnostics, both off unless set:
 | `AWP_PPROF=<path>` | A CPU profile of the whole deck session, written to that path on exit. Read it with `go tool pprof -top -nodecount=30 <path>`. |
 
 `AWP_PPROF` is **a path, not a switch** — and it is refused if you give it one, because every spelling of "on" is also a valid filename. `AWP_PPROF=true awp deck` wrote a 26 KB profile to a file called `true` in whatever directory you launched from, which is how one ended up committed to this repo. An off-ish value (`0`, `false`, `no`, `off`) is honoured as "no profile"; an on-ish one (`1`, `true`, `yes`, `on`) prints what it wanted instead and opens the deck without profiling.
+
+### Which emulator interprets a pane
+
+A pane's output is interpreted by a terminal emulator inside awp, and `AWP_PANE_VT` picks which one:
+
+| Value | Emulator |
+|-------|----------|
+| unset, or `x-vt` | `github.com/charmbracelet/x/vt` — the default, pure Go, what every ordinary build has. |
+| `ghostty` | libghostty-vt, Ghostty's own VT library. Only present in a binary built with `-tags ghosttyvt`. |
+
+It exists to compare the two on the same session with the same program, which is
+the only way to tell a fidelity defect in the emulator from one in the layout
+around it. Note it is **not** `AWP_PANE_EXEC`, which answers a different question
+— that one hands the real terminal to the child and runs no emulator at all.
+
+Asking for an emulator this binary does not have is an error naming the build
+tag, not a quiet fall back to the default: the point of choosing is to compare,
+and a comparison that silently ran the default twice would report that the two
+agree.
+
+The ghostty build needs an archive, which Ghostty's own build produces:
+
+```sh
+# in a libghostty-vt source tree (the `tip` release ships libghostty-vt-source.tar.gz)
+zig build -Demit-lib-vt=true -Demit-xcframework=false -Dsimd=false \
+  -Doptimize=ReleaseFast --prefix $DIR
+
+CGO_CFLAGS=-I$DIR/include CGO_LDFLAGS=$DIR/lib/libghostty-vt.a \
+  go build -tags ghosttyvt -o /tmp/awp-ghostty ./cmd/awp
+```
+
+`-Demit-xcframework=false` is required on macOS or the install step fails in
+`xcodebuild` after the library itself has already built; `-Dsimd=false` keeps the
+C++ SIMD dependency out, which is why the archive needs nothing but libc to link.
+Nothing about the default build changes: `go build ./...` stays cgo-free.
