@@ -1572,6 +1572,34 @@ func TestColourFollowsKindNotAuthor(t *testing.T) {
 	}
 }
 
+// TestACommentBlockIsEdgedNotWashed.
+//
+// A comment's rows carry no background of their own. The block used to be filled
+// with BgPanel, which put a third tint between the diff's green and red — the two
+// backgrounds that mean something in this pane — for a block whose edge is already
+// drawn by the kind-coloured ▌ down its gutter.
+//
+// The cursorline is the exception and stays: it is a selection treatment, and it
+// has to be carried by every style on the row because each inner style ends with a
+// reset that would clear it mid-row.
+func TestACommentBlockIsEdgedNotWashed(t *testing.T) {
+	for _, k := range []review.Kind{review.KindComment, review.KindSuggestion, review.KindQuestion, review.KindPraise} {
+		bar, head, body, fill := commentStyles(k, false)
+		for name, s := range map[string]lipgloss.Style{"bar": bar, "head": head, "body": body, "fill": fill} {
+			if got := fmt.Sprint(s.GetBackground()); got != fmt.Sprint(lipgloss.NoColor{}) {
+				t.Errorf("%q: the %s paints a background (%s); the gutter's bar is the block's edge", k, name, got)
+			}
+		}
+	}
+	// On the cursor's row every style carries the band.
+	bar, head, body, fill := commentStyles(review.KindSuggestion, true)
+	for name, s := range map[string]lipgloss.Style{"bar": bar, "head": head, "body": body, "fill": fill} {
+		if fmt.Sprint(s.GetBackground()) == fmt.Sprint(lipgloss.NoColor{}) {
+			t.Errorf("the %s drops the cursorline, so the band breaks mid-row", name)
+		}
+	}
+}
+
 // tab cycles the kind while composing, and lands back where it started. The box
 // owns every key while it is open, so tab is free here — it is the pane switch
 // only out in the diff.

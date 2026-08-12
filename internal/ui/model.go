@@ -1530,17 +1530,21 @@ var (
 	styleQuestionHead   = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	stylePraiseHead     = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Success)).Bold(true)
 	// The prose itself is not tinted. A whole paragraph in the kind's hue was
-	// harder to read against the block's fill and no more informative than a
-	// coloured edge, so the signal lives on the bar and the label while the body
-	// takes the palette's emphasized-text token — which needs to be explicit
-	// rather than terminal-default, since these cells carry a background.
+	// harder to read and no more informative than a coloured edge, so the signal
+	// lives on the bar and the label while the body takes the palette's
+	// emphasized-text token — which is what separates a remark from the code it sits
+	// between, now that the block carries no fill to do it.
 	styleCommentText = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Strong))
-	// Comments are painted across the full width so they read as blocks set into
-	// the diff rather than as loose text between code lines. BgPanel is the
-	// palette's chip background — a comment box is exactly that — which keeps
-	// charm.Cursorline the only non-ANSI-16 value in the palette.
-	commentBg         = lipgloss.Color(charm.BgPanel)
-	styleCommentFill  = lipgloss.NewStyle().Background(commentBg)
+	// A comment's rows are unpainted, and the kind-coloured ▌ down the gutter is
+	// what makes the block a block.
+	//
+	// They used to be washed with BgPanel on the reasoning that a comment box is a
+	// chip. It is not: BgPanel is sized for a fill you read a label off, and behind
+	// a paragraph — between the diff's own green and red tints, which are the
+	// backgrounds that mean something here — it read as a third tint competing with
+	// the two that carry information. Cached rather than built per row, since this is
+	// a render path.
+	styleCommentPlain = lipgloss.NewStyle()
 	styleOrphanHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Warning)).Bold(true)
 	styleReviewHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(charm.Accent)).Bold(true)
 	// Muted, not the header's accent: the stand-in is a hint about a section with

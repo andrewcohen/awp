@@ -119,9 +119,11 @@ func (m Model) renderStreamRowAt(i, width int) string {
 	case marked:
 		prefix = kindStyles(mark).Render(selectionPrefixBar)
 	case isCommentRow(kind):
-		// Paint the reserved columns too: an unpainted gap on the left would
-		// break the block the comment is meant to read as.
-		prefix = styleCommentFill.Render(selectionPrefixBlank)
+		// Left as reserved blank columns. They used to be painted so the block's
+		// wash reached the pane's left edge; with no wash there is nothing for them
+		// to continue, and the gutter's ▌ sits just inside them where the block's
+		// edge belongs.
+		prefix = styleCommentPlain.Render(selectionPrefixBlank)
 	}
 	body := m.renderStreamRow(m.stream.rows[i], width-lipgloss.Width(selectionPrefixBlank), band)
 	row := prefix + body

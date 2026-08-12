@@ -1522,8 +1522,10 @@ func commentStyles(kind review.Kind, cursor bool) (bar, head, body, fill lipglos
 		return bar.Background(cursorlineBg), head.Background(cursorlineBg),
 			body.Background(cursorlineBg), styleCursorFill
 	}
-	return bar.Background(commentBg), head.Background(commentBg),
-		body.Background(commentBg), styleCommentFill
+	// No fill off the cursor. The kind's hue on the gutter's ▌ is the block's edge
+	// and its label at once, which is all the wash was adding — see
+	// styleCommentPlain for why a background was the wrong thing to add it with.
+	return bar, head, body, styleCommentPlain
 }
 
 // kindColor is the palette token for a kind, for surfaces that need the colour
