@@ -91,12 +91,12 @@ func (p *prNumberModal) update(m *Model, msg tea.Msg) tea.Cmd {
 
 func (p *prNumberModal) footerHelp() string { return "" }
 
-func (p *prNumberModal) renderPopover(m *Model) string {
-	box := lipgloss.NewStyle().
+func (p *prNumberModal) renderPopover(m *Model, b box) string {
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(60 + borderCells)
+		Width(fit(60+borderCells, b))
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
@@ -125,7 +125,7 @@ func (p *prNumberModal) renderPopover(m *Model) string {
 		lines = append(lines, "", errStyle.Render(p.err))
 	}
 	lines = append(lines, "", hintStyle.Render("enter save · esc cancel"))
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 // pinAliasModal is the `gR` alias-rename popover: set the display label
@@ -195,12 +195,12 @@ func (p *pinAliasModal) update(m *Model, msg tea.Msg) tea.Cmd {
 
 func (p *pinAliasModal) footerHelp() string { return "" }
 
-func (p *pinAliasModal) renderPopover(m *Model) string {
-	box := lipgloss.NewStyle().
+func (p *pinAliasModal) renderPopover(m *Model, b box) string {
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).
 		Padding(1, 2).
-		Width(60 + borderCells)
+		Width(fit(60+borderCells, b))
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
 	errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)).Bold(true)
@@ -225,5 +225,5 @@ func (p *pinAliasModal) renderPopover(m *Model) string {
 		lines = append(lines, "", errStyle.Render(p.err))
 	}
 	lines = append(lines, "", mutedStyle.Render("enter save · esc cancel"))
-	return box.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }

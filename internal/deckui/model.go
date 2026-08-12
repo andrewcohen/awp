@@ -3962,7 +3962,8 @@ func (m Model) View() tea.View {
 		if p.term.WantsMouse() {
 			v.MouseMode = tea.MouseModeCellMotion
 		}
-		if x, y, ok := p.screenCursor(m.width, m.height); ok {
+		pb := m.childBox()
+		if x, y, ok := p.screenCursor(pb.w, pb.h); ok {
 			v.Cursor = tea.NewCursor(x, y)
 		}
 	}
@@ -4009,7 +4010,7 @@ func (m Model) view() string {
 	// help overlay on a short terminal) so their header — which carries the
 	// close hint — stays on screen instead of clipping off the top.
 	if pm, ok := m.active.(popoverModal); ok {
-		content := pm.renderPopover(&m)
+		content := pm.renderPopover(&m, m.childBox())
 		vpos := lipgloss.Center
 		if lipgloss.Height(content) > m.height {
 			vpos = lipgloss.Top
@@ -4028,7 +4029,7 @@ func (m Model) view() string {
 	switch {
 	case m.active != nil:
 		if bm, ok := m.active.(bodyModal); ok {
-			left, right = bm.view(&m)
+			left, right = bm.view(&m, m.childBox())
 		}
 	default:
 		left = m.renderList(m.width)
@@ -4641,11 +4642,9 @@ func (m Model) renderList(width int) string {
 // (mirroring the bookmark/review pickers).
 const deckStackThreshold = 90
 
-// deckStacked reports whether the deck is in the narrow-terminal
-// layout where pickers render full-width without a right pane.
-func (m Model) deckStacked() bool {
-	return m.width > 0 && m.width < deckStackThreshold
-}
+// Whether a given surface is stacked is box.stacked() — a question about the
+// region being rendered into rather than about the deck, since in a split the
+// two halves can answer it differently.
 
 // pickerSplit returns (leftWidth, rightWidth) for the new-menu / open
 // pickers: a 70/30 split with a 3-col gutter when wide enough, or full

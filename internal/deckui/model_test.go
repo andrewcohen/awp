@@ -2600,7 +2600,7 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 		t.Fatalf("merge must not dispatch before confirmation; got calls=%d", calls)
 	}
 	// The confirm modal must surface the exact command for confidence.
-	if view := cm.renderPopover(&m); !strings.Contains(view, "gh pr merge 99 --squash") || !strings.Contains(view, "#99") {
+	if view := cm.renderPopover(&m, m.childBox()); !strings.Contains(view, "gh pr merge 99 --squash") || !strings.Contains(view, "#99") {
 		t.Fatalf("expected merge confirm to show command and PR number; got %q", view)
 	}
 

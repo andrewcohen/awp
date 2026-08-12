@@ -72,8 +72,8 @@ func (jm *jobsModal) selectedJob() (Job, bool) {
 
 func (jm *jobsModal) footerHelp() string { return "" }
 
-func (jm *jobsModal) renderPopover(m *Model) string {
-	return renderJobsOverlay(m.width, m.height, &jm.list, &jm.vp, len(m.jobs) == 0)
+func (jm *jobsModal) renderPopover(m *Model, b box) string {
+	return renderJobsOverlay(b.w, b.h, &jm.list, &jm.vp, len(m.jobs) == 0)
 }
 
 // update handles keypresses while the overlay is active. Selection +

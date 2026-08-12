@@ -109,12 +109,12 @@ func (p *bookmarkPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (p *bookmarkPicker) view(m *Model) (left, right string) {
+func (p *bookmarkPicker) view(m *Model, b box) (left, right string) {
 	// JoinHorizontal between a short loading-state left pane and a tall
 	// static right pane caused painting bleed during load, so the bookmark
 	// picker is deliberately single-column (see the historical note that
 	// used to live in View).
-	return p.renderList(m, m.width), ""
+	return p.renderList(m, b), ""
 }
 
 func (p *bookmarkPicker) footerHelp() string {
@@ -124,8 +124,8 @@ func (p *bookmarkPicker) footerHelp() string {
 	return p.list.Help.ShortHelpView(pickerShortHelp(p.list))
 }
 
-func (p *bookmarkPicker) renderList(m *Model, width int) string {
+func (p *bookmarkPicker) renderList(m *Model, b box) string {
 	// A single loadingItem stands in during the fetch so the list's chrome
 	// keeps its shape and the panel doesn't resize under the user.
-	return renderPickerPanel(m, &p.list, width)
+	return renderPickerPanel(m, &p.list, b)
 }

@@ -263,13 +263,13 @@ func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
 	m, p := openedPane(t, allKinds())
 	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
 
-	box := p.renderPopover(&m)
+	rendered := p.renderPopover(&m, m.childBox())
 	tw, th := paneDims(m.width, m.height)
 	wantW, wantH := paneBox(tw, th)
-	if got := lipgloss.Width(box); got != wantW {
+	if got := lipgloss.Width(rendered); got != wantW {
 		t.Errorf("the box rendered %d columns wide, want %d", got, wantW)
 	}
-	if got := lipgloss.Height(box); got != wantH {
+	if got := lipgloss.Height(rendered); got != wantH {
 		t.Errorf("the box rendered %d rows tall, want %d", got, wantH)
 	}
 }

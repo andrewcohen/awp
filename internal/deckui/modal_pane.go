@@ -237,14 +237,18 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		return nil, false
 	}
 	handover := os.Getenv(PaneExecEnv) != ""
+	// The pane is sized from the box it will be rendered into, not from the
+	// terminal, so a pty started for half the screen is started at half the
+	// width rather than laying itself out for the whole one.
+	b := m.childBox()
 	// A handed-over pane is the whole terminal, so there is no size it does not
 	// fit. The emulated one has to leave room for its own chrome.
-	if !handover && !paneFits(m.width, m.height) {
-		m.status = fmt.Sprintf("this terminal is %dx%d, too small for a pane", m.width, m.height)
+	if !handover && !paneFits(b.w, b.h) {
+		m.status = fmt.Sprintf("this pane gets %dx%d, too small to host one", b.w, b.h)
 		return nil, true
 	}
 
-	w, h := paneDims(m.width, m.height)
+	w, h := paneDims(b.w, b.h)
 	cmd, restore, err := m.panes.Open(item, kind, w, h)
 	if err != nil {
 		m.status = PaneLabel(kind) + ": " + err.Error()
@@ -543,7 +547,8 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		// The deck asks for mouse events only while a pane is up (see View),
 		// so anything arriving here belongs to the hosted program — but in the
 		// deck's coordinates, not its own.
-		inner, ok := paneMouse(msg, m.width, m.height)
+		pb := m.childBox()
+		inner, ok := paneMouse(msg, pb.w, pb.h)
 		if !ok {
 			return nil
 		}
@@ -656,8 +661,8 @@ func paneFits(deckW, deckH int) bool {
 	return w >= paneMinW && h >= paneMinH
 }
 
-func (p *panePopover) renderPopover(m *Model) string {
-	w, h := paneDims(m.width, m.height)
+func (p *panePopover) renderPopover(m *Model, b box) string {
+	w, h := paneDims(b.w, b.h)
 	if w != p.setW || h != p.setH {
 		// The deck was resized, so the pty and the emulator have to follow
 		// together or the process lays out for one width while we render at

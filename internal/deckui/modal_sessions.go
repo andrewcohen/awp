@@ -344,14 +344,14 @@ func (p *sessionPicker) endSession(m *Model, s PaneSession) tea.Cmd {
 	}
 }
 
-func (p *sessionPicker) view(m *Model) (left, right string) {
+func (p *sessionPicker) view(m *Model, b box) (left, right string) {
 	if p.err != nil {
-		return m.styles.Panel.Width(m.width).Render(
+		return m.styles.Panel.Width(b.w).Render(
 			m.styles.Danger.Render("sessions: " + p.err.Error())), ""
 	}
 	if !p.loading && len(p.list.Items()) == 0 {
-		return m.styles.Panel.Width(m.width).Render(
+		return m.styles.Panel.Width(b.w).Render(
 			m.styles.Muted.Render("No sessions. Opening an agent, editor, shell or vcs pane starts one.")), ""
 	}
-	return renderPickerPanel(m, &p.list, m.width), ""
+	return renderPickerPanel(m, &p.list, b), ""
 }
