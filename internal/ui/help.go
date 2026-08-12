@@ -74,7 +74,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"A", "approve the agent's proposal"},
 				{"D", "delete the comment and every reply beneath it"},
 				{"r", "mark the file reviewed and collapse it"},
-				{"R", "resolve / reopen the GitHub thread"},
+				{"R", "settle the conversation: resolve a GitHub thread, or close one of yours"},
 				{"T", "cycle GitHub threads shown: unresolved → all → none"},
 				{"enter", "fold / unfold the GitHub thread at the cursor"},
 				{"ctrl+s", "send every remark you have written and not sent to the agent"},

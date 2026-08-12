@@ -809,6 +809,15 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			}
 			return store.DeleteComment(r, id)
 		},
+		// Settle is the local half of `R`. The store resolves the conversation's root
+		// itself, so the viewer can name it by any of its messages.
+		Settle: func(item deckui.Item, rootID string, settled bool) error {
+			store, r, err := open(item)
+			if err != nil {
+				return err
+			}
+			return store.Settle(r, rootID, settled)
+		},
 		Approve: func(item deckui.Item, id string) (review.Comment, error) {
 			store, r, err := open(item)
 			if err != nil {
