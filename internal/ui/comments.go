@@ -224,20 +224,97 @@ func (m Model) threadFor(commentID string) (review.Thread, bool) {
 	return review.Thread{}, false
 }
 
-// toggleResolved resolves or unresolves the thread under the cursor.
+// toggleResolved settles the conversation under the cursor, whichever kind it is:
+// a mirrored GitHub thread by resolving it on the PR, one of ours by recording
+// that the reviewer is done with it.
+//
+// One key for both, because from the keyboard it is one gesture — "I have dealt
+// with this" — and the reader should not have to know which store a conversation
+// lives in to close it. What the two do is not the same thing, though, and the
+// vocabulary keeps them apart: GitHub records `resolved` about a thread; ours move
+// to review.Settled.
 func (m Model) toggleResolved() (tea.Model, tea.Cmd) {
-	t, ok := m.threadAtCursor()
-	if !ok {
-		// Worded for the pane the key was pressed in: from the index there is no
-		// cursor to move, only a selection that is a local comment — which has
-		// nothing to resolve, since resolving is a thing GitHub records.
-		if m.focus == FocusComments {
-			m.status = "only a GitHub thread can be resolved"
-		} else {
-			m.status = "put the cursor on a GitHub thread to resolve it"
+	if t, ok := m.threadAtCursor(); ok {
+		return m.resolveRemoteThread(t)
+	}
+	if root, ok := m.localRootAtCursor(); ok {
+		return m.settleLocalThread(root)
+	}
+	// Worded for the pane the key was pressed in: from the index there is no
+	// cursor to move, only a selection that is not a conversation at all.
+	if m.focus == FocusComments {
+		m.status = "nothing to settle here"
+	} else {
+		m.status = "put the cursor on a conversation to settle it"
+	}
+	return m, nil
+}
+
+// localRootAtCursor is the conversation of ours the cursor is in — its opening
+// remark, whichever of its messages the cursor sits on.
+//
+// The root, because a conversation is settled and counted as a whole: a reply's
+// significance is carried by reopening its parent, so the parent's state is the
+// conversation's state. The same property resolving a mirrored thread has, where
+// any message answers for the whole of it.
+func (m Model) localRootAtCursor() (review.Comment, bool) {
+	if len(m.stream.rows) == 0 || m.cursorRow >= len(m.stream.rows) {
+		return review.Comment{}, false
+	}
+	r := m.stream.rows[m.cursorRow]
+	if !isCommentRow(r.kind) || r.comment < 0 || r.comment >= len(m.stream.comments) {
+		return review.Comment{}, false
+	}
+	id := m.stream.comments[r.comment].ID
+	if _, mirrored := review.ThreadIDOf(id); mirrored {
+		return review.Comment{}, false
+	}
+	root := review.RootOf(m.comments, id)
+	for _, c := range m.comments {
+		if c.ID == root {
+			return c, true
 		}
+	}
+	return review.Comment{}, false
+}
+
+// settleLocalThread records that the reviewer is done with one of our
+// conversations, or takes that back.
+func (m Model) settleLocalThread(root review.Comment) (tea.Model, tea.Cmd) {
+	if m.SettleThread == nil {
+		m.status = "settling unavailable here"
 		return m, nil
 	}
+	want := root.State != review.Settled
+	if err := m.SettleThread(root.ID, want); err != nil {
+		m.fail("settle: %v", err)
+		return m, nil
+	}
+	// Written through to the local copy so the chip changes on this frame. The
+	// refresh tick would bring it eventually, and a keystroke whose effect arrives
+	// seconds later reads as one that did nothing.
+	for i := range m.comments {
+		if m.comments[i].ID == root.ID {
+			if want {
+				m.comments[i].State = review.Settled
+			} else {
+				m.comments[i].State = review.Open
+			}
+		}
+	}
+	if want {
+		m.status = "settled — it stops counting as a finding"
+	} else {
+		m.status = "reopened"
+	}
+	m.rebuildStream()
+	m.clampCursor()
+	m.followCursor()
+	return m, nil
+}
+
+// resolveRemoteThread resolves or unresolves a mirrored GitHub thread.
+func (m Model) resolveRemoteThread(t review.Thread) (tea.Model, tea.Cmd) {
 	if m.ResolveThread == nil {
 		m.status = "resolving unavailable here"
 		return m, nil
@@ -575,14 +652,70 @@ func (m Model) threadFolded(t review.Thread) bool {
 
 // threadCollapsed answers the same question about an adapted comment, which is
 // the form the row builders see.
+//
+// A conversation of ours folds on the same rule with the state swapped: a settled
+// one closes the way a resolved GitHub thread does, because settling means the same
+// thing about it — dealt with, and no longer what you are reading the diff for.
+// Anything not settled stays open; folding a remark you are in the middle of
+// writing about would be perverse.
 func (m Model) threadCollapsed(c review.Comment) bool {
-	t, ok := m.threadFor(c.ID)
-	if !ok {
-		// A local comment is the reviewer's own working set, always open. Folding
-		// what you are in the middle of writing about would be perverse.
-		return false
+	if t, ok := m.threadFor(c.ID); ok {
+		return m.threadFolded(t)
 	}
-	return m.threadFolded(t)
+	root := m.conversationRoot(c.ID)
+	// The explicit override wins for the same reason it does on a mirrored thread:
+	// settling a conversation you deliberately opened should not close it under you.
+	if expanded, ok := m.threadFold[root]; ok {
+		return !expanded
+	}
+	return m.settledRoots[root]
+}
+
+// conversationRoot is the id a local comment's conversation is keyed by — its
+// opening remark — read off the index rebuilt with the comment set rather than
+// walked here. Geometry and render both ask this per comment per pass, which is
+// exactly the shape of the per-frame cost the stream cache exists to avoid.
+func (m Model) conversationRoot(id string) string {
+	if root, ok := m.rootOf[id]; ok {
+		return root
+	}
+	return id
+}
+
+// indexConversations rebuilds the id → root map and the set of settled roots.
+//
+// Called from rebuildStream, which is where every path that changes the comment
+// set already converges — a keystroke, a refresh tick, a resize — and never from a
+// render.
+func (m *Model) indexConversations() {
+	parent := make(map[string]string, len(m.comments))
+	settled := make(map[string]bool, len(m.comments))
+	for _, c := range m.comments {
+		if c.ReplyTo != "" {
+			parent[c.ID] = c.ReplyTo
+		}
+		if c.State == review.Settled {
+			settled[c.ID] = true
+		}
+	}
+	m.rootOf = make(map[string]string, len(m.comments))
+	m.settledRoots = make(map[string]bool, len(settled))
+	for _, c := range m.comments {
+		id := c.ID
+		// Bounded by the comment count: a ReplyTo cycle in a corrupt record must not
+		// spin a render path.
+		for range m.comments {
+			next, ok := parent[id]
+			if !ok {
+				break
+			}
+			id = next
+		}
+		m.rootOf[c.ID] = id
+		if settled[id] {
+			m.settledRoots[id] = true
+		}
+	}
 }
 
 // threadHeaderLabel is a mirrored thread's header: which way it folds, where it
@@ -621,19 +754,30 @@ func threadAuthor(t review.Thread) string {
 
 // toggleThreadFold opens or closes the mirrored thread under the cursor.
 func (m Model) toggleThreadFold() (tea.Model, tea.Cmd) {
-	t, ok := m.threadAtCursor()
-	if !ok {
-		// Silent: enter on a line of code is not a mistake, and the diff has no
-		// other meaning for it.
-		return m, nil
+	// The id the conversation is known by, and whether it is closed right now.
+	// Mirrored or ours: the fold is the same gesture on both, and a settled
+	// conversation of ours has to be openable again or R would hide it for good.
+	var id string
+	var folded bool
+	switch t, ok := m.threadAtCursor(); {
+	case ok:
+		id, folded = t.ID, m.threadFolded(t)
+	default:
+		root, isLocal := m.localRootAtCursor()
+		if !isLocal {
+			// Silent: enter on a line of code is not a mistake, and the diff has no
+			// other meaning for it.
+			return m, nil
+		}
+		id, folded = root.ID, m.threadCollapsed(root)
 	}
 	if m.threadFold == nil {
 		m.threadFold = map[string]bool{}
 	}
-	// Store what it is moving *to* as an explicit override, so the fold survives
-	// the thread's resolved state changing under it — resolving a thread you
+	// Store what it is moving *to* as an explicit override, so the fold survives the
+	// conversation's state changing under it — settling or resolving one you
 	// deliberately opened should not close it.
-	m.threadFold[t.ID] = m.threadFolded(t)
+	m.threadFold[id] = folded
 	m.rebuildStream()
 	return m, nil
 }
@@ -841,6 +985,13 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 			continue
 		}
 		all = append(all, th.Parent)
+		if m.threadCollapsed(th.Parent) {
+			// Folded is one row for the whole conversation, so its replies are not
+			// placed at all rather than placed and then each drawn as its own marker —
+			// the same choice threadAsComments makes for a folded mirrored thread, and
+			// what makes a settled conversation cost a line instead of a line each.
+			continue
+		}
 		for _, reply := range th.Replies {
 			// A reply displays in the thread's kind, not its own. The whole
 			// conversation renders as one card sharing one left bar, and a reply

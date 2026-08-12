@@ -116,6 +116,10 @@ type CommentStore struct {
 	LastSaved func() (review.Comment, bool)
 	// Resolve toggles a GitHub review thread's resolved state.
 	Resolve func(item Item, threadID string, resolve bool) error
+	// Settle records that the reviewer is done with one of our own conversations,
+	// named by its opening remark, or takes that back. Nil leaves `R` unavailable on
+	// a local thread.
+	Settle func(item Item, rootID string, settled bool) error
 	// ReplyToThread posts a reply into a GitHub review thread and returns the id of
 	// the comment it created. That id is not a courtesy: it is what the local record
 	// is marked with, and what stops the same reply being drawn twice or sent twice.
@@ -422,6 +426,9 @@ func ApplyCommentStore(inner *ui.Model, item Item, comments CommentStore) {
 	}
 	if comments.Resolve != nil {
 		inner.ResolveThread = func(id string, resolve bool) error { return comments.Resolve(item, id, resolve) }
+	}
+	if comments.Settle != nil {
+		inner.SettleThread = func(id string, settled bool) error { return comments.Settle(item, id, settled) }
 	}
 	if comments.ReplyToThread != nil {
 		inner.ReplyToThread = func(id, body string) (string, error) {

@@ -74,6 +74,19 @@ const (
 	Orphaned State = "orphaned"
 	// Published means it lives on GitHub now.
 	Published State = "published"
+	// Settled means the reviewer is done with it: asserted by pressing R, not
+	// inferred from anything. The deck's finding count stops counting it.
+	//
+	// Not called "resolved", and the distance is deliberate — see Thread's doc on
+	// the vocabulary split. Resolving is a thing GitHub records about a conversation
+	// on a PR; this is a position in one of our comments' lives, and a reader who
+	// saw the same word for both would reasonably expect pressing R here to have
+	// reached GitHub.
+	//
+	// Distinct from Addressed for the same kind of reason: Addressed is inferred
+	// from the anchored code changing after a send, and is a claim about the code.
+	// This is a claim about the reviewer.
+	Settled State = "settled"
 )
 
 // Side is which side of the diff an anchor refers to. Added and context lines
@@ -1043,6 +1056,67 @@ func CommentAndReplies(comments []Comment, id string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// RootOf is the comment a conversation starts at: id itself if it is a root, else
+// whatever it is ultimately replying to.
+//
+// A conversation is settled, counted and folded as a whole, so every one of those
+// has to be able to name it from any of its rows — the same property resolving a
+// mirrored thread has, where any message answers for the conversation. A chain
+// whose parent is missing answers with the last id it could reach, which is the
+// nearest thing to a root that exists.
+func RootOf(comments []Comment, id string) string {
+	byID := make(map[string]Comment, len(comments))
+	for _, c := range comments {
+		byID[c.ID] = c
+	}
+	// Bounded by the number of comments: a cycle in ReplyTo would otherwise spin
+	// here, and a corrupt record must not hang the surface reading it.
+	for range comments {
+		c, ok := byID[id]
+		if !ok || c.ReplyTo == "" {
+			return id
+		}
+		id = c.ReplyTo
+	}
+	return id
+}
+
+// Settle records that the reviewer is done with a conversation, or takes that
+// back. It acts on the conversation's root whichever of its comments is named.
+//
+// The root alone, not its replies. OpenCount counts roots — a reply's significance
+// is carried by reopening its parent — so settling the root is the whole of what
+// stops a conversation asking for attention, and writing Settled over a reply
+// would erase what that reply's own state was recording. Reopening puts the root
+// back to Open, which is where the count wants it.
+func (s Store) Settle(r Review, id string, settled bool) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("review: settle needs a comment id")
+	}
+	comments, err := s.Comments(r)
+	if err != nil {
+		return err
+	}
+	root := RootOf(comments, id)
+	for _, c := range comments {
+		if c.ID != root {
+			continue
+		}
+		if c.Mirrored() {
+			// GitHub's own record, which this cannot write. Resolving a mirrored
+			// thread is a different call and says so.
+			return fmt.Errorf("review: %s is a mirrored GitHub thread — resolve it on the PR", root)
+		}
+		if settled {
+			c.State = Settled
+		} else {
+			c.State = Open
+		}
+		return s.UpdateComment(r, c)
+	}
+	return fmt.Errorf("review: no comment %q to settle", root)
 }
 
 // Comments lists a review's comments, oldest first.

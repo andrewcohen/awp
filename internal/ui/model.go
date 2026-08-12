@@ -217,9 +217,29 @@ type Model struct {
 	// True means expanded. Absent means the default — resolved threads fold, open
 	// ones do not (see threadFolded). Not persisted: how you left a fold is a
 	// reading position, not a property of the review.
+	//
+	// Keyed by thread id for a mirrored conversation and by the opening remark's id
+	// for one of ours — both are "the id the conversation is known by", so one map
+	// covers both and `enter` does not have to know which it is looking at.
 	threadFold map[string]bool
+	// rootOf maps a comment id to its conversation's opening remark, and
+	// settledRoots is the set of those the reviewer has settled. Both are rebuilt
+	// from the comment set (see indexConversations) rather than walked per comment
+	// per frame, which is where the stream's geometry pass would otherwise pay for
+	// it twice.
+	rootOf       map[string]string
+	settledRoots map[string]bool
 	// ResolveThread toggles a GitHub thread's resolved state.
 	ResolveThread ThreadResolver
+	// SettleThread records that the reviewer is done with one of *our*
+	// conversations, or takes that back. rootID names the conversation by its
+	// opening remark. Nil leaves `R` unavailable on a local thread, which the viewer
+	// says rather than appearing to close it.
+	//
+	// Separate from ResolveThread because the two are different acts against
+	// different stores — a GraphQL call about someone's PR, and a state move in a
+	// file here — and the vocabulary split is what keeps that legible.
+	SettleThread func(rootID string, settled bool) error
 	// ReplyToThread posts a reply into a GitHub thread, returning the id of the
 	// comment it created. Nil leaves replying unavailable, which the viewer says
 	// rather than opening a box whose contents would have nowhere to go.
@@ -409,6 +429,9 @@ func (m *Model) rebuildStream() {
 	// so they all die with it. This is the only place that happens, which is what
 	// lets the cache outlive a frame at all — see renderCache in stream_render.go.
 	m.cache.drop()
+	// Before the build, because the geometry pass asks which conversations are
+	// folded and a settled one folds on its root's state.
+	m.indexConversations()
 	idx := withComments(
 		buildStreamLayout(m.filtered, m.hunkWidth, m.wrap, m.sideBySide, m.isCollapsed),
 		m.placeComments, m.threadCollapsed,
