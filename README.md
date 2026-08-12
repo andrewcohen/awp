@@ -84,6 +84,16 @@ The counts cover every workspace, not just the ones the current scope shows, so
 pressing `P` changes which rows you see without changing what the badge says is
 waiting.
 
+Under `awp zdeck` the badge **stays on screen inside a pane**, at the left of the
+pane's header row, ahead of the pane's label and the `ctrl+\ deck` hint. A pane is
+where most of the time goes, and the counts are the reason to go back to the row
+list — so they follow you into it, and they keep counting while you are there: an
+agent that finishes its turn behind the pane shows up without your leaving. The
+row is one row for three things, so a narrow terminal drops the label first and
+the badge second; the leave key never goes. The scope label stays behind on the
+deck's own title row — which slice of the list you were looking through is not a
+question a pane raises.
+
 ### Mini deck (quick-jump)
 
 ```sh
