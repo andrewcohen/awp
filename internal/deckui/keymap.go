@@ -44,6 +44,7 @@ type deckKeyMap struct {
 	UserActions   key.Binding
 	EditState     key.Binding
 	PRMenu        key.Binding
+	SplitChord    key.Binding
 	OpenURL       key.Binding
 	SendPrompt    key.Binding
 	PinChord      key.Binding
@@ -85,6 +86,7 @@ func newDeckKeyMap() deckKeyMap {
 		UserActions:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "user actions menu")),
 		EditState:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "edit raw state JSON in $EDITOR")),
 		PRMenu:        key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "PR menu (o open · m merge · r repair · s set PR #)")),
+		SplitChord:    key.NewBinding(key.WithKeys("|"), key.WithHelp("|", "split: agent beside c diff · v vcs · e editor · s shell · i ci · W watch")),
 		OpenURL:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "open captured dev-server URL")),
 		SendPrompt:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "send a typed prompt to the workspace's agent")),
 		PinChord:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "pin chord (mm default · m<letter> group · mD unpin · mR name)")),

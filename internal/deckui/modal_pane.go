@@ -230,36 +230,54 @@ func (r paneRef) label() string {
 	return PaneLabel(r.kind) + " · " + r.project + "/" + r.workspace
 }
 
-// openPane hosts the given window kind for the selected row. It reports false
-// when there is no backend for it, so the caller can fall back to tmux.
+// openPane hosts the given window kind for the selected row, filling the deck.
+// It reports false when there is no backend for it, so the caller can fall back
+// to tmux.
 func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
+	p, cmd, handled := m.newPane(item, kind, m.childBox())
+	if handled && p != nil {
+		m.active = p
+	}
+	return cmd, handled
+}
+
+// newPane builds a pane for the kind, sized and started for the box it will be
+// rendered into, and returns it without installing it anywhere.
+//
+// Separate from openPane because a split needs two of these and neither of them
+// is "the deck's child" — the split is. It returns a nil pane with handled=true
+// for the two cases that are neither a refusal nor a pane: a handed-over
+// terminal, which has no popover because the deck is suspended behind it, and a
+// failure, which has already said so in m.status.
+//
+// The box is an argument rather than read from the Model because it is the whole
+// reason this can be called twice: a pty started for half the screen has to be
+// started at half the width, or the program lays itself out for a width it will
+// never be drawn at.
+func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, bool) {
 	if m.panes == nil || !m.panes.Describes(kind) {
-		return nil, false
+		return nil, nil, false
 	}
 	handover := os.Getenv(PaneExecEnv) != ""
-	// The pane is sized from the box it will be rendered into, not from the
-	// terminal, so a pty started for half the screen is started at half the
-	// width rather than laying itself out for the whole one.
-	b := m.childBox()
 	// A handed-over pane is the whole terminal, so there is no size it does not
 	// fit. The emulated one has to leave room for its own chrome.
 	if !handover && !paneFits(b.w, b.h) {
 		m.status = fmt.Sprintf("this pane gets %dx%d, too small to host one", b.w, b.h)
-		return nil, true
+		return nil, nil, true
 	}
 
 	w, h := paneDims(b.w, b.h)
 	cmd, restore, err := m.panes.Open(item, kind, w, h)
 	if err != nil {
 		m.status = PaneLabel(kind) + ": " + err.Error()
-		return nil, true
+		return nil, nil, true
 	}
 	// Recorded here rather than at the top, so a kind the backend refused or an
 	// open that failed is not somewhere the deck claims you can go back to.
 	ref := paneRef{project: item.ProjectName, workspace: item.WorkspaceName, kind: kind}
 	if handover {
 		m.recordPane(ref)
-		return m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
+		return nil, m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
 	term, err := vterm.Open(m.paneGen, w, h, cmd, m.hostColors)
@@ -268,7 +286,7 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 			restore()
 		}
 		m.status = PaneLabel(kind) + ": " + err.Error()
-		return nil, true
+		return nil, nil, true
 	}
 
 	p := &panePopover{
@@ -279,10 +297,9 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		setH:    h,
 		opened:  time.Now(),
 	}
-	m.active = p
 	m.recordPane(ref)
 	m.status = ""
-	return tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
+	return p, tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
 }
 
 // recordPane remembers a pane the deck has just opened, keeping the two the
@@ -547,8 +564,7 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		// The deck asks for mouse events only while a pane is up (see View),
 		// so anything arriving here belongs to the hosted program — but in the
 		// deck's coordinates, not its own.
-		pb := m.childBox()
-		inner, ok := paneMouse(msg, pb.w, pb.h)
+		inner, ok := paneMouse(msg, m.boxOf(p))
 		if !ok {
 			return nil
 		}
@@ -602,13 +618,13 @@ func paneBox(w, h int) (boxW, boxH int) {
 //
 // The box size is computed rather than measured so this does not have to
 // render the popover a second time.
-func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
-	if !paneFits(deckW, deckH) {
+func (p *panePopover) screenCursor(b box) (x, y int, ok bool) {
+	if !paneFits(b.w, b.h) {
 		return 0, 0, false
 	}
-	w, h := paneDims(deckW, deckH)
+	w, h := paneDims(b.w, b.h)
 	boxW, boxH := paneBox(w, h)
-	originX, originY := (deckW-boxW)/2, (deckH-boxH)/2
+	originX, originY := b.x+(b.w-boxW)/2, b.y+(b.h-boxH)/2
 	cx, cy, visible := p.term.Cursor()
 	if !visible || cx < 0 || cy < 0 || cx >= w || cy >= h {
 		return 0, 0, false
@@ -628,13 +644,13 @@ func (p *panePopover) screenCursor(deckW, deckH int) (x, y int, ok bool) {
 // opposite direction, so the two cannot come to disagree about where the
 // terminal starts. The bounds check mirrors it too: a click on the border or
 // the header row is not a cell the program has.
-func paneMouse(msg tea.MouseMsg, deckW, deckH int) (tea.MouseMsg, bool) {
-	if !paneFits(deckW, deckH) {
+func paneMouse(msg tea.MouseMsg, b box) (tea.MouseMsg, bool) {
+	if !paneFits(b.w, b.h) {
 		return nil, false
 	}
-	w, h := paneDims(deckW, deckH)
+	w, h := paneDims(b.w, b.h)
 	boxW, boxH := paneBox(w, h)
-	originX, originY := (deckW-boxW)/2, (deckH-boxH)/2
+	originX, originY := b.x+(b.w-boxW)/2, b.y+(b.h-boxH)/2
 	mouse := msg.Mouse()
 	x, y := mouse.X-originX-paneInsetX, mouse.Y-originY-paneInsetY
 	if x < 0 || y < 0 || x >= w || y >= h {
@@ -673,10 +689,18 @@ func (p *panePopover) renderPopover(m *Model, b box) string {
 	}
 
 	boxW, _ := paneBox(w, h)
+	// A pane the keyboard has left drops its border a tier, per the design
+	// system: in a split exactly one half may look like the active one, and the
+	// border is the only chrome a pane has to say it with. The program inside is
+	// untouched — it goes on painting whatever it paints.
+	border := colAccent
+	if b.blurred {
+		border = colMuted
+	}
 	body := lipgloss.JoinVertical(lipgloss.Left, p.header(m, w), p.term.View())
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colAccent)).
+		BorderForeground(lipgloss.Color(border)).
 		Width(boxW).
 		Render(body)
 }
@@ -700,7 +724,14 @@ const paneLabelMin = 10
 // own title row carries stays behind; which slice of the list you were looking
 // through is not a question a pane raises.
 func (p *panePopover) header(m *Model, w int) string {
-	hint := m.styles.PaneHint.Render(PaneLeaveKey + " deck")
+	leave := PaneLeaveKey + " deck"
+	if _, split := m.active.(*splitModal); split {
+		// In a split the reserved key is a prefix, so one press does not leave.
+		// The hint has to say the keystrokes that do, or it is describing a
+		// different arrangement of the screen than the one you are looking at.
+		leave = PaneLeaveKey + " " + PaneLeaveKey + " deck"
+	}
+	hint := m.styles.PaneHint.Render(leave)
 	// Which emulator is behind the pane, but only when it is not the default one.
 	// Running on an alternative is a thing you need to see to trust a comparison;
 	// running on the usual one is not news, and the pane's chrome is one row.

@@ -453,7 +453,7 @@ func TestNoCursorWhenTheProgramHidesIt(t *testing.T) {
 		_, _, visible := p.term.Cursor()
 		return !visible
 	})
-	if _, _, ok := p.screenCursor(m.width, m.height); ok {
+	if _, _, ok := p.screenCursor(m.childBox()); ok {
 		t.Error("screenCursor placed a cursor the program had hidden")
 	}
 	if m.View().Cursor != nil {
@@ -471,7 +471,7 @@ func TestTheCursorLandsInsideTheTerminal(t *testing.T) {
 		if !paneFits(w, h) {
 			continue
 		}
-		x, y, ok := p.screenCursor(w, h)
+		x, y, ok := p.screenCursor(box{w: w, h: h})
 		if !ok {
 			continue // the program's cursor is off its own screen
 		}
@@ -495,7 +495,7 @@ func TestTheCursorLandsInsideTheTerminal(t *testing.T) {
 func TestNoCursorWhenThePaneDoesNotFit(t *testing.T) {
 	_, p := openedPane(t, allKinds())
 
-	if _, _, ok := p.screenCursor(10, 4); ok {
+	if _, _, ok := p.screenCursor(box{w: 10, h: 4}); ok {
 		t.Error("a deck too small for a pane still reported a cursor position")
 	}
 }
