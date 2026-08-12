@@ -824,6 +824,11 @@ reach for — the agent's own account of what it did, beside the diff of what it
 actually changed, with no keystroke between them. `|v` is jjui beside the agent,
 `|s` a shell, and so on down the window keys.
 
+`|c` opens the diff with its **left column already collapsed** — the file tree
+and comment index would spend a third of half a terminal on navigation, and the
+diff is what you opened the half to read. `\` brings them back for the file you
+need to jump around in, and the cursors they hold were never lost.
+
 Both halves are live. The one without the keyboard keeps painting: an agent's
 output, a `watch` view, a diff refreshing itself on its own tick. Only the keys
 are somewhere specific, and the half that has them is the one with the teal

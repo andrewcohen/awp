@@ -729,7 +729,7 @@ func (p *panePopover) header(m *Model, w int) string {
 		// In a split the reserved key is a prefix, so one press does not leave.
 		// The hint has to say the keystrokes that do, or it is describing a
 		// different arrangement of the screen than the one you are looking at.
-		leave = PaneLeaveKey + " " + PaneLeaveKey + " deck"
+		leave = PaneLeaveKey + " q deck"
 	}
 	hint := m.styles.PaneHint.Render(leave)
 	// Which emulator is behind the pane, but only when it is not the default one.
