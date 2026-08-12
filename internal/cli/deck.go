@@ -61,6 +61,9 @@ const deckSessionPrefix = "[awp]"
 // the HEAD descriptions once the lock clears.
 const deckEnrichTimeout = 4 * time.Second
 
+// deckFPS is the ceiling on how often the renderer paints the terminal.
+const deckFPS = 30
+
 type noopReporter struct{}
 
 func (noopReporter) Step(string) {}
@@ -1081,7 +1084,17 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	// Optionally record the frames themselves — see vterm.FrameLogEnv. The deck
 	// is where this belongs rather than every program: it is the one that hosts
 	// panes, so it is the one whose output a pane's bytes have to survive.
-	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(vterm.TapTerminal(out)))
+	// WithFPS caps how often the renderer diffs the frame and writes to the
+	// terminal. It does not cap how often View is called — Bubble Tea renders
+	// after every message, so the guard against a message loop is at the source
+	// (see the spinner tick in deckui) and this is the backstop under it: a
+	// future loop costs a string, not a screen repaint at whatever rate the
+	// messages arrive.
+	//
+	// 30 rather than the default 60 because nothing in the deck moves faster
+	// than the spinner (10/s), and the one thing that could — a pty streaming
+	// output into a pane — is a program you are reading, not animating.
+	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(vterm.TapTerminal(out)), tea.WithFPS(deckFPS))
 
 	// Deferred before the teardown below so it runs after it: a crash should
 	// still let go of the panes before anyone reads about it.
