@@ -850,6 +850,19 @@ prompt does start one — see below — but `A` is for talking to an agent that 
 already there, and starting one to receive a message you could have opened the
 pane to type would be a surprise.)
 
+That is not just `A`'s rule. Every surface that talks to an agent — `A`, the diff
+viewer's `ctrl+s`, the review flow's opening brief — resolves the destination
+through **one** function (`agentPromptSender` in `internal/cli/prompt_sender.go`),
+because picking the wrong substrate does not fail: tmux is asked for a session,
+does not find one, makes it, and starts a coding agent in it. The review store
+used to wire tmux in directly, so under zdeck every remark a reviewer sent from
+`c` went to an agent created for the occasion, with the same `AWP_WORKSPACE`,
+reporting status and recording gates — while the agent on screen never heard it.
+Standalone `awp diff` has no host to ask and can perfectly well be running inside
+a zdeck pane, so it looks for a live zmx agent session by name rather than
+assuming tmux; tmux is the answer only when nothing on zmx claims the workspace,
+which is where it stays the whole answer for `awp deck`.
+
 **Two keys get you back into a pane, and they are not the same question.**
 `ctrl+\` **resumes** — back into the pane you just left, which is the common case
 and belongs on the key that already means "hop between the pane and the deck".

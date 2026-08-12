@@ -260,7 +260,13 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 	//
 	// One wiring function shared with the deck (deckui.ApplyCommentStore), so a
 	// seam cannot be present in one surface and quietly missing in the other.
-	deckui.ApplyCommentStore(&model, subject, reviewStoreWithSend(runner, tmux.New(runner), svc))
+	// nil for the pane host: standalone `awp diff` has no deck to ask, and may well
+	// be running *inside* a zdeck pane on a workspace whose agent is a zmx session.
+	// agentPromptSender resolves that by looking for the session rather than
+	// assuming tmux, which is what used to send a reviewer's remark to an agent
+	// started for the occasion and never seen again.
+	send := agentPromptSender(nil, runner, tmux.New(runner), svc)
+	deckui.ApplyCommentStore(&model, subject, reviewStoreWithSend(runner, send))
 	program := tea.NewProgram(model, tea.WithInput(in), tea.WithOutput(out))
 	_, err = program.Run()
 	return err

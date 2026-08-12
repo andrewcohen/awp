@@ -19,7 +19,6 @@ import (
 	"github.com/andrewcohen/awp/internal/github"
 	"github.com/andrewcohen/awp/internal/jj"
 	"github.com/andrewcohen/awp/internal/review"
-	"github.com/andrewcohen/awp/internal/tmux"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -833,16 +832,16 @@ func runnerOrExec(r Runner) Runner {
 	return r
 }
 
-func sendCommentToAgentFor(tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentSender {
+func sendCommentToAgentFor(send promptSender) deckui.CommentSender {
 	return func(item deckui.Item, c review.Comment) error {
-		// noopReporter, not nil: sendPromptToAgent calls reporter.Step on every
-		// path, so a nil interface panics rather than sending anything.
+		// noopReporter, not nil: a sender calls reporter.Step on every path, so a
+		// nil interface panics rather than sending anything.
 		// Name the revision so the agent knows which version of the file the
 		// comment was written against. Best-effort: an unresolvable change id
 		// falls back to "your working copy", which is correct for a
 		// workspace-scoped review anyway.
 		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(item.Path)
-		if err := sendPromptToAgent(tmuxClient, svc, item, commentPromptFor(c, revision), noopReporter{}); err != nil {
+		if err := send(item, commentPromptFor(c, revision), noopReporter{}); err != nil {
 			return err
 		}
 		store := review.Store{}
@@ -938,9 +937,14 @@ func mergePRFor(runner Runner) func(deckui.Item, bool) (string, error) {
 }
 
 // reviewStoreWithSend is the full store seam: load, save, and hand to the agent.
-func reviewStoreWithSend(runner Runner, tmuxClient *tmux.Client, svc workspace.Service) deckui.CommentStore {
+//
+// send is passed in rather than resolved here, because which agent a remark
+// reaches is not the review store's business and is the same decision the deck's
+// `A` makes — see agentPromptSender. Wiring tmux in directly is what sent every
+// comment on a zdeck-hosted workspace to an agent nobody could see.
+func reviewStoreWithSend(runner Runner, send promptSender) deckui.CommentStore {
 	cs := reviewStoreFor(runner)
-	cs.Send = sendCommentToAgentFor(tmuxClient, svc)
+	cs.Send = sendCommentToAgentFor(send)
 	cs.Publish = publishReviewFor(runner)
 	cs.MergePR = mergePRFor(runner)
 	cs.LoadReviewed, cs.SaveReviewed = reviewedMarksFor()
