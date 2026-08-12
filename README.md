@@ -865,6 +865,17 @@ it has no ambiguity — it is a state resolved by the next key, not by a clock.
 A single pane is unchanged: `ctrl+\` there leaves on one press, the way it always
 has. The prefix exists only where there is something to switch between.
 
+**A held `ctrl+\` does nothing.** The deck asks its terminal for the Kitty
+keyboard protocol's event-types flag, which is what makes a key repeat reportable
+as something other than a press. Without it, one key spelled two decisions:
+holding `ctrl+\` used to leave a pane, be read again in the row list as "go back
+into it", and flap between the two for as long as the key was down. Now a repeat
+of the reserved key is dropped in both places — in a pane and on the row list —
+so a held key settles wherever one tap put you. A terminal that does not grant
+the flag never reports a repeat at all, which is exactly the behaviour awp had
+before asking; the flap comes back there, and there is nothing to be done about
+it from this side.
+
 The divider's position is a fraction of the width rather than a column count, so
 resizing the terminal keeps it where you put it instead of leaving it wherever it
 happened to fall in the old width. `<` and `>` move it 5% at a time — a fraction
