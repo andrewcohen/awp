@@ -34,6 +34,7 @@ type deckKeyMap struct {
 	ShellWindow   key.Binding
 	CIWindow      key.Binding
 	LastSession   key.Binding
+	ResumePane    key.Binding
 	Delete        key.Binding
 	Rename        key.Binding
 	LinkBookmark  key.Binding
@@ -73,7 +74,8 @@ func newDeckKeyMap() deckKeyMap {
 		VCSWindow:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "vcs window (jjui)")),
 		ShellWindow:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shell window")),
 		CIWindow:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "ci window (gh run watch)")),
-		LastSession:   key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "back to the last pane (tmux: last session)")),
+		LastSession:   key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "switch to the previous pane (tmux: last session)")),
+		ResumePane:    key.NewBinding(key.WithKeys(PaneLeaveKey), key.WithHelp(PaneLeaveKey, "back into the pane you left")),
 		Delete:        key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete workspace (or project for default row)")),
 		Rename:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename workspace")),
 		LinkBookmark:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "link a bookmark to the selected workspace")),

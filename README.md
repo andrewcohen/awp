@@ -299,7 +299,8 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
 | `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
-| `L` | Back to the pane you were last in — the way in from the row list without finding the row again, after you left a pane with `ctrl+\` to look something up. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving the pane again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and `L` is about where you have been, not about which list you are looking at. Under `awp deck`, which hosts no panes, `L` is `tmux switch-client -l` as before. |
+| `ctrl+\` | Back into the pane you just left — the same key that leaves one, so the pair is a single gesture: out to check a row, back to carry on. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and the key is about where you have been, not about which list you are looking at. Not bound under `awp deck`, which hosts no panes: there `ctrl+\` belongs to tmux. |
+| `L` | Switch to the **previous** pane — the one before the pane you were last in. `tmux switch-client -l` one substrate over, and the point is the same: the two most recent things you were in are one keypress apart, so pressing it twice puts you back. Resuming (`ctrl+\`) does not disturb the alternate, so holding one pane open all afternoon doesn't lose the other. One pane deep it says so and names `ctrl+\` instead. Under `awp deck` it is still `tmux switch-client -l`. |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
 | `B` | Link a jj bookmark to the selected workspace (drives the per-row PR glyph) |
 | `d` | Open the selected workspace's auto-discovered dev URL in your default browser |
@@ -849,14 +850,19 @@ prompt does start one — see below — but `A` is for talking to an agent that 
 already there, and starting one to receive a message you could have opened the
 pane to type would be a surprise.)
 
-**`L` goes back to the last pane.** Under `awp deck` the key is `tmux
-switch-client -l`, which from outside tmux exits 0 having done nothing — so
-under zdeck it used to say there was nothing to switch to. The gesture is worth
-just as much with panes, though: you left the agent with `ctrl+\` to check a row
-and `L` is the way back. The deck records the workspace and kind of every pane it
-opens and reopens that one, resolving the row at press time — see the key table
-above. Before any pane has been opened it says so rather than opening the
-selected row's shell.
+**Two keys get you back into a pane, and they are not the same question.**
+`ctrl+\` **resumes** — back into the pane you just left, which is the common case
+and belongs on the key that already means "hop between the pane and the deck".
+`L` **alternates** — the *previous* pane, the one before that, which is what
+`tmux switch-client -l` is for: press it twice and you are back where you started.
+A single slot can only ever offer the pane you just had, so one key could not do
+both.
+
+The deck remembers the workspace and kind of the two most recent panes, resolving
+the row at press time — see the key table above. Re-entering the pane you are
+already alternating from does not push it down, so `ctrl+\` never erases what `L`
+exists to reach. Before any pane has been opened both keys say so rather than
+opening the selected row's shell.
 
 **Creating a workspace with a prompt starts its agent.** The create runs as a
 detached subprocess, so there is no terminal to hand a hosted agent — but it does
