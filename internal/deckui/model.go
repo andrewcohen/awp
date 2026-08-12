@@ -3960,6 +3960,14 @@ func (m Model) View() tea.View {
 	// A hosted pane is the only thing in the deck that needs the terminal's
 	// mouse and cursor, so it is the only thing that asks for them. Requesting
 	// them all the time would cost drag-to-select everywhere else.
+	if _, split := m.active.(*splitModal); split {
+		// A split wants the mouse for its own divider, whatever the halves' own
+		// programs want. This is the one place awp asks for mouse reporting on its
+		// own behalf, and it does cost the terminal's drag-to-select for as long as
+		// the split is up — the divider has no other gesture, and `ctrl+\ < >` is
+		// there for when selecting text matters more than dragging it.
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	if p, ok := m.hostedPane(); ok {
 		// Only ask when the pane's own program has enabled mouse reporting.
 		// Without it the outer terminal, being in alt-screen with no tracking
