@@ -19,6 +19,13 @@ import (
 //
 // *Term, the x/vt implementation, satisfies it.
 type Hosted interface {
+	// Emulator names which implementation this is, one of the Emulator constants.
+	//
+	// Asked of the terminal rather than read back out of the environment, because
+	// what a surface wants to report is what is running — and the variable is read
+	// once, at Open, while a frame is drawn thousands of times after.
+	Emulator() string
+
 	// Gen is the generation this terminal was started with, echoed back on every
 	// message so a stale terminal's frames can be discarded.
 	Gen() int

@@ -214,6 +214,10 @@ func (t *ghosttyTerm) setHostColors(host HostColors) {
 // pointer, used only for identity.
 func (t *ghosttyTerm) key() uintptr { return uintptr(unsafe.Pointer(t.vt)) }
 
+// Emulator is EmulatorGhostty, which is what the pane header reports so nobody
+// has to ask a running deck which emulator it is on.
+func (t *ghosttyTerm) Emulator() string { return EmulatorGhostty }
+
 func (t *ghosttyTerm) Gen() int { return t.gen }
 
 func (t *ghosttyTerm) Size() (int, int) {
