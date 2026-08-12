@@ -249,14 +249,10 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		return nil, true
 	}
 	// Recorded here rather than at the top, so a kind the backend refused or an
-	// open that failed is not somewhere L claims you can go back to. Recorded on
-	// the way in rather than on the way out because the two are the same answer —
-	// the pane you are in is the pane you last left — and leaving happens down
-	// several paths (ctrl+\, the program exiting, a handover returning) that
-	// would each have to remember.
+	// open that failed is not somewhere the deck claims you can go back to.
 	ref := paneRef{project: item.ProjectName, workspace: item.WorkspaceName, kind: kind}
 	if handover {
-		m.lastPane = ref
+		m.recordPane(ref)
 		return m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
@@ -278,52 +274,104 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 		opened:  time.Now(),
 	}
 	m.active = p
-	m.lastPane = ref
+	m.recordPane(ref)
 	m.status = ""
 	return tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
 }
 
-// reopenLastPane puts you back in the pane you were last in, which is what L
-// means on a deck that hosts its own panes.
+// recordPane remembers a pane the deck has just opened, keeping the two the
+// keyboard can reach: the one you are in, and the one before it.
 //
-// `tmux switch-client -l` is the same gesture one substrate over — you left
-// where you were working to look at something, and this is the way back without
-// having to find the row again. It reports false only when there is no pane
-// backend at all, so the tmux deck's L keeps going to tmux; every other outcome
-// is handled here, because a key that silently does nothing reads as broken.
-func (m *Model) reopenLastPane() (tea.Cmd, bool) {
+// Recorded on the way in rather than on the way out because the two are the same
+// answer — the pane you are in is the pane you will have last left — and leaving
+// happens down several paths (ctrl+\, the program exiting, a handover returning)
+// that would each have to remember.
+//
+// Re-entering the same pane does not push, which is the whole reason the check is
+// here: ctrl+\ resuming the pane you were just in must not overwrite the
+// alternate, or the second key would have nothing left to reach and holding one
+// pane open would erase the memory of every other.
+func (m *Model) recordPane(ref paneRef) {
+	if ref == m.lastPane {
+		return
+	}
+	m.prevPane = m.lastPane
+	m.lastPane = ref
+}
+
+// resumePane goes back into the pane you just left, which is what ctrl+\ means
+// from the row list.
+//
+// The same key leaves a pane, so the pair is one gesture: out to check something,
+// back to carry on. That is the common half of what L used to do on its own, and
+// giving it to the key that already means "hop between the pane and the deck"
+// frees L to be the alternate — see alternatePane.
+//
+// Reports false only when there is no pane backend at all. Every other outcome is
+// handled here, because a key that silently does nothing reads as broken.
+func (m *Model) resumePane() (tea.Cmd, bool) {
 	if m.panes == nil {
 		return nil, false
 	}
-	ref := m.lastPane
-	if !ref.set() {
+	if !m.lastPane.set() {
 		m.status = "no pane to go back to yet — open one first (a agent, e editor, v vcs, s shell)"
 		return nil, true
 	}
+	return m.reopenPane(m.lastPane)
+}
+
+// alternatePane switches to the previous pane — the one before the pane you were
+// last in — which is what L means on a deck that hosts its own panes.
+//
+// `tmux switch-client -l` is the same gesture one substrate over, and the point
+// of it is that the two most recent things you were in are one keypress apart:
+// press it twice and you are back. That only works if the key reaches the *other*
+// pane, which is why resuming (ctrl+\) and alternating (L) are two keys rather
+// than one — a single slot can only ever offer you the thing you just had.
+func (m *Model) alternatePane() (tea.Cmd, bool) {
+	if m.panes == nil {
+		return nil, false
+	}
+	if !m.prevPane.set() {
+		if m.lastPane.set() {
+			// One pane deep: there is nothing to alternate with, and the useful
+			// thing to say is which key does have somewhere to go.
+			m.status = "only one pane so far — " + PaneLeaveKey + " goes back to " + m.lastPane.label()
+		} else {
+			m.status = "no pane to switch to yet — open one first (a agent, e editor, v vcs, s shell)"
+		}
+		return nil, true
+	}
+	return m.reopenPane(m.prevPane)
+}
+
+// reopenPane resolves a remembered pane against the rows as they are now and
+// opens it, which is the half resumePane and alternatePane share.
+func (m *Model) reopenPane(ref paneRef) (tea.Cmd, bool) {
 	// The scoped list first, so the cursor can land on the row: leaving the pane
-	// again has to put you on the row the pane was, or L and ctrl+\ disagree
-	// about where you are.
+	// again has to put you on the row the pane was, or the keys and ctrl+\
+	// disagree about where you are.
 	for i, it := range m.items() {
 		if ref.matches(it) {
 			m.cursor = i
-			return m.openLastPaneRow(it, ref)
+			return m.openRememberedPane(it, ref)
 		}
 	}
 	// Not in the current scope — an agent that exited drops out of attention —
-	// but the pane is still the one you were in, and refusing to go back to it
-	// because of a filter would make L depend on which list you are looking at.
-	// No cursor move: there is no row here to move it to.
+	// but the pane is still one you were in, and refusing to go back to it because
+	// of a filter would make the key depend on which list you are looking at. No
+	// cursor move: there is no row here to move it to.
 	for _, it := range m.itemsAll {
 		if ref.matches(it) {
-			return m.openLastPaneRow(it, ref)
+			return m.openRememberedPane(it, ref)
 		}
 	}
 	m.status = ref.label() + ": that workspace is not on the deck any more"
 	return nil, true
 }
 
-// openLastPaneRow is the tail of reopenLastPane, shared by the two lookups.
-func (m *Model) openLastPaneRow(it Item, ref paneRef) (tea.Cmd, bool) {
+// openRememberedPane is the tail of reopenPane, shared by the two lookups.
+func (m *Model) openRememberedPane(it Item, ref paneRef) (tea.Cmd, bool) {
 	if m2, blocked := m.blockIfSettingUp(it); blocked {
 		*m = m2
 		return nil, true
