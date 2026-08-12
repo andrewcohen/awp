@@ -444,7 +444,7 @@ func TestDiffGitUsesRevisionWhenProvided(t *testing.T) {
 	r := &fakeRunner{out: "diff output"}
 	c := New(r)
 
-	out, err := c.DiffGit("/repo", "qa@")
+	out, err := c.DiffGit("/repo", "qa@", DiffContextDefault)
 	if err != nil {
 		t.Fatalf("DiffGit returned error: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestDiffGitUsesRevisionWhenProvided(t *testing.T) {
 	if r.lastDir != "/repo" {
 		t.Fatalf("unexpected dir: %q", r.lastDir)
 	}
-	wantArgs := []string{"diff", "--git", "-r", "qa@"}
+	wantArgs := []string{"diff", "--git", "--context", "3", "-r", "qa@"}
 	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
 	}
@@ -464,11 +464,36 @@ func TestDiffGitWithoutRevision(t *testing.T) {
 	r := &fakeRunner{out: "diff output"}
 	c := New(r)
 
-	if _, err := c.DiffGit("/repo", ""); err != nil {
+	if _, err := c.DiffGit("/repo", "", DiffContextDefault); err != nil {
 		t.Fatalf("DiffGit returned error: %v", err)
 	}
-	wantArgs := []string{"diff", "--git"}
+	wantArgs := []string{"diff", "--git", "--context", "3"}
 	if !reflect.DeepEqual(r.lastArgs, wantArgs) {
 		t.Fatalf("unexpected args: got %#v want %#v", r.lastArgs, wantArgs)
+	}
+}
+
+// TestDiffGitPassesTheContextItWasGiven is the whole point of the argument: the
+// viewer's + and - are only worth having if the number reaches jj.
+func TestDiffGitPassesTheContextItWasGiven(t *testing.T) {
+	for _, tc := range []struct {
+		lines int
+		want  string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{24, "24"},
+		// A negative count is not a request that can be honoured, and is clamped
+		// rather than passed on for jj to reject.
+		{-5, "0"},
+	} {
+		r := &fakeRunner{out: "diff output"}
+		if _, err := New(r).DiffGit("/repo", "", tc.lines); err != nil {
+			t.Fatalf("DiffGit(%d) returned error: %v", tc.lines, err)
+		}
+		wantArgs := []string{"diff", "--git", "--context", tc.want}
+		if !reflect.DeepEqual(r.lastArgs, wantArgs) {
+			t.Errorf("DiffGit(%d) ran %#v, want %#v", tc.lines, r.lastArgs, wantArgs)
+		}
 	}
 }

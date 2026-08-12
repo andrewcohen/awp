@@ -26,7 +26,7 @@ func diffLoaderFor(runner Runner) deckui.DiffLoader {
 		if runner == nil {
 			runner = NewExecRunner()
 		}
-		return jj.New(runner).DiffGit(item.Path, scopeRevset(runner, item, scope))
+		return jj.New(runner).DiffGit(item.Path, scopeRevset(runner, item, scope), jj.DiffContextDefault)
 	}
 }
 
@@ -254,7 +254,7 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		// Read on every refresh tick rather than pinned to a commit id here, so
 		// `-r @-` keeps meaning "the change before this one" as the stack moves
 		// under it.
-		model = ui.New(viewerRoot, func() (string, error) { return j.DiffGit(cwd, revset) }, openEditor)
+		model = ui.New(viewerRoot, func() (string, error) { return j.DiffGit(cwd, revset, jj.DiffContextDefault) }, openEditor)
 		// Named as the revset rather than as a resolved commit: that is what the
 		// reader will recognise, and it stays true after the change is rewritten.
 		model.ResolveBase = func() string { return revset }
