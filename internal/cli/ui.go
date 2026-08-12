@@ -221,6 +221,22 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 	if err != nil {
 		return fmt.Errorf("not a jj repository: %w", err)
 	}
+	// And the workspace root, which is a different question with a different
+	// answer: `jj diff --git` prints paths relative to the workspace it ran in, so
+	// this is what the viewer joins them onto — and, since #291, the directory it
+	// hands $EDITOR.
+	//
+	// Both roots are needed and neither can stand in for the other. Using the source
+	// repo as the viewer's root meant that inside a secondary workspace — every PR
+	// workspace — `e` opened the *source repo's* copy of the file: same relative
+	// path, different working copy, so an edit landed somewhere the review was not
+	// and nothing said so. Using the workspace root for the store would open a
+	// different review than the deck's `c` does, which is the failure the comment
+	// above is about.
+	viewerRoot, err := j.RepoRoot()
+	if err != nil {
+		return fmt.Errorf("resolve the workspace root: %w", err)
+	}
 	subject := diffSubjectFor(svc, repoRoot, cwd)
 	openEditor := func(dir, filePath string, line int) tea.Cmd {
 		return tea.ExecProcess(editor.OpenExecCmd(dir, "", filePath, line), func(err error) tea.Msg {
@@ -238,7 +254,7 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		// Read on every refresh tick rather than pinned to a commit id here, so
 		// `-r @-` keeps meaning "the change before this one" as the stack moves
 		// under it.
-		model = ui.New(repoRoot, func() (string, error) { return j.DiffGit(cwd, revset) }, openEditor)
+		model = ui.New(viewerRoot, func() (string, error) { return j.DiffGit(cwd, revset) }, openEditor)
 		// Named as the revset rather than as a resolved commit: that is what the
 		// reader will recognise, and it stays true after the change is rewritten.
 		model.ResolveBase = func() string { return revset }
@@ -247,13 +263,17 @@ func runDiffWithCharm(runner Runner, svc workspace.Service, revset string, in io
 		// the default range and the `-` menu are one decision made in one place —
 		// `awp diff` in a workspace and `c` on its deck row show the same change.
 		scopes := scopeOptionsFor(runner, subject, subject.Path)
-		model = ui.New(repoRoot, scopes[0].Load, openEditor)
+		model = ui.New(viewerRoot, scopes[0].Load, openEditor)
 		model.ResolveBase = scopes[0].Base
 		model.WithScopes(scopes)
 	}
 	// The chrome says what it is a review of, the way the deck's footer does:
 	// which workspace, which PR, and what the diff is read against.
 	model.Subject = ui.Subject{
+		// The project, said out loud, because the viewer's root is now the workspace
+		// and its directory name is the workspace's. Inside a PR workspace the header
+		// would otherwise name `pr-2336-dev` twice and the repo not at all.
+		Project:   strings.TrimSpace(subject.ProjectName),
 		Workspace: strings.TrimSpace(subject.WorkspaceName),
 		PR:        deckui.PRLabel(subject),
 	}
