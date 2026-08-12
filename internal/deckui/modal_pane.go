@@ -681,10 +681,17 @@ func (p *panePopover) renderPopover(m *Model) string {
 // have a row of its own for.
 func (p *panePopover) header(m *Model, w int) string {
 	hint := m.styles.PaneHint.Render(PaneLeaveKey + " deck")
+	// Which emulator is behind the pane, but only when it is not the default one.
+	// Running on an alternative is a thing you need to see to trust a comparison;
+	// running on the usual one is not news, and the pane's chrome is one row.
+	if vt := p.term.Emulator(); vt != vterm.EmulatorXVT {
+		hint = m.styles.PaneHint.Render(vt+" · ") + hint
+	}
 	label := m.styles.PaneTitle.Render(truncate(p.label, w-lipgloss.Width(hint)-1))
 	gap := w - lipgloss.Width(label) - lipgloss.Width(hint)
 	if gap < 1 {
-		// Too narrow for both; the label is the one you can infer without.
+		// Too narrow for both; the label is the one you can infer without. The leave
+		// key is not — it is how you get back out.
 		return hint
 	}
 	return label + strings.Repeat(" ", gap) + hint

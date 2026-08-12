@@ -278,6 +278,9 @@ func HostTerm(env []string) []string {
 	return append(out, "TERM="+term)
 }
 
+// Emulator is EmulatorXVT: a Term is the x/vt implementation of Hosted.
+func (t *Term) Emulator() string { return EmulatorXVT }
+
 // Gen is the generation this Term was started with.
 func (t *Term) Gen() int { return t.gen }
 
