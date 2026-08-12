@@ -153,6 +153,18 @@ Closing the pane clears it too because entering cannot cover an agent that finis
 
 **Dev-loop progress on the meta line.** While a workspace's agent is **actively working**, its row's meta line switches from the usual branch/port to a live snapshot of the agent's dev loop, progress-first: `<done>/<total> · <phase> · ▶ <current unit>` (e.g. `3/7 · implement · ▶ wire up the meta line`). The `<done>/<total>` count is the agent's todo/unit list, `<phase>` is the current dev-loop phase (`explore → implement → verify → commit`), and `▶ <current unit>` is the in-progress task. `explore` is the pre-task-list stretch — investigating or writing the spec, before the work is broken into a task list; once a task list exists, each unit cycles `implement → verify → commit`. It's the same data the [`w` watch overlay](#key-bindings) shows, condensed to one line — read from the agent's Claude Code transcript by the deck's background refresh (so it lags live activity by up to the refresh interval; open the `w` overlay for a second-by-second view including gate pass/fail and churn). Each fresh snapshot is cached in `workspace-state.json` (the `DevLoop` field on the entry), so the next deck open renders progress on the very first paint instead of flashing the branch/port meta while the transcript is (re)scanned; the cache is rewritten only when the snapshot actually changes. For repos with a [`dev_loop`](#dev_loop), the phase and gate pass/fail are additionally kept live by event-driven hooks (`awp internal loop track` / `awp internal gate record`), so the cached snapshot reflects the *current* phase on open — even right after a phase switch — rather than the last scan's (`done`/`total` still refresh via the scan). Any missing slot drops out, and the row falls back to its normal branch/port meta the moment the agent stops working, once **all units are done** (a finished `12/12` loop has nothing in progress to surface), or if there's no transcript / no progress to show yet. Uses the project's [`dev_loop`](#dev_loop) config, or the inferred default loop when none is set.
 
+The transcript scan behind that line is **incremental**. A refresh folds only the
+bytes the agent has appended since the last one, keeping the accumulated state and
+the offset it stopped at; a row whose agent has written nothing costs a `stat` and
+no read at all. It used to replay the whole file every refresh, which is fine for
+a fresh session and ruinous for a long one — a profile of a real `zdeck` session
+(`AWP_PPROF`) spent **25% of the process** in that fold, ~50 MB/s of JSON, against
+a transcript that had reached **251 MB**, plus most of the scheduler churn around
+it. `BenchmarkRefresh` in `internal/watch` measures both ways: on a 20k-line
+transcript, 118 µs resumed against 337 ms full. A transcript that has shrunk is
+taken to be a different file and folded again from the top, and a line without its
+newline yet is left for the next pass rather than folded half-written.
+
 ### PR status (the glyphs leading each row's meta line)
 
 Each workspace is matched to a PR by its jj bookmark (PR `headRefName`). If a match is found, a glyph cluster (Nerd Font Octicons + Material icons) leads the meta line under the workspace row — primary PR state first, then any condition glyphs from the tables below. The meta line itself is mostly muted; only the `:port` token is tinted (blue) for a touch of contrast — everything else, including the workspace-less inbox row's keyboard-return `to review` / `to check out` hint, stays muted. On a collapsed default-only project row the glyphs render inline after the project name instead (there's no second line). Workspaces with no bookmark on file, or no matching PR, show no glyphs.
