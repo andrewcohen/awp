@@ -503,6 +503,73 @@ func TestTheDividerMoves(t *testing.T) {
 	}
 }
 
+// TestTheDividerIsDraggable. A press on it starts a drag, motion moves it, and
+// the release ends one — and none of the three reaches a half, since a program
+// being typed at by a resize gesture is the failure mode this guards.
+func TestTheDividerIsDraggable(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	col := s.splitCol(m.childBox())
+	m = pressMouse(t, m, tea.MouseClickMsg{X: col, Y: 5, Button: tea.MouseLeft})
+	if !s.dragging {
+		t.Fatal("a press on the divider did not start a drag")
+	}
+	target := col + 20
+	m = pressMouse(t, m, tea.MouseMotionMsg{X: target, Y: 5, Button: tea.MouseLeft})
+	if got := s.splitCol(m.childBox()); got != target {
+		t.Errorf("dragging to column %d left the divider at %d", target, got)
+	}
+	m = pressMouse(t, m, tea.MouseReleaseMsg{X: target, Y: 5, Button: tea.MouseLeft})
+	if s.dragging {
+		t.Error("the release did not end the drag")
+	}
+	// Motion after the release is an ordinary event again, and must not move the
+	// divider just because the pointer crossed the screen.
+	settled := s.splitCol(m.childBox())
+	pressMouse(t, m, tea.MouseMotionMsg{X: 10, Y: 5})
+	if got := s.splitCol(m.childBox()); got != settled {
+		t.Errorf("motion after the release moved the divider to %d, want %d", got, settled)
+	}
+}
+
+// TestADragDoesNotMoveTheKeyboard. Grabbing the divider is not choosing a half:
+// the press is consumed by the divider, so halfAt never sees it.
+func TestADragDoesNotMoveTheKeyboard(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	if !s.rightFocused {
+		t.Fatal("expected the right half focused to start")
+	}
+	col := s.splitCol(m.childBox())
+	// The left border of the divider pair, which is inside the left half's box.
+	pressMouse(t, m, tea.MouseClickMsg{X: col - 1, Y: 5, Button: tea.MouseLeft})
+	if !s.rightFocused {
+		t.Error("grabbing the divider moved the keyboard to the left half")
+	}
+	if !s.dragging {
+		t.Error("a press on the divider's left column did not start a drag")
+	}
+}
+
+// TestASplitAsksForTheMouseItself. The deck otherwise only requests mouse
+// reporting when the focused pane's own program wants it, which would leave the
+// divider undraggable beside a plain shell.
+func TestASplitAsksForTheMouseItself(t *testing.T) {
+	m, _ := openedSplit(t, "v")
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Errorf("a split declared mouse mode %v, want cell motion", got)
+	}
+}
+
+// pressMouse sends one mouse event through the deck.
+func pressMouse(t *testing.T, m Model, msg tea.MouseMsg) Model {
+	t.Helper()
+	next, _ := m.Update(msg)
+	got, ok := next.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T", next)
+	}
+	return got
+}
+
 // TestTheDividerStopsBeforeAHalfDisappears. Held at the wall the key does
 // nothing, rather than squeezing a half down to a border around nothing and
 // resizing a pty to a width its program cannot lay out.

@@ -872,8 +872,21 @@ so one tap feels the same on a 120-column terminal and a 400-column one — and 
 at the point where a half would be narrower than a pane's minimum, rather than
 collapsing a half you would then have to re-open. Both halves resize themselves
 from there: a pty is told its new size through the same path a window resize uses.
-The status line reports the two widths, since the divider carries no number and
-there is nothing to grab.
+The status line reports the two widths as it moves.
+
+The divider can also be **dragged**: press on it — its two border columns, plus a
+column of slack either side, since a two-column target is one you miss — and it
+follows the pointer until you let go. A press there is consumed by the divider
+rather than reaching a half, so grabbing it does not move the keyboard, and the
+motion in between belongs to the divider even when your hand runs ahead of where
+it can go.
+
+This is the one place awp asks the terminal for mouse reporting on its own
+behalf. Everywhere else it asks only when a hosted pane's own program has enabled
+it, because asking on behalf of a program that never wanted the mouse costs the
+terminal's own drag-to-select for nothing. A split does want it, so while one is
+up that selection is gone — `ctrl+\ < >` is there for when selecting text matters
+more than dragging the divider.
 
 **`ctrl+\` leaves the diff viewer too**, in both hosts: standalone `awp diff` quits on it the way it quits on `q`, and the deck's `c` modal closes on it the way it closes on `esc`. The key means "give the keyboard back to whatever put me here" everywhere else in awp, and the review surface is the one you spend the longest in — it had no reason to be the exception. It matters most in a handed-over pane, where the deck is suspended and reading nothing, so a program that does not bind the key itself cannot be left at all. The spelling lives in `internal/charm` for that reason: `internal/ui` cannot import `internal/deckui`, and a second copy of the string is how the hint a pane prints stops matching the key that works.
 

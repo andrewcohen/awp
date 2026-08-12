@@ -48,6 +48,10 @@ type splitModal struct {
 	// and a struct literal that forgets the field would otherwise open with the
 	// left half at zero columns. splitLeftFrac reads it, and treats zero as even.
 	leftFrac float64
+	// dragging is whether the pointer has the divider. Set by a press on it and
+	// cleared by the release, so the motion in between belongs to the divider
+	// rather than to whichever program the pointer has run over.
+	dragging bool
 	// prefixArmed is whether the last key was the reserved one, so the next key
 	// is read as a verb rather than typed at whichever program has focus.
 	//
@@ -269,10 +273,13 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	if _, isPaste := msg.(tea.PasteMsg); isPaste {
 		return s.deliver(m, s.focused(), msg)
 	}
-	if _, isMouse := msg.(tea.MouseMsg); isMouse {
+	if mouse, isMouse := msg.(tea.MouseMsg); isMouse {
+		if s.dragDivider(m, mouse) {
+			return nil
+		}
 		// A click is where it landed, not where the keyboard was. It also moves
 		// the keyboard there, which is what a mouse is for.
-		return s.deliver(m, s.halfAt(m, msg.(tea.MouseMsg)), msg)
+		return s.deliver(m, s.halfAt(m, mouse), msg)
 	}
 	left := s.deliver(m, s.left, msg)
 	if m.active != s {
@@ -324,6 +331,58 @@ func (s *splitModal) collapse(m *Model, gone modal) tea.Cmd {
 		m.status = p.label
 	}
 	return nil
+}
+
+// splitGrabCols is how far either side of the divider counts as grabbing it.
+//
+// The two halves' borders butt, so the divider is two columns wide with nothing
+// between them, and a target two columns wide is one you miss. One column of
+// slack on each side costs nothing: the cells it takes belong to the borders,
+// which is the one place in a half that is not a cell of a program.
+const splitGrabCols = 1
+
+// dragDivider handles a mouse event that belongs to the divider rather than to
+// either half, reporting whether it consumed it.
+//
+// A press on the divider starts a drag, motion moves it, and anything else ends
+// one. It is checked before the halves get a look because a press on the border
+// is not a cell either program has — paneMouse already refuses it — so this is
+// spending an event that was going nowhere.
+//
+// While dragging, every motion event is consumed regardless of where the pointer
+// is: a hand that runs ahead of the divider (which is clamped, and stops) must
+// not start typing at whichever program is under the pointer.
+func (s *splitModal) dragDivider(m *Model, msg tea.MouseMsg) bool {
+	if s.zoomed {
+		// One half, no divider.
+		return false
+	}
+	x := msg.Mouse().X
+	switch msg.(type) {
+	case tea.MouseMotionMsg:
+		if !s.dragging {
+			return false
+		}
+		s.leftFrac = float64(x) / float64(max(1, m.width))
+		col := s.splitCol(m.childBox())
+		m.status = fmt.Sprintf("split: %d / %d columns", col, max(0, m.width-col))
+		return true
+	case tea.MouseClickMsg:
+		col := s.splitCol(m.childBox())
+		if x < col-1-splitGrabCols || x > col+splitGrabCols {
+			return false
+		}
+		s.dragging = true
+		return true
+	default:
+		// A release, a wheel, anything else: the drag is over. Consumed only if
+		// there was one, so an ordinary click in a half still reaches it.
+		if s.dragging {
+			s.dragging = false
+			return true
+		}
+		return false
+	}
 }
 
 // halfAt is which half a mouse event landed in.
