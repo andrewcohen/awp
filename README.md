@@ -190,9 +190,23 @@ The mirror records **each message's GitHub node id**, which is how the diff reco
 
 ### Attention scope (`P`)
 
-The second `P` scope is **one flat list — the agents that are running, then everything that wants you, most-your-problem first**. Unlike the inbox it has no section headers and unlike the all scope it is not grouped by project — grouping would cut a single priority-ordered list into as many lists as you have repos, and put a different kind of claim at the top of each. So reading down it is reading down the priority, and **every row says why it is there** on its meta line, since nothing else on screen does.
+The second `P` scope is **one flat list — the rows with an agent on them, then everything that wants you, most-your-problem first**. Unlike the inbox it has no section headers and unlike the all scope it is not grouped by project — grouping would cut a single priority-ordered list into as many lists as you have repos, and put a different kind of claim at the top of each. So reading down it is reading down the priority (in bands — see below), and **every row says why it is there** on its meta line, since nothing else on screen does.
 
-**Running agents lead**, which is not where urgency would put them: there is nothing to do about an agent that is working. But the deck is watched as much as it is acted on, and the running rows are the ones that are changing — scattered below the rows that want you they were the hardest thing in the list to keep an eye on. Being first also decides what a row reports when it matches more than one reason, and that lands the right way round: a workspace whose agent is working and whose PR has gone red reads as `working`, because something is already on it.
+**Agent rows lead**, which is not where urgency would put them: there is nothing to do about an agent that is working. But the deck is watched as much as it is acted on, and the agent rows are the ones that are changing — scattered below the rows that want you they were the hardest thing in the list to keep an eye on.
+
+**The order is by band, not by reason.** The list sorts into five groups —
+
+1. the **agents**: `working`, `waiting on you`, `finished a turn`
+2. `re-review requested`
+3. `your review`
+4. **your own PRs**: `PR needs action`, `approved, green`
+5. `2h ago` — you were just here
+
+— and *inside* a band by project, then label. So an agent working, stopping to ask, and finishing a turn does not move its row at all: only its dot and its reason text change. A red PR going green does not move either.
+
+This is the second pass at the scope, and it exists because the first one was unusable. Ranking by the reason itself meant the sort key was a signal that changes every few seconds, so an agent's ordinary lifecycle walked its row several places up and down and displaced everything in between — with a few agents running, the list was never still. The bands are the divisions you would name looking at the screen, and the transitions inside one are exactly the frequent ones. (The other half of that fix: **the cursor follows its row** when the list does re-order, so a refresh landing never leaves your next keypress aimed at whatever slid into the slot.)
+
+The reason a row *reports* is still the precise one, and the precedence there is the table's own order: a workspace whose agent is working and whose PR has gone red reads as `working`, because something is already on it. Position tells you the band; the row tells you which reason within it.
 
 A row qualifies for any of these, and shows the first one it matches:
 

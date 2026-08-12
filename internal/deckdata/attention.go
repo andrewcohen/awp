@@ -26,11 +26,17 @@ import (
 // Reason is what a row is asking of you, or ReasonNone when it is asking
 // nothing and so is not in the scope at all.
 //
-// Declaration order is precedence *and* render order, the same convention
-// InboxBucket uses: most-your-problem first. A row matching several reasons
-// reports the first, because the flat list has no headers to carry that
-// hierarchy — the sort does, and the reason a row shows has to be the one it
-// sorted under or the list reads as unordered.
+// Declaration order is precedence: a row matching several reasons reports the
+// first. It is *not* the sort order — the sort is by band, which is coarser (see
+// band below), because a reason changes far more often than a row's position in
+// the list should.
+//
+// The two used to be the same enum, on the argument that the reason a row shows
+// has to be the one it sorted under or the flat list reads as unordered. That
+// argument survives at the band's grain, which is the one a reader can see: every
+// reason in a band sorts the same, so a row still reports something true of where
+// it is. What it bought was a list that re-ordered every time an agent changed
+// state, which is the thing the scope is mostly watching.
 type Reason int
 
 const (
@@ -52,6 +58,10 @@ const (
 	// permission prompt, an elicitation. First of the reasons that want you,
 	// because it is the only one where the work has actually halted and you are
 	// the thing in its way.
+	//
+	// Ranked here, sorted with ReasonWorking: an agent alternating between the
+	// two is one agent, and there is nothing to learn from its row changing
+	// places every time it stops to ask.
 	ReasonWaiting
 	// ReasonReReviewRequested is a PR you reviewed once, that the author has
 	// pushed to and asked you about again. Above a first request because
@@ -160,18 +170,77 @@ func (v View) WantsText(it Item) string {
 	return r.String()
 }
 
+// band is how coarsely the attention scope sorts: a group of reasons that share
+// a position in the list.
+//
+// The scope is sorted on live signals, so its sort key changes while you read
+// it — and the finer the key, the more often. Ranking by Reason meant an agent's
+// ordinary lifecycle (working, stopping to ask, finishing a turn) walked its row
+// several places up and down and displaced everything in between; with a few
+// agents running the list was never still, which for a list you mostly watch is
+// the whole complaint. The bands are the divisions a reader would name looking at
+// the screen, and the transitions inside one — the ones that happen every few
+// seconds — no longer move anything.
+//
+// Declaration order is the order they appear, most-your-problem first.
+type band int
+
+const (
+	// bandAgent is a workspace whose agent is the reason: running, stopped to
+	// ask, or finished a turn you have not read. One band because it is one
+	// agent, and because these are the rows that change.
+	bandAgent band = iota
+	// bandReReview is a second request for a review you already gave. Its own
+	// band, above a first request: somebody acted on what you said and is waiting
+	// again, and a re-request does not flicker the way an agent's state does.
+	bandReReview
+	// bandReview is a first request for your review.
+	bandReview
+	// bandYourPR is your own PR wanting something — a fix, or a merge. One band
+	// because "changes requested / CI red" and "approved and green" are the same
+	// row a check-run later, and which of the two it is belongs on the row rather
+	// than in its position.
+	bandYourPR
+	// bandRecent is a workspace you were just in, which asks for nothing.
+	bandRecent
+	// bandNone is the row with no reason at all: the workspace the deck was
+	// opened from, kept so the cursor has somewhere to land. Last, because a list
+	// about what wants you should not open with the one row that wants nothing.
+	bandNone
+)
+
+// bandOf is the reason's position in the list, as opposed to its rank.
+func bandOf(r Reason) band {
+	switch r {
+	case ReasonWorking, ReasonWaiting, ReasonNotified:
+		return bandAgent
+	case ReasonReReviewRequested:
+		return bandReReview
+	case ReasonReviewRequested:
+		return bandReview
+	case ReasonPRNeedsAction, ReasonPRReadyToMerge:
+		return bandYourPR
+	case ReasonRecent:
+		return bandRecent
+	case ReasonNone:
+		return bandNone
+	}
+	return bandNone
+}
+
 // urgencyOrdered is the attention scope's row order: most-your-problem first.
 //
 // Pinned rows still float above everything, in register order, because a pin is
 // something you said out loud and a reason is something the deck worked out —
 // when the two disagree the deck is not the one to trust. Below the pins it is
-// Reason order, which is the constants' declaration order, so the ranking lives
-// in one place and a new reason slots into it by being declared in the right
-// spot.
+// band order, so the ranking lives in one place and a new reason slots into it by
+// joining the right band.
 //
-// Ties fall back to project then label, the order the scope had before it had
+// Inside a band it is project then label, the order the scope had before it had
 // urgency — so rows that are equally your problem stay in a stable, familiar
-// arrangement rather than shuffling between refreshes.
+// arrangement rather than shuffling between refreshes. That is now most of the
+// list's order rather than a tie-break, which is the point: a position that never
+// moves is one you can aim a key at.
 func (v View) urgencyOrdered(items []Item) []Item {
 	out := append([]Item(nil), items...)
 	sort.SliceStable(out, func(i, j int) bool {
@@ -179,7 +248,7 @@ func (v View) urgencyOrdered(items []Item) []Item {
 		if ka, kb := v.pinKey(a), v.pinKey(b); ka != kb {
 			return ka < kb
 		}
-		if ra, rb := urgency(v.Wants(a)), urgency(v.Wants(b)); ra != rb {
+		if ra, rb := bandOf(v.Wants(a)), bandOf(v.Wants(b)); ra != rb {
 			return ra < rb
 		}
 		if a.ProjectName != b.ProjectName {
@@ -199,20 +268,6 @@ func (v View) pinKey(it Item) string {
 		return "\xff"
 	}
 	return PinGroupSortKey(v.PinAliases, pg)
-}
-
-// urgency ranks a reason for sorting, putting "no reason at all" last.
-//
-// Only one row can have no reason and still be in the scope: the workspace the
-// deck was opened from, which is kept whatever it is doing so the cursor has
-// somewhere to land. Sorting it by its raw value would put it first — the zero
-// value being the smallest — which would open the deck with the one row that
-// wants nothing at the top of a list about what wants you.
-func urgency(r Reason) int {
-	if r == ReasonNone {
-		return int(lastReason) + 1
-	}
-	return int(r)
 }
 
 // prWants is what the row's pull request is asking of you, if anything.

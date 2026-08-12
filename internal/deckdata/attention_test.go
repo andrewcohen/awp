@@ -352,13 +352,132 @@ func TestTheScopeReadsDownThePriority(t *testing.T) {
 	for _, it := range v.Items() {
 		got = append(got, it.WorkspaceName)
 	}
-	// The running agent leads, which is not where urgency would put it — there
-	// is nothing to do about a working agent. The deck is watched as much as it
-	// is acted on, and scattered below the rows that want you the moving rows
-	// were the hardest thing in the list to keep an eye on.
-	want := []string{"running", "blocked", "reviewing", "broken", "recent"}
+	// The agent rows lead, which is not where urgency would put them — there is
+	// nothing to do about a working agent. The deck is watched as much as it is
+	// acted on, and scattered below the rows that want you the moving rows were
+	// the hardest thing in the list to keep an eye on.
+	//
+	// blocked before running is the band's own order — project, then label — and
+	// not a claim that a stopped agent outranks a running one. Inside a band the
+	// order is alphabetical precisely so that the agent's state, which changes
+	// every few seconds, is not what decides where its row sits.
+	want := []string{"blocked", "running", "reviewing", "broken", "recent"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// TestAnAgentsLifecycleDoesNotMoveItsRow is the whole point of the bands. An
+// agent working, stopping to ask, and finishing a turn is one agent, and under a
+// Reason-ranked sort each of those steps walked its row several places and
+// displaced everything in between — on every 5s refresh, for every agent running.
+func TestAnAgentsLifecycleDoesNotMoveItsRow(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	rows := func(mid Item) []string {
+		v := View{Scope: ScopeAttention, Now: func() time.Time { return now }, All: []Item{
+			{WorkspaceName: "aaa", ProjectName: "p", Status: "working", Active: true},
+			mid,
+			{WorkspaceName: "zzz", ProjectName: "p", Status: "working", Active: true},
+		}}
+		var out []string
+		for _, it := range v.Items() {
+			out = append(out, it.WorkspaceName)
+		}
+		return out
+	}
+	want := "aaa,mmm,zzz"
+	for _, tc := range []struct {
+		what string
+		it   Item
+	}{
+		{"working", Item{WorkspaceName: "mmm", ProjectName: "p", Status: "working", Active: true}},
+		{"stopped to ask", Item{WorkspaceName: "mmm", ProjectName: "p", Status: "waiting", Unread: true}},
+		{"finished a turn", Item{WorkspaceName: "mmm", ProjectName: "p", Status: "idle", Unread: true}},
+	} {
+		if got := strings.Join(rows(tc.it), ","); got != want {
+			t.Errorf("with the middle row %s the order is %s, want %s", tc.what, got, want)
+		}
+	}
+}
+
+// TestAPRsCheckRunDoesNotMoveItsRow, for the same reason: a red PR going green
+// and back is your own PR either way, and which of the two it is belongs on the
+// row rather than in its position.
+func TestAPRsCheckRunDoesNotMoveItsRow(t *testing.T) {
+	order := func(st prstatus.PRStatus) []string {
+		v := View{Scope: ScopeAttention, PRStatusByRepo: map[string]map[string]prstatus.PRStatus{
+			"/repo": {
+				"aaa": {Number: 1, State: prstatus.PRStateOpen, Mine: true, CIState: prstatus.PRCIFailing, HeadRefName: "aaa"},
+				"mmm": st,
+				"zzz": {Number: 3, State: prstatus.PRStateOpen, Mine: true, CIState: prstatus.PRCIFailing, HeadRefName: "zzz"},
+			},
+		}, All: []Item{
+			{WorkspaceName: "aaa", ProjectName: "p", RepoRoot: "/repo", Bookmark: "aaa", Status: "idle"},
+			{WorkspaceName: "mmm", ProjectName: "p", RepoRoot: "/repo", Bookmark: "mmm", Status: "idle"},
+			{WorkspaceName: "zzz", ProjectName: "p", RepoRoot: "/repo", Bookmark: "zzz", Status: "idle"},
+		}}
+		var out []string
+		for _, it := range v.Items() {
+			out = append(out, it.WorkspaceName)
+		}
+		return out
+	}
+	red := prstatus.PRStatus{Number: 2, State: prstatus.PRStateOpen, Mine: true, CIState: prstatus.PRCIFailing, HeadRefName: "mmm"}
+	green := prstatus.PRStatus{
+		Number: 2, State: prstatus.PRStateOpen, Mine: true, HeadRefName: "mmm",
+		CIState: prstatus.PRCIPassing, ReviewDecision: prstatus.PRReviewApproved,
+		MergeStateStatus: prstatus.PRMergeStateClean,
+	}
+	want := "aaa,mmm,zzz"
+	if got := strings.Join(order(red), ","); got != want {
+		t.Fatalf("with a failing check the order is %s, want %s", got, want)
+	}
+	if got := strings.Join(order(green), ","); got != want {
+		t.Errorf("once the PR is approved and green the order is %s, want %s", got, want)
+	}
+}
+
+// TestABandsRowsStillSayWhichReasonTheyAre. Sorting coarser than the reason is
+// only safe while every reason in a band is reported as itself: the position says
+// which band, and the row says which reason within it. A row that sorted with the
+// agents and said "recently active" would be the list lying about its own order.
+func TestABandsRowsStillSayWhichReasonTheyAre(t *testing.T) {
+	v := View{Scope: ScopeAttention, All: []Item{
+		{WorkspaceName: "running", ProjectName: "p", Status: "working", Active: true},
+		{WorkspaceName: "blocked", ProjectName: "p", Status: "waiting", Unread: true},
+		{WorkspaceName: "read-me", ProjectName: "p", Status: "idle", Unread: true},
+	}}
+	want := map[string]Reason{
+		"running": ReasonWorking,
+		"blocked": ReasonWaiting,
+		"read-me": ReasonNotified,
+	}
+	for _, it := range v.Items() {
+		if got := v.Wants(it); got != want[it.WorkspaceName] {
+			t.Errorf("%s reports %v, want %v", it.WorkspaceName, got, want[it.WorkspaceName])
+		}
+	}
+}
+
+// TestEveryReasonIsInSomeBand, walked from the constants rather than listed here.
+// bandOf's default is bandNone — last — so a reason added without a band would
+// silently sort below "recently active" instead of failing.
+func TestEveryReasonIsInSomeBand(t *testing.T) {
+	if bandOf(ReasonNone) != bandNone {
+		t.Errorf("ReasonNone is in band %v, want bandNone", bandOf(ReasonNone))
+	}
+	for r := ReasonNone + 1; r <= lastReason; r++ {
+		if r == ReasonRecent {
+			// The one reason whose band is bandRecent, checked separately so the
+			// loop's rule is "everything that wants you sorts above recent".
+			if bandOf(r) != bandRecent {
+				t.Errorf("%v is in band %v, want bandRecent", r, bandOf(r))
+			}
+			continue
+		}
+		if b := bandOf(r); b >= bandRecent {
+			t.Errorf("%v is in band %v, which is at or below the band for rows that ask nothing", r, b)
+		}
 	}
 }
 
