@@ -78,3 +78,16 @@ linters:
         linters:
           - gocritic
           - revive
+      # internal/vterm/ghostty*.go is cgo (build tag ghosttyvt, see #211/#297).
+      # gocritic's dupSubExpr reads cgo's generated argument handling as an
+      # expression compared with itself and reports it against whatever line
+      # called into C — including lines with no comparison on them at all. It is
+      # a diagnostic about generated code, so there is nothing to fix at the call
+      # site; scoping it out here beats peppering the file with suppressions that
+      # would each need the same paragraph. Every other gocritic check still
+      # applies to these files, and the default (untagged) build never compiles
+      # them anyway.
+      - path: internal/vterm/ghostty.*\.go
+        linters:
+          - gocritic
+        text: dupSubExpr
