@@ -849,6 +849,7 @@ build on:
 | after `ctrl+\` | does |
 |---|---|
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
+| `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
 | `q` | leave the split entirely, back to the row list |
@@ -863,6 +864,16 @@ it has no ambiguity — it is a state resolved by the next key, not by a clock.
 
 A single pane is unchanged: `ctrl+\` there leaves on one press, the way it always
 has. The prefix exists only where there is something to switch between.
+
+The divider's position is a fraction of the width rather than a column count, so
+resizing the terminal keeps it where you put it instead of leaving it wherever it
+happened to fall in the old width. `<` and `>` move it 5% at a time — a fraction
+so one tap feels the same on a 120-column terminal and a 400-column one — and stop
+at the point where a half would be narrower than a pane's minimum, rather than
+collapsing a half you would then have to re-open. Both halves resize themselves
+from there: a pty is told its new size through the same path a window resize uses.
+The status line reports the two widths, since the divider carries no number and
+there is nothing to grab.
 
 **`ctrl+\` leaves the diff viewer too**, in both hosts: standalone `awp diff` quits on it the way it quits on `q`, and the deck's `c` modal closes on it the way it closes on `esc`. The key means "give the keyboard back to whatever put me here" everywhere else in awp, and the review surface is the one you spend the longest in — it had no reason to be the exception. It matters most in a handed-over pane, where the deck is suspended and reading nothing, so a program that does not bind the key itself cannot be left at all. The spelling lives in `internal/charm` for that reason: `internal/ui` cannot import `internal/deckui`, and a second copy of the string is how the hint a pane prints stops matching the key that works.
 
