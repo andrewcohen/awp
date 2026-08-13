@@ -30,12 +30,15 @@ type fakeTerm struct {
 	w, h int
 	cmd  *exec.Cmd
 
-	mu      sync.Mutex
-	view    string
-	closed  bool
-	sent    []byte
-	keys    []tea.KeyPressMsg
-	mice    []tea.MouseMsg
+	mu     sync.Mutex
+	view   string
+	closed bool
+	sent   []byte
+	keys   []tea.KeyPressMsg
+	mice   []tea.MouseMsg
+	// scroll is how far up the fake's view is, in rows, as a non-positive number —
+	// zero is the tail, which is where a terminal starts.
+	scroll  int
 	exited  chan struct{}
 	exitErr error
 	// painted is pinged whenever the screen changes, so AwaitOutput behaves the
@@ -159,8 +162,17 @@ func (t *fakeTerm) moveCursor(x, y int) {
 func (t *fakeTerm) View() string {
 	t.mu.Lock()
 	lines := strings.Split(t.view, "\n")
-	w, h := t.w, t.h
+	w, h, scroll := t.w, t.h, t.scroll
 	t.mu.Unlock()
+	// The window the view is on, the way the real terminal's View slices at its
+	// viewport: the tail by default, further up when scrolled.
+	from := max(len(lines)-h, 0) + scroll
+	if from < 0 {
+		from = 0
+	}
+	if from < len(lines) {
+		lines = lines[from:]
+	}
 	out := make([]string, h)
 	for i := range out {
 		line := ""
@@ -245,6 +257,30 @@ func (t *fakeTerm) SelectionText(x0, y0, x1, y1 int) string {
 		out = append(out, strings.TrimRight(ansi.Cut(lines[y], from, to), " "))
 	}
 	return strings.Join(out, "\n")
+}
+
+// Scrolling. The fake keeps a scroll offset over the lines it was given, so the
+// deck's half of the question — does the wheel move the view, does a pane say it is
+// behind the tail — is answerable without an emulator. What a real terminal keeps
+// in its scrollback is checked in internal/vterm.
+func (t *fakeTerm) ScrollBy(rows int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	above := max(len(strings.Split(t.view, "\n"))-t.h, 0)
+	t.scroll = min(max(t.scroll+rows, -above), 0)
+}
+
+func (t *fakeTerm) ScrollToBottom() {
+	t.mu.Lock()
+	t.scroll = 0
+	t.mu.Unlock()
+}
+
+func (t *fakeTerm) Scrollback() (int, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	above := max(len(strings.Split(t.view, "\n"))-t.h, 0)
+	return above + t.scroll, t.scroll == 0
 }
 
 func (t *fakeTerm) Resize(w, h int) error {
