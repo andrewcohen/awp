@@ -1266,7 +1266,7 @@ Two more diagnostics, both off unless set:
 
 | Variable | Records |
 |----------|---------|
-| `AWP_TRACE=1` | One line per frame into `/tmp/awp-deck.log`: what awp's own render cost, and the gap since the previous frame. Also where best-effort failures the deck deliberately doesn't surface get written. |
+| `AWP_TRACE=1` | One line per frame into `/tmp/awp-deck.log`: what awp's own render cost, and the gap since the previous frame. While a pane is up, also a `cursor` line per frame — the column the pane's program put its cursor at, the screen cell the deck drew on, the pane's box, and the composed frame's own row with where its text ends. Also where best-effort failures the deck deliberately doesn't surface get written. |
 
 The trace log also **says when the frame rate is absurd**: over 60 frames a second
 it prints `frame rate N/s over budget` once a second. Nothing the deck draws

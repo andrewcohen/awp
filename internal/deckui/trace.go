@@ -2,7 +2,11 @@ package deckui
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Frame tracing.
@@ -72,6 +76,39 @@ func traceFrame(start time.Time, bytes int) {
 	Trace("frame view %.1fms gap %.1fms bytes %d", sinceMS(start), gap, bytes)
 	lastFrameEnd = time.Now()
 	traceFrameRate(lastFrameEnd)
+}
+
+// traceCursorPlacement says where a pane's cursor was drawn and what the frame
+// has there.
+//
+// #339 is a cursor one column from the insertion point, and it has survived one
+// fix aimed at a divergence that is real but was not it. Three numbers can be
+// wrong and from the outside they look identical: the column the program put its
+// cursor at, the column the emulator reports for it, and the column the deck draws
+// on. This prints all three against the frame that was actually composed, so the
+// next reproduction names the culprit instead of narrowing the field by one.
+//
+// The row is the composed frame's own row, not the pane's — the pane's is what a
+// test can already check, and the frame is what the terminal is handed.
+func traceCursorPlacement(frame string, x, y int, paneX, paneY int, b box) {
+	if Trace == nil {
+		return
+	}
+	rows := strings.Split(frame, "\n")
+	if y < 0 || y >= len(rows) {
+		Trace("cursor at (%d,%d) but the frame has %d rows", x, y, len(rows))
+		return
+	}
+	row := ansi.Strip(rows[y])
+	// Where the row's text actually ends, which is where a cursor following it
+	// belongs. Trailing blanks are not text.
+	ends := lipgloss.Width(strings.TrimRight(row, " "))
+	at := "past the end"
+	if runes := []rune(row); x >= 0 && x < len(runes) {
+		at = fmt.Sprintf("%q", runes[x])
+	}
+	Trace("cursor pane=(%d,%d) screen=(%d,%d) box=(x%d,y%d,w%d,h%d) rowtext ends %d at %s row=%q",
+		paneX, paneY, x, y, b.x, b.y, b.w, b.h, ends, at, row)
 }
 
 // frameBudget is how many frames a second is more than anything the deck shows
