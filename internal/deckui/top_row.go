@@ -222,11 +222,14 @@ const (
 // is invisible from the rows themselves.
 func (m *Model) topRowHint() string {
 	if m.hostsTerminal() {
-		// One string for both arrangements, because the reserved key now means the
-		// same thing in either: it opens the menu, and the way out is behind it. It
-		// used to read as a door in a pane and a prefix in a split, which made the
-		// same key look like two keys.
-		return PaneLeaveKey + " keys · " + PaneLeaveKey + " " + prefixLeaveVerb(m) + " deck"
+		// One string for both arrangements: ctrl+\ is a door on every surface, and the
+		// menu is a second key beside it rather than a mode in front of it. On a
+		// terminal that cannot send the menu key there is no menu, so the row does not
+		// offer one — see paneMenuPressed.
+		if m.keysEnhanced {
+			return PaneMenuKey + " menu · " + PaneLeaveKey + " deck"
+		}
+		return PaneLeaveKey + " deck"
 	}
 	return "scope: " + scopeLabel(m.scope)
 }
@@ -240,11 +243,11 @@ func (m *Model) armedPrefixHint() (string, bool) {
 	switch c := m.active.(type) {
 	case *splitModal:
 		if c.prefixArmed {
-			return splitPrefixHint(m), true
+			return splitPrefixHint(), true
 		}
 	case *panePopover:
 		if c.prefixArmed {
-			return panePrefixHint(m), true
+			return panePrefixHint(), true
 		}
 	}
 	return "", false

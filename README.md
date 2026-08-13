@@ -86,7 +86,7 @@ waiting.
 
 Under `awp zdeck` the badge **stays on screen inside a pane**, at the left of the
 deck's top row, ahead of the label of what is on screen and the
-`ctrl+\ keys · ctrl+\ ctrl+\ deck` hint. A pane is where most of the time goes, and the counts are the reason to go
+`ctrl+| menu · ctrl+\ deck` hint. A pane is where most of the time goes, and the counts are the reason to go
 back to the row list — so they follow you into it, and they keep counting while
 you are there: an agent that finishes its turn behind the pane shows up without
 your leaving. The row is one row for three things, so a narrow terminal drops the
@@ -106,8 +106,9 @@ sat in a different cell on each of the three screens you move between constantly
 One row, one address. A pane also gets back the row its header was spending.
 
 What changes between the screens is only what the row has to say. Over a pane or a
-split it names what is on screen, that workspace's own state, and the key that
-leaves. Over the row list it names the scope — there is nothing to leave, and no
+split it names what is on screen, that workspace's own state, and the two keys that
+act on it — `ctrl+| menu · ctrl+\ deck`, dropping the menu on a terminal that
+cannot send it. Over the row list it names the scope — there is nothing to leave, and no
 one workspace to report on. The badge is at the left on all three.
 
 Between the badge and the label the row reports **the hosted workspace's own
@@ -363,7 +364,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). Starts at `all` unless `awp deck --scope=<scope>` is passed at launch — not persisted across opens. |
 | `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
-| `ctrl+\` | Back into the pane you just left — the same key that, inside a pane, opens the menu you leave from (`ctrl+\ ctrl+\`), so the pair is a single gesture: out to check a row, back to carry on. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and the key is about where you have been, not about which list you are looking at. Not bound under `awp deck`, which hosts no panes: there `ctrl+\` belongs to tmux. |
+| `ctrl+\` | Back into the pane you just left — the same key that leaves one, so the pair is a single gesture: out to check a row, back to carry on. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and the key is about where you have been, not about which list you are looking at. Not bound under `awp deck`, which hosts no panes: there `ctrl+\` belongs to tmux. |
 | `\|` then a window key | **Split**: the workspace's agent on the left, the key's window on the right — `\|c` diff, `\|v` vcs, `\|e` editor, `\|s` shell, `\|i` ci, `\|W` watch. `\|a` is refused (the left half is already the agent), and anything else cancels the chord. Focus starts on the right, because the right is what you asked to look at. Refused below 120 columns, naming the width it wants: two halves of a narrow terminal are two panes you cannot read. From inside a pane the same gesture is `ctrl+\` (out to the deck) then `\|c`, which re-attaches the agent's session rather than starting a second one. See **A split, and the keys inside one** below. |
 | `L` | Switch to the **previous** pane — the one before the pane you were last in. `tmux switch-client -l` one substrate over, and the point is the same: the two most recent things you were in are one keypress apart, so pressing it twice puts you back. Resuming (`ctrl+\`) does not disturb the alternate, so holding one pane open all afternoon doesn't lose the other. One pane deep it says so and names `ctrl+\` instead. Under `awp deck` it is still `tmux switch-client -l`. |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
@@ -851,15 +852,13 @@ watch the same GitHub run. `W` runs the awp binary the deck itself is running,
 so a build in a temp path opens that build's watch view rather than an older
 install's.
 
-`ctrl+\` is the way out of a pane. It has to be a key nothing inside one wants,
-because every other key belongs to the program: `esc`, `q` and `ctrl+c` all mean
-something to an agent. It is a **prefix** rather than a door — one press arms a
-menu, and the second key is the verb — which is the same thing it means in a
-split, so the key does not depend on how many panes are up. `ctrl+\ ctrl+\` goes
-back to the deck; where the terminal cannot report a key repeat it is `ctrl+\ q`
-instead, and the menu on the top row names whichever one this terminal has. See
-[a split, and the keys inside one](#a-split-and-the-keys-inside-one) for the rest
-of the verbs and for why the double tap is conditional.
+`ctrl+\` leaves a pane, on one press, whether one pane is up or a split of two. It
+has to be a key nothing inside one wants, because every other key belongs to the
+program: `esc`, `q` and `ctrl+c` all mean something to an agent. **`ctrl+|` — the
+same key shifted — is the menu**: split what is on screen, move the keyboard
+between halves, resize, zoom, close a half. Two gestures one key apart rather than
+one key meaning two things depending on how many panes are up. See [a split, and
+the keys inside one](#a-split-and-the-keys-inside-one) for the verbs.
 
 Any window kind zdeck does not handle — the review
 window, the PR-description window — falls through to tmux exactly as before.
@@ -910,39 +909,54 @@ are somewhere specific, and the half that has them is the one with the teal
 border — the other drops to grey, the same tier the diff viewer's unfocused panes
 drop to.
 
-Inside a pane or a split `ctrl+\` is a **prefix**, not a door: the programs on
-screen keep their own complete keymaps and there is exactly one key spare to build
-on. A single pane's menu is the short one — the way out and nothing else, since
-there is nothing to switch between and nothing to resize. A split's is the full
-set:
+**`ctrl+|` is the menu**, in a single pane and in a split alike: a prefix, because
+the programs on screen keep their own complete keymaps and there is no room to
+spend a second key on each verb. It is the shifted leave key, so the pair you reach
+for from inside a pane is one key apart. `ctrl+\` is not part of it — that is the
+door, and it leaves on one press from either arrangement.
 
-| after `ctrl+\` | does |
+| after `ctrl+\|` | does |
 |---|---|
+| a window key — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch | **split**: that kind beside the pane you are in. Already split, there is nowhere to put a third, so it **replaces the focused half** |
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
-| `q` | leave, back to the row list — the one verb a single pane's menu also has |
-| `ctrl+\` | leave, where the terminal reports key repeats; otherwise it re-arms |
+| `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
-**The double tap is conditional, and says so.** Two taps of the prefix key is the
-gesture this wanted from the start — tmux spells its own prefix twice — but a key
-repeat and a deliberate second press are the same bytes unless the terminal
-reports event types, so on a plain terminal a held key would leave. awp asks for
-the Kitty keyboard protocol's event-types flag and records the answer, so the
-menu offers `ctrl+\` where the distinction exists and `q` where it does not,
-rather than offering a verb that misfires. `q` keeps working either way. The
-prefix has no timeout for the same reason it has no ambiguity — it is a state
+A single pane's menu carries the window keys and nothing else: focus, size, zoom
+and close-a-half have nothing to act on until there are two halves, so they are
+absent rather than listed and inert.
+
+Splitting from a pane keeps that pane as the left half rather than opening a fresh
+one beside its replacement. The agent you were watching is the reason you wanted
+something next to it, and re-opening it would repaint the program you were reading
+mid-thought. The pane needs no resize of its own either — a pane asks its terminal
+for whatever box it is handed, so the next frame is what moves the pty to half the
+width.
+
+The menu has no timeout, for the same reason it has no ambiguity: it is a state
 resolved by the next key, not by a clock.
 
-**A held `ctrl+\` does nothing**, on every terminal. One key used to spell two
-decisions: holding it left a pane, was read again in the row list as "go back into
-it", and flapped between the two for as long as the key was down. Making it a
-prefix is what actually fixed that rather than a guard against repeats — arming an
-armed menu is idempotent, so the press and every repeat behind it settle in the
-same state, whether or not the terminal can tell them apart. On the row list,
-where the key is a door rather than a prefix, a reported repeat is still dropped.
+**`ctrl+|` needs the Kitty keyboard protocol.** A plain terminal sends `0x1c` for
+`ctrl+shift+\` exactly as it does for `ctrl+\`, so there is nothing to tell apart —
+reading one as the menu there would swallow the key that leaves. Where the flag is
+not granted there is simply no menu: the top row stops offering one, `ctrl+\` still
+leaves, and `|` from the row list is still the way to open a split. Terminals that
+do grant it disagree about how they spell it — some resolve the shift and send `|`
+with ctrl, others send `\` with ctrl and shift — and both are read as the same
+keypress.
+
+**A held `ctrl+\` does nothing.** The key spells two decisions — leave a pane, and
+from the row list go back into one — so a repeat read as a press opened what the
+next repeat closed for as long as the key was down. The deck asks its terminal for
+the Kitty keyboard protocol's event-types flag, which is what makes a repeat
+reportable as something other than a press, and drops it in both places. A terminal
+that does not grant the flag never reports a repeat at all, which is exactly the
+behaviour awp had before asking; the flap comes back there, and there is nothing to
+be done about it from this side. A held `ctrl+|` is harmless on every terminal,
+since re-arming an armed menu is idempotent.
 
 The divider's position is a fraction of the width rather than a column count, so
 resizing the terminal keeps it where you put it instead of leaving it wherever it

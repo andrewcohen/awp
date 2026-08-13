@@ -45,6 +45,27 @@ var splitActions = []splitAction{
 	{key: "W", kind: PaneKindWatch, label: "watch"},
 }
 
+// splitKindsHint is the kinds as a menu fragment, for the ctrl+| menus that carry
+// them alongside their own verbs. The same keys in the same order as the deck's
+// `|` chord, because they are the same vocabulary reached from a different place.
+func splitKindsHint() string {
+	parts := make([]string, 0, len(splitActions))
+	for _, a := range splitActions {
+		parts = append(parts, a.key+" "+a.label)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// splitKindFor resolves a pressed key to the kind it names.
+func splitKindFor(pressed string) (string, bool) {
+	for _, a := range splitActions {
+		if a.key == pressed {
+			return a.kind, true
+		}
+	}
+	return "", false
+}
+
 // splitChordHint is the menu as the status bar shows it.
 func splitChordHint() string {
 	parts := make([]string, 0, len(splitActions)+1)

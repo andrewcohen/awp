@@ -51,13 +51,10 @@ func TestAHeldLeaveKeyDoesNotFlapTheDeck(t *testing.T) {
 	if _, ok := m.active.(*panePopover); !ok {
 		t.Fatalf("no pane opened; status %q", m.status)
 	}
-	// Out through the menu, since one press no longer leaves.
 	next, _ = m.Update(resumeKey())
 	m = next.(Model)
-	next, _ = m.Update(runeKey("q"))
-	m = next.(Model)
 	if m.active != nil {
-		t.Fatalf("ctrl+\\ then q did not leave the pane (active=%T)", m.active)
+		t.Fatalf("ctrl+\\ did not leave the pane (active=%T)", m.active)
 	}
 	for range 8 {
 		next, _ = m.Update(repeatKey(resumeKey()))
@@ -72,10 +69,9 @@ func TestAHeldLeaveKeyDoesNotFlapTheDeck(t *testing.T) {
 	}
 }
 
-// TestAHeldLeaveKeyInAPaneStaysInIt. The pane's half of the same flap. Arming a
-// menu is idempotent, so the repeats behind the press do nothing at all — and
-// they are swallowed rather than forwarded, because a held ctrl+\ passed through
-// would spray it at whatever is running.
+// TestAHeldLeaveKeyInAPaneStaysInIt. The pane's half of the same flap, and the
+// reason the repeat is swallowed rather than forwarded: a held ctrl+\ passed
+// through to the program would spray it at whatever is running.
 func TestAHeldLeaveKeyInAPaneStaysInIt(t *testing.T) {
 	m := twoRowPanes(t, allKinds())
 	next, _ := m.trigger(ActionOpenWindow, PaneKindAgent)
@@ -85,12 +81,6 @@ func TestAHeldLeaveKeyInAPaneStaysInIt(t *testing.T) {
 		t.Fatalf("no pane opened; status %q", m.status)
 	}
 	defer p.close(&m)
-	// The burst as the terminal sends it, on a terminal that reports repeats: the
-	// press and every repeat behind it. Even the double tap that leaves must not
-	// be spelled by holding the key.
-	m.keysEnhanced = true
-	next, _ = m.Update(resumeKey())
-	m = next.(Model)
 	for range 8 {
 		next, _ = m.Update(repeatKey(resumeKey()))
 		m = next.(Model)
@@ -98,61 +88,54 @@ func TestAHeldLeaveKeyInAPaneStaysInIt(t *testing.T) {
 	if m.active != p {
 		t.Errorf("a held ctrl+\\ closed the pane (active=%T)", m.active)
 	}
-	if !p.prefixArmed {
-		t.Error("the repeats disarmed the menu the press armed")
+	// And one real press still leaves, so the guard has not taken the key.
+	next, _ = m.Update(resumeKey())
+	if got := next.(Model); got.active != nil {
+		t.Errorf("a pressed ctrl+\\ did not leave the pane (active=%T)", got.active)
 	}
 }
 
-// TestADoubleTapLeavesAPane is what the event-types flag buys: the gesture the
-// prefix wanted from the start, two taps of the reserved key, the way tmux
-// spells its own prefix twice.
-func TestADoubleTapLeavesAPane(t *testing.T) {
+// TestTheMenuKeyNeedsEventTypes. ctrl+shift+\ is 0x1c on a plain terminal, exactly
+// as ctrl+\ is, so there is nothing to tell apart: reading it as the menu there
+// would swallow the key that leaves. The menu is unavailable rather than
+// approximated, and the pane still leaves on the key it always did.
+func TestTheMenuKeyNeedsEventTypes(t *testing.T) {
 	m := twoRowPanes(t, allKinds())
 	next, _ := m.trigger(ActionOpenWindow, PaneKindAgent)
 	m = next.(Model)
 	if _, ok := m.active.(*panePopover); !ok {
 		t.Fatalf("no pane opened; status %q", m.status)
 	}
-	m.keysEnhanced = true
-	for range 2 {
-		next, _ = m.Update(resumeKey())
-		m = next.(Model)
-	}
-	if m.active != nil {
-		// Reported before the cleanup, since closing it sets m.active to nil and the
-		// message would name the state the test just created.
-		left := m.active
-		if p, ok := left.(*panePopover); ok {
-			p.close(&m)
-		}
-		t.Errorf("two taps of ctrl+\\ did not leave the pane (active=%T)", left)
-	}
-}
-
-// TestADoubleTapDoesNotLeaveWithoutEventTypes. On a terminal that grants
-// nothing, the second press is indistinguishable from a repeat, so it re-arms
-// and `q` is the way out. The menu says so — see panePrefixHint — rather than
-// offering a verb that would leave whenever the key was held.
-func TestADoubleTapDoesNotLeaveWithoutEventTypes(t *testing.T) {
-	m := twoRowPanes(t, allKinds())
-	next, _ := m.trigger(ActionOpenWindow, PaneKindAgent)
-	m = next.(Model)
-	p, ok := m.active.(*panePopover)
-	if !ok {
-		t.Fatalf("no pane opened; status %q", m.status)
-	}
-	defer p.close(&m)
 	if m.keysEnhanced {
 		t.Fatal("this terminal reports event types; the fallback is untested")
 	}
-	for range 4 {
-		next, _ = m.Update(resumeKey())
-		m = next.(Model)
+	// What such a terminal actually sends for the menu key.
+	next, _ = m.Update(resumeKey())
+	m = next.(Model)
+	if m.active != nil {
+		t.Errorf("ctrl+\\ stopped leaving the pane on a terminal with no menu (active=%T)", m.active)
 	}
-	if m.active != p {
-		t.Fatalf("taps of ctrl+\\ left the pane on a terminal that cannot tell them from a repeat (active=%T)", m.active)
+	if hint := m.topRowHint(); strings.Contains(hint, PaneMenuKey) {
+		t.Errorf("the row offers %q, which this terminal cannot send: %q", PaneMenuKey, hint)
 	}
-	if hint := panePrefixHint(&m); !strings.Contains(hint, "q deck") {
-		t.Errorf("the menu %q does not offer q, which is the only way out here", hint)
+}
+
+// TestTheMenuKeyIsBothSpellings. A shifted backslash arrives as `|` with ctrl from
+// a terminal that resolves the shift, and as `\` with ctrl and shift from one that
+// reports it — the same keypress either way.
+func TestTheMenuKeyIsBothSpellings(t *testing.T) {
+	m := twoRowPanes(t, allKinds())
+	m.keysEnhanced = true
+	for _, msg := range []tea.KeyPressMsg{
+		{Code: '|', Mod: tea.ModCtrl},
+		{Code: '\\', Mod: tea.ModCtrl | tea.ModShift},
+	} {
+		if !paneMenuPressed(&m, msg) {
+			t.Errorf("%q was not read as the menu key", msg.String())
+		}
+	}
+	// And the door is not the menu, or pressing it would open one instead of leaving.
+	if paneMenuPressed(&m, resumeKey()) {
+		t.Error("the leave key was read as the menu key")
 	}
 }

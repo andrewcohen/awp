@@ -25,6 +25,30 @@ import (
 // have to be one string or the hint is a lie.
 const PaneLeaveKey = charm.PaneLeaveKey
 
+// PaneMenuKey opens the menu of things you can do to what is on screen. See
+// charm.PaneMenuKey for why it is the shifted leave key, and paneMenuPressed for
+// why pressing it is not the same question as naming it.
+const PaneMenuKey = charm.PaneMenuKey
+
+// paneMenuPressed reports whether this key is the menu key.
+//
+// Not a string comparison, because the terminals that can send it do not agree on
+// how: a shifted backslash may arrive as `|` with ctrl, or as `\` with ctrl and
+// shift, depending on whether the terminal resolves the shift itself. Both are the
+// same keypress and both mean the menu.
+//
+// And it is only that keypress at all where the terminal reports shifted control
+// keys as distinct — a plain terminal sends 0x1c for ctrl+shift+\ exactly as for
+// ctrl+\, so reading it as the menu there would swallow the key that leaves. The
+// menu is simply unavailable on such a terminal, which is why the deck's `|` chord
+// stays the way to open a split from the row list.
+func paneMenuPressed(m *Model, msg tea.KeyPressMsg) bool {
+	if !m.keysEnhanced || msg.Mod&tea.ModCtrl == 0 {
+		return false
+	}
+	return msg.Code == '|' || (msg.Code == '\\' && msg.Mod&tea.ModShift != 0)
+}
+
 // PaneBackend turns a workspace and a window kind into a process the deck can
 // host on a pty it owns, instead of handing off to a tmux window.
 //
@@ -538,33 +562,70 @@ func paneExitStatus(label string, err error, lived time.Duration, reason string)
 
 func (p *panePopover) footerHelp() string { return "" }
 
-// panePrefixHint is the verb menu for a single pane. Short, because a pane has
-// nothing to switch between and nothing to resize — the whole menu is the way
-// out. It is a menu anyway rather than a door, so the reserved key means the
-// same thing in a pane as in a split (see splitPrefixHint).
-func panePrefixHint(m *Model) string {
-	return PaneLeaveKey + ": " + prefixLeaveVerb(m) + " deck · esc cancel"
+// panePrefixHint is the menu for a single pane: the window keys, each of which
+// puts that kind beside the pane you are in. The arrangement verbs a split's menu
+// also carries — focus, size, zoom, close a half — have nothing to act on until
+// there are two halves, so they are absent rather than listed and inert.
+//
+// No verb for leaving. ctrl+\ is a door on every surface and needs no menu in
+// front of it.
+func panePrefixHint() string {
+	return PaneMenuKey + ": split " + splitKindsHint() + " · esc cancel"
 }
 
-// prefixKey reads one key while a single pane's prefix is armed. Like the
-// split's, it disarms on anything that is not the reserved key, and swallows
-// what it read rather than letting a mistyped verb type itself at the program.
+// prefixKey reads one key while a single pane's menu is armed. Like the split's,
+// it disarms on anything that is not the menu key, and swallows what it read
+// rather than letting a mistyped verb type itself at the program.
 func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
-	if msg.String() == PaneLeaveKey {
-		if leavesOnSecondPress(m, msg) {
-			p.prefixArmed = false
-			m.status = ""
-			return p.close(m)
-		}
-		m.status = panePrefixHint(m)
+	if paneMenuPressed(m, msg) {
+		// The menu key again re-arms rather than resolving, so holding it cannot do
+		// anything.
+		m.status = panePrefixHint()
 		return nil
 	}
 	p.prefixArmed = false
 	m.status = ""
-	if msg.String() == "q" {
-		return p.close(m)
+	if kind, ok := splitKindFor(msg.String()); ok {
+		return p.splitWith(m, kind)
 	}
 	return nil
+}
+
+// splitWith puts kind beside this pane, keeping this pane as the left half.
+//
+// Reusing the live pane is the point: the agent you are watching is the reason you
+// wanted something beside it, and re-opening it as a fresh left half would resize
+// and repaint the program you were reading mid-thought. It also means the split
+// can be made of whatever pane you happen to be in rather than only of an agent —
+// see splitModal.left, which used to promise more than it now does.
+//
+// The pane needs no resize here. renderPopover asks its terminal for the box it is
+// handed, so the next frame is what moves the pty to half the width.
+func (p *panePopover) splitWith(m *Model, kind string) tea.Cmd {
+	full := m.childBox()
+	if !splitFits(full) {
+		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, splitMinW)
+		return nil
+	}
+	item, ok := m.topRowRow()
+	if !ok {
+		// The pane outlived its row — a workspace deleted while you were inside it.
+		// The pane is still usable; there is just nothing to resolve a second program
+		// against.
+		m.status = "split: this pane's workspace is not on the deck any more"
+		return nil
+	}
+	probe := &splitModal{}
+	_, rightBox := probe.boxes(full)
+	right, cmd, ok := m.openChild(item, kind, rightBox)
+	if !ok {
+		// openChild said why, and installed nothing. Back to the pane as it was.
+		m.active = p
+		return nil
+	}
+	m.active = &splitModal{left: p, right: right, rightFocused: true, label: PaneLabel(kind)}
+	m.status = ""
+	return cmd
 }
 
 func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
@@ -596,16 +657,21 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		if p.prefixArmed {
 			return p.prefixKey(m, msg)
 		}
-		if msg.String() == PaneLeaveKey {
-			// Armed rather than acted on, so one pane and a split of two spell the
-			// reserved key the same way. Arming is idempotent, which is what makes a
-			// held key harmless: this used to leave on every press, and since the
-			// deck's own ctrl+\ goes straight back in, a repeat flapped between the
-			// two (#307). The repeat that used to be swallowed here now simply
-			// re-arms.
+		if paneMenuPressed(m, msg) {
 			p.prefixArmed = true
-			m.status = panePrefixHint(m)
+			m.status = panePrefixHint()
 			return nil
+		}
+		if msg.String() == PaneLeaveKey {
+			if msg.IsRepeat {
+				// Held, not pressed again. Swallowed rather than closed on or
+				// forwarded: the deck's own ctrl+\ goes back into the pane this would
+				// close, so a repeat that gets through flaps between the two (#307),
+				// and passing it to the program means holding the key sprays it at
+				// whatever is running.
+				return nil
+			}
+			return p.close(m)
 		}
 		p.term.SendKey(msg)
 		return nil
