@@ -4038,6 +4038,11 @@ func (m Model) View() tea.View {
 		}
 		if x, y, ok := p.screenCursor(m.boxOf(p)); ok {
 			v.Cursor = tea.NewCursor(x, y)
+			// And what the program asked it to look like, which for an editor is
+			// which mode it is in. Without this every pane drew tea's default block,
+			// so nvim's insert-mode bar and replace-mode underline were invisible —
+			// the pane was showing the program's screen and overruling its cursor.
+			v.Cursor.Shape, v.Cursor.Blink = p.term.CursorShape()
 		}
 	}
 	return v

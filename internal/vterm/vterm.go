@@ -432,6 +432,20 @@ func (t *Term) Cursor() (x, y int, visible bool) {
 	return pos.X, pos.Y, t.cursorVisible.Load()
 }
 
+// CursorShape is the block, always.
+//
+// x/vt does report DECSCUSR — Callbacks.CursorStyle fires with the style and,
+// despite the parameter's name, the *steady* flag (screen.go passes !blink). It is
+// not wired up here on purpose: this emulator is being deleted in favour of
+// libghostty-vt, which is the one every pane actually runs on, so the six lines
+// that would read it are six lines with a known removal date.
+//
+// The block is not a guess or a fallback — it is the terminal default, and what a
+// program that never asked for a shape gets. So a pane on this emulator behaves
+// exactly as it did before Hosted grew the method, rather than reporting something
+// invented.
+func (t *Term) CursorShape() (tea.CursorShape, bool) { return tea.CursorBlock, true }
+
 // WantsMouse reports whether the hosted program has enabled mouse reporting.
 //
 // It matters because the host has to ask its own terminal for mouse events to

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // ghosttyPane runs cmd on a libghostty-vt pane of the given size.
@@ -153,5 +155,82 @@ func TestAClosedGhosttyPaneStaysClosed(t *testing.T) {
 	_ = term.LastLine()
 	if err := term.Send([]byte("x")); err == nil {
 		t.Error("a closed pane accepted a send")
+	}
+}
+
+// waitForShape renders until the cursor reports the shape wanted, so a test never
+// races the pty. Rendering is what a frame does, and the shape is read per frame.
+func waitForShape(t *testing.T, term Hosted, want tea.CursorShape) (tea.CursorShape, bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		shape, blink := term.CursorShape()
+		if shape == want {
+			return shape, blink
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited 5s for shape %v; it is %v", want, shape)
+			return shape, blink
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestAPaneReportsTheCursorShapeItsProgramAsked. This is how an editor says which
+// mode it is in — DECSCUSR — and awp used to drop it, drawing tea's default block
+// over nvim's insert-mode bar. A pane showing someone else's screen does not get to
+// overrule their cursor.
+//
+// Driven through a real pty with the escape sequences rather than by poking the
+// emulator, because the thing that was broken was the whole path: the program
+// writes it, the emulator interprets it, the deck has to be able to ask.
+func TestAPaneReportsTheCursorShapeItsProgramAsked(t *testing.T) {
+	// 6 is a steady bar, 4 a steady underline, 2 a steady block — the odd numbers
+	// are their blinking twins. printf so nothing but the sequences is written.
+	term := ghosttyPane(t, 40, 6, exec.Command("printf", "READY\\n\\033[6 q"))
+	waitForScreen(t, term, "READY")
+
+	if shape, blink := waitForShape(t, term, tea.CursorBar); blink {
+		t.Errorf("DECSCUSR 6 is a *steady* bar; got shape %v blink %v", shape, blink)
+	}
+}
+
+// TestAPaneCursorGoesBackToABlock, because a mode is left as well as entered — and
+// the shape is cached between reads, so the direction that has to invalidate the
+// cache is the one worth a test.
+//
+// The program writes both sequences, with a pause between them. It cannot be done
+// by sending the second one to the pane: Send is "as if typed", and a typed escape
+// is echoed by the line discipline as a literal ^[ rather than replayed as a
+// command — which is the correct behaviour, and was this test's first mistake.
+func TestAPaneCursorGoesBackToABlock(t *testing.T) {
+	term := ghosttyPane(t, 40, 6, exec.Command("sh", "-c",
+		`printf 'READY\n\033[5 q'; sleep 0.5; printf '\033[2 q'; sleep 5`))
+	waitForScreen(t, term, "READY")
+	waitForShape(t, term, tea.CursorBar)
+	// What leaving insert mode does.
+	waitForShape(t, term, tea.CursorBlock)
+}
+
+// TestABlinkingShapeIsReportedAsBlinking. DECSCUSR encodes shape and blink in one
+// parameter — 5 is a blinking bar and 6 a steady one — so reading the shape without
+// the blink is reading half of what the program said.
+func TestABlinkingShapeIsReportedAsBlinking(t *testing.T) {
+	term := ghosttyPane(t, 40, 6, exec.Command("printf", "READY\\n\\033[5 q"))
+	waitForScreen(t, term, "READY")
+
+	if shape, blink := waitForShape(t, term, tea.CursorBar); !blink {
+		t.Errorf("DECSCUSR 5 is a *blinking* bar; got shape %v blink %v", shape, blink)
+	}
+}
+
+// TestAFreshPaneReportsABlock — the terminal default, and what a program that has
+// asked for nothing gets. Not a fallback: it is the right answer.
+func TestAFreshPaneReportsABlock(t *testing.T) {
+	term := ghosttyPane(t, 40, 6, exec.Command("printf", "READY\\n"))
+	waitForScreen(t, term, "READY")
+
+	if shape, _ := term.CursorShape(); shape != tea.CursorBlock {
+		t.Errorf("a pane whose program said nothing reports shape %v, want a block", shape)
 	}
 }

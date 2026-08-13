@@ -54,6 +54,20 @@ type Hosted interface {
 	Cursor() (x, y int, visible bool)
 	WantsMouse() bool
 
+	// CursorShape is what the program asked its cursor to look like — DECSCUSR,
+	// which is how an editor says which mode it is in.
+	//
+	// Separate from Cursor because it answers a different question and is allowed
+	// to be cheaper: where the cursor is changes constantly, what it looks like
+	// changes when you press `i`. An emulator that cannot report a shape returns
+	// the block, which is the terminal default and what a program that never asked
+	// gets anyway.
+	//
+	// blink is carried alongside because DECSCUSR encodes the two in one
+	// parameter: 5 is a blinking bar and 6 is a steady one, so reading the shape
+	// without the blink is reading half of what the program said.
+	CursorShape() (shape tea.CursorShape, blink bool)
+
 	Resize(w, h int) error
 	Close() error
 }
