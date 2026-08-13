@@ -185,7 +185,7 @@ type modal interface {
 // It exists so the deck can tell those apart from the modals it swaps the body
 // for. What is on screen is still the row list, so the deck's top row still
 // belongs there — and the menu goes on that row, which is where every other menu
-// in the deck goes (an armed ctrl+| in a pane or a split). A chord that instead
+// in the deck goes (an armed ctrl+space in a pane or a split). A chord that instead
 // printed its menu in the status bar was two inconsistencies at once: the menu in
 // a different place depending on which one you armed, and — because the top row
 // was dropped for the duration — the whole frame moving up a line as you armed it.
