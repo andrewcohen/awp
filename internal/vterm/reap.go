@@ -25,22 +25,7 @@ var live struct {
 	terms map[interface{ Close() error }]struct{}
 }
 
-func register(t interface{ Close() error }) {
-	live.Lock()
-	defer live.Unlock()
-	if live.terms == nil {
-		live.terms = map[interface{ Close() error }]struct{}{}
-	}
-	live.terms[t] = struct{}{}
-}
-
-func unregister(t interface{ Close() error }) {
-	live.Lock()
-	defer live.Unlock()
-	delete(live.terms, t)
-}
-
-// CloseAll tears down every Term still open, and is what a program hosting them
+// CloseAll tears down every hosted terminal still open, and is what a program hosting them
 // defers so no exit it returns from can leave one behind.
 //
 // That covers a normal quit, a SIGINT or SIGTERM (Bubble Tea turns both into a

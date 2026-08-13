@@ -1,3 +1,5 @@
+//go:build ghosttyvt
+
 package vterm
 
 import (

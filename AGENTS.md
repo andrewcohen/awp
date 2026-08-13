@@ -482,6 +482,39 @@ When applicable, run:
 
 If you cannot run something, state what was not run and why.
 
+### The default gate does not cover the terminal emulator
+
+There is one emulator behind a pane — libghostty-vt — and it is cgo against an
+archive built by Zig, so it lives behind `-tags ghosttyvt`. Everything that drives
+a real terminal is tagged with it: `internal/vterm`'s corpus and pty tests
+(`term_test.go`, `keys_test.go`, `modkeys_test.go`, `host_test.go`, `tap_test.go`,
+`reap_test.go`, `fidelity_test.go`) and `internal/zmx/fidelity_test.go`. A plain
+`go test ./...` compiles none of them.
+
+So a change to how a pane interprets bytes, encodes a key, or answers a query is
+**not checked by the gates above**. Run the tagged suite when you touch
+`internal/vterm`:
+
+```sh
+CGO_ENABLED=1 \
+CGO_CFLAGS="-I$HOME/.cache/awp/libghostty-vt/out/include" \
+CGO_LDFLAGS="$HOME/.cache/awp/libghostty-vt/out/lib/libghostty-vt.a" \
+  mise exec -- go test -tags ghosttyvt ./...
+```
+
+(`make ghostty-lib` builds the archive if it is not cached yet.)
+
+That is the trade for deleting the pure-Go emulator. Two emulators meant the
+default gate always had one to test against — and it also meant every fidelity
+question had two answers, one of which was never going to ship.
+
+What kept the coverage on the default gate is `internal/deckui`'s fake terminal:
+the deck's own behaviour around a pane is tested there with no emulator at all (see
+`Model.openTerm`). Keep it that way. A new test about what the deck does with a
+pane belongs on the fake; only one about what a terminal does with bytes belongs
+behind the tag, and those skip without an emulator rather than failing — a skipped
+pane test in a plain checkout is expected, not a problem to fix.
+
 ### `zmx attach` means two different things
 
 Three tests in `internal/zmx` drive the real zmx binary. They skip when
