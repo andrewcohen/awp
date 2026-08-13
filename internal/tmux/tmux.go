@@ -6,7 +6,40 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andrewcohen/awp/internal/cmderr"
 )
+
+// ranAndSaidNo reports whether tmux ran and answered in the negative, as opposed
+// to awp being unable to run it at all.
+//
+// The three listing calls need the distinction because tmux spells "there is
+// nothing to list" as a failure: with no server up, `list-sessions` exits 1 with
+// `no server running on /private/tmp/tmux-502/default` on stderr. To a deck that
+// hosts its own panes that is the normal state of the world rather than an error
+// — there is no tmux, and no reason for there to be one.
+//
+// Keyed on the process's exit status (cmderr.RanAndFailed) rather than on the
+// text of the message, which is what these guards used to do and what broke
+// them: they matched "exit status", the phrasing exec's own error carries, and
+// both of awp's runners replace that with a message of their own to make a
+// non-zero exit readable in a job log. So the no-server case started surfacing
+// as a real error — visibly, as a workspace delete that reported failure after
+// it had already deleted the workspace.
+//
+// The string match stays as a fallback: Runner is an interface anyone can
+// satisfy, and a Runner that flattens the exit without wrapping it should still
+// get the right answer here rather than a mystery error.
+func ranAndSaidNo(err error) bool {
+	if err == nil {
+		return false
+	}
+	if cmderr.RanAndFailed(err) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "exit status") || strings.Contains(msg, "no server running")
+}
 
 // pasteSettleDelay gives the receiving TUI a beat to finish ingesting a
 // bracketed paste before the submit Enter arrives. Without it a large
@@ -32,7 +65,7 @@ func New(runner Runner) *Client {
 func (c *Client) WindowExists(name string) (bool, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "list-windows", "-F", "#{window_name}")
 	if err != nil {
-		if strings.Contains(err.Error(), "exit status") {
+		if ranAndSaidNo(err) {
 			return false, nil
 		}
 		return false, err
@@ -137,7 +170,7 @@ type Session struct {
 func (c *Client) ListSessions() ([]Session, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}")
 	if err != nil {
-		if strings.Contains(err.Error(), "exit status") {
+		if ranAndSaidNo(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -173,7 +206,7 @@ func (c *Client) SessionIDByName(name string) (string, error) {
 func (c *Client) SessionExists(name string) (bool, error) {
 	out, err := c.runner.Run(context.Background(), "", "tmux", "list-sessions", "-F", "#{session_name}")
 	if err != nil {
-		if strings.Contains(err.Error(), "exit status") {
+		if ranAndSaidNo(err) {
 			return false, nil
 		}
 		return false, err
