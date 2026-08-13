@@ -257,16 +257,16 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 	summary := fmt.Sprintf(" (%d hunk%s)", len(f.Hunks), plural(len(f.Hunks)))
 	if r.collapsed {
 		// A collapsed file still has to say what is inside it, or the divider
-		// becomes a wall you have to open to see past — and it has to say *why* it
-		// is closed. A folded file wearing "✓ reviewed" is the divider claiming you
-		// read something you pressed enter to put away, which is the one thing the
-		// reviewed mark must never overstate.
-		why := "folded"
-		if m.isReviewed(pathOf(f)) {
-			why = "✓ reviewed"
-		}
-		summary = fmt.Sprintf(" %s · %d hunk%s, %d line%s hidden",
-			why, len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
+		// becomes a wall you have to open to see past.
+		//
+		// "reviewed" is on it and "folded" is not. The mark is a claim about the file
+		// that outlives the view and has to be visible; being folded is a fact the
+		// reader is looking at — the body is not there — so saying it spends a word on
+		// what the divider already is. What matters is that a merely folded file does
+		// not wear the badge, which is the whole reason the two came apart.
+		summary = fmt.Sprintf(" %s%d hunk%s, %d line%s hidden",
+			reviewedBadge(m.isReviewed(pathOf(f))),
+			len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
 	}
 	meta := styleMuted.Render(summary)
 	reserved := lipgloss.Width(lead) + lipgloss.Width(badge) + 1 + lipgloss.Width(meta)
@@ -625,6 +625,15 @@ func (m Model) renderStreamPanel(width, height int) string {
 
 // countChangedLines is how many added or removed lines a file's diff holds, for
 // the collapsed divider's summary.
+// reviewedBadge is the divider's mark for a reviewed file, and nothing at all for
+// one that is merely folded.
+func reviewedBadge(reviewed bool) string {
+	if reviewed {
+		return "✓ reviewed · "
+	}
+	return ""
+}
+
 func countChangedLines(f diff.FileDiff) int {
 	n := 0
 	for _, h := range f.Hunks {

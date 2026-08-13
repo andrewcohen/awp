@@ -1876,8 +1876,13 @@ func (m Model) toggleReviewed() (tea.Model, tea.Cmd) {
 	if m.ReviewedFiles == nil {
 		m.ReviewedFiles = map[string]string{}
 	}
+	// Whether the file is *reviewed*, not whether it is closed. Those were the same
+	// question until a fold could close a file on its own, and asking the wrong one
+	// broke the key outright: in a fold-by-default viewer every file reads as
+	// collapsed, so `r` took the branch that withdraws a mark that was never there
+	// and reported "unreviewed" for a file it had been asked to review.
 	hash := ""
-	if !m.isCollapsed(path) {
+	if !m.isReviewed(path) {
 		hash = fileContentHash(f)
 	}
 	if hash == "" {
@@ -1887,6 +1892,12 @@ func (m Model) toggleReviewed() (tea.Model, tea.Cmd) {
 		m.ReviewedFiles[path] = hash
 		m.status = path + ": reviewed"
 	}
+	// And `r` has the last word on the fold either way: a file you had deliberately
+	// opened with enter would otherwise stay open when marked reviewed, which is `r`
+	// visibly not collapsing it, and one you had folded would stay shut when
+	// un-reviewed. Clearing the override rather than setting it leaves enter free to
+	// reopen a reviewed file afterwards, which is the point of them being separate.
+	delete(m.fileFold, path)
 	if m.MarkReviewed != nil {
 		if err := m.MarkReviewed(path, hash); err != nil {
 			m.fail("reviewed: %v", err)
