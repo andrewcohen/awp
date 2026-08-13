@@ -298,18 +298,18 @@ func TestClosingOneHalfLeavesTheOtherAsAWholePane(t *testing.T) {
 // programs, and a keystroke reaching the wrong one types into an agent.
 func TestAKeyGoesToTheFocusedHalfAndNowhereElse(t *testing.T) {
 	m, s := openedSplit(t, "v")
-	left := s.left.(*panePopover)
-	right := s.right.(*panePopover)
-	eventually(t, "both halves to paint", func() bool {
-		return strings.Contains(left.term.View(), "PANE-UP") && strings.Contains(right.term.View(), "PANE-UP")
-	})
+	left := fakeOf(t, s.left.(*panePopover))
+	right := fakeOf(t, s.right.(*panePopover))
 
 	pressDeck(t, m, runeKey("Q"))
-	eventually(t, "the focused half to receive the key", func() bool {
-		return strings.Contains(right.term.View(), "Q")
-	})
-	if strings.Contains(ansi.Strip(left.term.View()), "Q") {
-		t.Error("the key reached the half the keyboard had left")
+	// Read off what each half was typed at rather than out of its screen: a key
+	// reaching the wrong program is the failure, and which program received it is
+	// the question — whether it then drew anything is the emulator's business.
+	if got := right.keysSent(); len(got) != 1 || got[0] != "Q" {
+		t.Errorf("the focused half received %v, want just Q", got)
+	}
+	if got := left.keysSent(); len(got) != 0 {
+		t.Errorf("the half the keyboard had left received %v", got)
 	}
 }
 

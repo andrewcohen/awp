@@ -854,8 +854,20 @@ type Model struct {
 	// process inside the deck on a pty awp owns instead of handing off to
 	// a tmux window. nil is the ordinary deck. The UI is the same either
 	// way; only where the process lives differs.
-	panes   PaneBackend
-	paneGen int
+	panes PaneBackend
+	// openTerm starts the terminal a pane's process runs in. defaultTermOpener
+	// when nil, which is every deck the user runs.
+	//
+	// A seam rather than a direct call because vterm.Open is cgo against an
+	// archive built by Zig, so a plain `go build` produces a binary that cannot
+	// start a terminal at all — and without this, every test about the deck's own
+	// behaviour (a key that leaves a pane, an arrangement that is remembered, a
+	// close hook that runs) would need the emulator built before it could check
+	// any of it. The deck's business is what it does with a terminal, not what a
+	// terminal does with bytes; the tests about the latter ask for a real one and
+	// skip without it (internal/deckui/pane_fidelity_test.go).
+	openTerm termOpener
+	paneGen  int
 	// lastPane and prevPane are the two panes the keyboard can reach: the one the
 	// deck most recently opened, which ctrl+\ resumes, and the one before it,
 	// which L alternates to. Zero until a pane has been opened. See paneRef for

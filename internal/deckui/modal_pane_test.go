@@ -295,8 +295,6 @@ func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
 	// And the rendered box has to actually match those numbers, or the cursor
 	// arithmetic in screenCursor is placing against a box that isn't there.
 	m, p := openedPane(t, allKinds())
-	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
-
 	b := m.childBox()
 	rendered := p.renderPopover(&m, b)
 	tw, th := paneDims(b.w, b.h)
@@ -317,9 +315,7 @@ func TestThePaneCostsOnlyABorderAndAHeader(t *testing.T) {
 // than through renderPopover, because the padding it would catch is added by
 // the lipgloss.Place that centres the box — not by the box.
 func TestNothingSitsOutsideThePanesBorder(t *testing.T) {
-	m, p := openedPane(t, allKinds())
-	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
-
+	m, _ := openedPane(t, allKinds())
 	lines := strings.Split(m.render(), "\n")
 	if len(lines) != m.height {
 		t.Fatalf("the frame is %d rows, the terminal is %d", len(lines), m.height)
@@ -426,11 +422,8 @@ func TestTheDeckAsksForNothingWithNoPaneOpen(t *testing.T) {
 // tracking asked for, turns the wheel into arrow keys and scrolling types at
 // the agent.
 func TestAPaneAsksForTheMouseWhenItsProgramDoes(t *testing.T) {
-	backend := allKinds()
-	backend.script = `printf '\033[?1000h'; sleep 30`
-	m, p := openedPane(t, backend)
-
-	eventually(t, "the program to enable mouse reporting", p.term.WantsMouse)
+	m, p := openedPane(t, allKinds())
+	fakeOf(t, p).askForMouse()
 	if got := m.View().MouseMode; got == tea.MouseModeNone {
 		t.Error("a pane did not ask for mouse events, so the wheel arrives as arrow keys")
 	}
@@ -441,10 +434,8 @@ func TestAPaneAsksForTheMouseWhenItsProgramDoes(t *testing.T) {
 // loses the terminal's own drag-to-select in exchange for nothing.
 func TestAPaneLeavesTheMouseAloneWhenItsProgramIgnoresIt(t *testing.T) {
 	m, p := openedPane(t, allKinds())
-
-	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
 	if p.term.WantsMouse() {
-		t.Fatal("a plain sleeper somehow enabled mouse reporting")
+		t.Fatal("a program that asked for nothing somehow enabled mouse reporting")
 	}
 	if got := m.View().MouseMode; got != tea.MouseModeNone {
 		t.Errorf("the deck took the mouse (%v) for a program that does not want it, "+
@@ -454,9 +445,7 @@ func TestAPaneLeavesTheMouseAloneWhenItsProgramIgnoresIt(t *testing.T) {
 
 // A pane's program owns whether there is a cursor at all.
 func TestAPaneShowsACursorWhenItsProgramWantsOne(t *testing.T) {
-	m, p := openedPane(t, allKinds())
-
-	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), "PANE-UP") })
+	m, _ := openedPane(t, allKinds())
 	if m.View().Cursor == nil {
 		t.Error("a pane did not place a cursor, so the hosted program has none")
 	}
@@ -466,14 +455,8 @@ func TestAPaneShowsACursorWhenItsProgramWantsOne(t *testing.T) {
 // own rendering. Drawing one anyway puts a blinking block at an arbitrary spot
 // on its screen — which is what jjui looked like.
 func TestNoCursorWhenTheProgramHidesIt(t *testing.T) {
-	backend := allKinds()
-	backend.script = `printf '\033[?25l'; sleep 30`
-	m, p := openedPane(t, backend)
-
-	eventually(t, "the program to hide its cursor", func() bool {
-		_, _, visible := p.term.Cursor()
-		return !visible
-	})
+	m, p := openedPane(t, allKinds())
+	fakeOf(t, p).hideCursor()
 	if _, _, ok := p.screenCursor(m.childBox()); ok {
 		t.Error("screenCursor placed a cursor the program had hidden")
 	}
