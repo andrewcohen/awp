@@ -341,6 +341,17 @@ func (s *splitModal) collapse(m *Model, gone modal) tea.Cmd {
 	}
 	if p, ok := survivor.(*panePopover); ok {
 		m.status = p.label
+		// What is on screen is one pane now, so that is what coming back should
+		// find. Recorded here rather than only where a key takes a half off,
+		// because this is the one place every collapse goes through: the diff
+		// viewer quitting with `q`, a pane's program exiting, a half replaced by a
+		// form. Only ctrl+| x used to record, so a split taken apart any other way
+		// came back rebuilt.
+		m.recordArrangementValue(paneArrangement{left: paneRef{
+			project:   p.project,
+			workspace: p.workspace,
+			kind:      p.kind,
+		}})
 	}
 	return nil
 }
@@ -424,18 +435,9 @@ func (s *splitModal) closeHalf(m *Model) tea.Cmd {
 	case *diffModal:
 		m.active = nil
 	}
-	collapsed := s.collapse(m, going)
-	// What is on screen is one pane now, so that is what coming back should find.
-	// Without this, closing a half and leaving would re-open the split you had just
-	// taken apart.
-	if survivor, isPane := m.active.(*panePopover); isPane {
-		m.recordArrangementValue(paneArrangement{left: paneRef{
-			project:   survivor.project,
-			workspace: survivor.workspace,
-			kind:      survivor.kind,
-		}})
-	}
-	return tea.Batch(cmd, collapsed)
+	// collapse records the survivor as the arrangement — see there; it is the same
+	// answer whether a key took this half off or the half closed itself.
+	return tea.Batch(cmd, s.collapse(m, going))
 }
 
 // replaceHalf swaps the focused half for a fresh child of the named kind.

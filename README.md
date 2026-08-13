@@ -1093,7 +1093,10 @@ you left, not a program: both halves and the divider where you put it, so leavin
 split to check a row and coming back finds the split rather than one pane you then
 have to re-split. Every change of shape records — a half replaced, a half closed,
 the divider moved — because "what was on screen" is the question being answered, so
-closing a half and leaving does *not* rebuild the split you had just taken apart. A
+closing a half and leaving does *not* rebuild the split you had just taken apart.
+That holds however the half went: `ctrl+| x` takes one off, and so does the diff
+viewer quitting with its own key or a pane's program exiting, and all of them leave
+one pane behind as the thing to come back to. A
 terminal too narrow for two halves by the time you come back gets the left half
 alone rather than a refusal: that is the pane you were working in, and the second
 half is the part that does not fit.
