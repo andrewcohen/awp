@@ -25,11 +25,19 @@ func splitDeck(t *testing.T) Model {
 	}, func(ActionRequest) error { return nil }).WithPaneBackend(allKinds())
 	m.width, m.height = 200, 40
 	m.itemsAll = []Item{{ProjectName: "proj", WorkspaceName: "ws", Path: "/tmp", RepoRoot: "/tmp"}}
+	// The menu key is only distinguishable from the leave key where the terminal
+	// reports shifted control keys, so a split's verbs are only reachable there.
+	m.keysEnhanced = true
 	return m
 }
 
 // leaveKey is the reserved key, as the terminal sends it.
 func leaveKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl} }
+
+// menuKey is the shifted leave key — the one that opens the verb menu. Only
+// reachable on a terminal that reports shifted control keys, which is why
+// splitDeck grants event types; see paneMenuPressed.
+func menuKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: '|', Mod: tea.ModCtrl} }
 
 // press sends one key through the deck and returns the new model.
 func pressDeck(t *testing.T, m Model, key tea.KeyPressMsg) Model {
@@ -188,7 +196,7 @@ func TestThePrefixMovesTheKeysBetweenHalves(t *testing.T) {
 		{"tab", false}, // toggles off the right
 		{"tab", true},
 	} {
-		m = pressDeck(t, m, leaveKey())
+		m = pressDeck(t, m, menuKey())
 		if !s.prefixArmed {
 			t.Fatalf("%s: the reserved key did not arm the prefix", tc.key)
 		}
@@ -202,14 +210,13 @@ func TestThePrefixMovesTheKeysBetweenHalves(t *testing.T) {
 	}
 }
 
-// TestAHeldReservedKeyDoesNotThrash is the complaint that killed the debounce:
-// in a single pane ctrl+\ leaves on every press, so a key repeat flips back and
-// forth. Arming a prefix is idempotent, so the same repeat does nothing at all
-// until you press a verb.
-func TestAHeldReservedKeyDoesNotThrash(t *testing.T) {
+// TestAHeldMenuKeyDoesNotThrash. Arming a menu is idempotent, so holding the key
+// does nothing at all until you press a verb — and the menu key is not the key
+// that leaves, so a held one cannot take the split down either.
+func TestAHeldMenuKeyDoesNotThrash(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	for range 8 {
-		m = pressDeck(t, m, leaveKey())
+		m = pressDeck(t, m, menuKey())
 	}
 	if _, ok := m.active.(*splitModal); !ok {
 		t.Fatalf("a held key left the split: %T", m.active)
@@ -222,30 +229,34 @@ func TestAHeldReservedKeyDoesNotThrash(t *testing.T) {
 	}
 }
 
-// TestADoubleTapLeavesASplit. The same gesture as in a single pane, so the
-// reserved key does not mean two different things depending on how many panes
-// are up — which was the whole complaint. Only available where a repeat is
-// reportable; see TestAHeldReservedKeyDoesNotThrash for the terminal that is not.
-func TestADoubleTapLeavesASplit(t *testing.T) {
+// TestOnePressLeavesASplit. The leave key is a door in a split exactly as in a
+// single pane: one press, back to the deck, no menu in front of it. It meant two
+// different things depending on how many panes were up, which was the complaint.
+func TestOnePressLeavesASplit(t *testing.T) {
 	m, _ := openedSplit(t, "v")
-	m.keysEnhanced = true
-	for range 2 {
-		m = pressDeck(t, m, leaveKey())
-	}
+	m = pressDeck(t, m, leaveKey())
 	if m.active != nil {
-		t.Errorf("two taps of the reserved key left %T open", m.active)
+		t.Errorf("one press of the leave key left %T open", m.active)
 	}
 }
 
-// TestThePrefixThenQLeaves. `q` is the way out wherever a second press and a key
-// repeat are indistinguishable — see TestAHeldReservedKeyDoesNotThrash, which is
-// the test that decided this — and it keeps working where they are not.
-func TestThePrefixThenQLeaves(t *testing.T) {
-	m, _ := openedSplit(t, "v")
-	m = pressDeck(t, m, leaveKey())
-	m = pressDeck(t, m, runeKey("q"))
-	if m.active != nil {
-		t.Errorf("the prefix then q left %T open", m.active)
+// TestAWindowKeyReplacesTheFocusedHalf. The same keys that name a kind in a single
+// pane's menu name one here; with both halves already up, the only place to put it
+// is the half you are looking at. The other half is what you are keeping.
+func TestAWindowKeyReplacesTheFocusedHalf(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	keeping := s.left
+	before := s.right
+	m = pressDeck(t, m, menuKey())
+	m = pressDeck(t, m, runeKey("s"))
+	if m.active != s {
+		t.Fatalf("replacing a half left %T on screen", m.active)
+	}
+	if s.right == before {
+		t.Error("the focused half was not replaced")
+	}
+	if s.left != keeping {
+		t.Error("the half that was not focused was replaced too")
 	}
 }
 
@@ -253,7 +264,7 @@ func TestThePrefixThenQLeaves(t *testing.T) {
 // re-open anything — which is the reason it is a zoom and not a close.
 func TestZoomGivesTheFocusedHalfTheWholeScreen(t *testing.T) {
 	m, s := openedSplit(t, "v")
-	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey("o"))
 	if !s.zoomed {
 		t.Fatal("o did not zoom")
@@ -276,7 +287,7 @@ func TestZoomGivesTheFocusedHalfTheWholeScreen(t *testing.T) {
 func TestClosingOneHalfLeavesTheOtherAsAWholePane(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	agent := s.left
-	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey("x"))
 	if m.active != agent {
 		t.Fatalf("closing the focused half left %T, want the agent alone", m.active)
@@ -379,9 +390,9 @@ func TestThePrefixIsVisibleWhileItIsArmed(t *testing.T) {
 		t.Fatal("the prefix menu is on screen before the prefix was armed")
 	}
 
-	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, menuKey())
 	armed := ansi.Strip(m.render())
-	for _, want := range []string{"focus", "zoom", "q leave"} {
+	for _, want := range []string{"focus", "zoom", "replace"} {
 		if !strings.Contains(armed, want) {
 			t.Errorf("the armed prefix does not say %q:\n%s", want, lastLine(armed))
 		}
@@ -491,7 +502,7 @@ func TestTheDividerMoves(t *testing.T) {
 	if want := m.width / 2; even != want {
 		t.Fatalf("a fresh split divides at %d, want %d", even, want)
 	}
-	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey(">"))
 	wider := s.splitCol(m.childBox())
 	if wider <= even {
@@ -500,7 +511,7 @@ func TestTheDividerMoves(t *testing.T) {
 	if got := lipgloss.Width(renderChild(&m, s.left, mustBox(t, s, &m, s.left))); got != wider {
 		t.Errorf("the left half rendered %d columns with the divider at %d", got, wider)
 	}
-	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey("="))
 	if got := s.splitCol(m.childBox()); got != even {
 		t.Errorf("= left the divider at %d, want %d", got, even)

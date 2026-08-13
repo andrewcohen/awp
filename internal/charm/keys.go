@@ -16,3 +16,19 @@ package charm
 // it. The hint a pane's chrome prints and the key those programs bind are the
 // same string or the hint is a lie.
 const PaneLeaveKey = "ctrl+\\"
+
+// PaneMenuKey opens the menu of things you can do to the arrangement on screen —
+// split it, move the keyboard between halves, resize, zoom, close a half.
+//
+// The shifted form of the leave key, and that is the whole argument: the two
+// gestures are the pair you reach for from inside a pane, so they should be one
+// key apart rather than one arbitrary key each. It also keeps PaneLeaveKey a door
+// on every surface — a single press, always back to the deck — instead of a
+// prefix in a split and a door in a pane, which made the same key mean two
+// things depending on how many panes were up.
+//
+// Only reachable where the terminal reports shifted control keys as distinct: a
+// plain terminal sends 0x1c for ctrl+shift+\ exactly as for ctrl+\, so there is
+// nothing to tell apart. See Model.keysEnhanced, and paneMenuPressed, which is
+// where the ambiguity is resolved rather than at each call site.
+const PaneMenuKey = "ctrl+|"

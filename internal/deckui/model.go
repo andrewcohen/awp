@@ -5314,7 +5314,7 @@ func deckKeyGroups() []keyGroup {
 				{"/", "filter rows · esc clears"},
 				{"f", "find: collapse to sections → expand one → jump"},
 				{"P", "cycle scope (all → attention → inbox)"},
-				{PaneLeaveKey, "back into the pane you left (inside one it is the prefix: twice, or " + PaneLeaveKey + " q, comes back)"},
+				{PaneLeaveKey, "back into the pane you left (the key that leaves one, on one press)"},
 				{"L", "switch to the previous pane (tmux: last session)"},
 			},
 		},
@@ -5344,6 +5344,20 @@ func deckKeyGroups() []keyGroup {
 		{
 			Title: "Split (| then a window key)",
 			Keys:  splitHelpKeys(),
+		},
+		{
+			// Inside a pane or a split rather than on this list, but listed here
+			// because this overlay is the only place the keymap is written down and a
+			// key you can only discover by pressing it is not discoverable.
+			Title: "Inside a pane (" + PaneMenuKey + " menu)",
+			Keys: [][2]string{
+				{PaneLeaveKey, "back to the deck, from a pane or a split"},
+				{PaneMenuKey + " then a window key", "split the pane you are in — replaces the focused half if already split"},
+				{PaneMenuKey + " h/l/tab", "move the keys to the other half"},
+				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
+				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},
+				{PaneMenuKey + " x", "close the focused half"},
+			},
 		},
 		{
 			Title: "Workspace",

@@ -185,16 +185,42 @@ func TestOnlyTheLeaveKeyIsInterceptedInAPane(t *testing.T) {
 		}
 	}
 
-	// The reserved key arms the menu rather than leaving on its own, so `q` —
-	// which the loop above just proved is the program's key — becomes awp's for
-	// exactly one keypress.
 	p.update(&m, tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl})
-	if m.active == nil {
-		t.Fatalf("%s left the pane on one press instead of arming the menu", PaneLeaveKey)
-	}
-	p.update(&m, tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if m.active != nil {
-		t.Errorf("%s then q did not close the pane", PaneLeaveKey)
+		t.Errorf("%s did not close the pane", PaneLeaveKey)
+	}
+}
+
+// TestTheMenuKeySplitsFromThePaneYouAreIn. The window keys behind ctrl+| mean the
+// same thing they do from the row list, reached from inside the thing being split
+// — and the pane you were in becomes the left half rather than being torn down and
+// re-opened, so the program you were reading is not resized twice.
+func TestTheMenuKeySplitsFromThePaneYouAreIn(t *testing.T) {
+	m := splitDeck(t)
+	next, _ := m.trigger(ActionOpenWindow, PaneKindAgent)
+	m = next.(Model)
+	p, ok := m.active.(*panePopover)
+	if !ok {
+		t.Fatalf("no pane opened; status %q", m.status)
+	}
+	m = pressDeck(t, m, menuKey())
+	if !p.prefixArmed {
+		t.Fatalf("the menu key did not arm the menu (status %q)", m.status)
+	}
+	m = pressDeck(t, m, runeKey("s"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("the shell key opened %T, want a split (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+	if s.left != p {
+		t.Errorf("the left half is %T, want the pane the split was made from", s.left)
+	}
+	if s.right == nil {
+		t.Error("the split has no right half")
+	}
+	if !s.rightFocused {
+		t.Error("the keys stayed in the half that was already there")
 	}
 }
 

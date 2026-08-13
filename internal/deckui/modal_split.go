@@ -62,67 +62,33 @@ type splitModal struct {
 	prefixArmed bool
 }
 
-// splitPrefixHint is the verb menu, shown in the status bar while the prefix is
-// up.
-func splitPrefixHint(m *Model) string {
-	return PaneLeaveKey + ": h/l/tab focus · < > = size · o zoom · x close this half · " +
-		prefixLeaveVerb(m) + " leave · esc cancel"
+// splitPrefixHint is the verb menu, shown in the status bar while the menu is up.
+//
+// The window keys are on it too, and mean here what they mean in a single pane's
+// menu — that kind, on screen — except that with two halves already up there is
+// nowhere to put a third, so they replace the focused one. Same key, same
+// vocabulary, one arrangement's worth of difference in what it does.
+func splitPrefixHint() string {
+	return PaneMenuKey + ": h/l/tab focus · < > = size · o zoom · x close this half · " +
+		"replace " + splitKindsHint() + " · esc cancel"
 }
 
-// prefixLeaveVerb is how you say "leave" behind the prefix, which is not the
-// same on every terminal.
-//
-// The gesture wants to be the reserved key twice, the way tmux spells its own
-// prefix twice, and that is what it is wherever a repeat is reportable as
-// something other than a press. Where it is not, a held key and a deliberate
-// double tap are the same bytes, so the double tap would leave whenever the key
-// was held — the flap #307 was about. There `q` stays the way out and the second
-// press re-arms.
-//
-// Said rather than silently degraded: the menu names whichever verb this
-// terminal actually has, so the one that does nothing here is never offered.
-func prefixLeaveVerb(m *Model) string {
-	if m.keysEnhanced {
-		return PaneLeaveKey
-	}
-	return "q"
-}
-
-// leavesOnSecondPress reports whether this press of the reserved key, with the
-// prefix already armed, is the deliberate second tap that leaves.
-//
-// Both halves of the question matter: the terminal has to be able to tell a
-// repeat from a press, and this particular key has to not be one. A repeat gets
-// here whenever the key is simply held down.
-func leavesOnSecondPress(m *Model, msg tea.KeyPressMsg) bool {
-	return m.keysEnhanced && !msg.IsRepeat
-}
-
-// prefixKey reads one key while the prefix is armed. It returns the command to
-// run; the prefix is always disarmed by it, since every key either is a verb or
-// cancels.
+// prefixKey reads one key while the menu is armed. It returns the command to run;
+// the menu is always disarmed by it, since every key either is a verb or cancels.
 func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
-	pressed := msg.String()
-	if pressed == PaneLeaveKey {
-		if leavesOnSecondPress(m, msg) {
-			s.prefixArmed = false
-			m.status = ""
-			return s.close(m)
-		}
-		// The reserved key again re-arms rather than resolving, which is the whole
-		// reason a held key cannot do anything on a terminal that cannot report a
-		// repeat. `q` is the verb for leaving there. See prefixLeaveVerb.
-		m.status = splitPrefixHint(m)
+	if paneMenuPressed(m, msg) {
+		// The menu key again re-arms rather than resolving, so holding it cannot do
+		// anything.
+		m.status = splitPrefixHint()
 		return nil
 	}
+	pressed := msg.String()
 	s.prefixArmed = false
-	switch pressed {
-	case "q":
-		// The deck's own key for leaving a thing, behind the prefix so it does not
-		// have to be taken from either half — `q` in a shell is a command and in
-		// the diff viewer is already bound.
+	if kind, ok := splitKindFor(pressed); ok {
 		m.status = ""
-		return s.close(m)
+		return s.replaceHalf(m, kind)
+	}
+	switch pressed {
 	case "l", "right":
 		s.rightFocused = true
 	case "h", "left":
@@ -299,10 +265,19 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		if s.prefixArmed {
 			return s.prefixKey(m, key)
 		}
-		if pressed == PaneLeaveKey {
+		if paneMenuPressed(m, key) {
 			s.prefixArmed = true
-			m.status = splitPrefixHint(m)
+			m.status = splitPrefixHint()
 			return nil
+		}
+		if pressed == PaneLeaveKey {
+			if key.IsRepeat {
+				// Held, not pressed again — the same guard a single pane has, and for
+				// the same reason: the deck's own ctrl+\ comes back in, so a repeat
+				// that gets through flaps (#307).
+				return nil
+			}
+			return s.close(m)
 		}
 		return s.deliver(m, s.focused(), msg)
 	}
@@ -446,6 +421,46 @@ func (s *splitModal) closeHalf(m *Model) tea.Cmd {
 		m.active = nil
 	}
 	return tea.Batch(cmd, s.collapse(m, going))
+}
+
+// replaceHalf swaps the focused half for a fresh child of the named kind.
+//
+// What a window key means with two halves already up: the same "put that on
+// screen" as in a single pane's menu, with the only place to put it being the half
+// you are looking at. The other half is untouched — it is the one you are keeping.
+//
+// The new child is built before the old one is closed, so a kind this deck cannot
+// open leaves the split exactly as it was rather than half-torn-down.
+func (s *splitModal) replaceHalf(m *Model, kind string) tea.Cmd {
+	item, ok := m.topRowRow()
+	if !ok {
+		m.status = "split: this pane's workspace is not on the deck any more"
+		return nil
+	}
+	left, right := s.boxes(m.childBox())
+	b := left
+	if s.rightFocused {
+		b = right
+	}
+	child, cmd, ok := m.openChild(item, kind, b)
+	// openChild installs what it built, because the paths it calls are the same ones
+	// that open a whole-screen pane. The split is still what is on screen.
+	m.active = s
+	if !ok {
+		return nil
+	}
+	var closed tea.Cmd
+	if p, isPane := s.focused().(*panePopover); isPane {
+		closed = p.close(m)
+	}
+	if s.rightFocused {
+		s.right = child
+	} else {
+		s.left = child
+	}
+	s.label = PaneLabel(kind)
+	m.status = ""
+	return tea.Batch(closed, cmd)
 }
 
 // close tears down both halves, which is what leaving the split means for the
