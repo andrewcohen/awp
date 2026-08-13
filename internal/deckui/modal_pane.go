@@ -739,8 +739,8 @@ func (p *panePopover) footerHelp() string { return "" }
 //
 // No verb for leaving. ctrl+\ is a door on every surface and needs no menu in
 // front of it.
-func panePrefixHint() string {
-	return PaneMenuKey + ": split " + splitKindsHint() + " · esc cancel"
+func panePrefixHint(m *Model) string {
+	return PaneMenuKey + ": split " + splitKindsHint() + " · " + sidebarHint(m.sidebar) + " · esc cancel"
 }
 
 // prefixKey reads one key while a single pane's menu is armed. Like the split's,
@@ -750,13 +750,16 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if paneMenuPressed(m, msg) {
 		// The menu key again re-arms rather than resolving, so holding it cannot do
 		// anything.
-		m.status = panePrefixHint()
+		m.status = panePrefixHint(m)
 		return nil
 	}
 	p.prefixArmed = false
 	m.status = ""
 	if kind, ok := splitKindFor(msg.String()); ok {
 		return p.splitWith(m, kind)
+	}
+	if msg.String() == sidebarKey {
+		m.toggleSidebar()
 	}
 	return nil
 }
@@ -831,7 +834,7 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		}
 		if paneMenuPressed(m, msg) {
 			p.prefixArmed = true
-			m.status = panePrefixHint()
+			m.status = panePrefixHint(m)
 			return nil
 		}
 		if msg.String() == PaneLeaveKey {

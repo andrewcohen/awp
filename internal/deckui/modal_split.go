@@ -68,9 +68,9 @@ type splitModal struct {
 // menu — that kind, on screen — except that with two halves already up there is
 // nowhere to put a third, so they replace the focused one. Same key, same
 // vocabulary, one arrangement's worth of difference in what it does.
-func splitPrefixHint() string {
+func splitPrefixHint(m *Model) string {
 	return PaneMenuKey + ": h/l/tab focus · < > = size · o zoom · x close this half · " +
-		"replace " + splitKindsHint() + " · esc cancel"
+		"replace " + splitKindsHint() + " · " + sidebarHint(m.sidebar) + " · esc cancel"
 }
 
 // prefixKey reads one key while the menu is armed. It returns the command to run;
@@ -79,7 +79,7 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if paneMenuPressed(m, msg) {
 		// The menu key again re-arms rather than resolving, so holding it cannot do
 		// anything.
-		m.status = splitPrefixHint()
+		m.status = splitPrefixHint(m)
 		return nil
 	}
 	pressed := msg.String()
@@ -105,6 +105,9 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		s.zoomed = !s.zoomed
 	case "x":
 		return s.closeHalf(m)
+	case sidebarKey:
+		m.toggleSidebar()
+		return nil
 	}
 	// Anything else — esc included — cancels, having consumed the key. It does
 	// not fall through to the focused program: a mistyped verb typing itself at
@@ -268,7 +271,7 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		}
 		if paneMenuPressed(m, key) {
 			s.prefixArmed = true
-			m.status = splitPrefixHint()
+			m.status = splitPrefixHint(m)
 			return nil
 		}
 		if pressed == PaneLeaveKey {

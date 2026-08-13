@@ -251,11 +251,11 @@ func (m *Model) topRowMenu() (string, bool) {
 	switch c := m.active.(type) {
 	case *splitModal:
 		if c.prefixArmed {
-			return splitPrefixHint(), true
+			return splitPrefixHint(m), true
 		}
 	case *panePopover:
 		if c.prefixArmed {
-			return panePrefixHint(), true
+			return panePrefixHint(m), true
 		}
 	}
 	if c, ok := m.active.(chordModal); ok {

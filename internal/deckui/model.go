@@ -875,6 +875,10 @@ type Model struct {
 	// there are two.
 	lastPane paneArrangement
 	prevPane paneArrangement
+	// sidebar is whether the attention strip is up beside a hosted program, which
+	// ctrl+| S toggles. A property of the deck rather than of the arrangement — see
+	// sidebar.go, where that is argued.
+	sidebar bool
 	// keysEnhanced is whether this terminal reports key repeats and releases as
 	// distinct from presses — the Kitty protocol's event-types flag, asked for in
 	// View and answered once at startup. False on a terminal that does not support
@@ -4134,7 +4138,13 @@ func (m Model) view() string {
 		if lipgloss.Height(content) > b.h {
 			vpos = lipgloss.Top
 		}
-		placed := lipgloss.Place(m.width, b.h, lipgloss.Center, vpos, content)
+		placed := lipgloss.Place(b.w, b.h, lipgloss.Center, vpos, content)
+		// The attention strip, when it is up, occupies the columns childBox has
+		// already taken off the child's left.
+		if m.showsSidebar() {
+			placed = lipgloss.JoinHorizontal(lipgloss.Top,
+				m.renderSidebar(box{w: sidebarWidth, h: b.h}), placed)
+		}
 		// A pane or a split gets the deck's own row above it — the same row, in the
 		// same cells, as the row list wears. See top_row.go.
 		if m.showsTopRow() {
@@ -5403,6 +5413,7 @@ func deckKeyGroups() []keyGroup {
 				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
 				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},
 				{PaneMenuKey + " x", "close the focused half"},
+				{PaneMenuKey + " " + sidebarKey, "show or hide the attention sidebar"},
 			},
 		},
 		{
