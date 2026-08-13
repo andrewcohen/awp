@@ -203,3 +203,85 @@ func TestTheBarSaysNothingAboveAnOverlay(t *testing.T) {
 		t.Errorf("the row list starts on row %d, want 0", got)
 	}
 }
+
+// prRow is the workspace paneOn opens, carrying a PR whose CI is failing and a
+// dev loop three units in with a gate red.
+func prRow() []Item {
+	return []Item{{
+		ProjectName: "proj", WorkspaceName: "ws", Path: "/tmp", RepoRoot: "/tmp",
+		PRNumber: 412,
+		DevLoop: &DevLoopSummary{
+			Done: 3, Total: 7,
+			Gates: map[string]string{"gofmt": "pass", "vet": "pass", "test": "fail"},
+		},
+	}}
+}
+
+// TestTheBarSaysWhetherTheThingOnScreenIsBroken. The badge says something wants
+// you somewhere; this says whether what you are looking at has fallen over —
+// which from inside a pane you would otherwise leave to find out.
+func TestTheBarSaysWhetherTheThingOnScreenIsBroken(t *testing.T) {
+	m, _ := paneOn(t, prRow())
+	bar := barText(&m, 200)
+	if !strings.Contains(bar, "#412") {
+		t.Errorf("the bar does not name the workspace's PR: %q", bar)
+	}
+	if !strings.Contains(bar, "3/7") {
+		t.Errorf("the bar does not carry the dev loop's progress: %q", bar)
+	}
+	if !strings.Contains(bar, gateGlyphFail+"1") {
+		t.Errorf("the bar does not report the one failing gate: %q", bar)
+	}
+	// The gate digest reports the worst result, so a red gate must not be
+	// reported as two passes.
+	if strings.Contains(bar, gateGlyphPass) {
+		t.Errorf("the bar reports a pass while a gate is failing: %q", bar)
+	}
+}
+
+// TestTheBarUsesNoWordsForState. The rule the badge already followed, applied to
+// everything else the row reports: a coloured glyph and a number, so the row is
+// glanced at rather than parsed. The label and the leave key are the only text.
+func TestTheBarUsesNoWordsForState(t *testing.T) {
+	m, _ := paneOn(t, prRow())
+	bar := barText(&m, 200)
+	// The label and hint are the allowed text; nothing else may spell a state.
+	rest := strings.ReplaceAll(bar, m.hostBarLabel(), "")
+	rest = strings.ReplaceAll(rest, m.hostBarHint(), "")
+	for _, word := range []string{"pass", "fail", "pending", "gates", "waiting", "working", "PR", "unread", "columns"} {
+		if strings.Contains(strings.ToLower(rest), strings.ToLower(word)) {
+			t.Errorf("the bar spells state as the word %q: %q", word, rest)
+		}
+	}
+}
+
+// TestTheBarSaysNothingAboutAWorkspaceItCannotFind. A pane outlives a delete, and
+// a refresh can land between the two — so the row it is of may be gone. Saying
+// less is the only honest answer; the alternative is a zero PR and an empty loop
+// rendered as facts.
+func TestTheBarSaysNothingAboutAWorkspaceItCannotFind(t *testing.T) {
+	m, _ := paneOn(t, prRow())
+	if !strings.Contains(barText(&m, 200), "#412") {
+		t.Fatal("the PR was never on the bar to begin with")
+	}
+	m.itemsAll = nil
+	bar := barText(&m, 200)
+	if strings.Contains(bar, "#") || strings.Contains(bar, "/7") {
+		t.Errorf("the bar still reports a workspace that is gone: %q", bar)
+	}
+}
+
+// TestTheBarAndTheRowSpellAPRTheSameWay. Two surfaces showing the same PR have to
+// show it with the same glyphs in the same order, or the second one is a new
+// vocabulary to learn — which is why prGlyphCluster is one function.
+func TestTheBarAndTheRowSpellAPRTheSameWay(t *testing.T) {
+	m, _ := paneOn(t, prRow())
+	item := m.mergedItemsAll()[0]
+	cluster := m.prGlyphCluster(item)
+	if cluster == "" {
+		t.Skip("this fixture's PR has no cached status, so it has earned no glyphs")
+	}
+	if !strings.Contains(m.renderHostBar(200), cluster) {
+		t.Errorf("the bar does not show the row's glyph cluster %q", cluster)
+	}
+}

@@ -102,10 +102,25 @@ border, and a second copy the split drew above both halves — so the same three
 items moved by a row and a column depending on how many programs were on screen.
 One row, one address, and a pane gets the row back that its header was spending.
 
-Everything the row says about **state** is a glyph and a number, never a word —
-starting with the badge's coloured dots and counts. The only prose on it is the
-name of what is on screen and the key that leaves. A split does not list its two
-halves there — the
+Between the badge and the label the row reports **the hosted workspace's own
+state** — the row you came from, so you can tell from inside a pane whether the
+thing on screen has fallen over:
+
+| on the row | means |
+|---|---|
+| `#412` | the workspace's PR, tinted the way its row tints it — grey merged or closed, red CI failing, yellow CI pending or draft, green approved |
+| the glyphs after it | the same PR glyph cluster the row list shows, in the same order: state, blocked-on-base, behind, locally stale, review conversation |
+| `3/7` | dev-loop units done over units total |
+| `✗2` / `○2` / `✔5` | the dev loop's gates: how many are failing, else how many have not run, else how many pass |
+
+The gate mark is a digest rather than one glyph per gate. With no room for names,
+a bare run of ticks and crosses cannot say *which* gate failed — and the order
+that would carry that is the loop's, which is stored as a map by the time the deck
+sees it. "Two failing" is what a glance is asking anyway; `w` names them.
+
+Everything there is a glyph and a number, never a word — the same rule the badge
+already followed. The only prose on the row is the name of what is on screen and
+the key that leaves. A split does not list its two halves there — the
 accent-vs-muted border already says which half has the keys, so naming both of
 them spent the row's best columns on the one thing that cannot tell them apart.
 Resizing the divider likewise reports nothing: you pressed the key, and the

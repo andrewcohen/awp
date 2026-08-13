@@ -4569,22 +4569,7 @@ func (m Model) renderList(width int) string {
 			// column so every row's meta lines up, even though the child's
 			// label is connector-indented above it.
 			metaIndent := strings.Repeat(" ", metaIndentW)
-			glyphs := ""
-			for _, g := range []string{
-				m.prGlyphForItem(item),
-				m.prBlockedGlyphForItem(item),
-				m.prStaleGlyphForItem(item),
-				m.prLocalStaleGlyphForItem(item),
-				m.prReviewReqGlyphForItem(item),
-			} {
-				if g == "" {
-					continue
-				}
-				if glyphs != "" {
-					glyphs += " "
-				}
-				glyphs += g
-			}
+			glyphs := m.prGlyphCluster(item)
 			metaRoom := max(10, width-2-metaIndentW)
 			line := metaIndent
 			if glyphs != "" {
@@ -6648,6 +6633,35 @@ func (m Model) prReviewReqGlyphForItem(item Item) string {
 		return m.styles.Warning.Render(g)
 	}
 	return m.styles.Info.Render(g)
+}
+
+// prGlyphCluster is every PR glyph this row has earned, in the locked order,
+// space-separated, and "" when it has earned none.
+//
+// One function because three surfaces render this cluster — a workspace row's
+// meta line, a project row, and the host bar above a pane — and the first two
+// had already drifted into two spellings of the same loop. The order is part of
+// the vocabulary: the eye learns "state, blocked, behind, stale, conversation"
+// as positions, so a surface that assembled them in its own order would be
+// showing the same glyphs and meaning something else by them.
+func (m Model) prGlyphCluster(item Item) string {
+	glyphs := ""
+	for _, g := range []string{
+		m.prGlyphForItem(item),
+		m.prBlockedGlyphForItem(item),
+		m.prStaleGlyphForItem(item),
+		m.prLocalStaleGlyphForItem(item),
+		m.prReviewReqGlyphForItem(item),
+	} {
+		if g == "" {
+			continue
+		}
+		if glyphs != "" {
+			glyphs += " "
+		}
+		glyphs += g
+	}
+	return glyphs
 }
 
 // prBlockedGlyphForItem badges a stacked PR that can't merge yet because
