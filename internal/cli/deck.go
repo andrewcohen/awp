@@ -646,6 +646,21 @@ func saveDeckScope(scope deckui.Scope) error {
 	return state.SaveDeckScope(deckui.ScopeName(scope))
 }
 
+// rememberedSidebar is whether the attention strip was up when the last deck
+// exited. Unreadable preferences leave it down, and say why in the deck log — the
+// same bargain rememberedScope makes, for the same reason.
+func rememberedSidebar() bool {
+	prefs, err := state.LoadDeckPrefs()
+	if err != nil {
+		deckDebugLogf("deck prefs: %v", err)
+		return false
+	}
+	return prefs.Sidebar
+}
+
+// saveDeckSidebar is the deck's SidebarSaver.
+func saveDeckSidebar(on bool) error { return state.SaveDeckSidebar(on) }
+
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes paneHost) error {
 	// The deck needs tmux because every window key hands off to a tmux client.
 	// A deck with a pane backend hosts those itself, so it is the one thing
@@ -1046,6 +1061,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	model := deckui.New(items, handler).
 		WithInitialScope(initialScope).
 		WithScopeSaver(saveDeckScope).
+		WithSidebar(rememberedSidebar()).
+		WithSidebarSaver(saveDeckSidebar).
 		// nil for `awp deck`; zdeck supplies one so the window keys render a
 		// pane in place instead of handing off to tmux.
 		WithPaneBackend(panes).
