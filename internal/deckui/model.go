@@ -592,6 +592,10 @@ const (
 // onto Scope values. See deckdata.ParseScope.
 func ParseScope(s string) (Scope, bool) { return deckdata.ParseScope(s) }
 
+// ScopeName is the name ParseScope reads back — re-exported beside it so a caller
+// that has one has both. See deckdata.ScopeName.
+func ScopeName(s Scope) string { return deckdata.ScopeName(s) }
+
 // PRItem is a lightweight PR summary for the review picker.
 type PRItem struct {
 	Number  int
@@ -868,6 +872,9 @@ type Model struct {
 	// so they can say what a plain terminal cannot do rather than misbehaving on
 	// it.
 	keysEnhanced bool
+	// saveScope records a scope change so the next deck opens on it. Nil in a deck
+	// that does not persist anything — see ScopeSaver.
+	saveScope ScopeSaver
 	// hostColors is what this deck's own terminal looks like, asked for at boot
 	// and answered asynchronously. A pane hands it to its emulator so a hosted
 	// program that asks what colour its background is gets the real one — see
@@ -1296,15 +1303,22 @@ func (m Model) WithInitialScope(s Scope) Model {
 	return m
 }
 
-func scopeLabel(scope Scope) string {
-	switch scope {
-	case ScopeInbox:
-		return "inbox"
-	case ScopeAttention:
-		return "attention"
-	default:
-		return "all"
-	}
+// scopeLabel is the name on the top row's `scope:` label, which is also the name
+// the scope is saved and parsed under — see deckdata.ScopeName.
+func scopeLabel(scope Scope) string { return deckdata.ScopeName(scope) }
+
+// ScopeSaver records the scope the deck should open in next time.
+//
+// A hook rather than a call into the state package, because deckui is the UI and
+// has no business knowing where ~/.awp is; the deck's wiring supplies it, and the
+// tests supply one that counts calls. An unset saver is a deck that does not
+// remember, which is what a test deck and the mini-deck are.
+type ScopeSaver func(Scope) error
+
+// WithScopeSaver sets the hook called when `P` changes the scope.
+func (m Model) WithScopeSaver(save ScopeSaver) Model {
+	m.saveScope = save
+	return m
 }
 
 // UserActionsResolver returns the user actions available for a given
@@ -2668,6 +2682,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.scope = (m.scope + 1) % scopeCount
 			m.cursor = 0
 			m.status = "scope: " + scopeLabel(m.scope)
+			if m.saveScope != nil {
+				if err := m.saveScope(m.scope); err != nil {
+					// The scope did change; only remembering it failed. Said rather
+					// than swallowed, because the next deck opening on the old scope
+					// with no explanation is the confusing version — and appended to
+					// the scope message rather than replacing it, since what you
+					// pressed the key for did happen.
+					m.status += " · not remembered: " + err.Error()
+				}
+			}
 			return m, nil
 		case key.Matches(msg, km.Up):
 			if m.cursor > 0 {

@@ -788,7 +788,10 @@ func (a *App) runDeck(args []string) error {
 		_, _ = fmt.Fprintln(a.out, "                                    cycles through all scopes in the deck.")
 		return nil
 	}
-	scope := deckui.ScopeAll
+	// The remembered scope is the default, so the deck opens where you left it.
+	// An explicit --scope wins: a flag naming a scope is an instruction about this
+	// run, not a preference, and it does not overwrite the remembered one either.
+	scope := rememberedScope(deckui.ScopeAll)
 	for _, arg := range args {
 		raw, ok := strings.CutPrefix(arg, "--scope=")
 		if !ok {

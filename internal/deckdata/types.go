@@ -130,6 +130,23 @@ func ParseScope(s string) (Scope, bool) {
 	return ScopeAll, false
 }
 
+// ScopeName is the name ParseScope reads back, and the one the deck shows in its
+// `scope:` label.
+//
+// The inverse of ParseScope, beside it: a scope that is saved to disk under one
+// spelling and parsed under another is a preference that silently does not stick,
+// and the two halves drifting apart is how that happens.
+func ScopeName(scope Scope) string {
+	switch scope {
+	case ScopeInbox:
+		return "inbox"
+	case ScopeAttention:
+		return "attention"
+	default:
+		return "all"
+	}
+}
+
 // InboxBucket sections the inbox scope the way GitHub's pull-request
 // inbox does: by what the deck owner's next move is. Declaration order
 // is render order — most urgent next-move first.
