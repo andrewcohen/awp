@@ -52,6 +52,11 @@ type Hosted interface {
 
 	// Cursor is where the hosted program put its cursor and whether it wants one
 	// drawn; WantsMouse whether it asked for mouse reporting at all.
+	//
+	// x is a column of the string View returns, which is not always the emulator's
+	// cell column: a grapheme's cell footprint and its rendered width can differ,
+	// and the caller places the cursor against the rendered string. Whoever knows
+	// the cell widths owns the translation — see ghosttyTerm.Cursor.
 	Cursor() (x, y int, visible bool)
 	WantsMouse() bool
 

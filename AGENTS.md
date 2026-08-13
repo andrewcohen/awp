@@ -515,6 +515,26 @@ pane belongs on the fake; only one about what a terminal does with bytes belongs
 behind the tag, and those skip without an emulator rather than failing — a skipped
 pane test in a plain checkout is expected, not a problem to fix.
 
+### A pane's columns are display columns, not cells
+
+`Hosted.Cursor` returns a column of the string `View` returns, and `SendMouse`
+takes one. Neither is the emulator's cell column, and the difference is not
+cosmetic: a grapheme's footprint in the cell grid is the emulator's measurement,
+its footprint in a rendered string is lipgloss/uniseg's, and they disagree.
+👩‍💻 is **four cells and two columns**. The deck draws its cursor at an
+absolute column of the frame, so a cell column on a row holding one of those put
+the cursor beside the text instead of on it — #339, worst in a split, where a
+narrow half wraps a program's decorated status line onto the row being typed on.
+
+`ghosttyTerm.displayCol` and `cellForCol` are the two directions of that
+translation, and both work by rebuilding the row's prefix as one string and
+measuring it whole. Per-cell widths cannot be summed: a ZWJ sequence is stored
+across two wide cells, which is two graphemes of two columns apart and one of two
+together, so a running total gets 4 where the rendered row has 2. Any new code
+that converts between a pane's grid and the deck's screen goes through those two,
+and `internal/vterm/cursorcol_test.go` pins the invariant against a real
+emulator.
+
 ### `zmx attach` means two different things
 
 Three tests in `internal/zmx` drive the real zmx binary. They skip when
