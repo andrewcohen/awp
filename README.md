@@ -1244,11 +1244,25 @@ whatever awp is running under — inheriting `tmux-256color` describes tmux — 
 `xterm-256color` is the closest true statement about that emulator. Claiming
 `xterm-ghostty` would advertise capabilities it does not have.
 
-The mouse and the cursor follow the pane's program rather than the pane. A
-program that enables mouse reporting — an agent, jjui — gets the wheel
-forwarded to it; one that doesn't, like a shell, leaves the mouse to your
-terminal so its own drag-to-select keeps working. Likewise a program that
-hides its cursor doesn't get one drawn.
+The mouse follows the pane's program rather than the pane. A program that enables
+mouse reporting — an agent, jjui — gets the wheel and the clicks forwarded to it.
+Likewise a program that hides its cursor doesn't get one drawn.
+
+**A program that ignores the mouse gets drag-to-select instead.** In a shell pane,
+drag to highlight and it copies on release — no key, the way the terminals awp runs
+inside behave. The highlight stays until your next click so you can see what went to
+the clipboard, and typing clears it. Double-click for a word and triple-click for a
+line aren't wired up yet.
+
+This is awp's own selection, not your terminal's, and it has to be: the host
+terminal selects *screen rows* and knows nothing about the divider, so a drag over
+one half of a split came back with the other half's text interleaved on every line.
+Only the deck knows where the panes are. Selected cells wear a background tint
+(`charm.SelectionBg`) rather than a foreground change, because every character on
+the screen already has whatever colour the program gave it — and the text stays
+readable through the tint, since checking what you selected is the point of showing
+it. Text inside the highlight renders without the program's own colours for now,
+which keeps the band uniform.
 
 **In a split, a click moves the keyboard between halves and the wheel does not.**
 Both reach the half under the pointer — scrolling over a half scrolls that half —

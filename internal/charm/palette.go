@@ -113,6 +113,21 @@ var (
 	// the row beneath it — true of added, removed and unchanged alike.
 	AddedBgCursor   = compat.AdaptiveColor{Light: lipgloss.Color("#cceccc"), Dark: lipgloss.Color("#2f4429")}
 	RemovedBgCursor = compat.AdaptiveColor{Light: lipgloss.Color("#f2ccd2"), Dark: lipgloss.Color("#472830")}
+
+	// SelectionBg is the background behind text you have dragged over in a pane.
+	//
+	// A background for the same reason the diff tints are: the pane is showing
+	// someone else's program, every character on the screen already has whatever
+	// foreground that program chose, and repainting them would say something about
+	// the text rather than about the selection.
+	//
+	// Stronger than Cursorline, which is the other thing wearing a low-contrast
+	// band. A cursorline is a place the keyboard is and is meant to sit under
+	// reading; a selection is a thing you have picked out and are about to act on,
+	// and at Cursorline's weight it was not obvious which cells were in it. Still
+	// short of a chip's fill, because the text has to stay readable through it —
+	// checking what you selected is the point of showing it at all.
+	SelectionBg = compat.AdaptiveColor{Light: lipgloss.Color("#c8d8f0"), Dark: lipgloss.Color("#33415c")}
 )
 
 // BorderCells is how many columns a single-cell border adds to a style's

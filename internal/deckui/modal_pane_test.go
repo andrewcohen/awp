@@ -429,17 +429,27 @@ func TestAPaneAsksForTheMouseWhenItsProgramDoes(t *testing.T) {
 	}
 }
 
-// The other half, and the one that was wrong: taking the mouse for a program
-// that never asked is a pure loss. The emulator drops the events, and the user
-// loses the terminal's own drag-to-select in exchange for nothing.
-func TestAPaneLeavesTheMouseAloneWhenItsProgramIgnoresIt(t *testing.T) {
+// The other half. A pane whose program ignores the mouse asks for it too, and the
+// events go to awp's own selection instead of to the program (#355).
+//
+// This test used to say the opposite, on the argument that taking the mouse for a
+// program that never asked cost the terminal's own drag-to-select in exchange for
+// nothing. Both halves of that turned out to be false. It cost the selection anyway
+// the moment a split went up, because the divider asks unconditionally — and the
+// terminal's selection was not worth protecting regardless: it takes screen rows and
+// knows nothing about the divider, so a drag over one half of a split came back with
+// the other half's text interleaved on every line. Only awp knows where the panes
+// are, so only awp can select in one.
+func TestAPaneTakesTheMouseForItsOwnSelection(t *testing.T) {
 	m, p := openedPane(t, allKinds())
 	if p.term.WantsMouse() {
 		t.Fatal("a program that asked for nothing somehow enabled mouse reporting")
 	}
-	if got := m.View().MouseMode; got != tea.MouseModeNone {
-		t.Errorf("the deck took the mouse (%v) for a program that does not want it, "+
-			"which costs the terminal's native selection and gains nothing", got)
+	if !p.paneSelects() {
+		t.Error("a pane whose program ignores the mouse is not selecting with it")
+	}
+	if got := m.View().MouseMode; got == tea.MouseModeNone {
+		t.Error("the deck did not ask for the mouse, so a drag never arrives to select with")
 	}
 }
 
