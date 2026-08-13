@@ -787,5 +787,5 @@ func runZdeck(runner Runner, svc workspace.Service, in io.Reader, out io.Writer)
 		// is the action the menu offered.
 		actionsFor: userActionsForRepo,
 	}
-	return runDeckWithCharm(runner, svc, in, out, deckui.ScopeAll, backend)
+	return runDeckWithCharm(runner, svc, in, out, rememberedScope(deckui.ScopeAll), backend)
 }

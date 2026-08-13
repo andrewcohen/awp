@@ -619,6 +619,33 @@ func hostFirst(panes paneHost, tmuxHandler func(deckui.ActionRequest) error) fun
 	}
 }
 
+// rememberedScope is the scope the last deck was left in, or fallback if nothing
+// has been remembered yet.
+//
+// A preference that cannot be read is not worth refusing to start over: the deck
+// opens on the fallback and the next `P` overwrites the unreadable file. The error
+// is not silently dropped either — it goes to the deck log, which is where the
+// answer to "why did it not remember" is.
+func rememberedScope(fallback deckui.Scope) deckui.Scope {
+	prefs, err := state.LoadDeckPrefs()
+	if err != nil {
+		deckDebugLogf("deck prefs: %v", err)
+		return fallback
+	}
+	scope, ok := deckui.ParseScope(prefs.Scope)
+	if !ok {
+		// Includes the empty string — a prefs file that has never recorded a scope,
+		// which is the ordinary first run rather than a problem.
+		return fallback
+	}
+	return scope
+}
+
+// saveDeckScope is the deck's ScopeSaver: it records the scope by name.
+func saveDeckScope(scope deckui.Scope) error {
+	return state.SaveDeckScope(deckui.ScopeName(scope))
+}
+
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes paneHost) error {
 	// The deck needs tmux because every window key hands off to a tmux client.
 	// A deck with a pane backend hosts those itself, so it is the one thing
@@ -1018,6 +1045,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 
 	model := deckui.New(items, handler).
 		WithInitialScope(initialScope).
+		WithScopeSaver(saveDeckScope).
 		// nil for `awp deck`; zdeck supplies one so the window keys render a
 		// pane in place instead of handing off to tmux.
 		WithPaneBackend(panes).

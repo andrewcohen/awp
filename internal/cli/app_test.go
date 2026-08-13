@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/workspace"
 )
 
@@ -461,6 +462,45 @@ func TestRunDeckPassesScopeFlag(t *testing.T) {
 	}
 	if gotScope != deckui.ScopeInbox {
 		t.Fatalf("expected ScopeInbox, got %v", gotScope)
+	}
+}
+
+// TestRunDeckOpensOnTheRememberedScope, and lets an explicit --scope win.
+//
+// A flag naming a scope is an instruction about this run rather than a preference,
+// so it neither reads the remembered one nor overwrites it — otherwise a scripted
+// `awp deck --scope=inbox` in a keybinding would quietly redefine where your deck
+// opens.
+func TestRunDeckOpensOnTheRememberedScope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := state.SaveDeckScope("inbox"); err != nil {
+		t.Fatalf("remembering a scope: %v", err)
+	}
+	svc := &fakeService{}
+	app := NewApp(svc, &bytes.Buffer{})
+	var gotScope deckui.Scope
+	app.deck = func(runner Runner, _ workspace.Service, _ io.Reader, _ io.Writer, scope deckui.Scope, _ paneHost) error {
+		gotScope = scope
+		return nil
+	}
+	if err := app.Run([]string{"deck"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if gotScope != deckui.ScopeInbox {
+		t.Fatalf("the deck opened on %v, want the remembered inbox", gotScope)
+	}
+	if err := app.Run([]string{"deck", "--scope=attention"}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if gotScope != deckui.ScopeAttention {
+		t.Fatalf("--scope=attention opened on %v", gotScope)
+	}
+	prefs, err := state.LoadDeckPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefs.Scope != "inbox" {
+		t.Errorf("the flag overwrote the remembered scope: %q", prefs.Scope)
 	}
 }
 
