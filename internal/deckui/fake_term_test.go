@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/vterm"
 )
@@ -218,6 +219,32 @@ func (t *fakeTerm) miceSeen() []tea.MouseMsg {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]tea.MouseMsg(nil), t.mice...)
+}
+
+// SelectionText slices the fake's screen the way a real one slices its cells: the
+// rows between the two points, with the first and last cut at their columns. No
+// unwrapping, because the fake has no soft wraps — it never parsed anything.
+func (t *fakeTerm) SelectionText(x0, y0, x1, y1 int) string {
+	if y1 < y0 || (y1 == y0 && x1 < x0) {
+		x0, y0, x1, y1 = x1, y1, x0, y0
+	}
+	lines := strings.Split(t.View(), "\n")
+	if y0 < 0 || y0 >= len(lines) {
+		return ""
+	}
+	y1 = min(y1, len(lines)-1)
+	out := make([]string, 0, y1-y0+1)
+	for y := y0; y <= y1; y++ {
+		from, to := 0, lipgloss.Width(lines[y])
+		if y == y0 {
+			from = x0
+		}
+		if y == y1 {
+			to = x1 + 1
+		}
+		out = append(out, strings.TrimRight(ansi.Cut(lines[y], from, to), " "))
+	}
+	return strings.Join(out, "\n")
 }
 
 func (t *fakeTerm) Resize(w, h int) error {

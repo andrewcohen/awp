@@ -74,6 +74,22 @@ type Hosted interface {
 	// without the blink is reading half of what the program said.
 	CursorShape() (shape tea.CursorShape, blink bool)
 
+	// SelectionText is the text of the cells between two points of the screen,
+	// inclusive, as it should land on a clipboard: plain, soft-wrapped lines
+	// rejoined, trailing blanks dropped. Endpoints in either order describe the
+	// same range.
+	//
+	// The columns are the ones View renders and Cursor answers in, not the
+	// emulator's cells — see Cursor.
+	//
+	// Here rather than in the caller because the caller has a string and no cells,
+	// and the difference matters: what a range of cells says is a question about
+	// the grid, and the string has already lost the soft wraps and the padding that
+	// answering it needs. Which cells are selected is the caller's own business —
+	// it owns the pointer and knows where its panes are, which is the whole reason
+	// the host terminal cannot do this for us.
+	SelectionText(x0, y0, x1, y1 int) string
+
 	Resize(w, h int) error
 	Close() error
 }
