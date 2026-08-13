@@ -86,6 +86,38 @@ func (m *Model) toggleSidebar() {
 	}
 	m.sidebar = !m.sidebar
 	m.status = ""
+	if m.saveSidebar != nil {
+		if err := m.saveSidebar(m.sidebar); err != nil {
+			// Same treatment the scope's saver gets: the strip is already on or off,
+			// which is what you asked for, and the only thing lost is that it will not
+			// be next time. Worth saying, not worth refusing.
+			m.status = fmt.Sprintf("sidebar: %v", err)
+		}
+	}
+}
+
+// SidebarSaver records whether the attention strip should be up next time.
+//
+// A hook for the reason ScopeSaver is one: deckui is the UI and has no business
+// knowing where ~/.awp is. What it saves is the intent, not showsSidebar — a
+// terminal too narrow to fit the strip today must not erase the answer for a wider
+// one tomorrow.
+//
+// Deliberately its own hook rather than a general "save the deck's preferences",
+// which would hand deckui a preferences struct to know the shape of. Two settings
+// is not enough to be worth that; a third is when to reconsider.
+type SidebarSaver func(bool) error
+
+// WithSidebar opens the deck with the strip in the state it was left in.
+func (m Model) WithSidebar(on bool) Model {
+	m.sidebar = on
+	return m
+}
+
+// WithSidebarSaver sets the hook called when the sidebar is toggled.
+func (m Model) WithSidebarSaver(save SidebarSaver) Model {
+	m.saveSidebar = save
+	return m
 }
 
 // sidebarPadX / sidebarPadY are the strip's own inset, inside its width.

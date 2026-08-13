@@ -928,7 +928,7 @@ it leaves on one press from either arrangement.
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
-| `S` | show or hide the attention sidebar — a 28-column strip down the left carrying the attention scope's rows |
+| `S` | show or hide the attention sidebar — a 28-column strip down the left carrying the attention scope's rows. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
@@ -947,6 +947,15 @@ a turn`, `PR needs action`, `approved, green`, `recently active`. Each row wears
 status dot the row list would give it, and the workspace you are currently in is
 marked with a muted `┃` — the tier the design system gives a pane the keyboard has
 left, since it says where you are without claiming to be a cursor.
+
+**Whether it is up is remembered**, in `~/.awp/deck-prefs.json` beside `P`'s
+scope — one flag for the whole deck rather than one per workspace. "Do I want to
+see what is waiting" is a question about the deck, so an answer stored per
+workspace would make the strip appear and vanish as you moved between panes. What
+is saved is the intent and not what fits: turn it on in a wide terminal and open
+the deck in a narrow one and the strip stays down for want of columns, but it comes
+back when the room does. A terminal too narrow to show it refuses the key and
+records nothing, rather than storing an answer the width chose for you.
 
 The scope rather than a tally of agent states, which is what the strip carried
 first: the badge counts three things because it is three numbers wide, and

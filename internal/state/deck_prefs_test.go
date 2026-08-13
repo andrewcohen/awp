@@ -97,3 +97,45 @@ func TestAnUnparseablePrefsFileIsReported(t *testing.T) {
 		t.Errorf("the error %q does not name the file to delete", got)
 	}
 }
+
+// TestTheSidebarSurvivesTheProcess, in both directions. Off has to round-trip as
+// deliberately as on: it is a key you pressed, and if it were stored with
+// omitempty a deck told to hide the strip would come back with it up.
+func TestTheSidebarSurvivesTheProcess(t *testing.T) {
+	deckPrefsHome(t)
+	for _, want := range []bool{true, false} {
+		if err := SaveDeckSidebar(want); err != nil {
+			t.Fatalf("saving sidebar=%v: %v", want, err)
+		}
+		prefs, err := LoadDeckPrefs()
+		if err != nil {
+			t.Fatalf("loading sidebar=%v back: %v", want, err)
+		}
+		if prefs.Sidebar != want {
+			t.Errorf("saved sidebar=%v, loaded %v", want, prefs.Sidebar)
+		}
+	}
+}
+
+// TestTheSidebarAndTheScopeDoNotOverwriteEachOther. Both are read-modify-write
+// over one file, so saving either has to leave the other alone — the failure
+// otherwise is that changing the scope silently turns the strip off.
+func TestTheSidebarAndTheScopeDoNotOverwriteEachOther(t *testing.T) {
+	deckPrefsHome(t)
+	if err := SaveDeckSidebar(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDeckScope("inbox"); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prefs.Sidebar {
+		t.Error("saving the scope turned the sidebar off")
+	}
+	if prefs.Scope != "inbox" {
+		t.Errorf("the scope is %q, want inbox", prefs.Scope)
+	}
+}

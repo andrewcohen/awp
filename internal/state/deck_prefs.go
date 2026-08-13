@@ -25,8 +25,18 @@ import (
 // back), not the enum's number: the numbers are declaration order, so a new
 // scope inserted in the middle would silently re-point every saved preference at
 // a different slice.
+// Sidebar is whether the attention strip is up beside a pane. Not per workspace:
+// the strip answers "what wants me", which is a question about the whole deck, so
+// a per-workspace answer would make it appear and vanish as you moved between
+// panes.
+//
+// No omitempty, unlike Scope. false is a choice here — you pressed the key to
+// turn it off — and an omitted field is indistinguishable from one this build
+// never wrote, so omitting it would make turning the strip off the one setting
+// that does not stick.
 type DeckPrefs struct {
-	Scope string `json:"scope,omitempty"`
+	Scope   string `json:"scope,omitempty"`
+	Sidebar bool   `json:"sidebar"`
 }
 
 // DeckPrefsPath returns the path of the global deck-preferences file.
@@ -87,6 +97,22 @@ func SaveDeckScope(scope string) error {
 		return nil
 	}
 	prefs.Scope = scope
+	return writeDeckPrefs(prefs)
+}
+
+// SaveDeckSidebar records whether the attention strip should be up next time.
+//
+// Read-modify-write and a no-op when unchanged, for the same reasons SaveDeckScope
+// is both.
+func SaveDeckSidebar(on bool) error {
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		return err
+	}
+	if prefs.Sidebar == on {
+		return nil
+	}
+	prefs.Sidebar = on
 	return writeDeckPrefs(prefs)
 }
 

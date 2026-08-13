@@ -891,6 +891,8 @@ type Model struct {
 	// saveScope records a scope change so the next deck opens on it. Nil in a deck
 	// that does not persist anything — see ScopeSaver.
 	saveScope ScopeSaver
+	// saveSidebar does the same for the attention strip — see SidebarSaver.
+	saveSidebar SidebarSaver
 	// hostColors is what this deck's own terminal looks like, asked for at boot
 	// and answered asynchronously. A pane hands it to its emulator so a hosted
 	// program that asks what colour its background is gets the real one — see
