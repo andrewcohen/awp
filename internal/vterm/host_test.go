@@ -1,24 +1,15 @@
+//go:build ghosttyvt
+
 package vterm
 
 import (
 	"image/color"
-	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
-
-// startHost is start with something said about the outer terminal.
-func startHost(t *testing.T, host HostColors, args ...string) *Term {
-	t.Helper()
-	term, err := Start(1, 60, 10, exec.Command(args[0], args[1:]...), host) //nolint:gosec // fixed test commands
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = term.Close() })
-	return term
-}
 
 // The lie: a pane answered "what colour is your background?" out of x/vt's own
 // defaults, so every hosted program was told white on black whatever was really
@@ -51,17 +42,35 @@ func TestAPaneAnswersAColourQueryWithTheRealTerminalsColour(t *testing.T) {
 	}
 }
 
-// With nothing known the emulator's own defaults stand — the same wrong answer
-// as before, which is honest about not knowing rather than a fresh invention.
-// This is what a pane opened before the terminal has answered gets.
-func TestAnUnknownHostLeavesTheEmulatorsDefaults(t *testing.T) {
+// With nothing known the query goes unanswered — no colour at all, rather than a
+// default nobody chose. That is what a pane opened before the outer terminal has
+// answered awp's own query gets, and it is a change: x/vt replied out of its own
+// defaults, so a program was told white on black whatever was behind it.
+//
+// Silence is the better of the two. A program that asks and is not answered falls
+// back to whatever it would have done on a terminal that does not support the
+// query, which is a case it has to handle anyway; one that is answered wrongly
+// blends its dim greys toward a background that is not on screen. In practice the
+// deck fills the colours in from tea.BackgroundColorMsg before any pane opens.
+func TestAnUnknownHostAnswersNothing(t *testing.T) {
 	term := startHost(t, HostColors{}, "sh", "-c", `printf '\033]11;?\007'; exec cat -v`)
-	black := ansi.XRGBColor{Color: color.Black}.String()
-	awaitScreen(t, term, black)
-
-	// And the point of the fix: that default is not the terminal the deck is on.
-	catppuccin := ansi.XRGBColor{Color: color.RGBA{R: 0x24, G: 0x27, B: 0x3a, A: 0xff}}.String()
-	if strings.Contains(render(term), catppuccin) {
-		t.Error("an unknown host reported a colour nobody told it")
+	// `cat -v` would print the reply if one came. Give it long enough to be a
+	// silence rather than a race, then assert nothing arrived.
+	time.Sleep(500 * time.Millisecond)
+	if got := strings.TrimSpace(render(term)); got != "" {
+		t.Errorf("an unknown host answered %q, want nothing", got)
+	}
+	// Named explicitly, because the two wrong answers are different mistakes: the
+	// emulator's own default, and a colour nobody told it at all.
+	for _, wrong := range []struct {
+		what string
+		c    color.Color
+	}{
+		{"its own default", color.Black},
+		{"a colour nobody told it", color.RGBA{R: 0x24, G: 0x27, B: 0x3a, A: 0xff}},
+	} {
+		if strings.Contains(render(term), ansi.XRGBColor{Color: wrong.c}.String()) {
+			t.Errorf("an unknown host answered with %s", wrong.what)
+		}
 	}
 }

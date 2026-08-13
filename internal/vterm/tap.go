@@ -93,16 +93,6 @@ func openLog(env string) *logSink {
 	return sink
 }
 
-// tapPair returns writers that record each direction of a pane's traffic, or
-// the originals when no log is configured.
-func tapPair(sink *logSink, toEmulator, toProcess io.Writer) (io.Writer, io.Writer) {
-	if sink == nil {
-		return toEmulator, toProcess
-	}
-	return &tap{mu: sink.mu, f: sink.f, dir: "out", next: toEmulator},
-		&tap{mu: sink.mu, f: sink.f, dir: "in", next: toProcess}
-}
-
 // TapTerminal returns out wrapped to record every byte a program writes to its
 // terminal, or out unchanged when FrameLogEnv is unset.
 //

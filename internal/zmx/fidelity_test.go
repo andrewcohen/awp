@@ -1,3 +1,5 @@
+//go:build ghosttyvt
+
 package zmx
 
 import (
@@ -63,7 +65,7 @@ func TestASessionCostsNothingInFidelity(t *testing.T) {
 // once the payload's end marker has arrived.
 func hostUntilDone(t *testing.T, w, h int, cmd *exec.Cmd) string {
 	t.Helper()
-	term, err := vterm.Start(1, w, h, cmd, vterm.HostColors{})
+	term, err := vterm.Open(1, w, h, cmd, vterm.HostColors{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,3 +1,5 @@
+//go:build ghosttyvt
+
 package vterm
 
 import (
@@ -9,46 +11,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// render returns the screen with ANSI stripped, for matching on text.
-func render(t *Term) string {
-	var b strings.Builder
-	s := t.View()
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0x1b {
-			for i < len(s) && !strings.ContainsRune("mHKJhlr", rune(s[i])) {
-				i++
-			}
-			continue
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
-// awaitScreen polls the rendered screen for want. It uses a deadline rather
-// than a fixed sleep so a genuine deadlock fails loudly instead of hanging the
-// test binary until the package timeout.
-func awaitScreen(t *testing.T, term *Term, want string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(render(term), want) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("waited 5s for %q on screen; got:\n%s", want, render(term))
-}
-
-func start(t *testing.T, args ...string) *Term {
-	t.Helper()
-	term, err := Start(1, 40, 10, exec.Command(args[0], args[1:]...), HostColors{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = term.Close() })
-	return term
-}
+// What a hosted terminal has to do, asked of whichever one a pane gets: render a
+// process's output, answer its queries without wedging, carry typing to it, resize
+// the pty and the screen together, report an exit, and refuse work once closed.
+//
+// These were written against the x/vt implementation and are unchanged by its
+// deletion, because none of them was ever about x/vt — the harness (start,
+// awaitScreen) is what names the emulator, and it names the only one there is.
 
 func TestAHostedProcessRendersItsOutput(t *testing.T) {
 	term := start(t, "sh", "-c", "echo HELLO-FROM-PTY; sleep 30")
@@ -134,11 +103,11 @@ func TestClosingIsSafeAndFinal(t *testing.T) {
 	}
 }
 
-func TestStartRejectsNonsense(t *testing.T) {
-	if _, err := Start(1, 0, 10, exec.Command("true"), HostColors{}); err == nil {
+func TestOpenRejectsNonsense(t *testing.T) {
+	if _, err := Open(1, 0, 10, exec.Command("true"), HostColors{}); err == nil {
 		t.Error("a zero width was accepted")
 	}
-	if _, err := Start(1, 40, 10, nil, HostColors{}); err == nil {
+	if _, err := Open(1, 40, 10, nil, HostColors{}); err == nil {
 		t.Error("a nil command was accepted")
 	}
 }
