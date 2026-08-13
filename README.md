@@ -1098,6 +1098,16 @@ terminal too narrow for two halves by the time you come back gets the left half
 alone rather than a refusal: that is the pane you were working in, and the second
 half is the part that does not fit.
 
+**Any key that enters the workspace finds it.** Not only `ctrl+\` and `L`: `enter`
+and the window keys go into the arrangement too, when the row and the key are the
+one you left — `enter` on a workspace whose agent you had split against the diff
+brings back both halves. It is gated on the key as well as the row, because a split
+is an arrangement its *left half* is part of rather than something the workspace now
+is, so `e` on that same row is the editor, one pane. This used to be `ctrl+\`'s
+alone, which made the memory worse than absent: entering with `enter` opened a bare
+agent pane, and opening it recorded itself, so the split was forgotten by the act of
+glancing at the row list.
+
 Splitting the pane you are in replaces that pane's memory rather than pushing it
 into the `L` slot. It is one continuous act, and pushing would spend the alternate
 on the pane you can still see half of.

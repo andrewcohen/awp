@@ -466,6 +466,32 @@ func (m *Model) recordArrangement(s *splitModal) {
 	})
 }
 
+// openPaneOrArrangement opens a kind on a row, or — when that row and that kind
+// are the arrangement you last left — the whole arrangement it was part of.
+//
+// This is what every key that enters a workspace goes through (enter, a, e, v, s,
+// i), and it is the difference between remembering a split and remembering it only
+// for one key. ctrl+\ resumed the arrangement from the start, because resuming is
+// all it does; enter opened a bare agent pane, which is not what the workspace
+// looked like when you left it — and worse, opening it recorded itself, so the
+// split you had set up was forgotten by the act of going back to look at it.
+//
+// Gated on the kind as well as the row: a split is an arrangement its left half is
+// part of, so `e` on a workspace whose split was agent-plus-diff means the editor,
+// not that split. Press the key the left half was and you get the pair.
+func (m *Model) openPaneOrArrangement(item Item, kind string) (tea.Cmd, bool) {
+	arr := m.lastPane
+	if arr.split() && arr.left.matches(item) && arr.left.kind == kind {
+		if cmd, ok := m.openSplitKinds(item, kind, arr.rightKind, arr.leftFrac); ok {
+			return cmd, true
+		}
+		// A right half this deck cannot build any more (the diff viewer unwired, a
+		// kind dropped from the config) is not a reason to refuse the key. Fall
+		// through to the single pane, which is what the row asked for.
+	}
+	return m.openPane(item, kind)
+}
+
 // resumePane goes back into the pane you just left, which is what ctrl+\ means
 // from the row list.
 //

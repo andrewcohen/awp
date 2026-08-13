@@ -99,3 +99,49 @@ func TestASplitIsNotAlsoTheAlternate(t *testing.T) {
 		t.Errorf("splitting pushed %v into the alternate slot", m.prevPane)
 	}
 }
+
+// TestEnteringAWorkspaceFindsTheSplitYouLeft. ctrl+\ is not the only way back in
+// — enter, and the window keys, are how you get to a workspace from the row list,
+// and every one of them used to open a bare pane over the split you had set up.
+// Worse than not restoring it: opening the bare pane recorded itself, so the split
+// was forgotten by the act of looking at the deck.
+func TestEnteringAWorkspaceFindsTheSplitYouLeft(t *testing.T) {
+	m, _ := openedSplit(t, "v")
+	m = pressDeck(t, m, leaveKey())
+	item, ok := m.selected()
+	if !ok {
+		t.Fatal("no row is selected on the deck the split was opened from")
+	}
+	if _, handled := m.openPaneOrArrangement(item, PaneKindAgent); !handled {
+		t.Fatal("entering the workspace was refused")
+	}
+	s, isSplit := m.active.(*splitModal)
+	if !isSplit {
+		t.Fatalf("entering the workspace gave %T, want the split that was there", m.active)
+	}
+	t.Cleanup(func() { s.close(&m) })
+}
+
+// TestEnteringWithAnotherKeyIsThatKind. A split is an arrangement its left half is
+// part of, not a thing the workspace now is: `e` on a workspace whose split was
+// agent-beside-vcs means the editor.
+func TestEnteringWithAnotherKeyIsThatKind(t *testing.T) {
+	m, _ := openedSplit(t, "v")
+	m = pressDeck(t, m, leaveKey())
+	item, ok := m.selected()
+	if !ok {
+		t.Fatal("no row is selected on the deck the split was opened from")
+	}
+	if _, handled := m.openPaneOrArrangement(item, "editor"); !handled {
+		t.Fatal("entering the workspace as the editor was refused")
+	}
+	if s, isSplit := m.active.(*splitModal); isSplit {
+		s.close(&m)
+		t.Fatal("the editor key rebuilt the agent's split")
+	}
+	p, isPane := m.active.(*panePopover)
+	if !isPane {
+		t.Fatalf("the editor key gave %T, want one pane", m.active)
+	}
+	p.close(&m)
+}

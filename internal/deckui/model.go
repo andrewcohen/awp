@@ -3550,7 +3550,10 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 			}
 		}
 		if isPane {
-			if cmd, handled := m.openPane(item, kind); handled {
+			// Or the arrangement this row and kind were last part of — see
+			// openPaneOrArrangement. Entering a workspace should find it the way you
+			// left it, whichever key you enter it with.
+			if cmd, handled := m.openPaneOrArrangement(item, kind); handled {
 				return m, cmd
 			}
 		}
