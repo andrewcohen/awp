@@ -110,7 +110,13 @@ func (r Reason) String() string {
 	case ReasonReReviewRequested:
 		return "re-review requested"
 	case ReasonReviewRequested:
-		return "your review"
+		// "reviewing", not "your review". Every other reason on the strip is
+		// phrased as an activity or a state the row is in — working, waiting on
+		// you, ready to merge — and a possessive stood out as naming a thing rather
+		// than a doing. The inbox's own bucket for the wider set stays "Needs your
+		// review": it includes PRs you have not pulled down, where there is nothing
+		// you are in the middle of.
+		return "reviewing"
 	case ReasonNotified:
 		return "finished a turn"
 	case ReasonPRNeedsAction:
@@ -290,7 +296,7 @@ func (v View) prWants(it Item) Reason {
 	// A synthetic inbox row is a PR with no local workspace, which is the
 	// opposite of one you are working on. The attention scope is built from
 	// real rows only, so this is defensive — but it is the whole difference
-	// between "your review" here and the inbox's "Needs your review" bucket,
+	// between "reviewing" here and the inbox's "Needs your review" bucket,
 	// which deliberately includes PRs you have not pulled down.
 	if it.Virtual {
 		return ReasonNone

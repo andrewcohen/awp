@@ -234,7 +234,7 @@ When the PR needs attention beyond its primary state, a second glyph renders to 
 | 󰭹 | Review feedback on **your** PR (yellow) — a reviewer requested changes *or* left review comments (pairs with `p r`, which preloads a fix prompt for it). Fires on any `COMMENTED` / `CHANGES_REQUESTED` review, not just a formal "request changes": GitHub's review *decision* stays `REVIEW_REQUIRED` when someone only comments, so the glyph reads the review states directly. Suppressed once the PR is approved — `p r` still offers the feedback there, deliberately: a glyph sits on the row every frame and would read as "act on this" for a PR that is ready to merge, while `p r` is a key you pressed. |
 |  | Blocked on base (red) — this PR is stacked on another open PR that isn't ready to merge yet, so it can't land until the base does. Derived from the stack graph (see the inbox scope); pairs with the `└─` tree connector that nests the PR under its base. |
 
-**A review requested from your team is requested from you.** GitHub lets a request name a *team* instead of a person, and on a PR assigned that way nobody is named individually — so awp read it as a PR that wanted nothing from anybody, and the 󰻞 glyph, the attention scope's `your review` reason and `p r`'s pending-request repair were all silent on every repo that reviews by team. A request now also matches against **your own team membership**, read once per fetch from `gh api user/teams` and compared org-qualified (`acme-corp/consumer-team`), so one org's `platform-team` never stands in for another's.
+**A review requested from your team is requested from you.** GitHub lets a request name a *team* instead of a person, and on a PR assigned that way nobody is named individually — so awp read it as a PR that wanted nothing from anybody, and the 󰻞 glyph, the attention scope's `reviewing` reason and `p r`'s pending-request repair were all silent on every repo that reviews by team. A request now also matches against **your own team membership**, read once per fetch from `gh api user/teams` and compared org-qualified (`acme-corp/consumer-team`), so one org's `platform-team` never stands in for another's.
 
 That call needs the **`read:org`** scope, which `gh auth login` does not grant by default. Without it awp cannot tell "in no teams" from "not allowed to look", so it assumes the former and team-assigned reviews stay quiet exactly as they did before — nothing on screen is wrong, so nothing is reported. `gh auth refresh -s read:org` grants it, and `AWP_TRACE` records the refusal if you want to confirm that is what is happening.
 
@@ -262,7 +262,7 @@ The second `P` scope is **one flat list — the rows with an agent on them, then
 
 1. the **agents**: `working`, `waiting on you`, `finished a turn`
 2. `re-review requested`
-3. `your review`
+3. `reviewing`
 4. **your own PRs**: `PR needs action`, `ready to merge`
 5. `2h ago` — you were just here
 
@@ -279,7 +279,7 @@ A row qualifies for any of these, and shows the first one it matches:
 | `working` | An agent running right now. Replaced by the dev-loop progress when there is any — `3/7 · implement · ▶ <unit>` says "working" with more in it than the word does. |
 | `waiting on you` | The agent asked something and stopped. The first of the ones that want you, and the only one where the work has actually halted. |
 | `re-review requested` | You reviewed this PR, the author pushed and asked again. |
-| `your review` | A PR you have **checked out** whose review is still wanted from you. |
+| `reviewing` | A PR you have **checked out** whose review is still wanted from you — something you are in the middle of, which is why it is not named the inbox's `Needs your review` (that bucket also holds PRs you have not pulled down). |
 | `finished a turn` | The agent finished since you last looked. |
 | `PR needs action` | Your own PR: changes requested, CI red, or a branch that won't merge as it stands. |
 | `ready to merge` | Your own PR, approved and green — one keypress from done. Named the same as the inbox's **Ready to merge** bucket, because it is the same state. |
@@ -942,7 +942,7 @@ enough to decide whether to leave what you are in — and leaving to find out is
 thing that row was added to avoid. `S` puts a 36-column strip down the left of the
 pane or the split, carrying **the attention scope** — the same rows `P`'s attention
 scope shows, in the same order, grouped under the scope's own words for why each is
-there: `working`, `waiting on you`, `re-review requested`, `your review`, `finished
+there: `working`, `waiting on you`, `re-review requested`, `reviewing`, `finished
 a turn`, `PR needs action`, `ready to merge`, `recently active`. Each row wears the
 status dot the row list would give it, and the workspace you are currently in is
 marked with a muted `┃` — the tier the design system gives a pane the keyboard has
