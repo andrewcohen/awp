@@ -92,9 +92,9 @@ func (b box) stacked() bool { return b.w > 0 && b.w < deckStackThreshold }
 // is a bar every one of them agrees about.
 func (m *Model) childBox() box {
 	b := box{w: m.width, h: m.height}
-	if m.hostsBar() {
-		b.y += hostBarRows
-		b.h -= hostBarRows
+	if m.showsTopRow() {
+		b.y += topRowRows
+		b.h -= topRowRows
 	}
 	return b
 }

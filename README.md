@@ -94,13 +94,21 @@ label first and the badge second; the leave key never goes. The scope label stay
 behind on the deck's own title row — which slice of the list you were looking
 through is not a question a pane raises.
 
-**That row is in the same cells whether one pane is up or a split of two.** It is
-the deck's row, not the pane's: it spans the terminal, sits above the pane's
-border rather than inside it, and every pane below it renders no header of its
-own. It used to be two separate things — a header the pane drew inside its own
-border, and a second copy the split drew above both halves — so the same three
-items moved by a row and a column depending on how many programs were on screen.
-One row, one address, and a pane gets the row back that its header was spending.
+**That row is in the same cells on every screen that is about your workspaces** —
+the row list, one pane, or a split of two. It is the deck's row, not the pane's or
+the list panel's: it spans the terminal on row 0, indented to the same column the
+rows' status dots sit in, and a pane below it renders no header of its own.
+
+It used to be three separate things — a header the pane drew inside its own
+border, a copy the split drew above both halves, and a title row the list drew
+inside its panel — so the badge, which is the thing you are actually glancing at,
+sat in a different cell on each of the three screens you move between constantly.
+One row, one address. A pane also gets back the row its header was spending.
+
+What changes between the screens is only what the row has to say. Over a pane or a
+split it names what is on screen, that workspace's own state, and the key that
+leaves. Over the row list it names the scope — there is nothing to leave, and no
+one workspace to report on. The badge is at the left on all three.
 
 Between the badge and the label the row reports **the hosted workspace's own
 state** — the row you came from, so you can tell from inside a pane whether the
@@ -875,10 +883,9 @@ and comment index would spend a third of half a terminal on navigation, and the
 diff is what you opened the half to read. `\` brings them back for the file you
 need to jump around in, and the cursors they hold were never lost.
 
-A split wears **the same top row a single pane does** — see [the top
-row](#the-top-row), which is where it is described:
-the badge, the name of the half the keys are in, and how to leave, spanning the
-terminal above both halves. It is the deck's row rather than either half's,
+A split wears **the same top row a single pane and the row list do** — see [the
+top row](#the-top-row), which is where it is described: the badge, the name of the
+half the keys are in, and how to leave, spanning the terminal above both halves. It is the deck's row rather than either half's,
 because it answers for the screen; the halves render no header of their own.
 While the `ctrl+\` prefix is armed, that same row becomes the verb menu.
 

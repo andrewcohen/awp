@@ -396,7 +396,7 @@ func TestTheDiffHalfFillsItsHeight(t *testing.T) {
 	if got, want := lipgloss.Height(diff), lipgloss.Height(agent); got != want {
 		t.Errorf("the diff half is %d rows and the agent half is %d", got, want)
 	}
-	if got, want := lipgloss.Height(s.renderPopover(&m, m.childBox())), m.height-hostBarRows; got != want {
+	if got, want := lipgloss.Height(s.renderPopover(&m, m.childBox())), m.height-topRowRows; got != want {
 		t.Errorf("the split is %d rows tall, want %d — the terminal less the deck's bar", got, want)
 	}
 	if got := lipgloss.Height(m.render()); got != m.height {
@@ -453,7 +453,7 @@ func TestTheSplitLeavesTheBarItsRowAndFillsTheRest(t *testing.T) {
 	m.itemsAll = waitingRows()
 
 	body := ansi.Strip(s.renderPopover(&m, m.childBox()))
-	if got, want := lipgloss.Height(body), m.height-hostBarRows; got != want {
+	if got, want := lipgloss.Height(body), m.height-topRowRows; got != want {
 		t.Errorf("the halves are %d rows, want %d", got, want)
 	}
 	rows := strings.Split(ansi.Strip(m.render()), "\n")
@@ -627,10 +627,10 @@ func TestAHalfSitsWhereTheCursorThinksItDoes(t *testing.T) {
 			t.Errorf("the %s half is drawn in %+v but addressed as %+v", half.name, half.want, got)
 		}
 	}
-	if got := wantLeft.y; got != hostBarRows {
-		t.Errorf("the halves start on row %d, want %d — below the deck's bar", got, hostBarRows)
+	if got := wantLeft.y; got != topRowRows {
+		t.Errorf("the halves start on row %d, want %d — below the deck's bar", got, topRowRows)
 	}
-	if got, want := wantLeft.h, m.height-hostBarRows; got != want {
+	if got, want := wantLeft.h, m.height-topRowRows; got != want {
 		t.Errorf("the halves are %d rows tall, want %d", got, want)
 	}
 }

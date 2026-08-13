@@ -7,29 +7,49 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// The host bar is the deck's own row above whatever is hosting a terminal: one
-// pane, or a split of two.
+// The top row is the deck's, on row 0, spanning the terminal, in the same cells
+// on every screen that is about your workspaces: the row list, a pane, and a
+// split of two.
 //
-// It is the deck's rather than the pane's because the questions it answers are
-// the deck's. The attention badge counts every workspace, not the one on screen;
-// the leave key leaves the arrangement, not the half under the cursor. Both were
-// once rendered by the pane, inside its border, which put them one row down and
-// one column in — and then a split, which owns the row above both halves, drew
-// its own copy in a different place. Same three things, two addresses, and
-// neither configuration could be glanced at the way the other had trained you
-// to.
+// It got there in three steps, each of which had drawn its own. A lone pane drew
+// a header inside its own border, one row down and one column in. A split drew a
+// copy above both halves, spanning the terminal. The row list drew a title row
+// inside its panel. Three surfaces you move between constantly, and the badge —
+// the thing you are actually glancing at — sat in a different cell on each, so
+// none of them could be read the way the last one had trained you to.
 //
-// So there is one row, on row 0, spanning the terminal, in the same cells in
-// both arrangements. A pane in a split renders no header at all; a lone pane
-// renders no header either. The border is what says where a pane ends.
-const hostBarRows = 1
+// Now it is rendered once, by the deck, above whatever the body is. What changes
+// between the screens is only what the row has to say: over a pane it names what
+// is on screen, that workspace's own state, and the key that leaves; over the row
+// list it names the scope, because there is nothing to leave and no one workspace
+// to report on. The badge is on the left in all three.
+//
+// Panes therefore render no header at all — their border is what says where they
+// end — and the row list's panel no longer starts with a title.
+const topRowRows = 1
 
-// hostsBar reports whether the active modal is one the deck draws its bar above.
+// showsTopRow reports whether this screen wears the deck's top row.
 //
-// The two that host someone else's full-screen program. Every other popover —
-// help, the jobs overlay, a confirm — is awp's own text in a box on a blank
-// canvas, and has nothing to say about a workspace you are sitting inside.
-func (m *Model) hostsBar() bool {
+// The row list (no modal at all), a pane, and a split. Not the modes you are
+// *inside* of rather than looking out from: a form, a picker, the diff viewer,
+// the help overlay. Those carry their own chrome — the diff viewer has a whole
+// status line of its own — and a row about which workspaces want you, above a
+// screen whose subject is one file, is a row spent on the wrong question.
+func (m *Model) showsTopRow() bool {
+	switch m.active.(type) {
+	case nil, *panePopover, *splitModal:
+		return true
+	}
+	return false
+}
+
+// hostsTerminal is whether the top row has a hosted program to talk about, as
+// opposed to sitting over the row list.
+//
+// Separate from showsTopRow because it is the question that decides what the row
+// says, where showsTopRow decides whether there is a row. Over the list there is
+// no label to print, no PR to report and nothing to leave.
+func (m *Model) hostsTerminal() bool {
 	switch m.active.(type) {
 	case *panePopover, *splitModal:
 		return true
@@ -37,13 +57,13 @@ func (m *Model) hostsBar() bool {
 	return false
 }
 
-// hostBarSubject is the pane the bar names: the one the keys are in, or the
+// topRowSubject is the pane the bar names: the one the keys are in, or the
 // other half when the focused one is not a pane at all.
 //
 // A split's halves are the same workspace, so either answers the "where am I"
 // question; the focused one is preferred because its kind is the one whose keys
 // you are pressing.
-func (m *Model) hostBarSubject() *panePopover {
+func (m *Model) topRowSubject() *panePopover {
 	switch a := m.active.(type) {
 	case *panePopover:
 		return a
@@ -57,15 +77,15 @@ func (m *Model) hostBarSubject() *panePopover {
 	return nil
 }
 
-// hostBarLabel is what is on screen, named: "<kind> · <project>/<workspace>".
+// topRowLabel is what is on screen, named: "<kind> · <project>/<workspace>".
 //
 // It does not name the emulator behind the pane. That was worth a segment while
 // libghostty-vt was a thing being tried — a comparison you cannot confirm you are
 // inside is not a comparison — and it stopped being one once the answer was
 // settled. Which emulator is running is still askable (Hosted.Emulator, and the
 // byte log), just not on every frame of the row.
-func (m *Model) hostBarLabel() string {
-	p := m.hostBarSubject()
+func (m *Model) topRowLabel() string {
+	p := m.topRowSubject()
 	if p == nil {
 		if s, ok := m.active.(*splitModal); ok {
 			return s.label
@@ -75,15 +95,15 @@ func (m *Model) hostBarLabel() string {
 	return p.label
 }
 
-// hostBarRow is the row list's entry for the workspace this pane is of, so the
+// topRowRow is the row list's entry for the workspace this pane is of, so the
 // bar can report the same state the row would.
 //
 // Matched forward by project and workspace name, on the rows the deck already
 // holds — the same pass the badge makes. Missing means the workspace is gone
 // (deleted from under the pane, or a refresh that has not landed yet), and the
 // bar simply says less rather than inventing a row.
-func (m *Model) hostBarRow() (Item, bool) {
-	p := m.hostBarSubject()
+func (m *Model) topRowRow() (Item, bool) {
+	p := m.topRowSubject()
 	if p == nil || p.workspace == "" {
 		return Item{}, false
 	}
@@ -95,7 +115,7 @@ func (m *Model) hostBarRow() (Item, bool) {
 	return Item{}, false
 }
 
-// hostBarState is what the hosted workspace's own row says about it: its PR
+// topRowState is what the hosted workspace's own row says about it: its PR
 // number and glyph cluster, and how its dev loop is going.
 //
 // Glyphs and numbers, no words. The glyphs are the row list's, in the row list's
@@ -107,24 +127,24 @@ func (m *Model) hostBarRow() (Item, bool) {
 // This is the part of the bar that earns it. The badge says something wants you
 // somewhere; this says whether the thing you are looking at is broken — which
 // from inside a pane you would otherwise have to leave to find out.
-func (m *Model) hostBarState() string {
-	item, ok := m.hostBarRow()
+func (m *Model) topRowState() string {
+	item, ok := m.topRowRow()
 	if !ok {
 		return ""
 	}
 	segs := make([]string, 0, 2)
-	if pr := m.hostBarPR(item); pr != "" {
+	if pr := m.topRowPR(item); pr != "" {
 		segs = append(segs, pr)
 	}
-	if loop := m.hostBarLoop(item); loop != "" {
+	if loop := m.topRowLoop(item); loop != "" {
 		segs = append(segs, loop)
 	}
 	return strings.Join(segs, " ")
 }
 
-// hostBarPR is "#412" plus the row's glyph cluster, tinted the way the row tints
+// topRowPR is "#412" plus the row's glyph cluster, tinted the way the row tints
 // it. Empty when the workspace has no PR, or none whose status has been fetched.
-func (m *Model) hostBarPR(item Item) string {
+func (m *Model) topRowPR(item Item) string {
 	if item.PRNumber <= 0 {
 		return ""
 	}
@@ -143,7 +163,7 @@ func (m *Model) hostBarPR(item Item) string {
 	return num
 }
 
-// hostBarLoop is the agent's dev-loop progress as two numbers and one glyph:
+// topRowLoop is the agent's dev-loop progress as two numbers and one glyph:
 // units done over units total, and the gates' worst result with how many are in
 // it — green tick for all passing, red cross for the ones that fail, muted ring
 // for the ones not yet run.
@@ -153,7 +173,7 @@ func (m *Model) hostBarPR(item Item) string {
 // order that would carry that is the loop's — which the deck does not have here,
 // since a persisted snapshot stores the gates as a map. "Two failing" is the
 // question a glance is asking anyway; the `w` watch view names them.
-func (m *Model) hostBarLoop(item Item) string {
+func (m *Model) topRowLoop(item Item) string {
 	dl := item.DevLoop
 	if dl == nil {
 		return ""
@@ -192,17 +212,27 @@ const (
 	gateGlyphPending = "○"
 )
 
-// hostBarHint is the way out, which differs between the two arrangements
-// because in a split the reserved key is a prefix rather than a door.
-func (m *Model) hostBarHint() string {
-	if _, split := m.active.(*splitModal); split {
+// topRowHint is what sits at the right end: the way out of what is on screen, or
+// over the row list the scope it is showing.
+//
+// The way out differs between the two hosted arrangements, because in a split the
+// reserved key is a prefix rather than a door. Over the list there is nothing to
+// leave — the question that end of the row answers there is which slice of the
+// workspaces you are looking through, which is the one thing about the list that
+// is invisible from the rows themselves.
+func (m *Model) topRowHint() string {
+	switch m.active.(type) {
+	case *splitModal:
 		return PaneLeaveKey + " keys · " + PaneLeaveKey + " q deck"
+	case *panePopover:
+		return PaneLeaveKey + " deck"
 	}
-	return PaneLeaveKey + " deck"
+	return "scope: " + scopeLabel(m.scope)
 }
 
-// renderHostBar draws the row: what wants you and what you are looking at on
-// the left, how to leave on the right.
+// renderTopRow draws the row: what wants you on the left, then what you are
+// looking at, and on the right the way out — or which scope the list is showing,
+// when the list is what is below.
 //
 // State is glyphs and numbers, never words. The attention badge has always been
 // a coloured dot and a count — see renderAttentionSummary, where the argument is
@@ -212,10 +242,17 @@ func (m *Model) hostBarHint() string {
 //
 // An armed prefix takes the whole row. That menu used to be painted over the
 // split's bottom border for want of a row to put it on; this is that row.
-func (m *Model) renderHostBar(w int) string {
+func (m *Model) renderTopRow(w int) string {
 	if s, ok := m.active.(*splitModal); ok && s.prefixArmed {
-		return padBar(m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, w))), w)
+		return padTopRow(m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, w))), w)
 	}
+	// The row starts on the body's own text column, so the badge's dots land in
+	// the same column as the status dots of the rows below them. That alignment is
+	// why the indent exists, and it is why a pane's row is indented too even
+	// though the pane's border below it starts at column 0 — the row belongs to
+	// the deck, and it is the same row on both screens or it is not one row.
+	indent := deckIndent
+	avail := w - len(indent)
 
 	// Counted every frame rather than cached, and deliberately: an agent finishing
 	// its turn while you are in a pane is the whole reason the badge is up here, so
@@ -225,33 +262,38 @@ func (m *Model) renderHostBar(w int) string {
 	if badge := m.renderAttentionSummary(countAttention(m.mergedItemsAll())); badge != "" {
 		segs = append(segs, badge)
 	}
-	if state := m.hostBarState(); state != "" {
+	if state := m.topRowState(); state != "" {
 		segs = append(segs, state)
 	}
-	hint := m.styles.PaneHint.Render(m.hostBarHint())
+	right := m.styles.PaneHint.Render(m.topRowHint())
 
-	if label := m.hostBarLabel(); label != "" {
-		room := w - lipgloss.Width(joinBarSegs(segs)) - lipgloss.Width(hint) - len(hostBarSep) - 1
-		if room >= hostBarLabelMin {
+	if label := m.topRowLabel(); label != "" {
+		room := avail - lipgloss.Width(joinTopRowSegs(segs)) - lipgloss.Width(right) - len(topRowSep) - 1
+		if room >= topRowLabelMin {
 			segs = append(segs, m.styles.PaneTitle.Render(truncate(label, room)))
 		}
 	}
 
-	left := joinBarSegs(segs)
-	gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
+	left := joinTopRowSegs(segs)
+	gap := avail - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		// Too narrow for both. The badge is a thing leaving will show you anyway;
-		// the leave key is how you leave.
-		return padBar(hint, w)
+		// Too narrow for both. Over a pane the right side is the way out, which is
+		// the one thing that must not go; over the list it is the scope, and the
+		// badge it would push off is the reason the row exists. So which one gives
+		// way follows which screen it is.
+		if m.hostsTerminal() {
+			return padTopRow(truncate(indent+right, w), w)
+		}
+		return padTopRow(truncate(indent+left, w), w)
 	}
-	return padBar(left+strings.Repeat(" ", gap)+hint, w)
+	return padTopRow(indent+left+strings.Repeat(" ", gap)+right, w)
 }
 
-// hostBarLabelMin is the narrowest the label is worth showing at. Below it there
+// topRowLabelMin is the narrowest the label is worth showing at. Below it there
 // is room for a word and an ellipsis, which names nothing.
-const hostBarLabelMin = 10
+const topRowLabelMin = 10
 
-// hostBarSep is the gap between the row's top-level segments.
+// topRowSep is the gap between the row's top-level segments.
 //
 // Whitespace rather than a ` · ` bullet. The row carries the badge, the hosted
 // workspace's state and the label, and each of those is internally punctuated
@@ -261,24 +303,28 @@ const hostBarLabelMin = 10
 // four bullets and eight spaces spent saying nothing. Space groups just as well
 // when the things being grouped are visually distinct, and these are — a coloured
 // dot, a number, a word.
-const hostBarSep = "   "
+const topRowSep = "   "
 
-// joinBarSegs puts the row's segments together, dropping the empty ones so a
+// joinTopRowSegs puts the row's segments together, dropping the empty ones so a
 // missing segment costs no gap.
-func joinBarSegs(segs []string) string {
+func joinTopRowSegs(segs []string) string {
 	kept := make([]string, 0, len(segs))
 	for _, s := range segs {
 		if s != "" {
 			kept = append(kept, s)
 		}
 	}
-	return strings.Join(kept, hostBarSep)
+	return strings.Join(kept, topRowSep)
 }
 
-// padBar fills a bar row out to the width, so the row is opaque rather than
-// letting whatever the frame put in those cells show through the ones it did not
-// write.
-func padBar(bar string, w int) string {
+// padTopRow fills the row out to the width, so it is opaque rather than letting
+// whatever the frame put in those cells show through the ones it did not write.
+//
+// Padding only — a caller that might exceed the width truncates first. A row one
+// column over does not wrap harmlessly: it pushes the frame's every later line
+// down by one, which is a whole screen misaligned by the narrowest terminal
+// anyone opens.
+func padTopRow(bar string, w int) string {
 	if pad := w - lipgloss.Width(bar); pad > 0 {
 		return bar + strings.Repeat(" ", pad)
 	}
