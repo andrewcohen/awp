@@ -271,3 +271,111 @@ func TestTheSidebarTogglesFromASplitToo(t *testing.T) {
 		t.Errorf("the split starts at column %d, want %d", b.x, sidebarWidth)
 	}
 }
+
+// The row layout, after the strip was reported as mostly wasted space.
+//
+// What it was spending its width and height on: `alpha/` printed on every row
+// as a chip, eight columns of a twenty-six-column strip repeated four times in a
+// row, while the PR titles it was labelling truncated to `fix(l...`; and a blank
+// row between every group, a quarter of the height, on a surface whose whole
+// purpose is fitting more rows than the badge can count.
+
+// TestGroupsAreSeparatedByABlankRow, and the first one is not pushed down by one.
+//
+// The blank costs a workspace the strip could have listed, which is why it was
+// tried without: the header is coloured and bold, and that reads as a header on its
+// own. It does not read as a *separator* — the groups are what makes the strip
+// scannable instead of a list, and against a wall of rows the eye could not find
+// the one it wanted. So the row is spent deliberately.
+func TestGroupsAreSeparatedByABlankRow(t *testing.T) {
+	m := sidebarDeck(t)
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	lines := strings.Split(out, "\n")
+
+	first, last := -1, 0
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			if first == -1 {
+				first = i
+			}
+			last = i
+		}
+	}
+	if first == -1 {
+		t.Fatalf("the strip rendered nothing:\n%s", out)
+	}
+	// The fixture spans more than one group, so somewhere between the first row of
+	// content and the last there is exactly one blank per group boundary.
+	blanks := 0
+	for _, l := range lines[first:last] {
+		if strings.TrimSpace(l) == "" {
+			blanks++
+		}
+	}
+	if blanks == 0 {
+		t.Errorf("no blank row separates the groups:\n%s", out)
+	}
+	// And the strip's first content row is a header, not a blank the loop emitted
+	// before it — the separator goes between groups, not above the first.
+	if strings.TrimSpace(lines[first]) == "" {
+		t.Errorf("the strip opens with a blank row:\n%s", out)
+	}
+}
+
+// TestAProjectIsNamedOnceNotOnEveryRow.
+func TestAProjectIsNamedOnceNotOnEveryRow(t *testing.T) {
+	items := []Item{
+		{ProjectName: "alpha", WorkspaceName: "one", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
+		{ProjectName: "alpha", WorkspaceName: "two", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
+		{ProjectName: "alpha", WorkspaceName: "three", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
+	}
+	m := New(items, func(ActionRequest) error { return nil }).WithPaneBackend(allKinds())
+	m.width, m.height = 200, 40
+	m.itemsAll = items
+
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	if got := strings.Count(out, "alpha"); got != 1 {
+		t.Errorf("three rows of one project named it %d times, want once:\n%s", got, out)
+	}
+	// And every workspace is still listed under it.
+	for _, name := range []string{"one", "two", "three"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("%s is missing from the strip:\n%s", name, out)
+		}
+	}
+}
+
+// TestEveryWorkspaceRowStartsAtTheSameColumn. Rows with a status dot and rows
+// without used to sit at different indents, so nothing lined up down the strip and
+// the drift cost columns on both kinds.
+func TestEveryWorkspaceRowStartsAtTheSameColumn(t *testing.T) {
+	m := sidebarDeck(t)
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	col := -1
+	for _, l := range strings.Split(out, "\n") {
+		dot := strings.Index(l, statusDot)
+		if dot < 0 {
+			continue // a header or a project sub-row
+		}
+		if col == -1 {
+			col = dot
+			continue
+		}
+		if dot != col {
+			t.Errorf("a row's dot is at column %d and another's at %d:\n%s", dot, col, out)
+		}
+	}
+	if col == -1 {
+		t.Fatalf("no row in the strip carries a status dot:\n%s", out)
+	}
+}
+
+// TestARowGetsMostOfTheStripForItsName. The point of the width: a PR row is a
+// number and the head of a title, and the strip is worth having only if enough of
+// the title survives to tell two PRs apart.
+func TestARowGetsMostOfTheStripForItsName(t *testing.T) {
+	room := sidebarWidth - 2*sidebarPadX - len(sidebarIndent) - 2 // bar, dot and its space
+	if room < 28 {
+		t.Errorf("a row has %d columns for its name; a PR number and a readable title need about 28", room)
+	}
+}

@@ -6769,8 +6769,13 @@ func statusGlyph(status string, dim bool, unread bool) string {
 		return " "
 	}
 	color := statusColor(status, dim, unread)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("●")
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(statusDot)
 }
+
+// statusDot is the glyph a row's agent state is carried on. Named because it is
+// also what a test looks for when it needs to find the rows in a rendered block —
+// a literal in both places is two spellings of one thing.
+const statusDot = "●"
 
 // statusGlyphVisible reports whether statusGlyph renders a dot for this
 // status/unread combination. Shared with collapsedProjects so "has a

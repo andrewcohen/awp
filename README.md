@@ -263,7 +263,7 @@ The second `P` scope is **one flat list — the rows with an agent on them, then
 1. the **agents**: `working`, `waiting on you`, `finished a turn`
 2. `re-review requested`
 3. `your review`
-4. **your own PRs**: `PR needs action`, `approved, green`
+4. **your own PRs**: `PR needs action`, `ready to merge`
 5. `2h ago` — you were just here
 
 — and *inside* a band by project, then label. So an agent working, stopping to ask, and finishing a turn does not move its row at all: only its dot and its reason text change. A red PR going green does not move either.
@@ -282,7 +282,7 @@ A row qualifies for any of these, and shows the first one it matches:
 | `your review` | A PR you have **checked out** whose review is still wanted from you. |
 | `finished a turn` | The agent finished since you last looked. |
 | `PR needs action` | Your own PR: changes requested, CI red, or a branch that won't merge as it stands. |
-| `approved, green` | Your own PR, one keypress from done. |
+| `ready to merge` | Your own PR, approved and green — one keypress from done. Named the same as the inbox's **Ready to merge** bucket, because it is the same state. |
 | `2h ago` | You were in this workspace recently and nothing else is true of it. |
 
 **Review means still-wanted, not still-open.** GitHub clears the review request the moment you submit a review and re-sets it only if the author asks again, so a PR you have already reviewed drops out on its own — there is no rule saying so, and none needed. "Checked out" is also the whole difference from the inbox's *Needs your review* bucket, which deliberately includes PRs you have **not** pulled down; a PR with no local workspace is the opposite of one you are working on.
@@ -928,7 +928,7 @@ it leaves on one press from either arrangement.
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
-| `S` | show or hide the attention sidebar — a 28-column strip down the left carrying the attention scope's rows. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
+| `S` | show or hide the attention sidebar — a 36-column strip down the left carrying the attention scope's rows. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
@@ -939,14 +939,28 @@ they are absent rather than listed and inert.
 **`S` is the attention sidebar.** The top row's badge says *how many* workspaces
 want you and not *which*, which is enough to know something is waiting and not
 enough to decide whether to leave what you are in — and leaving to find out is the
-thing that row was added to avoid. `S` puts a 28-column strip down the left of the
+thing that row was added to avoid. `S` puts a 36-column strip down the left of the
 pane or the split, carrying **the attention scope** — the same rows `P`'s attention
 scope shows, in the same order, grouped under the scope's own words for why each is
 there: `working`, `waiting on you`, `re-review requested`, `your review`, `finished
-a turn`, `PR needs action`, `approved, green`, `recently active`. Each row wears the
+a turn`, `PR needs action`, `ready to merge`, `recently active`. Each row wears the
 status dot the row list would give it, and the workspace you are currently in is
 marked with a muted `┃` — the tier the design system gives a pane the keyboard has
 left, since it says where you are without claiming to be a cursor.
+
+**A row spends its width on what differs.** The project is a muted sub-row printed
+once, when it changes, rather than a chip on every row: at 28 columns the strip was
+spending eight of them repeating `alpha/` down a group while the PR titles it was
+labelling truncated to `fix(l...`, so the sub-row above now says what four rows were
+each saying and the rows keep the columns. Every row is the same shape (bar, dot,
+name), so the dots line up down the strip; rows with a dot and rows without used to
+sit at different indents and the drift cost columns on both.
+
+A blank row separates the groups, and none sits above the first. It costs a
+workspace the strip could have listed, which is why it was tried without — but the
+coloured bold header reads as a header on its own and not as a *separator*, and the
+groups are what makes the strip scannable rather than a list. Against a wall of rows
+the eye could not find the group it wanted, so the row is spent deliberately.
 
 **Whether it is up is remembered**, in `~/.awp/deck-prefs.json` beside `P`'s
 scope — one flag for the whole deck rather than one per workspace. "Do I want to
@@ -970,7 +984,7 @@ mean the two halves rather than three regions, and a row you want to act on is
 `ctrl+\` away with the deck's own cursor already on it. The strip's columns come
 off the child's box, so the pty behind a pane is resized to what is actually left
 — a strip drawn over a full-width pane would put the cursor and every mouse click
-28 columns off. On a terminal with no room for a pane beside it the key refuses and
+36 columns off. On a terminal with no room for a pane beside it the key refuses and
 says the width it wants, rather than setting a flag that draws nothing now and
 surprises you on the next resize.
 
