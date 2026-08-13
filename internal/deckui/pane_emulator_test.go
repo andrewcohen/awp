@@ -9,8 +9,8 @@ import (
 	"github.com/andrewcohen/awp/internal/vterm"
 )
 
-// namedEmulator is a hosted terminal that only answers which emulator it is. The
-// bar asks nothing else of it.
+// namedEmulator is a hosted terminal that only answers which emulator it is,
+// which is all a test about naming one needs.
 type namedEmulator struct {
 	vterm.Hosted
 	name string
@@ -18,47 +18,19 @@ type namedEmulator struct {
 
 func (n namedEmulator) Emulator() string { return n.name }
 
-// TestTheBarIsSilentAboutTheDefaultEmulator. Almost every pane runs on the
-// default, so naming it would spend a column of a one-row bar telling you what
-// is always true.
-func TestTheBarIsSilentAboutTheDefaultEmulator(t *testing.T) {
-	m, _ := openedPane(t, allKinds())
-	bar := m.renderHostBar(200)
-	if strings.Contains(bar, vterm.EmulatorXVT) || strings.Contains(bar, vterm.EmulatorGhostty) {
-		t.Errorf("the bar names the default emulator: %q", bar)
-	}
-}
-
-// TestTheBarNamesAnUnusualEmulator, because a comparison you cannot confirm
-// you are inside is not a comparison. Asking "is this the ghostty build?" of a
-// running deck was the whole reason for this.
-func TestTheBarNamesAnUnusualEmulator(t *testing.T) {
+// TestTheBarNeverNamesTheEmulator, whichever one is behind the pane.
+//
+// It used to name an unusual one, which was right while libghostty-vt was a thing
+// being tried: a comparison you cannot confirm you are inside is not a
+// comparison. The answer is settled, and the row was crowded — so the segment is
+// gone, and it should not come back on a whim, because it costs the columns the
+// hosted workspace's own state is now spending.
+func TestTheBarNeverNamesTheEmulator(t *testing.T) {
 	m, p := openedPane(t, allKinds())
-	p.term = namedEmulator{Hosted: p.term, name: vterm.EmulatorGhostty}
-
-	bar := m.renderHostBar(200)
-	if !strings.Contains(bar, vterm.EmulatorGhostty) {
-		t.Errorf("the bar does not say which emulator is behind the pane: %q", bar)
-	}
-	if !strings.Contains(bar, PaneLeaveKey) {
-		t.Errorf("the bar lost the leave key to make room: %q", bar)
-	}
-}
-
-// TestANamedEmulatorNeverCostsTheLeaveKey. The name is the least important thing
-// on the row; the way out is the most. A narrow pane drops the label, then the
-// name, and keeps the key.
-func TestANamedEmulatorNeverCostsTheLeaveKey(t *testing.T) {
-	m, p := openedPane(t, allKinds())
-	p.term = namedEmulator{Hosted: p.term, name: vterm.EmulatorGhostty}
-
-	for _, w := range []int{200, 80, 40, 24, 12, 4} {
-		bar := m.renderHostBar(w)
-		if strings.Contains(bar, "\n") {
-			t.Errorf("at %d columns the bar wrapped: %q", w, bar)
-		}
-		if !strings.Contains(bar, PaneLeaveKey) {
-			t.Errorf("at %d columns the bar dropped the leave key: %q", w, bar)
+	for _, name := range []string{vterm.EmulatorXVT, vterm.EmulatorGhostty} {
+		p.term = namedEmulator{Hosted: p.term, name: name}
+		if bar := m.renderHostBar(200); strings.Contains(bar, name) {
+			t.Errorf("the bar names the %s emulator: %q", name, bar)
 		}
 	}
 }
