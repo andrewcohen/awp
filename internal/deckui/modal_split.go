@@ -292,9 +292,14 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		if s.dragDivider(m, mouse) {
 			return nil
 		}
-		// A click is where it landed, not where the keyboard was. It also moves
-		// the keyboard there, which is what a mouse is for.
-		return s.deliver(m, s.halfAt(m, mouse), msg)
+		// Where the event goes and what holds the keyboard are two questions. An
+		// event goes to the half under the pointer either way; only a click moves
+		// the keyboard there.
+		half := s.halfUnder(m.childBox(), mouse)
+		if mouseTakesFocus(mouse) {
+			s.focusHalf(half)
+		}
+		return s.deliver(m, half, msg)
 	}
 	left := s.deliver(m, s.left, msg)
 	if m.active != s {
@@ -419,19 +424,48 @@ func (s *splitModal) dragDivider(m *Model, msg tea.MouseMsg) bool {
 	}
 }
 
-// halfAt is which half a mouse event landed in.
-func (s *splitModal) halfAt(m *Model, msg tea.MouseMsg) modal {
-	left, right := s.boxes(m.childBox())
+// halfUnder is which half a mouse event landed in. It moves nothing — see
+// mouseTakesFocus for the other half of the question.
+func (s *splitModal) halfUnder(b box, msg tea.MouseMsg) modal {
+	left, right := s.boxes(b)
 	x := msg.Mouse().X
 	if right.w > 0 && x >= right.x {
-		s.rightFocused = true
 		return s.right
 	}
 	if left.w > 0 {
-		s.rightFocused = false
 		return s.left
 	}
 	return s.focused()
+}
+
+// focusHalf puts the keyboard in the named half.
+func (s *splitModal) focusHalf(half modal) {
+	if half == s.right {
+		s.rightFocused = true
+		return
+	}
+	if half == s.left {
+		s.rightFocused = false
+	}
+	// Anything else is the zoomed-away half or nothing at all, and neither is a
+	// place the keyboard can go.
+}
+
+// mouseTakesFocus reports whether a mouse event means "put the keyboard here".
+//
+// A click does: pointing at a half and pressing is how you say which one you mean,
+// and that is what a mouse is for. Nothing else does.
+//
+// The wheel is the case this exists for (#340). Scrolling is reading — you turn the
+// wheel over what you want to look at, not what you want to type into — so a wheel
+// that moved the keyboard meant a glance at the diff sent your next keystroke into
+// it instead of the agent, with nothing on screen having said so. Motion and release
+// are excluded for a plainer reason: they belong to whatever gesture is already
+// under way, and a pointer crossing the divider on its way somewhere is not a
+// decision about anything.
+func mouseTakesFocus(msg tea.MouseMsg) bool {
+	_, click := msg.(tea.MouseClickMsg)
+	return click
 }
 
 // closeHalf drops the focused half and leaves the other one as a whole pane.

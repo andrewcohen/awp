@@ -1236,6 +1236,15 @@ forwarded to it; one that doesn't, like a shell, leaves the mouse to your
 terminal so its own drag-to-select keeps working. Likewise a program that
 hides its cursor doesn't get one drawn.
 
+**In a split, a click moves the keyboard between halves and the wheel does not.**
+Both reach the half under the pointer — scrolling over a half scrolls that half —
+but only a click is a statement about where you want to type. Scrolling is reading:
+you turn the wheel over what you want to look at, so a wheel that also moved the
+keyboard meant a glance at the diff sent your next keystroke into it instead of the
+agent, with nothing on screen having said so. Motion and release move nothing
+either; they belong to whatever gesture is already under way, and a pointer
+crossing the divider on its way somewhere is not a decision.
+
 **The cursor's shape follows the program too**, which is how an editor tells you
 which mode it is in: nvim's insert-mode bar and replace-mode underline, and back
 to a block on escape. Blink comes with it, because `DECSCUSR` encodes the two in

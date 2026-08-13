@@ -34,6 +34,7 @@ type fakeTerm struct {
 	closed  bool
 	sent    []byte
 	keys    []tea.KeyPressMsg
+	mice    []tea.MouseMsg
 	exited  chan struct{}
 	exitErr error
 	// painted is pinged whenever the screen changes, so AwaitOutput behaves the
@@ -200,8 +201,24 @@ func (t *fakeTerm) SendKey(k tea.KeyPressMsg) {
 	t.mu.Unlock()
 }
 
-func (t *fakeTerm) SendText(s string)        { _ = t.Send([]byte(s)) }
-func (t *fakeTerm) SendMouse(_ tea.MouseMsg) {}
+func (t *fakeTerm) SendText(s string) { _ = t.Send([]byte(s)) }
+
+// SendMouse records rather than discards. What a real terminal does with a mouse
+// event is the emulator's half and is checked in internal/vterm; the deck's half is
+// which pane an event reaches at all, and that is only answerable if the pane
+// remembers being handed one.
+func (t *fakeTerm) SendMouse(msg tea.MouseMsg) {
+	t.mu.Lock()
+	t.mice = append(t.mice, msg)
+	t.mu.Unlock()
+}
+
+// miceSeen is the mouse events this terminal was handed, in order.
+func (t *fakeTerm) miceSeen() []tea.MouseMsg {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]tea.MouseMsg(nil), t.mice...)
+}
 
 func (t *fakeTerm) Resize(w, h int) error {
 	t.mu.Lock()
