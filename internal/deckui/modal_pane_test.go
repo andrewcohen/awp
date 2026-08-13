@@ -185,9 +185,16 @@ func TestOnlyTheLeaveKeyIsInterceptedInAPane(t *testing.T) {
 		}
 	}
 
+	// The reserved key arms the menu rather than leaving on its own, so `q` —
+	// which the loop above just proved is the program's key — becomes awp's for
+	// exactly one keypress.
 	p.update(&m, tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl})
+	if m.active == nil {
+		t.Fatalf("%s left the pane on one press instead of arming the menu", PaneLeaveKey)
+	}
+	p.update(&m, tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if m.active != nil {
-		t.Errorf("%s did not close the pane", PaneLeaveKey)
+		t.Errorf("%s then q did not close the pane", PaneLeaveKey)
 	}
 }
 

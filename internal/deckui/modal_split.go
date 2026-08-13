@@ -64,20 +64,55 @@ type splitModal struct {
 
 // splitPrefixHint is the verb menu, shown in the status bar while the prefix is
 // up.
-const splitPrefixHint = PaneLeaveKey + ": h/l/tab focus · < > = size · o zoom · x close this half · q leave · esc cancel"
+func splitPrefixHint(m *Model) string {
+	return PaneLeaveKey + ": h/l/tab focus · < > = size · o zoom · x close this half · " +
+		prefixLeaveVerb(m) + " leave · esc cancel"
+}
+
+// prefixLeaveVerb is how you say "leave" behind the prefix, which is not the
+// same on every terminal.
+//
+// The gesture wants to be the reserved key twice, the way tmux spells its own
+// prefix twice, and that is what it is wherever a repeat is reportable as
+// something other than a press. Where it is not, a held key and a deliberate
+// double tap are the same bytes, so the double tap would leave whenever the key
+// was held — the flap #307 was about. There `q` stays the way out and the second
+// press re-arms.
+//
+// Said rather than silently degraded: the menu names whichever verb this
+// terminal actually has, so the one that does nothing here is never offered.
+func prefixLeaveVerb(m *Model) string {
+	if m.keysEnhanced {
+		return PaneLeaveKey
+	}
+	return "q"
+}
+
+// leavesOnSecondPress reports whether this press of the reserved key, with the
+// prefix already armed, is the deliberate second tap that leaves.
+//
+// Both halves of the question matter: the terminal has to be able to tell a
+// repeat from a press, and this particular key has to not be one. A repeat gets
+// here whenever the key is simply held down.
+func leavesOnSecondPress(m *Model, msg tea.KeyPressMsg) bool {
+	return m.keysEnhanced && !msg.IsRepeat
+}
 
 // prefixKey reads one key while the prefix is armed. It returns the command to
 // run; the prefix is always disarmed by it, since every key either is a verb or
 // cancels.
-func (s *splitModal) prefixKey(m *Model, pressed string) tea.Cmd {
+func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	pressed := msg.String()
 	if pressed == PaneLeaveKey {
+		if leavesOnSecondPress(m, msg) {
+			s.prefixArmed = false
+			m.status = ""
+			return s.close(m)
+		}
 		// The reserved key again re-arms rather than resolving, which is the whole
-		// reason a held key cannot do anything here. It was going to be the verb
-		// for "leave" — two taps, the way tmux spells its own prefix twice — until
-		// the test for a key repeat pointed out that a repeat and a deliberate
-		// double tap are the same bytes. Without the Kitty keyboard protocol
-		// nothing can tell them apart, so leaving got a letter instead.
-		m.status = splitPrefixHint
+		// reason a held key cannot do anything on a terminal that cannot report a
+		// repeat. `q` is the verb for leaving there. See prefixLeaveVerb.
+		m.status = splitPrefixHint(m)
 		return nil
 	}
 	s.prefixArmed = false
@@ -262,11 +297,11 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	if key, isKey := msg.(tea.KeyPressMsg); isKey {
 		pressed := key.String()
 		if s.prefixArmed {
-			return s.prefixKey(m, pressed)
+			return s.prefixKey(m, key)
 		}
 		if pressed == PaneLeaveKey {
 			s.prefixArmed = true
-			m.status = splitPrefixHint
+			m.status = splitPrefixHint(m)
 			return nil
 		}
 		return s.deliver(m, s.focused(), msg)
