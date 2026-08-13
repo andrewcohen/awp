@@ -928,7 +928,7 @@ door, and it leaves on one press from either arrangement.
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
-| `S` | show or hide the attention sidebar — a 28-column strip down the left listing the workspaces that want you |
+| `S` | show or hide the attention sidebar — a 28-column strip down the left carrying the attention scope's rows |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
@@ -940,11 +940,21 @@ they are absent rather than listed and inert.
 want you and not *which*, which is enough to know something is waiting and not
 enough to decide whether to leave what you are in — and leaving to find out is the
 thing that row was added to avoid. `S` puts a 28-column strip down the left of the
-pane or the split, grouped the way the badge counts: waiting, working, unread, each
-under a header in that bucket's own colour, each row wearing the status dot the row
-list would give it. The workspace you are currently in is marked with a muted `┃`
-— the tier the design system gives a pane the keyboard has left, since it says
-where you are without claiming to be a cursor.
+pane or the split, carrying **the attention scope** — the same rows `P`'s attention
+scope shows, in the same order, grouped under the scope's own words for why each is
+there: `working`, `waiting on you`, `re-review requested`, `your review`, `finished
+a turn`, `PR needs action`, `approved, green`, `recently active`. Each row wears the
+status dot the row list would give it, and the workspace you are currently in is
+marked with a muted `┃` — the tier the design system gives a pane the keyboard has
+left, since it says where you are without claiming to be a cursor.
+
+The scope rather than a tally of agent states, which is what the strip carried
+first: the badge counts three things because it is three numbers wide, and
+inheriting that grouping meant the strip said "nothing waiting" beside a row list
+with a screenful in it. A PR whose review is requested, one whose CI has gone red,
+one approved and waiting to merge, a workspace you were in ten minutes ago — all of
+those want you, and the scope is the deck's existing answer to that question. The
+strip and `P` answer it the same way or one of them is lying.
 
 It reads and does nothing. There is no cursor in it, so `h` / `l` / `tab` still
 mean the two halves rather than three regions, and a row you want to act on is
