@@ -383,19 +383,26 @@ func (s *splitModal) dragDivider(m *Model, msg tea.MouseMsg) bool {
 		// One half, no divider.
 		return false
 	}
-	x := msg.Mouse().X
+	// A mouse event carries a screen column; the divider is a column of the box.
+	// Converted once, here, because both branches below need it in the box's terms
+	// and each having its own idea of the origin is what went wrong: the click test
+	// compared a screen column against a box column, and the motion measured the
+	// fraction against the whole terminal. Both were right while childBox started
+	// at zero, and the sidebar (#333) is what stopped it.
+	b := m.childBox()
+	x := msg.Mouse().X - b.x
 	switch msg.(type) {
 	case tea.MouseMotionMsg:
 		if !s.dragging {
 			return false
 		}
-		s.leftFrac = float64(x) / float64(max(1, m.width))
+		s.leftFrac = float64(x) / float64(max(1, b.w))
 		// Where you dragged it to is where it should come back — the same reason the
 		// keyboard resize records.
 		m.recordArrangement(s)
 		return true
 	case tea.MouseClickMsg:
-		col := s.splitCol(m.childBox())
+		col := s.splitCol(b)
 		if x < col-1-splitGrabCols || x > col+splitGrabCols {
 			return false
 		}
