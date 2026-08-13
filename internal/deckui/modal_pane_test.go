@@ -291,7 +291,9 @@ func TestNothingSitsOutsideThePanesBorder(t *testing.T) {
 	if len(lines) != m.height {
 		t.Fatalf("the frame is %d rows, the terminal is %d", len(lines), m.height)
 	}
-	top, bottom := ansi.Strip(lines[0]), ansi.Strip(lines[len(lines)-1])
+	// Row 0 is the deck's own top row, not the pane — see top_row.go. The pane's
+	// box starts under it.
+	top, bottom := ansi.Strip(lines[topRowRows]), ansi.Strip(lines[len(lines)-1])
 	for _, tc := range []struct {
 		what string
 		line string

@@ -29,7 +29,7 @@ func TestTheBarNeverNamesTheEmulator(t *testing.T) {
 	m, p := openedPane(t, allKinds())
 	for _, name := range []string{vterm.EmulatorXVT, vterm.EmulatorGhostty} {
 		p.term = namedEmulator{Hosted: p.term, name: name}
-		if bar := m.renderHostBar(200); strings.Contains(bar, name) {
+		if bar := m.renderTopRow(200); strings.Contains(bar, name) {
 			t.Errorf("the bar names the %s emulator: %q", name, bar)
 		}
 	}

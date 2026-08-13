@@ -40,8 +40,8 @@ func TestTheDeckSpendsThreeRowsOnChrome(t *testing.T) {
 		t.Errorf("the status bar should be on the last row; it is blank")
 	}
 
-	// deckHeaderRows + panelRows + footerRows, said the other way round.
-	if want := h - deckHeaderRows - panelRows - footerRows; m.deckBodyCapacity() != want {
+	// deckFrameRows, said the other way round.
+	if want := h - deckFrameRows; m.deckBodyCapacity() != want {
 		t.Errorf("capacity is %d, want %d — the constant and the render disagree", m.deckBodyCapacity(), want)
 	}
 }

@@ -42,12 +42,24 @@ const (
 	// footerRows is the whole footer block: the status bar plus its padding,
 	// which matches the panels'.
 	footerRows = 1 + panelRows
-	// deckHeaderRows is the row list's own header: the title row and the blank
-	// under it.
-	deckHeaderRows = 2
-	// deckTitleRowIndex is which line of renderList's output the title row is —
-	// past the panel's top padding, and nothing else. Tests that reach for the
-	// title index by this rather than by a literal, so a padding change moves
+	// deckHeaderRows is the row list panel's own header: the blank under the
+	// deck's top row, and nothing else.
+	//
+	// It was 2 — the title row and the blank — until the title row became the
+	// deck's own top row, rendered above this panel and above a pane alike so it
+	// sits in the same cells on both. The row it used to cost here is now
+	// topRowRows, one level up, so the frame's height is unchanged and
+	// deckFrameRows is what says so.
+	deckHeaderRows = 1
+	// deckFrameRows is every row the deck spends on itself around the row list:
+	// its top row, the blank under it, the panel's padding and the footer.
+	//
+	// One name because the number is asked for twice — once to size the body and
+	// once by the test that pins it — and a body sized against a different total
+	// than the renderer uses leaves a band of dead rows above the footer.
+	deckFrameRows = topRowRows + deckHeaderRows + panelRows + footerRows
+	// deckTopRowIndex is which line of the deck's frame the top row is: the
+	// first. Tests reach for it by name so a change of mind about the frame moves
 	// them with it instead of failing them.
-	deckTitleRowIndex = panelPadY
+	deckTopRowIndex = 0
 )

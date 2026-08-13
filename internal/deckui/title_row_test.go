@@ -39,15 +39,19 @@ func badgeOf(row string) string {
 	return strings.TrimSpace(strings.SplitN(row, "scope:", 2)[0])
 }
 
-// topRow returns the deck's first content row: the badge, then the scope label.
+// topRow returns the deck's top row: the badge, then the scope label.
+//
+// Read off the whole frame rather than out of the row-list panel, because the row
+// is the deck's own now — the same row a pane wears — rather than the panel's
+// first line. See top_row.go.
 func topRow(t *testing.T, m Model) string {
 	t.Helper()
 	(&m).clampDeckViewport()
-	lines := strings.Split(m.renderList(m.width), "\n")
-	if len(lines) <= deckTitleRowIndex {
-		t.Fatalf("expected a line at index %d, got %d lines", deckTitleRowIndex, len(lines))
+	lines := strings.Split(m.render(), "\n")
+	if len(lines) <= deckTopRowIndex {
+		t.Fatalf("expected a line at index %d, got %d lines", deckTopRowIndex, len(lines))
 	}
-	return ansi.Strip(lines[deckTitleRowIndex])
+	return ansi.Strip(lines[deckTopRowIndex])
 }
 
 func TestTopRowPutsTheBadgeLeftAndTheScopeRight(t *testing.T) {
@@ -58,9 +62,9 @@ func TestTopRowPutsTheBadgeLeftAndTheScopeRight(t *testing.T) {
 	m := New(items, nil)
 	m.width, m.height = 100, 40
 	(&m).clampDeckViewport()
-	out := m.renderList(m.width)
+	out := m.render()
 
-	line := strings.Split(out, "\n")[deckTitleRowIndex]
+	line := strings.Split(out, "\n")[deckTopRowIndex]
 	if got := lipgloss.Width(line); got != m.width {
 		t.Errorf("top row is %d cols, want %d (the scope label is off the right edge)", got, m.width)
 	}
@@ -117,7 +121,7 @@ func TestBadgeDotsWearTheRowStatusColours(t *testing.T) {
 	m.width, m.height = 120, 40
 	(&m).clampDeckViewport()
 
-	badge := strings.SplitN(strings.Split(m.renderList(m.width), "\n")[deckTitleRowIndex], "scope:", 2)[0]
+	badge := strings.SplitN(strings.Split(m.render(), "\n")[deckTopRowIndex], "scope:", 2)[0]
 	for _, want := range []struct {
 		status string
 		label  string

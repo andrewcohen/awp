@@ -11,7 +11,7 @@ import (
 // barText is the bar as read rather than as sent: SGR sequences are full of
 // digits, and the badge is a count, so an assertion about numbers has to be made
 // against the plain text.
-func barText(m *Model, w int) string { return ansi.Strip(m.renderHostBar(w)) }
+func barText(m *Model, w int) string { return ansi.Strip(m.renderTopRow(w)) }
 
 // waitingRows is a deck where two workspaces want you and one is working, so the
 // badge has something to say. Waiting needs the unread mark as well as the
@@ -66,16 +66,24 @@ func TestTheBarSaysNothingWhenNothingNeedsYou(t *testing.T) {
 	}
 }
 
-// TestTheBarKeepsTheLeaveKeyAtEveryWidth. Three things want one row, and the
-// order they are given up in is fixed: the label first, because the screen below
-// already says what it is; then the badge, which is a thing leaving will show
-// you; never the leave key, which is how you leave.
-func TestTheBarKeepsTheLeaveKeyAtEveryWidth(t *testing.T) {
+// TestTheBarKeepsTheLeaveKeyWhileItFits. Three things want one row, and the order
+// they are given up in is fixed: the label first, because the screen below already
+// says what it is; then the badge, which is a thing leaving will show you; last the
+// leave key, which is how you leave.
+//
+// Last, not never. Below the width of the key itself there is no honest answer —
+// the row cannot overrun, because a row one column over pushes every later line of
+// the frame down by one. So the claim is that the key survives every width that
+// can hold it, and that the row never wraps at any width at all.
+func TestTheBarKeepsTheLeaveKeyWhileItFits(t *testing.T) {
 	m, _ := paneOn(t, waitingRows())
 	for _, w := range []int{120, 80, 40, 24, 16, 8, 4} {
-		bar := m.renderHostBar(w)
+		bar := m.renderTopRow(w)
 		if strings.Contains(bar, "\n") {
 			t.Errorf("at %d columns the bar wrapped: %q", w, bar)
+		}
+		if w < lipgloss.Width(m.topRowHint()) {
+			continue
 		}
 		if !strings.Contains(bar, PaneLeaveKey) {
 			t.Errorf("at %d columns the bar dropped the leave key: %q", w, bar)
@@ -89,8 +97,8 @@ func TestTheBarKeepsTheLeaveKeyAtEveryWidth(t *testing.T) {
 func TestTheBarFillsExactlyTheWidthItWasGiven(t *testing.T) {
 	m, _ := paneOn(t, waitingRows())
 	for _, w := range []int{120, 80, 60, 40, 30, 12} {
-		if got := lipgloss.Width(m.renderHostBar(w)); got != w {
-			t.Errorf("at %d columns the bar rendered %d wide: %q", w, got, m.renderHostBar(w))
+		if got := lipgloss.Width(m.renderTopRow(w)); got != w {
+			t.Errorf("at %d columns the bar rendered %d wide: %q", w, got, m.renderTopRow(w))
 		}
 	}
 }
@@ -140,8 +148,8 @@ func TestTheBarIsInTheSameCellsWhicheverArrangementIsUp(t *testing.T) {
 		if !strings.Contains(row, "2") {
 			t.Errorf("with %s row 0 lost the badge: %q", tc.what, row)
 		}
-		if got := tc.m.childBox().y; got != hostBarRows {
-			t.Errorf("with %s the child starts on row %d, want %d", tc.what, got, hostBarRows)
+		if got := tc.m.childBox().y; got != topRowRows {
+			t.Errorf("with %s the child starts on row %d, want %d", tc.what, got, topRowRows)
 		}
 	}
 }
@@ -185,22 +193,60 @@ func TestAnArmedPrefixTakesTheWholeBar(t *testing.T) {
 	}
 }
 
-// TestTheBarSaysNothingAboveAnOverlay. Help, the jobs overlay and the confirms
-// are awp's own text in a box on a blank canvas — they have nothing to say about
-// a workspace you are sitting inside, and a bar above one would be chrome around
-// chrome.
-func TestTheBarSaysNothingAboveAnOverlay(t *testing.T) {
+// TestTheRowListWearsTheSameRow. The point of the row being the deck's: the three
+// screens you move between constantly — the list, a pane, a split — put the badge
+// in the same cell, so it can be glanced at rather than found.
+//
+// What differs is only what the row has to say. Over the list there is nothing to
+// leave and no one workspace to report on, so the right end carries the scope
+// instead of a leave key.
+func TestTheRowListWearsTheSameRow(t *testing.T) {
 	m, p := paneOn(t, waitingRows())
-	if !m.hostsBar() {
-		t.Fatal("a pane does not get the bar")
+	if !m.showsTopRow() {
+		t.Fatal("a pane does not get the top row")
 	}
+	inPane := barText(&m, 120)
+
 	p.close(&m)
 	m.active = nil
-	if m.hostsBar() {
-		t.Error("the deck's own row list is being given a host bar as well")
+	if !m.showsTopRow() {
+		t.Fatal("the row list does not get the top row")
+	}
+	onList := barText(&m, 120)
+
+	for _, tc := range []struct{ what, row string }{{"in a pane", inPane}, {"on the list", onList}} {
+		if !strings.HasPrefix(tc.row, deckIndent) {
+			t.Errorf("%s the row does not start on the deck's text column: %q", tc.what, tc.row)
+		}
+		if lipgloss.Width(tc.row) != 120 {
+			t.Errorf("%s the row is %d columns, want 120", tc.what, lipgloss.Width(tc.row))
+		}
+	}
+	// The badge is in the same cell on both, which is the whole claim.
+	if a, b := strings.Index(inPane, "●"), strings.Index(onList, "●"); a != b {
+		t.Errorf("the badge starts at %d in a pane and %d on the list", a, b)
+	}
+	if !strings.Contains(onList, "scope:") {
+		t.Errorf("the list's row does not name the scope: %q", onList)
+	}
+	if strings.Contains(onList, PaneLeaveKey) {
+		t.Errorf("the list's row offers a way out of a screen you are not in: %q", onList)
+	}
+}
+
+// TestAnOverlayGetsNoTopRow. Help, the jobs overlay, the pickers and the diff
+// viewer are modes you are inside of rather than looking out from — the diff has a
+// whole status line of its own — so a row about which workspaces want you, above a
+// screen whose subject is one file, is a row spent on the wrong question.
+func TestAnOverlayGetsNoTopRow(t *testing.T) {
+	m, p := paneOn(t, waitingRows())
+	p.close(&m)
+	m.active = newHelpModal()
+	if m.showsTopRow() {
+		t.Error("an overlay is being given the deck's top row")
 	}
 	if got := m.childBox().y; got != 0 {
-		t.Errorf("the row list starts on row %d, want 0", got)
+		t.Errorf("an overlay starts on row %d, want 0 — it owns its whole canvas", got)
 	}
 }
 
@@ -246,8 +292,8 @@ func TestTheBarUsesNoWordsForState(t *testing.T) {
 	m, _ := paneOn(t, prRow())
 	bar := barText(&m, 200)
 	// The label and hint are the allowed text; nothing else may spell a state.
-	rest := strings.ReplaceAll(bar, m.hostBarLabel(), "")
-	rest = strings.ReplaceAll(rest, m.hostBarHint(), "")
+	rest := strings.ReplaceAll(bar, m.topRowLabel(), "")
+	rest = strings.ReplaceAll(rest, m.topRowHint(), "")
 	for _, word := range []string{"pass", "fail", "pending", "gates", "waiting", "working", "PR", "unread", "columns"} {
 		if strings.Contains(strings.ToLower(rest), strings.ToLower(word)) {
 			t.Errorf("the bar spells state as the word %q: %q", word, rest)
@@ -281,7 +327,7 @@ func TestTheBarAndTheRowSpellAPRTheSameWay(t *testing.T) {
 	if cluster == "" {
 		t.Skip("this fixture's PR has no cached status, so it has earned no glyphs")
 	}
-	if !strings.Contains(m.renderHostBar(200), cluster) {
+	if !strings.Contains(m.renderTopRow(200), cluster) {
 		t.Errorf("the bar does not show the row's glyph cluster %q", cluster)
 	}
 }

@@ -4091,9 +4091,9 @@ func (m Model) view() string {
 		}
 		placed := lipgloss.Place(m.width, b.h, lipgloss.Center, vpos, content)
 		// A pane or a split gets the deck's own row above it — the same row, in the
-		// same cells, whichever of the two is up. See host_bar.go.
-		if m.hostsBar() {
-			return m.renderHostBar(m.width) + "\n" + placed
+		// same cells, as the row list wears. See top_row.go.
+		if m.showsTopRow() {
+			return m.renderTopRow(m.width) + "\n" + placed
 		}
 		return placed
 	}
@@ -4112,7 +4112,9 @@ func (m Model) view() string {
 			left, right = bm.view(&m, m.childBox())
 		}
 	default:
-		left = m.renderList(m.width)
+		// The list's own top row is the deck's now, prepended below with the one a
+		// pane gets, so it is the same row in the same cells on both screens.
+		left = m.renderTopRow(m.width) + "\n" + m.renderList(m.width)
 	}
 	var body string
 	if right == "" {
@@ -4383,23 +4385,16 @@ func (m Model) renderList(width int) string {
 	// its Items() the rows. Built once because mergedItemsAll allocates, and
 	// this runs on every keystroke.
 	view := m.rm()
-	// The top row holds the two things at opposite ends: what wants you on the
-	// left, on the body's own text column so its dots line up with the rows'
-	// dots below; which scope you are looking through on the right, its right
-	// edge at the panel's inner width — width minus the 1-col horizontal
-	// padding on each side, which is where the rows end.
-	badge := m.renderAttentionSummary(countAttention(view.All))
-	scope := m.styles.Muted.Render("scope: " + scopeLabel(m.scope))
-	gap := (width - panelCols) - deckTextCol - lipgloss.Width(badge) - lipgloss.Width(scope)
-	if gap < 1 {
-		gap = 1
-	}
-	// The blank under the title is deckHeaderRows' second row, and the only
-	// vertical gap the deck spends on itself. It earns the row: the badge sits
-	// on deckTextCol, the rows' own text column, so butted straight against the
-	// first project header it reads as a row rather than as a title.
-	titleRow := deckIndent + badge + strings.Repeat(" ", gap) + scope
-	header := []string{titleRow, ""}
+	// The badge and the scope label used to be assembled here, as this panel's
+	// own first line. They are the deck's top row now (top_row.go), rendered
+	// above this panel and above a pane alike, so the row does not move as you
+	// go between them.
+	//
+	// What stays is the blank under it — deckHeaderRows, and the only vertical gap
+	// the deck spends on itself. It earns the row: the badge sits on deckTextCol,
+	// the rows' own text column, so butted straight against the first project
+	// header it reads as a row rather than as a heading.
+	header := []string{""}
 	items := view.Items()
 	if len(items) == 0 {
 		header = append(header, deckIndent+m.styles.Muted.Render("No workspaces found."))
@@ -4730,9 +4725,9 @@ func pickerSplit(total int, stacked bool) (int, int) {
 
 // deckBodyCapacity returns the number of scrollable body rows the left
 // column can show given the terminal height. Subtracts the chrome the
-// caller renders around the body: the title row and the blank under it
-// (deckHeaderRows), the panel's own vertical padding (panelRows), and
-// the footer block (footerRows). Each entry in `body` is exactly 1
+// caller renders around the body — the deck's top row, the blank under
+// it, the panel's own vertical padding and the footer block, which is
+// deckFrameRows. Each entry in `body` is exactly 1
 // rendered line, so the math is precise without slack. Falls back to a
 // generous capacity when height is unknown so tests and initial paints
 // don't accidentally hide rows.
@@ -4740,8 +4735,7 @@ func (m Model) deckBodyCapacity() int {
 	if m.height <= 0 {
 		return len(m.items()) * 2
 	}
-	const chrome = deckHeaderRows + panelRows + footerRows
-	rows := m.height - chrome
+	rows := m.height - deckFrameRows
 	if rows < 1 {
 		rows = 1
 	}
