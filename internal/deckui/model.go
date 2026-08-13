@@ -4076,15 +4076,17 @@ func (m Model) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	if p, ok := m.hostedPane(); ok {
-		// Only ask when the pane's own program has enabled mouse reporting.
-		// Without it the outer terminal, being in alt-screen with no tracking
-		// asked for, turns the wheel into arrow keys and the pane gets typed
-		// at — but asking on behalf of a program that never wanted the mouse
-		// is worse than not asking: the emulator drops the events and the user
-		// loses the terminal's own drag-to-select for nothing.
-		if p.term.WantsMouse() {
-			v.MouseMode = tea.MouseModeCellMotion
-		}
+		// Asked for either way, and for opposite reasons. A program that enabled
+		// mouse reporting wants the events. One that did not gets its drag turned
+		// into a selection instead (see pane_selection.go) — which awp has to make
+		// itself, because the host terminal's own selection takes screen rows and
+		// would hand back both halves of a split interleaved.
+		//
+		// This used to be gated on WantsMouse alone, on the argument that asking for
+		// a program that never wanted the mouse cost the terminal's drag-to-select
+		// for nothing. It cost it anyway the moment a split went up — the divider
+		// asks unconditionally — so the selection was not there to protect.
+		v.MouseMode = tea.MouseModeCellMotion
 		b := m.boxOf(p)
 		if x, y, ok := p.screenCursor(b); ok {
 			v.Cursor = tea.NewCursor(x, y)

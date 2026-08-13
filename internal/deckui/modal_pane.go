@@ -148,6 +148,9 @@ type panePopover struct {
 	restore   func()
 	setW      int
 	setH      int
+	// sel is the text dragged over with the mouse, for a pane whose program does
+	// not want the mouse itself — see pane_selection.go.
+	sel paneSelection
 	// opened is when the process started, which is how the exit is judged. An
 	// exit is only worth reporting on its own if it happened before you could
 	// have read anything — see paneQuickExit.
@@ -842,6 +845,10 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 			}
 			return p.close(m)
 		}
+		// Typing means you are done with whatever you had picked out, and a
+		// highlight left over a screen the program is about to redraw marks whatever
+		// text moves under it.
+		p.clearSelection()
 		p.term.SendKey(msg)
 		return nil
 
@@ -850,6 +857,15 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		return nil
 
 	case tea.MouseMsg:
+		// A program that did not ask for the mouse does not get it: the drag is a
+		// selection instead, which is the only way a pane can have one — see
+		// pane_selection.go for why the host terminal cannot do it.
+		if p.paneSelects() {
+			if cmd, consumed := p.selectMouse(m, msg); consumed {
+				return cmd
+			}
+			return nil
+		}
 		// The deck asks for mouse events only while a pane is up (see View),
 		// so anything arriving here belongs to the hosted program — but in the
 		// deck's coordinates, not its own.
@@ -988,9 +1004,16 @@ func (p *panePopover) renderPopover(m *Model, b box) string {
 	if b.blurred {
 		border = colMuted
 	}
+	screen := p.term.View()
+	// The selection is painted over the program's own screen rather than being
+	// something the program knows about, because it is not the program's: awp made
+	// it, out of cells the program has already drawn.
+	if p.paneSelects() {
+		screen = tintSelection(screen, p.selectionRows(w), w)
+	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(border)).
 		Width(boxW).
-		Render(p.term.View())
+		Render(screen)
 }
