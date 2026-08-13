@@ -113,15 +113,49 @@ func TestTheSidebarStaysOnAcrossPanes(t *testing.T) {
 	}
 }
 
-// TestTheSidebarSaysWhatWantsYou. Grouped the way the top row's badge counts —
-// so `● 3` up there and three rows under "waiting" down here are visibly the same
-// three.
+// TestTheSidebarSaysWhatWantsYou: the attention scope's rows, grouped under the
+// scope's own words for why each is there. The strip and `P`'s attention scope
+// answer one question, so they have to answer it the same way — grouping by agent
+// state instead made the strip say "nothing waiting" beside a row list with a
+// screenful in it.
 func TestTheSidebarSaysWhatWantsYou(t *testing.T) {
 	m, _ := sidebarPane(t)
 	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 20}))
-	for _, want := range []string{"waiting", "ws", "working", "busy", "unread", "read-me"} {
+	for _, want := range []string{"waiting on you", "ws", "finished a turn", "read-me"} {
 		if !strings.Contains(strip, want) {
 			t.Errorf("the strip does not mention %q:\n%s", want, strip)
+		}
+	}
+}
+
+// TestTheSidebarListsTheAttentionScope. The strip is not a second opinion about
+// what wants you — it is the same list `P`'s attention scope shows, in the same
+// order, so a row missing from one is a bug in both.
+func TestTheSidebarListsTheAttentionScope(t *testing.T) {
+	m, _ := sidebarPane(t)
+	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 40}))
+	rows := m.attentionView().Items()
+	if len(rows) == 0 {
+		t.Fatal("the attention scope is empty, so this proves nothing")
+	}
+	for _, it := range rows {
+		if !strings.Contains(strip, it.WorkspaceName) {
+			t.Errorf("%s is in the attention scope and not on the strip:\n%s", it.WorkspaceName, strip)
+		}
+	}
+}
+
+// TestEveryGroupTheScopeCanProduceHasWords. A reason with no label heads a group
+// with a blank line where its name goes, which reads as a rendering fault rather
+// than as a group.
+func TestEveryGroupTheScopeCanProduceHasWords(t *testing.T) {
+	m, _ := sidebarPane(t)
+	for _, r := range sidebarGroups {
+		if sidebarGroupLabel(r) == "" {
+			t.Errorf("reason %v heads a group with no words", r)
+		}
+		if m.sidebarGroupStyle(r).GetForeground() == nil {
+			t.Errorf("reason %v heads a group with no colour", r)
 		}
 	}
 }
@@ -148,7 +182,7 @@ func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 	m, p := sidebarPane(t)
 	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 20}))
 	for _, line := range strings.Split(strip, "\n") {
-		if !strings.HasPrefix(line, "┃") {
+		if !strings.HasPrefix(strings.TrimLeft(line, " "), "┃") {
 			continue
 		}
 		if !strings.Contains(line, p.workspace) {
@@ -203,7 +237,7 @@ func TestTheFrameIsStillTheTerminalsWithTheSidebarUp(t *testing.T) {
 	}
 	// And the strip is in the frame at all — every other test here reads
 	// renderSidebar directly, which would pass on a strip nothing draws.
-	if !strings.Contains(frame, "waiting") {
+	if !strings.Contains(frame, "waiting on you") {
 		t.Errorf("the strip is not in the frame:\n%s", frame)
 	}
 }
