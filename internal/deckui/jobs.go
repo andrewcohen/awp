@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/charm"
 )
@@ -221,6 +222,21 @@ func refreshJobsListCmd(r JobsListRefresher) tea.Cmd {
 // → right segment, so the filter / find-mode input on the right
 // always stays visible.
 func composeStatusBar(activities []Activity, spinnerGlyph, right, hint string, width int) string {
+	bar := layOutStatusBar(activities, spinnerGlyph, right, hint, width)
+	if width <= 0 {
+		return bar
+	}
+	// One row, always. The frame's height is budgeted with the status bar as a
+	// single line (see footerRows), so a bar one column too wide wraps, the footer
+	// becomes two rows, and the whole deck is pushed up off the top of the screen —
+	// which is what a long status message did: the drop order below thins the bar
+	// down to the message alone and then hands it over at whatever width it is.
+	// Truncating here rather than at each caller because this is the one place that
+	// knows the width the bar was given.
+	return ansi.Truncate(bar, width, "…")
+}
+
+func layOutStatusBar(activities []Activity, spinnerGlyph, right, hint string, width int) string {
 	left := renderActivitiesCompact(activities, spinnerGlyph)
 	var hintRendered string
 	if hint != "" {

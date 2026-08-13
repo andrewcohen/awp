@@ -1124,7 +1124,10 @@ func TestComposeStatusBarDropsActivityBeforeRightUnderWidthPressure(t *testing.T
 	activities := []Activity{{ID: "pr-status", Label: "pr-status fetching repos", Done: 1, Total: 9}}
 	right := "filter: \"verylongfilterneedle\" · ready"
 	bar := composeStatusBar(activities, "⠼", right, "? help", 30)
-	if !strings.Contains(bar, "ready") {
+	// The right segment is what the remaining width is spent on, from its start —
+	// this used to assert that its tail survived too, which was only true while the
+	// bar was allowed to overrun the width it was given and wrap onto a second row.
+	if !strings.Contains(bar, "filter:") {
 		t.Fatalf("expected right segment to survive narrow width, got %q", bar)
 	}
 	if strings.Contains(bar, "pr-status") {

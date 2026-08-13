@@ -505,6 +505,10 @@ func TestRunDeckOpensOnTheRememberedScope(t *testing.T) {
 }
 
 func TestRunDeckCallsWorkflow(t *testing.T) {
+	// A deck opened with no --scope reads the remembered one, so without a home of
+	// its own this test asserts the default against whatever scope the developer
+	// last left their own deck in.
+	t.Setenv("HOME", t.TempDir())
 	svc := &fakeService{}
 	app := NewApp(svc, &bytes.Buffer{})
 	called := false
