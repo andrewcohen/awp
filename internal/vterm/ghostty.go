@@ -616,6 +616,80 @@ func (t *ghosttyTerm) cellForCol(col, y int) int {
 	return col
 }
 
+// SelectionText is the text of the cells from (x0,y0) to (x1,y1) inclusive, in
+// reading order, as it should land on a clipboard.
+//
+// The range is given in the same display columns Cursor answers in and SendMouse
+// takes, because the caller picked it out with a pointer over the rendered screen —
+// see displayCol. Endpoints in either order describe the same range: a drag
+// upwards or leftwards is still a selection of what lies between.
+//
+// Plain text, unwrapped and trimmed, which is what libghostty documents as
+// matching a terminal's own copy behaviour: a line the shell soft-wrapped is one
+// line when you paste it, and the blanks padding a short line to the width of the
+// screen are not text you selected.
+func (t *ghosttyTerm) SelectionText(x0, y0, x1, y1 int) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return ""
+	}
+	// Reading order, so the formatter is handed a forward range whichever way the
+	// pointer travelled.
+	if y1 < y0 || (y1 == y0 && x1 < x0) {
+		x0, y0, x1, y1 = x1, y1, x0, y0
+	}
+	start, ok := t.gridRef(t.cellForCol(x0, y0), y0)
+	if !ok {
+		return ""
+	}
+	end, ok := t.gridRef(t.cellForCol(x1, y1), y1)
+	if !ok {
+		return ""
+	}
+
+	var sel C.GhosttySelection
+	sel.size = C.size_t(unsafe.Sizeof(sel))
+	sel.start, sel.end = start, end
+	sel.rectangle = C.bool(false)
+
+	var opts C.GhosttyTerminalSelectionFormatOptions
+	opts.size = C.size_t(unsafe.Sizeof(opts))
+	opts.emit = C.GHOSTTY_FORMATTER_FORMAT_PLAIN
+	opts.unwrap = C.bool(true)
+	opts.trim = C.bool(true)
+	opts.selection = &sel
+
+	// Sized by asking first, because a selection can be a screenful and the
+	// formatter reports what it needs rather than truncating.
+	var n C.size_t
+	if rc := C.ghostty_terminal_selection_format_buf(t.vt, opts, nil, 0, &n); rc != C.GHOSTTY_OUT_OF_SPACE || n == 0 {
+		if !succeeded(rc) {
+			return ""
+		}
+	}
+	buf := make([]byte, int(n))
+	if rc := C.ghostty_terminal_selection_format_buf(t.vt, opts,
+		(*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), &n); !succeeded(rc) {
+		return ""
+	}
+	return string(buf[:n])
+}
+
+// gridRef resolves a cell of the active area. Caller holds mu.
+func (t *ghosttyTerm) gridRef(x, y int) (C.GhosttyGridRef, bool) {
+	var ref C.GhosttyGridRef
+	ref.size = C.size_t(unsafe.Sizeof(ref))
+	var pt C.GhosttyPoint
+	pt.tag = C.GHOSTTY_POINT_TAG_ACTIVE
+	coord := (*C.GhosttyPointCoordinate)(unsafe.Pointer(&pt.value))
+	coord.x, coord.y = C.uint16_t(max(x, 0)), C.uint32_t(max(y, 0))
+	if rc := C.ghostty_terminal_grid_ref(t.vt, pt, &ref); !succeeded(rc) {
+		return ref, false
+	}
+	return ref, true
+}
+
 // cellText is what one cell contributes to the rendered row.
 //
 // An empty cell is a space, because that is what it renders as. A wide
@@ -623,13 +697,8 @@ func (t *ghosttyTerm) cellForCol(col, y int) int {
 // it, and the character it belongs to was emitted by the cell that owns it.
 // Caller holds mu.
 func (t *ghosttyTerm) cellText(x, y int) (string, bool) {
-	var ref C.GhosttyGridRef
-	ref.size = C.size_t(unsafe.Sizeof(ref))
-	var pt C.GhosttyPoint
-	pt.tag = C.GHOSTTY_POINT_TAG_ACTIVE
-	coord := (*C.GhosttyPointCoordinate)(unsafe.Pointer(&pt.value))
-	coord.x, coord.y = C.uint16_t(x), C.uint32_t(y)
-	if rc := C.ghostty_terminal_grid_ref(t.vt, pt, &ref); !succeeded(rc) {
+	ref, ok := t.gridRef(x, y)
+	if !ok {
 		return "", false
 	}
 
