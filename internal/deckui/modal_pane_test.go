@@ -191,7 +191,7 @@ func TestOnlyTheLeaveKeyIsInterceptedInAPane(t *testing.T) {
 	}
 }
 
-// TestTheMenuKeySplitsFromThePaneYouAreIn. The window keys behind ctrl+space mean the
+// TestTheMenuKeySplitsFromThePaneYouAreIn. The window keys behind ctrl+b mean the
 // same thing they do from the row list, reached from inside the thing being split
 // — and the pane you were in becomes the left half rather than being torn down and
 // re-opened, so the program you were reading is not resized twice.

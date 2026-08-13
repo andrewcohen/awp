@@ -21,29 +21,21 @@ const PaneLeaveKey = "ctrl+\\"
 // split it, move the keyboard between halves, resize, zoom, close a half, show
 // the attention sidebar.
 //
-// Two adjacent fingers and no shift, for the key you reach for most from inside a
-// pane. It was ctrl+| — the shifted leave key — on the argument that the two
-// gestures should be one key apart; what that spelled in the hand was
-// ctrl+shift+\, a three-finger stretch next to a door that costs one press. The
-// pairing was a nice property of the notation rather than of the gesture.
+// One press, two adjacent fingers, no shift, and no operating system in the way.
+// That last part is what decided it: the previous spelling was ctrl+| —
+// ctrl+shift+\ in the hand, a three-finger stretch for the key you press most —
+// and the attempt before this one was ctrl+b, which macOS binds system-wide to
+// switching input sources, so the key never reaches the terminal at all.
 //
-// Nothing inside a pane claims it. 0x00 is ctrl+@ historically, which no shell or
-// agent binds — emacs' set-mark is the only common claim, and emacs is not what
-// runs in these panes.
+// ctrl+b is the tmux prefix and readline's backward-char, and a pane's program
+// therefore stops receiving it. That is a real cost, accepted deliberately: awp
+// reserves exactly two keys, and a reserved key is only reserved if something gives
+// it up. ctrl+\ (SIGQUIT) was free because nothing interactive binds it; there is
+// no second such key that is also comfortable, so the menu takes one that is.
 //
-// It also works on every terminal, which ctrl+| did not: a plain terminal sends
-// 0x1c for ctrl+shift+\ exactly as for ctrl+\, so there was nothing to tell apart
-// and such a terminal simply had no menu — the one surface awp had that some
-// terminals could not reach at all. 0x00 decodes to {Code: KeySpace, Mod: ModCtrl}
-// whether or not the Kitty keyboard protocol is in play (ultraviolet's legacy key
-// table and its Kitty map agree), so the menu no longer depends on a flag the
-// terminal may not grant. keysEnhanced is still asked for, and still decides whether
-// a held key can be told from a tapped one; the menu simply no longer needs it.
-//
-// The old spelling is gone rather than kept as an alias. Two keys for one gesture is
-// two things to document and a second path through the predicate that reads them,
-// and the reason the old one existed — the pairing with the leave key — is the thing
-// being given up on purpose.
+// It needs nothing from the terminal either. 0x02 is 0x02 everywhere, with or
+// without the Kitty keyboard protocol — where ctrl+| was indistinguishable from
+// ctrl+\ on a plain terminal, so such a terminal had no menu at all.
 //
 // PaneLeaveKey is untouched: one press, always back to the deck, on every surface.
-const PaneMenuKey = "ctrl+space"
+const PaneMenuKey = "ctrl+b"

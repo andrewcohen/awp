@@ -34,9 +34,9 @@ func splitDeck(t *testing.T) Model {
 // leaveKey is the reserved key, as the terminal sends it.
 func leaveKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl} }
 
-// menuKey opens the verb menu. ctrl+space, which every terminal can send — see
-// charm.PaneMenuKey.
-func menuKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeySpace, Mod: tea.ModCtrl} }
+// menuKey opens the verb menu. ctrl+b, which every terminal can send and no
+// operating system intercepts — see charm.PaneMenuKey.
+func menuKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl} }
 
 // press sends one key through the deck and returns the new model.
 func pressDeck(t *testing.T, m Model, key tea.KeyPressMsg) Model {
@@ -357,7 +357,7 @@ func TestTheDiffHalfIsAwpsOwnViewer(t *testing.T) {
 // one and not the other is how they start disagreeing.
 //
 // The menu is read off the top row rather than off m.status, which is where the
-// menu goes: the same row an armed ctrl+space uses in a pane or a split.
+// menu goes: the same row an armed ctrl+b uses in a pane or a split.
 func TestTheChordSaysWhatItCanDo(t *testing.T) {
 	m := splitDeck(t)
 	m = pressDeck(t, m, runeKey("|"))

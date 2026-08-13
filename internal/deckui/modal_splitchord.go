@@ -45,7 +45,7 @@ var splitActions = []splitAction{
 	{key: "W", kind: PaneKindWatch, label: "watch"},
 }
 
-// splitKindsHint is the kinds as a menu fragment, for the ctrl+space menus that carry
+// splitKindsHint is the kinds as a menu fragment, for the ctrl+b menus that carry
 // them alongside their own verbs. The same keys in the same order as the deck's
 // `|` chord, because they are the same vocabulary reached from a different place.
 func splitKindsHint() string {
