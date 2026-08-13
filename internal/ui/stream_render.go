@@ -257,9 +257,16 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 	summary := fmt.Sprintf(" (%d hunk%s)", len(f.Hunks), plural(len(f.Hunks)))
 	if r.collapsed {
 		// A collapsed file still has to say what is inside it, or the divider
-		// becomes a wall you have to open to see past.
-		summary = fmt.Sprintf(" ✓ reviewed · %d hunk%s, %d line%s hidden",
-			len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
+		// becomes a wall you have to open to see past — and it has to say *why* it
+		// is closed. A folded file wearing "✓ reviewed" is the divider claiming you
+		// read something you pressed enter to put away, which is the one thing the
+		// reviewed mark must never overstate.
+		why := "folded"
+		if m.isReviewed(pathOf(f)) {
+			why = "✓ reviewed"
+		}
+		summary = fmt.Sprintf(" %s · %d hunk%s, %d line%s hidden",
+			why, len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
 	}
 	meta := styleMuted.Render(summary)
 	reserved := lipgloss.Width(lead) + lipgloss.Width(badge) + 1 + lipgloss.Width(meta)

@@ -752,6 +752,23 @@ func threadAuthor(t review.Thread) string {
 	return strings.TrimSpace(t.Comments[0].Author)
 }
 
+// foldableThreadAtCursor is whether the cursor is on a conversation that `enter`
+// folds, mirrored or ours, and the id it is known by.
+//
+// The question toggleThreadFold used to answer inside itself and return silently
+// from. Named because `enter` now has a second meaning — folding the file — and
+// which one it takes has to be decided before either runs, rather than by one of
+// them declining.
+func (m Model) foldableThreadAtCursor() (string, bool) {
+	if t, ok := m.threadAtCursor(); ok {
+		return t.ID, true
+	}
+	if root, ok := m.localRootAtCursor(); ok {
+		return root.ID, true
+	}
+	return "", false
+}
+
 // toggleThreadFold opens or closes the mirrored thread under the cursor.
 func (m Model) toggleThreadFold() (tea.Model, tea.Cmd) {
 	// The id the conversation is known by, and whether it is closed right now.
@@ -1771,9 +1788,31 @@ func fileContentHash(f diff.FileDiff) string {
 	return strconv.FormatUint(h.Sum64(), 16)
 }
 
-// isCollapsed reports whether a file is currently hidden: reviewed, and
-// unchanged since it was reviewed.
+// isCollapsed reports whether a file's body is hidden.
+//
+// Three answers, in order of who said them: what `enter` said about this file,
+// then whether it is reviewed and unchanged since, then whether this viewer folds
+// by default. Reviewed still folds — a file you have finished with should get out
+// of the way without a second keypress — but it is no longer the *only* way a file
+// closes, which is what made "I have read this" and "I am not looking at this
+// right now" the same statement.
 func (m Model) isCollapsed(path string) bool {
+	if folded, stated := m.fileFold[path]; stated {
+		return folded
+	}
+	if m.isReviewed(path) {
+		return true
+	}
+	// Either never reviewed, or edited since — in which case the mark no longer
+	// applies and the fold falls back to the default rather than staying shut on
+	// the strength of it.
+	return m.foldByDefault
+}
+
+// isReviewed reports whether a file carries a reviewed mark that still applies —
+// the middle clause of isCollapsed, asked on its own by the divider, which has to
+// say why a file is closed rather than assuming the only reason there used to be.
+func (m Model) isReviewed(path string) bool {
 	want, ok := m.ReviewedFiles[path]
 	if !ok {
 		return false
@@ -1785,6 +1824,46 @@ func (m Model) isCollapsed(path string) bool {
 	}
 	return false
 }
+
+// toggleFold is what `enter` does to a file: closes an open one, opens a closed
+// one, and says so explicitly so neither the reviewed mark nor the default can
+// take it back.
+func (m Model) toggleFold() (tea.Model, tea.Cmd) {
+	f, ok := m.cursorFile()
+	if !ok {
+		// enter on a row that is not part of a file — the review-level section, an
+		// empty diff. Silent: pressing it there is not a mistake.
+		return m, nil
+	}
+	path := pathOf(f)
+	if m.fileFold == nil {
+		m.fileFold = map[string]bool{}
+	}
+	folding := !m.isCollapsed(path)
+	m.fileFold[path] = folding
+	// Folding changes the row count, so the geometry has to be rebuilt — and the
+	// cursor has to be put somewhere that still exists. Onto the divider when the
+	// file closes, since that is the row the file has become; back into the body
+	// when it opens, which is what you pressed enter to read.
+	at := m.fileIndexOf(path)
+	m.rebuildStream()
+	if folding {
+		m.cursorToFileHeader(at)
+	} else {
+		m.cursorToFileFirstLine(at)
+	}
+	return m, nil
+}
+
+// FoldFiles starts the viewer with every file folded, so the first thing on
+// screen is the list of what changed rather than the top of the first file.
+//
+// For the host that knows the view is not getting the whole terminal — the deck's
+// `|` split — where a diff is opened to answer "what did it touch" before "what
+// did it write", and an expanded first file means scrolling to find out there are
+// eight of them. `enter` opens any of them, and having opened one you have stated
+// its fold, so it stays open.
+func (m *Model) FoldFiles(folded bool) { m.foldByDefault = folded }
 
 // toggleReviewed marks the file at the cursor reviewed, or un-marks it.
 func (m Model) toggleReviewed() (tea.Model, tea.Cmd) {
