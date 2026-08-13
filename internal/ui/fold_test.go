@@ -75,8 +75,9 @@ func TestAFoldedFileDoesNotClaimToBeReviewed(t *testing.T) {
 	m = pressEnter(t, m)
 	row := m.stream.rows[m.cursorRow]
 	header := ansi.Strip(m.renderStreamFileHeader(row, 100))
-	if !strings.Contains(header, "folded") {
-		t.Errorf("a folded file's divider does not say it is folded: %q", header)
+	// It still says what is inside it, so the divider is not a wall.
+	if !strings.Contains(header, "hidden") {
+		t.Errorf("a folded file's divider does not say what it is hiding: %q", header)
 	}
 	if strings.Contains(header, "reviewed") {
 		t.Errorf("a folded file's divider claims it is reviewed: %q", header)
@@ -157,5 +158,50 @@ func TestFoldFilesFoldsEverythingNobodyHasStated(t *testing.T) {
 	m = pressEnter(t, m)
 	if m.isCollapsed(pathOf(m.filtered[0])) {
 		t.Error("enter did not open a file the default had folded")
+	}
+}
+
+// TestRWorksOnAFoldedFile is the regression. toggleReviewed asked isCollapsed —
+// "is this file closed" — which was the same question as "is this reviewed" until a
+// fold could close one on its own. In a fold-by-default viewer every file is
+// closed, so `r` took the withdraw branch and reported "unreviewed" for a file it
+// had been asked to review: the key looked dead.
+func TestRWorksOnAFoldedFile(t *testing.T) {
+	m := foldModel(t)
+	m.FoldFiles(true)
+	m.rebuildStream()
+	path := pathOf(m.filtered[0])
+	m.cursorRow = m.stream.fileStart[0]
+	next, _ := m.toggleReviewed()
+	m = next.(Model)
+	if !m.isReviewed(path) {
+		t.Errorf("r did not mark the folded file reviewed; status %q", m.status)
+	}
+	if !strings.Contains(m.status, "reviewed") || strings.Contains(m.status, "unreviewed") {
+		t.Errorf("r said %q", m.status)
+	}
+}
+
+// TestRHasTheLastWordOnTheFold. `r` means "read it, get it out of the way", so a
+// file you had opened by hand collapses when you mark it — otherwise the key
+// visibly does not collapse it. It clears the override rather than setting one, so
+// enter can still reopen a reviewed file afterwards.
+func TestRHasTheLastWordOnTheFold(t *testing.T) {
+	m := foldModel(t)
+	path := pathOf(m.filtered[0])
+	m = pressEnter(t, m) // fold it by hand
+	m = pressEnter(t, m) // and open it again: an explicit "open"
+	if m.isCollapsed(path) {
+		t.Fatal("the file is folded before r is pressed")
+	}
+	next, _ := m.toggleReviewed()
+	m = next.(Model)
+	if !m.isCollapsed(path) {
+		t.Error("r did not collapse a file that had been opened by hand")
+	}
+	m.cursorRow = m.stream.fileStart[0]
+	m = pressEnter(t, m)
+	if m.isCollapsed(path) {
+		t.Error("enter cannot reopen the file r collapsed")
 	}
 }
