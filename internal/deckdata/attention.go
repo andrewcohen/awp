@@ -350,10 +350,18 @@ func (v View) recentlyActive(it Item) Reason {
 // RecentWindow is how long a workspace goes on counting as one you are in the
 // middle of.
 //
-// Short on purpose. The claim is "you were just here", not "you worked on this
-// today" — a day-long window would put every workspace you touched since
-// breakfast in a list whose whole job is to be shorter than the all scope.
-const RecentWindow = 4 * time.Hour
+// A day. It was four hours, on the argument that the claim is "you were just
+// here" rather than "you worked on this today", and that a day-long window would
+// put everything touched since breakfast into a list whose job is to be shorter
+// than the all scope. In use the shorter window lost things that were still live:
+// work picked up the next morning, or after an afternoon on something else, had
+// dropped out of the one list that answers "what was I doing".
+//
+// The length is what makes it safe to widen: ReasonRecent is last in declaration
+// order, so a recent row only shows once nothing else is true of it, and it sorts
+// below everything that actually wants you. A day of those at the bottom of the
+// list costs the rows above it nothing.
+const RecentWindow = 24 * time.Hour
 
 // now is the view's clock, defaulting to the real one. Injectable so a test can
 // say what "recent" means without sleeping.
