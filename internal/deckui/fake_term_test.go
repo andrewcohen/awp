@@ -133,6 +133,23 @@ func (t *fakeTerm) askForMouse() {
 	t.mu.Unlock()
 }
 
+// setView and moveCursor state a screen and a cursor on it directly, for the
+// tests that are about what the deck does with the pair — where the program is
+// beside the point and starting a process to print the text would only make the
+// screen arrive whenever it arrived.
+func (t *fakeTerm) setView(s string) {
+	t.mu.Lock()
+	t.view = s
+	t.mu.Unlock()
+	t.repainted()
+}
+
+func (t *fakeTerm) moveCursor(x, y int) {
+	t.mu.Lock()
+	t.cursorX, t.cursorY = x, y
+	t.mu.Unlock()
+}
+
 // View is the screen: exactly h lines of w cells, which is what a real terminal
 // returns whether or not its program has written anything. The deck's layout
 // arithmetic is measured against this, so a fake that returned "" for an

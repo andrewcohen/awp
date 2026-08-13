@@ -4043,7 +4043,10 @@ func (m Model) actionModeStatus() string {
 // as a tea.NewProgram option. The content itself comes from render, which
 // stays a plain string so tests and the panel helpers can call it.
 func (m Model) View() tea.View {
-	v := tea.NewView(m.render())
+	// Held rather than passed straight in, because the cursor trace below reports
+	// against the frame that was actually composed.
+	frame := m.render()
+	v := tea.NewView(frame)
 	v.AltScreen = true
 	// Ask the terminal to say whether a key event is a press, a repeat or a
 	// release — the Kitty keyboard protocol's event-types flag.
@@ -4080,13 +4083,18 @@ func (m Model) View() tea.View {
 		if p.term.WantsMouse() {
 			v.MouseMode = tea.MouseModeCellMotion
 		}
-		if x, y, ok := p.screenCursor(m.boxOf(p)); ok {
+		b := m.boxOf(p)
+		if x, y, ok := p.screenCursor(b); ok {
 			v.Cursor = tea.NewCursor(x, y)
 			// And what the program asked it to look like, which for an editor is
 			// which mode it is in. Without this every pane drew tea's default block,
 			// so nvim's insert-mode bar and replace-mode underline were invisible —
 			// the pane was showing the program's screen and overruling its cursor.
 			v.Cursor.Shape, v.Cursor.Blink = p.term.CursorShape()
+			if Trace != nil {
+				px, py, _ := p.term.Cursor()
+				traceCursorPlacement(frame, x, y, px, py, b)
+			}
 		}
 	}
 	return v
