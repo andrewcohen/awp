@@ -348,6 +348,16 @@ hunt through the call sites that file exists to have replaced.
   no canvas. A pane shows someone else's full-screen program, and a column
   of blank beside the border is a second edge next to the one already there.
   `TestNothingSitsOutsideThePanesBorder` pins it.
+- **A child renders its box exactly.** The popover branch of `view()` centres
+  what a modal returns inside `childBox`, so a child that comes back narrower
+  than its box is padded on the left — and everything in it moves. That is how
+  #339 happened: `diffModal.view` reserved a literal 2 columns for panel padding,
+  `panelPadX` went to 0, and the diff rendered two columns short. In a split the
+  composed halves were then narrower than the box, the centring shifted both one
+  column right, and the pane's cursor — placed from `boxOf` — landed one column
+  left of the text being typed. Nothing failed; the halves were just narrow.
+  `split_fill_test.go` pins every row of a split at the box's width, and it is
+  where a new half that gets its width wrong should fail.
 - **`internal/deckui/layout.go` is the one place the frame budget is
   written down** — `panelPadX/Y`, `panelRows`, `panelCols`, `footerRows`,
   `deckHeaderRows`, `deckTitleRowIndex`. Anything that subtracts chrome

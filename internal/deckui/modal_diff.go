@@ -343,9 +343,20 @@ func (dm *diffModal) forward(msg tea.Msg) tea.Cmd {
 }
 
 func (dm *diffModal) view(m *Model, b box) (string, string) {
-	// Panel padding matches every other deck body panel; the inner width
-	// accounts for the 1 col of padding on each side.
-	innerWidth := b.w - 2
+	// Panel padding matches every other deck body panel, so the inner width comes
+	// off the same constant the panel is built from rather than a number that
+	// happened to equal it.
+	//
+	// It was a literal 2, for "the 1 col of padding on each side" — and when
+	// panelPadX went to zero the panel stopped adding those columns while this
+	// went on reserving them. Nothing failed. The viewer rendered two columns
+	// narrower than its box, and in a split that made the composed halves narrower
+	// than the box they were centred in, so lipgloss.Place padded one column onto
+	// the left and slid both halves right of where boxOf says they are. The pane's
+	// cursor is placed from the box, so it landed one column left of the text being
+	// typed — #339, which cost two wrong diagnoses before a traced frame showed the
+	// frame's own row starting one column in.
+	innerWidth := b.w - panelCols
 	if innerWidth < 1 {
 		return "", ""
 	}
