@@ -38,12 +38,17 @@ const sidebarKey = "S"
 // sidebarWidth is the strip's width, in columns.
 //
 // Fixed rather than a fraction of the terminal. What goes on a row is a glyph and
-// `project/workspace`, which is the same number of columns whether the terminal is
-// 120 wide or 400 — a fraction would spend a quarter of a wide screen on names
-// that stopped needing the room twenty columns ago. Wide enough for a name of
-// useful length beside its project; narrow enough that a 120-column terminal can
-// still carry a pane beside it.
-const sidebarWidth = 28
+// a name, which is the same number of columns whether the terminal is 120 wide or
+// 400 — a fraction would spend a quarter of a wide screen on names that stopped
+// needing the room twenty columns ago.
+//
+// 36 rather than the 28 it started at. A row's useful content is a PR number and
+// the head of its title, and at 28 — less padding, bar and dot — that left about
+// sixteen columns, which truncated `fix(lint): drop the dead branch` to `fix(l...`.
+// The eight extra columns come off a pane that has plenty and hand the row back
+// most of a subject line. Narrow enough that a 120-column terminal still carries a
+// usable pane beside it.
+const sidebarWidth = 36
 
 // sidebarChildMinW is the narrowest thing the sidebar will leave beside itself:
 // one pane, with its chrome.
@@ -169,15 +174,31 @@ func (m Model) renderSidebar(b box) string {
 	// and walking it in its own order is what keeps the strip and the row list
 	// listing the same workspaces in the same sequence.
 	last := deckdata.ReasonNone
+	// The project is a sub-row under the group, printed only when it changes,
+	// rather than a chip repeated on every row. It was a chip, and the strip spent
+	// eight of its twenty-six columns printing `alpha/` four times in a row while
+	// the PR titles it was labelling truncated to `fix(l...` — three characters of
+	// signal beneath a name already on screen above. Said once, the columns go back
+	// to the part that differs.
+	project := ""
 	for _, it := range rows {
 		reason := v.Wants(it)
 		if reason != last {
+			// A blank row above each group but the first. It costs a workspace the
+			// strip could have listed, and it is worth it: the groups are what makes
+			// the strip scannable rather than a list, and colour alone did not
+			// separate them enough to find the one you were looking for.
 			if len(lines) > 0 {
 				lines = append(lines, "")
 			}
 			lines = append(lines, m.sidebarGroupStyle(reason).Render(
 				truncate(sidebarGroupLabel(reason), inner)))
-			last = reason
+			last, project = reason, ""
+		}
+		if it.ProjectName != project {
+			project = it.ProjectName
+			lines = append(lines, sidebarIndent+m.styles.Muted.Render(
+				truncate(project, max(1, inner-len(sidebarIndent)))))
 		}
 		lines = append(lines, m.sidebarRow(it, v.DisplayLabel(it), inner))
 	}
@@ -260,22 +281,17 @@ func (m Model) sidebarRow(it Item, label string, width int) string {
 		bar = m.styles.Muted.Render("┃") + " "
 	}
 	glyph := statusGlyph(it.Status, false, it.Unread)
-	// The project is a chip rather than a line of its own: a header per project
-	// would spend a third of a short strip on names, where the rows it groups are
-	// often one apiece.
-	chip := m.styles.Muted.Render(it.ProjectName + "/")
-	room := width - lipgloss.Width(bar) - lipgloss.Width(glyph) - lipgloss.Width(chip) - 1
-	if room < sidebarNameMin {
-		// No room for both. The workspace is the part that identifies the row.
-		chip = ""
-		room = width - lipgloss.Width(bar) - lipgloss.Width(glyph) - 1
-	}
-	return bar + glyph + " " + chip + truncate(label, max(1, room))
+	// Every row is the same shape — bar, dot, name — whatever the row is about.
+	// Rows with a dot and rows without used to sit at different indents, so nothing
+	// lined up vertically and the drift cost columns on both kinds.
+	room := width - lipgloss.Width(bar) - lipgloss.Width(glyph) - 1
+	return bar + glyph + " " + truncate(label, max(1, room))
 }
 
-// sidebarNameMin is the shortest a workspace name is worth truncating to beside
-// its project. Below it the chip has eaten the name it was labelling.
-const sidebarNameMin = 8
+// sidebarIndent is what a project sub-row is inset by: the columns a workspace row
+// spends on its selection bar, so the name above lines up with the names below it
+// rather than starting in the bar's channel.
+const sidebarIndent = "  "
 
 // sidebarHint is how the ctrl+b menus name the key.
 func sidebarHint(on bool) string {

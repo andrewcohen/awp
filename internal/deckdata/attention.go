@@ -116,7 +116,12 @@ func (r Reason) String() string {
 	case ReasonPRNeedsAction:
 		return "PR needs action"
 	case ReasonPRReadyToMerge:
-		return "approved, green"
+		// "ready to merge", not "approved, green". The old wording stated the
+		// evidence and left the reader to work out the move, which is the mistake
+		// this method's own comment warns about — and it is the same state the inbox
+		// buckets call "Ready to merge" (see InboxBucket.String), so it was one state
+		// wearing two names depending on which surface you read it on.
+		return "ready to merge"
 	case ReasonWorking:
 		return "working"
 	case ReasonRecent:
