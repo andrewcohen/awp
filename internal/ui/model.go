@@ -361,6 +361,18 @@ type Model struct {
 	// tool has, and awp's agent edits while you review.
 	ReviewedFiles map[string]string
 	MarkReviewed  func(path, hash string) error
+	// fileFold is an explicit answer for a path, set by `enter`, overriding both
+	// the reviewed rule and foldByDefault. true is folded, false is open, absent
+	// is "whatever the defaults say".
+	//
+	// The same shape as threadFold, and for the same reason: a fold is a reading
+	// position rather than a property of the review, so it has to survive the
+	// state underneath it changing. A reviewed file you deliberately opened must
+	// stay open, and a file you folded must stay folded when you mark it reviewed.
+	fileFold map[string]bool
+	// foldByDefault folds every file whose fold nobody has stated — what a diff
+	// opened in half a terminal starts as. See FoldFiles.
+	foldByDefault bool
 	// status is the footer's one line, and statusErr colours it as a failure. Set a
 	// failure through fail() rather than writing both: that is what puts the reason
 	// somewhere it can still be read afterwards.
@@ -1084,11 +1096,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if strings.TrimSpace(m.searchQuery) != "" {
 				m.seekMatch(false, false)
 			}
-		// enter opens and closes the GitHub thread under the cursor. Free to bind
-		// here: in the two lists enter hands the keyboard to the diff, and in the
-		// diff it had no meaning at all.
+		// enter opens and closes whatever is under the cursor: a conversation when
+		// the cursor is on one, else the file itself.
+		//
+		// One key for both because they are one gesture — "close this, I am not
+		// reading it now" — and which of the two is meant is never ambiguous: a
+		// thread row is a thread and every other row belongs to a file. Folding a
+		// file is deliberately *not* `r`: marking a file reviewed is a claim that you
+		// have read it, and it happens to collapse the file; a fold is a reading
+		// position and claims nothing.
 		case "enter":
-			return m.toggleThreadFold()
+			if _, onThread := m.foldableThreadAtCursor(); onThread {
+				return m.toggleThreadFold()
+			}
+			return m.toggleFold()
 		// `v` starts a range at the cursor and the movement keys extend it — the
 		// vim gesture, so there is one letter to learn and nothing else.
 		case "v":
@@ -1202,6 +1223,20 @@ func (m *Model) cursorToFirstLine() {
 // nearest line above when there is nothing after — collapsing the last file — and
 // leaves the cursor on the divider when the whole change has no lines left to
 // land on.
+// cursorToFileHeader parks the cursor on a file's divider, which is where a file
+// that has just folded has gone: its body no longer has rows to stand on, and a
+// plain clamp leaves the cursor wherever the rows that vanished used to be.
+func (m *Model) cursorToFileHeader(i int) {
+	if i < 0 || i >= len(m.stream.fileStart) {
+		return
+	}
+	m.cursorRow = m.stream.fileStart[i]
+	m.hunkHScroll = 0
+	m.clampCursor()
+	m.followCursor()
+	m.syncFileCursorToCursor()
+}
+
 func (m *Model) cursorToFileFirstLine(i int) {
 	if i < 0 || i >= len(m.stream.fileStart) {
 		return
