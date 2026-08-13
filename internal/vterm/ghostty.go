@@ -275,25 +275,56 @@ func (t *ghosttyTerm) AwaitExit() tea.Cmd {
 	}
 }
 
-// View is the screen as exactly h lines.
+// View is the h lines the viewport is on.
 //
-// The padding is not cosmetic. The formatter drops trailing blank rows — 20 rows
-// of terminal come back as however many are occupied — and every caller of
-// Hosted.View places the result in a layout sized for h. A short block silently
-// shifts the footer up.
+// The formatter emits the whole screen, scrollback included, from the top of the
+// history down. So the rows to show are the window the viewport sits at, and the
+// offset comes from the same scrollbar state Scrollback reports.
+//
+// It used to take the first h lines. That is right only for a screen with no
+// history — which is every alt-screen program, so every agent, editor and pager
+// looked correct — and wrong for a shell, where it meant the pane showed the first
+// screenful it ever printed and never advanced. Output kept arriving, the emulator
+// kept it, and the pane went on rendering the top of the scrollback: a shell that
+// looked frozen after its first page and had, in the same breath, no scrolling and
+// no live tail.
+//
+// The padding is not cosmetic either. The formatter drops trailing blank rows — 20
+// rows of terminal come back as however many are occupied — and every caller places
+// the result in a layout sized for h, so a short block silently shifts the footer
+// up.
 func (t *ghosttyTerm) View() string {
 	t.mu.Lock()
 	screen, h := t.render(), t.h
+	offset := t.viewportRow()
 	t.mu.Unlock()
 
 	lines := strings.Split(screen, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimSuffix(line, "\r") // the formatter ends rows CRLF
 	}
+	// Clamped rather than trusted: the scrollbar and the formatter are two reads of
+	// a terminal that the pty goroutine is still writing to, and a window past the
+	// end of what came back would panic rather than show a stale row.
+	if offset > max(len(lines)-h, 0) {
+		offset = max(len(lines)-h, 0)
+	}
+	lines = lines[offset:]
 	for len(lines) < h {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines[:h], "\n")
+}
+
+// viewportRow is how many rows of the formatted screen sit above the viewport.
+// Caller holds mu.
+func (t *ghosttyTerm) viewportRow() int {
+	if t.closed {
+		return 0
+	}
+	var bar C.GhosttyTerminalScrollbar
+	C.ghostty_terminal_get(t.vt, C.GHOSTTY_TERMINAL_DATA_SCROLLBAR, unsafe.Pointer(&bar))
+	return int(bar.offset)
 }
 
 // render formats the current screen. Caller holds mu.
@@ -812,6 +843,65 @@ func (t *ghosttyTerm) WantsMouse() bool {
 // Resize moves the pty and the terminal together, for the reason Term.Resize
 // does: the program lays out for the pty size and the terminal interprets what
 // comes back, so a mismatch is wrapping off by however far they drifted.
+// ScrollBy moves the pane's view up or down through the scrollback. Negative is
+// up, into history.
+//
+// The emulator keeps the history; nothing but this reaches it. A shell pane had no
+// scrolling at all — what left the top of the screen was gone, because View renders
+// the screen and the screen is the visible rows.
+func (t *ghosttyTerm) ScrollBy(rows int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || rows == 0 {
+		return
+	}
+	var beh C.GhosttyTerminalScrollViewport
+	beh.tag = C.GHOSTTY_SCROLL_VIEWPORT_DELTA
+	*(*C.intptr_t)(unsafe.Pointer(&beh.value)) = C.intptr_t(rows)
+	C.ghostty_terminal_scroll_viewport(t.vt, beh)
+}
+
+// ScrollToBottom puts the view back on the live tail.
+//
+// Its own method rather than a large positive ScrollBy, because "follow the output
+// again" is the state a pane returns to when you type into it, and a delta big
+// enough to be sure would depend on how much history there is.
+func (t *ghosttyTerm) ScrollToBottom() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	var beh C.GhosttyTerminalScrollViewport
+	beh.tag = C.GHOSTTY_SCROLL_VIEWPORT_BOTTOM
+	C.ghostty_terminal_scroll_viewport(t.vt, beh)
+}
+
+// Scrollback is how far back the view is: rows of history above the view, and
+// whether the view is on the live tail.
+//
+// Reported as "above" rather than as libghostty's own offset-from-the-top because
+// that is the question a caller has — whether there is anything up there to scroll
+// to, and whether to say the pane is not showing the latest output. libghostty's
+// header notes there is no change notification for scroll state and that callers
+// should poll once a frame, which is what the deck does.
+func (t *ghosttyTerm) Scrollback() (above int, atBottom bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return 0, true
+	}
+	var bar C.GhosttyTerminalScrollbar
+	C.ghostty_terminal_get(t.vt, C.GHOSTTY_TERMINAL_DATA_SCROLLBAR, unsafe.Pointer(&bar)) //nolint:gocritic // one read, two answers
+	// total is the whole scrollable area, len the visible window, offset where the
+	// window sits. The bottom is offset == total-len; anything less is scrolled up.
+	tail := int(bar.total) - int(bar.len)
+	if tail < 0 {
+		tail = 0
+	}
+	return int(bar.offset), int(bar.offset) >= tail
+}
+
 func (t *ghosttyTerm) Resize(w, h int) error {
 	if w <= 0 || h <= 0 {
 		return fmt.Errorf("vterm: %dx%d is not a usable size (want both > 0)", w, h)

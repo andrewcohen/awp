@@ -90,6 +90,20 @@ type Hosted interface {
 	// the host terminal cannot do this for us.
 	SelectionText(x0, y0, x1, y1 int) string
 
+	// ScrollBy moves the view through the scrollback — negative is up, into
+	// history — and ScrollToBottom puts it back on the live tail. Scrollback says
+	// how many rows of history sit above the view and whether it is on the tail,
+	// which is what a caller needs to know whether there is anywhere to go and
+	// whether to say the pane is behind.
+	//
+	// Here because the history is the emulator's: it has been keeping it all along,
+	// and View renders the visible rows, so nothing above them was reachable.
+	// libghostty's header notes there is no change notification for scroll state and
+	// that a caller should poll once a frame, which is what the deck does.
+	ScrollBy(rows int)
+	ScrollToBottom()
+	Scrollback() (above int, atBottom bool)
+
 	Resize(w, h int) error
 	Close() error
 }
