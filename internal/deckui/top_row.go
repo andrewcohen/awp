@@ -221,13 +221,33 @@ const (
 // workspaces you are looking through, which is the one thing about the list that
 // is invisible from the rows themselves.
 func (m *Model) topRowHint() string {
-	switch m.active.(type) {
-	case *splitModal:
-		return PaneLeaveKey + " keys · " + PaneLeaveKey + " q deck"
-	case *panePopover:
-		return PaneLeaveKey + " deck"
+	if m.hostsTerminal() {
+		// One string for both arrangements, because the reserved key now means the
+		// same thing in either: it opens the menu, and the way out is behind it. It
+		// used to read as a door in a pane and a prefix in a split, which made the
+		// same key look like two keys.
+		return PaneLeaveKey + " keys · " + PaneLeaveKey + " " + prefixLeaveVerb(m) + " deck"
 	}
 	return "scope: " + scopeLabel(m.scope)
+}
+
+// armedPrefixHint is the verb menu of whichever arrangement has the prefix up,
+// and whether one does at all.
+//
+// Both arrangements arm the same key and both put their menu on the same row, so
+// the row asks once here rather than testing each type where it renders.
+func (m *Model) armedPrefixHint() (string, bool) {
+	switch c := m.active.(type) {
+	case *splitModal:
+		if c.prefixArmed {
+			return splitPrefixHint(m), true
+		}
+	case *panePopover:
+		if c.prefixArmed {
+			return panePrefixHint(m), true
+		}
+	}
+	return "", false
 }
 
 // renderTopRow draws the row: what wants you on the left, then what you are
@@ -243,8 +263,8 @@ func (m *Model) topRowHint() string {
 // An armed prefix takes the whole row. That menu used to be painted over the
 // split's bottom border for want of a row to put it on; this is that row.
 func (m *Model) renderTopRow(w int) string {
-	if s, ok := m.active.(*splitModal); ok && s.prefixArmed {
-		return padTopRow(m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, w))), w)
+	if menu, armed := m.armedPrefixHint(); armed {
+		return padTopRow(m.styles.FindHeader.Render(truncate(menu, max(1, w))), w)
 	}
 	// The row starts on the body's own text column, so the badge's dots land in
 	// the same column as the status dots of the rows below them. That alignment is

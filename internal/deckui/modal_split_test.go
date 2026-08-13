@@ -222,9 +222,24 @@ func TestAHeldReservedKeyDoesNotThrash(t *testing.T) {
 	}
 }
 
-// TestThePrefixThenQLeaves. `q` rather than the reserved key a second time,
-// because a second press and a key repeat are indistinguishable — see
-// TestAHeldReservedKeyDoesNotThrash, which is the test that decided this.
+// TestADoubleTapLeavesASplit. The same gesture as in a single pane, so the
+// reserved key does not mean two different things depending on how many panes
+// are up — which was the whole complaint. Only available where a repeat is
+// reportable; see TestAHeldReservedKeyDoesNotThrash for the terminal that is not.
+func TestADoubleTapLeavesASplit(t *testing.T) {
+	m, _ := openedSplit(t, "v")
+	m.keysEnhanced = true
+	for range 2 {
+		m = pressDeck(t, m, leaveKey())
+	}
+	if m.active != nil {
+		t.Errorf("two taps of the reserved key left %T open", m.active)
+	}
+}
+
+// TestThePrefixThenQLeaves. `q` is the way out wherever a second press and a key
+// repeat are indistinguishable — see TestAHeldReservedKeyDoesNotThrash, which is
+// the test that decided this — and it keeps working where they are not.
 func TestThePrefixThenQLeaves(t *testing.T) {
 	m, _ := openedSplit(t, "v")
 	m = pressDeck(t, m, leaveKey())

@@ -129,6 +129,11 @@ type panePopover struct {
 	// exit is only worth reporting on its own if it happened before you could
 	// have read anything — see paneQuickExit.
 	opened time.Time
+	// prefixArmed is whether the last key was the reserved one, so the next key
+	// is read as a verb rather than typed at the hosted program. The split's own
+	// field of the same name carries the argument for why this is a state resolved
+	// by the next key and not by a clock.
+	prefixArmed bool
 }
 
 // PaneKindAgent is the window kind whose process is the workspace's agent.
@@ -533,6 +538,35 @@ func paneExitStatus(label string, err error, lived time.Duration, reason string)
 
 func (p *panePopover) footerHelp() string { return "" }
 
+// panePrefixHint is the verb menu for a single pane. Short, because a pane has
+// nothing to switch between and nothing to resize — the whole menu is the way
+// out. It is a menu anyway rather than a door, so the reserved key means the
+// same thing in a pane as in a split (see splitPrefixHint).
+func panePrefixHint(m *Model) string {
+	return PaneLeaveKey + ": " + prefixLeaveVerb(m) + " deck · esc cancel"
+}
+
+// prefixKey reads one key while a single pane's prefix is armed. Like the
+// split's, it disarms on anything that is not the reserved key, and swallows
+// what it read rather than letting a mistyped verb type itself at the program.
+func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	if msg.String() == PaneLeaveKey {
+		if leavesOnSecondPress(m, msg) {
+			p.prefixArmed = false
+			m.status = ""
+			return p.close(m)
+		}
+		m.status = panePrefixHint(m)
+		return nil
+	}
+	p.prefixArmed = false
+	m.status = ""
+	if msg.String() == "q" {
+		return p.close(m)
+	}
+	return nil
+}
+
 func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case vterm.OutputMsg:
@@ -559,16 +593,19 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.KeyPressMsg:
+		if p.prefixArmed {
+			return p.prefixKey(m, msg)
+		}
 		if msg.String() == PaneLeaveKey {
-			if msg.IsRepeat {
-				// Held, not pressed again. Swallowed rather than closed on or
-				// forwarded: the deck's own ctrl+\ goes back into the pane this
-				// would close, so a repeat that gets through flaps between the two
-				// (#307), and passing it to the program means holding the key
-				// sprays it at whatever is running.
-				return nil
-			}
-			return p.close(m)
+			// Armed rather than acted on, so one pane and a split of two spell the
+			// reserved key the same way. Arming is idempotent, which is what makes a
+			// held key harmless: this used to leave on every press, and since the
+			// deck's own ctrl+\ goes straight back in, a repeat flapped between the
+			// two (#307). The repeat that used to be swallowed here now simply
+			// re-arms.
+			p.prefixArmed = true
+			m.status = panePrefixHint(m)
+			return nil
 		}
 		p.term.SendKey(msg)
 		return nil

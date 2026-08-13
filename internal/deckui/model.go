@@ -5314,7 +5314,7 @@ func deckKeyGroups() []keyGroup {
 				{"/", "filter rows · esc clears"},
 				{"f", "find: collapse to sections → expand one → jump"},
 				{"P", "cycle scope (all → attention → inbox)"},
-				{PaneLeaveKey, "back into the pane you left (the key that leaves one)"},
+				{PaneLeaveKey, "back into the pane you left (inside one it is the prefix: twice, or " + PaneLeaveKey + " q, comes back)"},
 				{"L", "switch to the previous pane (tmux: last session)"},
 			},
 		},
