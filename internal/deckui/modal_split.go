@@ -348,7 +348,7 @@ func (s *splitModal) collapse(m *Model, gone modal) tea.Cmd {
 		// find. Recorded here rather than only where a key takes a half off,
 		// because this is the one place every collapse goes through: the diff
 		// viewer quitting with `q`, a pane's program exiting, a half replaced by a
-		// form. Only ctrl+space x used to record, so a split taken apart any other way
+		// form. Only ctrl+b x used to record, so a split taken apart any other way
 		// came back rebuilt.
 		m.recordArrangementValue(paneArrangement{left: paneRef{
 			project:   p.project,

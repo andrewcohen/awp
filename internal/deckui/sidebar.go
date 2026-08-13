@@ -19,7 +19,7 @@ import (
 // added to avoid, and it costs the pane a repaint of whatever program is in it.
 //
 // It reads and does nothing. There is no cursor in it, so no key moves one, so
-// the arrangement verbs behind ctrl+space still address two halves rather than three
+// the arrangement verbs behind ctrl+b still address two halves rather than three
 // regions — `h` / `l` / `tab` mean what they meant. A row you want to act on is
 // two keys away (ctrl+\ to the deck, and the row is under the cursor there), and
 // a sidebar that took the keyboard would have to answer what focus means with a
@@ -31,7 +31,7 @@ import (
 // "do I want to see what is waiting" does not change when you switch panes, so
 // it stays on until you turn it off.
 
-// sidebarKey is the verb, in both ctrl+space menus. Capital `S` because `s` is
+// sidebarKey is the verb, in both ctrl+b menus. Capital `S` because `s` is
 // already the window key for a shell, and the two live in the same menu.
 const sidebarKey = "S"
 
@@ -73,7 +73,7 @@ func (m *Model) sidebarCols() int {
 	return 0
 }
 
-// toggleSidebar is what ctrl+space S does.
+// toggleSidebar is what ctrl+b S does.
 //
 // A terminal too narrow refuses and says the width it wants, rather than setting
 // a flag that renders nothing — a key that appears to do nothing reads as broken,
@@ -245,7 +245,7 @@ func (m Model) sidebarRow(it Item, label string, width int) string {
 // its project. Below it the chip has eaten the name it was labelling.
 const sidebarNameMin = 8
 
-// sidebarHint is how the ctrl+space menus name the key.
+// sidebarHint is how the ctrl+b menus name the key.
 func sidebarHint(on bool) string {
 	if on {
 		return "S hide sidebar"

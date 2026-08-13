@@ -33,14 +33,14 @@ const PaneMenuKey = charm.PaneMenuKey
 // paneMenuPressed reports whether this key is the menu key.
 //
 // A predicate rather than a string comparison against msg.String(), because that is
-// where the terminals' disagreements were resolved when the menu was ctrl+space — read
+// where the terminals' disagreements were resolved when the menu was ctrl+| — read
 // as `|` with ctrl by a terminal that resolves the shift, as `\` with ctrl and shift
-// by one that does not, and as the leave key by one that reports neither. ctrl+space
-// has none of that: 0x00 arrives as space-with-ctrl everywhere. Kept as a function
-// anyway, since it is the one place the question is asked and the next key that wants
-// a condition on it will want it here.
+// by one that does not, and as the leave key by one that reports neither. ctrl+b has
+// none of that: 0x02 is 0x02 everywhere. Kept as a function anyway, since it is the
+// one place the question is asked and the next key that wants a condition on it will
+// want it here.
 func paneMenuPressed(_ *Model, msg tea.KeyPressMsg) bool {
-	return msg.Mod&tea.ModCtrl != 0 && msg.Code == tea.KeySpace
+	return msg.Mod&tea.ModCtrl != 0 && msg.Code == 'b'
 }
 
 // PaneBackend turns a workspace and a window kind into a process the deck can

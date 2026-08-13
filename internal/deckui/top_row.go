@@ -230,7 +230,7 @@ func (m *Model) topRowHint() string {
 		// One string for both arrangements, and on every terminal: ctrl+\ is a door
 		// everywhere, and the menu is a second key beside it rather than a mode in
 		// front of it. The row used to drop the menu where the terminal could not send
-		// ctrl+shift+\ as anything distinct; ctrl+space needs no such flag, so the
+		// ctrl+shift+\ as anything distinct; ctrl+b needs no such flag, so the
 		// offer is unconditional — see charm.PaneMenuKey.
 		return PaneMenuKey + " menu · " + PaneLeaveKey + " deck"
 	}
@@ -241,7 +241,7 @@ func (m *Model) topRowHint() string {
 // is.
 //
 // One answer for every menu the deck has, because they all go on this row: an
-// armed ctrl+space over a pane or a split, and the row list's own chords (`|`, `p`),
+// armed ctrl+b over a pane or a split, and the row list's own chords (`|`, `p`),
 // whose body is the row list rather than a screen of their own. Asked once here
 // rather than tested where each of them renders — which is how the chords came to
 // print theirs somewhere else.

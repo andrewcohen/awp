@@ -95,8 +95,8 @@ func TestAHeldLeaveKeyInAPaneStaysInIt(t *testing.T) {
 	}
 }
 
-// TestTheMenuKeyNeedsNothingFromTheTerminal. ctrl+space is 0x00, which decodes to
-// space-with-ctrl on a plain terminal and under the Kitty protocol alike — so the
+// TestTheMenuKeyNeedsNothingFromTheTerminal. ctrl+b is 0x02 on a plain terminal and
+// under the Kitty protocol alike — so the
 // menu is reachable everywhere. It was ctrl+shift+\ , which is 0x1c on a plain
 // terminal exactly as ctrl+\ is: nothing to tell apart, so such a terminal had no
 // menu at all. This is the test that used to say so.
