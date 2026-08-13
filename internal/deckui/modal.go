@@ -96,6 +96,14 @@ func (m *Model) childBox() box {
 		b.y += topRowRows
 		b.h -= topRowRows
 	}
+	// The attention strip's columns come off the left the same way, and here for
+	// the same reason: the cursor's position and a click's translation both derive
+	// from this box, so a child that starts 28 columns in is one every path agrees
+	// about. See sidebar.go.
+	if cols := m.sidebarCols(); cols > 0 {
+		b.x += cols
+		b.w -= cols
+	}
 	return b
 }
 
