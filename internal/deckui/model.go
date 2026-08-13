@@ -2924,15 +2924,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
+			// No m.status: the menu is on the top row, so putting it in the status
+			// bar too would say it twice, and a bar this long is a bar that wraps.
 			m.active = &splitChordModal{item: item}
-			m.status = splitChordHint()
 			return m, nil
 		case key.Matches(msg, km.PRMenu):
 			if _, ok := m.selected(); !ok {
 				return m, nil
 			}
+			// The menu is on the top row — see prMenuHint.
 			m.active = prMenuModal{}
-			m.status = "pr: o open in browser · d description · D description in a window · r repair · s set PR # · esc cancel"
 			return m, nil
 		case key.Matches(msg, km.PinChord):
 			if _, ok := m.selected(); !ok {
@@ -4139,6 +4140,12 @@ func (m Model) view() string {
 	case m.active != nil:
 		if bm, ok := m.active.(bodyModal); ok {
 			left, right = bm.view(&m, m.childBox())
+			// A chord's body is the row list, so it is still a screen the deck's own
+			// row belongs above — and the row is where its menu goes. childBox has
+			// already taken the row out of the height the modal sized itself to.
+			if m.showsTopRow() {
+				left = m.renderTopRow(m.width) + "\n" + left
+			}
 		}
 	default:
 		// The list's own top row is the deck's now, prepended below with the one a

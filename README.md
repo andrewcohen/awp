@@ -894,7 +894,13 @@ A split wears **the same top row a single pane and the row list do** — see [th
 top row](#the-top-row), which is where it is described: the badge, the name of the
 half the keys are in, and how to leave, spanning the terminal above both halves. It is the deck's row rather than either half's,
 because it answers for the screen; the halves render no header of their own.
-While the `ctrl+\` prefix is armed, that same row becomes the verb menu.
+While a menu is up, that same row becomes the menu — an armed `ctrl+|` over a
+pane or a split, and the row list's own chords (`|`, `p`), which are menus about
+the row you are pointing at with that row still on screen beneath them. One place
+for every menu the deck has, so which key you pressed does not change where to
+look. It is also the only place a menu fits: the status bar is budgeted as exactly
+one line, and a menu long enough to wrap it costs the frame a row, which scrolls
+the whole deck up off the top of the screen.
 
 It does **not** list both halves. That was the first cut, with the focused one
 wearing the usual `┃` selection bar — but the halves are the same workspace, so
