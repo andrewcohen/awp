@@ -32,21 +32,15 @@ const PaneMenuKey = charm.PaneMenuKey
 
 // paneMenuPressed reports whether this key is the menu key.
 //
-// Not a string comparison, because the terminals that can send it do not agree on
-// how: a shifted backslash may arrive as `|` with ctrl, or as `\` with ctrl and
-// shift, depending on whether the terminal resolves the shift itself. Both are the
-// same keypress and both mean the menu.
-//
-// And it is only that keypress at all where the terminal reports shifted control
-// keys as distinct — a plain terminal sends 0x1c for ctrl+shift+\ exactly as for
-// ctrl+\, so reading it as the menu there would swallow the key that leaves. The
-// menu is simply unavailable on such a terminal, which is why the deck's `|` chord
-// stays the way to open a split from the row list.
-func paneMenuPressed(m *Model, msg tea.KeyPressMsg) bool {
-	if !m.keysEnhanced || msg.Mod&tea.ModCtrl == 0 {
-		return false
-	}
-	return msg.Code == '|' || (msg.Code == '\\' && msg.Mod&tea.ModShift != 0)
+// A predicate rather than a string comparison against msg.String(), because that is
+// where the terminals' disagreements were resolved when the menu was ctrl+space — read
+// as `|` with ctrl by a terminal that resolves the shift, as `\` with ctrl and shift
+// by one that does not, and as the leave key by one that reports neither. ctrl+space
+// has none of that: 0x00 arrives as space-with-ctrl everywhere. Kept as a function
+// anyway, since it is the one place the question is asked and the next key that wants
+// a condition on it will want it here.
+func paneMenuPressed(_ *Model, msg tea.KeyPressMsg) bool {
+	return msg.Mod&tea.ModCtrl != 0 && msg.Code == tea.KeySpace
 }
 
 // PaneBackend turns a workspace and a window kind into a process the deck can

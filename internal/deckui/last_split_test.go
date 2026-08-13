@@ -146,7 +146,7 @@ func TestEnteringWithAnotherKeyIsThatKind(t *testing.T) {
 	p.close(&m)
 }
 
-// TestAHalfThatClosesItselfIsRememberedAsOnePane. ctrl+| x is not the only way a
+// TestAHalfThatClosesItselfIsRememberedAsOnePane. ctrl+space x is not the only way a
 // split comes apart — the diff viewer quits with its own key, and a pane's program
 // exits on its own — and all of those leave one pane on screen. Recorded where
 // every collapse goes through rather than at the one key that had it, or a split

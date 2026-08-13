@@ -227,14 +227,12 @@ const (
 // is invisible from the rows themselves.
 func (m *Model) topRowHint() string {
 	if m.hostsTerminal() {
-		// One string for both arrangements: ctrl+\ is a door on every surface, and the
-		// menu is a second key beside it rather than a mode in front of it. On a
-		// terminal that cannot send the menu key there is no menu, so the row does not
-		// offer one — see paneMenuPressed.
-		if m.keysEnhanced {
-			return PaneMenuKey + " menu · " + PaneLeaveKey + " deck"
-		}
-		return PaneLeaveKey + " deck"
+		// One string for both arrangements, and on every terminal: ctrl+\ is a door
+		// everywhere, and the menu is a second key beside it rather than a mode in
+		// front of it. The row used to drop the menu where the terminal could not send
+		// ctrl+shift+\ as anything distinct; ctrl+space needs no such flag, so the
+		// offer is unconditional — see charm.PaneMenuKey.
+		return PaneMenuKey + " menu · " + PaneLeaveKey + " deck"
 	}
 	return "scope: " + scopeLabel(m.scope)
 }
@@ -243,7 +241,7 @@ func (m *Model) topRowHint() string {
 // is.
 //
 // One answer for every menu the deck has, because they all go on this row: an
-// armed ctrl+| over a pane or a split, and the row list's own chords (`|`, `p`),
+// armed ctrl+space over a pane or a split, and the row list's own chords (`|`, `p`),
 // whose body is the row list rather than a screen of their own. Asked once here
 // rather than tested where each of them renders — which is how the chords came to
 // print theirs somewhere else.

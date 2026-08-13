@@ -31,7 +31,7 @@ func sidebarDeck(t *testing.T) Model {
 	return m
 }
 
-// sidebarPane opens a pane and turns the strip on with ctrl+| S.
+// sidebarPane opens a pane and turns the strip on with ctrl+space S.
 func sidebarPane(t *testing.T) (Model, *panePopover) {
 	t.Helper()
 	m := sidebarDeck(t)
@@ -45,7 +45,7 @@ func sidebarPane(t *testing.T) (Model, *panePopover) {
 	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey(sidebarKey))
 	if !m.showsSidebar() {
-		t.Fatalf("ctrl+| %s did not put the strip up (status %q)", sidebarKey, m.status)
+		t.Fatalf("ctrl+space %s did not put the strip up (status %q)", sidebarKey, m.status)
 	}
 	return m, p
 }
@@ -262,7 +262,7 @@ func TestTheSidebarTogglesFromASplitToo(t *testing.T) {
 	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey(sidebarKey))
 	if !m.showsSidebar() {
-		t.Fatalf("ctrl+| %s did nothing in a split (status %q)", sidebarKey, m.status)
+		t.Fatalf("ctrl+space %s did nothing in a split (status %q)", sidebarKey, m.status)
 	}
 	if _, isSplit := m.active.(*splitModal); !isSplit {
 		t.Fatalf("the key took the split down: active is %T", m.active)

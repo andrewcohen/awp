@@ -95,47 +95,50 @@ func TestAHeldLeaveKeyInAPaneStaysInIt(t *testing.T) {
 	}
 }
 
-// TestTheMenuKeyNeedsEventTypes. ctrl+shift+\ is 0x1c on a plain terminal, exactly
-// as ctrl+\ is, so there is nothing to tell apart: reading it as the menu there
-// would swallow the key that leaves. The menu is unavailable rather than
-// approximated, and the pane still leaves on the key it always did.
-func TestTheMenuKeyNeedsEventTypes(t *testing.T) {
+// TestTheMenuKeyNeedsNothingFromTheTerminal. ctrl+space is 0x00, which decodes to
+// space-with-ctrl on a plain terminal and under the Kitty protocol alike — so the
+// menu is reachable everywhere. It was ctrl+shift+\ , which is 0x1c on a plain
+// terminal exactly as ctrl+\ is: nothing to tell apart, so such a terminal had no
+// menu at all. This is the test that used to say so.
+func TestTheMenuKeyNeedsNothingFromTheTerminal(t *testing.T) {
 	m := twoRowPanes(t, allKinds())
 	next, _ := m.trigger(ActionOpenWindow, PaneKindAgent)
 	m = next.(Model)
-	if _, ok := m.active.(*panePopover); !ok {
+	p, ok := m.active.(*panePopover)
+	if !ok {
 		t.Fatalf("no pane opened; status %q", m.status)
 	}
+	t.Cleanup(func() { p.close(&m) })
 	if m.keysEnhanced {
-		t.Fatal("this terminal reports event types; the fallback is untested")
+		t.Fatal("this terminal reports event types; the plain-terminal case is untested")
 	}
-	// What such a terminal actually sends for the menu key.
-	next, _ = m.Update(resumeKey())
-	m = next.(Model)
-	if m.active != nil {
-		t.Errorf("ctrl+\\ stopped leaving the pane on a terminal with no menu (active=%T)", m.active)
+	if !paneMenuPressed(&m, menuKey()) {
+		t.Error("the menu key was not read as the menu on a terminal with no event types")
 	}
-	if hint := m.topRowHint(); strings.Contains(hint, PaneMenuKey) {
-		t.Errorf("the row offers %q, which this terminal cannot send: %q", PaneMenuKey, hint)
+	m = pressDeck(t, m, menuKey())
+	if !p.prefixArmed {
+		t.Error("the menu did not arm on a plain terminal")
+	}
+	if hint := m.topRowHint(); !strings.Contains(hint, PaneMenuKey) {
+		t.Errorf("the row does not offer the menu it can now always send: %q", hint)
 	}
 }
 
-// TestTheMenuKeyIsBothSpellings. A shifted backslash arrives as `|` with ctrl from
-// a terminal that resolves the shift, and as `\` with ctrl and shift from one that
-// reports it — the same keypress either way.
-func TestTheMenuKeyIsBothSpellings(t *testing.T) {
+// TestTheDoorIsNotTheMenu. The two are one key apart in the hand and must not be
+// one key: reading the door as the menu would open a menu instead of leaving.
+func TestTheDoorIsNotTheMenu(t *testing.T) {
 	m := twoRowPanes(t, allKinds())
 	m.keysEnhanced = true
+	if paneMenuPressed(&m, resumeKey()) {
+		t.Error("the leave key was read as the menu key")
+	}
+	// And the old spelling is gone rather than lingering as a second way to say it.
 	for _, msg := range []tea.KeyPressMsg{
 		{Code: '|', Mod: tea.ModCtrl},
 		{Code: '\\', Mod: tea.ModCtrl | tea.ModShift},
 	} {
-		if !paneMenuPressed(&m, msg) {
-			t.Errorf("%q was not read as the menu key", msg.String())
+		if paneMenuPressed(&m, msg) {
+			t.Errorf("%q still opens the menu; it was unbound", msg.String())
 		}
-	}
-	// And the door is not the menu, or pressing it would open one instead of leaving.
-	if paneMenuPressed(&m, resumeKey()) {
-		t.Error("the leave key was read as the menu key")
 	}
 }

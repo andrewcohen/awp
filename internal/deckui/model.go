@@ -876,7 +876,7 @@ type Model struct {
 	lastPane paneArrangement
 	prevPane paneArrangement
 	// sidebar is whether the attention strip is up beside a hosted program, which
-	// ctrl+| S toggles. A property of the deck rather than of the arrangement — see
+	// ctrl+space S toggles. A property of the deck rather than of the arrangement — see
 	// sidebar.go, where that is argued.
 	sidebar bool
 	// keysEnhanced is whether this terminal reports key repeats and releases as

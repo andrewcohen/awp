@@ -86,7 +86,7 @@ waiting.
 
 Under `awp zdeck` the badge **stays on screen inside a pane**, at the left of the
 deck's top row, ahead of the label of what is on screen and the
-`ctrl+| menu · ctrl+\ deck` hint. A pane is where most of the time goes, and the counts are the reason to go
+`ctrl+space menu · ctrl+\ deck` hint. A pane is where most of the time goes, and the counts are the reason to go
 back to the row list — so they follow you into it, and they keep counting while
 you are there: an agent that finishes its turn behind the pane shows up without
 your leaving. The row is one row for three things, so a narrow terminal drops the
@@ -107,8 +107,7 @@ One row, one address. A pane also gets back the row its header was spending.
 
 What changes between the screens is only what the row has to say. Over a pane or a
 split it names what is on screen, that workspace's own state, and the two keys that
-act on it — `ctrl+| menu · ctrl+\ deck`, dropping the menu on a terminal that
-cannot send it. Over the row list it names the scope — there is nothing to leave, and no
+act on it — `ctrl+space menu · ctrl+\ deck`. Over the row list it names the scope — there is nothing to leave, and no
 one workspace to report on. The badge is at the left on all three.
 
 Between the badge and the label the row reports **the hosted workspace's own
@@ -854,10 +853,11 @@ install's.
 
 `ctrl+\` leaves a pane, on one press, whether one pane is up or a split of two. It
 has to be a key nothing inside one wants, because every other key belongs to the
-program: `esc`, `q` and `ctrl+c` all mean something to an agent. **`ctrl+|` — the
-same key shifted — is the menu**: split what is on screen, move the keyboard
-between halves, resize, zoom, close a half. Two gestures one key apart rather than
-one key meaning two things depending on how many panes are up. See [a split, and
+program: `esc`, `q` and `ctrl+c` all mean something to an agent. **`ctrl+space` is the
+menu**: split what is on screen, move the keyboard between halves, resize, zoom,
+close a half, show the attention sidebar. Two keys, two gestures, rather than one
+key meaning two things depending on how many panes are up — and neither of them a
+shifted anything, since the menu is the one you press most. See [a split, and
 the keys inside one](#a-split-and-the-keys-inside-one) for the verbs.
 
 Any window kind zdeck does not handle — the review
@@ -894,7 +894,7 @@ A split wears **the same top row a single pane and the row list do** — see [th
 top row](#the-top-row), which is where it is described: the badge, the name of the
 half the keys are in, and how to leave, spanning the terminal above both halves. It is the deck's row rather than either half's,
 because it answers for the screen; the halves render no header of their own.
-While a menu is up, that same row becomes the menu — an armed `ctrl+|` over a
+While a menu is up, that same row becomes the menu — an armed `ctrl+space` over a
 pane or a split, and the row list's own chords (`|`, `p`), which are menus about
 the row you are pointing at with that row still on screen beneath them. One place
 for every menu the deck has, so which key you pressed does not change where to
@@ -915,13 +915,13 @@ are somewhere specific, and the half that has them is the one with the teal
 border — the other drops to grey, the same tier the diff viewer's unfocused panes
 drop to.
 
-**`ctrl+|` is the menu**, in a single pane and in a split alike: a prefix, because
+**`ctrl+space` is the menu**, in a single pane and in a split alike: a prefix, because
 the programs on screen keep their own complete keymaps and there is no room to
-spend a second key on each verb. It is the shifted leave key, so the pair you reach
-for from inside a pane is one key apart. `ctrl+\` is not part of it — that is the
-door, and it leaves on one press from either arrangement.
+spend a second key on each verb. Two adjacent fingers and no shift, for the key you
+reach for most from inside a pane. `ctrl+\` is not part of it — that is the door, and
+it leaves on one press from either arrangement.
 
-| after `ctrl+\|` | does |
+| after `ctrl+space` | does |
 |---|---|
 | a window key — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch | **split**: that kind beside the pane you are in. Already split, there is nowhere to put a third, so it **replaces the focused half** |
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
@@ -982,14 +982,16 @@ width.
 The menu has no timeout, for the same reason it has no ambiguity: it is a state
 resolved by the next key, not by a clock.
 
-**`ctrl+|` needs the Kitty keyboard protocol.** A plain terminal sends `0x1c` for
-`ctrl+shift+\` exactly as it does for `ctrl+\`, so there is nothing to tell apart —
-reading one as the menu there would swallow the key that leaves. Where the flag is
-not granted there is simply no menu: the top row stops offering one, `ctrl+\` still
-leaves, and `|` from the row list is still the way to open a split. Terminals that
-do grant it disagree about how they spell it — some resolve the shift and send `|`
-with ctrl, others send `\` with ctrl and shift — and both are read as the same
-keypress.
+**The menu needs nothing from the terminal.** `ctrl+space` is `0x00`, which decodes
+to space-with-ctrl on a plain terminal and under the Kitty keyboard protocol alike.
+It was `ctrl+|` — the shifted leave key, on the argument that the two gestures you
+reach for from inside a pane should be one key apart. What that spelled in the hand
+was `ctrl+shift+\`, a three-finger stretch for the key you press most, next to a
+door that costs one press; the pairing was a nice property of the notation rather
+than of the gesture. It was also the one surface some terminals could not reach at
+all: a plain terminal sends `0x1c` for `ctrl+shift+\` exactly as for `ctrl+\`, so
+there was nothing to tell apart and such a terminal simply had no menu. `ctrl+|` is
+now **unbound** — one gesture, one key. `ctrl+\` is untouched.
 
 **A held `ctrl+\` does nothing.** The key spells two decisions — leave a pane, and
 from the row list go back into one — so a repeat read as a press opened what the
@@ -998,7 +1000,7 @@ the Kitty keyboard protocol's event-types flag, which is what makes a repeat
 reportable as something other than a press, and drops it in both places. A terminal
 that does not grant the flag never reports a repeat at all, which is exactly the
 behaviour awp had before asking; the flap comes back there, and there is nothing to
-be done about it from this side. A held `ctrl+|` is harmless on every terminal,
+be done about it from this side. A held `ctrl+space` is harmless on every terminal,
 since re-arming an armed menu is idempotent.
 
 The divider's position is a fraction of the width rather than a column count, so
@@ -1131,7 +1133,7 @@ split to check a row and coming back finds the split rather than one pane you th
 have to re-split. Every change of shape records — a half replaced, a half closed,
 the divider moved — because "what was on screen" is the question being answered, so
 closing a half and leaving does *not* rebuild the split you had just taken apart.
-That holds however the half went: `ctrl+| x` takes one off, and so does the diff
+That holds however the half went: `ctrl+space x` takes one off, and so does the diff
 viewer quitting with its own key or a pane's program exiting, and all of them leave
 one pane behind as the thing to come back to. A
 terminal too narrow for two halves by the time you come back gets the left half
