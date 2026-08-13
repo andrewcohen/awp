@@ -278,8 +278,10 @@ func HostTerm(env []string) []string {
 	return append(out, "TERM="+term)
 }
 
-// Emulator is EmulatorXVT: a Term is the x/vt implementation of Hosted.
-func (t *Term) Emulator() string { return EmulatorXVT }
+// Emulator names this implementation. A Term is x/vt, which is no longer the
+// emulator behind any pane — Open does not build one, and the type goes with the
+// tests still driving it (322b).
+func (t *Term) Emulator() string { return "x-vt" }
 
 // Gen is the generation this Term was started with.
 func (t *Term) Gen() int { return t.gen }

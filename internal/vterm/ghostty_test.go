@@ -16,7 +16,8 @@ import (
 // ghosttyPane runs cmd on a libghostty-vt pane of the given size.
 func ghosttyPane(t *testing.T, w, h int, cmd *exec.Cmd) Hosted {
 	t.Helper()
-	t.Setenv(VTEnv, EmulatorGhostty)
+	// Open, with nothing to say about which emulator: in a build with this tag
+	// there is one, and it is this. The env var that used to choose is gone.
 	term, err := Open(1, w, h, cmd, HostColors{})
 	if err != nil {
 		t.Fatalf("open a ghostty pane: %v", err)

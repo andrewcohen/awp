@@ -1240,27 +1240,28 @@ screen is not repainted. The cap is the backstop; the source is the fix.
 
 ### Which emulator interprets a pane
 
-A pane's output is interpreted by a terminal emulator inside awp, and `AWP_PANE_VT` picks which one:
+A pane's output is interpreted by a terminal emulator inside awp, and there is one:
+**libghostty-vt**, Ghostty's own VT library. It is present only in a binary built
+with `-tags ghosttyvt`, which is what `make ghostty` produces — so an ordinary
+`go build` gives you an awp with no emulator, which loses panes (`awp zdeck`, and
+the deck's own hosted terminals) and nothing else. A pane in such a build refuses
+and says which tag it wanted.
 
-| Value | Emulator |
-|-------|----------|
-| unset, or `x-vt` | `github.com/charmbracelet/x/vt` — the default, pure Go, what every ordinary build has. |
-| `ghostty` | libghostty-vt, Ghostty's own VT library. Only present in a binary built with `-tags ghosttyvt`. |
+`AWP_PANE_VT` used to choose between libghostty-vt and `x/vt`, and is **gone**
+along with the emulator it chose. It existed to run the two against the same
+session with the same program, which is the only way to tell a fidelity defect in
+the emulator from one in the layout around it; libghostty-vt won, and a variable
+whose every accepted value names the same emulator is a question the reader has to
+answer and cannot get wrong. A stale `AWP_PANE_VT` in a shell profile is now
+inert rather than an error.
 
-It exists to compare the two on the same session with the same program, which is
-the only way to tell a fidelity defect in the emulator from one in the layout
-around it. Note it is **not** `AWP_PANE_EXEC`, which answers a different question
-— that one hands the real terminal to the child and runs no emulator at all.
+It was never `AWP_PANE_EXEC`, which answers a different question and remains —
+that one hands the real terminal to the child and runs no emulator at all.
 
-Asking for an emulator this binary does not have is an error naming the build
-tag, not a quiet fall back to the default: the point of choosing is to compare,
-and a comparison that silently ran the default twice would report that the two
-agree.
-
-The top row **no longer names the emulator**. It did while this was an open
-question — a comparison you cannot confirm you are inside is not a comparison —
-and the answer is settled, so the columns went to the hosted workspace's own
-state instead. The byte log (`AWP_PANE_LOG`) still says which one ran.
+The top row **no longer names the emulator**. It did while there were two — a
+comparison you cannot confirm you are inside is not a comparison — and the columns
+went to the hosted workspace's own state instead. The byte log (`AWP_PANE_LOG`)
+still records what a pane sent and received.
 
 The ghostty build needs an archive built from Ghostty's source, and `make` does
 the whole thing:

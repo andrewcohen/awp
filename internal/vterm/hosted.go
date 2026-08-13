@@ -1,10 +1,7 @@
 package vterm
 
 import (
-	"fmt"
-	"os"
 	"os/exec"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -17,7 +14,11 @@ import (
 // second implementation shares no types with the first, which is the whole
 // point: the two must be swappable without the pane knowing.
 //
-// *Term, the x/vt implementation, satisfies it.
+// ghosttyTerm, the libghostty-vt implementation, satisfies it. It was written
+// against this interface as the second of two, which is what kept the pane from
+// knowing which one it had; the first has since been deleted, and the interface
+// stays because a pane asking a terminal for a screen is the right seam whether
+// or not there is a choice to make behind it.
 type Hosted interface {
 	// Emulator names which implementation this is, one of the Emulator constants.
 	//
@@ -72,39 +73,24 @@ type Hosted interface {
 	Close() error
 }
 
-// VTEnv names the environment variable that picks a pane's emulator.
+// EmulatorGhostty is libghostty-vt, the emulator behind every pane.
 //
-// Deliberately not AWP_PANE_EXEC, which already means something else — hand the
-// real terminal to the child and run no emulator at all. One variable answering
-// both "which emulator" and "no emulator" would be two questions wearing one
-// name.
-const VTEnv = "AWP_PANE_VT"
+// It is available only in a binary built with -tags ghosttyvt, because it is cgo
+// against an archive built by Zig. See internal/vterm/ghostty.go for how, and
+// ghostty_off.go for what a build without it does instead.
+const EmulatorGhostty = "ghostty"
 
-// Emulator names are the accepted values of AWP_PANE_VT.
-const (
-	// EmulatorXVT is github.com/charmbracelet/x/vt, the default.
-	EmulatorXVT = "x-vt"
-	// EmulatorGhostty is libghostty-vt, available only in a binary built with
-	// -tags ghosttyvt. See internal/vterm/ghostty.go.
-	EmulatorGhostty = "ghostty"
-)
-
-// Open starts a hosted terminal, using whichever emulator AWP_PANE_VT names.
+// Open starts a hosted terminal.
 //
-// The arguments are Start's, and an unset AWP_PANE_VT is exactly Start.
+// There is one emulator, and which one is a property of the build rather than of
+// the environment. AWP_PANE_VT used to choose between libghostty-vt and x/vt while
+// the two were being compared; a variable whose every accepted value names the
+// same emulator is a question the reader has to answer and cannot get wrong,
+// which is worse than no question. It went with x/vt.
 //
-// A value naming an emulator this binary was not built with is an error rather
-// than a fall back to the default. Falling back would be the worse failure: the
-// point of choosing is to compare the two, and a comparison that silently ran
-// the same emulator twice would report that they agree.
+// A build without the tag refuses here rather than falling back, because there is
+// nothing left to fall back to — see ghostty_off.go, which is what says so and
+// says how to get one.
 func Open(gen, w, h int, c *exec.Cmd, host HostColors) (Hosted, error) {
-	switch name := strings.TrimSpace(os.Getenv(VTEnv)); name {
-	case "", EmulatorXVT:
-		return Start(gen, w, h, c, host)
-	case EmulatorGhostty:
-		return startGhostty(gen, w, h, c, host)
-	default:
-		return nil, fmt.Errorf("vterm: %s=%q is not an emulator this build knows (want %q or %q)",
-			VTEnv, name, EmulatorXVT, EmulatorGhostty)
-	}
+	return startGhostty(gen, w, h, c, host)
 }
