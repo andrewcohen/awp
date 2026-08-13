@@ -861,8 +861,8 @@ type Model struct {
 	// which L alternates to. Zero until a pane has been opened. See paneRef for
 	// why they are the row's identity rather than the row, and recordPane for why
 	// there are two.
-	lastPane paneRef
-	prevPane paneRef
+	lastPane paneArrangement
+	prevPane paneArrangement
 	// keysEnhanced is whether this terminal reports key repeats and releases as
 	// distinct from presses — the Kitty protocol's event-types flag, asked for in
 	// View and answered once at startup. False on a terminal that does not support

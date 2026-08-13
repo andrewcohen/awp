@@ -176,6 +176,7 @@ func (s *splitModal) resize(m *Model, frac float64) {
 	before := s.splitCol(m.childBox())
 	s.leftFrac = splitLeftFrac(s.leftFrac) + frac
 	after := s.splitCol(m.childBox())
+	defer m.recordArrangement(s)
 	if after == before {
 		// Clamped at a wall. Put the fraction back where the wall is, so repeated
 		// taps do not accumulate a fraction the clamp is hiding and then have to be
@@ -375,6 +376,9 @@ func (s *splitModal) dragDivider(m *Model, msg tea.MouseMsg) bool {
 			return false
 		}
 		s.leftFrac = float64(x) / float64(max(1, m.width))
+		// Where you dragged it to is where it should come back — the same reason the
+		// keyboard resize records.
+		m.recordArrangement(s)
 		return true
 	case tea.MouseClickMsg:
 		col := s.splitCol(m.childBox())
@@ -420,7 +424,18 @@ func (s *splitModal) closeHalf(m *Model) tea.Cmd {
 	case *diffModal:
 		m.active = nil
 	}
-	return tea.Batch(cmd, s.collapse(m, going))
+	collapsed := s.collapse(m, going)
+	// What is on screen is one pane now, so that is what coming back should find.
+	// Without this, closing a half and leaving would re-open the split you had just
+	// taken apart.
+	if survivor, isPane := m.active.(*panePopover); isPane {
+		m.recordArrangementValue(paneArrangement{left: paneRef{
+			project:   survivor.project,
+			workspace: survivor.workspace,
+			kind:      survivor.kind,
+		}})
+	}
+	return tea.Batch(cmd, collapsed)
 }
 
 // replaceHalf swaps the focused half for a fresh child of the named kind.
@@ -459,6 +474,7 @@ func (s *splitModal) replaceHalf(m *Model, kind string) tea.Cmd {
 		s.left = child
 	}
 	s.label = PaneLabel(kind)
+	m.recordArrangement(s)
 	m.status = ""
 	return tea.Batch(closed, cmd)
 }
@@ -536,32 +552,49 @@ func renderChild(m *Model, child modal, b box) string {
 // one is — the only difference being the box it is handed. That is the whole
 // reason 257a came first.
 func (m *Model) openSplit(item Item, kind string) (tea.Cmd, bool) {
+	if cmd, ok := m.openSplitKinds(item, PaneKindAgent, kind, splitEvenFrac); ok {
+		return cmd, true
+	}
+	return nil, true
+}
+
+// openSplitKinds is openSplit with both halves named and the divider placed, which
+// is what re-opening a remembered split needs: the left half is whatever you were
+// in when you split it, not necessarily the agent.
+//
+// Reports false when the split could not be built — a terminal too narrow, a kind
+// this deck cannot open — having said why. The caller decides what to do instead;
+// re-opening a remembered arrangement falls back to the left half alone, while the
+// `|` chord has nothing to fall back to.
+func (m *Model) openSplitKinds(item Item, leftKind, rightKind string, frac float64) (tea.Cmd, bool) {
 	full := m.childBox()
 	if !splitFits(full) {
 		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, splitMinW)
-		return nil, true
+		return nil, false
 	}
 	// The right half's box is what the kind is opened into. Built from a
 	// throwaway split so the arithmetic is the same one the renderer will do,
 	// rather than a second copy of it that agrees today.
-	probe := &splitModal{}
+	probe := &splitModal{leftFrac: frac}
 	leftBox, rightBox := probe.boxes(full)
 
-	left, cmdLeft, ok := m.openChild(item, PaneKindAgent, leftBox)
+	left, cmdLeft, ok := m.openChild(item, leftKind, leftBox)
 	if !ok {
-		return nil, true
+		return nil, false
 	}
-	right, cmdRight, ok := m.openChild(item, kind, rightBox)
+	right, cmdRight, ok := m.openChild(item, rightKind, rightBox)
 	if !ok {
-		// The agent half opened and its neighbour did not, so there is nothing
+		// The left half opened and its neighbour did not, so there is nothing
 		// to put beside it. Left as a whole pane rather than torn down: it is
 		// what `a` would have given you, and the status line says why the rest
-		// did not happen.
+		// did not happen. Reported as a success for that reason — something is on
+		// screen, and it is not the caller's fallback that put it there.
 		m.active = left
 		return cmdLeft, true
 	}
-	s := &splitModal{left: left, right: right, rightFocused: true, label: PaneLabel(kind)}
+	s := &splitModal{left: left, right: right, rightFocused: true, label: PaneLabel(rightKind), leftFrac: frac}
 	m.active = s
+	m.recordArrangement(s)
 	m.status = ""
 	return tea.Batch(cmdLeft, cmdRight), true
 }
@@ -587,7 +620,7 @@ func (m *Model) openChild(item Item, kind string, b box) (modal, tea.Cmd, bool) 
 		dm.inner.HideLeftColumn(true)
 		return dm, loadCmd, true
 	}
-	p, cmd, handled := m.newPane(item, kind, b)
+	p, cmd, handled := m.newPane(item, kind, b, false)
 	if !handled {
 		m.status = "split: nothing here hosts a " + PaneLabel(kind) + " pane"
 		return nil, nil, false
