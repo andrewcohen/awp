@@ -151,6 +151,22 @@ type panePopover struct {
 	// sel is the text dragged over with the mouse, for a pane whose program does
 	// not want the mouse itself — see pane_selection.go.
 	sel paneSelection
+	// lastBox is the region this pane was last drawn in, and what a mouse event is
+	// translated against.
+	//
+	// Recorded rather than asked for, because asking got the wrong answer inside a
+	// split. m.boxOf(child) returns the whole childBox when m.active is the child,
+	// and splitModal.deliver sets m.active to the half before calling its update —
+	// so a mouse event arriving at a half was measured from the left edge of the
+	// screen instead of from the half's own origin. A drag in the right half
+	// selected nothing at all, and every click forwarded to a program in a right
+	// half had been landing on the wrong cell since panes learned about the mouse.
+	//
+	// The drawn box is also the more honest source: it is where the cells the
+	// pointer is over actually are, rather than where a second derivation says they
+	// should be. Zero until the first render, which is the one frame where there is
+	// nothing on screen to point at.
+	lastBox box
 	// opened is when the process started, which is how the exit is judged. An
 	// exit is only worth reporting on its own if it happened before you could
 	// have read anything — see paneQuickExit.
@@ -869,7 +885,7 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		// The deck asks for mouse events only while a pane is up (see View),
 		// so anything arriving here belongs to the hosted program — but in the
 		// deck's coordinates, not its own.
-		inner, ok := paneMouse(msg, m.boxOf(p))
+		inner, ok := paneMouse(msg, p.lastBox)
 		if !ok {
 			return nil
 		}
@@ -985,6 +1001,8 @@ func paneFits(deckW, deckH int) bool {
 }
 
 func (p *panePopover) renderPopover(m *Model, b box) string {
+	// Where the pointer will find these cells, for the mouse to translate against.
+	p.lastBox = b
 	w, h := paneDims(b.w, b.h)
 	if w != p.setW || h != p.setH {
 		// The deck was resized, so the pty and the emulator have to follow

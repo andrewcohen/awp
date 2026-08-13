@@ -78,6 +78,9 @@ func TestTheWheelStillReachesTheHalfItIsOver(t *testing.T) {
 		t.Fatalf("the terminal is a %T", p.term)
 	}
 	f.askForMouse() // a program that never asked is sent nothing at all
+	// A frame first: an event is translated against the box the half was drawn in,
+	// which is the only thing that knows where a right half starts.
+	m.render()
 
 	m.Update(wheelAt(right.x + right.w/2))
 	if len(f.miceSeen()) == 0 {
