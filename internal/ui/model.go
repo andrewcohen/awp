@@ -428,6 +428,10 @@ func (m *Model) HideLeftColumn(hidden bool) {
 // check the state it asked for rather than reaching into the view.
 func (m Model) LeftColumnHidden() bool { return m.hideLeft }
 
+// FilesFoldByDefault reports whether files whose fold nobody has stated start
+// closed, so a host can check what it asked for. See FoldFiles.
+func (m Model) FilesFoldByDefault() bool { return m.foldByDefault }
+
 func (m *Model) SetSize(width, bodyHeight int) {
 	height := max(minBodyHeight, bodyHeight)
 	_, right := m.paneWidthsFor(width)

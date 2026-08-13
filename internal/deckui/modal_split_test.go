@@ -451,6 +451,20 @@ func TestTheDiffHalfOpensWithTheLeftColumnCollapsed(t *testing.T) {
 	}
 }
 
+// TestTheDiffHalfOpensWithEveryFileFolded. Same argument as the left column: in
+// half a terminal the diff is opened to answer "what did it touch" first, and an
+// expanded first file means scrolling past it to find out there are eight.
+func TestTheDiffHalfOpensWithEveryFileFolded(t *testing.T) {
+	_, s := splitWithDiff(t)
+	dm, ok := s.right.(*diffModal)
+	if !ok {
+		t.Fatalf("the right half is %T", s.right)
+	}
+	if !dm.inner.FilesFoldByDefault() {
+		t.Error("the diff half opened with every file expanded")
+	}
+}
+
 // splitWithDiff is `|c`: the agent beside awp's own diff viewer.
 func splitWithDiff(t *testing.T) (Model, *splitModal) {
 	t.Helper()

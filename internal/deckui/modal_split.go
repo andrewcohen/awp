@@ -623,6 +623,11 @@ func (m *Model) openChild(item Item, kind string, b box) (modal, tea.Cmd, bool) 
 		// the half to read. `\` brings them back for the file you need to jump
 		// around in, which is the minority of the time in a split.
 		dm.inner.HideLeftColumn(true)
+		// And every file folded. Half a terminal is where you open a diff to answer
+		// "what did it touch" before "what did it write", and an expanded first file
+		// means scrolling past it to find out there are eight. `enter` opens one, and
+		// having opened it you have said so, so it stays open.
+		dm.inner.FoldFiles(true)
 		return dm, loadCmd, true
 	}
 	p, cmd, handled := m.newPane(item, kind, b, false)
