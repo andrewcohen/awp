@@ -113,11 +113,18 @@ type PaneSessioner interface {
 type panePopover struct {
 	// term is the interface rather than *vterm.Term so which emulator interprets
 	// the pane is vterm.Open's decision, not this struct's. See vterm.Hosted.
-	term    vterm.Hosted
-	label   string
-	restore func()
-	setW    int
-	setH    int
+	term  vterm.Hosted
+	label string
+	// project / workspace are which row this pane is of, so the host bar can
+	// look that row up and report its PR, CI and dev-loop state while you are
+	// inside the pane. The label is a rendered string and cannot be matched
+	// against anything; parsing it back apart would be one more way to say a
+	// thing that is already known at the point the pane is built.
+	project   string
+	workspace string
+	restore   func()
+	setW      int
+	setH      int
 	// opened is when the process started, which is how the exit is judged. An
 	// exit is only worth reporting on its own if it happened before you could
 	// have read anything — see paneQuickExit.
@@ -290,12 +297,14 @@ func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, b
 	}
 
 	p := &panePopover{
-		term:    term,
-		label:   PaneLabel(kind) + " · " + item.ProjectName + "/" + item.WorkspaceName,
-		restore: restore,
-		setW:    w,
-		setH:    h,
-		opened:  time.Now(),
+		term:      term,
+		label:     PaneLabel(kind) + " · " + item.ProjectName + "/" + item.WorkspaceName,
+		project:   item.ProjectName,
+		workspace: item.WorkspaceName,
+		restore:   restore,
+		setW:      w,
+		setH:      h,
+		opened:    time.Now(),
 	}
 	m.recordPane(ref)
 	m.status = ""
