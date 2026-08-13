@@ -378,7 +378,7 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 		return nil, m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
-	term, err := vterm.Open(m.paneGen, w, h, cmd, m.hostColors)
+	term, err := m.terminalOpener()(m.paneGen, w, h, cmd, m.hostColors)
 	if err != nil {
 		if restore != nil {
 			restore()
@@ -403,6 +403,33 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 	}
 	m.status = ""
 	return p, tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
+}
+
+// termOpener is what starts the terminal a pane's process runs in.
+type termOpener func(gen, w, h int, c *exec.Cmd, host vterm.HostColors) (vterm.Hosted, error)
+
+// defaultTermOpener is what a deck that has not been told otherwise uses.
+//
+// A package variable, which is the one piece of global state in here, and it buys
+// something specific: the test binary points it at a fake in an init, so every
+// deck a test constructs — and they are constructed at twenty-odd sites, by
+// calling New directly rather than through any shared helper — gets a terminal
+// without each of those sites saying so. Production never assigns it; the deck
+// reads it once per pane.
+//
+// The alternative was every test that opens a pane needing the real emulator,
+// which is cgo against an archive built by Zig: a plain checkout could then run
+// none of the tests about what the deck does with a pane, which is most of what
+// this package is.
+var defaultTermOpener termOpener = vterm.Open
+
+// terminalOpener is how this deck starts a pane's terminal: its own opener if it
+// was given one, else the package default. See Model.openTerm.
+func (m *Model) terminalOpener() termOpener {
+	if m.openTerm != nil {
+		return m.openTerm
+	}
+	return defaultTermOpener
 }
 
 // recordPane remembers a pane the deck has just opened, keeping the two the

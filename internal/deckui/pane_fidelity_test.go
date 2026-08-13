@@ -87,7 +87,7 @@ func paintedByADeck(t *testing.T, emits string, repaint bool) string {
 	// The leading character gives the first frame something to paint, so a
 	// repainted case has a previous style for the diff to transition from.
 	backend.script = `printf '.'; ` + delayFor(repaint) + `printf '` + emits + `'; sleep 30`
-	m, p := openedPane(t, backend)
+	m, p := openedRealPane(t, backend)
 	eventually(t, "the pane to paint", func() bool { return strings.Contains(p.term.View(), ".") })
 
 	ptmx, tty, err := pty.Open()

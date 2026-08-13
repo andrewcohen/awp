@@ -71,7 +71,9 @@ func TestAHostedProgramIsToldTheDecksRealBackground(t *testing.T) {
 
 	backend := allKinds()
 	backend.script = `printf '\033]11;?\007'; exec cat -v`
-	m := paneModel(t, backend)
+	// A real emulator: the assertion is that the program's OSC 11 query gets the
+	// deck's own background back, which is a thing only a terminal can answer.
+	m := withRealTerm(t, paneModel(t, backend))
 	next, _ := m.Update(tea.BackgroundColorMsg{Color: bg})
 	m = next.(Model)
 
