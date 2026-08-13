@@ -42,10 +42,9 @@ ghostty: $(GHOSTTY_LIB)
 	CGO_LDFLAGS="$(GHOSTTY_LIB)" \
 	$(GO) install -tags ghosttyvt ./...
 	@echo
-	@echo "installed with the libghostty-vt emulator available."
-	@echo "  AWP_PANE_VT=ghostty awp zdeck   panes on libghostty-vt"
-	@echo "  awp zdeck                       panes on x/vt, the default"
-	@echo "  make install                    back to the ordinary build"
+	@echo "installed with the libghostty-vt emulator, which is what a pane runs on."
+	@echo "  awp zdeck        panes"
+	@echo "  make install     the ordinary build: no emulator, so no panes"
 
 ghostty-lib: $(GHOSTTY_LIB)
 

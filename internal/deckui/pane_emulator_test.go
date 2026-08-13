@@ -22,12 +22,16 @@ func (n namedEmulator) Emulator() string { return n.name }
 //
 // It used to name an unusual one, which was right while libghostty-vt was a thing
 // being tried: a comparison you cannot confirm you are inside is not a
-// comparison. The answer is settled, and the row was crowded — so the segment is
-// gone, and it should not come back on a whim, because it costs the columns the
-// hosted workspace's own state is now spending.
+// comparison. The answer is settled — there is one emulator now — and the row was
+// crowded, so the segment is gone, and it should not come back on a whim, because
+// it costs the columns the hosted workspace's own state is now spending.
+//
+// The retired emulator's name is still one of the strings checked, spelled here
+// rather than imported: a bar that starts naming emulators again is as wrong for
+// the one that lost as for the one that won.
 func TestTheBarNeverNamesTheEmulator(t *testing.T) {
 	m, p := openedPane(t, allKinds())
-	for _, name := range []string{vterm.EmulatorXVT, vterm.EmulatorGhostty} {
+	for _, name := range []string{vterm.EmulatorGhostty, "x-vt"} {
 		p.term = namedEmulator{Hosted: p.term, name: name}
 		if bar := m.renderTopRow(200); strings.Contains(bar, name) {
 			t.Errorf("the bar names the %s emulator: %q", name, bar)
