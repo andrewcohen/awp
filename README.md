@@ -1082,6 +1082,20 @@ already alternating from does not push it down, so `ctrl+\` never erases what `L
 exists to reach. Before any pane has been opened both keys say so rather than
 opening the selected row's shell.
 
+**A split is remembered as a split.** What either key restores is the arrangement
+you left, not a program: both halves and the divider where you put it, so leaving a
+split to check a row and coming back finds the split rather than one pane you then
+have to re-split. Every change of shape records — a half replaced, a half closed,
+the divider moved — because "what was on screen" is the question being answered, so
+closing a half and leaving does *not* rebuild the split you had just taken apart. A
+terminal too narrow for two halves by the time you come back gets the left half
+alone rather than a refusal: that is the pane you were working in, and the second
+half is the part that does not fit.
+
+Splitting the pane you are in replaces that pane's memory rather than pushing it
+into the `L` slot. It is one continuous act, and pushing would spend the alternate
+on the pane you can still see half of.
+
 **Creating a workspace with a prompt starts its agent.** The create runs as a
 detached subprocess, so there is no terminal to hand a hosted agent — but it does
 not need one: the agent's session is not where you are looking. awp allocates a

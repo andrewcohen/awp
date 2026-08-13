@@ -139,6 +139,11 @@ type panePopover struct {
 	// the pane is vterm.Open's decision, not this struct's. See vterm.Hosted.
 	term  vterm.Hosted
 	label string
+	// kind is the window kind this pane is hosting — the same string the backend
+	// was asked for. The label is that kind rendered for a human beside the row's
+	// name; keeping the kind itself is what lets a live pane be described back as a
+	// paneRef, which is how an arrangement is remembered (see recordArrangement).
+	kind string
 	// project / workspace are which row this pane is of, so the host bar can
 	// look that row up and report its PR, CI and dev-loop state while you are
 	// inside the pane. The label is a rendered string and cannot be matched
@@ -255,6 +260,58 @@ type paneRef struct {
 // opening the zero row's shell.
 func (r paneRef) set() bool { return strings.TrimSpace(r.workspace) != "" }
 
+// paneArrangement is what was on screen, which is not always one pane: a split of
+// two is a thing you set up and expect to find again, so what the deck remembers
+// has to be the arrangement rather than a single program.
+//
+// The row is the left half's, because both halves are of the same workspace — a
+// split is two views of one thing, which is why it exists.
+type paneArrangement struct {
+	// left is the whole answer for a single pane, and the left half of a split.
+	left paneRef
+	// rightKind is the kind beside it. A kind rather than a paneRef for the same
+	// reason the row lives on left: a second row would be a second workspace, which
+	// a split has never been.
+	//
+	// hasRight is what says there was a second half at all, because an empty kind is
+	// a real one — it is the shell, which the window keys spell as `s` and the
+	// backend as "". Inferring "no split" from an empty string would make `|s` the
+	// one split the deck could not remember.
+	rightKind string
+	hasRight  bool
+	// leftFrac is where the divider was, so a split you widened comes back the
+	// width you made it rather than snapping back to even. Zero means even — see
+	// splitLeftFrac, which is where that is read.
+	leftFrac float64
+}
+
+func (a paneArrangement) set() bool   { return a.left.set() }
+func (a paneArrangement) split() bool { return a.hasRight }
+
+// label is the arrangement in the words a status line uses.
+func (a paneArrangement) label() string {
+	if !a.split() {
+		return a.left.label()
+	}
+	// The pair, in the order they are on screen. `|` because that is the key that
+	// opens one.
+	return PaneLabel(a.left.kind) + " | " + PaneLabel(a.rightKind) +
+		" · " + a.left.project + "/" + a.left.workspace
+}
+
+// childKind describes a live half in the terms a kind is spelled in, so an
+// arrangement can be recorded from what is on screen rather than from whatever the
+// call that built it happened to still have in scope.
+func childKind(c modal) (string, bool) {
+	switch t := c.(type) {
+	case *panePopover:
+		return t.kind, true
+	case *diffModal:
+		return SplitKindDiff, true
+	}
+	return "", false
+}
+
 // matches is the row-identity comparison, in one place because the deck asks it
 // of both the scoped list and the unscoped one.
 func (r paneRef) matches(it Item) bool {
@@ -270,7 +327,7 @@ func (r paneRef) label() string {
 // It reports false when there is no backend for it, so the caller can fall back
 // to tmux.
 func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
-	p, cmd, handled := m.newPane(item, kind, m.childBox())
+	p, cmd, handled := m.newPane(item, kind, m.childBox(), true)
 	if handled && p != nil {
 		m.active = p
 	}
@@ -290,7 +347,10 @@ func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
 // reason this can be called twice: a pty started for half the screen has to be
 // started at half the width, or the program lays itself out for a width it will
 // never be drawn at.
-func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, bool) {
+// remember is whether opening this pane is the arrangement to come back to. False
+// for a half of a split, which records itself once as a pair rather than letting
+// each half register as the last thing you were in — see recordArrangement.
+func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopover, tea.Cmd, bool) {
 	if m.panes == nil || !m.panes.Describes(kind) {
 		return nil, nil, false
 	}
@@ -312,7 +372,9 @@ func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, b
 	// open that failed is not somewhere the deck claims you can go back to.
 	ref := paneRef{project: item.ProjectName, workspace: item.WorkspaceName, kind: kind}
 	if handover {
-		m.recordPane(ref)
+		if remember {
+			m.recordPane(ref)
+		}
 		return nil, m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
 	m.paneGen++
@@ -328,6 +390,7 @@ func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, b
 	p := &panePopover{
 		term:      term,
 		label:     PaneLabel(kind) + " · " + item.ProjectName + "/" + item.WorkspaceName,
+		kind:      kind,
 		project:   item.ProjectName,
 		workspace: item.WorkspaceName,
 		restore:   restore,
@@ -335,7 +398,9 @@ func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, b
 		setH:      h,
 		opened:    time.Now(),
 	}
-	m.recordPane(ref)
+	if remember {
+		m.recordPane(ref)
+	}
 	m.status = ""
 	return p, tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
 }
@@ -353,11 +418,52 @@ func (m *Model) newPane(item Item, kind string, b box) (*panePopover, tea.Cmd, b
 // alternate, or the second key would have nothing left to reach and holding one
 // pane open would erase the memory of every other.
 func (m *Model) recordPane(ref paneRef) {
-	if ref == m.lastPane {
+	m.recordArrangementValue(paneArrangement{left: ref})
+}
+
+// recordArrangementValue is recordPane for a whole arrangement.
+//
+// A split replaces the memory of its own left half rather than pushing it aside:
+// splitting the pane you are in is one continuous act, and pushing would spend the
+// alternate slot on the pane you can already see half of.
+func (m *Model) recordArrangementValue(arr paneArrangement) {
+	if arr == m.lastPane {
+		return
+	}
+	if arr.split() && arr.left == m.lastPane.left && !m.lastPane.split() {
+		m.lastPane = arr
 		return
 	}
 	m.prevPane = m.lastPane
-	m.lastPane = ref
+	m.lastPane = arr
+}
+
+// recordArrangement remembers the split as it now stands — both kinds and the
+// divider — so leaving it and coming back finds it rather than one pane.
+//
+// Called from every place a split changes shape rather than only where one is
+// built, because "what was on screen" is the question being answered: a half
+// replaced, a half closed or a divider moved are all changes to the thing you
+// expect to come back to.
+//
+// A split whose left half is not a pane is not recorded. Both halves being views of
+// one workspace is what makes a single row enough to describe the pair, and the
+// left half is where that row is read from.
+func (m *Model) recordArrangement(s *splitModal) {
+	left, isPane := s.left.(*panePopover)
+	if !isPane {
+		return
+	}
+	rightKind, ok := childKind(s.right)
+	if !ok {
+		return
+	}
+	m.recordArrangementValue(paneArrangement{
+		left:      paneRef{project: left.project, workspace: left.workspace, kind: left.kind},
+		rightKind: rightKind,
+		hasRight:  true,
+		leftFrac:  s.leftFrac,
+	})
 }
 
 // resumePane goes back into the pane you just left, which is what ctrl+\ means
@@ -408,14 +514,15 @@ func (m *Model) alternatePane() (tea.Cmd, bool) {
 
 // reopenPane resolves a remembered pane against the rows as they are now and
 // opens it, which is the half resumePane and alternatePane share.
-func (m *Model) reopenPane(ref paneRef) (tea.Cmd, bool) {
+func (m *Model) reopenPane(arr paneArrangement) (tea.Cmd, bool) {
+	ref := arr.left
 	// The scoped list first, so the cursor can land on the row: leaving the pane
 	// again has to put you on the row the pane was, or the keys and ctrl+\
 	// disagree about where you are.
 	for i, it := range m.items() {
 		if ref.matches(it) {
 			m.cursor = i
-			return m.openRememberedPane(it, ref)
+			return m.openRememberedPane(it, arr)
 		}
 	}
 	// Not in the current scope — an agent that exited drops out of attention —
@@ -424,7 +531,7 @@ func (m *Model) reopenPane(ref paneRef) (tea.Cmd, bool) {
 	// cursor move: there is no row here to move it to.
 	for _, it := range m.itemsAll {
 		if ref.matches(it) {
-			return m.openRememberedPane(it, ref)
+			return m.openRememberedPane(it, arr)
 		}
 	}
 	m.status = ref.label() + ": that workspace is not on the deck any more"
@@ -432,10 +539,20 @@ func (m *Model) reopenPane(ref paneRef) (tea.Cmd, bool) {
 }
 
 // openRememberedPane is the tail of reopenPane, shared by the two lookups.
-func (m *Model) openRememberedPane(it Item, ref paneRef) (tea.Cmd, bool) {
+func (m *Model) openRememberedPane(it Item, arr paneArrangement) (tea.Cmd, bool) {
+	ref := arr.left
 	if m2, blocked := m.blockIfSettingUp(it); blocked {
 		*m = m2
 		return nil, true
+	}
+	if arr.split() {
+		// The arrangement was two things side by side, so that is what comes back.
+		// A terminal too narrow for a split now falls through to the left half
+		// alone rather than refusing: the pane is what you were working in, and the
+		// second half is the part that does not fit.
+		if cmd, ok := m.openSplitKinds(it, ref.kind, arr.rightKind, arr.leftFrac); ok {
+			return cmd, true
+		}
 	}
 	cmd, handled := m.openPane(it, ref.kind)
 	if !handled {
@@ -623,7 +740,9 @@ func (p *panePopover) splitWith(m *Model, kind string) tea.Cmd {
 		m.active = p
 		return nil
 	}
-	m.active = &splitModal{left: p, right: right, rightFocused: true, label: PaneLabel(kind)}
+	s := &splitModal{left: p, right: right, rightFocused: true, label: PaneLabel(kind)}
+	m.active = s
+	m.recordArrangement(s)
 	m.status = ""
 	return cmd
 }
