@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/andrewcohen/awp/internal/charm"
+	"github.com/andrewcohen/awp/internal/cmderr"
 	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/review"
 )
@@ -408,10 +409,12 @@ func explainCmdError(name, out string, err error) error {
 			}
 			return fmt.Errorf("%s\n\n%s", lead, hint)
 		}
+		// Wrapped, not replaced — see internal/cmderr, and cli.explainExecError,
+		// which this mirrors.
 		if snippet != "" {
-			return fmt.Errorf("%q exited %d:\n%s", name, code, snippet)
+			return cmderr.Exited(fmt.Sprintf("%q exited %d:\n%s", name, code, snippet), exitErr)
 		}
-		return fmt.Errorf("%q exited %d (no output)", name, code)
+		return cmderr.Exited(fmt.Sprintf("%q exited %d (no output)", name, code), exitErr)
 	}
 	return err
 }

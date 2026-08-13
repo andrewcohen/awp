@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/andrewcohen/awp/internal/cmderr"
 )
 
 // Runner runs external commands.
@@ -66,10 +68,14 @@ func explainExecError(name, out string, err error) error {
 			lead += "\n\nFix: try `chmod +x` on the binary, or reinstall for your platform (e.g. `go install …` on this machine rather than copying the binary across architectures)."
 			return errors.New(lead)
 		}
+		// Wrapped rather than replaced: the message is what a person reads, and the
+		// ExitError behind it is how a caller asks whether the command ran at all.
+		// See internal/cmderr — losing that distinction is what made tmux's "no
+		// server running" read as a failed workspace delete.
 		if snippet != "" {
-			return fmt.Errorf("%q exited %d:\n%s", name, code, snippet)
+			return cmderr.Exited(fmt.Sprintf("%q exited %d:\n%s", name, code, snippet), exitErr)
 		}
-		return fmt.Errorf("%q exited %d (no output)", name, code)
+		return cmderr.Exited(fmt.Sprintf("%q exited %d (no output)", name, code), exitErr)
 	}
 	return err
 }
