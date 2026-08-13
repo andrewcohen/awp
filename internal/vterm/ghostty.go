@@ -62,6 +62,7 @@ import (
 	"unsafe"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 )
@@ -106,6 +107,13 @@ type ghosttyTerm struct {
 	rsWrites uint64
 	rsShape  tea.CursorShape
 	rsBlink  bool
+
+	// The last answer displayCol gave, and what it was asked. Same bargain as
+	// rsWrites above: the cursor cannot move without bytes arriving.
+	colWrites  uint64
+	colCellX   int
+	colCellY   int
+	colDisplay int
 }
 
 // hosts is every live ghosttyTerm by terminal handle, so the write_pty
@@ -455,8 +463,17 @@ func (t *ghosttyTerm) encodeMouse(msg tea.MouseMsg) []byte {
 	// encoder is written for a renderer that knows where its glyphs are, and it
 	// divides by the cell geometry itself. awp only ever has cells, so it declares
 	// a cell one pixel square below and this is the identity.
+	//
+	// The x that arrives is a column of the rendered screen, because that is the
+	// screen the pointer was over. Which cell that is is #339 asked backwards, and
+	// it has the same answer: on a row where a grapheme's cell footprint and its
+	// rendered width differ, the two columns are different numbers and the program
+	// is told about a cell the user did not point at.
+	t.mu.Lock()
+	cellX := t.cellForCol(max(m.X, 0), m.Y)
+	t.mu.Unlock()
 	C.ghostty_mouse_event_set_position(ev, C.GhosttyMousePosition{
-		x: C.float(max(m.X, 0)),
+		x: C.float(cellX),
 		y: C.float(max(m.Y, 0)),
 	})
 
@@ -500,6 +517,23 @@ func (t *ghosttyTerm) encodeMouse(msg tea.MouseMsg) []byte {
 	return []byte(C.GoStringN(&buf[0], C.int(n)))
 }
 
+// Cursor is where the cursor lands on the screen View draws — a display column,
+// not the emulator's cell column.
+//
+// The two are not the same number, and the difference is #339. A grapheme's
+// footprint in the cell grid is the emulator's own measurement; its footprint in
+// the string View returns is whatever lipgloss/uniseg measures when the deck
+// places that string on its screen. Those disagree: a ZWJ sequence
+// (👩‍💻) occupies four cells and renders two columns wide, and glyphs
+// exist that go the other way. The deck draws its cursor at an absolute column,
+// so on any row whose prefix contains such a grapheme the cursor separated from
+// the text — visibly one column off while typing, and worst in a split, where a
+// narrow half wraps a program's status line down onto the row being typed on.
+//
+// So the cell column is translated here, by walking the cursor's row and adding
+// up what each cell contributes to the rendered string. That keeps the
+// translation next to the emulator that knows the cell widths, rather than
+// leaving five callers to measure a row they were handed no cells for.
 func (t *ghosttyTerm) Cursor() (int, int, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -511,7 +545,130 @@ func (t *ghosttyTerm) Cursor() (int, int, bool) {
 	C.ghostty_terminal_get(t.vt, C.GHOSTTY_TERMINAL_DATA_CURSOR_X, unsafe.Pointer(&x))
 	C.ghostty_terminal_get(t.vt, C.GHOSTTY_TERMINAL_DATA_CURSOR_Y, unsafe.Pointer(&y))
 	C.ghostty_terminal_get(t.vt, C.GHOSTTY_TERMINAL_DATA_CURSOR_VISIBLE, unsafe.Pointer(&visible))
-	return int(x), int(y), bool(visible)
+	return t.displayCol(int(x), int(y)), int(y), bool(visible)
+}
+
+// displayCol is how many columns the cells left of (cellX, y) occupy once
+// rendered. Caller holds mu.
+//
+// Falls back to the cell column for anything it cannot read: a row the emulator
+// will not hand over is a reason to be no worse than before, not a reason to put
+// the cursor at zero.
+//
+// Memoised on the write counter, because libghostty says of the grid-ref lookup
+// that it "isn't meant to be used as the core of a render loop" and this makes
+// one per cell to the cursor's left. The cursor cannot move without bytes
+// arriving, so the frames where nothing happened get the cached answer — the same
+// bargain CursorShape makes, for the same reason.
+func (t *ghosttyTerm) displayCol(cellX, y int) int {
+	if cellX <= 0 {
+		return cellX
+	}
+	writes := t.writes.Load()
+	if t.colWrites == writes && t.colCellX == cellX && t.colCellY == y {
+		return t.colDisplay
+	}
+	// Rebuilt as one string and measured once, rather than cell by cell. A ZWJ
+	// sequence is stored across two wide cells — 👩 with the joiner, then
+	// 💻 — and the formatter puts them back together, so measured apart
+	// they are two graphemes of two columns each and together they are one of two.
+	// Summing per-cell widths gets 4 where the rendered row has 2, which is the
+	// whole defect in miniature.
+	var b strings.Builder
+	for x := range cellX {
+		text, ok := t.cellText(x, y)
+		if !ok {
+			return cellX
+		}
+		b.WriteString(text)
+	}
+	col := lipgloss.Width(b.String())
+	t.colWrites, t.colCellX, t.colCellY, t.colDisplay = writes, cellX, y, col
+	return col
+}
+
+// cellForCol is displayCol's inverse: which cell of row y is drawn at display
+// column col. Caller holds mu.
+//
+// Answers col itself for a row it cannot read, and for a column past the end of
+// the row's content — past the text every cell is a blank one column wide, so
+// there the two numbering schemes have already converged.
+func (t *ghosttyTerm) cellForCol(col, y int) int {
+	if col <= 0 || t.closed || y < 0 || y >= t.h {
+		return max(col, 0)
+	}
+	// Measured over the whole prefix at each step, for the reason displayCol is:
+	// a cell's contribution is not a width of its own. Two cells holding the
+	// halves of a ZWJ sequence are two columns together and four apart, so the
+	// cell that covers a column is the first one whose prefix reaches past it —
+	// not the one a running total of per-cell widths lands on.
+	var b strings.Builder
+	for x := range t.w {
+		text, ok := t.cellText(x, y)
+		if !ok {
+			return col
+		}
+		b.WriteString(text)
+		if lipgloss.Width(b.String()) > col {
+			return x
+		}
+	}
+	return col
+}
+
+// cellText is what one cell contributes to the rendered row.
+//
+// An empty cell is a space, because that is what it renders as. A wide
+// character's trailing spacer contributes nothing — the formatter does not draw
+// it, and the character it belongs to was emitted by the cell that owns it.
+// Caller holds mu.
+func (t *ghosttyTerm) cellText(x, y int) (string, bool) {
+	var ref C.GhosttyGridRef
+	ref.size = C.size_t(unsafe.Sizeof(ref))
+	var pt C.GhosttyPoint
+	pt.tag = C.GHOSTTY_POINT_TAG_ACTIVE
+	coord := (*C.GhosttyPointCoordinate)(unsafe.Pointer(&pt.value))
+	coord.x, coord.y = C.uint16_t(x), C.uint32_t(y)
+	if rc := C.ghostty_terminal_grid_ref(t.vt, pt, &ref); !succeeded(rc) {
+		return "", false
+	}
+
+	var cell C.GhosttyCell
+	if rc := C.ghostty_grid_ref_cell(&ref, &cell); !succeeded(rc) {
+		return "", false
+	}
+
+	var wide C.GhosttyCellWide
+	if rc := C.ghostty_cell_get(cell, C.GHOSTTY_CELL_DATA_WIDE, unsafe.Pointer(&wide)); !succeeded(rc) {
+		return "", false
+	}
+	if wide == C.GHOSTTY_CELL_WIDE_SPACER_TAIL {
+		return "", true
+	}
+
+	var cp C.uint32_t
+	if rc := C.ghostty_cell_get(cell, C.GHOSTTY_CELL_DATA_CODEPOINT, unsafe.Pointer(&cp)); !succeeded(rc) {
+		return "", false
+	}
+	if cp == 0 {
+		return " ", true // an empty cell renders as a space
+	}
+
+	// A cell can hold more than its primary codepoint: a combining mark, or the
+	// joiner that makes a ZWJ sequence one grapheme rather than two emoji. Those
+	// are exactly the codepoints that decide the width, so the cluster is what gets
+	// returned when there is one. A cluster longer than the buffer falls back to
+	// the primary codepoint rather than to nothing.
+	var buf [16]C.uint32_t
+	var n C.size_t
+	if rc := C.ghostty_grid_ref_graphemes(&ref, &buf[0], C.size_t(len(buf)), &n); succeeded(rc) && n > 0 && int(n) <= len(buf) {
+		var b strings.Builder
+		for _, c := range buf[:n] {
+			b.WriteRune(rune(c))
+		}
+		return b.String(), true
+	}
+	return string(rune(cp)), true
 }
 
 // CursorShape is what the program asked its cursor to look like, which for an
