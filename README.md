@@ -120,7 +120,9 @@ sees it. "Two failing" is what a glance is asking anyway; `w` names them.
 
 Everything there is a glyph and a number, never a word — the same rule the badge
 already followed. The only prose on the row is the name of what is on screen and
-the key that leaves. A split does not list its two halves there — the
+the key that leaves. The segments are separated by **space, not bullets**: each one
+is internally punctuated already, so gluing them with ` · ` meant most of the ink
+on the row was separator. A split does not list its two halves there — the
 accent-vs-muted border already says which half has the keys, so naming both of
 them spent the row's best columns on the one thing that cannot tell them apart.
 Resizing the divider likewise reports nothing: you pressed the key, and the
@@ -1180,10 +1182,10 @@ tag, not a quiet fall back to the default: the point of choosing is to compare,
 and a comparison that silently ran the default twice would report that the two
 agree.
 
-A pane also says which emulator it is on, in its header — but only when it is not
-the default. Reading "x/vt" on every pane forever would be a column of a one-row
-header spent on what is almost always true; reading "ghostty" is the only way to
-know a comparison is really running what you asked for.
+The top row **no longer names the emulator**. It did while this was an open
+question — a comparison you cannot confirm you are inside is not a comparison —
+and the answer is settled, so the columns went to the hosted workspace's own
+state instead. The byte log (`AWP_PANE_LOG`) still says which one ran.
 
 The ghostty build needs an archive built from Ghostty's source, and `make` does
 the whole thing:

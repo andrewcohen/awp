@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/andrewcohen/awp/internal/vterm"
 )
 
 // The host bar is the deck's own row above whatever is hosting a terminal: one
@@ -59,11 +57,13 @@ func (m *Model) hostBarSubject() *panePopover {
 	return nil
 }
 
-// hostBarLabel is what is on screen, named: "<kind> · <project>/<workspace>",
-// and which emulator is behind it when that is not the default one.
+// hostBarLabel is what is on screen, named: "<kind> · <project>/<workspace>".
 //
-// Running on an alternative emulator is a thing you need to see to trust a
-// comparison of the two; running on the usual one is not news.
+// It does not name the emulator behind the pane. That was worth a segment while
+// libghostty-vt was a thing being tried — a comparison you cannot confirm you are
+// inside is not a comparison — and it stopped being one once the answer was
+// settled. Which emulator is running is still askable (Hosted.Emulator, and the
+// byte log), just not on every frame of the row.
 func (m *Model) hostBarLabel() string {
 	p := m.hostBarSubject()
 	if p == nil {
@@ -71,9 +71,6 @@ func (m *Model) hostBarLabel() string {
 			return s.label
 		}
 		return ""
-	}
-	if vt := p.term.Emulator(); vt != vterm.EmulatorXVT {
-		return vt + " · " + p.label
 	}
 	return p.label
 }
@@ -220,7 +217,6 @@ func (m *Model) renderHostBar(w int) string {
 		return padBar(m.styles.FindHeader.Render(truncate(splitPrefixHint, max(1, w))), w)
 	}
 
-	sep := m.styles.PaneHint.Render(" · ")
 	// Counted every frame rather than cached, and deliberately: an agent finishing
 	// its turn while you are in a pane is the whole reason the badge is up here, so
 	// a number that only moved when the row list was on screen would be worse than
@@ -235,13 +231,13 @@ func (m *Model) renderHostBar(w int) string {
 	hint := m.styles.PaneHint.Render(m.hostBarHint())
 
 	if label := m.hostBarLabel(); label != "" {
-		room := w - lipgloss.Width(strings.Join(segs, sep)) - lipgloss.Width(hint) - lipgloss.Width(sep) - 1
+		room := w - lipgloss.Width(joinBarSegs(segs)) - lipgloss.Width(hint) - len(hostBarSep) - 1
 		if room >= hostBarLabelMin {
 			segs = append(segs, m.styles.PaneTitle.Render(truncate(label, room)))
 		}
 	}
 
-	left := strings.Join(segs, sep)
+	left := joinBarSegs(segs)
 	gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
 	if gap < 1 {
 		// Too narrow for both. The badge is a thing leaving will show you anyway;
@@ -254,6 +250,30 @@ func (m *Model) renderHostBar(w int) string {
 // hostBarLabelMin is the narrowest the label is worth showing at. Below it there
 // is room for a word and an ellipsis, which names nothing.
 const hostBarLabelMin = 10
+
+// hostBarSep is the gap between the row's top-level segments.
+//
+// Whitespace rather than a ` · ` bullet. The row carries the badge, the hosted
+// workspace's state and the label, and each of those is internally punctuated
+// already — the badge spaces its dots, the state has a `#` and a `/`, the label
+// has its own bullet between kind and path. Gluing them with more bullets read as
+// crowded because most of the ink on the row was separator: five segments meant
+// four bullets and eight spaces spent saying nothing. Space groups just as well
+// when the things being grouped are visually distinct, and these are — a coloured
+// dot, a number, a word.
+const hostBarSep = "   "
+
+// joinBarSegs puts the row's segments together, dropping the empty ones so a
+// missing segment costs no gap.
+func joinBarSegs(segs []string) string {
+	kept := make([]string, 0, len(segs))
+	for _, s := range segs {
+		if s != "" {
+			kept = append(kept, s)
+		}
+	}
+	return strings.Join(kept, hostBarSep)
+}
 
 // padBar fills a bar row out to the width, so the row is opaque rather than
 // letting whatever the frame put in those cells show through the ones it did not
