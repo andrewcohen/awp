@@ -8,8 +8,8 @@ import (
 
 // splitChordModal is the `|` key: a keys-only menu whose answer names the right
 // half of a split. Like the PR chord it renders the row list beneath itself and
-// puts its menu in the status bar, so the thing you are about to split is still
-// on screen while you pick.
+// puts its menu on the deck's top row, so the thing you are about to split is
+// still on screen while you pick.
 //
 // `|` because in the diff viewer it already means "two things side by side", and
 // at deck level it was free. The gesture is the same one either way.
@@ -66,7 +66,9 @@ func splitKindFor(pressed string) (string, bool) {
 	return "", false
 }
 
-// splitChordHint is the menu as the status bar shows it.
+func (c *splitChordModal) chordMenu() string { return splitChordHint() }
+
+// splitChordHint is the menu as the top row shows it.
 func splitChordHint() string {
 	parts := make([]string, 0, len(splitActions)+1)
 	for _, a := range splitActions {

@@ -35,12 +35,17 @@ const topRowRows = 1
 // the help overlay. Those carry their own chrome — the diff viewer has a whole
 // status line of its own — and a row about which workspaces want you, above a
 // screen whose subject is one file, is a row spent on the wrong question.
+// A chord is on the list too — it is a menu about the row you are pointing at,
+// with that row on screen beneath it, so the row it would drop is the one its own
+// menu goes on. Dropping it also moved the frame: one row fewer above the body
+// pushes every line up, so arming `|` visibly jumped the whole deck.
 func (m *Model) showsTopRow() bool {
 	switch m.active.(type) {
 	case nil, *panePopover, *splitModal:
 		return true
 	}
-	return false
+	_, chord := m.active.(chordModal)
+	return chord
 }
 
 // hostsTerminal is whether the top row has a hosted program to talk about, as
@@ -234,12 +239,15 @@ func (m *Model) topRowHint() string {
 	return "scope: " + scopeLabel(m.scope)
 }
 
-// armedPrefixHint is the verb menu of whichever arrangement has the prefix up,
-// and whether one does at all.
+// topRowMenu is the menu of whatever is waiting for a key, and whether anything
+// is.
 //
-// Both arrangements arm the same key and both put their menu on the same row, so
-// the row asks once here rather than testing each type where it renders.
-func (m *Model) armedPrefixHint() (string, bool) {
+// One answer for every menu the deck has, because they all go on this row: an
+// armed ctrl+| over a pane or a split, and the row list's own chords (`|`, `p`),
+// whose body is the row list rather than a screen of their own. Asked once here
+// rather than tested where each of them renders — which is how the chords came to
+// print theirs somewhere else.
+func (m *Model) topRowMenu() (string, bool) {
 	switch c := m.active.(type) {
 	case *splitModal:
 		if c.prefixArmed {
@@ -249,6 +257,9 @@ func (m *Model) armedPrefixHint() (string, bool) {
 		if c.prefixArmed {
 			return panePrefixHint(), true
 		}
+	}
+	if c, ok := m.active.(chordModal); ok {
+		return c.chordMenu(), true
 	}
 	return "", false
 }
@@ -263,10 +274,10 @@ func (m *Model) armedPrefixHint() (string, bool) {
 // same rule, so the row can be read at a glance rather than parsed. The only
 // text on it is the name of what is on screen and the key that leaves.
 //
-// An armed prefix takes the whole row. That menu used to be painted over the
-// split's bottom border for want of a row to put it on; this is that row.
+// A menu takes the whole row. That menu used to be painted over the split's
+// bottom border for want of a row to put it on; this is that row.
 func (m *Model) renderTopRow(w int) string {
-	if menu, armed := m.armedPrefixHint(); armed {
+	if menu, armed := m.topRowMenu(); armed {
 		return padTopRow(m.styles.FindHeader.Render(truncate(menu, max(1, w))), w)
 	}
 	// The row starts on the body's own text column, so the badge's dots land in

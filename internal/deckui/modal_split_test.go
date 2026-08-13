@@ -353,15 +353,22 @@ func TestTheDiffHalfIsAwpsOwnViewer(t *testing.T) {
 	}
 }
 
-// TestTheChordSaysWhatItCanDo. A keys-only menu is undiscoverable unless the
-// status bar lists it, and the `?` overlay has to carry the same set — a key
-// documented in one and not the other is how they start disagreeing.
+// TestTheChordSaysWhatItCanDo. A keys-only menu is undiscoverable unless the deck
+// lists it, and the `?` overlay has to carry the same set — a key documented in
+// one and not the other is how they start disagreeing.
+//
+// The menu is read off the top row rather than off m.status, which is where the
+// menu goes: the same row an armed ctrl+| uses in a pane or a split.
 func TestTheChordSaysWhatItCanDo(t *testing.T) {
 	m := splitDeck(t)
 	m = pressDeck(t, m, runeKey("|"))
+	menu, armed := m.topRowMenu()
+	if !armed {
+		t.Fatalf("the chord put no menu on the top row (active=%T)", m.active)
+	}
 	for _, a := range splitActions {
-		if !strings.Contains(m.status, a.key+" "+a.label) {
-			t.Errorf("the chord's menu omits %q: %q", a.key, m.status)
+		if !strings.Contains(menu, a.key+" "+a.label) {
+			t.Errorf("the chord's menu omits %q: %q", a.key, menu)
 		}
 	}
 	var documented []string

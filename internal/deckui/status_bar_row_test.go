@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -26,20 +27,51 @@ func TestTheStatusBarIsAlwaysOneRow(t *testing.T) {
 	}
 }
 
-// TestAnArmedChordDoesNotPushTheDeckUp. `|` puts the whole window-key menu in the
-// status bar, which is the longest thing the deck ever says there — and it says it
-// while the row list is on screen, so a second row moves everything.
+// TestAnArmedChordDoesNotPushTheDeckUp. `|` and `p` are menus over the row list,
+// and the row list has to stay exactly where it was while one is up — a chord that
+// costs the frame a row moves every workspace row under the cursor's own reading
+// position, which is the sort of jump you feel before you can name it.
+//
+// Pinned as the rows themselves rather than as the frame's height: the frame is
+// m.height either way, so a chord that drops the deck's top row scrolls the list
+// up without changing a single measurement.
 func TestAnArmedChordDoesNotPushTheDeckUp(t *testing.T) {
-	for _, width := range []int{60, 100, 200} {
-		m := splitDeck(t)
-		m.width = width
-		before := lipgloss.Height(m.render())
-		m = pressDeck(t, m, runeKey("|"))
-		if _, ok := m.active.(*splitChordModal); !ok {
-			t.Fatalf("| did not arm the chord (active=%T)", m.active)
-		}
-		if got := lipgloss.Height(m.render()); got != before {
-			t.Errorf("width %d: arming the chord took the frame from %d rows to %d", width, before, got)
+	arm := map[string]tea.KeyPressMsg{"|": runeKey("|"), "p": runeKey("p")}
+	for key, press := range arm {
+		for _, width := range []int{60, 100, 200} {
+			m := splitDeck(t)
+			m.width = width
+			before := rowLineIndex(t, m.render())
+			m = pressDeck(t, m, press)
+			if m.active == nil {
+				t.Fatalf("%s did not arm a menu", key)
+			}
+			if _, ok := m.active.(chordModal); !ok {
+				t.Fatalf("%s armed a %T, which is not a chord", key, m.active)
+			}
+			frame := m.render()
+			if got := lipgloss.Height(frame); got != m.height {
+				t.Errorf("%s at width %d: the frame is %d rows, want %d", key, width, got, m.height)
+			}
+			if got := rowLineIndex(t, frame); got != before {
+				t.Errorf("%s at width %d: arming moved the workspace row from line %d to %d:\n%s",
+					key, width, before, got, frame)
+			}
 		}
 	}
+}
+
+// rowLineIndex is which line of the frame the deck's one workspace row is on.
+//
+// Found by the selection bar rather than by the workspace's name, which is "ws" —
+// a substring of "browser", in the PR menu, on the row above it.
+func rowLineIndex(t *testing.T, frame string) int {
+	t.Helper()
+	for i, line := range strings.Split(frame, "\n") {
+		if strings.Contains(line, "┃") {
+			return i
+		}
+	}
+	t.Fatalf("no workspace row in the frame:\n%s", frame)
+	return -1
 }
