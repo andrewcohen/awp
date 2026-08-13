@@ -145,3 +145,35 @@ func TestEnteringWithAnotherKeyIsThatKind(t *testing.T) {
 	}
 	p.close(&m)
 }
+
+// TestAHalfThatClosesItselfIsRememberedAsOnePane. ctrl+| x is not the only way a
+// split comes apart — the diff viewer quits with its own key, and a pane's program
+// exits on its own — and all of those leave one pane on screen. Recorded where
+// every collapse goes through rather than at the one key that had it, or a split
+// taken apart any other way comes back rebuilt.
+func TestAHalfThatClosesItselfIsRememberedAsOnePane(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	// The right half closing itself, which is what its own quit key amounts to
+	// from the split's side: m.active no longer the child it was handed to.
+	right, isPane := s.right.(*panePopover)
+	if !isPane {
+		t.Fatalf("the right half is %T, want a pane", s.right)
+	}
+	m.active = right
+	right.close(&m)
+	s.collapse(&m, right)
+	if _, stillSplit := m.active.(*splitModal); stillSplit {
+		t.Fatal("the split survived a half closing itself")
+	}
+	m = pressDeck(t, m, leaveKey())
+	m = pressDeck(t, m, resumeKey())
+	if back, isSplit := m.active.(*splitModal); isSplit {
+		back.close(&m)
+		t.Fatal("coming back rebuilt the split whose half had closed itself")
+	}
+	p, ok := m.active.(*panePopover)
+	if !ok {
+		t.Fatalf("coming back gave %T, want the surviving pane", m.active)
+	}
+	p.close(&m)
+}
