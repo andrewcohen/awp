@@ -31,7 +31,13 @@ func selectPane(t *testing.T, screen string) (Model, *panePopover, *fakeTerm) {
 }
 
 // drag presses at one cell of the pane, moves to another, and releases.
+//
+// It renders first, because the deck does: a mouse event translates against the
+// box the pane was last drawn in (panePopover.lastBox), which is where the cells
+// the pointer is over actually are. A test that skipped the frame would be
+// exercising an order the program never runs in.
 func drag(m *Model, p *panePopover, x0, y0, x1, y1 int) tea.Cmd {
+	m.render()
 	b := m.boxOf(p)
 	sx, sy := b.x+paneInsetX, b.y+paneInsetY
 	p.update(m, tea.MouseClickMsg{X: sx + x0, Y: sy + y0, Button: tea.MouseLeft})
@@ -64,6 +70,7 @@ func TestAClickWithNoDragSelectsNothing(t *testing.T) {
 		t.Fatal("the drag did not select")
 	}
 
+	m.render()
 	b := m.boxOf(p)
 	sx, sy := b.x+paneInsetX, b.y+paneInsetY
 	p.update(&m, tea.MouseClickMsg{X: sx + 2, Y: sy, Button: tea.MouseLeft})
@@ -170,4 +177,63 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// TestADragSelectsInASplitHalf, which is where it did not.
+//
+// paneMouse translates a screen event against the pane's box, and the pane asks
+// m.boxOf(p) for it — but boxOf answers with the whole childBox whenever m.active
+// is the pane itself, and splitModal.deliver sets m.active to the half before
+// calling its update. So inside a split the translation used the frame's box, and a
+// drag in the right half was measured from the left edge of the screen. Every
+// selection test until now used a single pane, where the two boxes are the same.
+func TestADragSelectsInASplitHalf(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	for _, tc := range []struct {
+		name string
+		half func() modal
+	}{
+		{"left", func() modal { return s.left }},
+		{"right", func() modal { return s.right }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, ok := tc.half().(*panePopover)
+			if !ok {
+				t.Fatalf("the %s half is a %T", tc.name, tc.half())
+			}
+			f, ok := p.term.(*fakeTerm)
+			if !ok {
+				t.Fatalf("the terminal is a %T", p.term)
+			}
+			f.setView("hello world")
+			p.sel = paneSelection{}
+
+			// Through the split, the way a real event arrives — after a frame, which
+			// is what tells the half where it was drawn.
+			//
+			// Starting a few columns in, clear of the divider's grab band: the band
+			// reaches splitGrabCols past the divider on each side, so the first content
+			// column of the right half is a place the divider is grabbed rather than
+			// text selected. That is the divider's to claim — it is what you are most
+			// likely aiming at that close to it — but it means the column cannot be
+			// used to test the half's own translation.
+			m.render()
+			b := s.boxOf(p, m.childBox())
+			const from = 3
+			sx, sy := b.x+paneInsetX+from, b.y+paneInsetY
+			m.Update(tea.MouseClickMsg{X: sx, Y: sy, Button: tea.MouseLeft})
+			m.Update(tea.MouseMotionMsg{X: sx + 4, Y: sy, Button: tea.MouseLeft})
+			m.Update(tea.MouseReleaseMsg{X: sx + 4, Y: sy, Button: tea.MouseLeft})
+
+			if !p.sel.active {
+				t.Fatalf("a drag in the %s half selected nothing", tc.name)
+			}
+			// Measured from the half's own origin, not the screen's: that is the whole
+			// bug this test exists for.
+			if p.sel.anchorX != from || p.sel.cursorX != from+4 {
+				t.Errorf("the drag selected columns %d..%d of the half, want %d..%d",
+					p.sel.anchorX, p.sel.cursorX, from, from+4)
+			}
+		})
+	}
 }

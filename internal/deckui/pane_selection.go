@@ -58,7 +58,7 @@ func (p *panePopover) paneSelects() bool { return !p.term.WantsMouse() }
 // pressed in is not selecting anything, and treating it as such would highlight
 // text as you moved past on the way somewhere else.
 func (p *panePopover) selectMouse(m *Model, msg tea.MouseMsg) (tea.Cmd, bool) {
-	inner, ok := paneMouse(msg, m.boxOf(p))
+	inner, ok := paneMouse(msg, p.lastBox)
 	if !ok {
 		// Outside the terminal — the border, or another region. A drag that runs off
 		// the edge keeps the selection it had rather than dropping it, because the
