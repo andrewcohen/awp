@@ -58,6 +58,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	tea "charm.land/bubbletea/v2"
@@ -88,6 +89,23 @@ type ghosttyTerm struct {
 	fmtBuf  []byte
 	closed  bool
 	w, h    int
+
+	// rs is a render state, held only to read the cursor's visual style.
+	//
+	// libghostty does not expose the shape on the terminal itself:
+	// GHOSTTY_TERMINAL_DATA_CURSOR_STYLE is the SGR style for newly printed cells,
+	// and the DECSCUSR shape is render-state data. So there is one of these per
+	// pane, updated from the terminal when there is something new to read.
+	rs C.GhosttyRenderState
+	// writes counts chunks the pty has delivered, and rsWrites is the count the
+	// render state was last updated at. A cursor shape cannot change without bytes
+	// arriving, so comparing them is what keeps a render-state update off the
+	// frames where nothing happened — and the update is a screen snapshot, on top
+	// of the formatter pass View already makes every frame.
+	writes   atomic.Uint64
+	rsWrites uint64
+	rsShape  tea.CursorShape
+	rsBlink  bool
 }
 
 // hosts is every live ghosttyTerm by terminal handle, so the write_pty
@@ -140,6 +158,13 @@ func startGhostty(gen, w, h int, c *exec.Cmd, host HostColors) (Hosted, error) {
 		t.free()
 		return nil, fmt.Errorf("vterm: ghostty_mouse_encoder_new: %d", rc)
 	}
+	if rc = C.ghostty_render_state_new(nil, &t.rs); !succeeded(rc) {
+		t.free()
+		return nil, fmt.Errorf("vterm: ghostty_render_state_new: %d", rc)
+	}
+	// The block is what a program that has said nothing gets, so it is the honest
+	// starting value rather than a placeholder.
+	t.rsShape, t.rsBlink = tea.CursorBlock, true
 
 	// Registered before the callback is installed, because the first thing a
 	// full-screen program does is ask questions.
@@ -182,6 +207,7 @@ func (g ghosttyWriter) Write(p []byte) (int, error) {
 		C.ghostty_terminal_vt_write(g.t.vt, (*C.uint8_t)(unsafe.Pointer(&p[0])), C.size_t(len(p)))
 	}
 	g.t.mu.Unlock()
+	g.t.writes.Add(1)
 	select {
 	case g.t.dirty <- struct{}{}:
 	default: // a repaint is already pending; one is enough
@@ -488,6 +514,59 @@ func (t *ghosttyTerm) Cursor() (int, int, bool) {
 	return int(x), int(y), bool(visible)
 }
 
+// CursorShape is what the program asked its cursor to look like, which for an
+// editor is which mode it is in — nvim's insert-mode bar, and back to a block on
+// escape.
+//
+// Read off a render state rather than the terminal, because that is where
+// libghostty keeps it: the terminal's own CURSOR_STYLE is the SGR style for
+// newly printed cells, not the DECSCUSR shape.
+//
+// Updated only when the pty has delivered something since the last read. The
+// update is a snapshot of the screen and this is called once per frame, on top of
+// the formatter pass View already makes — and a shape cannot change without bytes
+// arriving, so the frames where nothing happened get the cached answer. The
+// counter is read before the work and stored after, both under the lock, so a
+// chunk that lands mid-update is seen by the next call rather than lost.
+//
+// A hollow block is reported as a block. It is a real ghostty shape with no
+// DECSCUSR spelling and no equivalent in tea's three, and of those three the
+// block is the one it is.
+func (t *ghosttyTerm) CursorShape() (tea.CursorShape, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return t.rsShape, t.rsBlink
+	}
+	at := t.writes.Load()
+	if at == t.rsWrites {
+		return t.rsShape, t.rsBlink
+	}
+	if !succeeded(C.ghostty_render_state_update(t.rs, t.vt)) {
+		// Keep the last good answer. A failed update means the render state was not
+		// refreshed, not that the cursor became a block.
+		return t.rsShape, t.rsBlink
+	}
+	t.rsWrites = at
+
+	var style C.GhosttyRenderStateCursorVisualStyle
+	if succeeded(C.ghostty_render_state_get(t.rs, C.GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, unsafe.Pointer(&style))) {
+		switch style {
+		case C.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
+			t.rsShape = tea.CursorBar
+		case C.GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE:
+			t.rsShape = tea.CursorUnderline
+		default:
+			t.rsShape = tea.CursorBlock
+		}
+	}
+	var blink C.bool
+	if succeeded(C.ghostty_render_state_get(t.rs, C.GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, unsafe.Pointer(&blink))) {
+		t.rsBlink = bool(blink)
+	}
+	return t.rsShape, t.rsBlink
+}
+
 // WantsMouse asks the terminal rather than tracking the five DEC modes by hand,
 // which is what the x/vt path has to do.
 func (t *ghosttyTerm) WantsMouse() bool {
@@ -558,6 +637,10 @@ func (t *ghosttyTerm) Close() error {
 
 // free releases the C side. Caller holds mu, or holds the only reference.
 func (t *ghosttyTerm) free() {
+	if t.rs != nil {
+		C.ghostty_render_state_free(t.rs)
+		t.rs = nil
+	}
 	if t.mouseNc != nil {
 		C.ghostty_mouse_encoder_free(t.mouseNc)
 		t.mouseNc = nil

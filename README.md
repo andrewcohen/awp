@@ -1125,6 +1125,19 @@ forwarded to it; one that doesn't, like a shell, leaves the mouse to your
 terminal so its own drag-to-select keeps working. Likewise a program that
 hides its cursor doesn't get one drawn.
 
+**The cursor's shape follows the program too**, which is how an editor tells you
+which mode it is in: nvim's insert-mode bar and replace-mode underline, and back
+to a block on escape. Blink comes with it, because `DECSCUSR` encodes the two in
+one parameter — 5 is a blinking bar and 6 a steady one — so reading the shape
+without the blink is reading half of what the program said. A program that asks
+for nothing gets the block, which is the terminal default rather than a fallback.
+
+Only the libghostty-vt build reports it. libghostty keeps the shape on a render
+state rather than on the terminal, so a pane holds one and refreshes it when the
+pty has delivered something — a shape cannot change without bytes arriving, so
+the frames where nothing happened cost nothing. On the x/vt build the cursor
+stays a block; that emulator is being retired rather than taught.
+
 ### Recording what a pane and the deck actually wrote
 
 Rendering questions in a pane come down to which bytes flowed, and two
