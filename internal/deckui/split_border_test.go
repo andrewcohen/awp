@@ -10,108 +10,128 @@ import (
 
 // Which half has the keyboard, said by the border.
 //
-// In a split exactly one half may look like the active one, and the border is the
-// only chrome that belongs to the half rather than to what is inside it. The pane
-// half has always had one; the diff half had none, so focus was carried entirely by
-// the pane going muted — a screen that says "not here" beside a half that never says
-// "here".
+// The diff half draws no border of its own — the viewer frames each of its panes, and
+// a frame around those is a second line beside the first. What follows focus is the
+// hue of the *viewer's* focused pane, which used to be the accent whatever the deck
+// was doing: a split where the agent was being typed into still had a teal-bordered
+// pane in the diff half claiming the keyboard.
 
-// borderHue is the SGR parameters the top border row of a rendered half is painted
-// with — the whole escape, not a palette token, because what reaches the terminal is
-// lipgloss's translation of the token and the two are not the same string ("8"
-// leaves as `90`).
+// sgrFor is the escape a palette token actually leaves as.
 //
-// Compared between halves rather than against a colour name for that reason: the
-// invariant worth pinning is that the two halves agree about which hue means focus,
-// and that focused and blurred differ. A test naming the escape would pass a change
-// that painted the diff half's border in a hue of its own.
-func borderHue(half string) string {
-	top := strings.SplitN(half, "\n", 2)[0]
-	seq, _, _ := strings.Cut(strings.TrimPrefix(top, "\x1b["), "m")
+// Rendered rather than written down, because the two are not the same string: the
+// tokens are ANSI 16 indices and lipgloss emits `36` for "6" and `90` for "8". A test
+// naming the escape would be pinning lipgloss's translation table rather than awp's
+// choice of hue.
+func sgrFor(token string) string {
+	painted := lipgloss.NewStyle().Foreground(lipgloss.Color(token)).Render("x")
+	seq, _, _ := strings.Cut(strings.TrimPrefix(painted, "\x1b["), "m")
 	return seq
 }
 
-// framed reports whether a rendered block wears one border around the whole of it.
+// paints reports whether the block sets this hue anywhere in it.
 //
-// Counted rather than looked for, because the viewer draws rounded borders of its
-// own — the file list and the diff body are each in one — so the corner glyph says
-// nothing on its own. An outer frame contributes exactly one top-left corner to the
-// first row; the viewer's own panes contribute one each and sit side by side.
-func framed(block string) bool {
-	top := ansi.Strip(strings.SplitN(block, "\n", 2)[0])
-	return strings.Count(top, lipgloss.RoundedBorder().TopLeft) == 1
+// Anywhere rather than on a particular glyph: which of the viewer's panes comes first
+// depends on whether the left column is showing, so a test that read "the first
+// border corner" was reading the file list in one layout and the diff body in
+// another.
+func paints(block, sgr string) bool {
+	return strings.Contains(block, "\x1b["+sgr+"m")
 }
 
-// halfBorders renders both halves of a split and returns their top border rows.
-func halfBorders(t *testing.T, m *Model, s *splitModal) (left, right string) {
+// halves renders both halves of a split with the keyboard where the split says it is,
+// and returns them in (focused, blurred) order.
+func halves(t *testing.T, m *Model, s *splitModal) (focused, blurred string) {
 	t.Helper()
 	lb, rb := s.boxes(m.childBox())
-	return renderChild(m, s.left, lb.focus(!s.rightFocused)),
-		renderChild(m, s.right, rb.focus(s.rightFocused))
+	left := renderChild(m, s.left, lb.focus(!s.rightFocused))
+	right := renderChild(m, s.right, rb.focus(s.rightFocused))
+	if s.rightFocused {
+		return right, left
+	}
+	return left, right
 }
 
-// TestTheDiffHalfHasABorderThatFollowsFocus, which is the whole of #338. Both
-// directions: the focused half's border is the accent, the other's is muted, and
-// moving the keyboard swaps them.
-func TestTheDiffHalfHasABorderThatFollowsFocus(t *testing.T) {
+// TestTheDiffHalfDrawsNoBorderOfItsOwn. The viewer already frames its panes, so a
+// border around the half is a second line against the first — which is what the first
+// attempt at #338 did, and it was visible immediately.
+func TestTheDiffHalfDrawsNoBorderOfItsOwn(t *testing.T) {
+	m, s := splitWithDiff(t)
+	dm, ok := s.right.(*diffModal)
+	if !ok {
+		t.Fatalf("the right half is %T", s.right)
+	}
+	_, rb := s.boxes(m.childBox())
+	half := renderChild(&m, s.right, rb.focus(true))
+
+	// The half against what the viewer alone drew into the same width: a frame shows up
+	// as a box corner the viewer did not put there.
+	inner := dm.inner.Body(rb.w-panelCols, rb.h+footerRows-diffModalChrome)
+	corner := lipgloss.RoundedBorder().TopLeft
+	got := strings.Count(firstRow(half), corner)
+	want := strings.Count(firstRow(inner), corner)
+	if got != want {
+		t.Errorf("the diff half's first row has %d box corners, the viewer's own has %d:\n%s",
+			got, want, firstRow(ansi.Strip(half)))
+	}
+}
+
+func firstRow(block string) string { return strings.SplitN(ansi.Strip(block), "\n", 2)[0] }
+
+// TestTheDiffHalfsBorderFollowsFocus, which is #338: the viewer's focused pane wears
+// the accent only while the deck's keyboard is in that half.
+func TestTheDiffHalfsBorderFollowsFocus(t *testing.T) {
 	m, s := splitWithDiff(t)
 	if !s.rightFocused {
 		t.Fatal("precondition: |c leaves the keyboard in the diff half")
 	}
+	accent := sgrFor(colAccent)
 
-	blurredPane, focusedDiff := halfBorders(t, &m, s)
-	if !framed(focusedDiff) {
-		t.Fatalf("the diff half has no border of its own:\n%s", ansi.Strip(focusedDiff))
+	focusedDiff, _ := halves(t, &m, s)
+	if !paints(focusedDiff, accent) {
+		t.Error("the focused diff half paints nothing in the accent, so nothing says the keys are in it")
 	}
 
 	s.rightFocused = false
-	focusedPane, blurredDiff := halfBorders(t, &m, s)
-
-	// The diff half says something different depending on where the keys are, which
-	// is the bug: before this it said nothing either way.
-	if borderHue(focusedDiff) == borderHue(blurredDiff) {
-		t.Errorf("the diff half's border does not follow focus (both %q)", borderHue(focusedDiff))
-	}
-	// And it says it the way the pane half does. Two vocabularies for one question is
-	// worse than one of them being absent, since the halves are read side by side.
-	if got, want := borderHue(focusedDiff), borderHue(focusedPane); got != want {
-		t.Errorf("the focused diff half's border is %q, the focused pane's is %q", got, want)
-	}
-	if got, want := borderHue(blurredDiff), borderHue(blurredPane); got != want {
-		t.Errorf("the blurred diff half's border is %q, the blurred pane's is %q", got, want)
+	_, blurredDiff := halves(t, &m, s)
+	if paints(blurredDiff, accent) {
+		t.Error("the blurred diff half still paints the accent — it goes on claiming the keyboard")
 	}
 }
 
-// TestAWholeScreenDiffHasNoBorder. Nothing else is on screen, so there is no
-// question for a border to answer — and two rows and two columns of a diff are
-// worth more than a frame around the only thing in the terminal.
-func TestAWholeScreenDiffHasNoBorder(t *testing.T) {
+// TestOnlyOneHalfClaimsTheKeyboard is the point of the exercise: before this, the diff
+// half's focused pane and the pane half's border were both the accent at once, so two
+// things on screen said the keys were in them.
+func TestOnlyOneHalfClaimsTheKeyboard(t *testing.T) {
+	m, s := splitWithDiff(t)
+	accent := sgrFor(colAccent)
+	for _, focusRight := range []bool{true, false} {
+		s.rightFocused = focusRight
+		focused, blurred := halves(t, &m, s)
+		side := map[bool]string{true: "right", false: "left"}[focusRight]
+		if !paints(focused, accent) {
+			t.Errorf("with the keyboard on the %s, that half does not paint the accent", side)
+		}
+		if paints(blurred, accent) {
+			t.Errorf("with the keyboard on the %s, the other half paints the accent too", side)
+		}
+	}
+}
+
+// TestAWholeScreenDiffIsNeverBlurred. HostBlurred is about being one of two halves, so
+// a viewer that owns the terminal must not dim: there is nowhere else for the keyboard
+// to be, and a diff whose every pane looks inactive reads as a dead screen.
+func TestAWholeScreenDiffIsNeverBlurred(t *testing.T) {
 	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
 	m, _ = pressKey(m, "c")
 	dm, ok := m.active.(*diffModal)
 	if !ok {
 		t.Fatalf("active is %T, want the diff viewer", m.active)
 	}
-	body, _ := dm.view(&m, m.childBox())
-	if framed(body) {
-		t.Errorf("a whole-screen diff drew a border around itself:\n%s", ansi.Strip(body))
+	full, _ := dm.view(&m, m.childBox())
+	if dm.inner.HostBlurred {
+		t.Error("a whole-screen diff was told the keyboard is somewhere else")
 	}
-}
-
-// TestTheBorderedHalfStillFillsItsBox. The border's cells come out of the body
-// rather than being added around it: a half that renders wider or narrower than its
-// box shifts everything inside it when the composed halves are centred (#339).
-func TestTheBorderedHalfStillFillsItsBox(t *testing.T) {
-	m, s := splitWithDiff(t)
-	b := m.childBox()
-	_, rb := s.boxes(b)
-	half := renderChild(&m, s.right, rb.focus(true))
-	for i, line := range strings.Split(half, "\n") {
-		if got := ansi.StringWidth(line); got != rb.w {
-			t.Fatalf("row %d of the diff half is %d columns wide, want %d", i, got, rb.w)
-		}
-	}
-	if got, want := lipgloss.Height(half), b.h; got != want {
-		t.Errorf("the diff half is %d rows tall, want %d", got, want)
+	if !paints(full, sgrFor(colAccent)) {
+		t.Error("a whole-screen diff draws no focused pane at all")
 	}
 }

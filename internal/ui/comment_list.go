@@ -280,10 +280,7 @@ func commentListHeader(listed, hidden int) string {
 }
 
 func (m Model) renderCommentList(width, height int) string {
-	border := styleNormalBorder
-	if m.focus == FocusComments {
-		border = styleFocusBorder
-	}
+	border := m.paneBorder(FocusComments)
 	rows := []string{styleDim.Render(truncate(commentListHeader(len(m.commentIndex), m.hiddenThreads()), width-4))}
 	start, end := visibleRange(m.commentsCursor, max(1, height-1), len(m.commentIndex))
 	contentWidth := width - 4
