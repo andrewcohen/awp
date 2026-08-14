@@ -964,13 +964,27 @@ it leaves on one press from either arrangement.
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
+| `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
 | `S` | show or hide the attention sidebar — a 36-column strip down the left carrying the attention scope's rows. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
-A single pane's menu carries the window keys and `S`, and nothing else: focus,
+A single pane's menu carries the window keys, `L` and `S`, and nothing else: focus,
 size, zoom and close-a-half have nothing to act on until there are two halves, so
 they are absent rather than listed and inert.
+
+**`ctrl+b L` switches arrangements without going via the deck.** `L` on the row
+list has meant "the pane before the one you were last in" since the deck started
+hosting its own panes, and it is the same act from inside one — so it is the same
+key. What differs is only that there is something on screen to take down first:
+the arrangement you are leaving closes, all of it, before the previous one opens.
+A split counts as one arrangement, so leaving a split closes both halves.
+
+Two panes are therefore one keypress apart in both directions: arriving somewhere
+records where you came from, so pressing it twice is where you started. Where
+there is no other arrangement to go to, the key says so and leaves the pane you
+are in alone — it does not close the pane and drop you on the deck, which would be
+the key doing half of itself.
 
 **`S` is the attention sidebar.** The top row's badge says *how many* workspaces
 want you and not *which*, which is enough to know something is waiting and not
