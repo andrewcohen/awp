@@ -126,12 +126,15 @@ func TestAMistypedSecondKeyCancels(t *testing.T) {
 	}
 }
 
-// TestASplitRefusesATerminalTooNarrowForTwo, naming the width it wants. Two
-// halves of a narrow terminal are two useless panes, and opening something
-// technically correct that cannot be read is worse than saying no.
+// TestASplitRefusesATerminalTooNarrowForTwo, naming the width it wants.
+//
+// The floor is a pane, not a comfortable one: a 120-column minimum used to refuse
+// splits that were merely cramped, which is a judgment the person who pressed the key
+// has already made. What is left is the width below which a half is a border around a
+// pty no program can lay out in.
 func TestASplitRefusesATerminalTooNarrowForTwo(t *testing.T) {
 	m := splitDeck(t)
-	m.width = splitMinW - 1
+	m.width = 2*splitHalfMinW - 1
 	m = pressDeck(t, m, runeKey("|"))
 	m = pressDeck(t, m, runeKey("v"))
 	if m.active != nil {

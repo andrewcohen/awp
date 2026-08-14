@@ -135,17 +135,19 @@ func (m Model) hostedPane() (*panePopover, bool) {
 	return nil, false
 }
 
-// splitMinW is the narrowest terminal a split is worth opening in.
+// splitFits reports whether a box can carry a split at all: two halves that are
+// each a pane, and nothing more.
 //
-// Two halves of a 100-column terminal are two 50-column panes, and a 50-column
-// diff is not a diff — it is a column of line numbers and the left third of the
-// code. Below this the split refuses and says the width it wants, rather than
-// opening something technically correct and useless. paneMinW is the floor for a
-// pane to exist at all, which is a different and much lower question.
-const splitMinW = 120
-
-// splitFits reports whether a box can carry a split at all.
-func splitFits(b box) bool { return b.w >= splitMinW && paneFits(b.w/2, b.h) }
+// There used to be a second floor — 120 columns, on the argument that a 50-column
+// diff is a column of line numbers and the left third of the code. True, and not
+// the deck's call to make: the key was pressed, a narrow split is legible enough to
+// be worth having on the terminal you are actually using, and `ctrl+b o` zooms a
+// half to the whole screen for the moment it is not. A refusal that names a width
+// you cannot change is a key that does nothing.
+//
+// paneFits is the floor that stays, because below it there is no pane — the pty
+// would be started at a size no program lays out at.
+func splitFits(b box) bool { return paneFits(b.w/2, b.h) }
 
 // splitEvenFrac is the divider's resting place, and what `=` restores.
 const splitEvenFrac = 0.5
@@ -615,7 +617,9 @@ func (m *Model) openSplit(item Item, kind string) (tea.Cmd, bool) {
 func (m *Model) openSplitKinds(item Item, leftKind, rightKind string, frac float64) (tea.Cmd, bool) {
 	full := m.childBox()
 	if !splitFits(full) {
-		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, splitMinW)
+		// The floor is a pane, so the number that matters is the pane's minimum, and it
+		// is per half rather than for the terminal.
+		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, 2*(paneMinW+paneChromeW))
 		return nil, false
 	}
 	// The right half's box is what the kind is opened into. Built from a

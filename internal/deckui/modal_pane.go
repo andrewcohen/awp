@@ -790,7 +790,9 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 func (p *panePopover) splitWith(m *Model, kind string) tea.Cmd {
 	full := m.childBox()
 	if !splitFits(full) {
-		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, splitMinW)
+		// The floor is a pane, so the number that matters is the pane's minimum, and it
+		// is per half rather than for the terminal.
+		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, 2*(paneMinW+paneChromeW))
 		return nil
 	}
 	item, ok := m.topRowRow()
