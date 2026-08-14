@@ -537,6 +537,36 @@ func (z zmxSessions) sessions(fast bool) deckSessionSnapshot {
 	return snap
 }
 
+// roots is each live session's own process, bucketed by workspace.
+//
+// One PID per session rather than per pane, because a zmx session *is* the
+// process — there are no panes under it to enumerate. A dev server started in
+// one is a descendant of that PID, which is what the discoverer walks, so the
+// answer is the same shape as tmux's for a substrate shaped differently.
+//
+// Ended sessions are skipped. zmx keeps a session listed after its command
+// exits so the output can still be read, and a PID that has been reused by the
+// kernel would hand the discoverer somebody else's sockets.
+func (z zmxSessions) roots() map[workspaceRef][]int {
+	list, err := z.client.List(context.Background())
+	if err != nil {
+		return nil
+	}
+	rows := z.knownRows()
+	out := map[workspaceRef][]int{}
+	for _, s := range list {
+		if !s.Live() || s.PID <= 0 {
+			continue
+		}
+		ref, _, ok := z.refFor(s, rows)
+		if !ok {
+			continue
+		}
+		out[ref] = append(out[ref], s.PID)
+	}
+	return out
+}
+
 // knownRows is the deck's workspaces, or nothing when none are wired — which
 // leaves every session to the name-reading fallback.
 func (z zmxSessions) knownRows() []workspaceRef {

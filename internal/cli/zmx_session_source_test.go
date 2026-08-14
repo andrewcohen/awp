@@ -166,3 +166,64 @@ func TestZdeckReadsTheSubstrateItHostsOn(t *testing.T) {
 		t.Errorf("zdeck's session source is %T, want zmxSessions", host.sessionSource())
 	}
 }
+
+// The dev-URL discoverer's PIDs, which is #342. `d` reported no dev server for
+// every row under a pane host, because the enumeration asked tmux — and a deck
+// hosting its own panes has no tmux server to ask. The PIDs now come from the
+// session source, so each substrate answers for itself.
+
+// TestEverySessionOffersItsProcess. A zmx session is the process, so there are
+// no panes under it to enumerate and the session's own PID is the root a dev
+// server will be a descendant of.
+func TestEverySessionOffersItsProcess(t *testing.T) {
+	src, _ := zmxSource(
+		"name=awp.repo.qa.agent\tpid=42\tclients=1",
+		"name=awp.repo.qa.dev\tpid=43\tclients=1",
+		"name=awp.repo.other.agent\tpid=44\tclients=1",
+	)
+	roots := src.roots()
+	if got := roots[workspaceRef{project: "repo", workspace: "other"}]; len(got) != 1 || got[0] != 44 {
+		t.Errorf("the other workspace's roots are %v, want [44]", got)
+	}
+	qa := roots[workspaceRef{project: "repo", workspace: "qa"}]
+	if len(qa) != 2 {
+		t.Fatalf("qa has %v roots, want both of its sessions", qa)
+	}
+	// Both sessions of a workspace, because the dev server is not obliged to be in
+	// the agent's: the point of a `dev` pane kind is that it is somewhere else.
+	for _, want := range []int{42, 43} {
+		if !slicesContainsInt(qa, want) {
+			t.Errorf("qa's roots %v are missing pid %d", qa, want)
+		}
+	}
+}
+
+// TestAnEndedSessionOffersNoProcess. zmx keeps a session listed after its
+// command exits, and the kernel is free to have given that PID to someone else
+// — so a dead session's pid would hand the discoverer a stranger's sockets and
+// report them as this workspace's dev server.
+func TestAnEndedSessionOffersNoProcess(t *testing.T) {
+	src, _ := zmxSource("name=awp.repo.qa.agent\tpid=42\tended=1\texit_code=0")
+	if roots := src.roots(); len(roots) != 0 {
+		t.Errorf("an ended session offered %v", roots)
+	}
+}
+
+// TestADaemonThatWillNotAnswerOffersNothing, rather than a partial answer. The
+// discoverer treats an empty map as "nothing found", which is the honest report
+// when the substrate could not be read.
+func TestADaemonThatWillNotAnswerOffersNothing(t *testing.T) {
+	r := &lsRunner{err: errors.New("no daemon")}
+	if roots := (zmxSessions{client: zmx.New(r.run)}).roots(); len(roots) != 0 {
+		t.Errorf("a failed read offered %v", roots)
+	}
+}
+
+func slicesContainsInt(haystack []int, want int) bool {
+	for _, n := range haystack {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
