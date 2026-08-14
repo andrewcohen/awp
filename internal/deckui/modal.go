@@ -31,6 +31,17 @@ import (
 type box struct {
 	x, y, w, h int
 	blurred    bool
+	// shared says this box is one of several on screen, so what fills it has to
+	// say whether the keyboard is in it.
+	//
+	// blurred alone cannot answer that: a child that has the whole screen is not
+	// blurred either, and it needs no border to prove it — there is nothing else
+	// the keys could be in. Only a box that is sharing the screen has a question to
+	// answer, which is why the two flags are separate rather than one being read off
+	// the other.
+	//
+	// Set by splitAt, because that is the moment a box stops being alone.
+	shared bool
 }
 
 // splitAt divides the box into left and right halves at col columns from its
@@ -40,8 +51,8 @@ type box struct {
 // edge, so a column of canvas between two borders is a third line down the
 // middle of the screen.
 func (b box) splitAt(col int) (left, right box) {
-	left = box{x: b.x, y: b.y, w: col, h: b.h}
-	right = box{x: b.x + col, y: b.y, w: b.w - col, h: b.h}
+	left = box{x: b.x, y: b.y, w: col, h: b.h, shared: true}
+	right = box{x: b.x + col, y: b.y, w: b.w - col, h: b.h, shared: true}
 	return left, right
 }
 
