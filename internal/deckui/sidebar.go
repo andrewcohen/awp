@@ -2,16 +2,18 @@ package deckui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 
 	"github.com/andrewcohen/awp/internal/deckdata"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
-// The sidebar is a narrow strip down the left of a pane or a split, holding the
-// workspaces that want you.
+// The sidebar is a narrow strip down the left of a pane or a split, holding every
+// workspace, sectioned so the ones wanting you are the ones at the top.
 //
 // It exists because the top row's badge says *how many* and not *which*: three
 // yellow dots is enough to know something is waiting and not enough to decide
@@ -143,24 +145,21 @@ const (
 	sidebarPadY = 1
 )
 
-// attentionView is the read model the strip renders from: the attention scope's rows, in the scope's
-// own order, grouped under the reason each of them is there for.
+// sidebarView is the read model the strip renders from: every workspace, in the
+// all scope's own order.
 //
-// The scope rather than a tally of agent states. The badge on the top row counts
-// three things — waiting, working, unread — because it is three numbers wide, and
-// the strip inherited that grouping when it was written. But the scope is the
-// deck's actual answer to "what wants you", and it is wider: a PR whose review is
-// requested, one whose CI has gone red, one approved and waiting to merge, a
-// workspace you were in ten minutes ago. Grouping by agent state meant the strip
-// said "nothing waiting" on a deck whose row list had a screenful — the strip and
-// the `P` scope beside it disagreeing about the one question they both answer.
+// Every workspace rather than the attention scope's, which is what it used to be.
+// The strip now has an `idle` section, and a scope that filters idle rows out
+// cannot fill it. What the strip is for moved with that: it was "which of the
+// things wanting you is which", and it is now the whole list, sectioned so the
+// ones wanting you are the ones at the top.
 //
-// Unfiltered, and over every workspace rather than the visible rows: the same
-// argument countAttention makes for the badge. What wants you cannot depend on a
-// filter typed into a list that is not even on screen from in here.
-func (m Model) attentionView() deckdata.View {
+// Unfiltered: the same argument countAttention makes for the badge. What the strip
+// shows cannot depend on a filter typed into a row list that is not even on screen
+// from inside a pane.
+func (m Model) sidebarView() deckdata.View {
 	v := m.rm()
-	v.Scope = deckdata.ScopeAttention
+	v.Scope = deckdata.ScopeAll
 	v.Filter = ""
 	return v
 }
@@ -170,45 +169,26 @@ func (m Model) renderSidebar(b box) string {
 	inner := max(1, b.w-2*sidebarPadX)
 	avail := max(1, b.h-2*sidebarPadY)
 
-	v := m.attentionView()
-	rows := v.Items()
+	v := m.sidebarView()
+	groups := sidebarSections(v.Items())
 
-	lines := make([]string, 0, len(rows)+len(sidebarGroups))
-	// A header whenever the reason changes, which needs no grouping pass of its
-	// own: the scope is already ordered so that rows sharing a band are adjacent,
-	// and walking it in its own order is what keeps the strip and the row list
-	// listing the same workspaces in the same sequence.
-	last := deckdata.ReasonNone
-	// The project is a sub-row under the group, printed only when it changes,
-	// rather than a chip repeated on every row. It was a chip, and the strip spent
-	// eight of its twenty-six columns printing `alpha/` four times in a row while
-	// the PR titles it was labelling truncated to `fix(l...` — three characters of
-	// signal beneath a name already on screen above. Said once, the columns go back
-	// to the part that differs.
-	project := ""
-	for _, it := range rows {
-		reason := v.Wants(it)
-		if reason != last {
-			// A blank row above each group but the first. It costs a workspace the
-			// strip could have listed, and it is worth it: the groups are what makes
-			// the strip scannable rather than a list, and colour alone did not
-			// separate them enough to find the one you were looking for.
-			if len(lines) > 0 {
-				lines = append(lines, "")
-			}
-			lines = append(lines, m.sidebarGroupStyle(reason).Render(
-				truncate(sidebarGroupLabel(reason), inner)))
-			last, project = reason, ""
+	lines := make([]string, 0, 2*len(v.Items())+len(groups))
+	for _, g := range groups {
+		// A blank row above each group but the first. It costs a workspace the
+		// strip could have listed, and it is worth it: the groups are what makes
+		// the strip scannable rather than a list, and colour alone did not
+		// separate them enough to find the one you were looking for.
+		if len(lines) > 0 {
+			lines = append(lines, "")
 		}
-		if it.ProjectName != project {
-			project = it.ProjectName
-			lines = append(lines, sidebarIndent+m.styles.Muted.Render(
-				truncate(project, max(1, inner-len(sidebarIndent)))))
+		lines = append(lines, m.sidebarSectionStyle(g.section).Render(
+			truncate(sidebarSectionLabel(g.section), inner)))
+		for _, it := range g.items {
+			lines = append(lines, m.sidebarRow(v, it, inner)...)
 		}
-		lines = append(lines, m.sidebarRow(it, v.DisplayLabel(it), inner))
 	}
 	if len(lines) == 0 {
-		lines = append(lines, m.styles.Muted.Render("nothing waiting"))
+		lines = append(lines, m.styles.Muted.Render("no workspaces"))
 	}
 	// Overflow is a count rather than a scroll: nothing can move a cursor in here,
 	// so a viewport would be a scrollable region with no key that scrolls it. The
@@ -224,63 +204,152 @@ func (m Model) renderSidebar(b box) string {
 		Render(strings.Join(lines, "\n"))
 }
 
-// sidebarGroups is every reason the strip can head a group with, in the order the
-// scope puts them. Only its length is used — to size the line slice — but the
-// list is what a test can walk to check each one has a label and a hue.
-var sidebarGroups = []deckdata.Reason{
-	deckdata.ReasonWorking,
-	deckdata.ReasonWaiting,
-	deckdata.ReasonReReviewRequested,
-	deckdata.ReasonReviewRequested,
-	deckdata.ReasonNotified,
-	deckdata.ReasonPRNeedsAction,
-	deckdata.ReasonPRReadyToMerge,
-	deckdata.ReasonRecent,
-}
-
-// sidebarGroupLabel is the header for a group of rows: the scope's own words for
-// why they are there.
+// sidebarSection is the band a row sits in on the strip.
 //
-// Reason.String, so the strip says what the row list's meta line says rather than
-// inventing a second vocabulary for the same fact. ReasonRecent's real words are a
-// duration, which belongs to a row and not to a group of them, so the group says
-// what they have in common.
-func sidebarGroupLabel(r deckdata.Reason) string {
-	if r == deckdata.ReasonRecent {
-		return "recently active"
-	}
-	if s := r.String(); s != "" {
-		return s
-	}
-	return "other"
+// Agent state, not deckdata.Reason, which is what it was and what made the strip
+// unreadable: a reason is a per-row answer to "why is this here", and several of
+// them describe the same row from different angles, so walking the scope in its
+// own order and starting a group whenever the reason changed re-opened a section
+// that had already been printed further up. Sections have to be a partition — one
+// row lands in exactly one of these — for a header to mean "everything below is
+// this", which is the only reason a header is worth its row.
+//
+// Declaration order is render order.
+type sidebarSection int
+
+const (
+	// sectionPinned is every row carrying a register, whatever its agent is doing.
+	// Pinned is a statement about the workspace rather than about this minute, so
+	// it outranks the state bands: you pinned it because you want it in front of
+	// you, and a pin that sorted under `idle` because the agent happens to be
+	// between turns is the pin not working.
+	sectionPinned sidebarSection = iota
+	sectionWaiting
+	sectionError
+	// sectionReady is the grey dot: an agent that finished, with the mark still
+	// unread. It is a turn you have not looked at yet.
+	sectionReady
+	sectionWorking
+	// sectionIdle is everything with nothing to say — no dot at all.
+	sectionIdle
+	sidebarSectionCount
+)
+
+// sidebarGroup is one section and the rows under it. Empty sections are dropped
+// before this, so a group always has rows.
+type sidebarGroup struct {
+	section sidebarSection
+	items   []Item
 }
 
-// sidebarGroupStyle is the hue a group's header wears — the colour its rows'
-// status dots and the badge's dots already wear, so the strip is read with the
-// vocabulary the rest of the deck taught.
-func (m Model) sidebarGroupStyle(r deckdata.Reason) lipgloss.Style {
-	switch r {
-	case deckdata.ReasonWorking:
-		return m.styles.Success.Bold(true)
-	case deckdata.ReasonWaiting, deckdata.ReasonReReviewRequested, deckdata.ReasonReviewRequested:
+// sidebarSections partitions the rows into the strip's bands, in render order.
+//
+// Rows keep the scope's order inside a band, except idle, which is sorted most
+// recently active first: the band has no urgency to rank by, so the useful
+// question is "where was I", and a workspace last touched in March is not the one
+// you want at the top of it. A zero LastActiveAt is unknown rather than ancient,
+// but it still sorts last — an unknown row is the one we have no reason to raise.
+func sidebarSections(rows []Item) []sidebarGroup {
+	var byBand [sidebarSectionCount][]Item
+	for _, it := range rows {
+		band := sidebarSectionOf(it)
+		byBand[band] = append(byBand[band], it)
+	}
+	idle := byBand[sectionIdle]
+	sort.SliceStable(idle, func(i, j int) bool {
+		return idle[i].LastActiveAt.After(idle[j].LastActiveAt)
+	})
+
+	groups := make([]sidebarGroup, 0, sidebarSectionCount)
+	for band := sidebarSection(0); band < sidebarSectionCount; band++ {
+		if len(byBand[band]) > 0 {
+			groups = append(groups, sidebarGroup{section: band, items: byBand[band]})
+		}
+	}
+	return groups
+}
+
+// sidebarSectionOf is which band one row belongs to.
+//
+// The order of the checks is the partition: pinned wins over everything, then the
+// three states that mean something is up, then the grey dot, and what is left has
+// nothing to report. `waiting` and `error` are read off the status whether or not
+// the mark is unread — the dot is an attention signal and goes quiet once you have
+// looked, but an agent that stopped to ask you something is still stopped, and
+// filing it under `idle` because you have already seen the question once is the
+// strip forgetting the thing it is for.
+func sidebarSectionOf(it Item) sidebarSection {
+	status := strings.ToLower(strings.TrimSpace(it.Status))
+	switch {
+	case strings.TrimSpace(it.PinGroup) != "":
+		return sectionPinned
+	case workspace.IsWorking(status):
+		return sectionWorking
+	case status == "waiting":
+		return sectionWaiting
+	case status == "error":
+		return sectionError
+	case statusGlyphVisible(status, it.Unread):
+		return sectionReady
+	}
+	return sectionIdle
+}
+
+// sidebarSectionLabel is the header over a band.
+func sidebarSectionLabel(s sidebarSection) string {
+	switch s {
+	case sectionPinned:
+		return "pinned"
+	case sectionWaiting:
+		return "waiting"
+	case sectionError:
+		return "error"
+	case sectionReady:
+		return "ready"
+	case sectionWorking:
+		return "working"
+	case sectionIdle, sidebarSectionCount:
+	}
+	return "idle"
+}
+
+// sidebarSectionStyle is the hue a header wears: the one its rows' status dots
+// already wear, so the strip is read with the vocabulary the rest of the deck
+// taught. Pinned is Accent — the structural hue the deck gives project headers,
+// which is what a register is.
+func (m Model) sidebarSectionStyle(s sidebarSection) lipgloss.Style {
+	switch s {
+	case sectionPinned:
+		return m.styles.Accent.Bold(true)
+	case sectionWaiting:
 		return m.styles.Warning.Bold(true)
-	case deckdata.ReasonPRNeedsAction:
+	case sectionError:
 		return m.styles.Danger.Bold(true)
-	case deckdata.ReasonPRReadyToMerge:
+	case sectionWorking:
 		return m.styles.Success.Bold(true)
-	case deckdata.ReasonNotified, deckdata.ReasonRecent, deckdata.ReasonNone:
+	case sectionReady, sectionIdle, sidebarSectionCount:
 	}
 	return m.styles.Muted.Bold(true)
 }
 
-// sidebarRow is one workspace: the status dot the row list would give it, its
-// project, and its name.
+// sidebarRow is one workspace, over two lines:
+//
+//	● workspace-name
+//	  ◐ ⇅ #412 andrew/thing
+//
+// Two lines rather than one because the strip is 36 columns and the row has two
+// unrelated facts to carry — which workspace, and where its PR stands. On one line
+// they compete: the number and the glyphs are fixed-width and go first, so the
+// name is what truncates, and a truncated name is the one field you cannot work
+// out from the others. Given a line of its own the name gets the whole strip, and
+// the PR line under it is free to be missing, which for a workspace with no PR it
+// is.
 //
 // The workspace you are in wears a `┃` bar in Muted — the "pane the keyboard has
 // left" tier of the selection treatment. It marks where you are without claiming
 // to be the cursor, which is what the full-strength bar means and there is no
 // cursor in here to mean it.
-func (m Model) sidebarRow(it Item, label string, width int) string {
+func (m Model) sidebarRow(v deckdata.View, it Item, width int) []string {
 	bar := "  "
 	if p := m.topRowSubject(); p != nil && p.project == it.ProjectName && p.workspace == it.WorkspaceName {
 		bar = m.styles.Muted.Render("┃") + " "
@@ -289,13 +358,56 @@ func (m Model) sidebarRow(it Item, label string, width int) string {
 	// Every row is the same shape — bar, dot, name — whatever the row is about.
 	// Rows with a dot and rows without used to sit at different indents, so nothing
 	// lined up vertically and the drift cost columns on both kinds.
-	room := width - lipgloss.Width(bar) - lipgloss.Width(glyph) - 1
-	return bar + glyph + " " + truncate(label, max(1, room))
+	name := truncate(it.WorkspaceName, max(1, width-lipgloss.Width(bar)-lipgloss.Width(glyph)-1))
+	lines := []string{bar + glyph + " " + name}
+	if meta := m.sidebarMeta(v, it, max(1, width-len(sidebarIndent))); meta != "" {
+		lines = append(lines, sidebarIndent+meta)
+	}
+	return lines
 }
 
-// sidebarIndent is what a project sub-row is inset by: the columns a workspace row
-// spends on its selection bar, so the name above lines up with the names below it
-// rather than starting in the bar's channel.
+// sidebarMeta is a row's second line: the PR glyph cluster, the PR number, and the
+// bookmark the workspace is on. "" when the row has none of the three, which is
+// the second line not being drawn at all.
+//
+// prGlyphCluster, not a spelling of its own — the deck's other three surfaces
+// render that cluster in that order, and the eye reads the positions, so a fourth
+// surface assembling its own would be showing the same glyphs and meaning
+// something else by them. Only the bookmark truncates: it is the field that varies
+// in length, and the glyphs and the number are the fixed part they were budgeted
+// against.
+func (m Model) sidebarMeta(v deckdata.View, it Item, width int) string {
+	segs := make([]string, 0, 3)
+	if cluster := m.prGlyphCluster(it); cluster != "" {
+		segs = append(segs, cluster)
+	}
+	number := ""
+	if pr, ok := v.ResolvePRStatus(it); ok {
+		number = "#" + strconv.Itoa(pr.Number)
+	}
+	if number != "" {
+		segs = append(segs, m.styles.Info.Render(number))
+	}
+	if len(segs) == 0 && strings.TrimSpace(it.Bookmark) == "" {
+		return ""
+	}
+	head := strings.Join(segs, " ")
+	if bookmark := strings.TrimSpace(it.Bookmark); bookmark != "" {
+		room := width - lipgloss.Width(head)
+		if head != "" {
+			room--
+		}
+		if bookmark = truncate(bookmark, max(1, room)); head != "" {
+			head += " "
+		}
+		head += m.styles.Muted.Render(bookmark)
+	}
+	return head
+}
+
+// sidebarIndent is what a row's second line is inset by: the columns the first
+// line spends on its selection bar, so the PR line reads as belonging to the name
+// above rather than as a row of its own.
 const sidebarIndent = "  "
 
 // sidebarVerb is how the ctrl+b menus name the key.

@@ -1011,7 +1011,7 @@ it leaves on one press from either arrangement.
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
-| `S` | show or hide the attention sidebar — a 36-column strip down the left carrying the attention scope's rows. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
+| `S` | show or hide the sidebar — a 36-column strip down the left carrying every workspace, sectioned by what its agent is doing. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
@@ -1032,31 +1032,61 @@ there is no other arrangement to go to, the key says so and leaves the pane you
 are in alone — it does not close the pane and drop you on the deck, which would be
 the key doing half of itself.
 
-**`S` is the attention sidebar.** The top row's badge says *how many* workspaces
-want you and not *which*, which is enough to know something is waiting and not
-enough to decide whether to leave what you are in — and leaving to find out is the
-thing that row was added to avoid. `S` puts a 36-column strip down the left of the
-pane or the split, carrying **the attention scope** — the same rows `P`'s attention
-scope shows, in the same order, grouped under the scope's own words for why each is
-there: `working`, `waiting on you`, `re-review requested`, `reviewing`, `finished
-a turn`, `PR needs action`, `ready to merge`, `recently active`. Each row wears the
-status dot the row list would give it, and the workspace you are currently in is
-marked with a muted `┃` — the tier the design system gives a pane the keyboard has
-left, since it says where you are without claiming to be a cursor.
+**`S` is the sidebar.** The top row's badge says *how many* workspaces want you and
+not *which*, which is enough to know something is waiting and not enough to decide
+whether to leave what you are in — and leaving to find out is the thing that row was
+added to avoid. `S` puts a 36-column strip down the left of the pane or the split,
+carrying **every workspace**, sectioned so the ones wanting you are the ones at the
+top:
 
-**A row spends its width on what differs.** The project is a muted sub-row printed
-once, when it changes, rather than a chip on every row: at 28 columns the strip was
-spending eight of them repeating `alpha/` down a group while the PR titles it was
-labelling truncated to `fix(l...`, so the sub-row above now says what four rows were
-each saying and the rows keep the columns. Every row is the same shape (bar, dot,
-name), so the dots line up down the strip; rows with a dot and rows without used to
-sit at different indents and the drift cost columns on both.
+| section | what is in it |
+|---------|---------------|
+| `pinned` | every row carrying a register, whatever its agent is doing — a pin is a statement about the workspace, not about this minute |
+| `waiting` | the agent stopped to ask you something |
+| `error` | the agent failed |
+| `ready` | the grey dot: a turn finished and you have not looked at it yet |
+| `working` | the green dot |
+| `idle` | nothing to report, most recently active first |
 
-A blank row separates the groups, and none sits above the first. It costs a
+The sections are a **partition** — a row lands in exactly one — which is what lets a
+header mean "everything below is this". The strip used to group by the same
+per-row reasons the row list's meta line gives (`waiting on you`, `PR needs
+action`, `recently active`, …), and those are not a partition: walking the scope
+and starting a group whenever the reason changed re-opened headers that had
+already been printed further up, so the same section appeared three times down one
+strip. It also read the attention scope, which is where `idle` could not come
+from — a scope that filters idle rows out cannot fill a section of them.
+
+`waiting` and `error` are read off the agent's status whether or not the mark is
+unread. The dot is an attention signal and goes quiet once you have looked, but an
+agent that stopped to ask you something is still stopped, and filing it under `idle`
+because you have already seen the question once is the strip forgetting what it is
+for. The workspace you are currently in is marked with a muted `┃` — the tier the
+design system gives a pane the keyboard has left, since it says where you are
+without claiming to be a cursor.
+
+**A row is two lines.**
+
+```
+● sidebar-redesign
+  ◐ #412 andrew/sidebar-redesign
+```
+
+The name on the first, the PR glyph cluster / number / bookmark on the second, and
+the second line is simply absent for a workspace with neither. On one line they
+compete: the glyphs and the number are fixed-width and go first, so the name is what
+truncates — and the name is the one field you cannot work out from the others. Given
+a line of its own it gets the whole strip. The project is on neither line: the
+sections cut across projects, so a project sub-row inside a band would be a second
+level of grouping under the one that matters. The cost is that two workspaces of the
+same name in different projects read alike here; the row list is where you tell them
+apart.
+
+A blank row separates the sections, and none sits above the first. It costs a
 workspace the strip could have listed, which is why it was tried without — but the
 coloured bold header reads as a header on its own and not as a *separator*, and the
-groups are what makes the strip scannable rather than a list. Against a wall of rows
-the eye could not find the group it wanted, so the row is spent deliberately.
+sections are what makes the strip scannable rather than a list. Against a wall of
+rows the eye could not find the section it wanted, so the row is spent deliberately.
 
 **Whether it is up is remembered**, in `~/.awp/deck-prefs.json` beside `P`'s
 scope and the split's divider — one flag for the whole deck rather than one per
