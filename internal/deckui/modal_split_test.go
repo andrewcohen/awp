@@ -1,6 +1,7 @@
 package deckui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -707,5 +708,92 @@ func TestAHalfHasNoHeaderOfItsOwn(t *testing.T) {
 	}
 	if th != left.h-borderCells {
 		t.Errorf("the program got %d of the half's %d rows, want %d", th, left.h, left.h-borderCells)
+	}
+}
+
+// Where you put the divider is a preference, not an accident of this split.
+//
+// It was neither remembered across splits nor across deck runs: leftFrac went into
+// the arrangement, so ctrl+\ and back found it, but the next `|` opened even again.
+// Global rather than per workspace, for the reason the sidebar is (#348).
+
+// TestANewSplitOpensAtTheRememberedDivider.
+func TestANewSplitOpensAtTheRememberedDivider(t *testing.T) {
+	m := splitDeck(t)
+	m = m.WithSplitFrac(0.7)
+	m = pressDeck(t, m, runeKey("|"))
+	m = pressDeck(t, m, runeKey("v"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("|v did not open a split (active=%T, status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+	if s.leftFrac != 0.7 {
+		t.Errorf("the split opened at %v, want the remembered 0.7", s.leftFrac)
+	}
+}
+
+// TestMovingTheDividerIsSaved, whichever way it is moved. Three gestures reach the
+// divider — the resize keys, `=`, and a drag — and each one is a place the save
+// could be forgotten, which is why they all go through setFrac.
+func TestMovingTheDividerIsSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		move func(t *testing.T, m *Model, s *splitModal)
+	}{
+		{"the resize key", func(t *testing.T, m *Model, s *splitModal) {
+			t.Helper()
+			s.resize(m, splitResizeStep)
+		}},
+		{"re-centring", func(t *testing.T, m *Model, s *splitModal) {
+			t.Helper()
+			s.leftFrac = 0.3
+			s.setFrac(m, splitEvenFrac)
+		}},
+		{"a drag", func(t *testing.T, m *Model, s *splitModal) {
+			t.Helper()
+			b := m.childBox()
+			col := s.splitCol(b)
+			// Through the deck's own Update, and the returned model kept: Model is a
+			// value, so a drag driven against a copy would move the divider (the split
+			// is a pointer) while the deck's own memory of it stayed behind.
+			*m = pressMouse(t, *m, tea.MouseClickMsg{X: b.x + col - 1, Y: 5, Button: tea.MouseLeft})
+			*m = pressMouse(t, *m, tea.MouseMotionMsg{X: b.x + col + 6, Y: 5})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, s := openedSplit(t, "v")
+			var saved []float64
+			m = m.WithSplitFracSaver(func(f float64) error {
+				saved = append(saved, f)
+				return nil
+			})
+			tc.move(t, &m, s)
+			if len(saved) == 0 {
+				t.Fatalf("%s did not record the divider", tc.name)
+			}
+			if got := saved[len(saved)-1]; got != s.leftFrac {
+				t.Errorf("saved %v, but the divider is at %v", got, s.leftFrac)
+			}
+			if m.splitFrac != s.leftFrac {
+				t.Errorf("the deck remembers %v, but the divider is at %v", m.splitFrac, s.leftFrac)
+			}
+		})
+	}
+}
+
+// TestASaveThatFailsIsSaidNotRefused. The divider is already where you put it; all
+// that is lost is that it will not be there next time — the treatment the scope's
+// and the sidebar's savers get.
+func TestASaveThatFailsIsSaidNotRefused(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	m = m.WithSplitFracSaver(func(float64) error { return errors.New("disk is full") })
+	before := s.leftFrac
+	s.resize(&m, splitResizeStep)
+	if s.leftFrac == before {
+		t.Error("a failed save undid the resize")
+	}
+	if !strings.Contains(m.status, "disk is full") {
+		t.Errorf("status is %q, which does not say the preference was not saved", m.status)
 	}
 }

@@ -140,15 +140,15 @@ func TestTheKeysAreTheStructsOwnTags(t *testing.T) {
 		name, _, _ := strings.Cut(fields.Field(i).Tag.Get("json"), ",")
 		tags[name] = true
 	}
-	for _, key := range []string{deckPrefScope, deckPrefSidebar} {
+	for _, key := range []string{deckPrefScope, deckPrefSidebar, deckPrefSplit} {
 		if !tags[key] {
 			t.Errorf("%q is saved but DeckPrefs has no field tagged with it, so loading it back reads nothing", key)
 		}
 	}
 	// And every field has a key, or a setting can be written by the struct and
 	// never by a save.
-	if len(tags) != 2 {
-		t.Errorf("DeckPrefs has %d fields and this test knows about 2 keys; a new field needs a deckPref* constant", len(tags))
+	if len(tags) != 3 {
+		t.Errorf("DeckPrefs has %d fields and this test knows about 3 keys; a new field needs a deckPref* constant", len(tags))
 	}
 }
 
@@ -210,6 +210,50 @@ func TestTheSidebarAndTheScopeDoNotOverwriteEachOther(t *testing.T) {
 	}
 	if !prefs.Sidebar {
 		t.Error("saving the scope turned the sidebar off")
+	}
+	if prefs.Scope != "inbox" {
+		t.Errorf("the scope is %q, want inbox", prefs.Scope)
+	}
+}
+
+// TestTheSplitDividerSurvivesTheProcess. Stored as a fraction, so the same
+// preference means the same layout on a terminal of another width.
+func TestTheSplitDividerSurvivesTheProcess(t *testing.T) {
+	deckPrefsHome(t)
+	if err := SaveDeckSplit(0.62); err != nil {
+		t.Fatalf("saving the divider: %v", err)
+	}
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefs.Split != 0.62 {
+		t.Errorf("the divider came back at %v, want 0.62", prefs.Split)
+	}
+}
+
+// TestTheThreePreferencesDoNotOverwriteEachOther. Three read-modify-writes over one
+// file: saving any of them has to leave the other two alone.
+func TestTheThreePreferencesDoNotOverwriteEachOther(t *testing.T) {
+	deckPrefsHome(t)
+	if err := SaveDeckSidebar(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDeckSplit(0.7); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDeckScope("inbox"); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prefs.Sidebar {
+		t.Error("a later save turned the sidebar off")
+	}
+	if prefs.Split != 0.7 {
+		t.Errorf("the divider is %v, want 0.7", prefs.Split)
 	}
 	if prefs.Scope != "inbox" {
 		t.Errorf("the scope is %q, want inbox", prefs.Scope)

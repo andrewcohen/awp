@@ -110,7 +110,12 @@ func (m *Model) toggleSidebar() {
 //
 // Deliberately its own hook rather than a general "save the deck's preferences",
 // which would hand deckui a preferences struct to know the shape of. Two settings
-// is not enough to be worth that; a third is when to reconsider.
+// was not enough to be worth that, and this comment used to say a third would be
+// when to reconsider. A third arrived (SplitFracSaver, #359) and the answer held:
+// each saver takes exactly the value its key stores and nothing else, while a
+// preferences struct would make every save a read-modify-write of a shape deckui
+// would have to know — and knowing that shape is the thing these hooks exist to
+// avoid. Reconsider again if a setting ever has to be saved together with another.
 type SidebarSaver func(bool) error
 
 // WithSidebar opens the deck with the strip in the state it was left in.

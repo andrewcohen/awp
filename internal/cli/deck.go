@@ -661,6 +661,22 @@ func rememberedSidebar() bool {
 // saveDeckSidebar is the deck's SidebarSaver.
 func saveDeckSidebar(on bool) error { return state.SaveDeckSidebar(on) }
 
+// rememberedSplitFrac is where the split's divider was when the last deck exited,
+// as the left half's share of the width. Zero — which the deck reads as an even
+// split — on an unreadable preferences file, the same bargain rememberedSidebar
+// makes.
+func rememberedSplitFrac() float64 {
+	prefs, err := state.LoadDeckPrefs()
+	if err != nil {
+		deckDebugLogf("deck prefs: %v", err)
+		return 0
+	}
+	return prefs.Split
+}
+
+// saveDeckSplitFrac is the deck's SplitFracSaver.
+func saveDeckSplitFrac(frac float64) error { return state.SaveDeckSplit(frac) }
+
 func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io.Writer, initialScope deckui.Scope, panes paneHost) error {
 	// The deck needs tmux because every window key hands off to a tmux client.
 	// A deck with a pane backend hosts those itself, so it is the one thing
@@ -1068,6 +1084,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithScopeSaver(saveDeckScope).
 		WithSidebar(rememberedSidebar()).
 		WithSidebarSaver(saveDeckSidebar).
+		WithSplitFrac(rememberedSplitFrac()).
+		WithSplitFracSaver(saveDeckSplitFrac).
 		// nil for `awp deck`; zdeck supplies one so the window keys render a
 		// pane in place instead of handing off to tmux.
 		WithPaneBackend(panes).

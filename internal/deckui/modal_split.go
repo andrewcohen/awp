@@ -116,7 +116,7 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case ">":
 		s.resize(m, splitResizeStep)
 	case "=":
-		s.leftFrac = splitEvenFrac
+		s.setFrac(m, splitEvenFrac)
 	case "o":
 		s.zoomed = !s.zoomed
 	case "x":
@@ -199,13 +199,32 @@ func (s *splitModal) resize(m *Model, frac float64) {
 	before := s.splitCol(m.childBox())
 	s.leftFrac = splitLeftFrac(s.leftFrac) + frac
 	after := s.splitCol(m.childBox())
-	defer m.recordArrangement(s)
 	if after == before {
 		// Clamped at a wall. Put the fraction back where the wall is, so repeated
 		// taps do not accumulate a fraction the clamp is hiding and then have to be
 		// undone one by one on the way back.
 		s.leftFrac = float64(after) / float64(max(1, m.width))
 	}
+	s.setFrac(m, s.leftFrac)
+}
+
+// setFrac puts the divider at frac and remembers it in both places it is
+// remembered: this arrangement, so leaving the split and coming back re-opens at
+// this width, and the deck's preferences, so the *next* split — and the next deck —
+// starts here rather than back at even.
+//
+// One function, because those are two different memories with two different scopes
+// and a divider move has to reach both. It used to reach only the first, and `=` did
+// not even reach that: it assigned leftFrac and returned, so re-centring a split was
+// forgotten the moment you left it.
+//
+// Global rather than per workspace for the reason the sidebar is (#348): how wide you
+// like the agent beside a diff is a fact about how you work, and a per-workspace width
+// would resize the panes under you as you moved between rows.
+func (s *splitModal) setFrac(m *Model, frac float64) {
+	s.leftFrac = frac
+	m.recordArrangement(s)
+	m.rememberSplitFrac(frac)
 }
 
 // splitLeftFrac is the left half's share, reading the zero value as even.
@@ -420,10 +439,9 @@ func (s *splitModal) dragDivider(m *Model, msg tea.MouseMsg) bool {
 		if !s.dragging {
 			return false
 		}
-		s.leftFrac = float64(x) / float64(max(1, b.w))
 		// Where you dragged it to is where it should come back — the same reason the
-		// keyboard resize records.
-		m.recordArrangement(s)
+		// keyboard resize records, and through the same function.
+		s.setFrac(m, float64(x)/float64(max(1, b.w)))
 		return true
 	case tea.MouseClickMsg:
 		col := s.splitCol(b)
@@ -617,7 +635,10 @@ func renderChild(m *Model, child modal, b box) string {
 // one is — the only difference being the box it is handed. That is the whole
 // reason 257a came first.
 func (m *Model) openSplit(item Item, kind string) (tea.Cmd, bool) {
-	if cmd, ok := m.openSplitKinds(item, PaneKindAgent, kind, splitEvenFrac); ok {
+	// The divider where you last left it, not the middle: how wide you like the agent
+	// beside a diff is a preference, and a fresh split that always opened even meant
+	// re-dragging it every time.
+	if cmd, ok := m.openSplitKinds(item, PaneKindAgent, kind, splitLeftFrac(m.splitFrac)); ok {
 		return cmd, true
 	}
 	return nil, true
@@ -712,3 +733,43 @@ func (m *Model) openChild(item Item, kind string, b box) (modal, tea.Cmd, bool) 
 // backend describes it: a review is the one action the deck already renders
 // itself, and running it as a pty would mean a second awp inside the first.
 const SplitKindDiff = "diff"
+
+// SplitFracSaver records where the split's divider should sit next time, as the
+// left half's share of the width.
+//
+// A hook for the reason ScopeSaver and SidebarSaver are: deckui is the UI and has
+// no business knowing where ~/.awp is.
+//
+// A fraction rather than a column count, because the same preference has to mean
+// the same layout on a terminal of another width — and because splitCol already
+// clamps it, a fraction chosen on a wide screen degrades to "as far over as this
+// terminal allows" on a narrow one instead of needing to be validated on load.
+type SplitFracSaver func(float64) error
+
+// WithSplitFrac opens new splits at the divider position last left.
+func (m Model) WithSplitFrac(frac float64) Model {
+	m.splitFrac = frac
+	return m
+}
+
+// WithSplitFracSaver sets the hook called when the divider moves.
+func (m Model) WithSplitFracSaver(save SplitFracSaver) Model {
+	m.saveSplitFrac = save
+	return m
+}
+
+// rememberSplitFrac records the divider's new home for the next split and the next
+// deck.
+//
+// A failed save is said, not refused: the divider is already where you put it, which
+// is what you asked for, and all that is lost is that it will not be there next time.
+// Same treatment the scope's and the sidebar's savers get.
+func (m *Model) rememberSplitFrac(frac float64) {
+	m.splitFrac = frac
+	if m.saveSplitFrac == nil {
+		return
+	}
+	if err := m.saveSplitFrac(frac); err != nil {
+		m.status = fmt.Sprintf("split: %v", err)
+	}
+}

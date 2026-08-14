@@ -898,6 +898,12 @@ type Model struct {
 	saveScope ScopeSaver
 	// saveSidebar does the same for the attention strip — see SidebarSaver.
 	saveSidebar SidebarSaver
+	// splitFrac is where the divider goes in a *new* split: the left half's share
+	// of the width, as last left. Zero means never set, which splitLeftFrac reads
+	// as an even split.
+	splitFrac float64
+	// saveSplitFrac records that for next time — see SplitFracSaver.
+	saveSplitFrac SplitFracSaver
 	// hostColors is what this deck's own terminal looks like, asked for at boot
 	// and answered asynchronously. A pane hands it to its emulator so a hosted
 	// program that asks what colour its background is gets the real one — see

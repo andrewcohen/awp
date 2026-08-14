@@ -1007,7 +1007,7 @@ it leaves on one press from either arrangement.
 |---|---|
 | a window key — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch | **split**: that kind beside the pane you are in. Already split, there is nowhere to put a third, so it **replaces the focused half** |
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
-| `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle |
+| `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle. **Where you leave it is remembered globally**, in `~/.awp/deck-prefs.json` beside `P`'s scope and `S`'s sidebar, so the next split — and the next deck — opens there. Stored as a fraction rather than a column count, so it means the same layout on a terminal of another width, and the clamp that keeps a half above a pane's minimum means a divider set on a wide screen degrades sensibly on a narrow one |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
@@ -1059,7 +1059,8 @@ groups are what makes the strip scannable rather than a list. Against a wall of 
 the eye could not find the group it wanted, so the row is spent deliberately.
 
 **Whether it is up is remembered**, in `~/.awp/deck-prefs.json` beside `P`'s
-scope — one flag for the whole deck rather than one per workspace. "Do I want to
+scope and the split's divider — one flag for the whole deck rather than one per
+workspace. "Do I want to
 see what is waiting" is a question about the deck, so an answer stored per
 workspace would make the strip appear and vanish as you moved between panes. What
 is saved is the intent and not what fits: turn it on in a wide terminal and open
@@ -1085,7 +1086,7 @@ says the width it wants, rather than setting a flag that draws nothing now and
 surprises you on the next resize.
 
 Whether the strip is up is the deck's state, not the arrangement's: unlike the two
-halves and the divider — which are remembered per workspace, see below — the
+halves — which are remembered per workspace, see below — the
 answer to "do I want to see what is waiting" does not change when you switch panes,
 so it stays on until you press `S` again. It is only ever up over a hosted program.
 Over the row list every row it would carry is already on screen in more detail,
