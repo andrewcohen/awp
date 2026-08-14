@@ -133,6 +133,24 @@ type Model struct {
 	// for them — and leaving it empty is how standalone `awp diff` avoids
 	// advertising keys only the deck has.
 	HostKeys []charm.KeyGroup
+	// HostBlurred says the host has the keyboard somewhere else — the viewer is one
+	// half of a split and the other half is the one being typed into.
+	//
+	// Two different questions have to be answered before a border can be drawn, and
+	// only one of them is the viewer's: m.focus is which of *its* panes the keys
+	// would go to, and this is whether the keys are here at all. Without it the
+	// viewer's focused pane wore the accent border whatever the deck was doing, so a
+	// split showed two panes claiming the keyboard — the diff's inner one and the
+	// other half's — and the honest answer, that this whole half is inactive, could
+	// not be expressed.
+	//
+	// A field the host sets per frame rather than something the viewer can work out:
+	// it has no idea it is in a split, which is the point of Body being a block of
+	// text the host places.
+	//
+	// Standalone `awp diff` leaves it false, because there is nowhere else for the
+	// keyboard to be.
+	HostBlurred bool
 	// Subject is what this is a review of, for the standalone header. A host with
 	// its own chrome (the deck) renders Body and answers this in its footer
 	// instead, so it leaves this empty.
@@ -1801,11 +1819,23 @@ func (m Model) renderFooter() string {
 	return lipgloss.JoinVertical(lipgloss.Left, filterLine, footerLine)
 }
 
-func (m Model) renderFileList(width, height int) string {
-	border := styleNormalBorder
-	if m.focus == FocusFiles {
-		border = styleFocusBorder
+// paneBorder is the border a pane of the viewer wears: the accent when the keys
+// are in it, muted otherwise.
+//
+// One function for the three panes because "in it" is two conditions — the pane has
+// the viewer's focus, *and* the viewer has the host's — and three copies of that is
+// three chances to forget the second. Forgetting it is what #338 was: every pane
+// asked only about m.focus, so the diff half of a split went on claiming the
+// keyboard while the agent beside it was being typed into.
+func (m Model) paneBorder(f Focus) lipgloss.Style {
+	if m.focus == f && !m.HostBlurred {
+		return styleFocusBorder
 	}
+	return styleNormalBorder
+}
+
+func (m Model) renderFileList(width, height int) string {
+	border := m.paneBorder(FocusFiles)
 	rows := []string{styleDim.Render(fmt.Sprintf(" Files (%d)", len(m.filtered)))}
 	// The window is over tree rows, not files: directory headings take rows of
 	// their own, so counting in files would scroll by the wrong amount and could

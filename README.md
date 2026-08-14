@@ -941,16 +941,15 @@ are somewhere specific, and the half that has them is the one with the teal
 border — the other drops to grey, the same tier the diff viewer's unfocused panes
 drop to.
 
-**Both halves, including the diff.** The diff half used to have no border at all,
-so the answer was carried entirely by the *pane* going grey: a screen that said "not
-here" beside a half that never said "here" — and since the diff's own panes dim their
-selection when it loses focus, a blurred diff beside a blurred pane read as nothing
-having the keys. It wears the same two hues as a pane now, because the halves are
-read side by side and one question deserves one vocabulary.
+**Both halves, including the diff.** The diff half has no border of its own — the
+viewer frames each of *its* panes, and a frame around those is just a second line
+beside the first — so what follows focus is the hue of the viewer's own focused pane.
+That used to be teal whatever the deck was doing, which meant a split where you were
+typing into the agent still had a teal-bordered pane in the diff half claiming the
+keyboard. Exactly one half wears the accent now, whichever kind of half it is.
 
-A **whole-screen** diff still has no border. Nothing else is on screen for the
-keyboard to be in, so there is no question to answer, and two rows and two columns
-of a diff are worth more than a frame around the only thing in the terminal.
+A **whole-screen** diff never dims: there is nowhere else for the keyboard to be, and
+a viewer whose every pane looks inactive reads as a dead screen.
 
 **`ctrl+b` is the menu**, in a single pane and in a split alike: a prefix, because
 the programs on screen keep their own complete keymaps and there is no room to

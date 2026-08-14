@@ -609,10 +609,7 @@ func (m Model) commentBlock(r rowRef, width int, cursor bool) []string {
 
 // renderStreamPanel draws the visible window of the stream.
 func (m Model) renderStreamPanel(width, height int) string {
-	border := styleNormalBorder
-	if m.focus == FocusHunks {
-		border = styleFocusBorder
-	}
+	border := m.paneBorder(FocusHunks)
 	if len(m.filtered) == 0 {
 		return panelBox([]string{styleDim.Render(" No changes")}, width, height, border)
 	}

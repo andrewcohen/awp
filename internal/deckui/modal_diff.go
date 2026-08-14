@@ -356,21 +356,18 @@ func (dm *diffModal) view(m *Model, b box) (string, string) {
 	// cursor is placed from the box, so it landed one column left of the text being
 	// typed — #339, which cost two wrong diagnoses before a traced frame showed the
 	// frame's own row starting one column in.
-	// Sharing the screen costs the border's cells on both axes. A whole-screen diff
-	// draws none — see box.shared, and dm.frame.
-	inner := b
-	if b.shared {
-		inner.w -= borderCells
-		inner.h -= borderCells
-	}
-	innerWidth := inner.w - panelCols
+	innerWidth := b.w - panelCols
 	if innerWidth < 1 {
 		return "", ""
 	}
-	bodyHeight := inner.h - diffModalChrome
+	bodyHeight := b.h - diffModalChrome
 	dm.inner.SetSize(innerWidth, bodyHeight)
+	// Which half has the keyboard is the deck's answer, not the viewer's — the
+	// viewer's own focus is which of *its* panes the keys would go to if the half had
+	// them. Both are needed to draw a border: see ui.Model.HostBlurred.
+	dm.inner.HostBlurred = b.shared && b.blurred
 	if Trace == nil {
-		return dm.frame(b, dm.panel.Render(dm.inner.Body(innerWidth, bodyHeight))), ""
+		return dm.panel.Render(dm.inner.Body(innerWidth, bodyHeight)), ""
 	}
 	// Timed in two halves: the viewer building its body, and the deck's panel
 	// Render over the result. The second is a lipgloss pass over the whole frame,
@@ -379,45 +376,9 @@ func (dm *diffModal) view(m *Model, b box) (string, string) {
 	body := dm.inner.Body(innerWidth, bodyHeight)
 	bodyMS := sinceMS(bodyStart)
 	padStart := time.Now()
-	out := dm.frame(b, dm.panel.Render(body))
+	out := dm.panel.Render(body)
 	Trace("diff.body %.1fms pad %.1fms bytes %d→%d", bodyMS, sinceMS(padStart), len(body), len(out))
 	return out, ""
-}
-
-// frame puts the split's border around the viewer, in the hue that says whether
-// the keyboard is in it — and returns the body untouched when the viewer has the
-// whole screen.
-//
-// The border is how a half says it has the keys, because it is the only chrome
-// that belongs to the half rather than to what is inside it. A pane has always had
-// one; the diff half had none, so in a split the answer was carried entirely by the
-// *pane* going muted — which meant the screen said "the keyboard is not here"
-// beside a half that never said "it is here", and the diff's own panes dim their
-// selection a tier on focus, so a blurred diff beside a blurred pane read as
-// nothing having the keys at all.
-//
-// Accent and Muted are the pane's two, not a second pair for this surface: the two
-// halves of one split have to be comparable at a glance, and a border that says
-// focus in a different hue on the right than the left is two vocabularies for one
-// question. See renderPopover in modal_pane.go.
-//
-// Width is the whole box, border included — lipgloss v2 counts border cells inside
-// Style.Width, which is why view took them off the inner width first. The two have
-// to agree or the half renders narrower than the box it is centred in, and
-// everything in it shifts (#339).
-func (dm *diffModal) frame(b box, body string) string {
-	if !b.shared {
-		return body
-	}
-	color := colAccent
-	if b.blurred {
-		color = colMuted
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(color)).
-		Width(b.w).
-		Render(body)
 }
 
 // ApplyCommentStore installs a review store's seams on a viewer: commenting,
