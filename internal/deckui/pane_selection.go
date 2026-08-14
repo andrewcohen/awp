@@ -3,6 +3,7 @@ package deckui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -45,7 +46,30 @@ type paneSelection struct {
 	// endpoints: a click with no drag is a real event that clears the last
 	// selection, and (0,0)-(0,0) is a legitimate one-cell range.
 	active bool
+	// clicks is how many presses this one is part of — 1 for a click, 2 for a
+	// double, 3 for a triple, and back to 1 after that. A terminal's own gesture
+	// vocabulary stops at three, and a fourth click starting over is what makes a
+	// mis-aimed flurry recoverable rather than leaving the pane in a mode.
+	clicks int
+	// lastClick is when and where the previous press was, which is the whole of what
+	// "the same click again" means: near enough in time, and on the same cell.
+	lastClick    time.Time
+	lastX, lastY int
 }
+
+// paneClickInterval is how long after a press a second one still counts as a
+// double-click.
+//
+// Half a second, which is the middle of what the platforms use (macOS defaults to
+// 500ms, and X11 toolkits to 400). Not read from the OS: this is a pane inside a
+// terminal inside someone else's window manager, and there is no answer to ask for
+// that would be about this pane.
+const paneClickInterval = 500 * time.Millisecond
+
+// paneNow is the clock the click counter reads, swapped in tests. A gesture defined
+// by an interval cannot be tested against a real clock without either sleeping or
+// being flaky, and this is the smallest seam that avoids both.
+var paneNow = time.Now
 
 // paneSelects reports whether this pane handles the mouse itself rather than
 // forwarding it.
@@ -69,19 +93,35 @@ func (p *panePopover) selectMouse(m *Model, msg tea.MouseMsg) (tea.Cmd, bool) {
 
 	switch msg.(type) {
 	case tea.MouseClickMsg:
+		now := paneNow()
+		clicks := p.sel.nextClick(now, at.X, at.Y)
 		p.sel = paneSelection{
 			anchorX: at.X, anchorY: at.Y,
 			cursorX: at.X, cursorY: at.Y,
-			dragging: true,
+			dragging:  true,
+			clicks:    clicks,
+			lastClick: now, lastX: at.X, lastY: at.Y,
 			// Not active yet: a click that never becomes a drag is how you clear a
 			// selection, and one cell highlighted under the pointer on every click
 			// would be noise.
 		}
+		// A second or third click on the spot selects something immediately, which is
+		// the difference between them and the first: a word or a line is picked out by
+		// the press itself rather than by the drag that may follow.
+		p.selectAround(clicks, at.X, at.Y)
 		return nil, true
 
 	case tea.MouseMotionMsg:
 		if !p.sel.dragging {
 			return nil, false
+		}
+		if p.sel.clicks > 1 {
+			// Dragging out of a word or a line selection. Left as it was rather than
+			// collapsing to the pointer: the gesture already said what unit you are
+			// picking, and extending by that unit is a bigger feature than this
+			// (libghostty ships select_word_between for exactly it). Ignoring the motion
+			// keeps what the double-click gave you instead of silently throwing it away.
+			return nil, true
 		}
 		p.sel.cursorX, p.sel.cursorY = at.X, at.Y
 		p.sel.active = true
@@ -174,4 +214,54 @@ func tintSelection(screen string, rows map[int][2]int, w int) string {
 		lines[y] = head + style.Render(ansi.Strip(mid)) + tail
 	}
 	return strings.Join(lines, "\n")
+}
+
+// nextClick is how many presses this one continues: a second press near the first,
+// soon enough, is a double, a third is a triple, and a fourth starts over.
+//
+// Same cell rather than a pixel radius, because a terminal has no pixels — the
+// pointer either moved off the character or it did not, and there is no smaller
+// distance for a threshold to be about.
+func (s paneSelection) nextClick(now time.Time, x, y int) int {
+	if s.clicks == 0 || s.clicks >= 3 {
+		return 1
+	}
+	if x != s.lastX || y != s.lastY {
+		return 1
+	}
+	if now.Sub(s.lastClick) > paneClickInterval {
+		return 1
+	}
+	return s.clicks + 1
+}
+
+// selectAround applies the unit a double- or triple-click picks out.
+//
+// The emulator answers both — see vterm.Hosted.WordAt — so this is the routing and
+// nothing else, deliberately: Ghostty ships the boundary rules, and a second opinion
+// here would make a pane disagree with the terminal it is running inside about what
+// a double-click picks out. That includes the cases that look like edge cases from
+// here: a run of blanks is a word, because it is one everywhere else.
+//
+// A gap therefore does get taken, and then dropped on release, because its text is
+// empty and an empty selection is not copied. The two rules meet at the right
+// answer — double-clicking between words does nothing — without either of them
+// having to know about the other.
+func (p *panePopover) selectAround(clicks, x, y int) {
+	var x0, y0, x1, y1 int
+	var ok bool
+	switch clicks {
+	case 2:
+		x0, y0, x1, y1, ok = p.term.WordAt(x, y)
+	case 3:
+		x0, y0, x1, y1, ok = p.term.LineAt(x, y)
+	default:
+		return
+	}
+	if !ok {
+		return
+	}
+	p.sel.anchorX, p.sel.anchorY = x0, y0
+	p.sel.cursorX, p.sel.cursorY = x1, y1
+	p.sel.active = true
 }

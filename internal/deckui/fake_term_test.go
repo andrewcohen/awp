@@ -233,6 +233,51 @@ func (t *fakeTerm) miceSeen() []tea.MouseMsg {
 	return append([]tea.MouseMsg(nil), t.mice...)
 }
 
+// WordAt and LineAt are the fake's answer to a double- and a triple-click.
+//
+// Deliberately simple-minded: a word is the run of non-space characters around the
+// column, and a line is the whole row. The real emulator's answers are Ghostty's
+// (its own boundary rules, and a logical line that spans a soft wrap), and the fake
+// does not try to imitate them — what the deck's tests are about is whether the
+// click count routes to the right question and the span it gets back is applied.
+// Which characters make up a word is libghostty's business and is tested against a
+// real emulator behind the ghosttyvt tag.
+func (t *fakeTerm) WordAt(x, y int) (int, int, int, int, bool) {
+	lines := strings.Split(t.View(), "\n")
+	if y < 0 || y >= len(lines) {
+		return 0, 0, 0, 0, false
+	}
+	row := []rune(ansi.Strip(lines[y]))
+	if x < 0 || x >= len(row) {
+		return 0, 0, 0, 0, false
+	}
+	// A run of blanks is a word here too, because it is one in Ghostty — see
+	// TestWordAtOnBlankSpaceTakesTheRunOfBlanks. A fake that answered "nothing" for
+	// the case the real one answers "the gap" would have the deck's tests agreeing
+	// with a terminal that does not exist.
+	blank := row[x] == ' '
+	from, to := x, x
+	for from > 0 && (row[from-1] == ' ') == blank {
+		from--
+	}
+	for to+1 < len(row) && (row[to+1] == ' ') == blank {
+		to++
+	}
+	return from, y, to, y, true
+}
+
+func (t *fakeTerm) LineAt(x, y int) (int, int, int, int, bool) {
+	lines := strings.Split(t.View(), "\n")
+	if y < 0 || y >= len(lines) {
+		return 0, 0, 0, 0, false
+	}
+	row := strings.TrimRight(ansi.Strip(lines[y]), " ")
+	if row == "" {
+		return 0, 0, 0, 0, false
+	}
+	return 0, y, len([]rune(row)) - 1, y, true
+}
+
 // SelectionText slices the fake's screen the way a real one slices its cells: the
 // rows between the two points, with the first and last cut at their columns. No
 // unwrapping, because the fake has no soft wraps — it never parsed anything.

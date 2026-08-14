@@ -90,6 +90,24 @@ type Hosted interface {
 	// the host terminal cannot do this for us.
 	SelectionText(x0, y0, x1, y1 int) string
 
+	// WordAt and LineAt are the word and the logical line at a point, as a span in
+	// the same display columns SelectionText takes — what a double-click and a
+	// triple-click select.
+	//
+	// Asked of the emulator rather than worked out from View's string, because both
+	// are questions about the grid and the emulator already answers them: Ghostty
+	// ships its own word-boundary rules, and a "line" is the logical one, so on a
+	// soft-wrapped shell command it spans every row the command wrapped over. A
+	// caller reading the rendered string would have to re-derive both, and would get
+	// a second opinion on where a word ends.
+	//
+	// ok is false where there is nothing to select at all — an empty row, a point
+	// off the screen — which is a real answer and not an error. Note that a run of
+	// blanks *is* a word: that is what Ghostty selects on a double-click, and what
+	// every terminal awp runs inside selects, so it is not awp's to correct.
+	WordAt(x, y int) (x0, y0, x1, y1 int, ok bool)
+	LineAt(x, y int) (x0, y0, x1, y1 int, ok bool)
+
 	// ScrollBy moves the view through the scrollback — negative is up, into
 	// history — and ScrollToBottom puts it back on the live tail. Scrollback says
 	// how many rows of history sit above the view and whether it is on the tail,
