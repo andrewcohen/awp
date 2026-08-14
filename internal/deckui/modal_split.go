@@ -86,7 +86,7 @@ func splitPrefixMenu(m *Model) deckMenu {
 		sidebarVerb(m.sidebar),
 		menuCancelVerb,
 	)
-	return menu("this split", verbs...)
+	return menu(verbs...)
 }
 
 // prefixKey reads one key while the menu is armed. It returns the command to run;

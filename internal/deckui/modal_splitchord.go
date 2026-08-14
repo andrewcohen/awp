@@ -73,7 +73,7 @@ func (c *splitChordModal) chordMenu() deckMenu { return splitChordMenu() }
 // splitChordMenu is `|`: pick what goes beside the agent.
 func splitChordMenu() deckMenu {
 	verbs := splitKindVerbs(func(label string) string { return label + ", beside the agent" })
-	return menu("split this workspace", append(verbs, menuCancelVerb)...)
+	return menu(append(verbs, menuCancelVerb)...)
 }
 
 // splitHelpKeys is the chord as the `?` overlay lists it.

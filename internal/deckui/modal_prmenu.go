@@ -16,7 +16,7 @@ type prMenuModal struct{}
 
 // prMenu is the PR verbs for this row.
 func prMenu() deckMenu {
-	return menu("this row's pr",
+	return menu(
 		[2]string{"o", "open the PR in a browser"},
 		[2]string{"d", "read the description here"},
 		[2]string{"D", "read the description in a window"},
