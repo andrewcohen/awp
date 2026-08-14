@@ -2,14 +2,19 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/cmderr"
 	"github.com/andrewcohen/awp/internal/deckui"
+	"github.com/andrewcohen/awp/internal/jobs"
 	"github.com/andrewcohen/awp/internal/tmux"
 )
 
@@ -196,5 +201,75 @@ func TestATmuxFailureDoesNotCostTheZmxReapItsTurn(t *testing.T) {
 	}
 	if err == nil {
 		t.Error("the tmux failure was swallowed; a session nobody killed has to be reported")
+	}
+}
+
+// TestTheDeleteActionStopsTheWorkspacesBackgroundJob — the third substrate, and the
+// wiring rather than the helper.
+//
+// A real process, killed through the real path: a `sleep` is spawned, a job record
+// naming its pid is written into the store the delete will open, and the delete has
+// to leave that process dead. A background user action is exactly this shape — a
+// detached child with its cwd in a working copy that is about to be removed (#265).
+func TestTheDeleteActionStopsTheWorkspacesBackgroundJob(t *testing.T) {
+	requireZmx(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	victim := exec.Command("sleep", "30")
+	if err := victim.Start(); err != nil {
+		t.Fatalf("starting the stand-in for a background action: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = victim.Process.Kill()
+		_, _ = victim.Process.Wait()
+	})
+	pid := victim.Process.Pid
+
+	host, _ := os.Hostname()
+	started, _ := jobs.PIDStartTime(pid)
+	record := jobs.Job{
+		ID:           "20260814-aaaa",
+		Title:        "dev server",
+		Status:       jobs.StatusRunning,
+		Host:         host,
+		PID:          pid,
+		PIDStartedAt: started,
+		Spec: jobs.Spec{
+			Action:        jobs.ActionCustom,
+			RepoRoot:      "/repo",
+			WorkspaceName: "qa",
+			WorkspacePath: "/repo/qa",
+		},
+	}
+	dir := filepath.Join(home, ".awp", "jobs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, string(record.ID)+".json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &zmxLsRunner{}
+	if err := handleDeckAction(tmux.New(r), &fakeService{}, r, deckui.ActionRequest{
+		Item:   deckui.Item{ProjectName: "repo", WorkspaceName: "qa", RepoRoot: "/repo", Path: "/repo/qa"},
+		Action: deckui.ActionDelete,
+	}, nil); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// SIGTERM, so the process gets to exit rather than being torn down — which is
+	// what lets a real run-job flush a `cancelled` record. Waited for, briefly,
+	// because "signalled" and "gone" are not the same instant.
+	done := make(chan struct{})
+	go func() { _, _ = victim.Process.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("the delete left the workspace's background job running")
 	}
 }
