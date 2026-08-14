@@ -491,7 +491,11 @@ widened it.
 well. **Folding hides the file's comments along with its lines** — a comment about
 a line, or about the file as a whole, is inside the file, and a file you have put
 away that still spends a dozen rows on its conversations has not been put away.
-The divider says what it is holding: `✓ reviewed · 2 comments · +34 -7`.
+The divider says what it is holding: `✓ 󰻞 2 · +34 -7` — reviewed, two
+conversations, and the file's shape. Glyphs rather than words: both chips are read
+at a glance and always in the same place, and the words cost the path its columns on
+the narrow half a split gives the diff. The bubble is the same one the deck puts on
+a row whose PR wants a review.
 
 The count is **conversations, not messages**, so a mirrored GitHub thread of six
 comments is one. "6 comments" about two exchanges misleads about how much is left

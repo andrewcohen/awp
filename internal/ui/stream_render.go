@@ -273,10 +273,14 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 		// them the same accounting: a folded file holding a question nobody has
 		// answered must not look like a folded file holding nothing.
 		if n := r.hiddenComments; n > 0 {
-			chips = append(chips, fmt.Sprintf("%d comment%s", n, plural(n)))
+			chips = append(chips, fmt.Sprintf("%s %d", commentChip, n))
 		}
 		if len(chips) > 0 {
-			summary = " " + strings.Join(chips, " · ") + " ·"
+			// Space between the chips, a `·` before the counts. Two glyphs with a
+			// separator between them read as a list of one thing each; the break that
+			// earns its column is the one between what is claimed about the file and
+			// how big it is.
+			summary = " " + strings.Join(chips, " ") + " ·"
 		}
 	}
 	meta := styleMuted.Render(summary) + changeCounts(f)
@@ -631,14 +635,24 @@ func (m Model) renderStreamPanel(width, height int) string {
 	return panelBox(rows, width, height, border)
 }
 
-// reviewedChip is the collapsed divider's mark for a reviewed file.
+// The collapsed divider's two chips.
 //
-// A folded file gets nothing. The mark is a claim about the file that outlives the
-// view and has to be visible; being folded is a fact the reader is looking at — the
-// body is not there — so saying it spends a word on what the divider already is.
-// What matters is that a merely folded file does not wear it, which is the whole
-// reason the two came apart.
-const reviewedChip = "✓ reviewed"
+// A folded file gets neither, and that is the point of them: the reviewed mark is a
+// claim about the file that outlives the view and has to be visible, where being
+// folded is a fact the reader is already looking at — the body is not there — so
+// saying it would spend a word on what the divider already is.
+//
+// Glyphs rather than words. Both are read at a glance and always in the same place,
+// which is what a chip is for, and the words cost the path its columns on the
+// narrow half a split gives the diff. The bubble is the same one the deck puts on a
+// row whose PR wants a review — a duplicated codepoint rather than a shared const,
+// because the two are different claims (a file has conversations in it; a PR wants
+// something from you) that happen to draw the same picture, and one const would
+// make changing either change both.
+const (
+	reviewedChip = "✓"
+	commentChip  = "\U000F0EDE" // nf-md-chat_outline
+)
 
 // changedLines is how many lines a file's diff touches, in each direction.
 //

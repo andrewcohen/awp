@@ -96,7 +96,7 @@ func TestAFoldedFilesChipsReadAsAList(t *testing.T) {
 	m.fileFold = map[string]bool{"a.go": true}
 	m.rebuildStream()
 	row := ansi.Strip(m.renderStreamRowAt(m.stream.fileStart[0], 90))
-	reviewed, counts := strings.Index(row, "reviewed"), strings.Index(row, "+3")
+	reviewed, counts := strings.Index(row, reviewedChip), strings.Index(row, "+3")
 	if reviewed < 0 || counts < 0 {
 		t.Fatalf("the divider is missing the reviewed chip or the counts: %q", row)
 	}
