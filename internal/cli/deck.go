@@ -2153,6 +2153,48 @@ func reconcileGates(st watch.State) map[string]string {
 	return gm
 }
 
+// reapWorkspaceSessions tears down the sessions a deleted workspace leaves
+// behind, on both substrates: the tmux session named after the row, and every
+// zmx session the workspace holds.
+//
+// Neither one's failure may cost the other its turn. By the time this runs the
+// workspace is already deleted, so a step that is skipped is not a step deferred
+// — it is a session with nothing left pointing at it, running an agent in a
+// working copy that is gone, and no key in awp can reach it again. That is how
+// the tmux half came to orphan the zmx half: deleting a workspace on a deck with
+// no tmux server failed on the *lookup*, before the zmx reap it sits in front of.
+//
+// So both run and both errors are reported, tmux first — a zmx failure must not
+// leave the tmux side half torn down, which is the order #246 settled on.
+//
+// The zmx side asks the substrate directly rather than being told which sessions
+// to end: this runs in a detached job, where there is no pane host to consult.
+func reapWorkspaceSessions(tmuxClient *tmux.Client, runner Runner, project, workspaceName, queuePath string, reporter deckui.Reporter) error {
+	return errors.Join(
+		reapTmuxSession(tmuxClient, DeckSessionName(project, workspaceName), queuePath, reporter),
+		killWorkspaceSessions(runner, project, workspaceName, reporter),
+	)
+}
+
+// reapTmuxSession removes the workspace's tmux session, or queues the removal
+// when the deck is running inside the very session being killed.
+func reapTmuxSession(tmuxClient *tmux.Client, sessionName, queuePath string, reporter deckui.Reporter) error {
+	id, err := tmuxClient.SessionIDByName(sessionName)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		return nil
+	}
+	if queuePath != "" {
+		reporter.Step(fmt.Sprintf("Queue tmux session removal %s", sessionName))
+		_ = appendPendingAction(queuePath, "session", sessionName)
+		return nil
+	}
+	reporter.Step(fmt.Sprintf("Kill tmux session %s", sessionName))
+	return tmuxClient.KillSession(sessionName)
+}
+
 func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Runner, req deckui.ActionRequest, reporter deckui.Reporter) error {
 	if reporter == nil {
 		reporter = noopReporter{}
@@ -2187,25 +2229,7 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		if err := svc.DeleteWithOptions(item.WorkspaceName, opts); err != nil {
 			return err
 		}
-		id, err := tmuxClient.SessionIDByName(sessionName)
-		if err != nil {
-			return err
-		}
-		if id != "" {
-			if queuePath != "" {
-				reporter.Step(fmt.Sprintf("Queue tmux session removal %s", sessionName))
-				_ = appendPendingAction(queuePath, "session", sessionName)
-			} else {
-				reporter.Step(fmt.Sprintf("Kill tmux session %s", sessionName))
-				if err := tmuxClient.KillSession(sessionName); err != nil {
-					return err
-				}
-			}
-		}
-		// Last, so a zmx failure cannot leave the tmux side half torn down.
-		// This runs in a detached job with no pane host to consult, which is why
-		// it asks the substrate directly rather than being told to.
-		return killWorkspaceSessions(runner, item.ProjectName, item.WorkspaceName, reporter)
+		return reapWorkspaceSessions(tmuxClient, runner, item.ProjectName, item.WorkspaceName, queuePath, reporter)
 	case deckui.ActionDeleteProject:
 		return handleDeleteProjectAction(tmuxClient, runner, svc, item, reporter)
 	case deckui.ActionRename:
@@ -2427,21 +2451,7 @@ func handleDeleteProjectAction(tmuxClient *tmux.Client, runner Runner, svc works
 		if err := svc.DeleteWithOptions(name, opts); err != nil {
 			return fmt.Errorf("delete %s: %w", name, err)
 		}
-		sessionName := DeckSessionName(item.ProjectName, name)
-		id, err := tmuxClient.SessionIDByName(sessionName)
-		if err != nil {
-			return err
-		}
-		if id != "" {
-			if queuePath != "" {
-				_ = appendPendingAction(queuePath, "session", sessionName)
-			} else {
-				if err := tmuxClient.KillSession(sessionName); err != nil {
-					return err
-				}
-			}
-		}
-		if err := killWorkspaceSessions(runner, item.ProjectName, name, reporter); err != nil {
+		if err := reapWorkspaceSessions(tmuxClient, runner, item.ProjectName, name, queuePath, reporter); err != nil {
 			return err
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andrewcohen/awp/internal/cmderr"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/tmux"
 )
@@ -18,6 +19,9 @@ type zmxLsRunner struct {
 	killErr error
 	killed  []string
 	tmux    [][]string
+	// tmuxErr replaces the no-server answer, for the case where tmux fails in a way
+	// that is a real error rather than the absence of a server.
+	tmuxErr error
 	// ended marks every listed session as exited. zmx keeps a session listed
 	// after its command dies, so "listed" and "running" are different
 	// questions, and the guards that ask them have to disagree.
@@ -28,8 +32,19 @@ func (r *zmxLsRunner) Run(_ context.Context, _ string, name string, args ...stri
 	switch name {
 	case "tmux":
 		r.tmux = append(r.tmux, args)
-		// No server, which is what a zdeck machine looks like.
-		return "", errors.New("exit status 1")
+		if r.tmuxErr != nil {
+			return "", r.tmuxErr
+		}
+		// No server, which is what a machine hosting its own panes looks like — and
+		// spelled the way the real runner spells it, wrapping the exit rather than
+		// describing it. Written as "exit status 1" here for a long time, which is
+		// exec's phrasing and not one any caller sees: the message the runner
+		// substitutes is what reached tmux's guards, and the fake saying otherwise
+		// is why this suite stayed green while a real delete reported failure.
+		return "", cmderr.Exited(
+			`"tmux" exited 1:`+"\nno server running on /private/tmp/tmux-502/default",
+			exitStatusOne(),
+		)
 	case "zmx":
 		if len(args) == 0 {
 			return "", nil
@@ -53,6 +68,12 @@ func (r *zmxLsRunner) Run(_ context.Context, _ string, name string, args ...stri
 		}
 	}
 	return "", nil
+}
+
+// exitStatusOne is a real *exec.ExitError, so what the fake returns has the same
+// structure production does and cmderr.RanAndFailed answers the same way.
+func exitStatusOne() error {
+	return exec.Command("sh", "-c", "exit 1").Run()
 }
 
 func requireZmx(t *testing.T) {
@@ -144,5 +165,36 @@ func TestTheDeleteActionReapsBothSubstrates(t *testing.T) {
 	}
 	if !slices.Contains(r.killed, "awp.repo.qa.agent") {
 		t.Errorf("the delete action left the agent session running; killed %v", r.killed)
+	}
+}
+
+// TestATmuxFailureDoesNotCostTheZmxReapItsTurn.
+//
+// The two substrates are torn down in order, and the tmux half used to return its
+// error — which meant any tmux trouble at all ended the delete before the zmx reap
+// it sits in front of. The workspace is already deleted by then, so the session is
+// left running an agent in a directory that is gone, with nothing in awp still
+// pointing at it.
+//
+// A tmux that cannot be run at all rather than an absent server: an absent server
+// is now no sessions and no error, so it no longer exercises this path. The error
+// still has to be reported — a tmux session nobody killed is worth saying out loud
+// — but reporting it is not a reason to skip the rest of the delete.
+func TestATmuxFailureDoesNotCostTheZmxReapItsTurn(t *testing.T) {
+	requireZmx(t)
+	r := &zmxLsRunner{
+		names:   []string{"awp.repo.qa.agent"},
+		tmuxErr: errors.New(`"tmux" is not on $PATH for this process.`),
+	}
+	svc := &fakeService{}
+	err := handleDeckAction(tmux.New(r), svc, r, deckui.ActionRequest{
+		Item:   deckui.Item{ProjectName: "repo", WorkspaceName: "qa", RepoRoot: "/repo", Path: "/repo/qa"},
+		Action: deckui.ActionDelete,
+	}, nil)
+	if !slices.Contains(r.killed, "awp.repo.qa.agent") {
+		t.Errorf("a tmux failure left the agent session running; killed %v", r.killed)
+	}
+	if err == nil {
+		t.Error("the tmux failure was swallowed; a session nobody killed has to be reported")
 	}
 }
