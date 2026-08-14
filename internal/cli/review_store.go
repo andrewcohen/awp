@@ -799,8 +799,17 @@ func reviewStoreFor(runner Runner) deckui.CommentStore {
 			}
 			// store.Reply reopens the parent, so the badge counts the thread as
 			// needing attention again.
-			_, err = store.Reply(r, parentID, c)
-			return err
+			saved, err := store.Reply(r, parentID, c)
+			if err != nil {
+				return err
+			}
+			// Recorded for the same reason Save records it: the send-to-agent prompt
+			// names the comment's id so the agent answers on this thread instead of
+			// filing a second one beside it, and the id is assigned here. Dropping it
+			// was the other half of #200 — a reply that did reach the send path would
+			// have gone out with no id to reply on.
+			lastSaved.Store(&saved)
+			return nil
 		},
 		Delete: func(item deckui.Item, id string) error {
 			store, r, err := open(item)

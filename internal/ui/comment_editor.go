@@ -589,12 +589,28 @@ func (m Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// didn't. It looked like the send failing, when it was never attempted.
 			return m.postThreadReply(c, action == editorSaveAndSend)
 		}
-		if parent := m.editor.replyTo; parent != "" {
+		// Three ways a remark reaches the store — a reply to one of ours, a revision
+		// of one, or a new one — and one send branch after them, which is what makes
+		// `ctrl+s` mean the same thing whichever of the three you just did. Written as
+		// one chain rather than three blocks that each return, because an early return
+		// here is precisely how #200 and #133 happened: the send at the foot is the
+		// only place the agent is handed anything, and a branch that leaves before it
+		// has silently unbound the key.
+		switch parent := m.editor.replyTo; {
+		case parent != "":
 			if err := m.ReplyComment(parent, c); err != nil {
 				m.fail("reply: %v", err)
 				return m, nil
 			}
 			c.ReplyTo = parent
+			// The store assigns the id, and the send-to-agent prompt names it so the
+			// agent can answer on this thread rather than filing a second comment
+			// beside it — the same read-back the new-comment branch below makes.
+			if m.LastSavedComment != nil {
+				if saved, ok := m.LastSavedComment(); ok {
+					c = saved
+				}
+			}
 			// A reply reopens the thread for its author too, matching what the
 			// store does — the record and the view must not disagree.
 			for i := range m.comments {
@@ -605,9 +621,7 @@ func (m Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.comments = append(m.comments, c)
 			m.rebuildStream()
 			m.status = "reply saved"
-			return m, nil
-		}
-		if c.ID != "" {
+		case c.ID != "":
 			// Revising: update in place rather than appending a near-duplicate.
 			if err := m.UpdateComment(c); err != nil {
 				m.fail("comment: %v", err)
@@ -623,7 +637,7 @@ func (m Model) handleEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if action == editorSave {
 				return m, nil
 			}
-		} else {
+		default:
 			if err := m.SaveComment(c); err != nil {
 				m.fail("comment: %v", err)
 				return m, nil
