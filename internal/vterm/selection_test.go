@@ -97,3 +97,86 @@ func TestSelectionTextOfAClosedTerminalIsEmpty(t *testing.T) {
 		t.Errorf("a closed terminal selected %q", got)
 	}
 }
+
+// The word and the line a click lands on, which the emulator answers rather than
+// awp (#357). Ghostty ships boundary rules and a logical-line notion; a second
+// opinion derived from View's string would disagree with the text the same
+// selection copies.
+
+// TestWordAtIsTheWordUnderThePoint, with Ghostty's own boundaries.
+func TestWordAtIsTheWordUnderThePoint(t *testing.T) {
+	term := selectionTerm(t, 40, 3, "hello world", "hello world")
+	for _, tc := range []struct {
+		name   string
+		at     int
+		x0, x1 int
+	}{
+		{"inside the second word", 8, 6, 10},
+		{"on its first character", 6, 6, 10},
+		{"on its last", 10, 6, 10},
+		{"inside the first word", 2, 0, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x0, y0, x1, y1, ok := term.WordAt(tc.at, 0)
+			if !ok {
+				t.Fatal("no word under a point that has one")
+			}
+			if x0 != tc.x0 || x1 != tc.x1 || y0 != 0 || y1 != 0 {
+				t.Errorf("word spans (%d,%d)..(%d,%d), want (%d,0)..(%d,0)", x0, y0, x1, y1, tc.x0, tc.x1)
+			}
+			if got := term.SelectionText(x0, y0, x1, y1); got == "" {
+				t.Error("the span the emulator gave back reads as empty text")
+			}
+		})
+	}
+}
+
+// TestWordAtOnBlankSpaceTakesTheRunOfBlanks, which is Ghostty's answer and every
+// other terminal's: a run of whitespace is a unit you can double-click, and the
+// alternative — a click that selects nothing — reads as the gesture having missed.
+//
+// Recorded here because it is the kind of thing awp would otherwise "fix" back to
+// its own idea of a word, and then the pane would disagree with the terminal it is
+// running in about what a double-click does.
+func TestWordAtOnBlankSpaceTakesTheRunOfBlanks(t *testing.T) {
+	term := selectionTerm(t, 40, 3, "hi     there", "hi     there")
+	x0, _, x1, _, ok := term.WordAt(4, 0)
+	if !ok {
+		t.Fatal("blank space selected nothing")
+	}
+	if x0 != 2 || x1 != 6 {
+		t.Errorf("the blank run spans %d..%d, want the gap 2..6", x0, x1)
+	}
+}
+
+// TestLineAtIsTheWholeLine, trimmed of the blanks that pad a short row out to the
+// width of the screen.
+func TestLineAtIsTheWholeLine(t *testing.T) {
+	term := selectionTerm(t, 40, 3, "hello world", "hello world")
+	x0, y0, x1, y1, ok := term.LineAt(8, 0)
+	if !ok {
+		t.Fatal("no line under a point on one")
+	}
+	if x0 != 0 || y0 != 0 || y1 != 0 {
+		t.Fatalf("line spans (%d,%d)..(%d,%d), want a single row from column 0", x0, y0, x1, y1)
+	}
+	if got := term.SelectionText(x0, y0, x1, y1); strings.TrimSpace(got) != "hello world" {
+		t.Errorf("the line reads as %q, want `hello world`", got)
+	}
+}
+
+// TestLineAtCrossesASoftWrap. The logical line: a command too long for the width
+// is one line, and selecting it means every row it wrapped over. Without this the
+// highlight and the copied text would disagree about what a line is —
+// SelectionText already unwraps.
+func TestLineAtCrossesASoftWrap(t *testing.T) {
+	const wide = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 30 chars into a 20-column screen
+	term := selectionTerm(t, 20, 4, wide, "aaaa")
+	_, y0, _, y1, ok := term.LineAt(2, 0)
+	if !ok {
+		t.Fatal("no line under a point on one")
+	}
+	if y1 == y0 {
+		t.Errorf("the line stopped at row %d; a soft-wrapped line spans the rows it wrapped over", y0)
+	}
+}

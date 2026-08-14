@@ -1348,8 +1348,15 @@ Likewise a program that hides its cursor doesn't get one drawn.
 **A program that ignores the mouse gets drag-to-select instead.** In a shell pane,
 drag to highlight and it copies on release — no key, the way the terminals awp runs
 inside behave. The highlight stays until your next click so you can see what went to
-the clipboard, and typing clears it. Double-click for a word and triple-click for a
-line aren't wired up yet.
+the clipboard, and typing clears it. **Double-click takes the word under the pointer
+and triple-click the line**, both copying on release like a drag. Two presses count
+as a double when they land on the same cell within half a second, and a fourth click
+starts over — three is the whole vocabulary. What a word is, and what a line is, are
+libghostty's answers rather than awp's: its own boundary rules, and a *logical* line,
+so triple-clicking a command long enough to soft-wrap takes every row it wrapped
+over. Ghostty counts a run of blanks as a word too, so double-clicking the gap
+between two words does select it — and then copies nothing, because a selection whose
+text is empty is dropped rather than put on the clipboard.
 
 **The same pane scrolls back through its history with the wheel**, three rows a
 notch. Typing puts you back on the live tail — the program answers on the bottom

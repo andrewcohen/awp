@@ -3,6 +3,7 @@ package deckui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -235,5 +236,156 @@ func TestADragSelectsInASplitHalf(t *testing.T) {
 					p.sel.anchorX, p.sel.cursorX, from, from+4)
 			}
 		})
+	}
+}
+
+// Double- and triple-click, which pick out a unit rather than a range (#357).
+//
+// The unit itself is libghostty's answer — its own word-boundary rules, and a
+// logical line that spans a soft wrap — so what is tested here is the counting and
+// the routing: which question a click number asks, and whether what comes back is
+// applied. The fake terminal's word and line are deliberately naive for that reason.
+
+// clickAt presses and releases once at a cell of the pane, at a given moment.
+func clickPane(t *testing.T, m *Model, p *panePopover, x, y int, at time.Time) tea.Cmd {
+	t.Helper()
+	paneNow = func() time.Time { return at }
+	m.render()
+	b := m.boxOf(p)
+	sx, sy := b.x+paneInsetX, b.y+paneInsetY
+	p.update(m, tea.MouseClickMsg{X: sx + x, Y: sy + y, Button: tea.MouseLeft})
+	return p.update(m, tea.MouseReleaseMsg{X: sx + x, Y: sy + y, Button: tea.MouseLeft})
+}
+
+// atAFixedTime pins the clock for a test and puts it back afterwards.
+func atAFixedTime(t *testing.T) time.Time {
+	t.Helper()
+	was := paneNow
+	t.Cleanup(func() { paneNow = was })
+	return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+}
+
+// TestADoubleClickSelectsTheWordUnderIt, and copies it — a double-click is a
+// complete gesture, so it goes to the clipboard on its release like a drag does.
+func TestADoubleClickSelectsTheWordUnderIt(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, _ := selectPane(t, "hello world")
+
+	clickPane(t, &m, p, 8, 0, start)
+	if p.sel.active {
+		t.Fatal("one click selected something")
+	}
+	cmd := clickPane(t, &m, p, 8, 0, start.Add(100*time.Millisecond))
+	if !p.sel.active {
+		t.Fatal("a double-click selected nothing")
+	}
+	if got := [2]int{p.sel.anchorX, p.sel.cursorX}; got != [2]int{6, 10} {
+		t.Errorf("selected columns %v, want the word `world` at 6..10", got)
+	}
+	if cmd == nil {
+		t.Error("the double-clicked word did not reach the clipboard")
+	}
+}
+
+// TestATripleClickSelectsTheLine.
+func TestATripleClickSelectsTheLine(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, _ := selectPane(t, "hello world")
+
+	clickPane(t, &m, p, 8, 0, start)
+	clickPane(t, &m, p, 8, 0, start.Add(100*time.Millisecond))
+	clickPane(t, &m, p, 8, 0, start.Add(200*time.Millisecond))
+	if !p.sel.active {
+		t.Fatal("a triple-click selected nothing")
+	}
+	if got := [2]int{p.sel.anchorX, p.sel.cursorX}; got != [2]int{0, 10} {
+		t.Errorf("selected columns %v, want the whole line 0..10", got)
+	}
+}
+
+// TestASlowSecondClickIsANewClick. Two presses far enough apart are two clicks, or
+// a pane you came back to an hour later would select a word on the first press.
+func TestASlowSecondClickIsANewClick(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, _ := selectPane(t, "hello world")
+
+	clickPane(t, &m, p, 8, 0, start)
+	clickPane(t, &m, p, 8, 0, start.Add(paneClickInterval+time.Millisecond))
+	if p.sel.active {
+		t.Errorf("a slow second click selected columns %d..%d", p.sel.anchorX, p.sel.cursorX)
+	}
+}
+
+// TestASecondClickSomewhereElseIsANewClick. Same cell rather than a radius: a
+// terminal has no pixels, so the pointer either stayed on the character or it did
+// not.
+func TestASecondClickSomewhereElseIsANewClick(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, _ := selectPane(t, "hello world")
+
+	clickPane(t, &m, p, 8, 0, start)
+	clickPane(t, &m, p, 2, 0, start.Add(50*time.Millisecond))
+	if p.sel.active {
+		t.Error("a second click on another cell selected a word anyway")
+	}
+}
+
+// TestAFourthClickStartsOver. Three is the whole vocabulary, and a flurry of clicks
+// that left the pane selecting ever larger things would have no way back.
+func TestAFourthClickStartsOver(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, _ := selectPane(t, "hello world")
+
+	for i := range 3 {
+		clickPane(t, &m, p, 8, 0, start.Add(time.Duration(i)*100*time.Millisecond))
+	}
+	clickPane(t, &m, p, 8, 0, start.Add(300*time.Millisecond))
+	if p.sel.active {
+		t.Error("a fourth click kept a selection instead of starting over")
+	}
+	if p.sel.clicks != 1 {
+		t.Errorf("the fourth click counted as %d", p.sel.clicks)
+	}
+}
+
+// TestADoubleClickOnBlankSpaceLeavesNothingSelected, and copies nothing.
+//
+// Two rules meeting, both of which stay. Ghostty calls a run of blanks a word, so
+// the double-click does take the gap — awp does not second-guess the emulator about
+// where a word ends. But a selection whose text is empty is dropped on release
+// rather than copied, because putting whitespace on the clipboard and reporting
+// "copied 5 characters" is a worse answer than nothing having happened.
+//
+// The visible result is that double-clicking the gap between words does nothing,
+// which is also what it should do.
+func TestADoubleClickOnBlankSpaceLeavesNothingSelected(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, _ := selectPane(t, "hi     there")
+
+	clickPane(t, &m, p, 4, 0, start)
+	cmd := clickPane(t, &m, p, 4, 0, start.Add(100*time.Millisecond))
+	if p.sel.active {
+		t.Errorf("blank space stayed highlighted: columns %d..%d", p.sel.anchorX, p.sel.cursorX)
+	}
+	if cmd != nil {
+		t.Error("a gap between words was put on the clipboard")
+	}
+}
+
+// TestAPaneWhoseProgramWantsTheMouseGetsTheClicks. The gate the drag already
+// respects: an agent or nvim implements its own double-click, and awp taking it
+// would replace a selection the program is drawing itself.
+func TestAPaneWhoseProgramWantsTheMouseGetsTheClicks(t *testing.T) {
+	start := atAFixedTime(t)
+	m, p, f := selectPane(t, "hello world")
+	f.askForMouse()
+
+	clickPane(t, &m, p, 8, 0, start)
+	clickPane(t, &m, p, 8, 0, start.Add(100*time.Millisecond))
+	if p.sel.active {
+		t.Error("awp selected a word in a pane whose program wanted the mouse")
+	}
+	if len(f.miceSeen()) == 0 {
+		t.Error("the program was not sent the clicks it asked for")
 	}
 }

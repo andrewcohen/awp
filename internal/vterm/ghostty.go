@@ -720,6 +720,71 @@ func (t *ghosttyTerm) SelectionText(x0, y0, x1, y1 int) string {
 	return string(buf[:n])
 }
 
+// WordAt is the word at a point, as a span in display columns.
+//
+// Ghostty's own boundary rules, through ghostty_terminal_select_word — awp does not
+// get an opinion about where a word ends. Hand-rolling that beside a library that
+// ships it is how two answers to one question appear, and the library's is the one
+// the rest of the terminal agrees with.
+func (t *ghosttyTerm) WordAt(x, y int) (int, int, int, int, bool) {
+	return t.spanAt(x, y, func(ref C.GhosttyGridRef, sel *C.GhosttySelection) bool {
+		var opts C.GhosttyTerminalSelectWordOptions
+		opts.size = C.size_t(unsafe.Sizeof(opts))
+		opts.ref = ref
+		// No boundary_codepoints: the library's default list is the one Ghostty
+		// itself double-clicks with.
+		return succeeded(C.ghostty_terminal_select_word(t.vt, &opts, sel))
+	})
+}
+
+// LineAt is the logical line at a point, as a span in display columns.
+//
+// Logical, not the row under the pointer: a shell command long enough to soft-wrap
+// is one line, and selecting it means selecting every row it wrapped over. That is
+// the same unwrap rule SelectionText already applies on the way to the clipboard, so
+// the highlight and the copied text agree about what a line is.
+func (t *ghosttyTerm) LineAt(x, y int) (int, int, int, int, bool) {
+	return t.spanAt(x, y, func(ref C.GhosttyGridRef, sel *C.GhosttySelection) bool {
+		var opts C.GhosttyTerminalSelectLineOptions
+		opts.size = C.size_t(unsafe.Sizeof(opts))
+		opts.ref = ref
+		// semantic_prompt_boundary stays false: it would stop a line at the shell's
+		// prompt marker, and triple-clicking a prompt line to get the command you ran
+		// is exactly the case this is for.
+		return succeeded(C.ghostty_terminal_select_line(t.vt, &opts, sel))
+	})
+}
+
+// spanAt is the shape WordAt and LineAt share: a point becomes a grid ref, the
+// library derives a selection from it, and the selection's endpoints come back as
+// display columns.
+//
+// The conversion out is displayCol, the same one Cursor answers through, because the
+// caller is going to paint this over a rendered row — see the Hosted docs on why a
+// pane's columns are not the emulator's cells. The refs the library returns are in
+// the same active-area coordinates the ref going in was.
+func (t *ghosttyTerm) spanAt(x, y int, derive func(C.GhosttyGridRef, *C.GhosttySelection) bool) (int, int, int, int, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return 0, 0, 0, 0, false
+	}
+	ref, ok := t.gridRef(t.cellForCol(x, y), y)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	var sel C.GhosttySelection
+	sel.size = C.size_t(unsafe.Sizeof(sel))
+	if !derive(ref, &sel) {
+		// GHOSTTY_NO_VALUE among others: a blank cell has no word in it, and an empty
+		// row has no line. Nothing selected is the honest answer.
+		return 0, 0, 0, 0, false
+	}
+	x0 := t.displayCol(int(sel.start.x), int(sel.start.y))
+	x1 := t.displayCol(int(sel.end.x), int(sel.end.y))
+	return x0, int(sel.start.y), x1, int(sel.end.y), true
+}
+
 // gridRef resolves a cell of the active area. Caller holds mu.
 func (t *ghosttyTerm) gridRef(x, y int) (C.GhosttyGridRef, bool) {
 	var ref C.GhosttyGridRef
