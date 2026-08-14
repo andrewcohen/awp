@@ -485,6 +485,21 @@ across the reload, and the header names the width whenever it is not the default
 since a widened diff looks like a different change once you have forgotten you
 widened it.
 
+### The wheel scrolls the pane it is over
+
+The review surface takes the mouse for one gesture. **A notch of the wheel scrolls
+whichever of its three panes the pointer is over** — the diff, the file list, or the
+comment index — and **does not move the keyboard there**, the same rule a pane and a
+split's halves follow: scrolling is reading, and a glance somewhere is not a
+statement about where your next keystroke goes. Over the diff it moves the view and
+leaves the cursor where it was, three rows a notch, which is what a terminal
+emulator's own default is. The two lists have no scroll apart from their selection,
+so there a notch moves the selection, one row at a time — and a conversation the
+index selects still drags the diff to it, because that is what selecting one means.
+The `?` reference scrolls too. This costs the terminal's own drag-to-select while
+the view is up, which is the trade the deck already makes for a pane and for a
+split's divider.
+
 ### A folded file hides its conversations too
 
 `enter` folds the file at the cursor, and marking one reviewed (`r`) folds it as

@@ -528,3 +528,61 @@ func TestPRLabelFormat(t *testing.T) {
 		}
 	}
 }
+
+// The wheel over the diff modal.
+//
+// Two halves have to agree for a notch to land: the deck asks the terminal for
+// mouse reporting while a diff is up, and the modal translates the event out of the
+// deck's coordinates into the viewer's body. Neither half fails loudly on its own —
+// without the first nothing arrives, and without the second the notch scrolls
+// whatever pane sits at the mirror-image position.
+func TestADiffModalAsksForTheMouse(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
+	if v := m.View(); v.MouseMode != tea.MouseModeNone {
+		t.Fatalf("the row list asks for the mouse (%v), so this proves nothing", v.MouseMode)
+	}
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	if v := m.View(); v.MouseMode != tea.MouseModeCellMotion {
+		t.Errorf("a diff modal asked for mouse mode %v, want cell motion", v.MouseMode)
+	}
+}
+
+func TestTheWheelScrollsTheDiffModal(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	// A frame first: the translation reads the box the modal was last rendered into.
+	before := m.render()
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatalf("active modal is %T, want the diff", m.active)
+	}
+	// Over the diff pane, which is right of the viewer's file list. Two thirds across
+	// is inside it whatever the exact split is.
+	x := dm.lastBox.x + dm.lastBox.w*2/3
+	next, _ := m.Update(tea.MouseWheelMsg{X: x, Y: dm.lastBox.y + 3, Button: tea.MouseWheelDown})
+	if after := next.(Model).render(); after == before {
+		t.Errorf("the wheel changed nothing on screen:\n%s", after)
+	}
+}
+
+// A notch below the modal's own rows — on the deck's status bar — is not the
+// viewer's, and must not scroll it. The bound is what stops a wheel event aimed at
+// the deck's chrome from moving a pane it is not over.
+func TestAWheelBelowTheDiffModalIsNotItsToTake(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil })
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	before := m.render()
+	dm := m.active.(*diffModal)
+
+	next, _ := m.Update(tea.MouseWheelMsg{
+		X:      dm.lastBox.x + dm.lastBox.w*2/3,
+		Y:      dm.lastBox.y + dm.lastBox.h - 1,
+		Button: tea.MouseWheelDown,
+	})
+	if after := next.(Model).render(); after != before {
+		t.Errorf("a notch on the status bar moved the diff:\n%s", after)
+	}
+}
