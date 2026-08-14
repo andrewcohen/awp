@@ -863,8 +863,10 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		}
 		// Typing means you are done with whatever you had picked out, and a
 		// highlight left over a screen the program is about to redraw marks whatever
-		// text moves under it.
+		// text moves under it. It also means you are done reading history: the
+		// program will answer on the bottom row, which is not where the view is.
 		p.clearSelection()
+		p.snapToTail()
 		p.term.SendKey(msg)
 		return nil
 
@@ -874,9 +876,13 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 
 	case tea.MouseMsg:
 		// A program that did not ask for the mouse does not get it: the drag is a
-		// selection instead, which is the only way a pane can have one — see
-		// pane_selection.go for why the host terminal cannot do it.
+		// selection and the wheel is the scrollback, which are the only ways a pane
+		// can have either — see pane_selection.go for why the host terminal cannot
+		// do it, and pane_scroll.go for what nothing else was answering.
 		if p.paneSelects() {
+			if p.scrollMouse(msg) {
+				return nil
+			}
 			if cmd, consumed := p.selectMouse(m, msg); consumed {
 				return cmd
 			}
