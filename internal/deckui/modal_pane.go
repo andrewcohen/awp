@@ -792,7 +792,7 @@ func panePrefixMenu(m *Model) deckMenu {
 		sidebarVerb(m.sidebar),
 		menuCancelVerb,
 	)
-	return menu(PaneMenuKey+" — this pane", verbs...)
+	return menu("this pane", verbs...)
 }
 
 // prefixKey reads one key while a single pane's menu is armed. Like the split's,

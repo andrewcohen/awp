@@ -16,11 +16,15 @@ type prMenuModal struct{}
 
 // prMenu is the PR verbs for this row.
 func prMenu() deckMenu {
-	return menu("pr — this row",
+	return menu("this row's pr",
 		[2]string{"o", "open the PR in a browser"},
 		[2]string{"d", "read the description here"},
 		[2]string{"D", "read the description in a window"},
 		[2]string{"r", "repair the PR"},
+		// `m` was handled and unlisted, which the ribbon hid better than a list does:
+		// six verbs in a row read as a sentence you skim, where a column of them reads
+		// as the complete set.
+		[2]string{"m", "merge the PR"},
 		[2]string{"s", "set the PR number"},
 		menuCancelVerb,
 	)
