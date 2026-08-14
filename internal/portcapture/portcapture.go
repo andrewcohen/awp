@@ -1,8 +1,13 @@
 // Package portcapture discovers the HTTP dev-server URL bound by a
-// long-running process inside a tmux session. The caller supplies a map
-// of session name → tmux pane PIDs; Discover walks each PID's process
+// long-running process in one of the deck's sessions. The caller supplies
+// a map of session name → root PIDs; Discover walks each PID's process
 // tree, enumerates listening TCP sockets owned by descendants, and
 // returns one chosen `http://localhost:<port>` URL per session.
+//
+// Which PIDs those are is the caller's business, and deliberately: under
+// tmux they are the session's pane shells, and under a deck hosting its
+// own panes they are the session processes. This package knows only that
+// a dev server is a descendant of one of them.
 //
 // Heuristic: pick the numerically lowest listening port (typically the
 // HTTP server, while HMR/WebSocket sockets sit on random high ports).
@@ -48,8 +53,8 @@ const (
 // has at least one TCP listener. Sessions with no listeners are absent
 // from the returned map (not present with empty string).
 //
-// panePIDsBySession maps tmux session name → list of pane shell PIDs.
-// Discover expands each pane PID to its full descendant set, then
+// panePIDsBySession maps session name → the PIDs that session's processes
+// are rooted at. Discover expands each root PID to its descendant set, then
 // enumerates all listening sockets system-wide and buckets them by
 // session via PID ownership.
 func Discover(ctx context.Context, panePIDsBySession map[string][]int) (map[string]string, error) {

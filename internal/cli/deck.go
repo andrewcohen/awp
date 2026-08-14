@@ -1042,18 +1042,23 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		go runJobsStartupCleanup()
 	}
 
-	// devURLDiscoverer fans out one tmux pane-PID enumeration + one
-	// platform listener call per tick and returns a DevURLsMsg keyed by
-	// session name. Silent — no activity-bar entry.
+	// devURLDiscoverer fans out one PID enumeration + one platform listener call
+	// per tick and returns a DevURLsMsg keyed by the row's session name. Silent
+	// — no activity-bar entry.
+	//
+	// The PIDs come from the session source, so a pane host's dev servers are
+	// found the same way tmux's are. It used to ask tmux directly, which meant
+	// zero PIDs and therefore no dev URL for any row whenever the deck was not
+	// running on tmux (#342).
 	devURLDiscoverer := func() tea.Cmd {
 		return func() tea.Msg {
-			panePIDs, err := tmuxClient.PanePIDsBySession()
-			if err != nil || len(panePIDs) == 0 {
+			roots := sessionSource.roots()
+			if len(roots) == 0 {
 				return deckui.DevURLsMsg{URLs: nil}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			urls, _ := portcapture.Discover(ctx, panePIDs)
+			urls, _ := portcapture.Discover(ctx, rootsByRow(roots))
 			return deckui.DevURLsMsg{URLs: urls}
 		}
 	}
@@ -1531,6 +1536,16 @@ type deckSessions interface {
 	// cheap call, for the first paint; the snapshot says which it got via
 	// known.
 	sessions(fast bool) deckSessionSnapshot
+
+	// roots reports, per workspace, the processes that workspace's sessions are
+	// rooted at — what the dev-URL discoverer walks to find a listening socket.
+	//
+	// Here rather than at the call site because it is the same question the rest
+	// of this interface answers, about the same substrate, and asking tmux for it
+	// directly is what #342 was: under a pane host there is no tmux server, so
+	// the enumeration came back empty and `d` reported no dev server for every
+	// row, whatever was running in it.
+	roots() map[workspaceRef][]int
 }
 
 // tmuxSessions answers from tmux, which is what awp deck's processes live on.
@@ -1570,6 +1585,47 @@ func (t tmuxSessions) sessions(fast bool) deckSessionSnapshot {
 		}
 	}
 	return snap
+}
+
+// rootsByRow re-keys a session source's answer by the name the deck's rows
+// carry, which is what a discovered URL will be looked up by.
+//
+// Named and separate because it is the one place the two naming schemes meet.
+// A session source answers by workspace so either substrate can fill it, and
+// Item.SessionName is DeckSessionName's spelling — under zmx the substrate's own
+// name is a third thing (awp.repo.qa.agent, one per pane kind), so keying on it
+// would find every dev server and attach none of them to a row.
+func rootsByRow(roots map[workspaceRef][]int) map[string][]int {
+	if len(roots) == 0 {
+		return nil
+	}
+	out := make(map[string][]int, len(roots))
+	for ref, pids := range roots {
+		out[DeckSessionName(ref.project, ref.workspace)] = pids
+	}
+	return out
+}
+
+// roots is every pane's shell PID, bucketed by the workspace whose session
+// holds it. One list-panes shell-out for the lot; a dev server started in any
+// pane is a descendant of one of these.
+func (t tmuxSessions) roots() map[workspaceRef][]int {
+	if t.client == nil {
+		return nil
+	}
+	byName, err := t.client.PanePIDsBySession()
+	if err != nil || len(byName) == 0 {
+		return nil
+	}
+	out := map[workspaceRef][]int{}
+	for name, pids := range byName {
+		ref, ok := tmuxWorkspaceRef(name)
+		if !ok {
+			continue
+		}
+		out[ref] = append(out[ref], pids...)
+	}
+	return out
 }
 
 // tmuxWorkspaceRef reads the workspace out of an awp tmux session name.

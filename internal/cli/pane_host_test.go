@@ -44,6 +44,8 @@ func (noSessions) sessions(bool) deckSessionSnapshot {
 	return deckSessionSnapshot{byWorkspace: map[workspaceRef]sessionFacts{}}
 }
 
+func (noSessions) roots() map[workspaceRef][]int { return nil }
+
 var promptItem = deckui.Item{ProjectName: "proj", WorkspaceName: "ws", Path: "/tmp", RepoRoot: "/tmp"}
 
 // The bug this prevents: the deck sent prompts through tmux to a session zdeck

@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/andrewcohen/awp/internal/deckui"
+)
 
 // knownSessions builds a snapshot in the state a full refresh produces, for
 // tests that care about what the rows do with it rather than how it was read.
@@ -130,5 +134,43 @@ func TestNoTmuxClientReadsAsNothing(t *testing.T) {
 	}
 	if snap.hasCurrent {
 		t.Error("no client, but a current workspace")
+	}
+}
+
+// TestNoTmuxClientOffersNoProcesses, the same reason: the discoverer's tick can
+// land before anything has been probed.
+func TestNoTmuxClientOffersNoProcesses(t *testing.T) {
+	if roots := (tmuxSessions{}).roots(); len(roots) != 0 {
+		t.Errorf("got %v processes from no client", roots)
+	}
+}
+
+// TestTheDiscoverersKeysAreTheKeysTheRowsCarry. The deck looks a dev URL up by
+// Item.SessionName, and both session sources answer keyed by workspace — so what
+// the discoverer is handed has to be re-keyed to the name the row carries. Under
+// zmx the substrate's own name is a third spelling (awp.repo.qa.agent, one per
+// pane kind), so keying on it would find every dev server and attach none of
+// them to a row.
+func TestTheDiscoverersKeysAreTheKeysTheRowsCarry(t *testing.T) {
+	src, _ := zmxSource("name=awp.repo.qa.agent\tpid=42\tclients=1")
+	byRow := rootsByRow(src.roots())
+	want := DeckSessionName("repo", "qa")
+	if got := byRow[want]; len(got) != 1 || got[0] != 42 {
+		t.Errorf("keyed by %q the roots are %v, want [42]; whole map: %v", want, got, byRow)
+	}
+	// The row the deck builds carries that same name, which is the other end of
+	// the lookup.
+	item := deckui.Item{SessionName: DeckSessionName("repo", "qa")}
+	if _, ok := byRow[item.SessionName]; !ok {
+		t.Errorf("the row's session name %q is not a key of %v", item.SessionName, byRow)
+	}
+}
+
+// TestNothingToReKeyStaysNothing: an empty answer must not become a map of one
+// row with no processes, which the discoverer would read as "found nothing here"
+// rather than "nothing was read".
+func TestNothingToReKeyStaysNothing(t *testing.T) {
+	if got := rootsByRow(nil); got != nil {
+		t.Errorf("re-keying nothing produced %v", got)
 	}
 }
