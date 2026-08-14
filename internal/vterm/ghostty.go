@@ -91,6 +91,10 @@ type ghosttyTerm struct {
 	closed  bool
 	w, h    int
 
+	// modkeys is the one input mode the terminal cannot be asked about, read out
+	// of the program's own output instead. Guarded by mu with the encoders.
+	modkeys modkeysSniffer
+
 	// rs is a render state, held only to read the cursor's visual style.
 	//
 	// libghostty does not expose the shape on the terminal itself:
@@ -212,6 +216,9 @@ func (g ghosttyWriter) Write(p []byte) (int, error) {
 	}
 	g.t.mu.Lock()
 	if !g.t.closed {
+		// Sniffed under the same lock the encoders are read under, so a mode the
+		// program set cannot be half-applied to a key pressed at the same moment.
+		g.t.modkeys.feed(p)
 		C.ghostty_terminal_vt_write(g.t.vt, (*C.uint8_t)(unsafe.Pointer(&p[0])), C.size_t(len(p)))
 	}
 	g.t.mu.Unlock()
@@ -445,6 +452,12 @@ func (t *ghosttyTerm) encodeKey(k tea.KeyPressMsg) []byte {
 	// word-motion in readline, so in every shell and every agent prompt.
 	asAlt := C.GhosttyOptionAsAlt(C.GHOSTTY_OPTION_AS_ALT_TRUE)
 	C.ghostty_key_encoder_setopt(t.keyEnc, C.GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, unsafe.Pointer(&asAlt))
+	// And modifyOtherKeys, from what the program actually asked for. The call above
+	// claims to set this from the terminal and answers `true` unconditionally, so
+	// left to it every pane invents ESC[27;2;13~ for shift+enter — see
+	// internal/vterm/modkeys.go for why awp tracks the mode itself.
+	modOther := C.bool(t.modkeys.state2)
+	C.ghostty_key_encoder_setopt(t.keyEnc, C.GHOSTTY_KEY_ENCODER_OPT_MODIFY_OTHER_KEYS_STATE_2, unsafe.Pointer(&modOther))
 	rc := C.ghostty_key_encoder_encode(t.keyEnc, ev, &buf[0], C.size_t(len(buf)), &n)
 	t.mu.Unlock()
 

@@ -23,14 +23,13 @@ func TestShiftEnterReachesTheProgram(t *testing.T) {
 		want    string
 	}{
 		{
-			// Nothing asked, so a real terminal would send a CR and so do we —
-			// which puts the two markers on separate rows. Inventing an escape
-			// sequence here would put one in the program's input buffer.
-			// Nothing asked, so a real terminal would send a CR and so do we,
-			// which puts the markers on separate rows. want "" means "no escape
-			// sequence anywhere": inventing one here would put it in the
-			// program's input buffer.
-			name: "no request", request: "", want: "",
+			// Ghostty encodes shift+enter this way with nothing asked for, and a pane
+			// is a Ghostty terminal: `input/function_keys.zig` gives enter+shift that
+			// sequence with no condition on any protocol, which is why binding
+			// shift+enter works in Ghostty and not in xterm. #334 looked at this
+			// output and read it as an invented sequence; it is the emulator's own
+			// answer, and matching it is the point of hosting that emulator.
+			name: "no request", request: "", want: "<^[[27;2;13~>",
 		},
 		{
 			name: "kitty keyboard", request: "\x1b[>1u", want: "<^[[13;2u>",
@@ -45,15 +44,6 @@ func TestShiftEnterReachesTheProgram(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.want == "" {
-				// #334. The encoder emits the modifyOtherKeys form for shift+enter
-				// whether or not the program asked for it, so this case fails against
-				// the emulator awp runs. Skipped rather than re-baselined: a sequence
-				// nobody asked for is not a spelling difference, it arrives in the
-				// program's input buffer as garbage, and this assertion is the one
-				// that should survive.
-				t.Skip("#334: the encoder invents ESC[27;2;13~ with nothing asking for one")
-			}
 			// The request comes out of the hosted program, which is the only path
 			// that exercises the sniffer — and READY, printed after it, is how the
 			// test knows the chunk carrying it has been read: the sniffer scans a
@@ -65,18 +55,57 @@ func TestShiftEnterReachesTheProgram(t *testing.T) {
 			term.SendText("<")
 			term.SendKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 			term.SendText(">")
-			if tc.want != "" {
-				awaitScreen(t, term, tc.want)
-				return
+			awaitScreen(t, term, tc.want)
+		})
+	}
+}
+
+// TestModifyOtherKeysIsOffUntilAskedFor is what #334 actually was, found by
+// chasing the shift+enter report: the encoder was being told modifyOtherKeys
+// state 2 was on in every pane, because the library's
+// setopt_from_terminal answers `true` whether the program asked for the mode,
+// asked for it to be turned off, or never mentioned it.
+//
+// shift+enter is the one key that looks the same either way, which is how this
+// hid. The keys below are the ones that do not: with the mode wrongly on, alt+b
+// and alt+f — word-motion in readline, so in every shell and every agent prompt —
+// arrive as ESC[27;3;98~ instead of ESC b, and typing a capital A sends
+// ESC[27;2;65~ instead of an A.
+func TestModifyOtherKeysIsOffUntilAskedFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.KeyPressMsg
+		off  string // what the program gets having asked for nothing
+		on   string // and having asked for modifyOtherKeys state 2
+	}{
+		{"alt+b", tea.KeyPressMsg{Code: 'b', Mod: tea.ModAlt, Text: "b"}, "\x1bb", "\x1b[27;3;98~"},
+		{"alt+f", tea.KeyPressMsg{Code: 'f', Mod: tea.ModAlt, Text: "f"}, "\x1bf", "\x1b[27;3;102~"},
+		{"shift+a", tea.KeyPressMsg{Code: 'a', Mod: tea.ModShift, Text: "A"}, "A", "\x1b[27;2;65~"},
+		{"shift+tab", tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}, "\x1b[Z", "\x1b[27;2;9~"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			quiet := ghosttyEncoderWithModes(t, "")
+			if got := string(quiet.encodeKey(tc.key)); got != tc.off {
+				t.Errorf("with nothing asked, %s encoded to %q, want %q", tc.name, got, tc.off)
 			}
-			// Both markers arrived, so whatever the key produced is on screen by
-			// now, and it must not be an escape sequence.
-			awaitScreen(t, term, "<")
-			awaitScreen(t, term, ">")
-			if got := render(term); strings.Contains(got, "^[") {
-				t.Errorf("an escape sequence was invented with nothing asking for one:\n%s", got)
+			// And the mode still works when it is asked for, which is the other half:
+			// awp overrides the library's answer rather than pinning it to false.
+			asked := ghosttyEncoderWithModes(t, `\033[>4;2m`)
+			if got := string(asked.encodeKey(tc.key)); got != tc.on {
+				t.Errorf("with the mode asked for, %s encoded to %q, want %q", tc.name, got, tc.on)
 			}
 		})
+	}
+}
+
+// TestTheModeCanBeWithdrawn. A program may turn it back off, and the pane has to
+// hear that too — otherwise a shell that enabled it for one prompt leaves every
+// later keystroke in the wrong encoding.
+func TestTheModeCanBeWithdrawn(t *testing.T) {
+	g := ghosttyEncoderWithModes(t, `\033[>4;2m\033[>4;0m`)
+	key := tea.KeyPressMsg{Code: 'b', Mod: tea.ModAlt, Text: "b"}
+	if got := string(g.encodeKey(key)); got != "\x1bb" {
+		t.Errorf("after the mode was withdrawn, alt+b encoded to %q, want %q", got, "\x1bb")
 	}
 }
 
