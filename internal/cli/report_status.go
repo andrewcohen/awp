@@ -192,11 +192,24 @@ func parseToolList(s string) []string {
 	return out
 }
 
-// resolveWorkspaceIdent returns (AWP_WORKSPACE, AWP_REPO, AWP_REPO_ROOT) with
-// a tmux fallback. When the process env is empty (e.g. the calling Claude/pi
-// was launched before the tmux session env was injected), we ask tmux for the
-// session-level values. This makes hooks robust against stale process
-// environments.
+// resolveWorkspaceIdent returns (AWP_WORKSPACE, AWP_REPO, AWP_REPO_ROOT), asked
+// three ways in order of how directly each one was stated.
+//
+//  1. The process environment, which is what a launcher injected.
+//  2. The tmux session environment, for a Claude/pi started before the session env
+//     was injected — the process env is empty there, but the session's is not.
+//  3. The working directory, matched against the workspaces awp has recorded.
+//
+// The third exists because the first two are both injections, and an injection can go
+// missing with no signal: a zmx session's environment is fixed at creation and never
+// re-injected, so a session made by an older awp quietly stops reporting status
+// forever (#216). cwd is not injected by anyone — an agent in a workspace pane is
+// running in the workspace's directory — so it answers for a stale session, a session
+// started outside awp, and whatever the pane environment does next.
+//
+// Last rather than first because it is the least specific: a shell that happens to be
+// cd'd into a workspace is in that directory without being that workspace's agent, and
+// where a launcher did say which workspace this is, it said so on purpose.
 func resolveWorkspaceIdent() (workspace, repo, repoRoot string) {
 	workspace = strings.TrimSpace(os.Getenv("AWP_WORKSPACE"))
 	repo = strings.TrimSpace(os.Getenv("AWP_REPO"))
@@ -204,17 +217,24 @@ func resolveWorkspaceIdent() (workspace, repo, repoRoot string) {
 	if workspace != "" {
 		return
 	}
-	if strings.TrimSpace(os.Getenv("TMUX")) == "" {
-		return
+	if strings.TrimSpace(os.Getenv("TMUX")) != "" {
+		if v := tmuxLocalEnv("AWP_WORKSPACE"); v != "" {
+			workspace = v
+		}
+		if repo == "" {
+			repo = tmuxLocalEnv("AWP_REPO")
+		}
+		if repoRoot == "" {
+			repoRoot = tmuxLocalEnv("AWP_REPO_ROOT")
+		}
+		if workspace != "" {
+			return
+		}
 	}
-	if v := tmuxLocalEnv("AWP_WORKSPACE"); v != "" {
-		workspace = v
-	}
-	if repo == "" {
-		repo = tmuxLocalEnv("AWP_REPO")
-	}
-	if repoRoot == "" {
-		repoRoot = tmuxLocalEnv("AWP_REPO_ROOT")
+	// The triple has to come from one source: a workspace name paired with another
+	// source's repo is a lookup against the wrong repo, which is worse than no answer.
+	if name, cwdRepo, cwdRoot, ok := workspaceFromCwd(); ok {
+		return name, cwdRepo, cwdRoot
 	}
 	return
 }
