@@ -2580,3 +2580,115 @@ func TestTypingIntoTheBoxRendersEachKeystroke(t *testing.T) {
 		t.Fatalf("the box is rendering a stale frame:\n%s", got)
 	}
 }
+
+// #200: replying to a comment the agent filed and confirming with ctrl+s saved
+// the reply and delivered nothing. The reply branch returned before the send at
+// the foot of the save handler was reached, so the one key whose whole purpose is
+// handing work to the agent silently didn't — indistinguishable from a send that
+// failed. The same defect #133 fixed for a reply to a GitHub thread; the local
+// reply kept its early return.
+
+// replyModel is a viewer with a comment from the agent on it and the cursor on
+// that comment's row, which is where `c` opens a reply.
+func replyModel(t *testing.T) (Model, review.Comment) {
+	t.Helper()
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.ReplyComment = func(string, review.Comment) error { return nil }
+	parent := commentOn("a.go", 1, "alpha", "this drops the error")
+	parent.Author, parent.State = "agent", review.Sent
+	m.SetComments([]review.Comment{parent})
+	for m.stream.rows[m.cursorRow].kind != rowComment {
+		before := m.cursorRow
+		m = press(m, "j")
+		if m.cursorRow == before {
+			t.Fatal("never reached the comment row")
+		}
+	}
+	return m, parent
+}
+
+// composeReply opens the reply box, types a word, and confirms with the given key.
+func composeReply(t *testing.T, m Model, confirm tea.KeyPressMsg) Model {
+	t.Helper()
+	m = press(m, "c")
+	if !m.editing {
+		t.Fatal("c did not open a reply box")
+	}
+	m = press(m, "o")
+	m = press(m, "k")
+	next, _ := m.Update(confirm)
+	got, ok := next.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T", next)
+	}
+	return got
+}
+
+func TestCtrlSOnAReplySendsItToTheAgent(t *testing.T) {
+	m, _ := replyModel(t)
+	var sent []review.Comment
+	m.SendComment = func(c review.Comment) error {
+		sent = append(sent, c)
+		return nil
+	}
+	m = composeReply(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if len(sent) != 1 {
+		t.Fatalf("the reply was handed to the agent %d times, want once; status %q", len(sent), m.status)
+	}
+	if sent[0].Body != "ok" {
+		t.Errorf("the agent got %q, want the reply's body", sent[0].Body)
+	}
+	if !strings.Contains(m.status, "agent") {
+		t.Errorf("status %q does not say it went to the agent", m.status)
+	}
+}
+
+// TestAReplySentToTheAgentCarriesItsID. The prompt names the comment's id so the
+// agent answers on this thread instead of filing a second one beside it, and the
+// store assigns that id — so the reply has to be read back before it is sent. The
+// store's Reply used to discard what it wrote, which is the other half of #200.
+func TestAReplySentToTheAgentCarriesItsID(t *testing.T) {
+	m, _ := replyModel(t)
+	m.LastSavedComment = func() (review.Comment, bool) {
+		return review.Comment{ID: "assigned-by-the-store", Body: "ok"}, true
+	}
+	var sent []review.Comment
+	m.SendComment = func(c review.Comment) error {
+		sent = append(sent, c)
+		return nil
+	}
+	m = composeReply(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if len(sent) != 1 {
+		t.Fatalf("the reply was handed to the agent %d times, want once", len(sent))
+	}
+	if sent[0].ID != "assigned-by-the-store" {
+		t.Errorf("the agent got id %q, want the one the store assigned", sent[0].ID)
+	}
+}
+
+// TestEnterOnAReplyDoesNotSend. The pair has to stay a pair: enter saves, ctrl+s
+// saves and sends. A fix that sent on both would hand the agent every reply you
+// wrote, including the ones you meant to keep until `P`.
+func TestEnterOnAReplyDoesNotSend(t *testing.T) {
+	m, _ := replyModel(t)
+	sends := 0
+	m.SendComment = func(review.Comment) error { sends++; return nil }
+	m = composeReply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if sends != 0 {
+		t.Errorf("enter sent the reply to the agent %d times", sends)
+	}
+	if m.editing {
+		t.Error("enter left the reply box open")
+	}
+}
+
+// TestAReplyWithNowhereToSendItSaysSo, rather than reporting a send that never
+// happened. Standalone `awp diff` on a change with no agent has no sink.
+func TestAReplyWithNowhereToSendItSaysSo(t *testing.T) {
+	m, _ := replyModel(t)
+	m.SendComment = nil
+	m = composeReply(t, m, tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if !strings.Contains(m.status, "unavailable") {
+		t.Errorf("status %q does not say sending is unavailable here", m.status)
+	}
+}
