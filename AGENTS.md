@@ -223,6 +223,10 @@ The `awp deck` title is plain bold (terminal-default fg / white) — it delibera
 
 **Row labels.** Workspace row labels stay at the terminal default fg — the colored status dot carries the agent state. Tinting every label by status was tried and flooded the list (yellow "waiting" rows collided with the yellow selection bar), so only the cursor (`Warning` + bold + `┃`) and find-mode dimming recolor a label.
 
+**In the sidebar, colour marks structure and not content.** Its section headers keep their hues (Accent pinned / Warning waiting / Danger error / Success working, muted for ready and idle) and so do its status dots — six headers on a screen and one dot per row are the skeleton that says where you are. But a row's **second line is muted throughout** in `internal/deckui/sidebar.go` — PR glyphs, PR number, bookmark, project — where it used to carry `prGlyphCluster`'s own hues and a blue PR number. The cluster is `ansi.Strip`ped and re-rendered `Muted`; the strip takes its *shape* (which glyphs, in what order) and declines its palette.
+
+The distinction is frequency, not the palette. That line appears once per row, so a hue on it repeats down the whole strip, and at 36 columns with two lines per row the repetition — not the headers — is what made the strip noisy. Emphasis spent everywhere is emphasis nowhere. So: chrome appearing a handful of times may carry a hue; anything appearing once per row may not.
+
 **Meta line.** `renderMetaText` / `metaSegStyle` tint only the `:port` token (blue) after truncation (so the width math stays ANSI-free); everything else — author, branch, prompt, stale chip, the virtual-row keyboard-return (`nf-md-keyboard_return`) `to review` / `to check out` hint, and the `·` separators — stays `Muted`. Coloring the author (teal) and branch (green) was tried and read as too much color repeated on every row, so the meta line stays mostly muted.
 
 - **Never** call `lipgloss.Color("123")` with a raw 256-color code. Add a

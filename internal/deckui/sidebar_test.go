@@ -1,10 +1,12 @@
 package deckui
 
 import (
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -289,16 +291,102 @@ func TestARowsSecondLineCarriesItsPR(t *testing.T) {
 	t.Fatalf("the workspace is not on the strip:\n%s", out)
 }
 
-// TestARowWithNothingToSaySpendsOneLine. The second line is allowed to be missing,
-// which for a workspace with no PR and no bookmark it is — a blank one would cost
-// the strip half its rows to say nothing.
-func TestARowWithNothingToSaySpendsOneLine(t *testing.T) {
+// TestEveryRowSpendsExactlyTwoLines, a workspace with nothing to say included.
+//
+// The fixed cadence is what separates one row from the next. It replaced a
+// variable-height row plus a blank row between rows, which spent between two and
+// three lines per workspace and still had to be scanned for where one ended. Both
+// lines carry text — see TestASecondLineAlwaysSaysSomething for why a blank one does
+// not keep the cadence, whatever the line count says.
+func TestEveryRowSpendsExactlyTwoLines(t *testing.T) {
 	m := stripDeck(nil)
-	if got := m.sidebarMeta(m.sidebarView(), Item{WorkspaceName: "bare"}, sidebarWidth); got != "" {
-		t.Errorf("a workspace with no PR and no bookmark drew %q", got)
+	v := m.sidebarView()
+	for _, it := range []Item{
+		{WorkspaceName: "bare"},
+		{ProjectName: "awp", WorkspaceName: "default"},
+		{WorkspaceName: "flaky-login-test", Bookmark: "andrew/login-retry"},
+		{WorkspaceName: "docs-tidy", Bookmark: "andrew/docs-tidy"},
+	} {
+		row := m.sidebarRow(v, it, sidebarWidth)
+		if len(row) != 2 {
+			t.Errorf("%s spent %d lines, want 2: %q", it.WorkspaceName, len(row), row)
+		}
 	}
-	if got := m.sidebarRow(m.sidebarView(), Item{WorkspaceName: "bare"}, sidebarWidth); len(got) != 1 {
-		t.Errorf("the row spent %d lines: %q", len(got), got)
+}
+
+// TestTheRowCadenceIsWhatSeparatesRows: every name in a section is exactly two lines
+// below the last, so a meta line can never be read as belonging to the name under it.
+func TestTheRowCadenceIsWhatSeparatesRows(t *testing.T) {
+	m := stripDeck([]Item{
+		{ProjectName: "a", WorkspaceName: "one", Status: "waiting", Bookmark: "andrew/one-branch"},
+		{ProjectName: "a", WorkspaceName: "two", Status: "waiting"}, // no meta: a blank second line
+		{ProjectName: "a", WorkspaceName: "three", Status: "waiting", Bookmark: "andrew/three-branch"},
+	})
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	lines := strings.Split(out, "\n")
+	at := func(name string) int {
+		for i, l := range lines {
+			if strings.Contains(l, name) {
+				return i
+			}
+		}
+		t.Fatalf("%s is missing from the strip:\n%s", name, out)
+		return -1
+	}
+	// Sorted, because the rows render in the scope's own order rather than the order
+	// the fixture lists them in.
+	rows := []int{at("one"), at("two"), at("three")}
+	sort.Ints(rows)
+	for i := 1; i < len(rows); i++ {
+		if rows[i]-rows[i-1] != 2 {
+			t.Errorf("consecutive names sit %d lines apart, want 2 (%v):\n%s",
+				rows[i]-rows[i-1], rows, out)
+		}
+	}
+}
+
+// TestASecondLineAlwaysSaysSomething, and never says the line above again.
+//
+// A blank second line kept the cadence in the line count and lost it on screen: what
+// the eye reads as a row is a block of text, so a name with nothing under it reads as
+// a one-line row. With nothing else to print the line carries the half of the row's
+// identity the name line is not using — the workspace name where the row goes by its
+// project, the project where it goes by its name.
+func TestASecondLineAlwaysSaysSomething(t *testing.T) {
+	m := stripDeck(nil)
+	v := m.sidebarView()
+	for _, tc := range []struct {
+		item Item
+		want string
+	}{
+		// A repo-root row goes by its project, so the line is which workspace.
+		{Item{ProjectName: "awp", WorkspaceName: "default"}, "default"},
+		// Any other row goes by its name, so the line is which project — the one fact
+		// the strip otherwise drops entirely.
+		{Item{ProjectName: "beta", WorkspaceName: "bump-deps"}, "beta"},
+		// A bookmark that only restates the name loses to that, not to a blank.
+		{Item{ProjectName: "awp", WorkspaceName: "docs-tidy", Bookmark: "andrew/docs-tidy"}, "awp"},
+		// One that says something new wins.
+		{Item{ProjectName: "awp", WorkspaceName: "flaky-login-test", Bookmark: "andrew/login-retry"}, "andrew/login-retry"},
+		// And with no project at all, the name is the last resort that always exists.
+		{Item{WorkspaceName: "bare"}, "bare"},
+	} {
+		got := ansi.Strip(m.sidebarMeta(v, tc.item, sidebarWidth))
+		if got != tc.want {
+			t.Errorf("%s: second line %q, want %q", tc.item.WorkspaceName, got, tc.want)
+		}
+	}
+	// And no rendered row has an empty second line.
+	deck := stripDeck([]Item{
+		{ProjectName: "awp", WorkspaceName: "default", Status: "idle"},
+		{ProjectName: "b", WorkspaceName: "bare", Status: "waiting"},
+	})
+	dv := deck.sidebarView()
+	for _, it := range dv.Items() {
+		row := deck.sidebarRow(dv, it, sidebarWidth)
+		if strings.TrimSpace(ansi.Strip(row[1])) == "" {
+			t.Errorf("%s drew an empty second line", it.WorkspaceName)
+		}
 	}
 }
 
@@ -317,22 +405,37 @@ func TestTheSidebarCountsEveryWorkspaceNotTheScope(t *testing.T) {
 	}
 }
 
-// TestTheSidebarMarksTheWorkspaceYouAreIn, in the tier the design system gives a
-// pane the keyboard has left: the bar, muted. It says where you are without
-// claiming to be a cursor there is none of in here.
+// TestTheSidebarMarksTheWorkspaceYouAreIn — its name in Strong, and no other row's.
+//
+// It was a muted `┃`, the tier the design system gives a pane the keyboard has left,
+// and the bar needed a column ahead of the status dot. That column was the indent
+// that made the strip's rows sit off the left edge its headers set, so the marker
+// moved into the name's own weight. #350 puts a real cursor in here and a cursor does
+// earn the bar back — the selection treatment is `┃ ` plus Warning — which is a
+// different claim from "you are here".
 func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 	m, p := sidebarPane(t)
-	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 20}))
-	for _, line := range strings.Split(strip, "\n") {
-		if !strings.HasPrefix(strings.TrimLeft(line, " "), "┃") {
-			continue
-		}
-		if !strings.Contains(line, p.workspace) {
-			t.Errorf("the marked row is %q, want the pane's own workspace %q", line, p.workspace)
-		}
-		return
+	v := m.sidebarView()
+	rows := v.Items()
+	if len(rows) < 2 {
+		t.Fatalf("need two rows to tell a marked one from an unmarked one, got %d", len(rows))
 	}
-	t.Errorf("the workspace the pane is of (%s) is not marked:\n%s", p.workspace, strip)
+	marked := 0
+	for _, it := range rows {
+		line := m.sidebarRow(v, it, sidebarWidth)[0]
+		isMine := it.ProjectName == p.project && it.WorkspaceName == p.workspace
+		strong := strings.Contains(line, m.styles.Strong.Render(sidebarLabel(it)))
+		if strong != isMine {
+			t.Errorf("%s: marked %v, want %v (the pane is of %s/%s)",
+				it.WorkspaceName, strong, isMine, p.project, p.workspace)
+		}
+		if strong {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Errorf("%d rows are marked, want exactly the one the pane is of", marked)
+	}
 }
 
 // TestTheSidebarRefusesATerminalWithNoRoomBesideAPane. A flag set on a terminal
@@ -416,7 +519,7 @@ func TestTheSidebarTogglesFromASplitToo(t *testing.T) {
 
 // The row layout, after the strip was reported as mostly wasted space.
 //
-// What it was spending its width and height on: `alpha/` printed on every row
+// What it was spending its width and height on: `beta/` printed on every row
 // as a chip, eight columns of a twenty-six-column strip repeated four times in a
 // row, while the PR titles it was labelling truncated to `fix(l...`; and a blank
 // row between every group, a quarter of the height, on a surface whose whole
@@ -464,22 +567,28 @@ func TestGroupsAreSeparatedByABlankRow(t *testing.T) {
 	}
 }
 
-// TestTheProjectIsNotOnTheStripAtAll. It was a chip on every row, then a muted
-// sub-row printed once per project — and now neither. The strip's sections cut
-// across projects, so a project sub-row inside a band would be a second level of
-// grouping under the one that matters, and the chip was eight columns of a name
-// already on screen above. The cost is that two workspaces of the same name in
-// different projects read alike on the strip; the row list is where you tell them
-// apart.
-func TestTheProjectIsNotOnTheStripAtAll(t *testing.T) {
-	m := stripDeck([]Item{
-		{ProjectName: "alpha", WorkspaceName: "one", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
-		{ProjectName: "alpha", WorkspaceName: "two", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
-	})
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
-	if strings.Contains(out, "alpha") {
-		t.Errorf("the strip names the project:\n%s", out)
+// TestARowGoesByItsName, never by the project it is in.
+//
+// The project was a chip on every row, then a muted sub-row printed once per project,
+// and it is now on neither: the sections cut across projects, so a project sub-row
+// inside a band would be a second level of grouping under the one that matters. It
+// survives only as the second line's last-resort content, which is a row saying "and
+// this one is in beta" rather than the project labelling the row. A `default`
+// workspace is the one row that goes by its project — see below.
+func TestARowGoesByItsName(t *testing.T) {
+	items := []Item{
+		{ProjectName: "beta", WorkspaceName: "one", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
+		{ProjectName: "beta", WorkspaceName: "two", Path: "/tmp", RepoRoot: "/r", Status: "waiting", Unread: true},
 	}
+	m := stripDeck(items)
+	v := m.sidebarView()
+	for _, it := range v.Items() {
+		row := m.sidebarRow(v, it, sidebarWidth)
+		if name := ansi.Strip(row[0]); strings.Contains(name, it.ProjectName) {
+			t.Errorf("the name line names the project: %q", name)
+		}
+	}
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
 	for _, name := range []string{"one", "two"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("%s is missing from the strip:\n%s", name, out)
@@ -516,8 +625,102 @@ func TestEveryWorkspaceRowStartsAtTheSameColumn(t *testing.T) {
 // is the field you cannot reconstruct from the others, and the strip is worth
 // having only if enough of it survives to tell two workspaces apart.
 func TestARowGetsMostOfTheStripForItsName(t *testing.T) {
-	room := sidebarWidth - 2*sidebarPadX - 3 // the bar's two columns, the dot, its space
+	room := sidebarWidth - 2*sidebarPadX - 2 // the status dot and its space
 	if room < 28 {
 		t.Errorf("a row has %d columns for its name; telling two workspaces apart needs about 28", room)
+	}
+}
+
+// The three things that made the first version of the strip unreadable on a real
+// deck, each of which was the strip repeating itself.
+
+// TestADefaultWorkspaceGoesByItsProject. Six projects each with only a repo-root
+// workspace rendered as six rows called `default`, and the name says nothing — the
+// project is the identity. collapsedProjects reaches the same conclusion for the row
+// list by a different route.
+//
+// `default` still appears, on the second line, where it is the one thing that line
+// has to say: the pair is the project (which repo) over the workspace (which one in
+// it). What must not happen is `default` being the row's *name*.
+func TestADefaultWorkspaceGoesByItsProject(t *testing.T) {
+	m := stripDeck([]Item{
+		{ProjectName: "awp", WorkspaceName: "default", Status: "idle"},
+		{ProjectName: "beta", WorkspaceName: "default", Status: "idle"},
+	})
+	v := m.sidebarView()
+	rows := v.Items()
+	if len(rows) != 2 {
+		t.Fatalf("the deck has %d rows, want 2", len(rows))
+	}
+	for _, it := range rows {
+		row := m.sidebarRow(v, it, sidebarWidth)
+		name, meta := ansi.Strip(row[0]), strings.TrimSpace(ansi.Strip(row[1]))
+		if !strings.Contains(name, it.ProjectName) {
+			t.Errorf("the name line is %q, want the project %q", name, it.ProjectName)
+		}
+		if strings.Contains(name, "default") {
+			t.Errorf("the name line still calls the row `default`: %q", name)
+		}
+		if meta != "default" {
+			t.Errorf("the second line is %q, want `default`", meta)
+		}
+	}
+}
+
+// TestAPRWorkspaceDropsTheNumberFromItsName, because the number is on the line
+// below it. `pr-128-refactor-parser` spent eight of the strip's thirty-six
+// columns on a field the next line then repeated.
+func TestAPRWorkspaceDropsTheNumberFromItsName(t *testing.T) {
+	if got := sidebarLabel(Item{WorkspaceName: "pr-128-refactor-parser"}); got != "refactor-parser" {
+		t.Errorf("the label is %q, want the name without its pr- prefix", got)
+	}
+	// And a workspace genuinely called pr-something keeps its name: the prefix is
+	// matched, not split off at the first dash.
+	for _, name := range []string{"pr-review-notes", "pr-", "pr-128", "prod-fix"} {
+		if got := sidebarLabel(Item{WorkspaceName: name}); got != name {
+			t.Errorf("sidebarLabel(%q) = %q, want it left alone", name, got)
+		}
+	}
+}
+
+// TestTheBookmarkIsDroppedWhenItIsTheNameAgain, which on a real deck is most rows:
+// a workspace named after its branch put `andrew/refactor-parser` under
+// `refactor-parser`, line after line.
+func TestTheBookmarkIsDroppedWhenItIsTheNameAgain(t *testing.T) {
+	for _, tc := range []struct {
+		item Item
+		want string
+	}{
+		{Item{WorkspaceName: "docs-tidy", Bookmark: "andrew/docs-tidy"}, ""},
+		{Item{WorkspaceName: "docs-tidy", Bookmark: "docs-tidy"}, ""},
+		{Item{WorkspaceName: "pr-128-refactor", Bookmark: "andrew/refactor"}, ""},
+		{Item{WorkspaceName: "flaky-login-test", Bookmark: "andrew/login-retry"}, "andrew/login-retry"},
+		{Item{WorkspaceName: "default", ProjectName: "awp", Bookmark: "andrew/awp"}, ""},
+	} {
+		if got := sidebarBookmark(tc.item); got != tc.want {
+			t.Errorf("%s on %q: bookmark %q, want %q",
+				tc.item.WorkspaceName, tc.item.Bookmark, got, tc.want)
+		}
+	}
+}
+
+// TestARowsTwoLinesStartAtTheSameColumn. The indents were header 0, name 4, meta 2 —
+// three indents for two levels, so the meta line claimed a level of its own that
+// does not exist. An indent is read as structure.
+func TestARowsTwoLinesStartAtTheSameColumn(t *testing.T) {
+	m := stripDeck(nil)
+	row := m.sidebarRow(m.sidebarView(),
+		Item{WorkspaceName: "flaky-login-test", Status: "working", Bookmark: "andrew/login-retry"}, sidebarWidth)
+	if len(row) != 2 {
+		t.Fatalf("the row spent %d lines, want 2: %q", len(row), row)
+	}
+	name, meta := ansi.Strip(row[0]), ansi.Strip(row[1])
+	// Display columns, not byte offsets — the status dot is three bytes wide and one
+	// column, which is the whole reason the two lines look misaligned or not.
+	nameCol := lipgloss.Width(name[:strings.Index(name, "flaky-login-test")])
+	metaCol := lipgloss.Width(meta[:len(meta)-len(strings.TrimLeft(meta, " "))])
+	if nameCol != metaCol {
+		t.Errorf("the name starts at column %d and its meta line at %d:\n%q\n%q",
+			nameCol, metaCol, name, meta)
 	}
 }

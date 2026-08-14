@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/deckdata"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -19,6 +20,20 @@ import (
 // yellow dots is enough to know something is waiting and not enough to decide
 // whether to leave what you are in. Leaving to find out is the thing the row was
 // added to avoid, and it costs the pane a repaint of whatever program is in it.
+//
+// **Colour marks structure here, not content.** The section headers keep their hues
+// and so do the status dots: there are six headers on a screen and one dot per row,
+// and between them they are the skeleton that says where you are in the list.
+//
+// A row's *second* line is muted throughout — PR glyphs, PR number, bookmark, project
+// — where it used to carry the glyph cluster's own colours and a blue PR number. That
+// is the line there is one of per row, so a hue on it is a hue repeated down the whole
+// strip, and at 36 columns with two lines per row the repetition is what made the strip
+// noisy rather than the headers. Emphasis spent everywhere is emphasis nowhere.
+//
+// So the rule for this file is narrower than "use the palette" and narrower than "mute
+// it": chrome that appears a handful of times may carry a hue, and anything that
+// appears once per row may not.
 //
 // It reads and does nothing. There is no cursor in it, so no key moves one, so
 // the arrangement verbs behind ctrl+b still address two halves rather than three
@@ -317,6 +332,11 @@ func sidebarSectionLabel(s sidebarSection) string {
 // already wear, so the strip is read with the vocabulary the rest of the deck
 // taught. Pinned is Accent — the structural hue the deck gives project headers,
 // which is what a register is.
+//
+// The headers keep their hues, and so do the dots. They are the strip's skeleton:
+// six of them on a screen, one per band, marking where you are in the list — which is
+// the opposite of the per-row repetition that made the strip noisy. What came off is
+// the second line of every row. See sidebarMeta.
 func (m Model) sidebarSectionStyle(s sidebarSection) lipgloss.Style {
 	switch s {
 	case sectionPinned:
@@ -341,73 +361,176 @@ func (m Model) sidebarSectionStyle(s sidebarSection) lipgloss.Style {
 // unrelated facts to carry — which workspace, and where its PR stands. On one line
 // they compete: the number and the glyphs are fixed-width and go first, so the
 // name is what truncates, and a truncated name is the one field you cannot work
-// out from the others. Given a line of its own the name gets the whole strip, and
-// the PR line under it is free to be missing, which for a workspace with no PR it
-// is.
+// out from the others. Given a line of its own the name gets the whole strip.
 //
-// The workspace you are in wears a `┃` bar in Muted — the "pane the keyboard has
-// left" tier of the selection treatment. It marks where you are without claiming
-// to be the cursor, which is what the full-strength bar means and there is no
-// cursor in here to mean it.
+// Always two, even for a workspace with no PR and no bookmark, whose second line is
+// blank. That fixed cadence is what separates one row from the next, and it does the
+// job a blank row between rows was doing for a row's worth less: every odd line down
+// the strip is a name and every even one is its detail, so a meta line cannot be
+// read as belonging to the name below it. A variable-height row plus a separator
+// spent between two and three rows per workspace and still had to be scanned for
+// where one ended; this spends exactly two, and the blank second line of a bare row
+// is the separator, rather than being in addition to one.
+//
+// Nothing on a row is indented from its section header: the dot sits in the
+// header's own first column, so a name starts two columns in and the header's
+// letters and the strip's names read as one left edge rather than two. The strip
+// is 36 columns and there is only one level of structure in it — a section and its
+// rows — so an indent has nothing to say that the coloured bold header does not.
+//
+// This is what cost the `┃` bar that used to mark the workspace you are in: the bar
+// needs a column of its own ahead of the dot, and that column is the indent. The
+// marker is the name in Strong instead. #350 puts a cursor in here, and a cursor
+// does need the bar — the design system's selection treatment is `┃ ` plus Warning
+// — so that is when the two columns come back, for something that earns them.
 func (m Model) sidebarRow(v deckdata.View, it Item, width int) []string {
-	bar := "  "
-	if p := m.topRowSubject(); p != nil && p.project == it.ProjectName && p.workspace == it.WorkspaceName {
-		bar = m.styles.Muted.Render("┃") + " "
-	}
 	glyph := statusGlyph(it.Status, false, it.Unread)
-	// Every row is the same shape — bar, dot, name — whatever the row is about.
+	nameStyle := m.styles.Label
+	if p := m.topRowSubject(); p != nil && p.project == it.ProjectName && p.workspace == it.WorkspaceName {
+		nameStyle = m.styles.Strong
+	}
+	// Every row is the same shape — dot, space, name — whatever the row is about.
 	// Rows with a dot and rows without used to sit at different indents, so nothing
 	// lined up vertically and the drift cost columns on both kinds.
-	name := truncate(it.WorkspaceName, max(1, width-lipgloss.Width(bar)-lipgloss.Width(glyph)-1))
-	lines := []string{bar + glyph + " " + name}
-	if meta := m.sidebarMeta(v, it, max(1, width-len(sidebarIndent))); meta != "" {
-		lines = append(lines, sidebarIndent+meta)
+	name := truncate(sidebarLabel(it), max(1, width-lipgloss.Width(glyph)-1))
+	meta := m.sidebarMeta(v, it, max(1, width-len(sidebarIndent)))
+	return []string{glyph + " " + nameStyle.Render(name), sidebarIndent + meta}
+}
+
+// sidebarLabel is the name a row goes by.
+//
+// Two corrections to the raw workspace name, both of which the strip's own screen
+// forced:
+//
+// A workspace called `default` is the repo root's, and the name says nothing —
+// six projects each with one render as six rows called `default`. The project is
+// its identity, so that is what it is called. The row list reached the same
+// conclusion by a different route: collapsedProjects folds a lone `default` row
+// into its project header because "the project name stands in for the workspace
+// label".
+//
+// And a `pr-128-…` prefix goes, because the number is on the line below. The name
+// carried it, the meta line carried it, and the strip is 36 columns wide — it was
+// spending eight of them on a field it then repeated.
+func sidebarLabel(it Item) string {
+	name := strings.TrimSpace(it.WorkspaceName)
+	if name == "default" {
+		if p := strings.TrimSpace(it.ProjectName); p != "" {
+			return p
+		}
 	}
-	return lines
+	return strings.TrimPrefix(name, prWorkspacePrefix(name))
+}
+
+// prWorkspacePrefix is the `pr-<digits>-` head of a workspace name, or "" when the
+// name does not start with one. Matched rather than split on the first `-`, so a
+// workspace genuinely called `pr-review-notes` keeps its name.
+func prWorkspacePrefix(name string) string {
+	rest, ok := strings.CutPrefix(name, "pr-")
+	if !ok {
+		return ""
+	}
+	digits := 0
+	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || digits >= len(rest) || rest[digits] != '-' {
+		return ""
+	}
+	return name[:len("pr-")+digits+1]
 }
 
 // sidebarMeta is a row's second line: the PR glyph cluster, the PR number, and the
-// bookmark the workspace is on. "" when the row has none of the three, which is
-// the second line not being drawn at all.
+// bookmark the workspace is on. Never empty — see below.
 //
-// prGlyphCluster, not a spelling of its own — the deck's other three surfaces
-// render that cluster in that order, and the eye reads the positions, so a fourth
-// surface assembling its own would be showing the same glyphs and meaning
-// something else by them. Only the bookmark truncates: it is the field that varies
-// in length, and the glyphs and the number are the fixed part they were budgeted
-// against.
+// prGlyphCluster, not a spelling of its own — the deck's other three surfaces render
+// that cluster in that order, and the eye reads the positions, so a fourth surface
+// assembling its own would be showing the same glyphs and meaning something else by
+// them.
+//
+// **The line always says something.** A blank second line kept the two-line cadence
+// in the line count and lost it on screen: what the eye reads as a row is a block of
+// text, so a name with nothing under it reads as a one-line row and the rhythm the
+// cadence was for is gone.
+//
+// Where a row has no PR and no bookmark left to show, the line falls back to
+// sidebarOtherIdent — whichever of the project and the workspace name the line above
+// is not already using. A repo-root row goes by its project, so its second line is
+// the word `default`: the pair reads as which repo over which workspace in it. Every
+// other row goes by its workspace name, so its second line is the project — which is
+// the one fact the strip otherwise drops, and the reason two same-named workspaces in
+// different projects were indistinguishable here.
+//
+// The bookmark is dropped when its last segment is already the row's name — on a real
+// deck most rows, since a workspace named after its branch put
+// `andrew/refactor-parser` under `refactor-parser`, one string twice, line after line.
+// Only the bookmark truncates: it is the field that varies in length, and the glyphs
+// and the number are the fixed part it was budgeted against.
 func (m Model) sidebarMeta(v deckdata.View, it Item, width int) string {
 	segs := make([]string, 0, 3)
 	if cluster := m.prGlyphCluster(it); cluster != "" {
-		segs = append(segs, cluster)
+		// Stripped of its own colours and re-rendered muted. prGlyphCluster hands back
+		// a pre-coloured cluster because its other three call sites want the hues, and
+		// the shape of the cluster is the part worth sharing — which glyphs, in which
+		// order. The strip takes the shape and declines the palette.
+		segs = append(segs, m.styles.Muted.Render(ansi.Strip(cluster)))
 	}
-	number := ""
 	if pr, ok := v.ResolvePRStatus(it); ok {
-		number = "#" + strconv.Itoa(pr.Number)
-	}
-	if number != "" {
-		segs = append(segs, m.styles.Info.Render(number))
-	}
-	if len(segs) == 0 && strings.TrimSpace(it.Bookmark) == "" {
-		return ""
+		segs = append(segs, m.styles.Muted.Render("#"+strconv.Itoa(pr.Number)))
 	}
 	head := strings.Join(segs, " ")
-	if bookmark := strings.TrimSpace(it.Bookmark); bookmark != "" {
+
+	tail := sidebarBookmark(it)
+	if tail == "" && head == "" {
+		tail = sidebarOtherIdent(it)
+	}
+	if tail != "" {
 		room := width - lipgloss.Width(head)
 		if head != "" {
 			room--
-		}
-		if bookmark = truncate(bookmark, max(1, room)); head != "" {
 			head += " "
 		}
-		head += m.styles.Muted.Render(bookmark)
+		head += m.styles.Muted.Render(truncate(tail, max(1, room)))
 	}
 	return head
 }
 
-// sidebarIndent is what a row's second line is inset by: the columns the first
-// line spends on its selection bar, so the PR line reads as belonging to the name
-// above rather than as a row of its own.
+// sidebarOtherIdent is the half of a row's identity its name line is not spending:
+// the workspace name where the row goes by its project, and the project where it goes
+// by its workspace name. Between them a row is always identified, and neither line
+// ever repeats the other.
+// A row with no project falls back to its own name rather than to nothing: the line
+// has to say something, and repeating the name is the last resort that always exists.
+func sidebarOtherIdent(it Item) string {
+	project, name := strings.TrimSpace(it.ProjectName), strings.TrimSpace(it.WorkspaceName)
+	if project == "" || sidebarLabel(it) == project {
+		return name
+	}
+	return project
+}
+
+// sidebarBookmark is the bookmark worth printing under a row, and "" when it only
+// restates the name the row already wears — see sidebarMeta, which then falls back to
+// the row's other identifier rather than leave the line empty.
+func sidebarBookmark(it Item) string {
+	bookmark := strings.TrimSpace(it.Bookmark)
+	tail := bookmark
+	if i := strings.LastIndexByte(bookmark, '/'); i >= 0 {
+		tail = bookmark[i+1:]
+	}
+	if tail == sidebarLabel(it) {
+		return ""
+	}
+	return bookmark
+}
+
+// sidebarIndent is what a row's second line is inset by: exactly the columns the
+// first line spends before its name — the status dot and its space — so the two
+// lines start in the same column.
+//
+// The indents were once header 0, name 4, meta 2: three of them for two levels of
+// structure. The eye reads an indent as structure, so a meta line at neither its
+// name's column nor its header's was claiming a level that does not exist.
 const sidebarIndent = "  "
 
 // sidebarVerb is how the ctrl+b menus name the key.

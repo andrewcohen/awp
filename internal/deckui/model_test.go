@@ -1678,20 +1678,20 @@ func TestAssignHintsPriorityIsListOrder(t *testing.T) {
 	// Mirrors the deck screenshot: earlier rows win contested keys, and a
 	// letter claimed by an earlier row is unavailable to a later one.
 	got := assignHints([]string{
-		"fixes",                  // f
-		"assistant",              // a
-		"app-main",           // f taken, a taken → m (word-initial of "main")
-		"reusable-workflows", // f taken → r (word-initial of "reusable")
-		"gate",                    // g
-		"growth",                  // g taken, r taken → o
+		"fixes",              // f
+		"assistant",          // a
+		"app-main",           // a taken → m (word-initial of "main")
+		"reusable-workflows", // r
+		"gate",               // g
+		"growth",             // g taken, r taken → o
 	})
 	want := map[string]string{
-		"fixes":                  "f",
-		"assistant":              "a",
+		"fixes":              "f",
+		"assistant":          "a",
 		"app-main":           "m",
 		"reusable-workflows": "r",
-		"gate":                    "g",
-		"growth":                  "o",
+		"gate":               "g",
+		"growth":             "o",
 	}
 	for name, expected := range want {
 		if got[name] != expected {
