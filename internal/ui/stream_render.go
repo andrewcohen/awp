@@ -258,27 +258,28 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 	// Never banded: the divider is already a full-width rule, so a cursorline
 	// behind it would add nothing (see renderStreamRow).
 	badge := statusBadge(f.Status, current, false)
-	summary := fmt.Sprintf(" (%d hunk%s)", len(f.Hunks), plural(len(f.Hunks)))
+	summary := ""
 	if r.collapsed {
-		// A collapsed file still has to say what is inside it, or the divider
-		// becomes a wall you have to open to see past.
-		//
-		// "reviewed" is on it and "folded" is not. The mark is a claim about the file
-		// that outlives the view and has to be visible; being folded is a fact the
-		// reader is looking at — the body is not there — so saying it spends a word on
-		// what the divider already is. What matters is that a merely folded file does
-		// not wear the badge, which is the whole reason the two came apart.
-		summary = fmt.Sprintf(" %s%d hunk%s, %d line%s hidden",
-			reviewedBadge(m.isReviewed(pathOf(f))),
-			len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
+		// A collapsed file still has to say what is inside it, or the divider becomes
+		// a wall you have to open to see past. The counts cover the shape either way;
+		// what only a folded file owes is whether it has been reviewed and whether
+		// anything in it is under discussion. See reviewedChip for why "folded" is
+		// not on the list.
+		var chips []string
+		if m.isReviewed(pathOf(f)) {
+			chips = append(chips, reviewedChip)
+		}
 		// The conversations go with the lines they are about, so the divider owes
 		// them the same accounting: a folded file holding a question nobody has
 		// answered must not look like a folded file holding nothing.
 		if n := r.hiddenComments; n > 0 {
-			summary += fmt.Sprintf(", %d comment%s", n, plural(n))
+			chips = append(chips, fmt.Sprintf("%d comment%s", n, plural(n)))
+		}
+		if len(chips) > 0 {
+			summary = " " + strings.Join(chips, " · ") + " ·"
 		}
 	}
-	meta := styleMuted.Render(summary)
+	meta := styleMuted.Render(summary) + changeCounts(f)
 	reserved := lipgloss.Width(lead) + lipgloss.Width(badge) + 1 + lipgloss.Width(meta)
 	label := renderPathWith(diff.DisplayPath(f), max(10, width-reserved), ruleStyle, baseStyle, styleMuted)
 
@@ -630,27 +631,49 @@ func (m Model) renderStreamPanel(width, height int) string {
 	return panelBox(rows, width, height, border)
 }
 
-// countChangedLines is how many added or removed lines a file's diff holds, for
-// the collapsed divider's summary.
-// reviewedBadge is the divider's mark for a reviewed file, and nothing at all for
-// one that is merely folded.
-func reviewedBadge(reviewed bool) string {
-	if reviewed {
-		return "✓ reviewed · "
-	}
-	return ""
-}
+// reviewedChip is the collapsed divider's mark for a reviewed file.
+//
+// A folded file gets nothing. The mark is a claim about the file that outlives the
+// view and has to be visible; being folded is a fact the reader is looking at — the
+// body is not there — so saying it spends a word on what the divider already is.
+// What matters is that a merely folded file does not wear it, which is the whole
+// reason the two came apart.
+const reviewedChip = "✓ reviewed"
 
-func countChangedLines(f diff.FileDiff) int {
-	n := 0
+// changedLines is how many lines a file's diff touches, in each direction.
+//
+// The two are never added together. A single total was what the collapsed divider
+// used to print, and it is the thing #337 replaced — see changeCounts.
+func changedLines(f diff.FileDiff) (added, removed int) {
 	for _, h := range f.Hunks {
 		for _, l := range h.Lines {
-			if l.Type == '+' || l.Type == '-' {
-				n++
+			switch l.Type {
+			case '+':
+				added++
+			case '-':
+				removed++
 			}
 		}
 	}
-	return n
+	return added, removed
+}
+
+// changeCounts is the file's shape, for its divider: +12 -3, in the hues a `+`
+// line and a `-` line wear in the body.
+//
+// This replaced a hunk count, which measures how many places a file was edited
+// rather than how much of it moved — so a one-line rename and a rewrite both read
+// as "(1 hunk)" — and, folded, a single "N lines hidden" that added the two
+// directions together, where a file that gained 40 lines and one that swapped 20
+// for 20 are not the same news. It matters most folded, which since #336 is how a
+// diff in a split opens: the divider is then the only thing about the file that is
+// on screen.
+//
+// Both counts are shown even at zero, so the columns line up down the stream and a
+// pure deletion is a shape rather than a shorter string.
+func changeCounts(f diff.FileDiff) string {
+	added, removed := changedLines(f)
+	return styleAdded.Render(fmt.Sprintf(" +%d", added)) + styleDeleted.Render(fmt.Sprintf(" -%d", removed))
 }
 
 // panelBox draws a rounded border around already-sized rows, without handing the

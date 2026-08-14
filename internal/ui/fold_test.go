@@ -75,8 +75,9 @@ func TestAFoldedFileDoesNotClaimToBeReviewed(t *testing.T) {
 	m = pressEnter(t, m)
 	row := m.stream.rows[m.cursorRow]
 	header := ansi.Strip(m.renderStreamFileHeader(row, 100))
-	// It still says what is inside it, so the divider is not a wall.
-	if !strings.Contains(header, "hidden") {
+	// It still says what is inside it, so the divider is not a wall — since #337
+	// that is the +/- counts rather than the word "hidden".
+	if !strings.Contains(header, "+") || !strings.Contains(header, "-") {
 		t.Errorf("a folded file's divider does not say what it is hiding: %q", header)
 	}
 	if strings.Contains(header, "reviewed") {

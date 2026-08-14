@@ -389,7 +389,9 @@ func TestCollapsedDividerSummarisesWhatIsHidden(t *testing.T) {
 	}
 	m = press(m, "r")
 	row := stripANSI(m.renderStreamRowAt(m.stream.fileStart[0], 90))
-	for _, want := range []string{"reviewed", "1 hunk", "2 line"} {
+	// The counts, not a hunk count: one line came and one went, and #337 is that
+	// those are two facts rather than "2 lines hidden".
+	for _, want := range []string{"reviewed", "+1", "-1"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("collapsed divider missing %q: %q", want, row)
 		}

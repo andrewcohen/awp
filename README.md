@@ -491,11 +491,21 @@ widened it.
 well. **Folding hides the file's comments along with its lines** — a comment about
 a line, or about the file as a whole, is inside the file, and a file you have put
 away that still spends a dozen rows on its conversations has not been put away.
-The divider says what it is holding: `3 hunks, 41 lines hidden, 2 comments`.
+The divider says what it is holding: `✓ reviewed · 2 comments · +34 -7`.
 
 The count is **conversations, not messages**, so a mirrored GitHub thread of six
 comments is one. "6 comments" about two exchanges misleads about how much is left
 to read.
+
+**`+N -M` is on every divider, open or folded**, in the green and red those lines
+wear in the body. It replaced a hunk count and, folded, a single "41 lines hidden".
+A hunk count measures how many *places* a file was edited rather than how much of
+it moved, so a one-line rename and a rewrite both read as `1 hunk`; and one total
+adds the two directions together, where a file that gained 40 lines and one that
+swapped 20 for 20 are not the same news. Both numbers show even at zero, so the
+columns line up down the stream and a pure deletion is a shape rather than a
+shorter string. It matters most folded — which is how a diff opened as a split half
+starts — since the divider is then the only thing about the file on screen.
 
 **The comment index keeps listing them.** Hiding is what the stream does with a
 file, not a claim about the remark — and the index is how you find a conversation,
