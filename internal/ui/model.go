@@ -955,11 +955,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// gesture used most while working through a change.
 		return m.toggleReviewed()
 	case "-":
-		// Only when a host installed more than one range to offer; otherwise the key
-		// does nothing rather than opening a menu with one answer in it.
+		// A menu only when a host installed more than one range to offer. Otherwise
+		// the key says why there is nothing to pick — see scopeUnavailable. It used to
+		// return in silence, and a key that does nothing and says nothing is a
+		// question the reader has to take to someone else (#155).
 		if len(m.scopes) > 1 {
 			m.scopePick = true
+			return m, nil
 		}
+		m.status = scopeUnavailable(m.scopes)
 		return m, nil
 	case "ctrl+r":
 		m.refreshing = true
@@ -1052,6 +1056,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			m.focus = FocusHunks
 		case "e":
+			if m.OpenFile == nil {
+				m.status = noEditorInstalled
+				return m, nil
+			}
 			return m, m.openCurrentFile()
 		}
 	}
@@ -1171,6 +1179,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "A":
 			return m.approveAtCursor()
 		case "e":
+			if m.OpenFile == nil {
+				m.status = noEditorInstalled
+				return m, nil
+			}
 			return m, m.openAtCursor()
 		}
 	}
@@ -1524,6 +1536,14 @@ func (m Model) currentFile() (diff.FileDiff, bool) {
 func (m Model) pageStep() int {
 	return max(1, m.bodyHeight/2)
 }
+
+// noEditorInstalled is what `e` says when its host wired no editor.
+//
+// The same reason `-` says why it has no menu (#155): a key that does nothing and
+// says nothing sends the reader looking for the fault somewhere else. Both call
+// sites use the one string, since which pane the cursor was in does not change the
+// answer.
+const noEditorInstalled = "$EDITOR: this view was opened without a way to open files"
 
 func (m Model) openCurrentFile() tea.Cmd {
 	// Through currentFile rather than indexing m.filtered directly, so the bounds are

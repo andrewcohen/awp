@@ -118,3 +118,23 @@ func (m Model) switchScope(i int) (tea.Model, tea.Cmd) {
 	m.statusErr = false
 	return m, tea.Batch(loadDiffCmd(m.LoadDiff, m.contextLines), resolveBaseCmd(m.ResolveBase))
 }
+
+// scopeUnavailable says why `-` has no menu to open.
+//
+// Two situations, and the wording keeps them apart because they are answered
+// differently. No scopes at all is `awp diff -r <revset>`: you named the range on
+// the command line, so there is nothing for the view to offer and the way to read
+// another one is to say so. Exactly one is a host that installed a single range —
+// a menu with one answer in it is not a menu, and naming the range you are already
+// on is the useful half of what the menu would have said.
+//
+// A status line rather than silence, per AGENTS.md: a message names what was
+// attempted and what the reader can do about it. This key gave neither, which is
+// how a diagnosis that should have been a glance at the footer became a
+// conversation.
+func scopeUnavailable(scopes []ScopeOption) string {
+	if len(scopes) == 0 {
+		return "scope: this view was opened on one range (-r), so there is nothing to switch between"
+	}
+	return "scope: " + scopes[0].Label + " is the only range this view was given"
+}

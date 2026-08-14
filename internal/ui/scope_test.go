@@ -170,3 +170,69 @@ func TestStandaloneHeaderFallsBackToTheScopeLabel(t *testing.T) {
 		t.Fatalf("expected the generic wording gone once resolved:\n%s", header)
 	}
 }
+
+// A key that does nothing has to say why (#155).
+
+// TestTheScopeKeySaysWhenTheViewWasOpenedOnOneRange. `awp diff -r <revset>`
+// installs no scopes at all, deliberately — you named the range. `-` used to
+// return in silence there, which is how a diagnosis became a conversation instead
+// of a glance at the footer.
+func TestTheScopeKeySaysWhenTheViewWasOpenedOnOneRange(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	if len(m.scopes) != 0 {
+		t.Fatalf("fixture is wrong: expected no scopes, got %d", len(m.scopes))
+	}
+	m = press(m, "-")
+	if m.scopePick {
+		t.Fatal("- opened a menu with nothing in it")
+	}
+	if m.status == "" {
+		t.Fatal("- did nothing and said nothing")
+	}
+	if !strings.Contains(m.status, "-r") {
+		t.Errorf("status %q does not say why there is nothing to pick", m.status)
+	}
+}
+
+// TestTheScopeKeyNamesTheOnlyRangeWhenThereIsOne. A menu with one answer is not a
+// menu, and the useful half of what it would have said is the range you are on —
+// so the two situations get different wording rather than one that implies a menu
+// exists.
+func TestTheScopeKeyNamesTheOnlyRangeWhenThereIsOne(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m.scopes = []ScopeOption{{Key: "w", Label: "working copy"}}
+	m = press(m, "-")
+	if m.scopePick {
+		t.Fatal("- opened a menu with one answer in it")
+	}
+	if !strings.Contains(m.status, "working copy") {
+		t.Errorf("status %q does not name the range this view is on", m.status)
+	}
+}
+
+// TestTwoScopesStillOpenTheMenu, which is the case the silence was protecting.
+func TestTwoScopesStillOpenTheMenu(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m.WithScopes([]ScopeOption{
+		{Key: "w", Label: "working copy"},
+		{Key: "t", Label: "vs trunk"},
+	})
+	m = press(m, "-")
+	if !m.scopePick {
+		t.Fatalf("- did not open the menu (status %q)", m.status)
+	}
+}
+
+// TestTheEditorKeySaysWhenNothingCanOpenAFile. Same shape as `-`: a host that
+// wired no opener left `e` doing nothing in silence.
+func TestTheEditorKeySaysWhenNothingCanOpenAFile(t *testing.T) {
+	m := streamModel(t, twoFiles()...)
+	m.OpenFile = nil
+	m = press(m, "e")
+	if m.status == "" {
+		t.Fatal("e did nothing and said nothing")
+	}
+	if !strings.Contains(m.status, "EDITOR") {
+		t.Errorf("status %q does not say what is missing", m.status)
+	}
+}
