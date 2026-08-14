@@ -1061,32 +1061,92 @@ from — a scope that filters idle rows out cannot fill a section of them.
 unread. The dot is an attention signal and goes quiet once you have looked, but an
 agent that stopped to ask you something is still stopped, and filing it under `idle`
 because you have already seen the question once is the strip forgetting what it is
-for. The workspace you are currently in is marked with a muted `┃` — the tier the
-design system gives a pane the keyboard has left, since it says where you are
-without claiming to be a cursor.
+for. The workspace you are currently in wears its **name in bright white**.
 
-**A row is two lines.**
+**A row is two lines, both starting in the same column, and nothing is indented from
+its header.** The status dot sits in the header's own first column, so the headers'
+letters and the rows' names read as one left edge instead of two:
 
 ```
-● sidebar-redesign
-  ◐ #412 andrew/sidebar-redesign
+pinned
+  awp
+  default
+
+idle
+  refactor-parser
+  ↻ 💬 #128
+  flaky-login-test
+  ⚠ #131 andrew/login-retry
+  bump-deps
+  beta
 ```
 
-The name on the first, the PR glyph cluster / number / bookmark on the second, and
-the second line is simply absent for a workspace with neither. On one line they
-compete: the glyphs and the number are fixed-width and go first, so the name is what
-truncates — and the name is the one field you cannot work out from the others. Given
-a line of its own it gets the whole strip. The project is on neither line: the
-sections cut across projects, so a project sub-row inside a band would be a second
-level of grouping under the one that matters. The cost is that two workspaces of the
-same name in different projects read alike here; the row list is where you tell them
-apart.
+There is one level of structure on a 36-column strip — a section and its rows — so an
+indent has nothing to say that the coloured bold header does not. That is what cost the
+muted `┃` the current workspace used to wear: the bar needs a column ahead of the dot,
+and that column *is* the indent. `#350` will put a real cursor in here, and a cursor
+does earn the bar back — the design system's selection treatment is `┃ ` plus `Warning`
+— which is a different claim from "you are here".
 
-A blank row separates the sections, and none sits above the first. It costs a
-workspace the strip could have listed, which is why it was tried without — but the
-coloured bold header reads as a header on its own and not as a *separator*, and the
-sections are what makes the strip scannable rather than a list. Against a wall of
-rows the eye could not find the section it wanted, so the row is spent deliberately.
+**Colour marks structure here, not content.** The section headers carry their hues and
+so do the status dots — six headers on a screen and one dot per row, which between them
+are the skeleton that says where you are in the list. But a row's **second line is
+muted throughout**: PR glyphs, PR number, bookmark, project. It used to carry the glyph
+cluster's own colours and a blue PR number, and that is the line there is one of per
+row, so a hue on it is a hue repeated down the whole strip. At 36 columns with two lines
+per row, that repetition — not the headers — is what made the strip noisy; emphasis
+spent everywhere is emphasis nowhere. The rule is frequency: chrome appearing a handful
+of times may carry a hue, anything appearing once per row may not.
+
+The name on the first line, the PR glyph cluster / number / bookmark on the second,
+and the second line is simply absent for a workspace with none of the three. On one
+line they compete: the glyphs and the number are fixed-width and go first, so the
+name is what truncates — and the name is the one field you cannot work out from the
+others. Given a line of its own it gets the whole strip.
+
+**Always two lines, so the cadence is the separator.** Every odd line down the strip
+is a name and every even one is its detail, so a meta line cannot be read as belonging
+to the name beneath it. The version before this had variable-height rows with a blank
+row between them — two to three lines per workspace, and it still had to be scanned for
+where one row ended. This spends exactly two.
+
+**And the second line always says something.** A blank one keeps the cadence in the
+line count and loses it on screen: what the eye reads as a row is a block of text, so a
+name with nothing under it reads as a one-line row. With no PR and no bookmark left to
+show, the line carries the half of the row's identity the name line is not using — the
+workspace name where the row goes by its project (so a repo-root row reads `awp` over
+`default`: which repo, then which workspace in it), and the project where the row goes
+by its own name (`bump-deps` over `beta`). Between the two lines a row is always
+identified, and neither ever repeats the other.
+
+There is no cheaper separator than a whole line, in case it comes up: half a row is
+not addressable, since a cell is the smallest unit there is vertically. The one trick
+that would have cost no row at all — an underline on the row's last line, drawn at the
+bottom edge of the cell — does not survive coloured content. Every inner lipgloss
+style ends in a full SGR reset, which cancels the underline mid-line, so the rule
+breaks at each coloured segment; via lipgloss's `UnderlineSpaces` it is worse, as that
+rewrites the line cell by cell and underlines the escape sequences as literal text. A
+border or a `▁` glyph row is back to costing a row.
+
+**A row spends its width only on what the rest of the row does not already say.**
+Three rules, each of which the strip's own first screen forced:
+
+- A workspace called `default` is the repo root's, and the name says nothing — six
+  projects each with one rendered as six rows called `default`. It goes by its
+  **project** instead. The row list reaches the same conclusion by another route:
+  a lone `default` row collapses into its project header because the project name
+  stands in for the label.
+- A `pr-128-…` prefix is **dropped from the name**, because the number is on the line
+  below it. The name carried it and the meta line repeated it, on a strip 36 columns
+  wide.
+- The **bookmark is dropped when its last segment is the name again**, which on a real
+  deck is most rows: a workspace named after its branch put `andrew/refactor-parser`
+  under `refactor-parser`, line after line.
+
+The project never labels a row — the sections cut across projects, so a project chip or
+sub-row would be a second level of grouping under the one that matters. It survives only
+as the second line's last-resort content, which is a row saying "and this one is in
+beta" rather than the project labelling the row.
 
 **Whether it is up is remembered**, in `~/.awp/deck-prefs.json` beside `P`'s
 scope and the split's divider — one flag for the whole deck rather than one per
