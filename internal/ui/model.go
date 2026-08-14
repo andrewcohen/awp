@@ -793,6 +793,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyThreadReplyDone(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+	case tea.MouseWheelMsg:
+		// Standalone, where this model's own header sits above the body. The header's
+		// height is measured rather than taken off chromeHeight: chromeHeight is the
+		// header *and* the footer, and splitting it by hand is the kind of number that
+		// silently drifts a row when a segment is added.
+		up := msg.Button == tea.MouseWheelUp
+		if !up && msg.Button != tea.MouseWheelDown {
+			// A horizontal wheel. `h`/`l` pan the diff; nothing here reads a wheel as
+			// panning, so there is nothing to do with one.
+			return m, nil
+		}
+		next, _ := m.WheelAt(msg.X, msg.Y-lipgloss.Height(m.renderHeader()), up)
+		return next, nil
 	}
 	// Non-key messages the compose box needs — the cursor blink, chiefly. Without
 	// this the box renders a static cursor, since nothing else routes them. The
@@ -1570,6 +1583,11 @@ func (m Model) resolveFilePath(f diff.FileDiff) string {
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// The wheel is the only mouse gesture this view has, and CellMotion is the
+	// coarsest mode that carries one. It costs the terminal's own drag-to-select for
+	// as long as the view is up, which is the same trade the deck makes for a pane
+	// and for a split's divider — and the deck is where this view is usually read.
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 

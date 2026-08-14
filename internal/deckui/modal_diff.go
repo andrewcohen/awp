@@ -192,6 +192,13 @@ type diffModal struct {
 	// another scope without going back through the cursor.
 	item  Item
 	scope DiffScope
+	// lastBox is the box this was last rendered into, kept for the wheel.
+	//
+	// Read rather than m.boxOf(dm), which cannot answer for a split's half: the
+	// split sets m.active to the half it is delivering to (see deliver), and boxOf
+	// reads that slot to mean "has the whole child box". The pane does the same
+	// thing for the same reason — see panePopover.lastBox.
+	lastBox box
 	// Styles are cached here rather than built per frame — view and
 	// footerHelp are render paths.
 	muted  lipgloss.Style
@@ -312,6 +319,10 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	if Trace != nil {
 		defer traceSince(time.Now(), "diff.update %T", msg)
 	}
+	if wheel, ok := msg.(tea.MouseWheelMsg); ok {
+		dm.wheel(wheel)
+		return nil
+	}
 	// While the viewer's filter has focus, or its `?` overlay is up, every key
 	// belongs to it — including the ones that would otherwise close the modal.
 	// Grabbing esc/q with the help open would close the diff instead of the help,
@@ -331,6 +342,36 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		}
 	}
 	return dm.forward(msg)
+}
+
+// wheel hands one notch to the viewer, in the viewer's own coordinates.
+//
+// The translation is the panel's, not the pane's: the deck renders the viewer's
+// Body inside deckStyles.Panel at the box's origin, so the body starts panelPad in
+// from it. Derived from the layout constants rather than written as numbers, for
+// the reason diffModalChrome is — a wrong offset here does not fail, it scrolls the
+// pane next door.
+//
+// Not forwarded as a message. The viewer is embedded, so a tea.MouseWheelMsg
+// reaching its Update would carry the deck's coordinates, and its Update reads
+// those as its own; WheelAt is the seam that takes translated ones.
+func (dm *diffModal) wheel(msg tea.MouseWheelMsg) {
+	up := msg.Button == tea.MouseWheelUp
+	if !up && msg.Button != tea.MouseWheelDown {
+		// A horizontal wheel, which nothing in the viewer reads.
+		return
+	}
+	b := dm.lastBox
+	w, h := b.w-panelCols, b.h-panelRows-footerRows
+	if w < 1 || h < 1 {
+		return
+	}
+	x, y := msg.X-b.x-panelPadX, msg.Y-b.y-panelPadY
+	if x < 0 || y < 0 || x >= w || y >= h {
+		return
+	}
+	inner, _ := dm.inner.WheelAt(x, y, up)
+	dm.inner = inner
 }
 
 // forward hands a message to the wrapped viewer and keeps the updated model.
@@ -356,6 +397,7 @@ func (dm *diffModal) view(m *Model, b box) (string, string) {
 	// cursor is placed from the box, so it landed one column left of the text being
 	// typed — #339, which cost two wrong diagnoses before a traced frame showed the
 	// frame's own row starting one column in.
+	dm.lastBox = b
 	innerWidth := b.w - panelCols
 	if innerWidth < 1 {
 		return "", ""
