@@ -2942,15 +2942,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			// No m.status: the menu is on the top row, so putting it in the status
-			// bar too would say it twice, and a bar this long is a bar that wraps.
+			// No m.status: armedMenu renders the verbs as a popover, so putting them
+			// in the status bar too would say it twice.
 			m.active = &splitChordModal{item: item}
 			return m, nil
 		case key.Matches(msg, km.PRMenu):
 			if _, ok := m.selected(); !ok {
 				return m, nil
 			}
-			// The menu is on the top row — see prMenuHint.
+			// The verbs render as a popover — see prMenu.
 			m.active = prMenuModal{}
 			return m, nil
 		case key.Matches(msg, km.PinChord):
