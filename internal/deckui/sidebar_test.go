@@ -246,11 +246,11 @@ func TestTheFrameIsStillTheTerminalsWithTheSidebarUp(t *testing.T) {
 // and a menu that does not list it is a key nobody finds.
 func TestBothMenusOfferTheSidebar(t *testing.T) {
 	m, _ := sidebarPane(t)
-	if hint := panePrefixHint(&m); !strings.Contains(hint, sidebarKey) {
-		t.Errorf("a pane's menu does not offer the strip: %q", hint)
+	if mn := panePrefixMenu(&m); !menuBinds(mn, sidebarKey) {
+		t.Errorf("a pane's menu does not offer the strip: %+v", mn.verbs)
 	}
-	if hint := splitPrefixHint(&m); !strings.Contains(hint, sidebarKey) {
-		t.Errorf("a split's menu does not offer the strip: %q", hint)
+	if mn := splitPrefixMenu(&m); !menuBinds(mn, sidebarKey) {
+		t.Errorf("a split's menu does not offer the strip: %+v", mn.verbs)
 	}
 }
 

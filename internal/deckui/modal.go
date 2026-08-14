@@ -194,16 +194,16 @@ type modal interface {
 // pointing at. The `|` split chord and the `p` PR menu.
 //
 // It exists so the deck can tell those apart from the modals it swaps the body
-// for. What is on screen is still the row list, so the deck's top row still
-// belongs there — and the menu goes on that row, which is where every other menu
-// in the deck goes (an armed ctrl+b in a pane or a split). A chord that instead
-// printed its menu in the status bar was two inconsistencies at once: the menu in
-// a different place depending on which one you armed, and — because the top row
-// was dropped for the duration — the whole frame moving up a line as you armed it.
+// for. What is on screen is still the row list, so nothing about the frame changes
+// as one is armed — the menu floats over it, which is where every other menu in the
+// deck goes (an armed ctrl+b in a pane or a split). A chord that instead printed its
+// menu in the status bar was two inconsistencies at once: the menu in a different
+// place depending on which one you armed, and — because the top row was dropped for
+// the duration — the whole frame moving up a line as you armed it.
 type chordModal interface {
 	modal
-	// chordMenu is the menu as the top row shows it: the keys and what they do.
-	chordMenu() string
+	// chordMenu is the menu this chord is waiting on: the keys and what they do.
+	chordMenu() deckMenu
 }
 
 // bodyModal renders full-width in place of the row list (pickers, menus).

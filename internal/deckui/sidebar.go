@@ -293,10 +293,13 @@ func (m Model) sidebarRow(it Item, label string, width int) string {
 // rather than starting in the bar's channel.
 const sidebarIndent = "  "
 
-// sidebarHint is how the ctrl+b menus name the key.
-func sidebarHint(on bool) string {
+// sidebarVerb is how the ctrl+b menus name the key.
+//
+// The description says which way the toggle goes, because with the strip already up
+// "show or hide" leaves you to work out which one pressing it does.
+func sidebarVerb(on bool) [2]string {
 	if on {
-		return "S hide sidebar"
+		return [2]string{sidebarKey, "hide the attention sidebar"}
 	}
-	return "S sidebar"
+	return [2]string{sidebarKey, "show the attention sidebar"}
 }

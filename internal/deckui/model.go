@@ -4104,14 +4104,28 @@ func (m Model) View() tea.View {
 	return v
 }
 
+// render is the frame, with an armed menu floated over it.
+//
+// The menu is composited here rather than inside view because view has a branch per
+// kind of screen — a pane, a split, a picker, the row list — and the menu goes over
+// all of them identically. One seam at the end is also what makes it a menu *over*
+// the frame rather than a thing each screen has to leave room for; see menu.go.
 func (m Model) render() string {
 	if Trace != nil {
 		start := time.Now()
-		out := m.view()
+		out := m.withMenu(m.view())
 		traceFrame(start, len(out))
 		return out
 	}
-	return m.view()
+	return m.withMenu(m.view())
+}
+
+func (m Model) withMenu(frame string) string {
+	mn, armed := m.armedMenu()
+	if !armed {
+		return frame
+	}
+	return overlayMenu(frame, mn.render(m.width))
 }
 
 func (m Model) view() string {

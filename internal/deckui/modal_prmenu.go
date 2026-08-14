@@ -9,18 +9,24 @@ import (
 
 // prMenuModal is the PR action chord (the `p` key): a keys-only menu
 // (o/d/r/m/s). It renders no overlay of its own — the row list stays visible
-// beneath — so it is a bodyModal whose view is the row list, and a chordModal
-// whose menu goes on the deck's top row, where every other menu goes. It holds no
-// state; each action re-reads the selected row.
+// beneath — so it is a bodyModal whose view is the row list, and a chordModal whose
+// menu floats over it, where every other menu in the deck goes. It holds no state;
+// each action re-reads the selected row.
 type prMenuModal struct{}
 
-// prMenuHint is the menu as the top row shows it.
-func prMenuHint() string {
-	return "pr: o open in browser · d description · D description in a window · " +
-		"r repair · s set PR # · esc cancel"
+// prMenu is the PR verbs for this row.
+func prMenu() deckMenu {
+	return menu("pr — this row",
+		[2]string{"o", "open the PR in a browser"},
+		[2]string{"d", "read the description here"},
+		[2]string{"D", "read the description in a window"},
+		[2]string{"r", "repair the PR"},
+		[2]string{"s", "set the PR number"},
+		menuCancelVerb,
+	)
 }
 
-func (prMenuModal) chordMenu() string { return prMenuHint() }
+func (prMenuModal) chordMenu() deckMenu { return prMenu() }
 
 // prDescWindow is the tmux window `p D` opens the description into. Named for
 // what is in it: the session already has `agent`, `editor`, `review` and `vcs`,

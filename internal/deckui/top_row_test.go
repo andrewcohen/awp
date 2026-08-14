@@ -178,18 +178,18 @@ func TestTheBarNamesTheHalfTheKeysAreIn(t *testing.T) {
 	}
 }
 
-// TestAnArmedPrefixTakesTheWholeBar. The verb menu was painted over the split's
-// bottom border in the first cut, for want of a row anything owned; this row is
-// that row, so nothing is drawn over a border.
-func TestAnArmedPrefixTakesTheWholeBar(t *testing.T) {
+// TestAnArmedPrefixLeavesTheTopRowAlone, which is the half of #344 this row cares
+// about. The menu took the whole row before that, so the attention badge and the
+// name of what you were looking at went away for as long as you were reading the
+// verbs — and the badge is the reason the row exists. The menu floats now, so the
+// row says the same thing armed or not.
+func TestAnArmedPrefixLeavesTheTopRowAlone(t *testing.T) {
 	m, s := openedSplit(t, "v")
+	m.itemsAll = waitingRows()
+	quiet := barText(&m, 200)
 	s.prefixArmed = true
-	bar := barText(&m, 200)
-	if !strings.Contains(bar, "zoom") {
-		t.Errorf("an armed prefix does not show its verbs: %q", bar)
-	}
-	if strings.Contains(bar, "\n") {
-		t.Errorf("the armed prefix wrapped off its row: %q", bar)
+	if armed := barText(&m, 200); armed != quiet {
+		t.Errorf("arming the prefix changed the row:\n quiet: %q\n armed: %q", quiet, armed)
 	}
 }
 
