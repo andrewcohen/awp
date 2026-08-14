@@ -93,20 +93,38 @@ func TestTheMenuIsNotWiderThanItNeeds(t *testing.T) {
 	}
 }
 
-// TestEveryMenuNamesWhatItActsOn. Four menus reach the same box, and two of them are
-// armed by the same key — so the title is the only thing that says whether the verbs
-// are about this pane, this split, this workspace or this row.
-func TestEveryMenuNamesWhatItActsOn(t *testing.T) {
+// TestEveryMenuIsVerbsAndNothingElse. No heading on any of them: a bordered box of
+// key-and-verb rows that appeared when you pressed a key does not need to be told it
+// is a menu, and the rows a heading costs are rows the box is taller for nothing.
+//
+// What every one does owe is `esc`, since it is the only verb that belongs to the
+// menu rather than to what is on screen.
+func TestEveryMenuIsVerbsAndNothingElse(t *testing.T) {
 	m := splitDeck(t)
-	for _, mn := range []deckMenu{panePrefixMenu(&m), splitPrefixMenu(&m), splitChordMenu(), prMenu()} {
-		if mn.title == "" {
-			t.Errorf("a menu has no title: %+v", mn.verbs)
-		}
+	for i, mn := range []deckMenu{panePrefixMenu(&m), splitPrefixMenu(&m), splitChordMenu(), prMenu()} {
 		if len(mn.verbs) == 0 {
-			t.Errorf("menu %q has no verbs", mn.title)
+			t.Errorf("menu %d has no verbs", i)
+			continue
 		}
 		if !menuBinds(mn, "esc") {
-			t.Errorf("menu %q does not offer esc", mn.title)
+			t.Errorf("menu %d does not offer esc: %+v", i, mn.verbs)
+		}
+		// Every row of the rendered box is one of the verbs, or the box's own chrome.
+		for _, row := range strings.Split(ansi.Strip(mn.render(m.width)), "\n") {
+			row = strings.TrimSpace(strings.Trim(row, "╭╮╰╯│─"))
+			if row == "" {
+				continue
+			}
+			found := false
+			for _, v := range mn.verbs {
+				if strings.Contains(row, v[1]) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("menu %d has a row that is not one of its verbs: %q", i, row)
+			}
 		}
 	}
 }
@@ -115,7 +133,7 @@ func TestEveryMenuNamesWhatItActsOn(t *testing.T) {
 // out by condition rather than building the slice twice — and a blank key would
 // otherwise render as a description with nothing to press.
 func TestAMenuDropsAVerbWithNoKey(t *testing.T) {
-	mn := menu("t", [2]string{"a", "keep"}, [2]string{"", "drop"})
+	mn := menu([2]string{"a", "keep"}, [2]string{"", "drop"})
 	if len(mn.verbs) != 1 || mn.verbs[0][1] != "keep" {
 		t.Errorf("menu kept a keyless verb: %+v", mn.verbs)
 	}

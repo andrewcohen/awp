@@ -19,27 +19,32 @@ import (
 // The top row goes back to saying what it says the rest of the time — the attention
 // badge and what is on screen — so nothing about it moves as a menu opens.
 
-// deckMenu is a menu as data: a title, and the verbs under it.
+// deckMenu is a menu as data: the verbs, and nothing else.
 //
 // Data rather than an assembled string, because the layout is no longer one line and
 // the thing that knows how to set a key beside its description is charm.KeyHelpView
 // — the same renderer behind the `?` overlay and the diff viewer's. A menu that
 // formatted itself would be a third opinion about how a keymap looks.
+//
+// No title. Each one carried its subject for a while ("this pane", "this split") and
+// before that the key that opened it, which told you the one thing you already knew.
+// A bordered box of key-and-verb rows that appeared when you pressed a key is
+// self-evidently a menu of what that key can do, and every row of a heading is a row
+// the box is taller than the thing it is worth.
 type deckMenu struct {
-	title string
 	verbs [][2]string
 }
 
 // menu builds one, dropping verbs whose key is empty so a caller can leave a row out
 // by condition rather than by building the slice twice.
-func menu(title string, verbs ...[2]string) deckMenu {
+func menu(verbs ...[2]string) deckMenu {
 	out := make([][2]string, 0, len(verbs))
 	for _, v := range verbs {
 		if v[0] != "" {
 			out = append(out, v)
 		}
 	}
-	return deckMenu{title: title, verbs: out}
+	return deckMenu{verbs: out}
 }
 
 // menuCancelVerb closes every menu's list.
@@ -55,7 +60,7 @@ var menuCancelVerb = [2]string{"esc", "cancel"}
 // float over a canvas rather than competing with the frame for its height, and
 // content flush against a border reads as a mistake.
 func (mn deckMenu) render(width int) string {
-	body := charm.KeyHelpView([]charm.KeyGroup{{Title: mn.title, Keys: mn.verbs}})
+	body := charm.KeyHelpView([]charm.KeyGroup{{Keys: mn.verbs}})
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colAccent)).

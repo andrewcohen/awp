@@ -18,6 +18,11 @@ import (
 // KeyGroup is a labeled set of (key, description) rows. Declaring bindings as
 // data rather than as strings assembled at render time is what lets one slice be
 // the single source of truth for a surface's keymap and its help.
+//
+// Title may be empty, which renders the bindings alone and unindented. A `?`
+// overlay stacks several groups and needs each one labeled; the deck's action
+// menus are one group on a screen of their own, where a heading would only name
+// what the box already is.
 type KeyGroup struct {
 	Title string
 	Keys  [][2]string
@@ -44,7 +49,14 @@ func KeyHelpView(groups []KeyGroup) string {
 		if i > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, titleStyle.Render(g.Title))
+		body := indent
+		if g.Title != "" {
+			lines = append(lines, titleStyle.Render(g.Title))
+		} else {
+			// Nothing to indent under, so nothing to indent. The 2 columns exist to
+			// set the bindings beneath their heading.
+			body = lipgloss.NewStyle()
+		}
 		bindings := make([]key.Binding, 0, len(g.Keys))
 		for _, kr := range g.Keys {
 			bindings = append(bindings, key.NewBinding(
@@ -55,7 +67,7 @@ func KeyHelpView(groups []KeyGroup) string {
 		// FullHelpView lays out one column per []key.Binding. Passing a single
 		// column keeps each binding on its own "key   description" line, which is
 		// what makes the key column scannable top to bottom.
-		lines = append(lines, indent.Render(h.FullHelpView([][]key.Binding{bindings})))
+		lines = append(lines, body.Render(h.FullHelpView([][]key.Binding{bindings})))
 	}
 	return strings.Join(lines, "\n")
 }

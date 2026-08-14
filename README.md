@@ -950,8 +950,9 @@ out** instead of packing them into a ribbon read left to right. The badge also s
 up, which matters because it is the reason the row exists.
 
 The box is sized to its content — never padded out to a wide terminal, never drawn
-wider than a narrow one — and it names what it acts on in its title (`ctrl+b — this
-pane`, `pr — this row`), since two of the four are armed by the same key.
+wider than a narrow one — and carries **no heading**. A bordered box of key-and-verb
+rows that appeared when you pressed a key does not need to be told it is a menu, and
+the row a heading costs is a row the box is taller for nothing.
 
 It does **not** list both halves. That was the first cut, with the focused one
 wearing the usual `┃` selection bar — but the halves are the same workspace, so
