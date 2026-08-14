@@ -1,8 +1,10 @@
 package state
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -61,11 +63,6 @@ func TestAnUnknownPreferenceSurvivesASave(t *testing.T) {
 	if err := SaveDeckScope("attention"); err != nil {
 		t.Fatalf("saving over a file with an unknown key: %v", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Log(string(data))
 	// The known key is updated…
 	prefs, err := LoadDeckPrefs()
 	if err != nil {
@@ -73,6 +70,85 @@ func TestAnUnknownPreferenceSurvivesASave(t *testing.T) {
 	}
 	if prefs.Scope != "attention" {
 		t.Errorf("the scope is %q, want attention", prefs.Scope)
+	}
+	// …and the unknown one is still on disk, which is the half this test was
+	// written for and did not check. It read the file, logged it, and asserted
+	// nothing about it — so it passed for as long as the guarantee was false.
+	raw := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("the saved file does not parse: %v\n%s", err, data)
+	}
+	got, ok := raw["somethingNewer"]
+	if !ok {
+		t.Fatalf("saving the scope erased a key this build does not know:\n%s", data)
+	}
+	if string(got) != "42" {
+		t.Errorf("the unknown key came back as %s, want 42", got)
+	}
+}
+
+// TestAnUnknownPreferenceSurvivesTheOtherSaveToo. Both savers go through one merge,
+// and this is what says so — a second one written the old way would pass every test
+// above.
+func TestAnUnknownPreferenceSurvivesTheOtherSaveToo(t *testing.T) {
+	home := deckPrefsHome(t)
+	path := filepath.Join(home, ".awp", "deck-prefs.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"sidebar":false,"somethingNewer":"kept"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDeckSidebar(true); err != nil {
+		t.Fatalf("saving the sidebar over a file with an unknown key: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("the saved file does not parse: %v\n%s", err, data)
+	}
+	if _, ok := raw["somethingNewer"]; !ok {
+		t.Fatalf("saving the sidebar erased a key this build does not know:\n%s", data)
+	}
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prefs.Sidebar {
+		t.Error("the sidebar did not come back on")
+	}
+}
+
+// TestTheKeysAreTheStructsOwnTags. The merge names its key as a string, so a typo
+// would write a second key beside the real one and the preference would simply stop
+// sticking — nothing fails, and the file even looks plausible.
+//
+// Walked by reflection rather than listed, in the spirit of
+// internal/github/dir_test.go: the point is that no key can be spelled somewhere
+// the struct does not have a field for.
+func TestTheKeysAreTheStructsOwnTags(t *testing.T) {
+	tags := map[string]bool{}
+	fields := reflect.TypeOf(DeckPrefs{})
+	for i := range fields.NumField() {
+		name, _, _ := strings.Cut(fields.Field(i).Tag.Get("json"), ",")
+		tags[name] = true
+	}
+	for _, key := range []string{deckPrefScope, deckPrefSidebar} {
+		if !tags[key] {
+			t.Errorf("%q is saved but DeckPrefs has no field tagged with it, so loading it back reads nothing", key)
+		}
+	}
+	// And every field has a key, or a setting can be written by the struct and
+	// never by a save.
+	if len(tags) != 2 {
+		t.Errorf("DeckPrefs has %d fields and this test knows about 2 keys; a new field needs a deckPref* constant", len(tags))
 	}
 }
 

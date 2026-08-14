@@ -39,6 +39,18 @@ type DeckPrefs struct {
 	Sidebar bool   `json:"sidebar"`
 }
 
+// The keys, named once. A save merges one key into the file's own object rather
+// than marshalling this struct over it (see saveDeckPref), so the name travels as a
+// string — and a typo would write a second key beside the real one, silently,
+// visible only as a preference that stopped sticking.
+//
+// TestTheKeysAreTheStructsOwnTags walks the struct by reflection and checks each of
+// these is a tag it really has, which is what makes the string safe to pass.
+const (
+	deckPrefScope   = "scope"
+	deckPrefSidebar = "sidebar"
+)
+
 // DeckPrefsPath returns the path of the global deck-preferences file.
 func DeckPrefsPath() (string, error) { return deckPrefsPath() }
 
@@ -77,10 +89,6 @@ func LoadDeckPrefs() (DeckPrefs, error) {
 }
 
 // SaveDeckScope records the scope the deck should open in next time.
-//
-// Read-modify-write rather than a whole-struct overwrite, so a preference this
-// build does not know about survives being saved by it — the alternative is that
-// an older binary silently drops a newer one's settings.
 func SaveDeckScope(scope string) error {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
@@ -96,14 +104,12 @@ func SaveDeckScope(scope string) error {
 		// file rewrite the user cannot see the point of.
 		return nil
 	}
-	prefs.Scope = scope
-	return writeDeckPrefs(prefs)
+	return saveDeckPref(deckPrefScope, scope)
 }
 
 // SaveDeckSidebar records whether the attention strip should be up next time.
 //
-// Read-modify-write and a no-op when unchanged, for the same reasons SaveDeckScope
-// is both.
+// A no-op when unchanged, for the same reason SaveDeckScope is.
 func SaveDeckSidebar(on bool) error {
 	prefs, err := LoadDeckPrefs()
 	if err != nil {
@@ -112,11 +118,58 @@ func SaveDeckSidebar(on bool) error {
 	if prefs.Sidebar == on {
 		return nil
 	}
-	prefs.Sidebar = on
-	return writeDeckPrefs(prefs)
+	return saveDeckPref(deckPrefSidebar, on)
 }
 
-func writeDeckPrefs(prefs DeckPrefs) error {
+// saveDeckPref writes one preference, leaving every other key in the file exactly
+// as it found it — including keys this build has never heard of.
+//
+// That last part is the whole reason this is a merge into the file's own object
+// rather than a read into DeckPrefs, a field assignment, and a marshal back. The
+// struct is a *subset* of the file: json.Unmarshal drops what it has no field for,
+// so the round trip through it deletes anything a newer build wrote. Two settings
+// in, that is no longer hypothetical — an older binary cycling `P` would erase the
+// sidebar flag, and nothing would say so, because the older binary does not know
+// there was anything there to lose.
+//
+// The old code documented this guarantee and did not have it. So did its test,
+// which asserted the known key was updated and never looked for the unknown one.
+func saveDeckPref(key string, value any) error {
+	raw, err := loadDeckPrefsObject()
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode deck pref %s: %w", key, err)
+	}
+	raw[key] = encoded
+	return writeDeckPrefs(raw)
+}
+
+// loadDeckPrefsObject reads the file as the object it is, with every value left
+// undecoded. A missing file is an empty object, for the reason LoadDeckPrefs treats
+// it as the zero value.
+func loadDeckPrefsObject() (map[string]json.RawMessage, error) {
+	path, err := deckPrefsPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]json.RawMessage{}, nil
+		}
+		return nil, fmt.Errorf("read deck prefs: %w", err)
+	}
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse deck prefs at %s: %w (delete the file to start over)", path, err)
+	}
+	return raw, nil
+}
+
+func writeDeckPrefs(prefs map[string]json.RawMessage) error {
 	path, err := deckPrefsPath()
 	if err != nil {
 		return err
