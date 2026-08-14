@@ -70,7 +70,8 @@ type splitModal struct {
 // vocabulary, one arrangement's worth of difference in what it does.
 func splitPrefixHint(m *Model) string {
 	return PaneMenuKey + ": h/l/tab focus · < > = size · o zoom · x close this half · " +
-		"replace " + splitKindsHint() + " · " + sidebarHint(m.sidebar) + " · esc cancel"
+		"replace " + splitKindsHint() + " · " + alternateKey + " last pane · " +
+		sidebarHint(m.sidebar) + " · esc cancel"
 }
 
 // prefixKey reads one key while the menu is armed. It returns the command to run;
@@ -108,6 +109,8 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case sidebarKey:
 		m.toggleSidebar()
 		return nil
+	case alternateKey:
+		return m.alternateFrom(func() tea.Cmd { return s.close(m) })
 	}
 	// Anything else — esc included — cancels, having consumed the key. It does
 	// not fall through to the focused program: a mistyped verb typing itself at

@@ -5425,6 +5425,7 @@ func deckKeyGroups() []keyGroup {
 				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
 				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},
 				{PaneMenuKey + " x", "close the focused half"},
+				{PaneMenuKey + " " + alternateKey, "go to the arrangement before this one, without stopping at the deck"},
 				{PaneMenuKey + " " + sidebarKey, "show or hide the attention sidebar"},
 			},
 		},

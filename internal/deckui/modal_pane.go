@@ -30,6 +30,15 @@ const PaneLeaveKey = charm.PaneLeaveKey
 // why pressing it is not the same question as naming it.
 const PaneMenuKey = charm.PaneMenuKey
 
+// alternateKey goes to the arrangement before this one, in both ctrl+b menus.
+//
+// The same letter the deck's row list binds for the same act, because it is the
+// same act — the pane you were in two arrangements ago — and a verb that needed a
+// different key depending on whether you were looking at the deck or at a program
+// would be two things to learn for one idea. TestTheMenusAlternateKeyIsTheDecksL
+// is what keeps the two spellings one.
+const alternateKey = "L"
+
 // paneMenuPressed reports whether this key is the menu key.
 //
 // A predicate rather than a string comparison against msg.String(), because that is
@@ -578,6 +587,30 @@ func (m *Model) alternatePane() (tea.Cmd, bool) {
 	return m.reopenPane(m.prevPane)
 }
 
+// alternateFrom is alternatePane pressed from inside the thing being left, which
+// is what the pane menu's L does.
+//
+// The order is the whole content of it: the current arrangement has to be torn
+// down before the previous one opens, or two panes are installed and the first
+// one's terminal is never closed. Checked before anything is closed rather than
+// after, because alternatePane's refusals are messages — "only one pane so far" —
+// and a key that says that having already dropped the pane you were reading would
+// be the worst of both answers.
+//
+// close is the teardown, passed in rather than switched on here: a pane closes
+// itself, a split closes both halves, and each already knows how.
+func (m *Model) alternateFrom(close func() tea.Cmd) tea.Cmd {
+	if m.panes == nil || !m.prevPane.set() {
+		// Nowhere to go. alternatePane is still the one that says so, so the wording
+		// is the same as it is from the row list.
+		cmd, _ := m.alternatePane()
+		return cmd
+	}
+	closed := close()
+	opened, _ := m.alternatePane()
+	return tea.Batch(closed, opened)
+}
+
 // reopenPane resolves a remembered pane against the rows as they are now and
 // opens it, which is the half resumePane and alternatePane share.
 func (m *Model) reopenPane(arr paneArrangement) (tea.Cmd, bool) {
@@ -753,7 +786,8 @@ func (p *panePopover) footerHelp() string { return "" }
 // No verb for leaving. ctrl+\ is a door on every surface and needs no menu in
 // front of it.
 func panePrefixHint(m *Model) string {
-	return PaneMenuKey + ": split " + splitKindsHint() + " · " + sidebarHint(m.sidebar) + " · esc cancel"
+	return PaneMenuKey + ": split " + splitKindsHint() + " · " + alternateKey + " last pane · " +
+		sidebarHint(m.sidebar) + " · esc cancel"
 }
 
 // prefixKey reads one key while a single pane's menu is armed. Like the split's,
@@ -771,8 +805,11 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if kind, ok := splitKindFor(msg.String()); ok {
 		return p.splitWith(m, kind)
 	}
-	if msg.String() == sidebarKey {
+	switch msg.String() {
+	case sidebarKey:
 		m.toggleSidebar()
+	case alternateKey:
+		return m.alternateFrom(func() tea.Cmd { return p.close(m) })
 	}
 	return nil
 }
