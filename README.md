@@ -1254,6 +1254,21 @@ inside behave. The highlight stays until your next click so you can see what wen
 the clipboard, and typing clears it. Double-click for a word and triple-click for a
 line aren't wired up yet.
 
+**The same pane scrolls back through its history with the wheel**, three rows a
+notch. Typing puts you back on the live tail — the program answers on the bottom
+row, so reading history is over the moment you type — while output arriving on its
+own does *not* yank the view down, which is what makes reading back through a
+chatty process possible at all. While a pane is behind, the top row says so with
+`↑` and the number of rows above the view; a scrolled-back pane otherwise looks
+exactly like one whose program has stopped printing.
+
+The scrollback was there the whole time and unreachable: a pane rendered the *first*
+screenful the emulator's formatter emitted, and the formatter emits the whole
+screen from the top of history down. So a shell pane went on showing its opening
+screen forever no matter how much it printed. Alt-screen programs escaped it,
+because the alternate screen has no scrollback — which is why every agent looked
+fine and only shells were wrong.
+
 This is awp's own selection, not your terminal's, and it has to be: the host
 terminal selects *screen rows* and knows nothing about the divider, so a drag over
 one half of a split came back with the other half's text interleaved on every line.

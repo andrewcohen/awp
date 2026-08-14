@@ -217,6 +217,32 @@ const (
 	gateGlyphPending = "○"
 )
 
+// topRowScrollback says the pane is not showing its live tail, and how many rows
+// of history sit above what is on screen.
+//
+// It earns its place on the row because nothing else on screen says it. A pane
+// scrolled back looks exactly like a pane whose program has stopped printing:
+// same border, same frame, output apparently frozen. The glyph is the direction
+// you moved and the number is how far, in the row's own vocabulary of glyphs and
+// numbers — and it is Warning, the hue the deck spends on "this is waiting for
+// something", because a view that is not live is the one state here that makes
+// everything else on the pane stale.
+func (m *Model) topRowScrollback() string {
+	p := m.topRowSubject()
+	if p == nil {
+		return ""
+	}
+	rows, behind := p.paneBehind()
+	if !behind {
+		return ""
+	}
+	return m.styles.Warning.Render(scrollbackGlyph + strconv.Itoa(rows))
+}
+
+// scrollbackGlyph marks the count as rows of history above the view, in the
+// direction you pressed to get there.
+const scrollbackGlyph = "↑"
+
 // topRowHint is what sits at the right end: the way out of what is on screen, or
 // over the row list the scope it is showing.
 //
@@ -296,6 +322,9 @@ func (m *Model) renderTopRow(w int) string {
 	}
 	if state := m.topRowState(); state != "" {
 		segs = append(segs, state)
+	}
+	if back := m.topRowScrollback(); back != "" {
+		segs = append(segs, back)
 	}
 	right := m.styles.PaneHint.Render(m.topRowHint())
 
