@@ -160,8 +160,9 @@ type Model struct {
 	scopes     []ScopeOption
 	scopeIndex int
 	scopePick  bool
-	// pendingZ is the `z` chord waiting for its second key — `zz` centres the diff
-	// on the cursor, the way it does in vim.
+	// pendingZ is the `z` chord waiting for its second key: `zz` centres the diff on
+	// the cursor, `zR` and `zM` open and close every fold, all spelled as vim
+	// spells them.
 	pendingZ bool
 
 	files       []diff.FileDiff
@@ -1393,21 +1394,30 @@ func (m *Model) centerCursor() {
 
 // handleZKey answers the key that follows `z`.
 //
-// Only `zz` means anything; everything else cancels, esc included, the same
+// Three keys mean something and everything else cancels, esc included, the same
 // bargain handleScopeKey makes. A mistyped second key must not fall through and
 // do whatever that letter means on its own — `zc` silently opening the compose
 // box is worse than `zc` doing nothing.
 //
-// Centring is what the comment index already does when it seeks (see
+// `zz` centres, which is what the comment index already does when it seeks (see
 // centerCursor), so this is the same gesture reached deliberately rather than as
 // a side effect of jumping somewhere. The cursor does not move: `zz` is about
 // where the pane is scrolled, not where you are.
+//
+// `zR` and `zM` open and close every fold, spelled the way vim spells them. They
+// are the pair `enter` is the single-file version of: `zM` for "show me what this
+// change touched", `zR` for "back to reading it".
 func (m Model) handleZKey(key string) (tea.Model, tea.Cmd) {
 	m.pendingZ = false
-	if key != "z" {
+	switch key {
+	case "z":
+		m.centerCursor()
 		return m, nil
+	case "R":
+		return m.foldAll(false)
+	case "M":
+		return m.foldAll(true)
 	}
-	m.centerCursor()
 	return m, nil
 }
 

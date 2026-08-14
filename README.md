@@ -488,7 +488,12 @@ widened it.
 ### A folded file hides its conversations too
 
 `enter` folds the file at the cursor, and marking one reviewed (`r`) folds it as
-well. **Folding hides the file's comments along with its lines** — a comment about
+well. **`zM` folds every file and `zR` opens every one**, spelled as vim spells
+them — `zM` is the two-key version of "what did this change touch", and `zR` is how
+you go back to reading it. Both state each file's fold explicitly, so neither the
+reviewed mark nor the folded-by-default start of a split half can take one back,
+and the cursor keeps the file it was in rather than returning to the top of the
+diff. **Folding hides the file's comments along with its lines** — a comment about
 a line, or about the file as a whole, is inside the file, and a file you have put
 away that still spends a dozen rows on its conversations has not been put away.
 The divider says what it is holding: `✓ 󰻞 2 · +34 -7` — reviewed, two
