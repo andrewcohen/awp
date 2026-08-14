@@ -109,6 +109,10 @@ type rowRef struct {
 	lastComment bool
 	// collapsed marks a file divider whose body is hidden.
 	collapsed bool
+	// hiddenComments is how many conversations went away with a collapsed file, for
+	// its divider to report. Zero on every other row, and on a collapsed file
+	// nobody has commented on.
+	hiddenComments int
 }
 
 // hunkMeta is the gutter geometry for one hunk: how wide its line-number
@@ -227,6 +231,10 @@ type streamIndex struct {
 	meta [][]hunkMeta
 	// comments is the comment set this index placed, indexed by rowRef.comment.
 	comments []review.Comment
+	// folded is the conversations this index did *not* place, because their file is
+	// collapsed, keyed by that file's divider row. They have no rows — that is what
+	// being hidden means — so the index lists them from here.
+	folded map[int][]review.Comment
 	// width, wrap and sideBySide are the inputs this index was built for.
 	width      int
 	wrap       bool
@@ -250,6 +258,19 @@ type commentPlacement struct {
 	// orphans are remarks that name a file but could no longer be located in it,
 	// shown in the detached section at the foot.
 	orphans []review.Comment
+	// folded are the conversations hidden with each folded file, keyed by that
+	// file's divider row — the row that has to say how many there are.
+	//
+	// Kept rather than counted, because the index still lists them: hiding is what
+	// the *stream* does with a file you have put away, and a conversation you cannot
+	// find is not put away, it is lost. Every file starts folded when the viewer
+	// opens as a split half, so counting alone would have emptied the index in the
+	// arrangement it is most useful in.
+	//
+	// Keyed by row rather than by path because the row is what both consumers have,
+	// and deriving the path back from it would be a second way to ask a question
+	// placement has already answered.
+	folded map[int][]review.Comment
 	// canAdd is whether a remark can be written here at all — a viewer with no
 	// store is a reader. It gates the empty review section, whose whole content is
 	// an invitation to press a key, and which would be a lie without one.
@@ -333,8 +354,29 @@ func withComments(idx streamIndex, place commentPlacer, folded commentFolder) st
 	// Row indices shift as comment rows are inserted, so every recorded offset
 	// has to be remapped rather than reused.
 	shift := make([]int, len(idx.rows))
+	// hidden is what folding took out of the stream, kept for the index — see
+	// commentPlacement.folded.
+	var hidden map[int][]review.Comment
 	for i, r := range idx.rows {
 		shift[i] = len(rows)
+		// A folded file's divider carries the count of what folding hid, which only
+		// the placement pass knows — the geometry pass that built this row had no
+		// comments to be told about. Conversations, not messages: a mirrored GitHub
+		// thread is several comments and one exchange, and "7 comments" about two
+		// exchanges is a number that misleads about how much there is to read.
+		if g := p.folded[i]; len(g) > 0 {
+			for _, c := range g {
+				if c.ReplyTo == "" {
+					r.hiddenComments++
+				}
+			}
+			if hidden == nil {
+				hidden = make(map[int][]review.Comment)
+			}
+			// Keyed by where the divider ends up, not where it was: the index reads
+			// rows of the finished stream, and shift[i] is that row.
+			hidden[shift[i]] = g
+		}
 		rows = append(rows, r)
 		// byRow[i] is a whole conversation — the parent followed by its replies —
 		// so the last entry is the one that closes the block.
@@ -361,6 +403,7 @@ func withComments(idx streamIndex, place commentPlacer, folded commentFolder) st
 	out := idx
 	out.rows = rows
 	out.comments = all
+	out.folded = hidden
 	out.fileStart = remap(idx.fileStart, shift)
 	out.hunkStart = remap(idx.hunkStart, shift)
 	return out

@@ -267,6 +267,12 @@ func (m Model) renderStreamFileHeader(r rowRef, width int) string {
 		summary = fmt.Sprintf(" %s%d hunk%s, %d line%s hidden",
 			reviewedBadge(m.isReviewed(pathOf(f))),
 			len(f.Hunks), plural(len(f.Hunks)), countChangedLines(f), plural(countChangedLines(f)))
+		// The conversations go with the lines they are about, so the divider owes
+		// them the same accounting: a folded file holding a question nobody has
+		// answered must not look like a folded file holding nothing.
+		if n := r.hiddenComments; n > 0 {
+			summary += fmt.Sprintf(", %d comment%s", n, plural(n))
+		}
 	}
 	meta := styleMuted.Render(summary)
 	reserved := lipgloss.Width(lead) + lipgloss.Width(badge) + 1 + lipgloss.Width(meta)

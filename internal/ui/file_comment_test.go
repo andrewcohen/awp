@@ -92,10 +92,11 @@ func TestAFileCommentAndALineCommentBothLand(t *testing.T) {
 	}
 }
 
-// A folded file still has exactly one row — its divider — and both scopes attach
-// to it. The file comment must not start reading as detached just because the code
-// it is about is hidden.
-func TestAFileCommentSurvivesFolding(t *testing.T) {
+// A folded file hides a remark about the file itself along with everything else
+// inside it — a comment about the file is inside the file, and folding is how you
+// put the whole thing away. It must not read as detached on the way, and the index
+// has to keep it: hidden is a fact about the stream, not about the remark.
+func TestAFileCommentIsHiddenWithItsFile(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
 	m.SetComments([]review.Comment{fileComment("c1", "a.go", "wrong package")})
 	m.ReviewedFiles = map[string]string{"a.go": fileContentHash(m.filtered[0])}
@@ -104,8 +105,22 @@ func TestAFileCommentSurvivesFolding(t *testing.T) {
 	if got := rowsOfKind(m, rowOrphan); got != 0 {
 		t.Errorf("folding the file detached its file comment (%d rows)", got)
 	}
+	view := stripANSI(m.renderStreamPanel(80, 20))
+	if strings.Contains(view, "wrong package") {
+		t.Errorf("the file comment is still rendered inside its folded file:\n%s", view)
+	}
+	if !strings.Contains(view, "1 comment") {
+		t.Errorf("the divider does not say a comment is hidden with the file:\n%s", view)
+	}
+	if len(m.commentIndex) != 1 || !m.commentIndex[0].folded {
+		t.Errorf("the index dropped the hidden file comment: %+v", m.commentIndex)
+	}
+
+	// Unfolding shows it again, under the divider it is about.
+	m.ReviewedFiles = nil
+	m.rebuildStream()
 	if !strings.Contains(stripANSI(m.renderStreamPanel(80, 20)), "wrong package") {
-		t.Error("the file comment vanished when its file was folded")
+		t.Error("unfolding the file did not bring its file comment back")
 	}
 }
 
