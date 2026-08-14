@@ -1884,6 +1884,54 @@ func (m Model) toggleFold() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// foldAll is what `zR` and `zM` do: every file at once, in the direction asked
+// for.
+//
+// Every path stated explicitly rather than by moving foldByDefault, for the
+// reason toggleFold states one: a default is what applies to files nobody has an
+// opinion about, and `zM` is an opinion about all of them. Flipping the default
+// instead would leave a file you had already opened by hand open through a
+// fold-all, which is not what "close everything" means.
+//
+// The cursor keeps its file. Which row it can stand on inside that file changes —
+// a folded file has only its divider — so it lands the way toggleFold lands it,
+// on the divider when closing and in the body when opening. Staying with the file
+// is the point: `zM` is how you get an overview of the change you are reading,
+// and being returned to the top of the diff would lose your place in it.
+func (m Model) foldAll(folded bool) (tea.Model, tea.Cmd) {
+	if len(m.filtered) == 0 {
+		return m, nil
+	}
+	if m.fileFold == nil {
+		m.fileFold = map[string]bool{}
+	}
+	for _, f := range m.filtered {
+		m.fileFold[pathOf(f)] = folded
+	}
+	// Read before the rebuild, because it is a row index into the geometry that is
+	// about to be replaced.
+	at := m.cursorFileIndex()
+	m.rebuildStream()
+	if folded {
+		m.cursorToFileHeader(at)
+	} else {
+		m.cursorToFileFirstLine(at)
+	}
+	return m, nil
+}
+
+// cursorFileIndex is which file the cursor is in, or 0 when it is not in one —
+// the review-level section at the top, or an empty diff. Zero is the honest
+// fallback: after a fold-all the first file's divider is the top of the list,
+// which is where a cursor that belonged to no file should be.
+func (m Model) cursorFileIndex() int {
+	f, ok := m.cursorFile()
+	if !ok {
+		return 0
+	}
+	return m.fileIndexOf(pathOf(f))
+}
+
 // FoldFiles starts the viewer with every file folded, so the first thing on
 // screen is the list of what changed rather than the top of the first file.
 //

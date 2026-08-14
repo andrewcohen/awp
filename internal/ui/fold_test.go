@@ -206,3 +206,91 @@ func TestRHasTheLastWordOnTheFold(t *testing.T) {
 		t.Error("enter cannot reopen the file r collapsed")
 	}
 }
+
+// zR and zM, vim's fold-all pair, on the `z` chord that already carried zz.
+//
+// `enter` folds one file, which is the wrong granularity for the question the
+// fold answers most often: "what did this change touch". zM is that question in
+// two keys, and zR is how you go back to reading.
+
+// TestZMFoldsEveryFile, including ones you had opened by hand — "close
+// everything" is an opinion about all of them, so a per-file override it does not
+// overwrite would be a file left open through a fold-all.
+func TestZMFoldsEveryFile(t *testing.T) {
+	m := foldModel(t)
+	m = pressEnter(t, m) // fold file 0 by hand
+	m = pressEnter(t, m) // and state it open again
+	m = press(m, "z")
+	m = press(m, "M")
+	for _, f := range m.filtered {
+		if !m.isCollapsed(pathOf(f)) {
+			t.Errorf("%s is still open after zM", pathOf(f))
+		}
+	}
+}
+
+// TestZROpensEveryFile, and beats the reviewed mark and the fold-by-default
+// start: both are reasons a file closes when nobody said otherwise, and zR is
+// somebody saying otherwise.
+func TestZROpensEveryFile(t *testing.T) {
+	m := foldModel(t)
+	m.FoldFiles(true)
+	m.rebuildStream()
+	m.ReviewedFiles = map[string]string{
+		pathOf(m.filtered[0]): fileContentHash(m.filtered[0]),
+	}
+	m = press(m, "z")
+	m = press(m, "R")
+	for _, f := range m.filtered {
+		if m.isCollapsed(pathOf(f)) {
+			t.Errorf("%s is still folded after zR", pathOf(f))
+		}
+	}
+}
+
+// TestAFoldAllKeepsTheCursorInItsFile. The rows the cursor could stand on change
+// — a folded file has only its divider — but which file it is in must not, or zM
+// costs you your place in the change you were reading.
+func TestAFoldAllKeepsTheCursorInItsFile(t *testing.T) {
+	m := foldModel(t)
+	// Into the second file, so a cursor that fell back to the top would show.
+	m.cursorToFileFirstLine(1)
+	want := pathOf(m.filtered[1])
+
+	m = press(m, "z")
+	m = press(m, "M")
+	row := m.stream.rows[m.cursorRow]
+	if row.kind != rowFileHeader {
+		t.Errorf("after zM the cursor is on a %v, want a divider", row.kind)
+	}
+	if got := pathOf(m.filtered[row.file]); got != want {
+		t.Errorf("zM moved the cursor from %s to %s", want, got)
+	}
+
+	m = press(m, "z")
+	m = press(m, "R")
+	row = m.stream.rows[m.cursorRow]
+	if row.kind != rowLine {
+		t.Errorf("after zR the cursor is on a %v, want a line of the file", row.kind)
+	}
+	if got := pathOf(m.filtered[row.file]); got != want {
+		t.Errorf("zR moved the cursor from %s to %s", want, got)
+	}
+}
+
+// TestAMistypedFoldKeyDoesNothing. The `z` chord swallows its second key
+// whatever it is, so a near-miss must not fall through — `zr` is one shift away
+// from zR, and `r` on its own marks a file reviewed.
+func TestAMistypedFoldKeyDoesNothing(t *testing.T) {
+	m := foldModel(t)
+	path := pathOf(m.filtered[0])
+	before := m.isCollapsed(path)
+	m = press(m, "z")
+	m = press(m, "r")
+	if m.isReviewed(path) {
+		t.Error("zr marked the file reviewed")
+	}
+	if m.isCollapsed(path) != before {
+		t.Error("zr changed the fold")
+	}
+}

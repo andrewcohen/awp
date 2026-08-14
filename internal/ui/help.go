@@ -78,6 +78,7 @@ func viewerKeyGroups(scope [][2]string) []charm.KeyGroup {
 				{"R", "settle the conversation: resolve a GitHub thread, or close one of yours"},
 				{"T", "cycle GitHub threads shown: unresolved → all → none"},
 				{"enter", "fold / unfold: the conversation at the cursor, else the file"},
+				{"zR / zM", "unfold / fold every file"},
 				{"ctrl+s", "send every remark you have written and not sent to the agent"},
 				{"P", "publish: verdict → summary → preview of every call → send"},
 				{"M", "merge the PR: the exact call, then y — the deck's p m, from here"},
