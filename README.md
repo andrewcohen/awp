@@ -485,6 +485,32 @@ across the reload, and the header names the width whenever it is not the default
 since a widened diff looks like a different change once you have forgotten you
 widened it.
 
+### A folded file hides its conversations too
+
+`enter` folds the file at the cursor, and marking one reviewed (`r`) folds it as
+well. **Folding hides the file's comments along with its lines** — a comment about
+a line, or about the file as a whole, is inside the file, and a file you have put
+away that still spends a dozen rows on its conversations has not been put away.
+The divider says what it is holding: `3 hunks, 41 lines hidden, 2 comments`.
+
+The count is **conversations, not messages**, so a mirrored GitHub thread of six
+comments is one. "6 comments" about two exchanges misleads about how much is left
+to read.
+
+**The comment index keeps listing them.** Hiding is what the stream does with a
+file, not a claim about the remark — and the index is how you find a conversation,
+so one you cannot find there is not put away but lost. That matters most in a split,
+where `|c` opens with every file folded: dropping them from the index would empty it
+in the arrangement it is most useful in. Selecting a hidden conversation **opens its
+file**, the same way pressing `enter` on it would, and lands the cursor on the
+conversation itself.
+
+None of this is the detached section. A comment whose file is folded has a perfectly
+good anchor — the code is just not on screen — while a detached comment names a file
+or a line the change no longer has. Attaching folded comments to the divider was the
+previous fix for confusing the two, and it went one step too far in the other
+direction.
+
 ## CLI reference (highlights)
 
 | Command | Purpose |

@@ -1034,11 +1034,17 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 		return out
 	}
 	out.byRow = make(map[int][]review.Comment, len(all))
+	out.folded = make(map[int][]review.Comment)
 	// A reply goes wherever its parent went, so a thread stays intact even if the
 	// reply's own anchor would resolve elsewhere (or nowhere). Review-level parents
 	// need their own set: they have no row for parentRow to record.
 	parentRow := make(map[string]int, len(all))
 	reviewParent := make(map[string]bool)
+	// foldedParent is the divider a hidden conversation belongs under, so its
+	// replies go wherever it went — which is nowhere, but counted in the same
+	// place. Without this a reply whose parent was folded away found no parentRow
+	// entry and landed in the detached section, which is the opposite of hidden.
+	foldedParent := make(map[string]int)
 	for _, c := range all {
 		if c.ReplyTo != "" {
 			if row, ok := parentRow[c.ReplyTo]; ok {
@@ -1049,12 +1055,30 @@ func (m Model) placeComments(rows []rowRef) commentPlacement {
 				out.review = append(out.review, c)
 				continue
 			}
+			if row, ok := foldedParent[c.ReplyTo]; ok {
+				// Hidden with the conversation it is part of, and kept beside it so the
+				// index can still fold it into a reply count.
+				out.folded[row] = append(out.folded[row], c)
+				foldedParent[c.ID] = row
+				continue
+			}
 			out.orphans = append(out.orphans, c)
 			continue
 		}
 		if reviewLevel(c) {
 			reviewParent[c.ID] = true
 			out.review = append(out.review, c)
+			continue
+		}
+		// A folded file hides its conversations along with its lines. Folding is how
+		// you put a file away — reviewed, or just not what you are reading — and a
+		// file put away that still spends a dozen rows on its comments has not been
+		// put away. The divider says how many there are, and the index goes on
+		// listing them, which is the same bargain the divider already makes for the
+		// hunks and lines it is hiding.
+		if row, ok := collapsedFileRow(rows, m.filtered, c.Anchor.Path); ok {
+			out.folded[row] = append(out.folded[row], c)
+			foldedParent[c.ID] = row
 			continue
 		}
 		if row, ok := m.locateComment(rows, c); ok {
@@ -1079,8 +1103,12 @@ func reviewLevel(c review.Comment) bool {
 }
 
 // collapsedFileRow is the divider row of a folded file at the given path, if the
-// change still holds that file and it is folded. The handle a comment attaches to
-// while the lines it was written against are hidden.
+// change still holds that file and it is folded.
+//
+// Two callers, for opposite reasons. Placement uses it to know a conversation is
+// hidden and which divider owes it a count; the compose editor uses it as the row
+// to put an editor on, since a remark you are writing has to be somewhere you can
+// see even when the file's lines are not.
 func collapsedFileRow(rows []rowRef, files []diff.FileDiff, path string) (int, bool) {
 	row, ok := fileHeaderRow(rows, files, path)
 	if !ok || !rows[row].collapsed {
@@ -1228,11 +1256,12 @@ func (m Model) locateAnchorStart(rows []rowRef, c review.Comment) (int, bool) {
 		// file read as detached: either the file is gone from the change, or it
 		// is simply collapsed and its lines are not being emitted right now.
 		//
-		// Folding a file you have reviewed must not relabel its conversations as
-		// remarks whose anchor could not be found — the anchor is fine, the code
-		// is just hidden — so they attach to the divider, which is the one row
-		// the file still has. Unfolding re-places them on their lines, since
-		// every rebuild resolves placement from scratch.
+		// A folded file's anchor is fine — the code is just hidden — so it must not
+		// be relabelled as one that could not be found. Placement now hides such a
+		// conversation outright and counts it on the divider, so what reaches here
+		// is the compose editor asking where to put itself: the divider, which is
+		// the one row the file still has. Unfolding re-places everything on its
+		// lines, since every rebuild resolves placement from scratch.
 		if row, ok := collapsedFileRow(rows, m.filtered, c.Anchor.Path); ok {
 			return row, true
 		}

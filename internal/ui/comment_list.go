@@ -64,6 +64,10 @@ type commentEntry struct {
 	// for is finding what is waiting on you, and one settled proposal does not
 	// settle the exchange.
 	proposal review.Proposal
+	// folded marks a conversation whose file is collapsed, so the stream is not
+	// showing it. Listed anyway — the index is how you find a conversation, and one
+	// you cannot find is not put away but lost — and seeking to it opens the file.
+	folded bool
 }
 
 // commentEntries walks the placed rows in stream order and returns one entry
@@ -77,25 +81,10 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 	// slot maps a conversation's id to its entry, so a reply can find its
 	// parent and be counted rather than listed.
 	slot := make(map[string]int, len(idx.comments))
-	for row, r := range idx.rows {
-		if !isCommentRow(r.kind) {
-			continue
-		}
-		// One entry per comment, anchored at its first display row.
-		if r.commentLine != 0 || r.comment < 0 || r.comment >= len(idx.comments) {
-			continue
-		}
-		c := idx.comments[r.comment]
-		if c.ReplyTo != "" {
-			if at, ok := slot[c.ReplyTo]; ok {
-				out[at].replies++
-				out[at].proposal = strongerProposal(out[at].proposal, c.Proposal)
-				continue
-			}
-			// A reply whose parent is not in the stream is a conversation in its
-			// own right as far as the reader is concerned — listing it is the
-			// only way to reach it.
-		}
+	// add builds one entry, shared by the placed conversations and the ones folding
+	// hid — the fields differ in two flags and nothing else, and a second copy of
+	// this is how the two lists would drift apart.
+	add := func(c review.Comment, row int, kind rowKind, folded bool) {
 		slot[c.ID] = len(out)
 		e := commentEntry{
 			id:         c.ID,
@@ -106,9 +95,10 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 			kind:       c.Kind.OrDefault(),
 			summary:    entrySummary(c),
 			state:      c.State,
-			detached:   r.kind == rowOrphan,
-			changeWide: r.kind == rowReview,
-			// A proposal is a reply, so this is normally set by the fold above. It is
+			detached:   kind == rowOrphan,
+			changeWide: kind == rowReview,
+			folded:     folded,
+			// A proposal is a reply, so this is normally set by the fold below. It is
 			// read off the parent too for the one case that is not: a reply whose
 			// parent is not in the stream is listed as a conversation in its own
 			// right, and it would otherwise be the only proposal the list omits.
@@ -118,6 +108,44 @@ func (m Model) commentEntries(idx streamIndex) []commentEntry {
 			e.outdated = t.Outdated
 		}
 		out = append(out, e)
+	}
+	// reply folds a message into the conversation above it, reporting whether it
+	// found one to fold into.
+	reply := func(c review.Comment) bool {
+		at, ok := slot[c.ReplyTo]
+		if !ok {
+			return false
+		}
+		out[at].replies++
+		out[at].proposal = strongerProposal(out[at].proposal, c.Proposal)
+		return true
+	}
+	for row, r := range idx.rows {
+		// The conversations this row's file is hiding come first, because this row is
+		// where they are: a folded file's divider stands in for everything inside it,
+		// and the index reads top to bottom whether or not the stream is showing what
+		// it names.
+		for _, c := range idx.folded[row] {
+			if c.ReplyTo != "" && reply(c) {
+				continue
+			}
+			add(c, row, r.kind, true)
+		}
+		if !isCommentRow(r.kind) {
+			continue
+		}
+		// One entry per comment, anchored at its first display row.
+		if r.commentLine != 0 || r.comment < 0 || r.comment >= len(idx.comments) {
+			continue
+		}
+		c := idx.comments[r.comment]
+		if c.ReplyTo != "" && reply(c) {
+			continue
+		}
+		// A reply whose parent is not in the stream is a conversation in its own
+		// right as far as the reader is concerned — listing it is the only way to
+		// reach it.
+		add(c, row, r.kind, false)
 	}
 	return out
 }
@@ -398,6 +426,24 @@ func (m *Model) seekToComment(i int) {
 	if i < 0 || i >= len(m.commentIndex) {
 		return
 	}
+	// A conversation in a folded file is listed but not shown, so seeking to it has
+	// to open the file — otherwise the one gesture for reaching a conversation lands
+	// on the divider hiding it, which reads as the seek having failed.
+	//
+	// The unfold is explicit (fileFold) rather than a one-off view state, because it
+	// is the same act as pressing enter on the file: you have decided to look at
+	// this file's code again, and a reviewed mark must not close it under you on the
+	// next rebuild.
+	if e := m.commentIndex[i]; e.folded && e.path != "" {
+		if m.fileFold == nil {
+			m.fileFold = map[string]bool{}
+		}
+		m.fileFold[e.path] = false
+		m.rebuildStream()
+		// Rebuilding re-places every conversation, so the row this entry named is
+		// stale — the comment now has rows of its own. Find it again by id.
+		i = m.indexOfComment(e.id, i)
+	}
 	m.commentsCursor = i
 	m.cursorRow = m.commentIndex[i].row
 	m.hunkHScroll = 0
@@ -407,6 +453,22 @@ func (m *Model) seekToComment(i int) {
 	// on the pane's last row.
 	m.centerCursor()
 	m.syncFileCursorToCursor()
+}
+
+// indexOfComment is where a conversation sits in the index now, falling back to
+// the position given — which is the one it was at before whatever moved it.
+//
+// The index is rebuilt from scratch whenever the stream is, so a position held
+// across a rebuild is a guess. Unfolding a file is the case that needs this: the
+// conversations it was hiding gain rows, which does not change how many entries
+// there are but does change what each one points at.
+func (m Model) indexOfComment(id string, fallback int) int {
+	for i, e := range m.commentIndex {
+		if e.id == id {
+			return i
+		}
+	}
+	return min(max(fallback, 0), max(0, len(m.commentIndex)-1))
 }
 
 // deleteFromIndex removes the selected conversation and re-seeks, so the cursor

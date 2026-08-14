@@ -691,12 +691,15 @@ func TestHidingThreadsReleasesFocusFromTheEmptiedIndex(t *testing.T) {
 	}
 }
 
-// Folding a file you have reviewed hides its lines, not its conversations. A
-// collapsed file emits only its divider row, and placement read that absence as
-// "this anchor cannot be found" — so marking a file reviewed relabelled every
-// comment on it as detached, which says the comment lost its place when nothing
-// of the sort happened.
-func TestCommentsOnAFoldedFileAreNotDetached(t *testing.T) {
+// Folding a file hides its conversations along with its lines — and hidden is not
+// the same as detached, which is the distinction this file's placement keeps
+// getting wrong in one direction or the other.
+//
+// It used to attach them to the divider, which was the fix for reading them as
+// detached and went one step too far: a file you have put away that still spends a
+// dozen rows on its comments has not been put away. Now they leave the stream, the
+// divider counts them, and the index goes on listing them.
+func TestCommentsOnAFoldedFileAreHiddenNotDetached(t *testing.T) {
 	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"), fileWith("b.go", 1, "delta"))
 	m.SetComments([]review.Comment{
 		comment("c1", "a.go", 2, "beta", "needs a guard", review.AuthorHuman),
@@ -711,13 +714,23 @@ func TestCommentsOnAFoldedFileAreNotDetached(t *testing.T) {
 	if len(m.commentIndex) != 1 {
 		t.Fatalf("expected the comment still listed, got %+v", m.commentIndex)
 	}
-	if m.commentIndex[0].detached {
-		t.Fatal("a comment on a folded file is not detached — its anchor is fine, the code is hidden")
+	if e := m.commentIndex[0]; e.detached {
+		t.Error("a comment on a folded file is not detached — its anchor is fine, the code is hidden")
 	}
-	// It hangs off the divider, the one row the folded file still has.
-	if got := m.stream.rows[m.commentIndex[0].row-1]; got.kind != rowFileHeader || !got.collapsed {
-		t.Fatalf("expected the comment under the collapsed divider, got %v (collapsed=%v)",
-			got.kind, got.collapsed)
+	if !m.commentIndex[0].folded {
+		t.Error("the index does not mark the conversation as folded away")
+	}
+	// Nothing of it is in the stream: not a comment row, and not a detached one.
+	if got := rowsOfKind(m, rowComment); got != 0 {
+		t.Errorf("the folded file still renders %d comment rows", got)
+	}
+	if got := rowsOfKind(m, rowOrphan); got != 0 {
+		t.Errorf("folding the file detached its comment (%d rows)", got)
+	}
+	// The divider says what it is holding, so the conversation is hidden rather
+	// than silently gone.
+	if got := stripANSI(m.renderStreamPanel(80, 20)); !strings.Contains(got, "1 comment") {
+		t.Errorf("the divider does not say a comment is hidden with the file:\n%s", got)
 	}
 
 	// Unfolding puts it back on its line: placement is resolved from scratch on
@@ -729,6 +742,55 @@ func TestCommentsOnAFoldedFileAreNotDetached(t *testing.T) {
 	}
 	if got := m.lineText(m.stream.rows[m.commentIndex[0].row-1]); got != "beta" {
 		t.Fatalf("expected it back on beta, got %q", got)
+	}
+}
+
+// TestSeekingToAFoldedConversationOpensItsFile. The index is the one gesture for
+// reaching a conversation, so it cannot land on the divider that is hiding the one
+// you picked — that reads as the seek having failed.
+func TestSeekingToAFoldedConversationOpensItsFile(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "beta", "needs a guard", review.AuthorHuman),
+	})
+	m.ReviewedFiles = map[string]string{"a.go": fileContentHash(m.filtered[0])}
+	m.rebuildStream()
+	if !m.commentIndex[0].folded {
+		t.Fatal("precondition: the conversation should be folded away")
+	}
+
+	m.seekToComment(0)
+
+	if m.commentIndex[0].folded {
+		t.Error("seeking to the conversation left its file folded")
+	}
+	if got := m.stream.rows[m.cursorRow]; !isCommentRow(got.kind) {
+		t.Errorf("the seek landed on a %v, not on the conversation", got.kind)
+	}
+}
+
+// TestAFoldedFileCountsConversationsNotMessages. A mirrored thread is one exchange
+// spread over several comments, and "5 comments hidden" about two exchanges
+// misleads about how much there is to read.
+func TestAFoldedFileCountsConversationsNotMessages(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.SetComments([]review.Comment{
+		comment("c1", "a.go", 2, "beta", "needs a guard", review.AuthorHuman),
+		{ID: "r1", Author: "agent", Body: "agreed", State: review.Open, ReplyTo: "c1",
+			Anchor: review.Anchor{Path: "a.go", Side: review.SideNew, LineHint: 2, Text: "beta"}},
+	})
+	m.ReviewedFiles = map[string]string{"a.go": fileContentHash(m.filtered[0])}
+	m.rebuildStream()
+
+	if len(m.commentIndex) != 1 {
+		t.Fatalf("the reply is listed as its own conversation: %+v", m.commentIndex)
+	}
+	if got := m.commentIndex[0].replies; got != 1 {
+		t.Errorf("the hidden conversation reports %d replies, want 1", got)
+	}
+	view := stripANSI(m.renderStreamPanel(80, 20))
+	if !strings.Contains(view, "1 comment") || strings.Contains(view, "2 comments") {
+		t.Errorf("the divider counts messages rather than conversations:\n%s", view)
 	}
 }
 
