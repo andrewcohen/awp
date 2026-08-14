@@ -941,6 +941,17 @@ are somewhere specific, and the half that has them is the one with the teal
 border — the other drops to grey, the same tier the diff viewer's unfocused panes
 drop to.
 
+**Both halves, including the diff.** The diff half used to have no border at all,
+so the answer was carried entirely by the *pane* going grey: a screen that said "not
+here" beside a half that never said "here" — and since the diff's own panes dim their
+selection when it loses focus, a blurred diff beside a blurred pane read as nothing
+having the keys. It wears the same two hues as a pane now, because the halves are
+read side by side and one question deserves one vocabulary.
+
+A **whole-screen** diff still has no border. Nothing else is on screen for the
+keyboard to be in, so there is no question to answer, and two rows and two columns
+of a diff are worth more than a frame around the only thing in the terminal.
+
 **`ctrl+b` is the menu**, in a single pane and in a split alike: a prefix, because
 the programs on screen keep their own complete keymaps and there is no room to
 spend a second key on each verb. Two adjacent fingers and no shift, for the key you
