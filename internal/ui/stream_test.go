@@ -353,8 +353,10 @@ func TestStreamFileHeaderShowsPath(t *testing.T) {
 	if !strings.Contains(row, "b.go") {
 		t.Fatalf("expected the file header to name the file, got %q", row)
 	}
-	if !strings.Contains(row, "1 hunk") {
-		t.Fatalf("expected the file header to count hunks, got %q", row)
+	// #337: the header carries the file's shape, in the two directions. A hunk count
+	// lived here before and measured how many places were edited, not how much moved.
+	if !strings.Contains(row, "+") || !strings.Contains(row, "-") {
+		t.Fatalf("expected the file header to carry the +/- counts, got %q", row)
 	}
 }
 
