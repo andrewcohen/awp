@@ -784,9 +784,14 @@ type PRStatusDoneMsg struct {
 	FetchedAt time.Time
 }
 
-// prStatusMinInterval is the minimum time between consecutive gh fetches for
-// the same repo. The throttle guards every entry point that might trigger a
-// fetch (cold Init, future refresh keys, future polling).
+// prStatusMinInterval is the minimum time between consecutive gh fetches for the
+// same repo. It guards every entry point: the cold Init, and the refresh poll.
+//
+// It is also what *sets the polling cadence*, rather than merely bounding it. The
+// refresh arm asks on every 5s tick (see refreshDoneMsg), so this constant is the
+// answer to "how often does a PR badge notice CI went red" — a minute. The
+// force-refresh path deliberately bypasses it, because that follows a user action
+// that just changed which PR belongs to which workspace.
 const prStatusMinInterval = 1 * time.Minute
 
 type findStage int
@@ -2433,13 +2438,22 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		} else if m.cursor >= len(items) {
 			m.cursor = len(items) - 1
 		}
-		// Items just changed — a workspace may have appeared from
-		// outside the deck (`awp review`, `jj workspace add`,
-		// concurrent deck instance). Re-evaluate the pr-status
-		// eligible-repo set; the policy function throttles per repo,
-		// so already-fresh repos no-op. Without this trigger, the
-		// deck would wait for the next init/link/p-s before noticing
-		// a newly-eligible repo.
+		// This is what refreshes the PR badges, and it is the only thing that does
+		// once the deck is up — so it is a poll, not a reaction to the item set
+		// changing. Every refresh asks; prStatusMinInterval answers "not yet" for a
+		// minute at a time, which turns a 5s row poll into one gh fan-out per repo
+		// per minute. That is the cadence CI going red, a review landing or a remote
+		// merge arrives on, and pr_status_poll_test.go pins it.
+		//
+		// It has to be here rather than on a tick of its own for the reason the
+		// eligible-repo set is computed from m.itemsAll: a workspace can appear from
+		// outside the deck (`awp review`, `jj workspace add`, a second deck), and
+		// the repos worth asking about are only known after the items land.
+		//
+		// The comment here used to say "items just changed", which reads as a
+		// trigger that fires on a change. It fires on every refresh, and the
+		// difference matters: read the other way round, the deck looks like it never
+		// polls PR state at all.
 		var prCmd tea.Cmd
 		m, prCmd = m.prStatusRefreshCmd(time.Now())
 		cmds := []tea.Cmd{enrichExpireCmd, rerunCmd}
