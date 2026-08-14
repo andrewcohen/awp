@@ -263,31 +263,6 @@ func (m *Model) topRowHint() string {
 	return "scope: " + scopeLabel(m.scope)
 }
 
-// topRowMenu is the menu of whatever is waiting for a key, and whether anything
-// is.
-//
-// One answer for every menu the deck has, because they all go on this row: an
-// armed ctrl+b over a pane or a split, and the row list's own chords (`|`, `p`),
-// whose body is the row list rather than a screen of their own. Asked once here
-// rather than tested where each of them renders — which is how the chords came to
-// print theirs somewhere else.
-func (m *Model) topRowMenu() (string, bool) {
-	switch c := m.active.(type) {
-	case *splitModal:
-		if c.prefixArmed {
-			return splitPrefixHint(m), true
-		}
-	case *panePopover:
-		if c.prefixArmed {
-			return panePrefixHint(m), true
-		}
-	}
-	if c, ok := m.active.(chordModal); ok {
-		return c.chordMenu(), true
-	}
-	return "", false
-}
-
 // renderTopRow draws the row: what wants you on the left, then what you are
 // looking at, and on the right the way out — or which scope the list is showing,
 // when the list is what is below.
@@ -298,12 +273,12 @@ func (m *Model) topRowMenu() (string, bool) {
 // same rule, so the row can be read at a glance rather than parsed. The only
 // text on it is the name of what is on screen and the key that leaves.
 //
-// A menu takes the whole row. That menu used to be painted over the split's
-// bottom border for want of a row to put it on; this is that row.
+// An armed menu does not touch this row. It used to take the whole of it (#328),
+// which meant the badge and the label went away for as long as you were reading the
+// menu, and the menu itself was a ribbon squeezed into one line. Since #344 the menu
+// floats over the frame instead — see menu.go — so the row says the same thing
+// whether or not something is waiting for a key.
 func (m *Model) renderTopRow(w int) string {
-	if menu, armed := m.topRowMenu(); armed {
-		return padTopRow(m.styles.FindHeader.Render(truncate(menu, max(1, w))), w)
-	}
 	// The row starts on the body's own text column, so the badge's dots land in
 	// the same column as the status dots of the rows below them. That alignment is
 	// why the indent exists, and it is why a pane's row is indented too even

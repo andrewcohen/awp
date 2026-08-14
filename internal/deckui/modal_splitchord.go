@@ -1,15 +1,13 @@
 package deckui
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 )
 
 // splitChordModal is the `|` key: a keys-only menu whose answer names the right
 // half of a split. Like the PR chord it renders the row list beneath itself and
-// puts its menu on the deck's top row, so the thing you are about to split is
-// still on screen while you pick.
+// floats its menu over that, so the thing you are about to split is still on screen
+// while you pick.
 //
 // `|` because in the diff viewer it already means "two things side by side", and
 // at deck level it was free. The gesture is the same one either way.
@@ -45,15 +43,19 @@ var splitActions = []splitAction{
 	{key: "W", kind: PaneKindWatch, label: "watch"},
 }
 
-// splitKindsHint is the kinds as a menu fragment, for the ctrl+b menus that carry
-// them alongside their own verbs. The same keys in the same order as the deck's
-// `|` chord, because they are the same vocabulary reached from a different place.
-func splitKindsHint() string {
-	parts := make([]string, 0, len(splitActions))
+// splitKindVerbs is the kinds as menu rows, for the ctrl+b menus that carry them
+// alongside their own verbs. The same keys in the same order as the deck's `|`
+// chord, because they are the same vocabulary reached from a different place.
+//
+// The description says where the kind lands rather than only naming it: from a
+// menu that also holds focus and size verbs, "diff" alone does not say whether the
+// key opens one or splits to it.
+func splitKindVerbs(what func(label string) string) [][2]string {
+	verbs := make([][2]string, 0, len(splitActions))
 	for _, a := range splitActions {
-		parts = append(parts, a.key+" "+a.label)
+		verbs = append(verbs, [2]string{a.key, what(a.label)})
 	}
-	return strings.Join(parts, " · ")
+	return verbs
 }
 
 // splitKindFor resolves a pressed key to the kind it names.
@@ -66,16 +68,12 @@ func splitKindFor(pressed string) (string, bool) {
 	return "", false
 }
 
-func (c *splitChordModal) chordMenu() string { return splitChordHint() }
+func (c *splitChordModal) chordMenu() deckMenu { return splitChordMenu() }
 
-// splitChordHint is the menu as the top row shows it.
-func splitChordHint() string {
-	parts := make([]string, 0, len(splitActions)+1)
-	for _, a := range splitActions {
-		parts = append(parts, a.key+" "+a.label)
-	}
-	parts = append(parts, "esc cancel")
-	return "split with agent: " + strings.Join(parts, " · ")
+// splitChordMenu is `|`: pick what goes beside the agent.
+func splitChordMenu() deckMenu {
+	verbs := splitKindVerbs(func(label string) string { return label + ", beside the agent" })
+	return menu("split this workspace", append(verbs, menuCancelVerb)...)
 }
 
 // splitHelpKeys is the chord as the `?` overlay lists it.

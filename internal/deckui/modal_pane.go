@@ -778,16 +778,21 @@ func paneExitStatus(label string, err error, lived time.Duration, reason string)
 
 func (p *panePopover) footerHelp() string { return "" }
 
-// panePrefixHint is the menu for a single pane: the window keys, each of which
+// panePrefixMenu is the menu for a single pane: the window keys, each of which
 // puts that kind beside the pane you are in. The arrangement verbs a split's menu
 // also carries — focus, size, zoom, close a half — have nothing to act on until
 // there are two halves, so they are absent rather than listed and inert.
 //
 // No verb for leaving. ctrl+\ is a door on every surface and needs no menu in
 // front of it.
-func panePrefixHint(m *Model) string {
-	return PaneMenuKey + ": split " + splitKindsHint() + " · " + alternateKey + " last pane · " +
-		sidebarHint(m.sidebar) + " · esc cancel"
+func panePrefixMenu(m *Model) deckMenu {
+	verbs := splitKindVerbs(func(label string) string { return "split, with " + label + " beside this" })
+	verbs = append(verbs,
+		[2]string{alternateKey, "go to the arrangement before this one"},
+		sidebarVerb(m.sidebar),
+		menuCancelVerb,
+	)
+	return menu(PaneMenuKey+" — this pane", verbs...)
 }
 
 // prefixKey reads one key while a single pane's menu is armed. Like the split's,
@@ -796,8 +801,8 @@ func panePrefixHint(m *Model) string {
 func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if paneMenuPressed(m, msg) {
 		// The menu key again re-arms rather than resolving, so holding it cannot do
-		// anything.
-		m.status = panePrefixHint(m)
+		// anything. Nothing to redraw: the menu is rendered from prefixArmed on every
+		// frame rather than written anywhere when it opens.
 		return nil
 	}
 	p.prefixArmed = false
@@ -886,7 +891,6 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		}
 		if paneMenuPressed(m, msg) {
 			p.prefixArmed = true
-			m.status = panePrefixHint(m)
 			return nil
 		}
 		if msg.String() == PaneLeaveKey {

@@ -62,16 +62,31 @@ type splitModal struct {
 	prefixArmed bool
 }
 
-// splitPrefixHint is the verb menu, shown in the status bar while the menu is up.
+// splitPrefixMenu is the verb menu for a split.
 //
 // The window keys are on it too, and mean here what they mean in a single pane's
 // menu — that kind, on screen — except that with two halves already up there is
 // nowhere to put a third, so they replace the focused one. Same key, same
 // vocabulary, one arrangement's worth of difference in what it does.
-func splitPrefixHint(m *Model) string {
-	return PaneMenuKey + ": h/l/tab focus · < > = size · o zoom · x close this half · " +
-		"replace " + splitKindsHint() + " · " + alternateKey + " last pane · " +
-		sidebarHint(m.sidebar) + " · esc cancel"
+//
+// The arrangement verbs come first: they are what the menu is armed for while a
+// split is already up, and the window keys under them are the longer list.
+func splitPrefixMenu(m *Model) deckMenu {
+	verbs := [][2]string{
+		{"h/l/tab", "move the keyboard to the other half"},
+		{"< >", "move the divider · = re-centres it"},
+		{"o", "zoom the focused half, and again to go back"},
+		{"x", "close the focused half"},
+	}
+	verbs = append(verbs, splitKindVerbs(func(label string) string {
+		return "put " + label + " in this half"
+	})...)
+	verbs = append(verbs,
+		[2]string{alternateKey, "go to the arrangement before this one"},
+		sidebarVerb(m.sidebar),
+		menuCancelVerb,
+	)
+	return menu(PaneMenuKey+" — this split", verbs...)
 }
 
 // prefixKey reads one key while the menu is armed. It returns the command to run;
@@ -79,8 +94,8 @@ func splitPrefixHint(m *Model) string {
 func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if paneMenuPressed(m, msg) {
 		// The menu key again re-arms rather than resolving, so holding it cannot do
-		// anything.
-		m.status = splitPrefixHint(m)
+		// anything. Nothing to redraw: the menu is rendered from prefixArmed on every
+		// frame rather than written anywhere when it opens.
 		return nil
 	}
 	pressed := msg.String()
@@ -276,7 +291,6 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		}
 		if paneMenuPressed(m, key) {
 			s.prefixArmed = true
-			m.status = splitPrefixHint(m)
 			return nil
 		}
 		if pressed == PaneLeaveKey {

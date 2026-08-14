@@ -151,18 +151,28 @@ func TestTheMenusAlternateKeyIsTheDecksL(t *testing.T) {
 	t.Errorf("the menus use %q, the deck's row list binds %q", alternateKey, keys)
 }
 
-// TestBothMenusOfferTheKey. It is discoverable only from the hint, since the ?
+// TestBothMenusOfferTheKey. It is discoverable only from the menu, since the ?
 // overlay is a screen away from the program you are in.
 func TestBothMenusOfferTheKey(t *testing.T) {
 	m := splitDeck(t)
-	for name, hint := range map[string]string{
-		"a pane": panePrefixHint(&m),
-		"split":  splitPrefixHint(&m),
+	for name, mn := range map[string]deckMenu{
+		"a pane": panePrefixMenu(&m),
+		"split":  splitPrefixMenu(&m),
 	} {
-		if !strings.Contains(hint, alternateKey+" last pane") {
-			t.Errorf("%s's menu does not offer %q: %q", name, alternateKey, hint)
+		if !menuBinds(mn, alternateKey) {
+			t.Errorf("%s's menu does not offer %q: %+v", name, alternateKey, mn.verbs)
 		}
 	}
+}
+
+// menuBinds reports whether the menu lists this key.
+func menuBinds(mn deckMenu, key string) bool {
+	for _, v := range mn.verbs {
+		if v[0] == key {
+			return true
+		}
+	}
+	return false
 }
 
 // twoPanesDeep leaves the editor's pane on screen with the agent's behind it, which

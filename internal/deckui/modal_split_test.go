@@ -359,18 +359,19 @@ func TestTheDiffHalfIsAwpsOwnViewer(t *testing.T) {
 // lists it, and the `?` overlay has to carry the same set — a key documented in
 // one and not the other is how they start disagreeing.
 //
-// The menu is read off the top row rather than off m.status, which is where the
-// menu goes: the same row an armed ctrl+b uses in a pane or a split.
+// The menu is read as data rather than off the frame: what is asserted here is that
+// the chord offers every kind, which is a question about the menu and not about where
+// it is drawn.
 func TestTheChordSaysWhatItCanDo(t *testing.T) {
 	m := splitDeck(t)
 	m = pressDeck(t, m, runeKey("|"))
-	menu, armed := m.topRowMenu()
+	mn, armed := m.armedMenu()
 	if !armed {
-		t.Fatalf("the chord put no menu on the top row (active=%T)", m.active)
+		t.Fatalf("the chord armed no menu (active=%T)", m.active)
 	}
 	for _, a := range splitActions {
-		if !strings.Contains(menu, a.key+" "+a.label) {
-			t.Errorf("the chord's menu omits %q: %q", a.key, menu)
+		if !menuBinds(mn, a.key) {
+			t.Errorf("the chord's menu omits %q: %+v", a.key, mn.verbs)
 		}
 	}
 	var documented []string
@@ -389,9 +390,9 @@ func TestTheChordSaysWhatItCanDo(t *testing.T) {
 
 // TestThePrefixIsVisibleWhileItIsArmed. A split renders no deck footer, so
 // arming the prefix changed only a bool and pressing the reserved key looked
-// exactly like pressing a dead key — which is how it was reported. The menu
-// takes over the deck's bar rather than being given a row of its own, so the
-// halves' boxes do not change and no pty is resized by a modifier keypress.
+// exactly like pressing a dead key — which is how it was reported. The menu now
+// floats over the frame (#344), so the halves' boxes do not change and no pty is
+// resized by a modifier keypress.
 func TestThePrefixIsVisibleWhileItIsArmed(t *testing.T) {
 	m, _ := openedSplit(t, "v")
 	before := m.render()
@@ -401,14 +402,15 @@ func TestThePrefixIsVisibleWhileItIsArmed(t *testing.T) {
 
 	m = pressDeck(t, m, menuKey())
 	armed := ansi.Strip(m.render())
-	for _, want := range []string{"focus", "zoom", "replace"} {
+	for _, want := range []string{"keyboard", "zoom", "in this half"} {
 		if !strings.Contains(armed, want) {
 			t.Errorf("the armed prefix does not say %q:\n%s", want, lastLine(armed))
 		}
 	}
 	// And it costs no rows: the frame is the same height armed or not, or the
 	// halves would reflow — and a pty relaying itself out because you pressed a
-	// modifier is worse than a border with a menu on it.
+	// modifier is worse than any menu placement. This is what a composite buys over
+	// the row the menu used to take.
 	if got, want := lipgloss.Height(armed), lipgloss.Height(ansi.Strip(before)); got != want {
 		t.Errorf("arming the prefix changed the frame from %d rows to %d", want, got)
 	}

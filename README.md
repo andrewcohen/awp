@@ -934,13 +934,24 @@ A split wears **the same top row a single pane and the row list do** — see [th
 top row](#the-top-row), which is where it is described: the badge, the name of the
 half the keys are in, and how to leave, spanning the terminal above both halves. It is the deck's row rather than either half's,
 because it answers for the screen; the halves render no header of their own.
-While a menu is up, that same row becomes the menu — an armed `ctrl+b` over a
-pane or a split, and the row list's own chords (`|`, `p`), which are menus about
-the row you are pointing at with that row still on screen beneath them. One place
-for every menu the deck has, so which key you pressed does not change where to
-look. It is also the only place a menu fits: the status bar is budgeted as exactly
-one line, and a menu long enough to wrap it costs the frame a row, which scrolls
-the whole deck up off the top of the screen.
+A menu does not touch this row. Every menu the deck has — an armed `ctrl+b` over a
+pane or a split, and the row list's own chords (`|`, `p`) — is a **bordered box
+floating in the middle of the screen**, over whatever you were looking at. One place
+for every menu, so which key you pressed does not change where to look, and the row
+goes on saying what it says the rest of the time.
+
+Those menus lived on this row for a while, on the argument that one row is where
+every menu belongs and that the status bar is budgeted at exactly one line — a menu
+long enough to wrap costs the frame a row, which scrolls the whole deck up. Both
+objections are better answered by floating it: a composited box consumes no frame row
+at all, so the halves of a split are never reflowed by a modifier keypress, and being
+unbound by one line it can give **each verb its own line with what it does spelled
+out** instead of packing them into a ribbon read left to right. The badge also stays
+up, which matters because it is the reason the row exists.
+
+The box is sized to its content — never padded out to a wide terminal, never drawn
+wider than a narrow one — and it names what it acts on in its title (`ctrl+b — this
+pane`, `pr — this row`), since two of the four are armed by the same key.
 
 It does **not** list both halves. That was the first cut, with the focused one
 wearing the usual `┃` selection bar — but the halves are the same workspace, so
