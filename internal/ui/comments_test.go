@@ -391,7 +391,7 @@ func TestCollapsedDividerSummarisesWhatIsHidden(t *testing.T) {
 	row := stripANSI(m.renderStreamRowAt(m.stream.fileStart[0], 90))
 	// The counts, not a hunk count: one line came and one went, and #337 is that
 	// those are two facts rather than "2 lines hidden".
-	for _, want := range []string{"reviewed", "+1", "-1"} {
+	for _, want := range []string{reviewedChip, "+1", "-1"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("collapsed divider missing %q: %q", want, row)
 		}
@@ -731,7 +731,7 @@ func TestCommentsOnAFoldedFileAreHiddenNotDetached(t *testing.T) {
 	}
 	// The divider says what it is holding, so the conversation is hidden rather
 	// than silently gone.
-	if got := stripANSI(m.renderStreamPanel(80, 20)); !strings.Contains(got, "1 comment") {
+	if got := stripANSI(m.renderStreamPanel(80, 20)); !strings.Contains(got, commentChip+" 1") {
 		t.Errorf("the divider does not say a comment is hidden with the file:\n%s", got)
 	}
 
@@ -791,7 +791,7 @@ func TestAFoldedFileCountsConversationsNotMessages(t *testing.T) {
 		t.Errorf("the hidden conversation reports %d replies, want 1", got)
 	}
 	view := stripANSI(m.renderStreamPanel(80, 20))
-	if !strings.Contains(view, "1 comment") || strings.Contains(view, "2 comments") {
+	if !strings.Contains(view, commentChip+" 1") || strings.Contains(view, commentChip+" 2") {
 		t.Errorf("the divider counts messages rather than conversations:\n%s", view)
 	}
 }
