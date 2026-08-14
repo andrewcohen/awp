@@ -24,7 +24,17 @@ func zmxShim(t *testing.T) string {
 	argvLog := filepath.Join(dir, "argv")
 	// Records what it was asked to run, then holds the pty open the way a real
 	// attach client does until it is killed.
-	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> " + argvLog + "; done\nsleep 5\n"
+	//
+	// Written aside and renamed into place, because the log's existence is what
+	// liveSessionRunner reports a live session on and therefore what ends the poll
+	// in StartDetached. Appending argument by argument to the log itself meant the
+	// poll could be satisfied by the first argument, so the test read an argv that
+	// stopped mid-flag — #349, seen once as a last argument of "--permission-mode"
+	// instead of the prompt. A rename is atomic, so the log is either absent or
+	// complete and there is nothing left to wait for.
+	script := "#!/bin/sh\n: > " + argvLog + ".part\n" +
+		"for a in \"$@\"; do printf '%s\\n' \"$a\" >> " + argvLog + ".part; done\n" +
+		"mv " + argvLog + ".part " + argvLog + "\nsleep 5\n"
 	if err := os.WriteFile(filepath.Join(dir, "zmx"), []byte(script), 0o755); err != nil { //nolint:gosec // a test shim has to be executable
 		t.Fatalf("write the zmx shim: %v", err)
 	}
@@ -40,6 +50,10 @@ func zmxShim(t *testing.T) string {
 // scheduled at all — the first exec in a process is slower than the poll interval
 // — and StartDetached would then end a client that had not started anything. The
 // real daemon cannot lie that way: it lists a session because zmx made one.
+//
+// So `after` is a completion signal, and whatever writes it owes the same
+// property a rename gives: present only once whole. A file that appears before
+// its contents are finished says the shim has run when it has only started.
 type liveSessionRunner struct {
 	name  string
 	after string
@@ -151,7 +165,10 @@ func TestTheAgentStartsInTheWorkspace(t *testing.T) {
 	}
 	marker := filepath.Join(ws, "cwd")
 	dir := t.TempDir()
-	script := "#!/bin/sh\npwd > " + marker + "\nsleep 5\n"
+	// Renamed into place for the reason zmxShim's log is: the marker's existence
+	// ends the poll, so a marker that exists before it has been written is a race
+	// with the read below.
+	script := "#!/bin/sh\npwd > " + marker + ".part\nmv " + marker + ".part " + marker + "\nsleep 5\n"
 	if err := os.WriteFile(filepath.Join(dir, "zmx"), []byte(script), 0o755); err != nil { //nolint:gosec // a test shim has to be executable
 		t.Fatalf("write the zmx shim: %v", err)
 	}
