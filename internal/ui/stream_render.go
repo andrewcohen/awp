@@ -222,7 +222,11 @@ func (m Model) renderStreamRow(r rowRef, width int, cursor bool) string {
 	case rowReviewEmpty:
 		// Says what the section is for and how to fill it. The header alone above a
 		// file divider reads as a section that failed to render.
-		return styleReviewEmpty.Width(width).Render("   nothing yet — c to say something about the whole change")
+		// Short enough not to wrap in half a terminal. It used to name what a
+		// review-level remark is ("say something about the whole change") and wrapped
+		// onto a second row in a split, which spent two rows of the diff on a
+		// placeholder. The section's own header already says what it holds.
+		return styleReviewEmpty.Width(width).Render("   nothing yet — c to add")
 	case rowOrphanHeader:
 		return styleOrphanHeader.Width(width).Render(" detached comments — their anchor could not be found")
 	case rowEditor:

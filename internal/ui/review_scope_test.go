@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"charm.land/lipgloss/v2"
 	"strings"
 	"testing"
 
@@ -47,10 +48,16 @@ func TestTheReviewSectionIsThereBeforeThereIsAnythingInIt(t *testing.T) {
 	if file := rowOfKind(m, rowFileHeader); file >= 0 && stand > file {
 		t.Errorf("the review section is at row %d, after the first file at %d", stand, file)
 	}
-	// And it says what to do, since that is its whole content.
+	// And it names the key, since that is its whole content. Only the key: the row
+	// used to describe what a review-level remark is, and at that length it wrapped
+	// onto a second row in half a terminal — two rows of the diff spent on a
+	// placeholder, where the section's own header already says what it holds.
 	body := ansi.Strip(m.renderStreamRow(m.stream.rows[stand], 100, false))
-	if !strings.Contains(body, "c to say something about the whole change") {
+	if !strings.Contains(body, "c to add") {
 		t.Errorf("the stand-in row does not name the gesture: %q", body)
+	}
+	if got := lipgloss.Height(body); got != 1 {
+		t.Errorf("the stand-in row is %d rows tall, so it wraps", got)
 	}
 }
 
