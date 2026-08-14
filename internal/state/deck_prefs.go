@@ -34,9 +34,18 @@ import (
 // turn it off — and an omitted field is indistinguishable from one this build
 // never wrote, so omitting it would make turning the strip off the one setting
 // that does not stick.
+// Split is where the divider sits in a split, as the left half's share of the
+// width — a fraction rather than a column count, or the same preference would mean
+// a different layout on a different terminal.
+//
+// omitempty, unlike Sidebar: zero is not a choice here, it is the absence of one.
+// A left half of no width is not something a key can ask for (the divider clamps
+// well before that), so "0" and "never set" are the same thing, and both mean the
+// even split a fresh deck opens at.
 type DeckPrefs struct {
-	Scope   string `json:"scope,omitempty"`
-	Sidebar bool   `json:"sidebar"`
+	Scope   string  `json:"scope,omitempty"`
+	Sidebar bool    `json:"sidebar"`
+	Split   float64 `json:"split,omitempty"`
 }
 
 // The keys, named once. A save merges one key into the file's own object rather
@@ -49,6 +58,7 @@ type DeckPrefs struct {
 const (
 	deckPrefScope   = "scope"
 	deckPrefSidebar = "sidebar"
+	deckPrefSplit   = "split"
 )
 
 // DeckPrefsPath returns the path of the global deck-preferences file.
@@ -119,6 +129,28 @@ func SaveDeckSidebar(on bool) error {
 		return nil
 	}
 	return saveDeckPref(deckPrefSidebar, on)
+}
+
+// SaveDeckSplit records where the split's divider should sit next time, as the left
+// half's share of the width.
+//
+// Not validated on the way in or out. splitCol already clamps the divider so neither
+// half falls below a pane's minimum, so a fraction saved on a 400-column screen
+// degrades to "as far left as this terminal allows" on a 100-column one rather than
+// needing a range check that would have to guess the terminal.
+//
+// A no-op when unchanged, for the same reason SaveDeckScope is: the divider moves in
+// 5% steps under a held-ish key, and a file rewrite per tap is a write the user
+// cannot see the point of.
+func SaveDeckSplit(frac float64) error {
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		return err
+	}
+	if prefs.Split == frac {
+		return nil
+	}
+	return saveDeckPref(deckPrefSplit, frac)
 }
 
 // saveDeckPref writes one preference, leaving every other key in the file exactly
