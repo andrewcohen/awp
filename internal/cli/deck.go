@@ -2209,9 +2209,9 @@ func reconcileGates(st watch.State) map[string]string {
 	return gm
 }
 
-// reapWorkspaceSessions tears down the sessions a deleted workspace leaves
-// behind, on both substrates: the tmux session named after the row, and every
-// zmx session the workspace holds.
+// reapWorkspaceSessions tears down what a deleted workspace leaves behind, on all
+// three substrates: the tmux session named after the row, every zmx session the
+// workspace holds, and every job still running for it.
 //
 // Neither one's failure may cost the other its turn. By the time this runs the
 // workspace is already deleted, so a step that is skipped is not a step deferred
@@ -2220,15 +2220,20 @@ func reconcileGates(st watch.State) map[string]string {
 // the tmux half came to orphan the zmx half: deleting a workspace on a deck with
 // no tmux server failed on the *lookup*, before the zmx reap it sits in front of.
 //
-// So both run and both errors are reported, tmux first — a zmx failure must not
-// leave the tmux side half torn down, which is the order #246 settled on.
+// So all three run and all three errors are reported, tmux first — a zmx failure
+// must not leave the tmux side half torn down, which is the order #246 settled on.
+// The jobs sweep goes last for the same reason and is the newest leg: it was missing
+// entirely, which is #265 (a background action running `sh -c` in a working copy
+// that had been removed under it).
 //
 // The zmx side asks the substrate directly rather than being told which sessions
-// to end: this runs in a detached job, where there is no pane host to consult.
-func reapWorkspaceSessions(tmuxClient *tmux.Client, runner Runner, project, workspaceName, queuePath string, reporter deckui.Reporter) error {
+// to end: this runs in a detached job, where there is no pane host to consult. The
+// jobs side reads the job store for the same reason.
+func reapWorkspaceSessions(tmuxClient *tmux.Client, runner Runner, repoRoot, project, workspaceName, queuePath string, reporter deckui.Reporter) error {
 	return errors.Join(
 		reapTmuxSession(tmuxClient, DeckSessionName(project, workspaceName), queuePath, reporter),
 		killWorkspaceSessions(runner, project, workspaceName, reporter),
+		cancelWorkspaceJobsOnDisk(repoRoot, workspaceName, reporter),
 	)
 }
 
@@ -2285,7 +2290,7 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		if err := svc.DeleteWithOptions(item.WorkspaceName, opts); err != nil {
 			return err
 		}
-		return reapWorkspaceSessions(tmuxClient, runner, item.ProjectName, item.WorkspaceName, queuePath, reporter)
+		return reapWorkspaceSessions(tmuxClient, runner, item.RepoRoot, item.ProjectName, item.WorkspaceName, queuePath, reporter)
 	case deckui.ActionDeleteProject:
 		return handleDeleteProjectAction(tmuxClient, runner, svc, item, reporter)
 	case deckui.ActionRename:
@@ -2507,7 +2512,7 @@ func handleDeleteProjectAction(tmuxClient *tmux.Client, runner Runner, svc works
 		if err := svc.DeleteWithOptions(name, opts); err != nil {
 			return fmt.Errorf("delete %s: %w", name, err)
 		}
-		if err := reapWorkspaceSessions(tmuxClient, runner, item.ProjectName, name, queuePath, reporter); err != nil {
+		if err := reapWorkspaceSessions(tmuxClient, runner, repoRoot, item.ProjectName, name, queuePath, reporter); err != nil {
 			return err
 		}
 	}
