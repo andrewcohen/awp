@@ -59,10 +59,10 @@ func sidebarPane(t *testing.T) (Model, *panePopover) {
 func TestTheSidebarTakesItsColumnsFromTheChild(t *testing.T) {
 	m, _ := sidebarPane(t)
 	b := m.childBox()
-	if b.x != sidebarWidth {
-		t.Errorf("the child starts at column %d, want %d — the strip's columns", b.x, sidebarWidth)
+	if b.x != sidebarDefaultWidth {
+		t.Errorf("the child starts at column %d, want %d — the strip's columns", b.x, sidebarDefaultWidth)
 	}
-	if want := m.width - sidebarWidth; b.w != want {
+	if want := m.width - sidebarDefaultWidth; b.w != want {
 		t.Errorf("the child is %d columns wide, want %d", b.w, want)
 	}
 }
@@ -128,7 +128,7 @@ func stripDeck(items []Item) Model {
 // TestTheSidebarSectionsByAgentState: the bands, in order, and a row under each.
 func TestTheSidebarSectionsByAgentState(t *testing.T) {
 	m, _ := sidebarPane(t)
-	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 20}))
+	strip := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 20}))
 	for _, want := range []string{"waiting", "ws", "ready", "read-me", "working", "busy"} {
 		if !strings.Contains(strip, want) {
 			t.Errorf("the strip does not mention %q:\n%s", want, strip)
@@ -141,7 +141,7 @@ func TestTheSidebarSectionsByAgentState(t *testing.T) {
 // cannot fill a section of them.
 func TestTheSidebarListsEveryWorkspace(t *testing.T) {
 	m, _ := sidebarPane(t)
-	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 40}))
+	strip := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 40}))
 	rows := m.sidebarView().Items()
 	if len(rows) == 0 {
 		t.Fatal("the deck has no rows, so this proves nothing")
@@ -166,7 +166,7 @@ func TestASectionIsPrintedOnce(t *testing.T) {
 		{ProjectName: "a", WorkspaceName: "three", Status: "waiting"},
 		{ProjectName: "b", WorkspaceName: "four", Status: "working"},
 	})
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 30}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 30}))
 	for _, band := range []sidebarSection{sectionWaiting, sectionWorking} {
 		label := sidebarSectionLabel(band)
 		headers := 0
@@ -233,7 +233,7 @@ func TestPinnedRowsSitAtTheVeryTop(t *testing.T) {
 		{ProjectName: "a", WorkspaceName: "busy", Status: "working"},
 		{ProjectName: "a", WorkspaceName: "kept", Status: "idle", PinGroup: "default"},
 	})
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 30}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 30}))
 	pinned, working := strings.Index(out, "kept"), strings.Index(out, "busy")
 	if pinned < 0 || working < 0 {
 		t.Fatalf("a row is missing from the strip:\n%s", out)
@@ -257,7 +257,7 @@ func TestIdleRowsAreMostRecentlyActiveFirst(t *testing.T) {
 		{ProjectName: "a", WorkspaceName: "unknown", Status: "idle"},
 		{ProjectName: "a", WorkspaceName: "minutes", Status: "idle", LastActiveAt: now.Add(-5 * time.Minute)},
 	})
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 30}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 30}))
 	recent, old, unknown := strings.Index(out, "minutes"), strings.Index(out, "march"), strings.Index(out, "unknown")
 	if recent < 0 || old < 0 || unknown < 0 {
 		t.Fatalf("a row is missing from the strip:\n%s", out)
@@ -277,7 +277,7 @@ func TestARowsSecondLineCarriesItsPR(t *testing.T) {
 	m := stripDeck([]Item{
 		{ProjectName: "a", WorkspaceName: "with-pr", Status: "idle", Bookmark: "andrew/thing"},
 	})
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 30}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 30}))
 	lines := strings.Split(out, "\n")
 	for i, line := range lines {
 		if !strings.Contains(line, "with-pr") {
@@ -307,7 +307,7 @@ func TestEveryRowSpendsExactlyTwoLines(t *testing.T) {
 		{WorkspaceName: "flaky-login-test", Bookmark: "andrew/login-retry"},
 		{WorkspaceName: "docs-tidy", Bookmark: "andrew/docs-tidy"},
 	} {
-		row := m.sidebarRow(v, it, sidebarWidth)
+		row := m.sidebarRow(v, it, sidebarDefaultWidth)
 		if len(row) != 2 {
 			t.Errorf("%s spent %d lines, want 2: %q", it.WorkspaceName, len(row), row)
 		}
@@ -328,7 +328,7 @@ func TestRowsAreThreeLinesApart(t *testing.T) {
 		{ProjectName: "a", WorkspaceName: "two", Status: "waiting"}, // no meta: a blank second line
 		{ProjectName: "a", WorkspaceName: "three", Status: "waiting", Bookmark: "andrew/three-branch"},
 	})
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 24}))
 	lines := strings.Split(out, "\n")
 	at := func(name string) int {
 		for i, l := range lines {
@@ -383,7 +383,7 @@ func TestASecondLineAlwaysSaysSomething(t *testing.T) {
 		// And with no project at all, the name is the last resort that always exists.
 		{Item{WorkspaceName: "bare"}, "bare"},
 	} {
-		got := ansi.Strip(m.sidebarMeta(v, tc.item, sidebarWidth))
+		got := ansi.Strip(m.sidebarMeta(v, tc.item, sidebarDefaultWidth))
 		if got != tc.want {
 			t.Errorf("%s: second line %q, want %q", tc.item.WorkspaceName, got, tc.want)
 		}
@@ -395,7 +395,7 @@ func TestASecondLineAlwaysSaysSomething(t *testing.T) {
 	})
 	dv := deck.sidebarView()
 	for _, it := range dv.Items() {
-		row := deck.sidebarRow(dv, it, sidebarWidth)
+		row := deck.sidebarRow(dv, it, sidebarDefaultWidth)
 		if strings.TrimSpace(ansi.Strip(row[1])) == "" {
 			t.Errorf("%s drew an empty second line", it.WorkspaceName)
 		}
@@ -411,7 +411,7 @@ func TestTheSidebarCountsEveryWorkspaceNotTheScope(t *testing.T) {
 	if got := len(m.items()); got != 0 {
 		t.Fatalf("the filter left %d rows in the scoped list, wanted none", got)
 	}
-	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 20}))
+	strip := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 20}))
 	if !strings.Contains(strip, "ws") {
 		t.Errorf("a workspace the scoped list filtered out fell off the strip:\n%s", strip)
 	}
@@ -434,7 +434,7 @@ func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 	}
 	marked := 0
 	for _, it := range rows {
-		line := m.sidebarRow(v, it, sidebarWidth)[0]
+		line := m.sidebarRow(v, it, sidebarDefaultWidth)[0]
 		isMine := it.ProjectName == p.project && it.WorkspaceName == p.workspace
 		strong := strings.Contains(line, m.styles.Strong.Render(sidebarLabel(it)))
 		if strong != isMine {
@@ -453,9 +453,13 @@ func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 // TestTheSidebarRefusesATerminalWithNoRoomBesideAPane. A flag set on a terminal
 // too narrow renders nothing, which reads as the key being broken — and then
 // surprises you by taking effect on the next resize.
+//
+// Measured against the *minimum* width, not the default: since the strip's width
+// became yours to drag, a terminal with room for a narrow strip gets a narrow one
+// rather than none. Only a terminal too narrow for even the floor refuses.
 func TestTheSidebarRefusesATerminalWithNoRoomBesideAPane(t *testing.T) {
 	m := sidebarDeck(t)
-	m.width = sidebarWidth + sidebarChildMinW - 1
+	m.width = sidebarMinWidth + sidebarChildMinW - 1
 	m.toggleSidebar()
 	if m.sidebar {
 		t.Error("the strip turned on with no room for a pane beside it")
@@ -471,7 +475,7 @@ func TestTheSidebarRefusesATerminalWithNoRoomBesideAPane(t *testing.T) {
 func TestTheSidebarDoesNotOverflowItsBox(t *testing.T) {
 	m, _ := sidebarPane(t)
 	const height = 4
-	strip := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: height}))
+	strip := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: height}))
 	if got := len(strings.Split(strip, "\n")); got != height {
 		t.Errorf("the strip rendered %d rows into a box %d tall:\n%s", got, height, strip)
 	}
@@ -524,8 +528,8 @@ func TestTheSidebarTogglesFromASplitToo(t *testing.T) {
 	if _, isSplit := m.active.(*splitModal); !isSplit {
 		t.Fatalf("the key took the split down: active is %T", m.active)
 	}
-	if b := m.childBox(); b.x != sidebarWidth {
-		t.Errorf("the split starts at column %d, want %d", b.x, sidebarWidth)
+	if b := m.childBox(); b.x != sidebarDefaultWidth {
+		t.Errorf("the split starts at column %d, want %d", b.x, sidebarDefaultWidth)
 	}
 }
 
@@ -546,7 +550,7 @@ func TestTheSidebarTogglesFromASplitToo(t *testing.T) {
 // the one it wanted. So the row is spent deliberately.
 func TestGroupsAreSeparatedByABlankRow(t *testing.T) {
 	m := sidebarDeck(t)
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 24}))
 	lines := strings.Split(out, "\n")
 
 	first, last := -1, 0
@@ -595,12 +599,12 @@ func TestARowGoesByItsName(t *testing.T) {
 	m := stripDeck(items)
 	v := m.sidebarView()
 	for _, it := range v.Items() {
-		row := m.sidebarRow(v, it, sidebarWidth)
+		row := m.sidebarRow(v, it, sidebarDefaultWidth)
 		if name := ansi.Strip(row[0]); strings.Contains(name, it.ProjectName) {
 			t.Errorf("the name line names the project: %q", name)
 		}
 	}
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 24}))
 	for _, name := range []string{"one", "two"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("%s is missing from the strip:\n%s", name, out)
@@ -613,7 +617,7 @@ func TestARowGoesByItsName(t *testing.T) {
 // the drift cost columns on both kinds.
 func TestEveryWorkspaceRowStartsAtTheSameColumn(t *testing.T) {
 	m := sidebarDeck(t)
-	out := ansi.Strip(m.renderSidebar(box{w: sidebarWidth, h: 24}))
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 24}))
 	col := -1
 	for _, l := range strings.Split(out, "\n") {
 		dot := strings.Index(l, statusDot)
@@ -637,7 +641,7 @@ func TestEveryWorkspaceRowStartsAtTheSameColumn(t *testing.T) {
 // is the field you cannot reconstruct from the others, and the strip is worth
 // having only if enough of it survives to tell two workspaces apart.
 func TestARowGetsMostOfTheStripForItsName(t *testing.T) {
-	room := sidebarWidth - 2*sidebarPadX - 2 // the status dot and its space
+	room := sidebarDefaultWidth - 2*sidebarPadX - 2 // the status dot and its space
 	if room < 28 {
 		t.Errorf("a row has %d columns for its name; telling two workspaces apart needs about 28", room)
 	}
@@ -665,7 +669,7 @@ func TestADefaultWorkspaceGoesByItsProject(t *testing.T) {
 		t.Fatalf("the deck has %d rows, want 2", len(rows))
 	}
 	for _, it := range rows {
-		row := m.sidebarRow(v, it, sidebarWidth)
+		row := m.sidebarRow(v, it, sidebarDefaultWidth)
 		name, meta := ansi.Strip(row[0]), strings.TrimSpace(ansi.Strip(row[1]))
 		if !strings.Contains(name, it.ProjectName) {
 			t.Errorf("the name line is %q, want the project %q", name, it.ProjectName)
@@ -752,7 +756,7 @@ func TestTheBookmarkIsDroppedWhenItIsTheNameAgain(t *testing.T) {
 func TestARowsTwoLinesStartAtTheSameColumn(t *testing.T) {
 	m := stripDeck(nil)
 	row := m.sidebarRow(m.sidebarView(),
-		Item{WorkspaceName: "flaky-login-test", Status: "working", Bookmark: "andrew/login-retry"}, sidebarWidth)
+		Item{WorkspaceName: "flaky-login-test", Status: "working", Bookmark: "andrew/login-retry"}, sidebarDefaultWidth)
 	if len(row) != 2 {
 		t.Fatalf("the row spent %d lines, want 2: %q", len(row), row)
 	}

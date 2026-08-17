@@ -42,10 +42,20 @@ import (
 // A left half of no width is not something a key can ask for (the divider clamps
 // well before that), so "0" and "never set" are the same thing, and both mean the
 // even split a fresh deck opens at.
+// SidebarWidth is how many columns wide the strip was dragged to.
+//
+// Columns rather than a fraction, unlike Split, because the strip's appetite does not
+// grow with the screen — see deckui.sidebarDefaultWidth. A fraction would widen it
+// every time you moved to a bigger monitor.
+//
+// omitempty, like Split and for the same reason: a strip of no width is not something
+// the drag can ask for (it clamps at a floor), so "0" and "never dragged" are the same
+// thing, and both mean the default width a fresh deck opens at.
 type DeckPrefs struct {
-	Scope   string  `json:"scope,omitempty"`
-	Sidebar bool    `json:"sidebar"`
-	Split   float64 `json:"split,omitempty"`
+	Scope        string  `json:"scope,omitempty"`
+	Sidebar      bool    `json:"sidebar"`
+	SidebarWidth int     `json:"sidebar_width,omitempty"`
+	Split        float64 `json:"split,omitempty"`
 }
 
 // The keys, named once. A save merges one key into the file's own object rather
@@ -56,9 +66,10 @@ type DeckPrefs struct {
 // TestTheKeysAreTheStructsOwnTags walks the struct by reflection and checks each of
 // these is a tag it really has, which is what makes the string safe to pass.
 const (
-	deckPrefScope   = "scope"
-	deckPrefSidebar = "sidebar"
-	deckPrefSplit   = "split"
+	deckPrefScope        = "scope"
+	deckPrefSidebar      = "sidebar"
+	deckPrefSidebarWidth = "sidebar_width"
+	deckPrefSplit        = "split"
 )
 
 // DeckPrefsPath returns the path of the global deck-preferences file.
@@ -129,6 +140,27 @@ func SaveDeckSidebar(on bool) error {
 		return nil
 	}
 	return saveDeckPref(deckPrefSidebar, on)
+}
+
+// SaveDeckSidebarWidth records how wide the attention strip should be next time, in
+// columns.
+//
+// Not validated, for the reason SaveDeckSplit is not: the deck clamps a remembered
+// width into what the terminal it opens on can spare, so a width chosen on a wide
+// screen degrades to "as wide as this one allows" rather than needing a range check
+// here that would have to guess the terminal.
+//
+// A no-op when unchanged, and this is the caller that needs it most: a drag is a
+// stream of motion events, most of which land on the column the last one did.
+func SaveDeckSidebarWidth(cols int) error {
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		return err
+	}
+	if prefs.SidebarWidth == cols {
+		return nil
+	}
+	return saveDeckPref(deckPrefSidebarWidth, cols)
 }
 
 // SaveDeckSplit records where the split's divider should sit next time, as the left

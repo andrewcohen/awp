@@ -661,6 +661,21 @@ func rememberedSidebar() bool {
 // saveDeckSidebar is the deck's SidebarSaver.
 func saveDeckSidebar(on bool) error { return state.SaveDeckSidebar(on) }
 
+// rememberedSidebarWidth is how wide the strip was dragged to, in columns. Zero —
+// which the deck reads as its default width — on an unreadable preferences file, the
+// same bargain rememberedSidebar makes.
+func rememberedSidebarWidth() int {
+	prefs, err := state.LoadDeckPrefs()
+	if err != nil {
+		deckDebugLogf("deck prefs: %v", err)
+		return 0
+	}
+	return prefs.SidebarWidth
+}
+
+// saveDeckSidebarWidth is the deck's SidebarWidthSaver.
+func saveDeckSidebarWidth(cols int) error { return state.SaveDeckSidebarWidth(cols) }
+
 // rememberedSplitFrac is where the split's divider was when the last deck exited,
 // as the left half's share of the width. Zero — which the deck reads as an even
 // split — on an unreadable preferences file, the same bargain rememberedSidebar
@@ -1084,6 +1099,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithScopeSaver(saveDeckScope).
 		WithSidebar(rememberedSidebar()).
 		WithSidebarSaver(saveDeckSidebar).
+		WithSidebarWidth(rememberedSidebarWidth()).
+		WithSidebarWidthSaver(saveDeckSidebarWidth).
 		WithSplitFrac(rememberedSplitFrac()).
 		WithSplitFracSaver(saveDeckSplitFrac).
 		// nil for `awp deck`; zdeck supplies one so the window keys render a

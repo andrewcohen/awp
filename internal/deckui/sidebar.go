@@ -52,12 +52,14 @@ import (
 // already the window key for a shell, and the two live in the same menu.
 const sidebarKey = "S"
 
-// sidebarWidth is the strip's width, in columns.
+// sidebarDefaultWidth is the strip's width until you drag its edge, in columns.
 //
-// Fixed rather than a fraction of the terminal. What goes on a row is a glyph and
-// a name, which is the same number of columns whether the terminal is 120 wide or
-// 400 — a fraction would spend a quarter of a wide screen on names that stopped
-// needing the room twenty columns ago.
+// A column count rather than a fraction of the terminal, and that is still true now
+// the number is yours to change. What goes on a row is a glyph and a name, which is
+// the same number of columns whether the terminal is 120 wide or 400 — a fraction
+// would spend a quarter of a wide screen on names that stopped needing the room
+// twenty columns ago. So the drag records columns, and a wider terminal gives the
+// extra room to the pane rather than to the strip.
 //
 // 36 rather than the 28 it started at. A row's useful content is a PR number and
 // the head of its title, and at 28 — less padding, bar and dot — that left about
@@ -65,7 +67,18 @@ const sidebarKey = "S"
 // The eight extra columns come off a pane that has plenty and hand the row back
 // most of a subject line. Narrow enough that a 120-column terminal still carries a
 // usable pane beside it.
-const sidebarWidth = 36
+const sidebarDefaultWidth = 36
+
+// sidebarMinWidth is the narrowest the strip may be dragged to.
+//
+// Below this it stops being a strip of rows and becomes a column of truncation: a
+// row spends two columns on the status dot and two more on its padding, so at 20
+// there are sixteen left for a name, which is about where `pr-2365-lantern-consumer`
+// still says something. Narrower than that and every row reads the same.
+//
+// It is a floor on the drag rather than a floor on the strip existing — see
+// sidebarWidth, which clamps a remembered width into what the terminal can spare.
+const sidebarMinWidth = 20
 
 // sidebarChildMinW is the narrowest thing the sidebar will leave beside itself:
 // one pane, with its chrome.
@@ -82,7 +95,33 @@ const sidebarChildMinW = paneMinW + paneChromeW
 // cursor on it — so a strip beside it would be the same answer twice, in the
 // narrower of the two.
 func (m *Model) showsSidebar() bool {
-	return m.sidebar && m.hostsTerminal() && m.width-sidebarWidth >= sidebarChildMinW
+	return m.sidebar && m.hostsTerminal() && m.sidebarFits()
+}
+
+// sidebarFits reports whether this terminal has room for the strip at all: the
+// narrowest strip, beside the narrowest pane.
+//
+// Asked against sidebarMinWidth rather than against the width you dragged to, so a
+// strip you widened on a big screen does not disappear on a small one — it comes
+// back narrow. Only a terminal with no room for even the minimum refuses.
+func (m *Model) sidebarFits() bool {
+	return m.width-sidebarMinWidth >= sidebarChildMinW
+}
+
+// sidebarWidth is how many columns the strip actually gets: what you dragged it
+// to, or the default, clamped to what this terminal can spare.
+//
+// The clamp is here rather than at the drag because the terminal can change size
+// after the drag. A width is remembered as the number you chose, and every screen
+// it is shown on answers for itself how much of that it can honour — the same
+// argument SaveDeckSplit makes for not validating a fraction on the way in.
+func (m *Model) sidebarWidth() int {
+	want := m.sidebarW
+	if want <= 0 {
+		want = sidebarDefaultWidth
+	}
+	room := max(m.width-sidebarChildMinW, sidebarMinWidth)
+	return min(max(want, sidebarMinWidth), room)
 }
 
 // sidebarCols is what the strip costs the child, which is nothing when it is not
@@ -90,7 +129,7 @@ func (m *Model) showsSidebar() bool {
 // child starts.
 func (m *Model) sidebarCols() int {
 	if m.showsSidebar() {
-		return sidebarWidth
+		return m.sidebarWidth()
 	}
 	return 0
 }
@@ -101,9 +140,9 @@ func (m *Model) sidebarCols() int {
 // a flag that renders nothing — a key that appears to do nothing reads as broken,
 // and the flag would then surprise you by taking effect on the next resize.
 func (m *Model) toggleSidebar() {
-	if !m.sidebar && m.width-sidebarWidth < sidebarChildMinW {
+	if !m.sidebar && !m.sidebarFits() {
 		m.status = fmt.Sprintf("sidebar: this terminal is %d columns, %d needed for a strip beside a pane",
-			m.width, sidebarWidth+sidebarChildMinW)
+			m.width, sidebarMinWidth+sidebarChildMinW)
 		return
 	}
 	m.sidebar = !m.sidebar

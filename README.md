@@ -1094,7 +1094,7 @@ it leaves on one press from either arrangement.
 | `x` | close the focused half; the other becomes an ordinary whole-screen pane |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
 | `a` | **the captain**, which takes this pane — or the whole split — down on the way. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
-| `S` | show or hide the sidebar — a 36-column strip down the left carrying every workspace, sectioned by what its agent is doing. **Remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
+| `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
@@ -1247,6 +1247,28 @@ is saved is the intent and not what fits: turn it on in a wide terminal and open
 the deck in a narrow one and the strip stays down for want of columns, but it comes
 back when the room does. A terminal too narrow to show it refuses the key and
 records nothing, rather than storing an answer the width chose for you.
+
+**Drag its right edge to resize it**, and that is remembered in the same file, as
+`sidebar_width`. The 36-column default has an argument behind it (below) and the
+argument is still right about the default — but what a row needs depends on how long
+your workspaces' names are, which awp cannot know and you can see. So grab the
+border, the way you grab a split's divider, and the number is yours.
+
+Two clamps, deliberately not one. The width **stored** is the number you dragged to,
+bounded only by a 20-column floor — narrower than that and every row is truncated to
+the same thing. The width **drawn** is that number bounded by what the terminal can
+spare beside a pane. Keeping them apart is what stops one session on a laptop from
+silently rewriting a width chosen on a large screen: the strip comes back narrow
+there and wide when you are back. It is also why a terminal too narrow for 36
+columns now gets a narrow strip rather than none — only one with no room for even the
+floor still refuses the key.
+
+Columns rather than a fraction of the screen, which is the opposite of the choice the
+split's divider makes. A split divides a fixed budget between two programs, so the
+interesting quantity is the ratio. The strip takes columns from a pane whose appetite
+does not grow with the screen, so the interesting quantity is how many — a fraction
+would widen the strip every time you moved to a bigger monitor, which is what the
+fixed number was there to prevent.
 
 The scope rather than a tally of agent states, which is what the strip carried
 first: the badge counts three things because it is three numbers wide, and
