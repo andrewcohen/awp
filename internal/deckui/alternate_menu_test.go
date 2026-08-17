@@ -120,10 +120,10 @@ func TestAlternatingFromASplitClosesBothHalves(t *testing.T) {
 // half of itself and leaving you looking at the deck.
 func TestTheMenusLSaysSoWithNowhereToGo(t *testing.T) {
 	m := splitDeck(t)
-	m = pressDeck(t, m, runeKey("a"))
+	m = pressDeck(t, m, agentKey())
 	before, ok := m.active.(*panePopover)
 	if !ok {
-		t.Fatalf("`a` opened %T (status %q)", m.active, m.status)
+		t.Fatalf("enter opened %T (status %q)", m.active, m.status)
 	}
 
 	m = pressDeck(t, m, menuKey())
@@ -180,7 +180,7 @@ func menuBinds(mn deckMenu, key string) bool {
 func twoPanesDeep(t *testing.T) Model {
 	t.Helper()
 	m := splitDeck(t)
-	m = pressDeck(t, m, runeKey("a"))
+	m = pressDeck(t, m, agentKey())
 	m = pressDeck(t, m, leaveKey())
 	m = pressDeck(t, m, runeKey("e"))
 	if _, ok := m.active.(*panePopover); !ok {

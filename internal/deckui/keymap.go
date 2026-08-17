@@ -26,7 +26,6 @@ type deckKeyMap struct {
 	HalfPageUp   key.Binding
 	ScopeCycle   key.Binding
 	Enter        key.Binding
-	AgentWindow  key.Binding
 	EditorWindow key.Binding
 	ReviewWindow key.Binding
 	ForgeMenu    key.Binding
@@ -67,7 +66,6 @@ func newDeckKeyMap() deckKeyMap {
 		HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "jump ½ page up")),
 		ScopeCycle:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "cycle scope (all → attention → inbox)")),
 		Enter:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "summon (create or focus the workspace tmux session)")),
-		AgentWindow:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),
 		EditorWindow: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "editor window ($EDITOR)")),
 		ReviewWindow: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "review this change (- inside switches scope)")),
 		ForgeMenu:    key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "forge menu (c review · o open · d/D description · r repair · m merge · s set PR #)")),
