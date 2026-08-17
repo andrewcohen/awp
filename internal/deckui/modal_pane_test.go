@@ -78,7 +78,7 @@ func paneModel(t *testing.T, backend PaneBackend) Model {
 }
 
 func allKinds() *fakePanes {
-	return &fakePanes{handles: map[string]bool{"agent": true, "editor": true, "vcs": true, "": true}}
+	return &fakePanes{handles: map[string]bool{"agent": true, "editor": true, "vcs": true, "": true, PaneKindCaptain: true}}
 }
 
 // The whole point of the backend: the deck's UI is unchanged and only where

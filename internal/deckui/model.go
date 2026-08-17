@@ -2761,6 +2761,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// opens the agent pane anyway. The letter went to the captain instead.
 		case key.Matches(msg, km.Enter):
 			return m.trigger(ActionSummon, "")
+		// Before the selected-row guard the window keys sit behind, and not after:
+		// the captain is not the cursor's workspace, so it opens from an empty deck
+		// and from a virtual inbox row alike.
+		case key.Matches(msg, km.Captain):
+			return m.openCaptain()
 		case key.Matches(msg, km.SendPrompt):
 			item, ok := m.selected()
 			if !ok {
@@ -5437,6 +5442,9 @@ func deckKeyGroups() []keyGroup {
 				{"enter", "summon (create or focus the workspace tmux session)"},
 				{"n", "new workspace"},
 				{"o", "open: fuzzy-pick a project from configured roots"},
+				// Listed with the doors rather than the windows: it is not one of the
+				// selected row's panes, and it opens from any row or none.
+				{"a", "the captain: an agent that drives awp itself (no repo, no row)"},
 			},
 		},
 		{
@@ -5469,6 +5477,9 @@ func deckKeyGroups() []keyGroup {
 				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},
 				{PaneMenuKey + " x", "close the focused half"},
 				{PaneMenuKey + " " + alternateKey, "go to the arrangement before this one, without stopping at the deck"},
+				// The captain's only door from in here: `a` on its own belongs to the
+				// program the pane is hosting.
+				{PaneMenuKey + " " + captainKey, "the captain (takes this pane, or the whole split, down)"},
 				{PaneMenuKey + " " + sidebarKey, "show or hide the attention sidebar"},
 			},
 		},
