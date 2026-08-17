@@ -125,9 +125,13 @@ func AllActions() []Action {
 	return all
 }
 
-// ReviewStackArg is the ActionOpenWindow arg `C` emits: open the review in a
-// `review` window in the workspace's tmux session, showing the same thing the
+// ReviewStackArg is the ActionOpenWindow arg the review falls back to: open it in
+// a `review` window in the workspace's tmux session, showing the same thing the
 // deck's own `c` shows — the whole change against its stack base.
+//
+// A fallback rather than a key. `C` used to emit it directly, opening the review in
+// a window on purpose; that key is the forge hub now and the window is only where
+// the in-deck viewer cannot go — unwired, or a row with no working copy to diff.
 //
 // A sentinel rather than a built command because the base is the workspace's
 // nearest stacked-parent bookmark (or trunk() when nothing is stacked), and
@@ -528,7 +532,7 @@ func (m *Model) syncProgressViewport() {
 type BookmarkLinkHandler func(item Item, bookmark string) error
 
 // PRNumberLinkHandler is called when the user pins (or clears) a PR
-// number override via the `p s` chord. prNumber == 0 clears the
+// number override via the `C s` chord. prNumber == 0 clears the
 // override; positive values pin the workspace to that PR number,
 // overriding bookmark-based PR-status resolution.
 type PRNumberLinkHandler func(item Item, prNumber int) error
@@ -1125,8 +1129,8 @@ func (m Model) WithPRFetcher(f PRFetcher) Model {
 	return m
 }
 
-// WithPRDescriptionLoader installs the fetch behind `p d`, the in-deck PR
-// description. Without it that key says so and `p D` — the tmux window, which
+// WithPRDescriptionLoader installs the fetch behind `C d`, the in-deck PR
+// description. Without it that key says so and `C D` — the tmux window, which
 // runs gh itself — is the way to read one.
 func (m Model) WithPRDescriptionLoader(l PRDescriptionLoader) Model {
 	m.prDescLoad = l
@@ -1213,7 +1217,7 @@ func (m Model) WithBookmarkLinkHandler(h BookmarkLinkHandler) Model {
 }
 
 // WithPRNumberLinkHandler installs the persistence callback used by the
-// `p s` chord. Without it, the chord shows a "not configured" status.
+// `C s` chord. Without it, the chord shows a "not configured" status.
 func (m Model) WithPRNumberLinkHandler(h PRNumberLinkHandler) Model {
 	m.prNumberLinkHandler = h
 	return m
@@ -1798,7 +1802,7 @@ func (m Model) prStatusRefreshCmd(now time.Time) (Model, tea.Cmd) {
 // "must have a PR-bearing workspace" eligibility check that the
 // periodic policy applies. Used by flows where the user just did
 // something that materially affects which PR belongs to which
-// workspace (new workspace from bookmark, review of a PR, `p s` save)
+// workspace (new workspace from bookmark, review of a PR, `C s` save)
 // — the trigger is a direct user signal, not a state observation, so
 // the row needs to reflect the new association even before the
 // downstream m.itemsAll picks up the PRNumber.
@@ -2781,11 +2785,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m.trigger(ActionOpenWindow, "editor")
 		case key.Matches(msg, km.ReviewWindow):
 			return m.openDiffModal(ScopeStackBase)
-		case key.Matches(msg, km.ReviewMainWin):
-			// The same review, in a tmux window beside the agent instead of in the
-			// deck's popup — for reading a change over a while, where a popup that
-			// closes when you switch away is the wrong container.
-			return m.trigger(ActionOpenWindow, ReviewStackArg)
+		case key.Matches(msg, km.ForgeMenu):
+			if _, ok := m.selected(); !ok {
+				return m, nil
+			}
+			// The verbs render as a popover — see forgeMenu.
+			m.active = forgeMenuModal{}
+			return m, nil
 		case key.Matches(msg, km.VCSWindow):
 			return m.trigger(ActionOpenWindow, "vcs")
 		case key.Matches(msg, km.ShellWindow):
@@ -2965,13 +2971,6 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			// No m.status: armedMenu renders the verbs as a popover, so putting them
 			// in the status bar too would say it twice.
 			m.active = &splitChordModal{item: item}
-			return m, nil
-		case key.Matches(msg, km.PRMenu):
-			if _, ok := m.selected(); !ok {
-				return m, nil
-			}
-			// The verbs render as a popover — see prMenu.
-			m.active = prMenuModal{}
 			return m, nil
 		case key.Matches(msg, km.PinChord):
 			if _, ok := m.selected(); !ok {
@@ -3221,7 +3220,7 @@ func (m *Model) acceptBookmarkSelection(name string, purpose bookmarkPurpose, ta
 			cmds = append(cmds, refreshCmd)
 		}
 		// A fresh link is a direct "this workspace is that PR now" signal,
-		// so force an immediate PR-status fetch — same as the `p s` PR-number
+		// so force an immediate PR-status fetch — same as the `C s` PR-number
 		// override. forcePRStatusRefresh bypasses both the throttle and the
 		// eligibility gate that prStatusRefreshCmd applies, which matters
 		// here because the just-linked bookmark isn't in m.itemsAll yet, so
@@ -3495,20 +3494,24 @@ func (m Model) blockIfSettingUp(item Item) (Model, bool) {
 }
 
 // openDiffModal opens awp's own diff viewer over the selected workspace at the
-// given scope — `c` opens at ScopeStackBase, and `-` inside the view switches to
-// another. Falls back to the named review window when the viewer isn't wired, or
-// when the row has no local working copy to diff — a virtual inbox row, or one
-// still being set up.
+// given scope — `c` and the forge hub's `c` open at ScopeStackBase, and `-` inside
+// the view switches to another. Falls back to the review window when the viewer
+// isn't wired, or when the row has no local working copy to diff — a virtual inbox
+// row, or one still being set up.
+//
+// The fallback carries ReviewStackArg rather than a bare `review`, so the window
+// shows the scope the modal would have. It used to open with none, which meant the
+// fallback quietly answered a different question than the key asked.
 func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	if m.diffLoad == nil {
-		return m.trigger(ActionOpenWindow, "review")
+		return m.trigger(ActionOpenWindow, ReviewStackArg)
 	}
 	item, ok := m.selected()
 	if !ok {
 		return m, nil
 	}
 	if item.Virtual || strings.TrimSpace(item.Path) == "" {
-		return m.trigger(ActionOpenWindow, "review")
+		return m.trigger(ActionOpenWindow, ReviewStackArg)
 	}
 	if m2, blocked := m.blockIfSettingUp(item); blocked {
 		return m2, nil
@@ -5441,7 +5444,6 @@ func deckKeyGroups() []keyGroup {
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
 				{"c", "review this change in the deck (- inside switches scope)"},
-				{"C", "review it in a tmux window beside the agent instead"},
 				{"v", "vcs window (jjui)"},
 				{"s", "shell window"},
 				{"i", "ci window (gh run watch)"},
@@ -5477,13 +5479,22 @@ func deckKeyGroups() []keyGroup {
 				{"D", "delete workspace (or default → delete project)"},
 				{"B", "link bookmark to workspace (drives PR glyph)"},
 				{"d", "open dev URL in browser (auto-discovered)"},
-				{"p o", "open this workspace's PR in browser"},
-				{"p m", "merge this workspace's PR (gh pr merge --squash, with confirmation)"},
-				{"p d", "read this workspace's PR description in the deck (scrollable, esc closes)"},
-				{"p D", "open the same description in a \"pr description\" tmux window (gh pr view | less)"},
-				{"p r", "repair this workspace's PR (prepopulates a fix prompt)"},
-				{"p s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 				{",", "edit global state file in $EDITOR"},
+			},
+		},
+		{
+			// The forge hub, spelled out. The menu itself lists the verbs when you press
+			// C, but a key you can only read by pressing it is not discoverable, so the
+			// overlay carries them too — the same reason the pane menu's verbs are here.
+			Title: "Forge (C then a verb)",
+			Keys: [][2]string{
+				{"C c", "review this change — the same viewer c opens"},
+				{"C o", "open this workspace's PR in browser"},
+				{"C m", "merge this workspace's PR (gh pr merge --squash, with confirmation)"},
+				{"C d", "read this workspace's PR description in the deck (scrollable, esc closes)"},
+				{"C D", "open the same description in a \"pr description\" tmux window (gh pr view | less)"},
+				{"C r", "repair this workspace's PR (prepopulates a fix prompt)"},
+				{"C s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 			},
 		},
 		{

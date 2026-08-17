@@ -7,16 +7,35 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// prMenuModal is the PR action chord (the `p` key): a keys-only menu
-// (o/d/r/m/s). It renders no overlay of its own — the row list stays visible
-// beneath — so it is a bodyModal whose view is the row list, and a chordModal whose
-// menu floats over it, where every other menu in the deck goes. It holds no state;
-// each action re-reads the selected row.
-type prMenuModal struct{}
+// forgeMenuModal is the deck's code-forge hub (the `C` key): the one-off things you
+// can do to this row's change and its PR, in one keys-only menu.
+//
+// One hub rather than a key each. These verbs have nothing in common but their
+// subject — a browser, a description, a merge — so each would otherwise want its
+// own top-level letter, and the deck has run out of letters that mean anything.
+// What they do share is that you reach for exactly one at a time and then go back
+// to what you were doing, which is what a menu is for.
+//
+// It renders no overlay of its own — the row list stays visible beneath — so it is
+// a bodyModal whose view is the row list, and a chordModal whose menu floats over
+// it, where every other menu in the deck goes (menu.go). That is the same popover
+// the pane menu opens, deliberately: which key opened a menu should not change what
+// a menu looks like. It holds no state; each action re-reads the selected row.
+//
+// This was the `p` menu until `C` took it over, and `p` is unbound rather than kept
+// as a second door — one way to say a thing.
+//
+// `C` itself used to open the review in a tmux window. Nothing replaced that: the
+// window has no meaning under a pane host (#206), and `| c` already puts the change
+// beside the agent, which is what it was for.
+type forgeMenuModal struct{}
 
-// prMenu is the PR verbs for this row.
-func prMenu() deckMenu {
+// forgeMenu is the hub's verbs for this row.
+func forgeMenu() deckMenu {
 	return menu(
+		// The review first: it is the verb you want most often, and the only one here
+		// that opens a surface rather than doing a thing and closing.
+		[2]string{"c", "review the change"},
 		[2]string{"o", "open the PR in a browser"},
 		[2]string{"d", "read the description here"},
 		[2]string{"D", "read the description in a window"},
@@ -30,9 +49,9 @@ func prMenu() deckMenu {
 	)
 }
 
-func (prMenuModal) chordMenu() deckMenu { return prMenu() }
+func (forgeMenuModal) chordMenu() deckMenu { return forgeMenu() }
 
-// prDescWindow is the tmux window `p D` opens the description into. Named for
+// prDescWindow is the tmux window `C D` opens the description into. Named for
 // what is in it: the session already has `agent`, `editor`, `review` and `vcs`,
 // and this used to join them as `pr`, which said which subject rather than which
 // of the several PR things you might have open.
@@ -57,22 +76,32 @@ func prNumberForAction(m *Model, what string) (Item, int, bool) {
 		return Item{}, 0, false
 	}
 	if status.Number <= 0 {
-		m.status = "pr: " + what + " unavailable (no PR number cached — try p s)"
+		m.status = "pr: " + what + " unavailable (no PR number cached — try C s)"
 		return Item{}, 0, false
 	}
 	return item, status.Number, true
 }
 
-func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
+func (forgeMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return nil
 	}
 	switch key.String() {
 	case "esc", "q", "ctrl+c":
+		// Cleared rather than echoed: you pressed esc, so you know. Per the design
+		// system, a cancellation leaves no message behind.
 		m.active = nil
-		m.status = "pr: cancelled"
+		m.status = ""
 		return nil
+	case "c":
+		// The deck's own `c`, from here. Not a duplicate of it: `c` is the key you
+		// reach for when reading a change is the thing you came to do, and this row
+		// is for when you opened the hub and then decided the answer was to look.
+		m.active = nil
+		updated, cmd := m.openDiffModal(ScopeStackBase)
+		*m = updated.(Model)
+		return cmd
 	case "o":
 		m.active = nil
 		item, ok := m.selected()
@@ -102,7 +131,7 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if m.prDescLoad == nil {
-			m.status = "pr: reading descriptions in the deck unavailable — p D opens it in a window"
+			m.status = "pr: reading descriptions in the deck unavailable — C D opens it in a window"
 			return nil
 		}
 		// In the deck, because reading what a PR says is a glance and this used to
@@ -164,7 +193,7 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if status.Number <= 0 {
-			m.status = "pr: merge unavailable (no PR number cached — try p s)"
+			m.status = "pr: merge unavailable (no PR number cached — try C s)"
 			return nil
 		}
 		if status.State != PRStateOpen {
@@ -191,6 +220,6 @@ func (prMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (prMenuModal) view(m *Model, b box) (left, right string) { return m.renderList(b.w), "" }
+func (forgeMenuModal) view(m *Model, b box) (left, right string) { return m.renderList(b.w), "" }
 
-func (prMenuModal) footerHelp() string { return "" }
+func (forgeMenuModal) footerHelp() string { return "" }

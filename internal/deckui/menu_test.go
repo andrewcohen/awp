@@ -88,7 +88,7 @@ func TestTheMenuStaysInsideANarrowTerminal(t *testing.T) {
 func TestTheMenuIsNotWiderThanItNeeds(t *testing.T) {
 	m := splitDeck(t)
 	m.width = 200
-	if got := lipgloss.Width(ansi.Strip(prMenu().render(m.width))); got >= m.width {
+	if got := lipgloss.Width(ansi.Strip(forgeMenu().render(m.width))); got >= m.width {
 		t.Errorf("the pr menu is %d columns wide on a %d-column terminal", got, m.width)
 	}
 }
@@ -101,7 +101,7 @@ func TestTheMenuIsNotWiderThanItNeeds(t *testing.T) {
 // menu rather than to what is on screen.
 func TestEveryMenuIsVerbsAndNothingElse(t *testing.T) {
 	m := splitDeck(t)
-	for i, mn := range []deckMenu{panePrefixMenu(&m), splitPrefixMenu(&m), splitChordMenu(), prMenu()} {
+	for i, mn := range []deckMenu{panePrefixMenu(&m), splitPrefixMenu(&m), splitChordMenu(), forgeMenu()} {
 		if len(mn.verbs) == 0 {
 			t.Errorf("menu %d has no verbs", i)
 			continue

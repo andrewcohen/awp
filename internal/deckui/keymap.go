@@ -12,85 +12,83 @@ import "charm.land/bubbles/v2/key"
 // convention rather than a user-discoverable binding, and centralising
 // them adds noise without leverage.
 type deckKeyMap struct {
-	Help          key.Binding
-	Jobs          key.Binding
-	Sessions      key.Binding
-	Watch         key.Binding
-	WatchWindow   key.Binding
-	Quit          key.Binding
-	Filter        key.Binding
-	Find          key.Binding
-	Down          key.Binding
-	Up            key.Binding
-	HalfPageDown  key.Binding
-	HalfPageUp    key.Binding
-	ScopeCycle    key.Binding
-	Enter         key.Binding
-	AgentWindow   key.Binding
-	EditorWindow  key.Binding
-	ReviewWindow  key.Binding
-	ReviewMainWin key.Binding
-	VCSWindow     key.Binding
-	ShellWindow   key.Binding
-	CIWindow      key.Binding
-	LastSession   key.Binding
-	ResumePane    key.Binding
-	Delete        key.Binding
-	Rename        key.Binding
-	LinkBookmark  key.Binding
-	NewMenu       key.Binding
-	ReviewPick    key.Binding
-	Open          key.Binding
-	UserActions   key.Binding
-	EditState     key.Binding
-	PRMenu        key.Binding
-	SplitChord    key.Binding
-	OpenURL       key.Binding
-	SendPrompt    key.Binding
-	PinChord      key.Binding
-	GotoTop       key.Binding
-	GotoBottom    key.Binding
+	Help         key.Binding
+	Jobs         key.Binding
+	Sessions     key.Binding
+	Watch        key.Binding
+	WatchWindow  key.Binding
+	Quit         key.Binding
+	Filter       key.Binding
+	Find         key.Binding
+	Down         key.Binding
+	Up           key.Binding
+	HalfPageDown key.Binding
+	HalfPageUp   key.Binding
+	ScopeCycle   key.Binding
+	Enter        key.Binding
+	AgentWindow  key.Binding
+	EditorWindow key.Binding
+	ReviewWindow key.Binding
+	ForgeMenu    key.Binding
+	VCSWindow    key.Binding
+	ShellWindow  key.Binding
+	CIWindow     key.Binding
+	LastSession  key.Binding
+	ResumePane   key.Binding
+	Delete       key.Binding
+	Rename       key.Binding
+	LinkBookmark key.Binding
+	NewMenu      key.Binding
+	ReviewPick   key.Binding
+	Open         key.Binding
+	UserActions  key.Binding
+	EditState    key.Binding
+	SplitChord   key.Binding
+	OpenURL      key.Binding
+	SendPrompt   key.Binding
+	PinChord     key.Binding
+	GotoTop      key.Binding
+	GotoBottom   key.Binding
 }
 
 func newDeckKeyMap() deckKeyMap {
 	return deckKeyMap{
-		Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help overlay")),
-		Jobs:          key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "jobs overlay")),
-		Sessions:      key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "hosted sessions")),
-		Watch:         key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "watch dev-loop progress for the selected workspace")),
-		WatchWindow:   key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "open the watch view in a new tmux window")),
-		Quit:          key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q/esc", "quit · esc clears filter first")),
-		Filter:        key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter rows · esc clears")),
-		Find:          key.NewBinding(key.WithKeys("f", "F"), key.WithHelp("f", "find: collapse to sections → expand one → jump")),
-		Down:          key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("↓/j", "move cursor")),
-		Up:            key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "move cursor")),
-		HalfPageDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "jump ½ page down")),
-		HalfPageUp:    key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "jump ½ page up")),
-		ScopeCycle:    key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "cycle scope (all → attention → inbox)")),
-		Enter:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "summon (create or focus the workspace tmux session)")),
-		AgentWindow:   key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),
-		EditorWindow:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "editor window ($EDITOR)")),
-		ReviewWindow:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "review this change (- inside switches scope)")),
-		ReviewMainWin: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "review it in a tmux window instead of the deck")),
-		VCSWindow:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "vcs window (jjui)")),
-		ShellWindow:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shell window")),
-		CIWindow:      key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "ci window (gh run watch)")),
-		LastSession:   key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "switch to the previous pane (tmux: last session)")),
-		ResumePane:    key.NewBinding(key.WithKeys(PaneLeaveKey), key.WithHelp(PaneLeaveKey, "back into the pane you left")),
-		Delete:        key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete workspace (or project for default row)")),
-		Rename:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename workspace")),
-		LinkBookmark:  key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "link a bookmark to the selected workspace")),
-		NewMenu:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new workspace")),
-		ReviewPick:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "pick a PR to review")),
-		Open:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open: fuzzy-pick a project from configured roots")),
-		UserActions:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "user actions menu")),
-		EditState:     key.NewBinding(key.WithKeys(","), key.WithHelp(",", "edit raw state JSON in $EDITOR")),
-		PRMenu:        key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "PR menu (o open · m merge · r repair · s set PR #)")),
-		SplitChord:    key.NewBinding(key.WithKeys("|"), key.WithHelp("|", "split: agent beside c diff · v vcs · e editor · s shell · i ci · W watch")),
-		OpenURL:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "open captured dev-server URL")),
-		SendPrompt:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "send a typed prompt to the workspace's agent")),
-		PinChord:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "pin chord (mm default · m<letter> group · mD unpin · mR name)")),
-		GotoTop:       key.NewBinding(key.WithKeys("g"), key.WithHelp("gg", "jump to top of list")),
-		GotoBottom:    key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "jump to bottom of list")),
+		Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help overlay")),
+		Jobs:         key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "jobs overlay")),
+		Sessions:     key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "hosted sessions")),
+		Watch:        key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "watch dev-loop progress for the selected workspace")),
+		WatchWindow:  key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "open the watch view in a new tmux window")),
+		Quit:         key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q/esc", "quit · esc clears filter first")),
+		Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter rows · esc clears")),
+		Find:         key.NewBinding(key.WithKeys("f", "F"), key.WithHelp("f", "find: collapse to sections → expand one → jump")),
+		Down:         key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("↓/j", "move cursor")),
+		Up:           key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "move cursor")),
+		HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("ctrl+d", "jump ½ page down")),
+		HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "jump ½ page up")),
+		ScopeCycle:   key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "cycle scope (all → attention → inbox)")),
+		Enter:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "summon (create or focus the workspace tmux session)")),
+		AgentWindow:  key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "agent window (re-attach without re-prompting)")),
+		EditorWindow: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "editor window ($EDITOR)")),
+		ReviewWindow: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "review this change (- inside switches scope)")),
+		ForgeMenu:    key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "forge menu (c review · o open · d/D description · r repair · m merge · s set PR #)")),
+		VCSWindow:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "vcs window (jjui)")),
+		ShellWindow:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "shell window")),
+		CIWindow:     key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "ci window (gh run watch)")),
+		LastSession:  key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "switch to the previous pane (tmux: last session)")),
+		ResumePane:   key.NewBinding(key.WithKeys(PaneLeaveKey), key.WithHelp(PaneLeaveKey, "back into the pane you left")),
+		Delete:       key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete workspace (or project for default row)")),
+		Rename:       key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename workspace")),
+		LinkBookmark: key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "link a bookmark to the selected workspace")),
+		NewMenu:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new workspace")),
+		ReviewPick:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "pick a PR to review")),
+		Open:         key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open: fuzzy-pick a project from configured roots")),
+		UserActions:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "user actions menu")),
+		EditState:    key.NewBinding(key.WithKeys(","), key.WithHelp(",", "edit raw state JSON in $EDITOR")),
+		SplitChord:   key.NewBinding(key.WithKeys("|"), key.WithHelp("|", "split: agent beside c diff · v vcs · e editor · s shell · i ci · W watch")),
+		OpenURL:      key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "open captured dev-server URL")),
+		SendPrompt:   key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "send a typed prompt to the workspace's agent")),
+		PinChord:     key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "pin chord (mm default · m<letter> group · mD unpin · mR name)")),
+		GotoTop:      key.NewBinding(key.WithKeys("g"), key.WithHelp("gg", "jump to top of list")),
+		GotoBottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "jump to bottom of list")),
 	}
 }
