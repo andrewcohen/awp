@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/config"
+	"github.com/andrewcohen/awp/internal/state"
 )
 
 // The captain's system-prompt append: who it is, and what it may do.
@@ -70,14 +72,17 @@ func captainPreamble(projects []string) string {
 	b.WriteString("that take `--project` will refuse rather than guess.\n\n")
 
 	if len(projects) > 0 {
-		b.WriteString("The projects you can name:\n")
+		b.WriteString("The projects with work in them:\n")
 		for _, p := range projects {
 			fmt.Fprintf(&b, "  - %s\n", p)
 		}
-		b.WriteString("\n")
+		b.WriteString("\nThat is where the workspaces are, not everything on the machine. If you ")
+		b.WriteString("are asked about a project not on this list, you can still name it — pass ")
+		b.WriteString("its name, or a path to it — but do not go looking for one.\n\n")
 	} else {
-		b.WriteString("No projects are configured under `deck.project_roots`, so there are ")
-		b.WriteString("none to name yet. Say so if you are asked to act on one.\n\n")
+		b.WriteString("There are no workspaces yet, in any project, so there is nothing to ")
+		b.WriteString("report on. Creating the first one is still something you can do, given a ")
+		b.WriteString("project name or a path.\n\n")
 	}
 
 	b.WriteString("## What you can read\n\n")
@@ -162,23 +167,50 @@ func captainPreambleFile(dir string) (string, bool) {
 		return "", false
 	}
 	path := filepath.Join(dir, "preamble.md")
-	if err := os.WriteFile(path, []byte(captainPreamble(captainProjectNames(cfg))), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(captainPreamble(captainProjectNames())), 0o644); err != nil {
 		return "", false
 	}
 	return path, true
 }
 
-// captainProjectNames is the projects the captain may name, from the same roots
-// the deck's `o` picker walks — so the captain and the picker cannot disagree
-// about what a project is.
-func captainProjectNames(cfg config.Config) []string {
-	projects, err := discoverProjects(cfg.Deck.ProjectRoots, 4)
+// captainProjectNames is the projects awp actually has workspaces in.
+//
+// Deliberately not discoverProjects, which walks deck.project_roots and finds every
+// repository under them. That is the right list for the deck's `o` picker, whose whole
+// job is opening a project awp does not know about yet; it is the wrong list here. On
+// a real machine it came to 56 entries, including a notes vault and some advent-of-code
+// solutions — repos the captain will never be asked about, spending its system prompt
+// and inviting it to reason about work that does not exist.
+//
+// What the captain is *told* about and what it can *address* are two questions, and
+// only this one narrows. resolveProjectRoot still accepts any name under the roots, or
+// a path, so the captain can be pointed at a project that is not on the deck — it just
+// will not go looking for one.
+//
+// Reads the store the deck reads. A read that fails yields no names rather than an
+// error: a captain that knows its verbs but not its projects can still be told one,
+// where a captain that would not start is no use at all.
+func captainProjectNames() []string {
+	byRepo, err := state.NewJSONStore().LoadAll()
 	if err != nil {
 		return nil
 	}
-	names := make([]string, 0, len(projects))
-	for _, p := range projects {
-		names = append(names, p.Name)
+	seen := map[string]bool{}
+	names := make([]string, 0, len(byRepo))
+	for root, entries := range byRepo {
+		// A repo with no workspaces left is not somewhere work is happening. The
+		// store keeps such a bucket around after the last delete, so counting it
+		// would put an empty project on the list for as long as the file lives.
+		if len(entries) == 0 {
+			continue
+		}
+		name := projectNameFor(root)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }

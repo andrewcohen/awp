@@ -40,12 +40,31 @@ func TestThePreambleTellsItToNameItsTarget(t *testing.T) {
 	}
 }
 
-// With no projects configured it says so, rather than printing an empty list the
-// captain would read as "there are none I am allowed to touch".
-func TestThePreambleSaysWhenThereAreNoProjects(t *testing.T) {
+// With no workspaces anywhere it says so, rather than printing an empty list the
+// captain would read as "there is nothing I am allowed to touch".
+//
+// It used to point at deck.project_roots, which was right when the list was every repo
+// under those roots. The list is now the projects that have workspaces, so an empty one
+// means no work exists yet — not that the config is wrong — and creating the first
+// workspace is still something the captain can do.
+func TestThePreambleSaysWhenThereIsNoWorkYet(t *testing.T) {
 	got := captainPreamble(nil)
-	if !strings.Contains(got, "project_roots") {
-		t.Errorf("with no projects the preamble should point at deck.project_roots:\n%s", got)
+	if !strings.Contains(got, "no workspaces yet") {
+		t.Errorf("with no workspaces the preamble should say so:\n%s", got)
+	}
+	if !strings.Contains(got, "still something you can do") {
+		t.Errorf("the empty case should not read as a dead end:\n%s", got)
+	}
+}
+
+// The list is what awp has, not what is on the machine, and it says which — otherwise a
+// captain asked about a project it cannot see concludes the project does not exist.
+func TestThePreambleSaysTheListIsNotEverything(t *testing.T) {
+	got := captainPreamble([]string{"awp", "zmx"})
+	for _, want := range []string{"work in them", "not everything on the machine", "you can still name it"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the preamble never says %q, so the list reads as exhaustive:\n%s", want, got)
+		}
 	}
 }
 
