@@ -123,6 +123,13 @@ func captainPreamble(projects []string) string {
 	b.WriteString("  awp workspace rename <old> <new>\n")
 	b.WriteString("      Renames a workspace, which moves its directory and its session. Prefer\n")
 	b.WriteString("      `label` when what you want is for a row to read better.\n\n")
+	b.WriteString("\nGetting a change shipped is a send, not a verb of your own. `awp ship` is what ")
+	b.WriteString("a workspace does with its own finished change — how depends on the repo, and it ")
+	b.WriteString("has to run where the change is. You have no workspace and no change, so say ")
+	b.WriteString("`awp workspace send --project <p> <workspace> 'ship it'` and the agent that ")
+	b.WriteString("wrote the work ships it. That is also what keeps a PR's title and description ")
+	b.WriteString("written by whoever did the work rather than by you.\n\n")
+
 	b.WriteString("Those verbs are complete, so if one fails it is a real failure and worth ")
 	b.WriteString("reporting. What is still missing is a way for another agent to answer you: ")
 	b.WriteString("`send` is one-way, so ask a question only when the user is there to relay the ")

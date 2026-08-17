@@ -143,6 +143,79 @@ func (c *confirmDeleteModal) renderPopover(m *Model, b box) string {
 	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
+// confirmShipModal is the ship confirmation popover (y/N), the deck's `C S`.
+//
+// Confirmed rather than immediate, and this is the one place the deck differs
+// from `awp ship` on purpose. The verb is typed by an agent that has just
+// finished the work and means it; the key is two presses away from a cursor
+// resting on whichever row you last looked at, and what it moves is the trunk
+// bookmark every other workspace branches from. A `y` is cheap next to shipping
+// the wrong row.
+//
+// It names the workspace and says what the repo's style will do, because the
+// deck is where you are least likely to remember which style this repo is on.
+type confirmShipModal struct {
+	target Item
+}
+
+func newConfirmShip(target Item) (*confirmShipModal, string) {
+	return &confirmShipModal{target: target},
+		fmt.Sprintf("ship %s? [y/N]", target.WorkspaceName)
+}
+
+func (c *confirmShipModal) update(m *Model, msg tea.Msg) tea.Cmd {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return nil
+	}
+	switch strings.ToLower(key.String()) {
+	case "y", "enter":
+		m.active = nil
+		if m.handler == nil {
+			m.status = "ship: handler not configured"
+			return nil
+		}
+		updated, cmd := m.startAction(ActionShip, c.target, "")
+		*m = updated.(Model)
+		return cmd
+	case "n", "esc", "q":
+		m.active = nil
+		m.status = ""
+	}
+	return nil
+}
+
+func (c *confirmShipModal) footerHelp() string { return "" }
+
+func (c *confirmShipModal) renderPopover(m *Model, b box) string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colAccent)).
+		Padding(1, 2).
+		Width(fit(64+borderCells, b))
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+	hintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted))
+
+	name := strings.TrimSpace(c.target.WorkspaceName)
+	if name == "" {
+		name = "this workspace"
+	}
+	lines := []string{
+		titleStyle.Render("Ship " + name + "?"),
+		"",
+		// What it does is the repo's config, not the deck's to state as fact —
+		// so the modal says where the answer comes from and what is checked
+		// first, and leaves the steps to the progress modal that runs them.
+		labelStyle.Render("Ships the way this repo's \"ship\" config says, after"),
+		labelStyle.Render("re-checking the dev-loop gates. Conflicts stop it and"),
+		labelStyle.Render("ask this workspace's agent to resolve them."),
+		"",
+		hintStyle.Render("y confirm · n / esc cancel"),
+	}
+	return boxStyle.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+}
+
 // confirmMergeModal is the merge-PR confirmation popover (y/N).
 type confirmMergeModal struct {
 	target Item

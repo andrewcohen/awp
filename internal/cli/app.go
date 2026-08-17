@@ -47,6 +47,10 @@ type App struct {
 	review        reviewWorkflow
 	isPiped       func(io.Reader) bool
 	isInteractive func(io.Reader) bool
+	// shipSvc overrides the service `awp ship` lists workspaces through. Unset
+	// in production, where it is built from the resolved repo root — see
+	// App.shipService for why the ambient svc is the wrong one there.
+	shipSvc workspace.Service
 }
 
 func NewApp(svc workspace.Service, out io.Writer) *App {
@@ -89,6 +93,8 @@ func (a *App) Run(args []string) error {
 		return runRunJob(a.svc, a.runner, args[1:])
 	case "review":
 		return a.runReview(args[1:])
+	case "ship":
+		return a.runShip(args[1:])
 	case "logs":
 		return runLogs(args[1:], a.out)
 	case "watch":
@@ -926,7 +932,7 @@ func (a *App) runReview(args []string) error {
 }
 
 func (a *App) usage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|mini-deck|diff|doctor|review|logs|config|workspace|w> ...")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <deck|mini-deck|diff|doctor|review|ship|logs|config|workspace|w> ...")
 	return nil
 }
 

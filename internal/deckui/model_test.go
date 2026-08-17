@@ -2627,6 +2627,96 @@ func TestForgeMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	}
 }
 
+// `C S` confirms, then dispatches ActionShip and nothing else.
+//
+// The deck deliberately checks none of ship's preconditions itself — not the
+// repo's style, not the gates, not whether there is a PR. All of that is the
+// handler's, which is the path `awp ship` takes; a second opinion here is how a
+// key and a verb come to ship by different rules. So what this pins is that the
+// key asks and then delegates.
+func TestForgeMenuShipKeyConfirmsThenDispatchesActionShip(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
+	var gotReq ActionRequest
+	calls := 0
+	handler := func(req ActionRequest) error { calls++; gotReq = req; return nil }
+	model := New([]Item{item}, handler)
+
+	updated, _ := model.Update(runeKey("C"))
+	updated, _ = updated.(Model).Update(runeKey("S"))
+	m := updated.(Model)
+	cs, ok := m.active.(*confirmShipModal)
+	if !ok {
+		t.Fatalf("expected confirm-ship modal after C S, got %T", m.active)
+	}
+	if cs.target.WorkspaceName != "ws" {
+		t.Fatalf("confirm targets %q, want ws", cs.target.WorkspaceName)
+	}
+	if calls != 0 {
+		t.Fatalf("ship must not dispatch before confirmation; got calls=%d", calls)
+	}
+	// It names the workspace and says where the steps come from, rather than
+	// stating them as fact — which style this repo is on is config, and the deck
+	// is where you are least likely to remember.
+	view := cs.renderPopover(&m, m.childBox())
+	if !strings.Contains(view, "Ship ws?") || !strings.Contains(view, "\"ship\" config") {
+		t.Fatalf("confirm should name the workspace and cite the config; got %q", view)
+	}
+
+	updated, cmd := m.Update(runeKey("y"))
+	got := updated.(Model)
+	if got.active != nil {
+		t.Fatalf("expected confirm-ship modal cleared after y")
+	}
+	// Foreground progress, like a merge: it rewrites a bookmark other
+	// workspaces read, so it is worth watching finish.
+	if !got.progressMode {
+		t.Fatalf("expected the progress modal to open and stay until success/failure")
+	}
+	drainCmd(cmd)
+	if calls != 1 {
+		t.Fatalf("expected handler called once, got %d", calls)
+	}
+	if gotReq.Action != ActionShip {
+		t.Fatalf("expected ActionShip; got %v", gotReq.Action)
+	}
+	if gotReq.Arg != "" {
+		t.Errorf("ship takes no arg — the handler reads the repo's style; got %q", gotReq.Arg)
+	}
+}
+
+// n / esc leaves nothing behind, per the design system: you pressed cancel, so
+// echoing it is noise.
+func TestShipConfirmCancelDispatchesNothing(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r"}
+	calls := 0
+	model := New([]Item{item}, func(ActionRequest) error { calls++; return nil })
+	updated, _ := model.Update(runeKey("C"))
+	updated, _ = updated.(Model).Update(runeKey("S"))
+	updated, _ = updated.(Model).Update(runeKey("n"))
+	m := updated.(Model)
+	if m.active != nil {
+		t.Fatalf("expected the confirm cleared after n, got %T", m.active)
+	}
+	if m.status != "" {
+		t.Errorf("a cancellation should leave no status; got %q", m.status)
+	}
+	if calls != 0 {
+		t.Errorf("cancel dispatched an action: calls=%d", calls)
+	}
+}
+
+// `C S` and `C s` are different verbs one shift apart, so the lowercase must
+// still be the PR-number override rather than a second door to shipping.
+func TestShipKeyDoesNotShadowTheLowercasePRNumberKey(t *testing.T) {
+	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r"}
+	model := New([]Item{item}, func(ActionRequest) error { return nil })
+	updated, _ := model.Update(runeKey("C"))
+	updated, _ = updated.(Model).Update(runeKey("s"))
+	if _, ok := updated.(Model).active.(*prNumberModal); !ok {
+		t.Fatalf("C s should still open the PR-number modal, got %T", updated.(Model).active)
+	}
+}
+
 // A successful merge force-refetches the merged PR's repo so its status
 // updates immediately (the merged PR drops out of the open-PR cache),
 // bypassing the prStatusMinInterval throttle.
