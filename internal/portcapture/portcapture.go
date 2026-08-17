@@ -77,7 +77,12 @@ func Discover(ctx context.Context, panePIDsBySession map[string][]int) (map[stri
 	if len(pidToSession) == 0 {
 		return nil, nil
 	}
-	listeners, err := listListeners(ctx)
+	// Only the descendants' sockets survive the bucketing below, so those are
+	// the only ones worth asking about. On darwin that is the difference
+	// between lsof walking every open file on the machine and walking a few
+	// dozen processes — measured at ~100ms of CPU against ~20ms, which the deck
+	// was paying every couple of seconds whether or not anything was serving.
+	listeners, err := listListeners(ctx, sortedPIDs(pidToSession))
 	if err != nil {
 		return nil, fmt.Errorf("port discovery: list listeners: %w", err)
 	}
@@ -94,6 +99,17 @@ func Discover(ctx context.Context, panePIDsBySession map[string][]int) (map[stri
 		}
 	}
 	return out, nil
+}
+
+// sortedPIDs is the PID set as a stable slice, so what the platform call is
+// asked for does not depend on map order.
+func sortedPIDs(bySession map[int]string) []int {
+	pids := make([]int, 0, len(bySession))
+	for pid := range bySession {
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	return pids
 }
 
 // pickURL chooses one listener per the heuristic documented on the
