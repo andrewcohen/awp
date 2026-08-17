@@ -355,7 +355,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `s` | Shell window |
 | `i` | CI window (`gh run watch`) |
 | `r` | Pick a PR to review |
-| `x` | User actions menu (configurable via `actions` in config) |
+| `x` | User actions menu (configurable via `actions` in config). Also `ctrl+b x` from inside a pane or a split |
 | `n` | New workspace (inline form: workspace name / start-from / agent prompt). `start-from` is a select with `main` (default) and `pick a bookmark…` (opens the bookmark picker). The form also surfaces a `Will create bookmark:` hint when `deck.bookmark_prefix` is configured. |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style section → workspace jump. Stage 1 collapses the list to just section headers — both pinned register sections (see the `m` chord) and unpinned project headers — and hints each one, so a long list fits on one screen; picking one expands only that section (the rest stay as one-line headers for context) and scopes stage 2 to its rows. `backspace` re-collapses to the header list. (In the inbox scope there are no headers, so `f` hints every row directly.) |
@@ -670,6 +670,8 @@ Set `"background": true` to run the action detached via the jobs subsystem inste
 Set `"focus": false` to keep the action foregrounded (it gets a real tmux window, runs interactively, scrollback intact) but **don't** switch the tmux client to it on launch. Useful for spawning a long-running watcher you'll check on later without losing your place in the deck. Ignored when `background` is true.
 
 The action menu lists actions alphabetically, so an alias stays where you learned it.
+
+The same actions are reachable from inside a pane or a split, under `ctrl+b x` — the ctrl+b menu carries a **user actions** row when the workspace's repo has any configured, and the key after it is the alias. Two steps rather than the aliases sitting on the ctrl+b menu directly, because an alias is yours to choose: an action aliased `c` would otherwise take the diff key. Behind `x` it collides with nothing. `ctrl+b` closes the focused half of a split with `q`, which is what it moved to when `x` became the actions key.
 
 Under `awp zdeck` a foreground action gets a **pane** instead of a tmux window, and a long-lived zmx session behind it — see [zdeck](#zdeck-proof-of-concept) for what that changes, including the fact that `focus` has no meaning there.
 
@@ -1113,7 +1115,8 @@ it leaves on one press from either arrangement.
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle. **Where you leave it is remembered globally**, in `~/.awp/deck-prefs.json` beside `P`'s scope and `S`'s sidebar, so the next split — and the next deck — opens there. Stored as a fraction rather than a column count, so it means the same layout on a terminal of another width, and the clamp that keeps a half above a pane's minimum means a divider set on a wide screen degrades sensibly on a narrow one |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
-| `x` | close the focused half; the other becomes an ordinary whole-screen pane |
+| `q` | close the focused half; the other becomes an ordinary whole-screen pane |
+| `x` | **user actions** — opens a second menu of the actions configured for this workspace's repo, keyed by their `alias`. The next key runs one: a foreground action lands beside the pane you are in (or replaces the focused half, already split), a `background` one starts as a job and leaves the screen alone. The row is absent when the repo has no `actions` configured. Same actions the row list's `x` offers, reached from inside a pane — see [actions](#actions) |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
 | `a` | **the captain**, which takes this pane — or the whole split — down on the way. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
 | `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
@@ -1534,7 +1537,7 @@ split to check a row and coming back finds the split rather than one pane you th
 have to re-split. Every change of shape records — a half replaced, a half closed,
 the divider moved — because "what was on screen" is the question being answered, so
 closing a half and leaving does *not* rebuild the split you had just taken apart.
-That holds however the half went: `ctrl+b x` takes one off, and so does the diff
+That holds however the half went: `ctrl+b q` takes one off, and so does the diff
 viewer quitting with its own key or a pane's program exiting, and all of them leave
 one pane behind as the thing to come back to. A
 terminal too narrow for two halves by the time you come back gets the left half

@@ -52,12 +52,12 @@ func TestTheDividerComesBackWhereYouPutIt(t *testing.T) {
 	}
 }
 
-// TestClosingAHalfIsRememberedAsOnePane. `x` takes the split apart, so coming
+// TestClosingAHalfIsRememberedAsOnePane. `q` takes the split apart, so coming
 // back must not rebuild it — the arrangement you left is the survivor alone.
 func TestClosingAHalfIsRememberedAsOnePane(t *testing.T) {
 	m, _ := openedSplit(t, "v")
 	m = pressDeck(t, m, menuKey())
-	m = pressDeck(t, m, runeKey("x"))
+	m = pressDeck(t, m, runeKey("q"))
 	if _, isPane := m.active.(*panePopover); !isPane {
 		t.Fatalf("closing the focused half left %T, want one pane", m.active)
 	}
@@ -146,7 +146,7 @@ func TestEnteringWithAnotherKeyIsThatKind(t *testing.T) {
 	p.close(&m)
 }
 
-// TestAHalfThatClosesItselfIsRememberedAsOnePane. ctrl+b x is not the only way a
+// TestAHalfThatClosesItselfIsRememberedAsOnePane. ctrl+b q is not the only way a
 // split comes apart — the diff viewer quits with its own key, and a pane's program
 // exits on its own — and all of those leave one pane on screen. Recorded where
 // every collapse goes through rather than at the one key that had it, or a split

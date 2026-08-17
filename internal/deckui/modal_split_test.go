@@ -297,7 +297,7 @@ func TestClosingOneHalfLeavesTheOtherAsAWholePane(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	agent := s.left
 	m = pressDeck(t, m, menuKey())
-	m = pressDeck(t, m, runeKey("x"))
+	m = pressDeck(t, m, runeKey("q"))
 	if m.active != agent {
 		t.Fatalf("closing the focused half left %T, want the agent alone", m.active)
 	}
