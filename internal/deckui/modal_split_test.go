@@ -35,6 +35,12 @@ func splitDeck(t *testing.T) Model {
 // leaveKey is the reserved key, as the terminal sends it.
 func leaveKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl} }
 
+// agentKey opens the selected row's agent pane. That is `enter` — ActionSummon,
+// which a pane host answers with PaneKindAgent. It was `a` until the captain took
+// that letter; named here so the next rebind is one edit rather than a hunt
+// through every test that wanted to be in an agent.
+func agentKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
+
 // menuKey opens the verb menu. ctrl+b, which every terminal can send and no
 // operating system intercepts — see charm.PaneMenuKey.
 func menuKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl} }

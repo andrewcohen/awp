@@ -2755,10 +2755,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.cursor = 0
 			}
 			return m, nil
+		// enter is the one way to a workspace's agent. `a` used to be a second
+		// one — ActionOpenWindow "agent", which re-attached without re-prompting —
+		// and the two had grown indistinguishable under a pane host, where summon
+		// opens the agent pane anyway. The letter went to the captain instead.
 		case key.Matches(msg, km.Enter):
 			return m.trigger(ActionSummon, "")
-		case key.Matches(msg, km.AgentWindow):
-			return m.trigger(ActionOpenWindow, "agent")
 		case key.Matches(msg, km.SendPrompt):
 			item, ok := m.selected()
 			if !ok {
@@ -5440,7 +5442,6 @@ func deckKeyGroups() []keyGroup {
 		{
 			Title: "Windows",
 			Keys: [][2]string{
-				{"a", "agent window (re-attach without re-prompting)"},
 				{"A", "send a typed prompt to the workspace's agent"},
 				{"e", "editor window ($EDITOR)"},
 				{"c", "review this change in the deck (- inside switches scope)"},
