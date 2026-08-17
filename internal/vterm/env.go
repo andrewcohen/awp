@@ -34,31 +34,74 @@ type ExitMsg struct {
 // screen-class terminal quietly loses capabilities the emulator has.
 const TermType = "xterm-256color"
 
-// Env prepares the environment for a hosted process: TermType, and no
-// inherited multiplexer markers.
+// sessionMarkers are the inherited variables a hosted process must not keep: the
+// ones that say "you are already inside me".
 //
-// A marker says "you are already inside me", and a hosted process is not
-// inside whatever awp is inside — it is inside this emulator. Under tmux the
-// markers make a nested client refuse to start, which is loud. ZMX_SESSION is
-// the quiet one: `zmx attach` reads it and, finding one, tells the daemon to
-// switch the *calling* client's session rather than making a new client. So a
-// pane that inherited it does not open a session beside awp's, it steals the
-// terminal awp is running in, and the session it was pulled off is re-created
-// empty — losing whatever agent was in it. zmx sets the variable itself for a
-// session's own child, so dropping the inherited value is not information lost.
+// A hosted process is not inside whatever awp is inside — it is inside this
+// emulator, in a session of its own. Three families, and they fail differently,
+// which is why the list is worth reading rather than trusting:
+//
+// The multiplexers fail loudly. Under tmux the markers make a nested client refuse
+// to start, and you find out immediately.
+//
+// ZMX_SESSION fails quietly and expensively. `zmx attach` reads it and, finding
+// one, tells the daemon to switch the *calling* client's session rather than making
+// a new client — so a pane that inherited it does not open a session beside awp's,
+// it steals the terminal awp is running in, and the session it was pulled off is
+// re-created empty, losing whatever agent was in it.
+//
+// Claude Code's markers fail quietly and invisibly, which is worse than either. A
+// deck launched from inside a Claude Code session — which is how awp is usually
+// developed — hands every agent it starts that session's identity, and the child
+// responds by turning transcript saving off, because as far as it can tell it is a
+// sub-agent of a session that is already recording. The agent works normally and
+// writes nothing down. `awp watch` reads transcripts, so the dev-loop view goes
+// blind for that workspace with no error anywhere; the captain is only where it
+// surfaced, because Claude Code says so on its own start-up line there.
+//
+// What is *not* here is deliberate. CLAUDE_CODE_EXECPATH, CLAUDE_CODE_TMPDIR and
+// the feature flags are configuration the user chose, and a child agent should go
+// on honouring them — stripping those would make a hosted agent behave differently
+// from the same agent in a terminal, which is the thing a pane is trying not to do.
+// The rule is: drop what identifies the parent *session* or reaches back into it,
+// keep what describes how the user likes their agent.
+var sessionMarkers = []string{
+	"TERM=",
+	"TMUX=",
+	"TMUX_PANE=",
+	"ZMX_SESSION=",
+	// Claude Code's identity for the session awp itself was launched from.
+	"CLAUDE_CODE_CHILD_SESSION=",
+	"CLAUDE_CODE_SESSION_ID=",
+	"CLAUDE_CODE_ENTRYPOINT=",
+	// And its IPC back to that session: a channel the new agent has no business on,
+	// and whose token is the parent's.
+	"CLAUDE_CODE_MESSAGING_SOCKET=",
+	"CLAUDE_CODE_MESSAGING_TOKEN=",
+}
+
+// Env prepares the environment for a hosted process: TermType, and none of the
+// inherited session markers — see sessionMarkers for what those are and how each
+// one fails.
 func Env(base []string) []string {
 	out := make([]string, 0, len(base)+1)
 	for _, kv := range base {
-		switch {
-		case strings.HasPrefix(kv, "TERM="),
-			strings.HasPrefix(kv, "TMUX="),
-			strings.HasPrefix(kv, "TMUX_PANE="),
-			strings.HasPrefix(kv, "ZMX_SESSION="):
+		if hasSessionMarker(kv) {
 			continue
 		}
 		out = append(out, kv)
 	}
 	return append(out, "TERM="+TermType)
+}
+
+// hasSessionMarker reports whether this KEY=VALUE is one of the markers to drop.
+func hasSessionMarker(kv string) bool {
+	for _, prefix := range sessionMarkers {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // HostTerm restores the real terminal's TERM in an environment Env prepared.
