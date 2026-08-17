@@ -26,7 +26,7 @@ import (
 // waiting behind the next time somebody opens a pane. Parking is the fallback and
 // is a complete one.
 
-const workspaceNewUsage = `Usage: awp w new [--project <name|path>] [--prompt <text>] [--bookmark <name>] <workspace>
+const workspaceNewUsage = `Usage: awp w new [--project <name|path>] [--prompt <text>] [--label <text>] [--bookmark <name>] <workspace>
 
 Creates the workspace and returns. It does not switch you into it, and it starts no
 tmux session — the agent runs where the deck hosts it.
@@ -36,6 +36,8 @@ tmux session — the agent runs where the deck hosts it.
                           repo you are standing in.
   --prompt <text>         start the agent on this. Without it the workspace is created
                           with no agent running, and the first pane starts one.
+  --label <text>          what the deck should show for it instead of its name. The
+                          name still has to be a directory; the label does not.
   --bookmark <name>       start the workspace at an existing bookmark, rather than at
                           the current working copy.
 
@@ -58,6 +60,10 @@ func (a *App) runWorkspaceNew(args []string) error {
 		return err
 	}
 	bookmark, rest, err := takeValueFlag(rest, "--bookmark")
+	if err != nil {
+		return err
+	}
+	label, rest, err := takeValueFlag(rest, "--label")
 	if err != nil {
 		return err
 	}
@@ -85,6 +91,16 @@ func (a *App) runWorkspaceNew(args []string) error {
 
 	if err := openWorkspaceInDeckMode(runner, svc, newWorkspaceRequest(name, bookmark, prompt)); err != nil {
 		return fmt.Errorf("create %s in %s: %w", name, projectName, err)
+	}
+
+	// After the create, not before: there is no entry to label until the workspace
+	// exists. Best-effort and reported rather than fatal — the workspace is made and
+	// its agent may already be working, so failing the whole command over the text
+	// on a row would be the tail wagging the dog.
+	if label = strings.TrimSpace(label); label != "" {
+		if err := svc.SetDisplayName(name, label); err != nil {
+			_, _ = fmt.Fprintf(a.out, "created %s/%s, but could not label it (%v) — set it with `awp w label`\n", projectName, name, err)
+		}
 	}
 
 	if strings.TrimSpace(prompt) != "" {

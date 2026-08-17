@@ -45,6 +45,7 @@ type fakeService struct {
 	recordedSessionID string
 	recordedSession   string
 	pendingPrompts    map[string]workspace.PendingPrompt
+	displayNames      map[string]string
 	renameOld         string
 	renameNew         string
 	deleteName        string
@@ -87,7 +88,15 @@ func (f *fakeService) RecordSession(workspaceName, sessionID, sessionName string
 	f.recordedSession = sessionName
 	return nil
 }
-func (f *fakeService) RecordBookmark(string, string) error          { return nil }
+func (f *fakeService) RecordBookmark(string, string) error { return nil }
+func (f *fakeService) SetDisplayName(workspaceName, label string) error {
+	if f.displayNames == nil {
+		f.displayNames = map[string]string{}
+	}
+	f.displayNames[workspaceName] = label
+	return nil
+}
+
 func (f *fakeService) RecordPROverride(string, int) error           { return nil }
 func (f *fakeService) ListAll() ([]workspace.CrossRepoEntry, error) { return nil, nil }
 func (f *fakeService) UpdatePrompt(string, string) error            { return nil }

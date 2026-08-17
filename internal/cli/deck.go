@@ -2050,6 +2050,7 @@ func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc w
 			item := deckui.Item{
 				ProjectName:      r.project,
 				WorkspaceName:    e.Name,
+				DisplayName:      strings.TrimSpace(e.DisplayName),
 				Path:             e.Path,
 				RepoRoot:         r.repo,
 				Bookmark:         strings.TrimSpace(e.Bookmark),

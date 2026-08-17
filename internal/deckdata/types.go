@@ -20,8 +20,12 @@ import (
 // open PR with no local workspace (Virtual). It is pure data — rendering
 // lives in deckui.
 type Item struct {
-	ProjectName      string
-	WorkspaceName    string
+	ProjectName   string
+	WorkspaceName string
+	// DisplayName is the label to show instead of WorkspaceName, empty when the
+	// workspace has none. Presentation only — see workspace.Entry.DisplayName, and
+	// display_name_test.go for the guard that keeps it that way.
+	DisplayName      string
 	Path             string
 	RepoRoot         string
 	Bookmark         string // jj bookmark associated with this workspace (still used for the new-workspace form, not for PR lookup)

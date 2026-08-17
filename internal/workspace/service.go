@@ -123,9 +123,26 @@ type CommandRunner interface {
 }
 
 type Entry struct {
-	Name     string
-	Path     string
-	Bookmark string `json:",omitempty"`
+	Name string
+	// DisplayName is what a human reads on a row, when it should not be the
+	// workspace's name.
+	//
+	// Name is identity: it is the directory on disk, the zmx session name, and
+	// usually the bookmark. That means whoever creates a workspace has to pick one
+	// slug that is simultaneously a filesystem name and a label — and an agent
+	// spawning workspaces will get one of those two jobs wrong every time, because
+	// the constraints disagree.
+	//
+	// So this is **presentation only**. Nothing resolves a path, a session, a
+	// bookmark or a PR from it, and the invariant is only as strong as every call
+	// site remembering, which is why display_name_test.go enumerates the files
+	// allowed to mention it at all.
+	//
+	// Empty means "use Name", which is every workspace that existed before this
+	// field and every one nobody has labelled.
+	DisplayName string `json:",omitempty"`
+	Path        string
+	Bookmark    string `json:",omitempty"`
 	// PRNumber pins this workspace to a specific PR. Set by `awp review`
 	// (the PR being reviewed), the `p s` chord, and the `B` link flow
 	// when the chosen bookmark resolves to exactly one PR. Zero means
@@ -280,7 +297,11 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 }
 
 type ListEntry struct {
-	Name         string
+	Name string
+	// DisplayName is Entry.DisplayName — the label to show instead of Name, empty
+	// when there is none. Carried here so a surface that renders rows does not have
+	// to load the store itself.
+	DisplayName  string
 	Path         string
 	TmuxWindow   string
 	Active       bool
@@ -323,6 +344,7 @@ type Service interface {
 	DeleteWithOptions(name string, opts DeleteOptions) error
 	RecordSession(workspaceName, sessionID, sessionName string) error
 	RecordBookmark(workspaceName, bookmark string) error
+	SetDisplayName(workspaceName, label string) error
 	RecordPROverride(workspaceName string, prNumber int) error
 	UpdatePrompt(workspaceName, prompt string) error
 	RecordPendingPrompt(workspaceName string, p PendingPrompt) error
@@ -813,6 +835,7 @@ func (s *service) List() ([]ListEntry, error) {
 		}
 		out = append(out, ListEntry{
 			Name:         name,
+			DisplayName:  strings.TrimSpace(entry.DisplayName),
 			Path:         entry.Path,
 			TmuxWindow:   windowName,
 			Active:       current == name && hasWindow,
@@ -1165,6 +1188,20 @@ func (s *service) RecordBookmark(workspaceName, bookmark string) error {
 // for this workspace. Drives the deck `p s` chord's persistence and
 // the awp review write-through. Kept as "RecordPROverride" for service
 // interface stability — the underlying field is now Entry.PRNumber.
+// SetDisplayName sets (or clears, with an empty label) the workspace's display
+// name — see Entry.DisplayName.
+//
+// Deliberately not part of Rename. Renaming moves a directory and a session and is
+// the operation that should stay hard; labelling is free and reversible, and a rename
+// leaves the label alone because the label was about what the work *is*, which a
+// rename does not change.
+func (s *service) SetDisplayName(workspaceName, label string) error {
+	label = strings.TrimSpace(label)
+	return s.mutateEntry(workspaceName, func(e *Entry) {
+		e.DisplayName = label
+	})
+}
+
 func (s *service) RecordPROverride(workspaceName string, prNumber int) error {
 	if prNumber < 0 {
 		prNumber = 0
