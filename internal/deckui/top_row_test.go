@@ -331,3 +331,35 @@ func TestTheBarAndTheRowSpellAPRTheSameWay(t *testing.T) {
 		t.Errorf("the bar does not show the row's glyph cluster %q", cluster)
 	}
 }
+
+// TestTheBarNamesTheWorkspaceYouNamed. A display label is what you called the
+// work, so the row that answers "where am I" says it rather than the directory
+// slug. It comes after a `·` rather than a `/`, because a label is a sentence and
+// `proj/the widget rewrite` claims a path that does not exist.
+func TestTheBarNamesTheWorkspaceYouNamed(t *testing.T) {
+	items := []Item{{
+		ProjectName: "proj", WorkspaceName: "ws", DisplayName: "the widget rewrite",
+		Bookmark: "andrew/ws", Path: "/tmp", RepoRoot: "/tmp",
+	}}
+	m, _ := paneOn(t, items)
+	bar := barText(&m, 200)
+	if !strings.Contains(bar, "proj · the widget rewrite") {
+		t.Errorf("the bar does not carry the display label: %q", bar)
+	}
+	if strings.Contains(bar, "proj/") {
+		t.Errorf("a labelled workspace should not be spelled as a path: %q", bar)
+	}
+}
+
+// TestTheBarSpellsAnUnlabelledWorkspaceAsAPath, which is what it is: the project
+// and the directory under it, unchanged by the label case above.
+func TestTheBarSpellsAnUnlabelledWorkspaceAsAPath(t *testing.T) {
+	items := []Item{{
+		ProjectName: "proj", WorkspaceName: "ws", Bookmark: "andrew/widget",
+		Path: "/tmp", RepoRoot: "/tmp",
+	}}
+	m, _ := paneOn(t, items)
+	if bar := barText(&m, 200); !strings.Contains(bar, "proj/ws") {
+		t.Errorf("the bar lost the workspace path: %q", bar)
+	}
+}

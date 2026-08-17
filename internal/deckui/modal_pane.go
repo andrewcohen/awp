@@ -351,6 +351,24 @@ func (r paneRef) label() string {
 	return PaneLabel(r.kind) + " · " + r.project + "/" + r.workspace
 }
 
+// paneWorkspaceLabel is the row the pane is of, as the top row names it:
+// "<project> · <label>" when the workspace has a display label, otherwise
+// "<project>/<workspace>".
+//
+// The separator changes with the thing after it, because the two are not the same
+// kind of name. A workspace name is a path component and reads as one; a label is
+// a sentence you wrote, and `proj/the widget rewrite` claims a directory that does
+// not exist. The `·` is the same separator the row already puts after the kind.
+//
+// Presentation only: nothing resolves a pane from this string (see
+// panePopover.project / .workspace, and workspace/display_name_test.go).
+func paneWorkspaceLabel(it Item) string {
+	if label := strings.TrimSpace(it.DisplayName); label != "" {
+		return it.ProjectName + " · " + label
+	}
+	return it.ProjectName + "/" + it.WorkspaceName
+}
+
 // openPane hosts the given window kind for the selected row, filling the deck.
 // It reports false when there is no backend for it, so the caller can fall back
 // to tmux.
@@ -417,7 +435,7 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 
 	p := &panePopover{
 		term:      term,
-		label:     PaneLabel(kind) + " · " + item.ProjectName + "/" + item.WorkspaceName,
+		label:     PaneLabel(kind) + " · " + paneWorkspaceLabel(item),
 		kind:      kind,
 		project:   item.ProjectName,
 		workspace: item.WorkspaceName,
