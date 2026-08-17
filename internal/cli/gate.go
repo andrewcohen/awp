@@ -579,12 +579,26 @@ func gateProgress(loop watch.Loop, gates map[string]string) (green, total int) {
 // readiness predicate for both the completion check and the record hook's
 // ready-transition nudge, so the two never disagree.
 func gatesAllGreen(loop watch.Loop, gates map[string]string) bool {
+	return len(redRequiredGates(loop, gates)) == 0
+}
+
+// redRequiredGates returns the loop's required gates that are not green
+// (failed or not yet run), in loop order.
+//
+// The list form of gatesAllGreen, and gatesAllGreen is defined in terms of it
+// so the two cannot answer differently. `awp ship` needs the names rather than
+// the verdict — "not shipping: gates that have not passed: test, lint" is
+// actionable where "gates are not green" is a second thing to go and look up —
+// and a repo's readiness to ship must be the same question its unit-completion
+// check asks, not a second notion of it.
+func redRequiredGates(loop watch.Loop, gates map[string]string) []string {
+	var out []string
 	for _, name := range loop.RequiredGateNames() {
 		if gates[name] != "pass" {
-			return false
+			out = append(out, name)
 		}
 	}
-	return true
+	return out
 }
 
 // redOptionalGates returns the loop's optional gates that are not green

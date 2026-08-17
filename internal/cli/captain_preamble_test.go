@@ -68,6 +68,30 @@ func TestThePreambleSaysTheListIsNotEverything(t *testing.T) {
 	}
 }
 
+// Shipping is a send, and the preamble says so as a route rather than as a refusal.
+//
+// The distinction is the point. `awp ship` is not on the refusal list, because a
+// refusal list is a fixed set of effects and shipping's effect depends on how the
+// repo is configured — a list entry that meant one thing in one repo and another in
+// the next is not a boundary an agent can reason about. What makes the captain not
+// ship is structural: ship runs where the change is, and the captain has no
+// workspace. So the preamble gives it the route it does have.
+func TestThePreamblePointsShippingAtTheAgentThatDidTheWork(t *testing.T) {
+	got := captainPreamble([]string{"alpha"})
+	for _, want := range []string{"awp ship", "'ship it'", "no workspace and no change"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the preamble never says %q, so the captain has no route to a shipped change:\n%s", want, got)
+		}
+	}
+	// It must not read as a refusal — the captain can get a change shipped, just
+	// not by running the verb itself.
+	shipIdx := strings.Index(got, "awp ship")
+	refusalIdx := strings.Index(got, "What you must not do")
+	if shipIdx < 0 || refusalIdx < 0 || shipIdx > refusalIdx {
+		t.Errorf("ship belongs with what the captain can change, not among the refusals (ship@%d refusals@%d)", shipIdx, refusalIdx)
+	}
+}
+
 // TestThePreambleStatesEveryRefusalWithItsReason. Stated up front rather than left
 // to be discovered: a captain that finds the boundary by trying to merge has spent a
 // turn on it and cannot tell a refusal from a breakage.

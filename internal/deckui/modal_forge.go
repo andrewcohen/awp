@@ -44,6 +44,11 @@ func forgeMenu() deckMenu {
 		// six verbs in a row read as a sentence you skim, where a column of them reads
 		// as the complete set.
 		[2]string{"m", "merge the PR"},
+		// Ship belongs on this hub rather than on a letter of its own: it has the
+		// same subject as merge — the outward thing you do with a finished change —
+		// and it is the verb `r` above turns into when a rebase conflicts. Capital,
+		// because `s` is the PR number below and because it moves the trunk.
+		[2]string{"S", "ship this change"},
 		[2]string{"s", "set the PR number"},
 		menuCancelVerb,
 	)
@@ -203,6 +208,23 @@ func (forgeMenuModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		var mergeModal *confirmMergeModal
 		mergeModal, m.status = newConfirmMerge(item, status)
 		m.active = mergeModal
+		return nil
+	case "S":
+		m.active = nil
+		item, ok := m.selected()
+		if !ok || strings.TrimSpace(item.WorkspaceName) == "" {
+			m.status = "ship: select a workspace row"
+			return nil
+		}
+		// No PR lookup and no style check here. Everything about whether this
+		// change can ship — the repo's style, the gates, the revision — is read by
+		// the handler, which is the same path `awp ship` takes; asking any of it
+		// twice is how a key and a verb come to disagree. What the deck adds is the
+		// confirmation, because a key is easier to press by accident than a command
+		// is to type.
+		var shipModal *confirmShipModal
+		shipModal, m.status = newConfirmShip(item)
+		m.active = shipModal
 		return nil
 	case "s":
 		m.active = nil

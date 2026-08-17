@@ -105,6 +105,14 @@ const (
 	// in the foreground progress modal (not the async jobs subsystem) so
 	// the modal stays open until gh reports success or failure.
 	ActionMergePR
+	// ActionShip ships the workspace's finished change the way the repo ships
+	// changes — the deck's `C S`, and the same path `awp ship` takes, through
+	// one handler so a key and a verb cannot ship by different rules.
+	//
+	// Foreground progress modal rather than a background job, for the same
+	// reason as ActionMergePR: it rewrites a bookmark other workspaces read, so
+	// it is worth watching finish. The three moves narrate themselves.
+	ActionShip
 	// actionEnd is one past the last action, and must stay last in this
 	// block. AllActions counts to it, so a new action declared above it is
 	// enumerated without anyone remembering to say so twice.
@@ -2298,6 +2306,15 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m, prCmd = m.forcePRStatusRefresh(msg.item.RepoRoot)
 			return m, prCmd
 		}
+		if msg.action == ActionShip {
+			// Stay in the progress modal on the result, like a merge: the three
+			// moves are worth reading back, and the change has left this
+			// workspace for the trunk every other one branches from. The rows
+			// reload on dismiss (below) rather than now, so the modal's own
+			// content does not shift under whoever is reading it.
+			m.status = fmt.Sprintf("shipped %s", msg.item.WorkspaceName)
+			return m, nil
+		}
 		if msg.action == ActionRename {
 			m.status = fmt.Sprintf("renamed %s → %s", msg.item.WorkspaceName, msg.arg)
 			// Move the cursor to the new name once the refresh lands so
@@ -2520,6 +2537,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 					if m.deleteTarget.Current {
 						m.pendingSelect = Item{ProjectName: m.deleteTarget.ProjectName, WorkspaceName: "default"}
 					}
+					var refreshCmd tea.Cmd
+					m, refreshCmd = m.requestRefresh(true)
+					return m, refreshCmd
+				}
+				if m.progressDoneAction == ActionShip && m.refresher != nil {
+					// A ship moved the trunk bookmark and the default
+					// workspace's working copy, so the rows' bookmarks and
+					// descriptions are stale on the way out of the modal.
 					var refreshCmd tea.Cmd
 					m, refreshCmd = m.requestRefresh(true)
 					return m, refreshCmd
@@ -3690,7 +3715,7 @@ func (m Model) trigger(a Action, arg string) (tea.Model, tea.Cmd) {
 
 func isProgressAction(a Action) bool {
 	switch a {
-	case ActionDelete, ActionDeleteProject, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom, ActionMergePR:
+	case ActionDelete, ActionDeleteProject, ActionReview, ActionCreateWorkspace, ActionCI, ActionCustom, ActionMergePR, ActionShip:
 		return true
 	}
 	return false
@@ -4085,6 +4110,8 @@ func actionLabel(a Action, arg string) string {
 			return "merge PR #" + arg
 		}
 		return "merge PR"
+	case ActionShip:
+		return "ship"
 	}
 	return "action"
 }
@@ -5540,6 +5567,7 @@ func deckKeyGroups() []keyGroup {
 				{"C d", "read this workspace's PR description in the deck (scrollable, esc closes)"},
 				{"C D", "open the same description in a \"pr description\" tmux window (gh pr view | less)"},
 				{"C r", "repair this workspace's PR (prepopulates a fix prompt)"},
+				{"C S", "ship this change the way the repo's \"ship\" config says (with confirmation)"},
 				{"C s", "set PR # override for this workspace (when the bookmark doesn't match the PR head ref)"},
 			},
 		},

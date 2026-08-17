@@ -51,6 +51,16 @@ type Config struct {
 		// a PR's headRefName. Unset = no auto-create (default).
 		BookmarkPrefix string `json:"bookmark_prefix,omitempty"`
 	} `json:"deck,omitempty"`
+	// Ship is what this repo does with a finished change — the style `awp
+	// ship` follows. One of "main" (rebase onto the trunk bookmark, move it,
+	// move the default workspace on) or "pull_request" (push the bookmark and
+	// open or update a PR; not implemented yet).
+	//
+	// Unset means `awp ship` is unavailable and says so. There is no default
+	// on purpose: the two styles differ in what they make visible to other
+	// people, and guessing one for a repo that has not said which convention
+	// it follows is exactly the wrong-by-default the verb exists to prevent.
+	Ship string `json:"ship,omitempty"`
 	// DevLoop defines the per-unit-of-work development loop that `awp
 	// watch` visualizes: the ordered phases a unit passes through and the
 	// gates (named checks awp recognizes in the agent's transcript) that
@@ -279,6 +289,9 @@ func merge(global, project Config) Config {
 	}
 	if strings.TrimSpace(out.Deck.BookmarkPrefix) == "" {
 		out.Deck.BookmarkPrefix = global.Deck.BookmarkPrefix
+	}
+	if strings.TrimSpace(out.Ship) == "" {
+		out.Ship = global.Ship
 	}
 	if len(out.DevLoop.Phases) == 0 {
 		out.DevLoop.Phases = global.DevLoop.Phases

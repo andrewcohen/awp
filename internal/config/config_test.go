@@ -56,6 +56,37 @@ func TestLoadMissingConfigReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestShipStyleReadsFromProjectConfigAndFallsBackToGlobal(t *testing.T) {
+	isolateGlobalConfig(t)
+	repo := t.TempDir()
+	writeConfig(t, repo, `{"ship": "main"}`)
+	cfg, err := Load(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ship != "main" {
+		t.Fatalf("ship style: got %q, want %q", cfg.Ship, "main")
+	}
+
+	// Unset in a repo is unset, not a default. `awp ship` refuses on this
+	// rather than picking a convention the repo never stated.
+	bare := t.TempDir()
+	cfg, err = Load(bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ship != "" {
+		t.Fatalf("ship style with no config: got %q, want empty", cfg.Ship)
+	}
+
+	if got := merge(Config{Ship: "main"}, Config{}).Ship; got != "main" {
+		t.Fatalf("global ship style should carry through: got %q", got)
+	}
+	if got := merge(Config{Ship: "main"}, Config{Ship: "pull_request"}).Ship; got != "pull_request" {
+		t.Fatalf("project ship style should win: got %q", got)
+	}
+}
+
 func TestMergeProjectWinsOverGlobal(t *testing.T) {
 	global := Config{
 		Actions: map[string]UserAction{

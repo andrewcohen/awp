@@ -2440,6 +2440,30 @@ func handleDeckAction(tmuxClient *tmux.Client, svc workspace.Service, runner Run
 		// workspace whose agent zdeck started, and it is the same resolution the
 		// review store's send uses.
 		return agentPromptSender(nil, runner, tmuxClient, svc)(item, req.Arg, reporter)
+	case deckui.ActionShip:
+		repoRoot := strings.TrimSpace(item.RepoRoot)
+		if repoRoot == "" {
+			return fmt.Errorf("ship: no repo root on the %s row, so there is no trunk to ship onto", item.WorkspaceName)
+		}
+		// The same path `awp ship` takes, with the deck's reporter attached so the
+		// progress modal narrates the three moves. deckui.Reporter and
+		// ship.Reporter are the same two methods, so the modal is the reporter.
+		//
+		// A bare App rather than the deck's own: shipWorkspace builds its service
+		// from the repo root it is given (see App.shipService), so the only field
+		// it needs is the runner. The report goes to the modal's log rather than to
+		// a writer nobody is reading.
+		app := &App{runner: runner, out: io.Discard}
+		report, err := app.shipWorkspace(repoRoot, item.WorkspaceName, false, reporter)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(report), "\n") {
+			if s := strings.TrimSpace(line); s != "" {
+				reporter.Log(s)
+			}
+		}
+		return nil
 	case deckui.ActionMergePR:
 		n, err := strconv.Atoi(strings.TrimSpace(req.Arg))
 		if err != nil || n <= 0 {
