@@ -94,6 +94,13 @@ label first and the badge second; the leave key never goes. The scope label stay
 behind on the deck's own title row — which slice of the list you were looking
 through is not a question a pane raises.
 
+The label names the workspace the way you named it. A workspace with a display
+label (`awp w label`) reads `agent · proj · the widget rewrite`; one without
+stays the path it is, `agent · proj/checkout-fix`. The separator changes with the
+thing after it because the two are not the same kind of name — a workspace name
+is a path component, where a label is a sentence, and `proj/the widget rewrite`
+claims a directory that does not exist.
+
 **That row is in the same cells on every screen that is about your workspaces** —
 the row list, one pane, or a split of two. It is the deck's row, not the pane's or
 the list panel's: it spans the terminal on row 0, indented to the same column the
@@ -971,7 +978,8 @@ poor sentence. A person splits the difference by habit; an agent has no habit an
 produces either a slug nobody can read or a label no filesystem wants.
 
 So `Entry.DisplayName`, set by `awp w label` or by `awp w new --label`, and shown on
-the row instead of the name. It beats the PR title when both exist, because a label is
+the row instead of the name — and on [the top row](#the-top-row), which names the
+pane you are inside the same way. It beats the PR title when both exist, because a label is
 the more deliberate of the two — you asked for it, where a PR title is GitHub's words
 and remains the default for the overwhelming majority of rows that carry no label.
 

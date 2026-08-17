@@ -34,6 +34,9 @@ func TestOnlyRenderersMentionDisplayName(t *testing.T) {
 		// the line below already carries the PR number.
 		"internal/deckdata/view.go":  "DisplayLabel — the row list's renderer",
 		"internal/deckui/sidebar.go": "sidebarLabel — the strip's renderer",
+		// The top row names the pane you are in; paneWorkspaceLabel is that name,
+		// and nothing is resolved from it (panePopover keeps project / workspace).
+		"internal/deckui/modal_pane.go": "paneWorkspaceLabel — the top row's renderer",
 		// The read model's row type carries it to that renderer.
 		"internal/deckdata/types.go": "declares it on the row",
 		// Populating a row from the store, and the two verbs that set it.
