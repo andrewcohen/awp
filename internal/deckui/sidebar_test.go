@@ -246,11 +246,15 @@ func TestPinnedRowsSitAtTheVeryTop(t *testing.T) {
 	}
 }
 
-// TestIdleRowsAreMostRecentlyActiveFirst. The band has no urgency to rank by, so
-// the useful question is "where was I" — and a workspace last touched in March is
-// not the answer. An unknown time still sorts last: it is a row we have no reason
-// to raise, rather than an ancient one.
-func TestIdleRowsAreMostRecentlyActiveFirst(t *testing.T) {
+// TestIdleRowsAreRankedByRecencyBucket. The band has no urgency to rank by, so the
+// useful question is "where was I" — and a workspace last touched in March is not the
+// answer. An unknown time still sorts last: it is a row we have no reason to raise,
+// rather than an ancient one.
+//
+// Buckets rather than the raw timestamp — see idleRecency. These three fixtures are
+// each in a different bucket, which is what makes their order meaningful at all;
+// TestOpeningAWorkspaceDoesNotReorderTheIdleBand covers the case the buckets exist for.
+func TestIdleRowsAreRankedByRecencyBucket(t *testing.T) {
 	now := time.Now()
 	m := stripDeck([]Item{
 		{ProjectName: "a", WorkspaceName: "march", Status: "idle", LastActiveAt: now.Add(-90 * 24 * time.Hour)},
@@ -266,6 +270,89 @@ func TestIdleRowsAreMostRecentlyActiveFirst(t *testing.T) {
 		t.Errorf("idle rows are out of order (recent at %d, old at %d, unknown at %d):\n%s",
 			recent, old, unknown, out)
 	}
+}
+
+// TestOpeningAWorkspaceDoesNotReorderTheIdleBand.
+//
+// The bug: the band sorted on LastActiveAt, which is a live timestamp. Opening a
+// workspace clears its unread mark, clearing the mark calls Entry.Touch(now), and Touch
+// writes exactly that field. So clicking a row on the strip sent it to the top of its
+// band and pushed every row below it down — the list reshuffling under your own hand, on
+// the surface whose whole job is to be glanced at while you work somewhere else.
+//
+// Modelled here by moving one row's timestamp to now, which is what Touch does. Both
+// rows are already inside the same bucket, so the order must not budge.
+func TestOpeningAWorkspaceDoesNotReorderTheIdleBand(t *testing.T) {
+	now := time.Now()
+	rows := []Item{
+		{ProjectName: "a", WorkspaceName: "aardvark", Status: "idle", LastActiveAt: now.Add(-20 * time.Minute)},
+		{ProjectName: "a", WorkspaceName: "zebra", Status: "idle", LastActiveAt: now.Add(-30 * time.Minute)},
+	}
+	before := idleOrder(t, rows, now)
+
+	// Touch the row that was last, the way opening it would.
+	touched := append([]Item(nil), rows...)
+	touched[1].LastActiveAt = now
+	after := idleOrder(t, touched, now)
+
+	if len(before) != len(after) {
+		t.Fatalf("the band changed size: %v then %v", before, after)
+	}
+	for i := range before {
+		if before[i] != after[i] {
+			t.Fatalf("opening a workspace reordered the idle band: %v became %v", before, after)
+		}
+	}
+}
+
+// TestCrossingARecencyBoundaryDoesMoveARow. The other side of the same coin: buckets
+// stop the churn without freezing the order, so a row that has genuinely gone from
+// last-week to just-now rises — once, when it crosses.
+//
+// The mover is named so it sorts *last* alphabetically, so its rise cannot be the
+// within-bucket tie-break doing the work.
+func TestCrossingARecencyBoundaryDoesMoveARow(t *testing.T) {
+	now := time.Now()
+	rows := []Item{
+		{ProjectName: "a", WorkspaceName: "zebra", Status: "idle", LastActiveAt: now.Add(-8 * 24 * time.Hour)},
+		{ProjectName: "a", WorkspaceName: "aardvark", Status: "idle", LastActiveAt: now.Add(-20 * time.Minute)},
+	}
+	if got := idleOrder(t, rows, now); got[0] != "aardvark" {
+		t.Fatalf("the row from this hour is not above the one from last week: %v", got)
+	}
+	// zebra is touched, the way opening it would, and crosses into the newest bucket.
+	rows[0].LastActiveAt = now
+	got := idleOrder(t, rows, now)
+	if got[0] != "aardvark" {
+		t.Fatalf("both rows are now in one bucket, so the label orders them: %v", got)
+	}
+	if got[1] != "zebra" {
+		t.Errorf("zebra did not join the newest bucket: %v", got)
+	}
+	// And it really did move: before the touch it was behind a bucket boundary, and a
+	// second row in that older bucket stays behind it now.
+	rows = append(rows, Item{ProjectName: "a", WorkspaceName: "beaver", Status: "idle",
+		LastActiveAt: now.Add(-8 * 24 * time.Hour)})
+	if got := idleOrder(t, rows, now); got[len(got)-1] != "beaver" {
+		t.Errorf("the row still in the older bucket is not last: %v", got)
+	}
+}
+
+// idleOrder is the workspace names in the idle band, in render order.
+func idleOrder(t *testing.T, rows []Item, now time.Time) []string {
+	t.Helper()
+	for _, g := range sidebarSections(rows, now) {
+		if g.section != sectionIdle {
+			continue
+		}
+		names := make([]string, 0, len(g.items))
+		for _, it := range g.items {
+			names = append(names, it.WorkspaceName)
+		}
+		return names
+	}
+	t.Fatal("no idle band — the fixture proves nothing")
+	return nil
 }
 
 // TestARowsSecondLineCarriesItsPR, indented under the name.

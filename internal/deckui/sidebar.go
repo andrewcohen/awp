@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -270,7 +271,10 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 	avail := max(1, b.h-2*sidebarPadY)
 
 	v := m.sidebarView()
-	groups := sidebarSections(v.Items())
+	// The clock is read here rather than held on the Model: nothing else in the strip
+	// needs one, and a field would be a second thing to keep wound. sidebarSections
+	// takes it as an argument so a test can say which moment it means.
+	groups := sidebarSections(v.Items(), time.Now())
 
 	lines := make([]sidebarLine, 0, 2*len(v.Items())+len(groups))
 	// Furniture — headers, separators, the overflow count — takes the inset as plain
@@ -375,12 +379,26 @@ type sidebarGroup struct {
 
 // sidebarSections partitions the rows into the strip's bands, in render order.
 //
-// Rows keep the scope's order inside a band, except idle, which is sorted most
-// recently active first: the band has no urgency to rank by, so the useful
-// question is "where was I", and a workspace last touched in March is not the one
-// you want at the top of it. A zero LastActiveAt is unknown rather than ancient,
-// but it still sorts last — an unknown row is the one we have no reason to raise.
-func sidebarSections(rows []Item) []sidebarGroup {
+// Rows keep the scope's order inside a band, except idle, which is ranked by how
+// recently it was touched — coarsely, in the buckets idleRecency names, and by label
+// inside a bucket.
+//
+// Coarsely, and that is the whole point. It used to sort on LastActiveAt directly,
+// which is a live timestamp: opening a workspace clears its unread mark, clearing the
+// mark calls Entry.Touch(now), and Touch writes the field this sorts on. So clicking a
+// row on the strip sent it to the top of its band and shifted every row below it down
+// — the list reshuffling under your own hand, on the surface whose whole job is to be
+// glanced at while you work somewhere else.
+//
+// This is the same cure #284 applied to the attention scope, where an agent's lifecycle
+// kept moving its row: replace the continuous value with a band, and rank by the band.
+// A Touch now moves a row only when it crosses a boundary — at most once, and when it
+// does the move means something.
+//
+// What is given up is fine-grained "where was I" ordering. That was worth having on the
+// band which by definition wants nothing from you, and it was not worth the strip
+// moving while you read it.
+func sidebarSections(rows []Item, now time.Time) []sidebarGroup {
 	var byBand [sidebarSectionCount][]Item
 	for _, it := range rows {
 		band := sidebarSectionOf(it)
@@ -388,7 +406,15 @@ func sidebarSections(rows []Item) []sidebarGroup {
 	}
 	idle := byBand[sectionIdle]
 	sort.SliceStable(idle, func(i, j int) bool {
-		return idle[i].LastActiveAt.After(idle[j].LastActiveAt)
+		a, b := idleRecency(idle[i].LastActiveAt, now), idleRecency(idle[j].LastActiveAt, now)
+		if a != b {
+			return a < b
+		}
+		// Inside a bucket, the label — which is what you are reading, so the order
+		// matches the text. Any stable key would do; the requirement is only that it
+		// cannot change when an agent does something, which is what the timestamp
+		// could not promise.
+		return sidebarLabel(idle[i]) < sidebarLabel(idle[j])
 	})
 
 	groups := make([]sidebarGroup, 0, sidebarSectionCount)
@@ -399,6 +425,36 @@ func sidebarSections(rows []Item) []sidebarGroup {
 	}
 	return groups
 }
+
+// idleRecency is the bucket a row's last activity falls in, lower being more recent.
+//
+// Four spans and an unknown. The spans are deliberately wide: what the idle band is
+// answering is "roughly where was I", and a boundary a workspace crosses once an hour
+// is a row that moves once an hour rather than every time you touch it.
+//
+// A zero time is unknown rather than ancient, and sorts last — which is the same
+// treatment deckdata.attention gives it, and for the same reason: an entry written
+// before the field existed is one we have no opinion about, and no opinion must not
+// read as "stale since the epoch".
+func idleRecency(at, now time.Time) int {
+	if at.IsZero() {
+		return idleUnknown
+	}
+	switch d := now.Sub(at); {
+	case d < time.Hour:
+		return 0
+	case d < 24*time.Hour:
+		return 1
+	case d < 7*24*time.Hour:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// idleUnknown is the bucket for a row with no recorded activity: last, behind every
+// row we know something about.
+const idleUnknown = 4
 
 // sidebarSectionOf is which band one row belongs to.
 //
