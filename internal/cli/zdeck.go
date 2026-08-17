@@ -82,8 +82,20 @@ var panes = map[string]paneSpec{
 //
 // config.AgentInvocation("") rather than a repo's: there is no repo, so the answer
 // comes from the global config alone.
+//
+// The preamble is what makes this a captain rather than an agent that happens to be
+// in an odd directory — see captainPreamble. Best-effort: an agent that could not be
+// given one still opens, and can be told its job in the first message.
 func captainAgentArgv() []string {
-	return fields(config.AgentInvocation(""))
+	argv := fields(config.AgentInvocation(""))
+	dir, err := captainDir()
+	if err != nil {
+		return argv
+	}
+	if path, ok := captainPreambleFile(dir); ok {
+		argv = append(argv, captainPreambleFlag, path)
+	}
+	return argv
 }
 
 // captainDir is where the captain's agent runs: a directory awp owns, under

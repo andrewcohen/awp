@@ -900,6 +900,21 @@ report status and record gates against a workspace nothing has an entry for, and
 deck would grow a row for an agent that is supposed to be the one thing nobody is
 watching.
 
+**The captain's preamble** works the same way and lands in
+`~/.awp/captain/preamble.md`: awp writes it and launches
+`claude --append-system-prompt-file <that path>`, so the captain knows its job
+before you type anything. Two things it says that a role description normally would
+not. It states the **refusals with their reasons** — merge, publish, PR
+descriptions, delete, prune, pin, scope — because a captain that learns the boundary
+by trying to merge a PR has already spent a turn on it and cannot tell a refusal
+from a breakage. And it says which verbs **do not exist yet**, because an agent told
+it may create workspaces will otherwise invent a plausible flag, run it, and report
+the failure as an awp bug. It also lists the projects under `deck.project_roots` by
+name, since the captain has no cwd to infer one from and every command it runs has
+to name its target. Non-Claude agents get no preamble (the flag is Claude-specific)
+and the captain still opens — one that has to be told its job is better than one
+that will not start.
+
 Its agent is also launched differently from both of the others. The coding agent
 gets the dev-loop preamble — work in units, run the gates, commit — which for the
 captain would be instructions about a repository that does not exist; the reviewer's
