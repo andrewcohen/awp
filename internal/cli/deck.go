@@ -796,7 +796,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	if panes != nil {
 		sessionSource = panes.sessionSource()
 	}
-	items, err := loadDeckItems(nil, sessionSource, true, svc, repoRoot, projectName, nil, nil)
+	items, err := loadDeckItems(nil, sessionSource, true, svc, repoRoot, projectName, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -894,9 +894,13 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 			return deckui.BookmarksDoneMsg{Bookmarks: names}
 		}
 	}
+	// One enricher for the life of the deck: it is the refresh's memory of what
+	// each workspace's jj said last time, and a per-refresh one would remember
+	// nothing.
+	enricher := newHeadEnricher()
 	refresher := func() tea.Cmd {
 		return func() tea.Msg {
-			items, err := loadDeckItems(j, sessionSource, false, svc, repoRoot, projectName, in, out)
+			items, err := loadDeckItems(j, sessionSource, false, svc, repoRoot, projectName, in, out, enricher)
 			return deckui.RefreshDoneMsg(items, err)
 		}
 	}
@@ -1769,7 +1773,11 @@ func isShellCommand(cmd string) bool {
 // per-row tmux calls. Workspaces created externally via `jj workspace
 // add` won't appear until the deck reconciles via a write path
 // (deck-driven create/delete already does this).
-func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer) ([]deckui.Item, error) {
+// enricher carries the jj-read cache across the refreshes of one deck. A nil
+// one is a caller with nothing to reuse — the fast first paint, or a one-shot
+// read from another command — and gets a cold cache it then throws away, which
+// is exactly the behaviour this function had before the cache existed.
+func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer, enricher *headEnricher) ([]deckui.Item, error) {
 	_ = j
 	_ = in
 	_ = out
@@ -1825,11 +1833,15 @@ func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc w
 	// The bookmark commit-id powers the "behind remote" / stale signal:
 	// comparing the local bookmark tip against the PR head SHA tells us
 	// whether what we have locally still matches what's on the PR.
-	type headInfo struct{ changeID, bookmarkCommitID, desc string }
-	type pathSpec struct{ path, bookmark string }
-	var headByPath map[string]headInfo
+	//
+	// Concurrency fixed the wall time and not the CPU: the deck runs this for
+	// every workspace in the global state file on every refresh, so the fan-out
+	// was still paid in full a dozen times a minute by a deck nobody was
+	// touching. enricher is what makes an idle repeat cost syscalls instead of
+	// subprocesses — see headEnricher.
+	var headByPath map[string]workspaceHead
 	if j != nil {
-		var specs []pathSpec
+		var specs []headSpec
 		seen := map[string]bool{}
 		for _, r := range repos {
 			for _, e := range repoMap[r.repo] {
@@ -1838,7 +1850,7 @@ func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc w
 					continue
 				}
 				seen[p] = true
-				specs = append(specs, pathSpec{path: p, bookmark: strings.TrimSpace(e.Bookmark)})
+				specs = append(specs, headSpec{path: p, bookmark: strings.TrimSpace(e.Bookmark)})
 			}
 		}
 		// Enrichment is best-effort: the authoritative row list comes from
@@ -1850,38 +1862,13 @@ func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc w
 		// forever. Since this runs inside the deck's refresher cmd, a blocked
 		// wg.Wait() would wedge m.refreshing=true permanently and kill the
 		// deck's background poll. So bound the wait: take whatever enrichment
-		// completed in time and proceed; stragglers keep writing to `live`
-		// under the lock (harmless — we read a snapshot), and the next refresh
-		// re-enriches the rows that timed out.
-		live := make(map[string]headInfo, len(specs))
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		for _, s := range specs {
-			wg.Add(1)
-			go func(s pathSpec) {
-				defer wg.Done()
-				id, desc, _ := j.HeadDescription(s.path)
-				var bookmarkCommit string
-				if s.bookmark != "" {
-					bookmarkCommit, _ = j.BookmarkCommitID(s.path, s.bookmark)
-				}
-				mu.Lock()
-				live[s.path] = headInfo{changeID: id, bookmarkCommitID: bookmarkCommit, desc: desc}
-				mu.Unlock()
-			}(s)
+		// completed in time and proceed; stragglers keep writing under the lock
+		// (harmless — we read a snapshot), and the next refresh re-enriches the
+		// rows that timed out.
+		if enricher == nil {
+			enricher = newHeadEnricher()
 		}
-		done := make(chan struct{})
-		go func() { wg.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(deckEnrichTimeout):
-		}
-		mu.Lock()
-		headByPath = make(map[string]headInfo, len(live))
-		for k, v := range live {
-			headByPath[k] = v
-		}
-		mu.Unlock()
+		headByPath = enricher.heads(j, specs, deckEnrichTimeout)
 	}
 
 	// Dev-loop progress summaries (rendered on the row meta line, see
