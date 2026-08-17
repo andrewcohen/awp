@@ -158,6 +158,8 @@ func (a *App) runWorkspace(args []string) error {
 		return a.runRename(args[1:])
 	case "delete", "remove", "rm":
 		return a.runDelete(args[1:])
+	case "send":
+		return a.runWorkspaceSend(args[1:])
 	case "bootstrap":
 		return a.runBootstrap(args[1:])
 	case "prune":
@@ -882,7 +884,7 @@ func (a *App) usage() error {
 }
 
 func (a *App) workspaceUsage() error {
-	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|bootstrap|rename|delete|remove|rm|prune>")
+	_, _ = fmt.Fprintln(a.out, "Usage: awp <workspace|w> <list|info|open|send|bootstrap|rename|delete|remove|rm|prune>")
 	return nil
 }
 

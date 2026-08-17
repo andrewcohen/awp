@@ -99,7 +99,7 @@ func sendPromptToZmxAgent(client zmx.Client, item deckui.Item, text string, repo
 		return err
 	}
 	if !found || !session.Live() {
-		return fmt.Errorf("send prompt: no agent running for %s — press a to start one", ws)
+		return fmt.Errorf("send prompt: no agent running for %s — press enter on its row to start one", ws)
 	}
 
 	reporter.Step("Send prompt to agent")
