@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/andrewcohen/awp/internal/review"
@@ -13,12 +14,25 @@ import (
 // has no idea an agent exists, so a finding got from "noticed while reading" to
 // "being fixed" via a human copying text between panes.
 //
-// The prompt deliberately reuses the propose-then-approve shape already
-// established for PR-repair prompts (see the `p r` flow): the agent reports the
-// problem and its proposed fix for approval *before* changing anything. A review
-// comment is a judgement call, and an agent that silently rewrites code in
-// response to one removes the reviewer from the loop the comment was meant to
-// open.
+// **By default the agent just makes the change.** A review comment is an
+// instruction, and the round trip this file exists to close is "noticed while
+// reading" → "fixed"; a gate in the middle of it is a second keypress for the
+// reviewer on every remark, which is the copying-between-panes cost in another
+// form.
+//
+// It used to gate on approval, reusing the propose-then-approve shape of the
+// PR-repair prompts (the `p r` flow), on the argument that a comment is a
+// judgement call and an agent that silently rewrites code in response to one
+// removes the reviewer from the loop the comment opened. That argument holds for
+// remarks whose answer is genuinely uncertain and not for the ordinary ones, and
+// the gate could not tell them apart — so it charged the uncertain case's price on
+// all of them. The reviewer is still in the loop either way: the change arrives as
+// a diff they are already reading.
+//
+// AWP_REVIEW_APPROVAL=1 requires the gate back — see requireProposalApproval. The
+// machinery is untouched by the default: an agent may still send `--proposal` when
+// it wants a yes, and `A` in the viewer still approves one. What the default
+// changes is only whether the prompt *demands* one.
 
 // commentPromptFor renders the prompt sent to a workspace's agent for one
 // comment. revision names the change under review, empty when unresolved.
@@ -58,24 +72,77 @@ func commentPromptFor(c review.Comment, revision string) string {
 	}
 
 	b.WriteString("\nRead the file yourself; this is a pointer, not a paste.\n")
+	reply := ""
 	if c.ID != "" {
-		// --body-file rather than --body: a proposal is exactly the long markdown
-		// body #95 was about, and a backtick put through a shell argument arrives
-		// mangled in a way nobody notices until it is on someone's PR.
-		fmt.Fprintf(&b, "Reply before changing anything:\n  awp review reply --to %s --body-file <path>\n", c.ID)
-	} else {
-		b.WriteString("Reply before changing anything.\n")
+		reply = fmt.Sprintf("  awp review reply --to %s --body-file <path>\n", c.ID)
 	}
-	// Two branches, named by what the reply *is* rather than by what you did, so an
-	// agent reading this literally gets the right answer either way.
+	b.WriteString(replyRuleFor(reply))
+	return b.String()
+}
+
+// replyRuleFor is the closing instruction of a finding prompt: what the agent is
+// told to do about the remark, and how to reply.
+//
+// reply is the indented command line to show, or "" for none — which is what a
+// comment with no id gets, since there is nothing to address the reply to and a
+// literal `--to <id>` would be an instruction the agent cannot follow. The caller
+// supplies it rather than an id because the batched prompt wants the `<id>`
+// placeholder (its remarks each carry their own) while a single idless comment
+// wants no command at all.
+//
+// One function because the single-comment and batched prompts say the same rules,
+// and they were two copies of a string that has now changed twice.
+//
+// --body-file rather than --body throughout: a reply is exactly the long markdown
+// body #95 was about, and a backtick put through a shell argument arrives mangled
+// in a way nobody notices until it is on someone's PR.
+func replyRuleFor(reply string) string {
+	// The lead-in ends in a colon when a command follows it and a full stop when
+	// none does, so an idless prompt does not trail a colon into nothing.
+	lead := func(sentence string) string {
+		if reply == "" {
+			return sentence + ".\n"
+		}
+		return sentence + ":\n" + reply
+	}
+	if !requireProposalApproval() {
+		// Reply *after*, and say what you did. The reply is still wanted — it is what
+		// closes the thread the remark opened, and what the reviewer reads next to the
+		// diff — but it is a report rather than a request.
+		return lead("Make the change, then reply saying what you did") +
+			"If the right answer is unclear, or the remark is a question, reply and ask\n" +
+			"instead of guessing. Add --proposal to any reply you want a yes on before\n" +
+			"acting, and stop there.\n"
+	}
+	// Two branches below, named by what the reply *is* rather than by what you did,
+	// so an agent reading this literally gets the right answer either way.
 	//
 	// "Then stop" rather than the old "wait for approval": waiting was not
 	// observable from here, so an agent told to wait either burned a turn polling
 	// for something with no channel or ignored the instruction. It is told now —
 	// approving sends it a prompt of its own — and `awp review list` is where it
 	// confirms.
-	b.WriteString(proposalGate)
-	return b.String()
+	return lead("Reply before changing anything") + proposalGate
+}
+
+// requireProposalApproval reports whether an agent must get a yes before changing
+// code in response to a review remark.
+//
+// Off unless AWP_REVIEW_APPROVAL is set to something truthy. Read per prompt rather
+// than cached at startup so flipping it does not need the deck restarted — the deck
+// is long-lived and a setting you cannot change without losing your panes is a
+// setting nobody tries.
+//
+// Deliberately an environment variable and not a config field. It is a preference
+// about how much rope to give an agent, which is the kind of thing you want to turn
+// on for one session while you watch it, and a config field would make that an edit
+// and an undo.
+func requireProposalApproval() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AWP_REVIEW_APPROVAL"))) {
+	case "", "0", "false", "no", "off":
+		return false
+	}
+	return true
 }
 
 // unsentPromptFor renders one prompt covering every remark the reviewer has
@@ -124,15 +191,14 @@ func unsentPromptFor(cs []review.Comment, revision string) string {
 	}
 
 	b.WriteString("\nRead the files yourself; these are pointers, not pastes.\n")
-	b.WriteString("Reply on each before changing anything:\n" +
-		"  awp review reply --to <id> --body-file <path>\n")
-	b.WriteString(proposalGate)
+	b.WriteString(replyRuleFor("  awp review reply --to <id> --body-file <path>\n"))
 	return b.String()
 }
 
-// proposalGate is the rule an agent is held to when a finding reaches it. The
-// gate is about changing code, not about replying: an answer or an explanation is
-// an ordinary reply, and only an offer to change something waits for a yes.
+// proposalGate is the rule an agent is held to when a finding reaches it *and*
+// AWP_REVIEW_APPROVAL is set. The gate is about changing code, not about replying:
+// an answer or an explanation is an ordinary reply, and only an offer to change
+// something waits for a yes.
 const proposalGate = "Add --proposal if the reply is a change you mean to make, then stop.\n" +
 	"You get a prompt when it is approved. Answering a question or explaining\n" +
 	"what is already there needs no approval: reply and carry on.\n"
