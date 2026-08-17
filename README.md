@@ -1255,6 +1255,20 @@ Three rules, each of which the strip's own first screen forced:
   deck is most rows: a workspace named after its branch put `andrew/refactor-parser`
   under `refactor-parser`, line after line.
 
+**The idle band is ranked by recency in coarse buckets** — this hour, today, this week,
+older, unknown — and by label inside a bucket. It sorted on the raw timestamp first, and
+that made the strip reshuffle under your own hand: opening a workspace clears its unread
+mark, clearing the mark stamps its last-active time, and that stamp was the sort key. So
+clicking a row sent it to the top of its band and pushed everything below it down, on the
+surface whose whole job is to be glanced at while you work somewhere else.
+
+Buckets are the same cure the attention scope got for the same disease (an agent's
+lifecycle kept moving its row): rank by a band, not by a continuously moving value. A row
+now moves only when it crosses a boundary — at most once, and when it does the move means
+something. What is given up is fine-grained "where was I" ordering, which was worth having
+on the one band that by definition wants nothing from you, and not worth the list moving
+while you read it.
+
 The project never labels a row — the sections cut across projects, so a project chip or
 sub-row would be a second level of grouping under the one that matters. It survives only
 as the second line's last-resort content, which is a row saying "and this one is in
