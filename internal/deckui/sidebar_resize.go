@@ -59,8 +59,11 @@ func (m Model) WithSidebarWidthSaver(save SidebarWidthSaver) Model {
 // strip's own last column, and a drag has to win there — resizing is the gesture you
 // are in the middle of, and a press on the edge that fell through to a row would
 // open a pane instead of taking hold of the border.
-func (m *Model) sidebarMouse(msg tea.MouseMsg) bool {
-	return m.dragSidebarEdge(msg)
+func (m *Model) sidebarMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
+	if m.dragSidebarEdge(msg) {
+		return nil, true
+	}
+	return m.clickSidebarRow(msg)
 }
 
 // sidebarEdgeCol is the screen column the strip's last column occupies. Only

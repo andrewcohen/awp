@@ -18,7 +18,7 @@ import (
 func TestGrabbingTheEdgeStartsADrag(t *testing.T) {
 	m, _ := sidebarPane(t)
 	edge := m.sidebarEdgeCol()
-	if !m.sidebarMouse(clickAt(edge)) {
+	if _, ok := m.sidebarMouse(clickAt(edge)); !ok {
 		t.Fatalf("a click on the edge at column %d did not grab it", edge)
 	}
 	if !m.sidebarDragging {
@@ -26,14 +26,13 @@ func TestGrabbingTheEdgeStartsADrag(t *testing.T) {
 	}
 }
 
-// TestAClickInsideTheStripIsNotTheEdge. The band is a couple of columns; a press on
-// a row is not a resize, and treating it as one would make the strip impossible to
-// click on — which is what #384 then has to build on.
+// TestAClickInsideTheStripIsNotTheEdge. The band is a couple of columns wide; a
+// press on a row is not a resize. The click is still consumed — the strip's columns
+// are the strip's — but what it must not do is take hold of the border, which would
+// leave every row unclickable.
 func TestAClickInsideTheStripIsNotTheEdge(t *testing.T) {
 	m, _ := sidebarPane(t)
-	if inside := m.sidebarEdgeCol() - 4; m.sidebarMouse(clickAt(inside)) {
-		t.Errorf("a click at column %d, well inside the strip, grabbed the edge", inside)
-	}
+	m.sidebarMouse(clickAt(m.sidebarEdgeCol() - 4))
 	if m.sidebarDragging {
 		t.Error("a click inside the strip started a drag")
 	}
@@ -45,7 +44,7 @@ func TestDraggingMovesTheEdgeToThePointer(t *testing.T) {
 	m, _ := sidebarPane(t)
 	m.sidebarDragging = true
 	const to = 60
-	if !m.sidebarMouse(motionAt(to)) {
+	if _, ok := m.sidebarMouse(motionAt(to)); !ok {
 		t.Fatal("a motion during a drag was not consumed")
 	}
 	if got := m.sidebarEdgeCol(); got != to {
@@ -62,7 +61,7 @@ func TestDraggingMovesTheEdgeToThePointer(t *testing.T) {
 // somewhere; consuming that would eat events the child is owed.
 func TestAMotionWithNoDragIsNotOurs(t *testing.T) {
 	m, _ := sidebarPane(t)
-	if m.sidebarMouse(motionAt(10)) {
+	if _, ok := m.sidebarMouse(motionAt(10)); ok {
 		t.Error("a motion with no drag under way was consumed")
 	}
 }
@@ -72,7 +71,7 @@ func TestTheDragEndsAndTheWidthStays(t *testing.T) {
 	m, _ := sidebarPane(t)
 	m.sidebarDragging = true
 	m.sidebarMouse(motionAt(50))
-	if !m.sidebarMouse(releaseAt(50)) {
+	if _, ok := m.sidebarMouse(releaseAt(50)); !ok {
 		t.Error("the release that ended the drag was not consumed")
 	}
 	if m.sidebarDragging {
@@ -82,7 +81,7 @@ func TestTheDragEndsAndTheWidthStays(t *testing.T) {
 		t.Errorf("the strip is %d columns after the drag, want 51", got)
 	}
 	// A release with no drag under way belongs to whatever it landed on.
-	if m.sidebarMouse(releaseAt(50)) {
+	if _, ok := m.sidebarMouse(releaseAt(50)); ok {
 		t.Error("a release with no drag was consumed")
 	}
 }
@@ -119,7 +118,7 @@ func TestTheDragLeavesRoomForAPane(t *testing.T) {
 // would be in belongs to the child, and a press there has to reach it.
 func TestTheEdgeIsOnlyGrabbableWhenTheStripIsUp(t *testing.T) {
 	m := sidebarDeck(t)
-	if m.sidebarMouse(clickAt(sidebarDefaultWidth - 1)) {
+	if _, ok := m.sidebarMouse(clickAt(sidebarDefaultWidth - 1)); ok {
 		t.Error("the edge was grabbable with no strip on screen")
 	}
 }
