@@ -1,7 +1,6 @@
 package deckui
 
 import (
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -119,9 +118,9 @@ func TestTheMenuKeyNeedsNothingFromTheTerminal(t *testing.T) {
 	if !p.prefixArmed {
 		t.Error("the menu did not arm on a plain terminal")
 	}
-	if hint := m.topRowHint(); !strings.Contains(hint, PaneMenuKey) {
-		t.Errorf("the row does not offer the menu it can now always send: %q", hint)
-	}
+	// The row no longer advertises the menu — it is on the `?` overlay and in the
+	// menu itself — so what is left to check is that the key armed one, which it
+	// did above.
 }
 
 // TestTheDoorIsNotTheMenu. The two are one key apart in the hand and must not be

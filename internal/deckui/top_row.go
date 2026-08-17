@@ -224,6 +224,49 @@ const (
 	gateGlyphPending = "○"
 )
 
+// topRowActivity is the background work in flight, as the status bar's own chips.
+//
+// It is on this row because a pane surface renders no status bar at all — the
+// popover branch of view() returns the child and this row, and nothing else. So a
+// background user action started from ctrl+b x (an install, a build) had no
+// surface anywhere: the menu closed, a job ran, and the only way to learn that
+// was to leave the pane. The chips are what the row list has always shown for
+// the same work, in the same shape, so nothing new has to be learned to read
+// them.
+//
+// Bounded twice, because a job's title is "<action> · <workspace>" and two of
+// those would have the label and the way out off the row: at most
+// topRowActivityMax chips, each label truncated, with a "+N" for the rest.
+func (m *Model) topRowActivity() string {
+	if len(m.activities) == 0 {
+		return ""
+	}
+	shown := m.activities
+	extra := 0
+	if len(shown) > topRowActivityMax {
+		extra, shown = len(shown)-topRowActivityMax, shown[:topRowActivityMax]
+	}
+	// Rendered from copies: truncating the label is this row's business and not
+	// something the status bar's activities should carry away with them.
+	short := make([]Activity, len(shown))
+	for i, a := range shown {
+		a.Label = truncate(a.Label, topRowActivityLabelMax)
+		short[i] = a
+	}
+	seg := renderActivitiesCompact(short, m.spinner.View())
+	if extra > 0 {
+		seg += m.styles.Muted.Render(" +" + strconv.Itoa(extra))
+	}
+	return seg
+}
+
+// topRowActivityMax is how many activities the row names before counting the
+// rest, and topRowActivityLabelMax how much of one it spells.
+const (
+	topRowActivityMax      = 2
+	topRowActivityLabelMax = 28
+)
+
 // topRowScrollback says the pane is not showing its live tail, and how many rows
 // of history sit above what is on screen.
 //
@@ -250,22 +293,22 @@ func (m *Model) topRowScrollback() string {
 // direction you pressed to get there.
 const scrollbackGlyph = "↑"
 
-// topRowHint is what sits at the right end: the way out of what is on screen, or
-// over the row list the scope it is showing.
+// topRowHint is what sits at the right end: over the row list, the scope it is
+// showing. Over a pane, nothing.
 //
-// The way out differs between the two hosted arrangements, because in a split the
-// reserved key is a prefix rather than a door. Over the list there is nothing to
-// leave — the question that end of the row answers there is which slice of the
-// workspaces you are looking through, which is the one thing about the list that
-// is invisible from the rows themselves.
+// The row used to spell the way out there — `ctrl+b menu · ctrl+\ deck`. Two
+// keys, on every frame, for the whole time you are in a pane, which is most of
+// the time the deck is open: a beginner's card that never came down. They are on
+// the `?` overlay and in the ctrl+b menu itself, which is where a key you have to
+// look up belongs. Dropping it also gives the row's right half back to the
+// label, which is now centred against the terminal rather than against whatever
+// was left over.
+//
+// Over the list it stays, because the scope is not a hint — it is state, and the
+// one thing about the list that is invisible from the rows themselves.
 func (m *Model) topRowHint() string {
 	if m.hostsTerminal() {
-		// One string for both arrangements, and on every terminal: ctrl+\ is a door
-		// everywhere, and the menu is a second key beside it rather than a mode in
-		// front of it. The row used to drop the menu where the terminal could not send
-		// ctrl+shift+\ as anything distinct; ctrl+b needs no such flag, so the
-		// offer is unconditional — see charm.PaneMenuKey.
-		return PaneMenuKey + " menu · " + PaneLeaveKey + " deck"
+		return ""
 	}
 	return "scope: " + scopeLabel(m.scope)
 }
@@ -308,28 +351,81 @@ func (m *Model) renderTopRow(w int) string {
 	if back := m.topRowScrollback(); back != "" {
 		segs = append(segs, back)
 	}
-	right := m.styles.PaneHint.Render(m.topRowHint())
-
-	if label := m.topRowLabel(); label != "" {
-		room := avail - lipgloss.Width(joinTopRowSegs(segs)) - lipgloss.Width(right) - len(topRowSep) - 1
-		if room >= topRowLabelMin {
-			segs = append(segs, m.styles.PaneTitle.Render(truncate(label, room)))
+	// Only over a hosted terminal. Over the row list the status bar below is
+	// already showing these, and the same chips twice on one screen reads as two
+	// things happening.
+	if m.hostsTerminal() {
+		if act := m.topRowActivity(); act != "" {
+			segs = append(segs, act)
 		}
+	}
+	// Empty over a pane, and rendered through the style only when there is
+	// something to style: a style applied to "" still emits its escapes, which
+	// would make an empty right end measure as a segment that is there.
+	var right string
+	if hint := m.topRowHint(); hint != "" {
+		right = m.styles.PaneHint.Render(hint)
 	}
 
 	left := joinTopRowSegs(segs)
+	if row, ok := m.centreLabel(indent+left, right, w); ok {
+		return row
+	}
+
 	gap := avail - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		// Too narrow for both. Over a pane the right side is the way out, which is
-		// the one thing that must not go; over the list it is the scope, and the
-		// badge it would push off is the reason the row exists. So which one gives
-		// way follows which screen it is.
-		if m.hostsTerminal() {
-			return padTopRow(truncate(indent+right, w), w)
-		}
+		// Too narrow for both. Over the list the right side is the scope and the
+		// left is the badge that is the reason the row exists, so the badge wins.
+		// A pane has no right side to lose.
 		return padTopRow(truncate(indent+left, w), w)
 	}
 	return padTopRow(indent+left+strings.Repeat(" ", gap)+right, w)
+}
+
+// centreLabel puts what is on screen in the middle of the row, between the state
+// on the left and the way out on the right. ok is false when there is no label or
+// no room for one, and the caller falls back to a row of two ends.
+//
+// Centred rather than packed in after the state, because everything to its left
+// changes width on its own: the badge is counted every frame, a PR's glyph
+// cluster grows when CI goes red, the scrollback count is however far you
+// scrolled, and an activity chip appears the moment you start a background
+// action. Packed, each of those slid the label sideways — the one thing on the
+// row you read as text, moving under your eyes for reasons that have nothing to
+// do with it. Anchored to the middle of the terminal it stays put, and the
+// segments that do change grow into the space beside it instead.
+//
+// It gives way rather than being pushed: when the left side grows into the
+// middle the label is clamped away from it and then truncated, so a long-titled
+// pane loses characters before the state loses a glyph. Both are held off by
+// topRowSep's width so nothing ever touches.
+func (m *Model) centreLabel(left, right string, w int) (string, bool) {
+	label := m.topRowLabel()
+	if label == "" {
+		return "", false
+	}
+	leftW, rightW := lipgloss.Width(left), lipgloss.Width(right)
+	gap := len(topRowSep)
+	room := w - leftW - rightW - 2*gap
+	if room < topRowLabelMin {
+		return "", false
+	}
+	rendered := m.styles.PaneTitle.Render(truncate(label, room))
+	labelW := lipgloss.Width(rendered)
+
+	start := (w - labelW) / 2
+	if max := w - rightW - gap - labelW; start > max {
+		start = max
+	}
+	if min := leftW + gap; start < min {
+		start = min
+	}
+	row := left + strings.Repeat(" ", start-leftW) + rendered
+	tail := w - lipgloss.Width(row) - rightW
+	if tail < 0 {
+		tail = 0
+	}
+	return padTopRow(row+strings.Repeat(" ", tail)+right, w), true
 }
 
 // topRowLabelMin is the narrowest the label is worth showing at. Below it there

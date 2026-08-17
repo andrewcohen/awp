@@ -85,12 +85,11 @@ pressing `P` changes which rows you see without changing what the badge says is
 waiting.
 
 Under `awp zdeck` the badge **stays on screen inside a pane**, at the left of the
-deck's top row, ahead of the label of what is on screen and the
-`ctrl+b menu · ctrl+\ deck` hint. A pane is where most of the time goes, and the counts are the reason to go
+deck's top row, ahead of the centred label of what is on screen. A pane is where most of the time goes, and the counts are the reason to go
 back to the row list — so they follow you into it, and they keep counting while
 you are there: an agent that finishes its turn behind the pane shows up without
-your leaving. The row is one row for three things, so a narrow terminal drops the
-label first and the badge second; the leave key never goes. The scope label stays
+your leaving. The row is one row for several things, so a narrow terminal
+truncates the label and then drops it; the badge is the last thing to go. The scope label stays
 behind on the deck's own title row — which slice of the list you were looking
 through is not a question a pane raises.
 
@@ -113,9 +112,22 @@ sat in a different cell on each of the three screens you move between constantly
 One row, one address. A pane also gets back the row its header was spending.
 
 What changes between the screens is only what the row has to say. Over a pane or a
-split it names what is on screen, that workspace's own state, and the two keys that
-act on it — `ctrl+b menu · ctrl+\ deck`. Over the row list it names the scope — there is nothing to leave, and no
-one workspace to report on. The badge is at the left on all three.
+split it names what is on screen and that workspace's own state; over the row list
+it names the scope — there is nothing to leave, and no one workspace to report on.
+The badge is at the left on all three.
+
+The label is **centred against the terminal**, not packed in after the state.
+Everything to its left changes width on its own — the badge is recounted every
+frame, a PR's glyph cluster grows when CI goes red, an activity chip appears the
+moment you start a background action — and packed, each of those slid the label
+sideways. Anchored to the middle it stays put; when the left side does grow into
+the middle, the label is clamped clear of it and truncated, so a long-titled pane
+loses characters before the state loses a glyph.
+
+Over a pane the right end of the row is **empty**. It used to spell the way out —
+`ctrl+b menu · ctrl+\ deck` — on every frame for the whole time a pane was open,
+which is a beginner's card that never came down. Both keys are on the `?` overlay
+and in the `ctrl+b` menu itself.
 
 Between the badge and the label the row reports **the hosted workspace's own
 state** — the row you came from, so you can tell from inside a pane whether the
@@ -338,7 +350,9 @@ The bottom status line shows in-flight background work as a single segment betwe
 - `⠼ workspace:rename:<name>` / `workspace:link:<name>` for the deck-local lifecycle actions that don't go through the async-jobs subsystem.
 - Each async deck job (workspace `create`, `delete`, `review`, custom `background: true` actions). Failed (`⚠`) and orphaned (`☠`) jobs stay visible in the bar until dismissed via the `J` overlay.
 
-Finished entries flash `✓ <label>` for 500ms before disappearing. When no background work is running, the bar is empty.
+Finished entries flash `✓ <label>` before disappearing — 500ms for the deck's own fetches (`pr-status`, `enrich`), which you are watching the bar for, and **4 seconds** for an async job, which is work you started and then went back to something else. When a job reaches a terminal state the status line also says how it went: `install · ws: done`, or `install · ws: exit 1 — J for the log`. Cancellations say nothing (you pressed the key). When no background work is running, the bar is empty.
+
+**From inside a pane or a split** the same activity chips appear on the deck's top row, since those screens have no bottom status bar. Two at a time, each label truncated, with `+N` for the rest — enough to see that the action you started from `ctrl+b x` is running and that it finished.
 
 ### Dev URL capture
 
@@ -693,7 +707,7 @@ with an empty task list even though its conversation is intact.
 
 Custom commands surfaced by the deck's `x` action menu. By default each action runs in a new tmux window in the workspace.
 
-Set `"background": true` to run the action detached via the jobs subsystem instead. The deck dispatches it without opening a tmux window; output is captured to `~/.awp/jobs/<id>.log` and the run shows up in the right panel's **Recent activity** list for that workspace. Failures appear in the bottom status bar's `⚠` count and stay until dismissed in the `J` overlay. Best for installs, lints, builds, or anything you'd rather not babysit.
+Set `"background": true` to run the action detached via the jobs subsystem instead. The deck dispatches it without opening a tmux window; output is captured to `~/.awp/jobs/<id>.log` and the run shows up in the right panel's **Recent activity** list for that workspace. Failures appear in the bottom status bar's `⚠` count and stay until dismissed in the `J` overlay. While it runs it is a spinner chip in the [activity bar](#activity-bar-bottom-of-the-deck) — and on the deck's top row when you are inside a pane, which is where you usually are when you start one — and when it lands the status line names the outcome. Best for installs, lints, builds, or anything you'd rather not babysit.
 
 Set `"focus": false` to keep the action foregrounded (it gets a real tmux window, runs interactively, scrollback intact) but **don't** switch the tmux client to it on launch. Useful for spawning a long-running watcher you'll check on later without losing your place in the deck. Ignored when `background` is true.
 
