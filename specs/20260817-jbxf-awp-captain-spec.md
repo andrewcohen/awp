@@ -123,13 +123,13 @@ deck's `o` picker offers.
 
 | Command | Gives it |
 |---|---|
+| `awp workspace attention [--json]` | which rows want you, and why — ✅ built |
 | `awp workspace list` | the roster: every workspace, per project, with agent state |
 | `awp workspace info <ws>` | one workspace in detail |
 | `awp watch --once [ws]` | one frame of an agent's dev-loop progress, printed, exits |
 | `awp review list` | findings on a change |
 | `awp logs` | a workspace's logs |
-| *attention* | which rows want you, and why — **no CLI for this yet** |
-| *PR / CI state* | the pr-status cache — **not exposed on `info` yet** |
+| *PR / CI state* | the pr-status cache — still not exposed on `info`, though `repair` reads it |
 
 Attention is the read worth exposing properly. Every other read the captain
 could approximate by shelling out to `jj` and `gh`; attention it cannot, because
@@ -142,11 +142,11 @@ Acting on awp's own workspaces and the agents inside them.
 
 | Command | State |
 |---|---|
-| `awp workspace new --project <p> <name> --prompt … --label …` | **new.** Creation today is `awp workspace open`, which creates *and* focuses — it attaches you to the session. A captain must create without switching. |
-| `awp workspace send --project <p> <ws> <text>` | **new.** Instructing an agent is deck-only today (`internal/cli/prompt_sender.go`), reachable via `A` and nothing else. |
-| `awp workspace repair --project <p> <ws>` | **new.** The repair prompt text lives in `deckui.prRepairPrompt`, inside the TUI and not callable. |
-| `awp workspace label --project <p> <ws> <text>` | **new.** See the display-name phase. |
-| `awp review <pr#>` | exists, and the captain may use it — it spawns a reviewer agent on a PR. Needs a non-interactive form. |
+| `awp workspace new --project <p> <name> [--prompt …] [--label …] [--bookmark …]` | ✅ built. Creates and returns; `openRequest.PaneHosted` is the half of `open` that does not attach. |
+| `awp workspace send --project <p> <ws> <text>` | ✅ built. A fourth caller of `agentPromptSender`, not a fourth way to send. |
+| `awp workspace repair --project <p> <ws> [--dry-run]` | ✅ built, on `deckui.PRRepairPrompt` — the deck's own prompt, so #171's author/reviewer split survives. |
+| `awp workspace label --project <p> <ws> [text]` | ✅ built, with `Entry.DisplayName` and its allow-list guard. |
+| `awp review <pr#> --project <p> --no-attach` | ✅ built. The picker is refused rather than opened for a caller that cannot answer it. |
 | `awp workspace rename` | exists |
 | `awp internal mark-read` | exists |
 
@@ -209,6 +209,24 @@ their target explicitly.
 7. **Done?** `a` opens an agent that, asked "what needs doing", reads the deck's
    state and acts on it — spawns a workspace with a readable label, sends a
    repair instruction to another agent — without being told how.
+
+## Status: what shipped
+
+Phases 0–12 are done, and the preamble no longer disclaims any of them. The captain
+can read the deck's attention scope, create labelled workspaces with a starting
+prompt, instruct an agent, trigger a repair, and start a review — all naming their
+target explicitly.
+
+The one gap left is the one the message log was going to close: `send` is one-way, so
+no agent can answer the captain. The preamble says so, and tells it to prefer reading
+progress with `awp watch --once` over asking a question nobody will answer. That is
+the case for building *Deferred: the message log* next, now that the captain exists to
+say what a message needs to carry.
+
+Two things raised while building, both parked as their own tasks rather than folded in
+here: whether the captain belongs in a ~70% modal over the live deck rather than a
+full-screen pane (the pane hides exactly the rows its answers are about), and `A`
+becoming "say something to the captain" with the cursor's project prefilled.
 
 ## Spec Change Log
 - 2026-08-17: Initial draft. Decisions taken at spec time: captain gets `a` and

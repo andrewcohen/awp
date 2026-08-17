@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,13 +67,25 @@ func TestThePreambleStatesEveryRefusalWithItsReason(t *testing.T) {
 	}
 }
 
-// TestThePreambleAdmitsWhatIsNotBuiltYet. An agent told it may create workspaces
-// invents a plausible flag, runs it, and reports the failure as an awp bug.
-func TestThePreambleAdmitsWhatIsNotBuiltYet(t *testing.T) {
+// TestThePreambleNamesTheGapThatIsLeft. It used to say five verbs were unbuilt; they
+// are built, so it says the one thing that is still missing instead — that `send` is
+// one-way and no agent can answer back.
+//
+// The point of the assertion is not the wording but that *something* is said. An
+// agent that believes it can ask another agent a question will ask one, wait, and
+// report the silence as a failure.
+func TestThePreambleNamesTheGapThatIsLeft(t *testing.T) {
 	got := captainPreamble([]string{"alpha"})
-	for _, want := range []string{"not there yet", "Do not guess at flags"} {
+	for _, want := range []string{"one-way", "answer you"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("the preamble never says %q", want)
+			t.Errorf("the preamble never says %q, so the captain does not know it cannot be replied to", want)
+		}
+	}
+	// And it no longer claims the built verbs are missing, which would have the
+	// captain decline work it can do.
+	for _, gone := range []string{"not there yet", "Do not guess at flags"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the preamble still says %q, but those verbs exist now", gone)
 		}
 	}
 }
@@ -82,33 +95,56 @@ func TestThePreambleAdmitsWhatIsNotBuiltYet(t *testing.T) {
 // verb the CLI actually dispatches. A preamble that drifts ahead of the CLI is how
 // the captain starts reporting our own gaps as failures.
 func TestThePreambleOnlyNamesCommandsThatExist(t *testing.T) {
-	// The subcommands app.go dispatches today, which is what a captain can reach.
-	known := map[string][]string{
-		"workspace": {"list", "info", "rename", "open", "bootstrap", "prune", "delete"},
-		"watch":     nil,
-		"review":    {"list", "add", "reply", "publish"},
-		"logs":      nil,
-	}
-	// Only the indented command lines. Prose mentions awp by name too, and a check
-	// that could not tell the two apart would be answered by rewording a sentence.
+	// Asked of the dispatcher rather than compared against a list written here. A
+	// hardcoded list is the thing that goes stale: it went stale the moment the five
+	// verbs it predated landed, and a guard that fails when the code gets *better* is
+	// one people learn to edit rather than read.
 	for _, line := range strings.Split(captainPreamble([]string{"alpha"}), "\n") {
+		// Only the indented command lines. Prose mentions awp by name too, and a
+		// check that could not tell the two apart would be answered by rewording a
+		// sentence.
 		if !strings.HasPrefix(line, "  awp ") {
 			continue
 		}
-		f := strings.Fields(line)
-		sub := f[1]
-		subs, ok := known[sub]
-		if !ok {
-			t.Errorf("the preamble offers `awp %s`, which is not a command awp dispatches: %q", sub, line)
+		args := commandWords(line)
+		if len(args) == 0 {
 			continue
 		}
-		if len(subs) == 0 || len(f) < 3 || strings.HasPrefix(f[2], "-") || strings.HasPrefix(f[2], "<") {
-			continue
-		}
-		if !slices.Contains(subs, f[2]) {
-			t.Errorf("the preamble offers `awp %s %s`, which is not a subcommand of %s: %q", sub, f[2], sub, line)
+		out := &bytes.Buffer{}
+		app := NewApp(&fakeService{}, out)
+		// --help so nothing runs: every verb answers it, and a verb that does not
+		// exist fails at the dispatcher before anything else can.
+		if err := app.Run(append(args, "--help")); err != nil && strings.Contains(err.Error(), "unknown") {
+			t.Errorf("the preamble offers `awp %s`, which awp does not dispatch (%v): %q", strings.Join(args, " "), err, line)
 		}
 	}
+}
+
+// commandWords is the command part of a preamble usage line: the words after `awp`
+// up to the first flag, placeholder, or the run of spaces that starts a description.
+//
+// The two-space split matters. Some lines put a description on the same row —
+// "  awp workspace attention            what wants attention" — and taking every word
+// would hand the dispatcher "attention what wants attention", which fails for the
+// wrong reason and reads as the verb not existing.
+func commandWords(line string) []string {
+	// Everything before the first run of two or more spaces after the command.
+	head := strings.TrimSpace(line)
+	if i := strings.Index(head, "  "); i > 0 {
+		head = head[:i]
+	}
+	fields := strings.Fields(head)
+	if len(fields) == 0 || fields[0] != "awp" {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	for _, f := range fields[1:] {
+		if strings.HasPrefix(f, "-") || strings.HasPrefix(f, "<") || strings.HasPrefix(f, "[") || strings.HasPrefix(f, "'") {
+			break
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // claudeCaptainHome isolates the captain's home and config, with claude as the
