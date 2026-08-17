@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/andrewcohen/awp/internal/config"
+	"github.com/andrewcohen/awp/internal/jj"
+	"github.com/andrewcohen/awp/internal/workspace"
 )
 
 // Naming a target explicitly, for commands that cannot resolve one from where
@@ -125,9 +129,49 @@ func expandProjectPath(name string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
-// The service for a resolved root is not here yet, on purpose. It wants to be
-// newDeckActionServiceWithIO(runner, root, …) — pinned to the root via
-// fixedDirRunner the way the deck's per-row service is, so every jj call runs in
-// the project the caller named rather than wherever the process started. It
-// arrives with the first verb that needs one, where a real call site can test it,
-// rather than sitting here as a method waiting for a caller.
+// serviceForProject is the workspace service for a named project, and the repo
+// root it resolved to.
+//
+// Pinned to that root via fixedDirRunner, the way the deck's per-row service is
+// (newDeckActionServiceWithIO). The pinning is the whole point: a service built
+// from the ambient cwd would answer questions about whichever repository the
+// process started in, and answer them successfully, which is the failure this file
+// exists to make impossible.
+func (a *App) serviceForProject(name string) (workspace.Service, string, error) {
+	cfg, err := config.Load("")
+	if err != nil {
+		return nil, "", fmt.Errorf("load config: %w", err)
+	}
+	root, err := resolveProjectRoot(name, cfg.Deck.ProjectRoots)
+	if err != nil {
+		return nil, "", err
+	}
+	return newDeckActionServiceWithIO(a.runner, root, a.in, a.out), root, nil
+}
+
+// ambientRepoRoot is the repository the process is standing in.
+//
+// The thing a captain's command may never use, and the thing a person's command
+// should: `awp w list` has always meant "here", and making one verb out of four
+// demand a flag would be a worse CLI for the sake of a rule that is about a
+// different caller. A verb that accepts it says which project it resolved to, so a
+// wrong answer is visible immediately — see App.sendTarget.
+func (a *App) ambientRepoRoot() (string, error) {
+	root, err := jj.New(a.runner).RepoRoot()
+	if err != nil {
+		return "", fmt.Errorf("no project given and this is not a repository: pass %s <name|path>", projectFlag)
+	}
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("no project given and this is not a repository: pass %s <name|path>", projectFlag)
+	}
+	return root, nil
+}
+
+// projectNameFor is what a repo root is called on the deck: its basename.
+//
+// One spelling, because the name is matched against session names and row
+// identities elsewhere — deck.go and workspaceEnvPairs both derive it the same way,
+// and a second derivation is the one that would disagree.
+func projectNameFor(repoRoot string) string {
+	return filepath.Base(strings.TrimRight(repoRoot, string(filepath.Separator)))
+}
