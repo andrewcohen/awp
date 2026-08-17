@@ -35,7 +35,7 @@ func TestTogglingTheSidebarRecordsIt(t *testing.T) {
 // saving the old one would rewrite the file on a keypress that did nothing.
 func TestARefusedSidebarToggleRecordsNothing(t *testing.T) {
 	m := sidebarDeck(t)
-	m.width = sidebarWidth + sidebarChildMinW - 1
+	m.width = sidebarMinWidth + sidebarChildMinW - 1
 	saved := false
 	m = m.WithSidebarSaver(func(bool) error { saved = true; return nil })
 	m.toggleSidebar()

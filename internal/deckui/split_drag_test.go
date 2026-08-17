@@ -11,7 +11,7 @@ import (
 // A mouse event carries a column of the screen. The divider lives at a column of
 // childBox, and those two agreed for as long as childBox started at zero — which
 // it did until the sidebar took columns off its left (#333). Then the grab band
-// sat sidebarWidth columns left of the visible divider, so grabbing the divider
+// sat sidebarDefaultWidth columns left of the visible divider, so grabbing the divider
 // did nothing and clicking well inside the left half started a drag.
 
 // dragDeck is a split whose box has been moved off the screen's left edge, which
@@ -77,6 +77,10 @@ func clickAt(x int) tea.MouseMsg {
 
 func motionAt(x int) tea.MouseMsg {
 	return tea.MouseMotionMsg{X: x, Y: 5, Button: tea.MouseLeft}
+}
+
+func releaseAt(x int) tea.MouseMsg {
+	return tea.MouseReleaseMsg{X: x, Y: 5, Button: tea.MouseLeft}
 }
 
 func abs(n int) int {

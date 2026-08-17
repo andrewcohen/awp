@@ -888,6 +888,15 @@ type Model struct {
 	// ctrl+b S toggles. A property of the deck rather than of the arrangement — see
 	// sidebar.go, where that is argued.
 	sidebar bool
+	// sidebarW is how many columns the strip was last dragged to. Zero means never
+	// dragged, which sidebarWidth reads as the default — and every read of it goes
+	// through that method, which clamps the number to what the terminal can spare.
+	sidebarW int
+	// sidebarDragging is whether the pointer has the strip's edge. Set by a press on
+	// it and cleared by the release, so the motion in between belongs to the edge
+	// rather than to whatever is under the pointer — the same shape splitModal.dragging
+	// has, and for the same reason.
+	sidebarDragging bool
 	// keysEnhanced is whether this terminal reports key repeats and releases as
 	// distinct from presses — the Kitty protocol's event-types flag, asked for in
 	// View and answered once at startup. False on a terminal that does not support
@@ -902,6 +911,9 @@ type Model struct {
 	saveScope ScopeSaver
 	// saveSidebar does the same for the attention strip — see SidebarSaver.
 	saveSidebar SidebarSaver
+	// saveSidebarWidth records how wide the strip was dragged to — see
+	// SidebarWidthSaver.
+	saveSidebarWidth SidebarWidthSaver
 	// splitFrac is where the divider goes in a *new* split: the left half's share
 	// of the width, as last left. Zero means never set, which splitLeftFrac reads
 	// as an even split.
@@ -2996,6 +3008,17 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 	}
+	// The attention strip is the deck's own furniture rather than the child's, so a
+	// mouse event that belongs to it is claimed here, before the child is offered
+	// anything. It has to be before: the strip's columns are columns childBox has
+	// already taken off the child, so an event over the strip translated into the
+	// child's coordinates lands at a negative column — which paneMouse refuses, and
+	// which is why the strip was unclickable rather than mis-clickable.
+	if mouse, isMouse := msg.(tea.MouseMsg); isMouse {
+		if m.sidebarMouse(mouse) {
+			return m, nil
+		}
+	}
 	// Picker lists drive themselves with async commands — FilterMatchesMsg
 	// from the filter input, cursor.BlinkMsg from the filter cursor,
 	// statusMessageTimeoutMsg from status timers. The KeyMsg branches
@@ -4205,7 +4228,7 @@ func (m Model) view() string {
 		// already taken off the child's left.
 		if m.showsSidebar() {
 			placed = lipgloss.JoinHorizontal(lipgloss.Top,
-				m.renderSidebar(box{w: sidebarWidth, h: b.h}), placed)
+				m.renderSidebar(box{w: m.sidebarWidth(), h: b.h}), placed)
 		}
 		// A pane or a split gets the deck's own row above it — the same row, in the
 		// same cells, as the row list wears. See top_row.go.

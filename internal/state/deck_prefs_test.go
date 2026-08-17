@@ -140,15 +140,20 @@ func TestTheKeysAreTheStructsOwnTags(t *testing.T) {
 		name, _, _ := strings.Cut(fields.Field(i).Tag.Get("json"), ",")
 		tags[name] = true
 	}
-	for _, key := range []string{deckPrefScope, deckPrefSidebar, deckPrefSplit} {
+	keys := []string{deckPrefScope, deckPrefSidebar, deckPrefSidebarWidth, deckPrefSplit}
+	for _, key := range keys {
 		if !tags[key] {
 			t.Errorf("%q is saved but DeckPrefs has no field tagged with it, so loading it back reads nothing", key)
 		}
 	}
 	// And every field has a key, or a setting can be written by the struct and
-	// never by a save.
-	if len(tags) != 3 {
-		t.Errorf("DeckPrefs has %d fields and this test knows about 3 keys; a new field needs a deckPref* constant", len(tags))
+	// never by a save. Counted against the list above rather than against a literal,
+	// so adding a preference means adding its constant in one place — the literal was
+	// a second thing to remember, and this test is here because remembering is what
+	// fails.
+	if len(tags) != len(keys) {
+		t.Errorf("DeckPrefs has %d fields and %d keys are declared; a new field needs a deckPref* constant",
+			len(tags), len(keys))
 	}
 }
 
@@ -232,11 +237,30 @@ func TestTheSplitDividerSurvivesTheProcess(t *testing.T) {
 	}
 }
 
-// TestTheThreePreferencesDoNotOverwriteEachOther. Three read-modify-writes over one
-// file: saving any of them has to leave the other two alone.
-func TestTheThreePreferencesDoNotOverwriteEachOther(t *testing.T) {
+// TestTheSidebarWidthSurvivesTheProcess. Stored as columns, not a fraction — the
+// strip's appetite does not grow with the screen, so the number is the point.
+func TestTheSidebarWidthSurvivesTheProcess(t *testing.T) {
+	deckPrefsHome(t)
+	if err := SaveDeckSidebarWidth(52); err != nil {
+		t.Fatalf("saving the width: %v", err)
+	}
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prefs.SidebarWidth != 52 {
+		t.Errorf("the width came back as %d, want 52", prefs.SidebarWidth)
+	}
+}
+
+// TestEveryPreferenceDoesNotOverwriteAnother. Four read-modify-writes over one
+// file: saving any of them has to leave the other three alone.
+func TestEveryPreferenceDoesNotOverwriteAnother(t *testing.T) {
 	deckPrefsHome(t)
 	if err := SaveDeckSidebar(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDeckSidebarWidth(44); err != nil {
 		t.Fatal(err)
 	}
 	if err := SaveDeckSplit(0.7); err != nil {
@@ -251,6 +275,9 @@ func TestTheThreePreferencesDoNotOverwriteEachOther(t *testing.T) {
 	}
 	if !prefs.Sidebar {
 		t.Error("a later save turned the sidebar off")
+	}
+	if prefs.SidebarWidth != 44 {
+		t.Errorf("the sidebar width is %d, want 44", prefs.SidebarWidth)
 	}
 	if prefs.Split != 0.7 {
 		t.Errorf("the divider is %v, want 0.7", prefs.Split)
