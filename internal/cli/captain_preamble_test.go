@@ -101,10 +101,25 @@ func TestThePreambleNamesTheGapThatIsLeft(t *testing.T) {
 		}
 	}
 	// And it no longer claims the built verbs are missing, which would have the
-	// captain decline work it can do.
-	for _, gone := range []string{"not there yet", "Do not guess at flags"} {
+	// captain decline work it can do. "not built yet" was the last survivor: the
+	// closing section went on offering it as a category after #383 removed the
+	// paragraph that gave it meaning.
+	for _, gone := range []string{"not there yet", "Do not guess at flags", "not built yet"} {
 		if strings.Contains(got, gone) {
 			t.Errorf("the preamble still says %q, but those verbs exist now", gone)
+		}
+	}
+}
+
+// The three kinds of "cannot" are named, because the user does something different
+// with each: a refusal is the captain working correctly, a block is a workspace to go
+// look at, and a failure is a bug to report. Collapsing them loses the distinction
+// the user actually acts on.
+func TestThePreambleDistinguishesRefusedFromBlockedFromFailed(t *testing.T) {
+	got := captainPreamble([]string{"alpha"})
+	for _, want := range []string{"refused", "blocked", "failed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the preamble never names %q as a kind of cannot", want)
 		}
 	}
 }
