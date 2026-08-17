@@ -198,7 +198,25 @@ func (m Model) renderSidebar(b box) string {
 		}
 		lines = append(lines, m.sidebarSectionStyle(g.section).Render(
 			truncate(sidebarSectionLabel(g.section), inner)))
-		for _, it := range g.items {
+		for i, it := range g.items {
+			// And a blank row between rows, so a row is a block with air around it
+			// rather than one stripe in a wall of text. A row is two lines, and the
+			// cadence alone — name, detail, name, detail — asks the eye to count in
+			// order to know which lines belong together; the gap says it without
+			// counting.
+			//
+			// It costs a third of the strip's height, which is the trade. There is no
+			// cheaper separator: half a row is not addressable, since a cell is the
+			// smallest unit there is vertically, and the trick that would have cost no
+			// row at all — an underline on the row's last line, drawn at the bottom edge
+			// of the cell — does not survive coloured content. Every inner lipgloss
+			// style ends in a full SGR reset, which cancels the underline mid-line, so
+			// the rule breaks at each coloured segment; via lipgloss's UnderlineSpaces
+			// it is worse, rewriting the line cell by cell and underlining the escape
+			// sequences as literal text.
+			if i > 0 {
+				lines = append(lines, "")
+			}
 			lines = append(lines, m.sidebarRow(v, it, inner)...)
 		}
 	}
