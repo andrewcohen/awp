@@ -218,24 +218,58 @@ func (m Model) sidebarView() deckdata.View {
 	return v
 }
 
+// sidebarLine is one rendered line of the strip and the row it belongs to.
+//
+// The pairing exists because a click arrives as a screen row and has to come back
+// as a workspace, and the only thing that knows which line is which is the loop that
+// laid them out. It used to return bare strings, so there was nowhere to ask — see
+// sidebarRowAt, which walks these.
+//
+// item is nil for a line that is not a row: a section header, a separator, the
+// overflow count. Those are the strip's own furniture and clicking one means nothing.
+type sidebarLine struct {
+	text string
+	item *Item
+}
+
 // renderSidebar draws the strip into the box it was given.
 func (m Model) renderSidebar(b box) string {
+	lines := m.sidebarLines(b)
+	texts := make([]string, len(lines))
+	for i, l := range lines {
+		texts[i] = l.text
+	}
+	return lipgloss.NewStyle().
+		Width(b.w).Height(b.h).
+		Padding(sidebarPadY, sidebarPadX).
+		Render(strings.Join(texts, "\n"))
+}
+
+// sidebarLines lays the strip out: every line it will draw, each tied to the row it
+// came from.
+//
+// Split from renderSidebar so the layout has exactly one author. A hit test that
+// re-derived which line is which — counting two lines per row plus a header plus the
+// separators — would be a second implementation of this loop, agreeing with it until
+// one of them changed.
+func (m Model) sidebarLines(b box) []sidebarLine {
 	inner := max(1, b.w-2*sidebarPadX)
 	avail := max(1, b.h-2*sidebarPadY)
 
 	v := m.sidebarView()
 	groups := sidebarSections(v.Items())
 
-	lines := make([]string, 0, 2*len(v.Items())+len(groups))
+	lines := make([]sidebarLine, 0, 2*len(v.Items())+len(groups))
+	text := func(s string) { lines = append(lines, sidebarLine{text: s}) }
 	for _, g := range groups {
 		// A blank row above each group but the first. It costs a workspace the
 		// strip could have listed, and it is worth it: the groups are what makes
 		// the strip scannable rather than a list, and colour alone did not
 		// separate them enough to find the one you were looking for.
 		if len(lines) > 0 {
-			lines = append(lines, "")
+			text("")
 		}
-		lines = append(lines, m.sidebarSectionStyle(g.section).Render(
+		text(m.sidebarSectionStyle(g.section).Render(
 			truncate(sidebarSectionLabel(g.section), inner)))
 		for i, it := range g.items {
 			// And a blank row between rows, so a row is a block with air around it
@@ -254,13 +288,20 @@ func (m Model) renderSidebar(b box) string {
 			// it is worse, rewriting the line cell by cell and underlining the escape
 			// sequences as literal text.
 			if i > 0 {
-				lines = append(lines, "")
+				text("")
 			}
-			lines = append(lines, m.sidebarRow(v, it, inner)...)
+			// Both of a row's lines carry the row, so clicking either the name or the
+			// detail under it means the same workspace. The row is one thing on screen
+			// and the eye reads it as one; a click that only counted on the first line
+			// would be a target half the size of the thing it looks like.
+			row := it
+			for _, l := range m.sidebarRow(v, it, inner) {
+				lines = append(lines, sidebarLine{text: l, item: &row})
+			}
 		}
 	}
 	if len(lines) == 0 {
-		lines = append(lines, m.styles.Muted.Render("no workspaces"))
+		text(m.styles.Muted.Render("no workspaces"))
 	}
 	// Overflow is a count rather than a scroll: nothing can move a cursor in here,
 	// so a viewport would be a scrollable region with no key that scrolls it. The
@@ -268,12 +309,9 @@ func (m Model) renderSidebar(b box) string {
 	if len(lines) > avail {
 		hidden := len(lines) - avail
 		lines = lines[:max(0, avail-1)]
-		lines = append(lines, m.styles.Muted.Render("+"+strconv.Itoa(hidden+1)+" more"))
+		text(m.styles.Muted.Render("+" + strconv.Itoa(hidden+1) + " more"))
 	}
-	return lipgloss.NewStyle().
-		Width(b.w).Height(b.h).
-		Padding(sidebarPadY, sidebarPadX).
-		Render(strings.Join(lines, "\n"))
+	return lines
 }
 
 // sidebarSection is the band a row sits in on the strip.

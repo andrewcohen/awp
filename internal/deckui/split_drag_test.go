@@ -79,6 +79,16 @@ func motionAt(x int) tea.MouseMsg {
 	return tea.MouseMotionMsg{X: x, Y: 5, Button: tea.MouseLeft}
 }
 
+// clickAtXY and wheelAt name a row as well as a column, which the strip needs and the
+// divider never did — a divider is a column and cares about nothing else.
+func clickAtXY(x, y int) tea.MouseMsg {
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
+
+func wheelAtXY(x, y int) tea.MouseMsg {
+	return tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp}
+}
+
 func releaseAt(x int) tea.MouseMsg {
 	return tea.MouseReleaseMsg{X: x, Y: 5, Button: tea.MouseLeft}
 }

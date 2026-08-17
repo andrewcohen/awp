@@ -3015,8 +3015,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// child's coordinates lands at a negative column — which paneMouse refuses, and
 	// which is why the strip was unclickable rather than mis-clickable.
 	if mouse, isMouse := msg.(tea.MouseMsg); isMouse {
-		if m.sidebarMouse(mouse) {
-			return m, nil
+		if cmd, done := m.sidebarMouse(mouse); done {
+			return m, cmd
 		}
 	}
 	// Picker lists drive themselves with async commands — FilterMatchesMsg

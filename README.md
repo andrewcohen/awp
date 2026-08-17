@@ -1248,6 +1248,22 @@ the deck in a narrow one and the strip stays down for want of columns, but it co
 back when the room does. A terminal too narrow to show it refuses the key and
 records nothing, rather than storing an answer the width chose for you.
 
+**Click a row to go to it.** The strip has no keyboard cursor and is not meant to
+have one yet: a strip that took the keys would have to answer what focus means with a
+pane, a split half and a strip on screen at once, which is a bigger question than
+"which of these wants me" — the one it was opened for. A mouse does not have that
+problem. Pointing at a row is how you say which one you mean, and it says it without
+taking anything away from whatever holds the keys.
+
+Clicking goes to a workspace the way `enter` on the row list does, through the same
+function, so a workspace whose last arrangement was a split comes back as that split
+rather than as a bare agent pane. Either line of a row works — a row reads as one
+thing, so a target half its apparent size is a target you miss — and the deck's cursor
+moves with you, so leaving the pane lands the row list on the workspace you were just
+in. A virtual inbox row is refused with a note about where to open it: `enter` on one
+of those starts a review or opens the new-workspace form, and those are too
+consequential for a click on a strip you were reading.
+
 **Drag its right edge to resize it**, and that is remembered in the same file, as
 `sidebar_width`. The 36-column default has an argument behind it (below) and the
 argument is still right about the default — but what a row needs depends on how long
