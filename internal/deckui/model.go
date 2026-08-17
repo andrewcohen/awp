@@ -867,6 +867,21 @@ type Model struct {
 	// migrated onto it incrementally (see modal.go). When set, Update
 	// dispatches keys to it before the legacy flag handlers.
 	active modal
+	// captain is the captain's pane while it is up, held beside active rather
+	// than in it — it is a modal *over* whatever the deck is showing, not a
+	// screen that replaces it.
+	//
+	// Every other pane is a workspace's program and answers the question the
+	// screen is already asking, so it takes the screen. The captain answers a
+	// question about the deck, and what you want while reading its claims is the
+	// thing it is claiming about: the sidebar, the row list, or the agent you
+	// asked it about, still there behind it. It used to be `active`, which meant
+	// opening it from a pane closed that pane — you came back to the row list
+	// instead of to what you had been reading. See #385.
+	//
+	// One slot, because there is one captain. Keys go to it while it is set, and
+	// its close is what puts them back.
+	captain *panePopover
 	// panes, when set, makes the window keys (a / e / v / s) render the
 	// process inside the deck on a pty awp owns instead of handing off to
 	// a tmux window. nil is the ordinary deck. The UI is the same either
@@ -2002,6 +2017,21 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	// through only keeps the machinery alive; it does not disturb the form.
 	// Everything else — key input, huh's own cursor-blink/field messages —
 	// still goes to the active form.
+	// The captain is a modal over the deck's screen, so while it is up the keys are
+	// its own — and only the keys. Everything else goes on to the deck: the pane
+	// behind it is a live program that has to keep painting, its refresh loop has to
+	// keep running, and a captain that swallowed those would freeze the very thing
+	// it was opened to be read against.
+	//
+	// Its own terminal's frames are the exception, routed by generation rather than
+	// by type: a vterm message names the pane it came from, and delivering the
+	// captain's to the pane behind it would paint one process's screen inside the
+	// other's.
+	if m.captain != nil {
+		if cmd, handled := m.deliverToCaptain(msg); handled {
+			return m, cmd
+		}
+	}
 	if !isDeckBackgroundMsg(msg) {
 		if m.newWorkspaceMode {
 			return m.dispatchNewWorkspaceForm(msg)
@@ -2812,7 +2842,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// the captain is not the cursor's workspace, so it opens from an empty deck
 		// and from a virtual inbox row alike.
 		case key.Matches(msg, km.Captain):
-			return m.openCaptain()
+			return m, m.openCaptain()
 		case key.Matches(msg, km.SendPrompt):
 			item, ok := m.selected()
 			if !ok {
@@ -4209,11 +4239,27 @@ func (m Model) View() tea.View {
 func (m Model) render() string {
 	if Trace != nil {
 		start := time.Now()
-		out := m.withMenu(m.view())
+		out := m.withMenu(m.withCaptain(m.view()))
 		traceFrame(start, len(out))
 		return out
 	}
-	return m.withMenu(m.view())
+	return m.withMenu(m.withCaptain(m.view()))
+}
+
+// withCaptain floats the captain's box over a rendered frame, at its own origin.
+//
+// Under the menu and over everything else: the menu is a list of verbs about what
+// has focus, and while the captain is up that is the captain.
+//
+// Composited rather than rendered as a screen of its own, for the reason overlayMenu
+// is — the deck's frame goes on saying what it said, which for the captain is the
+// whole point of it being a modal.
+func (m Model) withCaptain(frame string) string {
+	if m.captain == nil {
+		return frame
+	}
+	b := m.captainBox()
+	return overlayAt(frame, m.captain.renderPopover(&m, b), b.x, b.y)
 }
 
 func (m Model) withMenu(frame string) string {

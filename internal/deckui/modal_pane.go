@@ -766,6 +766,13 @@ func (p *panePopover) close(m *Model) tea.Cmd {
 	if m.active == p {
 		m.active = nil
 	}
+	// The captain is held beside active rather than in it, so it has its own slot
+	// to give back — and giving it back is what puts the keys into whatever the
+	// captain was floating over. Asked unconditionally: a pane is in exactly one of
+	// the two places, and the one it is not in does not match.
+	if m.captain == p {
+		m.captain = nil
+	}
 	var cmd tea.Cmd
 	*m, cmd = m.requestRefresh(false)
 	return cmd
@@ -857,7 +864,7 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case alternateKey:
 		return m.alternateFrom(func() tea.Cmd { return p.close(m) })
 	case captainKey:
-		return m.captainFrom(func() tea.Cmd { return p.close(m) })
+		return m.captainOverPane()
 	}
 	return nil
 }

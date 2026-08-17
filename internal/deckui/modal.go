@@ -134,8 +134,18 @@ func (m *Model) boxOf(child modal) box {
 	if s, ok := m.active.(*splitModal); ok {
 		return s.boxOf(child, full)
 	}
+	if m.captain == child {
+		// The captain is not one of active's children — it floats over them. Its box
+		// is its own, and Model.captainBox is where it comes from, so the render, the
+		// cursor and the mouse cannot come to disagree about where it is.
+		return m.captainBox()
+	}
 	return box{}
 }
+
+// screenBox is the whole terminal, chrome included — what a floating box is
+// centred against, as opposed to childBox, which is what a child may draw in.
+func (m *Model) screenBox() box { return box{w: m.width, h: m.height} }
 
 // renderPickerPanel is the body panel every list picker (bookmark, open,
 // review) renders into: the shared panel inset, with the list sized to fill

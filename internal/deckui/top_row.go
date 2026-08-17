@@ -69,6 +69,13 @@ func (m *Model) hostsTerminal() bool {
 // question; the focused one is preferred because its kind is the one whose keys
 // you are pressing.
 func (m *Model) topRowSubject() *panePopover {
+	// The captain while it is up, for the same reason the focused half of a split
+	// wins: the bar names where the keys are, and they are in the modal. Naming the
+	// pane behind it would say "agent · proj/ws" above a box the agent cannot hear
+	// you through, which is the row telling you the wrong thing about the keyboard.
+	if m.captain != nil {
+		return m.captain
+	}
 	switch a := m.active.(type) {
 	case *panePopover:
 		return a

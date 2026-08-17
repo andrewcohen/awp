@@ -85,6 +85,18 @@ const menuBoxCols = borderCells + 4
 // wherever each of them renders, which is how the chords once came to print theirs
 // somewhere else.
 func (m *Model) armedMenu() (deckMenu, bool) {
+	// The captain's own, while it is up: a menu names verbs about what has focus,
+	// and the pane behind the captain does not have it. Asked before active for the
+	// same reason hostedPane does.
+	if c := m.captain; c != nil {
+		if len(c.actions) > 0 {
+			return userActionsMenu(c.actions), true
+		}
+		if c.prefixArmed {
+			return panePrefixMenu(m), true
+		}
+		return deckMenu{}, false
+	}
 	switch c := m.active.(type) {
 	case *splitModal:
 		// The submenu first: `x` moved the menu on rather than resolving it, so the
@@ -127,12 +139,23 @@ func overlayMenu(frame, menuBox string) string {
 		// so it wins the screen rather than being drawn half off it.
 		return menuBox
 	}
-	// One compositor of two layers, not two Compose calls: a canvas composes each
-	// drawable at its own origin, so composing the layers separately drew the menu at
-	// 0,0 over an empty canvas and lost the frame entirely. A compositor is the thing
-	// that stacks them.
+	return overlayAt(frame, menuBox, (w-mw)/2, (h-mh)/2)
+}
+
+// overlayAt floats a box over a rendered frame at the given screen origin, and is
+// the one place the deck composites one thing over another.
+//
+// One compositor of two layers, not two Compose calls: a canvas composes each
+// drawable at its own origin, so composing the layers separately drew the box at
+// 0,0 over an empty canvas and lost the frame entirely. A compositor is the thing
+// that stacks them.
+//
+// The frame is measured rather than trusted to be m.width × m.height: a frame short
+// of its own height would otherwise put the box below the bottom of the terminal.
+func overlayAt(frame, floating string, x, y int) string {
+	w, h := lipgloss.Width(frame), lipgloss.Height(frame)
 	return lipgloss.NewCanvas(w, h).Compose(lipgloss.NewCompositor(
 		lipgloss.NewLayer(frame),
-		lipgloss.NewLayer(menuBox).X((w-mw)/2).Y((h-mh)/2),
+		lipgloss.NewLayer(floating).X(x).Y(y),
 	)).Render()
 }

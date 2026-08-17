@@ -21,15 +21,18 @@ func captainDeck(t *testing.T) Model {
 	return m
 }
 
-// captainPane is the captain's pane if that is what is on screen.
+// captainPane is the captain's pane if it is up.
+//
+// Read from m.captain rather than from m.active: the captain floats over whatever
+// the deck is showing, so what is in active is whatever it was opened over.
 func captainPane(t *testing.T, m *Model) *panePopover {
 	t.Helper()
-	p, ok := m.active.(*panePopover)
-	if !ok {
-		t.Fatalf("active is %T (status %q)", m.active, m.status)
+	p := m.captain
+	if p == nil {
+		t.Fatalf("the captain is not up; active is %T (status %q)", m.active, m.status)
 	}
 	if p.kind != PaneKindCaptain {
-		t.Fatalf("the pane on screen is %q, want the captain", p.kind)
+		t.Fatalf("the captain's pane is %q", p.kind)
 	}
 	return p
 }
@@ -88,27 +91,43 @@ func TestThePaneMenuReachesTheCaptain(t *testing.T) {
 	t.Cleanup(func() { p.close(&m) })
 }
 
-// And it takes the pane it replaced down with it. Installing the captain over a
-// live pane without closing it leaks the process and its pty, with nothing on
-// screen to say so — the same defect TestAlternatingAwayClosesThePaneItLeft covers
-// for L.
-func TestOpeningTheCaptainClosesThePaneItReplaced(t *testing.T) {
+// And the pane it was opened over stays exactly where it was.
+//
+// This is what the captain being a modal buys: you ask awp a question about the
+// agent you are watching without taking the agent's screen down, and dismissing the
+// question puts you back in it rather than back at the row list. Closing it used to
+// be the contract — TestOpeningTheCaptainClosesThePaneItReplaced — and coming back
+// to the wrong place is what that cost. See #385.
+func TestTheCaptainLeavesThePaneItOpenedOver(t *testing.T) {
 	m := splitDeck(t)
 	m = pressDeck(t, m, agentKey())
-	left := m.active.(*panePopover)
-	term, ok := left.term.(*fakeTerm)
+	under := m.active.(*panePopover)
+	term, ok := under.term.(*fakeTerm)
 	if !ok {
-		t.Fatalf("the pane's terminal is %T, want the fake", left.term)
+		t.Fatalf("the pane's terminal is %T, want the fake", under.term)
 	}
 
 	m = pressDeck(t, m, menuKey())
 	m = pressDeck(t, m, runeKey(captainKey))
 
 	p := captainPane(t, &m)
-	t.Cleanup(func() { p.close(&m) })
-	if !term.closed {
-		t.Error("the pane the captain replaced is still running its process")
+	if term.closed {
+		t.Error("the pane the captain floated over had its process closed")
 	}
+	if m.active != under {
+		t.Errorf("the pane behind the captain is %T, want the one that was there", m.active)
+	}
+
+	// And dismissing the captain gives it the keys back, rather than dropping to the
+	// row list.
+	p.close(&m)
+	if m.captain != nil {
+		t.Error("the captain is still up after its leave key")
+	}
+	if m.active != under {
+		t.Errorf("dismissing the captain left %T on screen, want the pane it floated over", m.active)
+	}
+	under.close(&m)
 }
 
 // The menu says so. A verb that works but is not listed is one you find by
