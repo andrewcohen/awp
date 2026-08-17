@@ -1130,12 +1130,12 @@ it leaves on one press from either arrangement.
 
 | after `ctrl+b` | does |
 |---|---|
-| a window key — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch | **split**: that kind beside the pane you are in. Already split, there is nowhere to put a third, so it **replaces the focused half** |
+| a window key — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch | **split**: the agent on the left, that kind on the right. Already split, there is nowhere to put a third, so it **replaces the right half** — whichever half the keys are in, since the left one is the agent and stays the agent |
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
 | `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle. **Where you leave it is remembered globally**, in `~/.awp/deck-prefs.json` beside `P`'s scope and `S`'s sidebar, so the next split — and the next deck — opens there. Stored as a fraction rather than a column count, so it means the same layout on a terminal of another width, and the clamp that keeps a half above a pane's minimum means a divider set on a wide screen degrades sensibly on a narrow one |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `q` | close the focused half; the other becomes an ordinary whole-screen pane |
-| `x` | **user actions** — opens a second menu of the actions configured for this workspace's repo, keyed by their `alias`. The next key runs one: a foreground action lands beside the pane you are in (or replaces the focused half, already split), a `background` one starts as a job and leaves the screen alone. The row is absent when the repo has no `actions` configured. Same actions the row list's `x` offers, reached from inside a pane — see [actions](#actions) |
+| `x` | **user actions** — opens a second menu of the actions configured for this workspace's repo, keyed by their `alias`. The next key runs one: a foreground action lands beside the agent, in the right half (replacing what is there, already split), a `background` one starts as a job and leaves the screen alone. The row is absent when the repo has no `actions` configured. Same actions the row list's `x` offers, reached from inside a pane — see [actions](#actions) |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
 | `a` | **the captain**, which takes this pane — or the whole split — down on the way. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
 | `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
@@ -1410,12 +1410,20 @@ so it stays on until you press `S` again. It is only ever up over a hosted progr
 Over the row list every row it would carry is already on screen in more detail,
 with a cursor on it.
 
-Splitting from a pane keeps that pane as the left half rather than opening a fresh
-one beside its replacement. The agent you were watching is the reason you wanted
-something next to it, and re-opening it would repaint the program you were reading
-mid-thought. The pane needs no resize of its own either — a pane asks its terminal
-for whatever box it is handed, so the next frame is what moves the pty to half the
-width.
+**The left half is always the agent.** That is the one thing a split's shape
+promises: the agent is the reason the arrangement exists, and the right half is the
+thing you wanted beside it — so the right half is the only one a split, a window
+key, or a user action ever changes. A remembered arrangement comes back the same
+way, whatever its left half was recorded as.
+
+Splitting from the agent pane keeps that pane as the left half rather than opening a
+fresh one beside its replacement: re-opening it would repaint the program you were
+reading mid-thought. The pane needs no resize of its own either — a pane asks its
+terminal for whatever box it is handed, so the next frame is what moves the pty to
+half the width. Splitting from a pane that is *not* the agent — `ctrl+b c` from
+inside an editor — opens the agent on the left and the kind you asked for on the
+right, closing the pane you were in, because a left half that is not the agent is
+not an arrangement this deck has.
 
 The menu has no timeout, for the same reason it has no ambiguity: it is a state
 resolved by the next key, not by a clock.
