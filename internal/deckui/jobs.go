@@ -186,6 +186,52 @@ func workspaceJobJustFinished(prev, cur []Job) bool {
 	return false
 }
 
+// jobOutcomeStatus is the status line for jobs that reached a terminal state
+// between prev and cur, or "" when none did.
+//
+// A job is the deck's only way to run something without a window in front of it,
+// and until this it was also the deck's only way to run something and never say
+// how it went: the chip left the bar and the record was in the J overlay, which
+// is a place you have to already suspect something to look in. A user action is
+// where that hurt — you press ctrl+b x i, the menu closes, and success and
+// failure look identical.
+//
+// Only a transition counts. A job that was already terminal the first time the
+// deck read the list is one from a previous session, and announcing those on
+// startup would make the status bar a log.
+//
+// Failures name the overlay because that is where the output is; successes do
+// not, because there is nothing to go and read.
+func jobOutcomeStatus(prev, cur []Job) string {
+	was := make(map[string]JobStatus, len(prev))
+	for _, j := range prev {
+		was[j.ID] = j.Status
+	}
+	for _, j := range cur {
+		if !j.Status.IsTerminal() {
+			continue
+		}
+		if before, ok := was[j.ID]; !ok || before.IsTerminal() {
+			continue
+		}
+		label := jobActivityLabel(j)
+		switch j.Status {
+		case JobDone:
+			return label + ": done"
+		case JobCancelled:
+			// The user cancelled it themselves, so saying so is telling them
+			// what they already did — see the status-message convention.
+			return ""
+		default:
+			if msg := strings.TrimSpace(j.ErrMsg); msg != "" {
+				return label + ": " + msg + " — J for the log"
+			}
+			return label + ": failed — J for the log"
+		}
+	}
+	return ""
+}
+
 type jobsListMsg struct{ jobs []Job }
 
 // JobActionDoneMsg signals the result of a c/x action initiated from

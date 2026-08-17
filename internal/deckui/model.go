@@ -2245,6 +2245,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// Retire an optimistic create row whose job has failed — no real
 		// row will ever land for it.
 		m.pruneOptimisticCreates()
+		// How a job went, once, as it lands. The chip in the bar says a job is
+		// running and — since jobDoneLingerDelay — that it stopped; this is the
+		// sentence that says whether that was a success, and where the output is
+		// when it was not.
+		if outcome := jobOutcomeStatus(prevJobs, msg.jobs); outcome != "" {
+			m.status = outcome
+		}
 		var expireCmd tea.Cmd
 		m, expireCmd = m.syncJobActivities(msg.jobs)
 		// A create/review job adds a workspace row and a delete job
@@ -2293,7 +2300,11 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			if isSetupJobAction(msg.spec.Action) {
 				m.dropOptimisticCreate(msg.spec.RepoRoot, msg.spec.WorkspaceName)
 			}
-			m.status = "create: " + msg.err.Error()
+			// Named by the job that failed to launch, not by "create". Every
+			// async action lands here — a delete, a review, a user action — and
+			// three of them reporting themselves as a create is a message that
+			// sends the reader to the wrong key.
+			m.status = dispatchFailureLabel(msg.spec) + ": " + msg.err.Error()
 			return m, nil
 		}
 		// Kick off a fresh tray refresh so the user sees the new
@@ -4282,6 +4293,19 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		*m, prCmd = m.forcePRStatusRefresh(repoRoot)
 	}
 	return *m, batchCmds(dispatch, prCmd)
+}
+
+// dispatchFailureLabel names an async job that never started, for the status
+// line. The spec's Title is already "<action> · <workspace>", which is what the
+// activity chip would have said had there been a job to chip.
+func dispatchFailureLabel(spec AsyncJobSpec) string {
+	if t := strings.TrimSpace(spec.Title); t != "" {
+		return t
+	}
+	if a := strings.TrimSpace(spec.Action); a != "" {
+		return a
+	}
+	return "job"
 }
 
 // asyncJobDispatchedMsg is emitted once the async launcher returns

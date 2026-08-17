@@ -73,20 +73,28 @@ func TestTheBarSaysNothingWhenNothingNeedsYou(t *testing.T) {
 //
 // Last, not never. Below the width of the key itself there is no honest answer —
 // the row cannot overrun, because a row one column over pushes every later line of
-// the frame down by one. So the claim is that the key survives every width that
-// can hold it, and that the row never wraps at any width at all.
-func TestTheBarKeepsTheLeaveKeyWhileItFits(t *testing.T) {
+// the frame down by one. So what is left of the claim, now that the row spells no
+// keys at all, is the half about width: it never wraps, at any width.
+func TestTheBarNeverWrapsHoweverNarrow(t *testing.T) {
 	m, _ := paneOn(t, waitingRows())
 	for _, w := range []int{120, 80, 40, 24, 16, 8, 4} {
 		bar := m.renderTopRow(w)
 		if strings.Contains(bar, "\n") {
 			t.Errorf("at %d columns the bar wrapped: %q", w, bar)
 		}
-		if w < lipgloss.Width(m.topRowHint()) {
-			continue
-		}
-		if !strings.Contains(bar, PaneLeaveKey) {
-			t.Errorf("at %d columns the bar dropped the leave key: %q", w, bar)
+	}
+}
+
+// TestTheBarSpellsNoKeysOverAPane. The way out used to sit on the right of every
+// frame for the whole time a pane was open — a beginner's card that never came
+// down. It is on `?` and in the ctrl+b menu, which is where a key you have to
+// look up belongs.
+func TestTheBarSpellsNoKeysOverAPane(t *testing.T) {
+	m, _ := paneOn(t, waitingRows())
+	bar := barText(&m, 200)
+	for _, key := range []string{PaneMenuKey, PaneLeaveKey, "menu", "deck"} {
+		if strings.Contains(bar, key) {
+			t.Errorf("the row still spells %q at you: %q", key, bar)
 		}
 	}
 }
@@ -142,7 +150,9 @@ func TestTheBarIsInTheSameCellsWhicheverArrangementIsUp(t *testing.T) {
 			t.Errorf("with %s the bar is %d columns, the terminal is %d: %q",
 				tc.what, lipgloss.Width(row), tc.m.width, row)
 		}
-		if !strings.Contains(row, PaneLeaveKey) {
+		// Named by the label rather than by the way out, which the row no longer
+		// spells.
+		if !strings.Contains(row, tc.m.topRowLabel()) {
 			t.Errorf("with %s row 0 is not the bar: %q", tc.what, row)
 		}
 		if !strings.Contains(row, "2") {
@@ -361,5 +371,108 @@ func TestTheBarSpellsAnUnlabelledWorkspaceAsAPath(t *testing.T) {
 	m, _ := paneOn(t, items)
 	if bar := barText(&m, 200); !strings.Contains(bar, "proj/ws") {
 		t.Errorf("the bar lost the workspace path: %q", bar)
+	}
+}
+
+// TestTheBarShowsBackgroundWorkFromInsideAPane. A pane renders no status bar, so
+// until the row carried them a background user action — ctrl+b x, an install —
+// ran with nothing on screen to say so.
+func TestTheBarShowsBackgroundWorkFromInsideAPane(t *testing.T) {
+	m, _ := paneOn(t, waitingRows())
+	m = m.startActivity("job:1", "install · ws", 0)
+	if !strings.Contains(barText(&m, 120), "install · ws") {
+		t.Errorf("the bar does not name the work in flight: %q", barText(&m, 120))
+	}
+}
+
+// TestTheRowListDoesNotShowActivityTwice. The status bar below the list is
+// already showing these chips; the same work named twice on one screen reads as
+// two things happening.
+func TestTheRowListDoesNotShowActivityTwice(t *testing.T) {
+	m := New(waitingRows(), func(ActionRequest) error { return nil })
+	m.width, m.height = 120, 40
+	m = m.startActivity("job:1", "install · ws", 0)
+	if strings.Contains(barText(&m, 120), "install · ws") {
+		t.Errorf("the list's top row repeats the status bar's chips: %q", barText(&m, 120))
+	}
+}
+
+// TestTheBarCountsTheActivityItCannotFit. Three jobs of "<action> · <workspace>"
+// would leave no room for the label or the way out, so past two the row counts
+// rather than spells.
+func TestTheBarCountsTheActivityItCannotFit(t *testing.T) {
+	m, _ := paneOn(t, waitingRows())
+	for _, id := range []string{"job:1", "job:2", "job:3", "job:4"} {
+		m = m.startActivity(id, id+" · ws", 0)
+	}
+	bar := barText(&m, 200)
+	if !strings.Contains(bar, "+2") {
+		t.Errorf("the bar does not count the activity it left off: %q", bar)
+	}
+	if strings.Contains(bar, "job:3") {
+		t.Errorf("the bar spelled more activity than it caps at: %q", bar)
+	}
+}
+
+// TestTheLabelDoesNotMoveWhenTheStateDoes. Everything left of the label changes
+// width on its own — the badge is recounted every frame, an activity chip
+// appears the moment a background action starts — and packed after them the
+// label slid sideways for reasons that had nothing to do with it.
+func TestTheLabelDoesNotMoveWhenTheStateDoes(t *testing.T) {
+	m, _ := paneOn(t, waitingRows())
+	before := labelCol(&m, 200)
+	if before < 0 {
+		t.Fatal("the label is not on the row to begin with")
+	}
+	m = m.startActivity("job:1", "install · ws", 0)
+	if after := labelCol(&m, 200); after != before {
+		t.Errorf("the label moved from column %d to %d when a chip appeared", before, after)
+	}
+	m.itemsAll = nil // the badge and the PR state both go away
+	if after := labelCol(&m, 200); after != before {
+		t.Errorf("the label moved from column %d to %d when the state emptied", before, after)
+	}
+}
+
+// labelCol is the column the label starts at, which is not the byte it starts at:
+// the row is full of multi-byte glyphs and the label itself carries a `·`, so an
+// index into the string moves when nothing on screen has.
+func labelCol(m *Model, w int) int {
+	bar, label := barText(m, w), m.topRowLabel()
+	i := strings.Index(bar, label)
+	if i < 0 {
+		return -1
+	}
+	return lipgloss.Width(bar[:i])
+}
+
+// TestTheLabelIsInTheMiddleOfTheRow, which is the anchor the test above is
+// about: a fixed column, not merely a repeatable one.
+func TestTheLabelIsInTheMiddleOfTheRow(t *testing.T) {
+	m, _ := paneOn(t, waitingRows())
+	start := labelCol(&m, 200)
+	if start < 0 {
+		t.Fatal("the label is not on the row")
+	}
+	middle := (200 - lipgloss.Width(m.topRowLabel())) / 2
+	if start != middle {
+		t.Errorf("the label starts at column %d, not the row's middle %d", start, middle)
+	}
+}
+
+// TestTheLabelGivesWayToTheStateRatherThanOverlappingIt. On a narrow terminal
+// the middle is already spoken for, so the label is clamped clear of the left
+// side and truncated — a pane's title loses characters before the state loses a
+// glyph.
+func TestTheLabelGivesWayToTheStateRatherThanOverlappingIt(t *testing.T) {
+	m, _ := paneOn(t, waitingRows())
+	for _, w := range []int{40, 60, 80, 120, 200} {
+		bar := barText(&m, w)
+		if lipgloss.Width(bar) != w {
+			t.Errorf("at %d columns the row is %d wide: %q", w, lipgloss.Width(bar), bar)
+		}
+		if strings.Contains(bar, "\n") {
+			t.Errorf("at %d columns the row wrapped: %q", w, bar)
+		}
 	}
 }

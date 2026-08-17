@@ -13,6 +13,17 @@ import (
 // in the bar before being dropped.
 const activityExpireDelay = 500 * time.Millisecond
 
+// jobDoneLingerDelay is the same flash for a job that ran as a subprocess, and
+// it is longer because the two are not the same event to watch for.
+//
+// An explicit activity — a PR-status fetch, an enrich — finishes work the user
+// is waiting on with their eyes on the bar, so half a second is an
+// acknowledgement. A job is work they asked for and then went back to whatever
+// they were doing: a user action's whole point is that it runs while you type
+// somewhere else. A ✓ that lasts 500 ms for that is a ✓ nobody sees, which is
+// how an install could succeed and leave no evidence it ever ran.
+const jobDoneLingerDelay = 4 * time.Second
+
 // Activity is one in-flight background operation surfaced in the bottom
 // status bar. ID is the stable key callers use to start/tick/finish;
 // Label is what the user sees. Total=0 means "no progress fraction —
@@ -184,7 +195,7 @@ func (m Model) syncJobActivities(jobs []Job) (Model, tea.Cmd) {
 				a.FinishedAt = time.Now()
 				m.activities[i] = a
 				id := a.ID
-				cmds = append(cmds, tea.Tick(activityExpireDelay, func(time.Time) tea.Msg {
+				cmds = append(cmds, tea.Tick(jobDoneLingerDelay, func(time.Time) tea.Msg {
 					return activityExpireMsg{id: id}
 				}))
 			}
