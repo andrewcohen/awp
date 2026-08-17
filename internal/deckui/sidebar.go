@@ -239,11 +239,24 @@ func (m Model) renderSidebar(b box) string {
 	for i, l := range lines {
 		texts[i] = l.text
 	}
+	// Vertical padding only. The horizontal inset moved into the lines themselves
+	// (see sidebarGutter) because a banded row has to be able to own it: a band that
+	// stops at the padding reads as a highlight of the text rather than of the row,
+	// and padding applied out here is outside every line's own style by construction.
 	return lipgloss.NewStyle().
 		Width(b.w).Height(b.h).
-		Padding(sidebarPadY, sidebarPadX).
+		Padding(sidebarPadY, 0).
 		Render(strings.Join(texts, "\n"))
 }
+
+// sidebarGutter is the strip's horizontal inset, as a string.
+//
+// A row's own style paints it — plain for an ordinary row, the band for the one you
+// are in — so the band reaches both edges of the strip rather than floating inside
+// it. The inset is still the strip's (the argument for it is in sidebarPadX: the strip
+// butts against a pane's border, so its text needs a column of air on each side); what
+// changed is who draws those columns.
+var sidebarGutter = strings.Repeat(" ", sidebarPadX)
 
 // sidebarLines lays the strip out: every line it will draw, each tied to the row it
 // came from.
@@ -260,7 +273,15 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 	groups := sidebarSections(v.Items())
 
 	lines := make([]sidebarLine, 0, 2*len(v.Items())+len(groups))
-	text := func(s string) { lines = append(lines, sidebarLine{text: s}) }
+	// Furniture — headers, separators, the overflow count — takes the inset as plain
+	// spaces. Only a row's own lines paint it, so only a row's band can reach the
+	// strip's edges. See sidebarGutter.
+	text := func(s string) {
+		if s != "" {
+			s = sidebarGutter + s
+		}
+		lines = append(lines, sidebarLine{text: s})
+	}
 	for _, g := range groups {
 		// A blank row above each group but the first. It costs a workspace the
 		// strip could have listed, and it is worth it: the groups are what makes
@@ -295,7 +316,7 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 			// and the eye reads it as one; a click that only counted on the first line
 			// would be a target half the size of the thing it looks like.
 			row := it
-			for _, l := range m.sidebarRow(v, it, inner) {
+			for _, l := range m.sidebarRow(v, it, b.w) {
 				lines = append(lines, sidebarLine{text: l, item: &row})
 			}
 		}
@@ -474,22 +495,67 @@ func (m Model) sidebarSectionStyle(s sidebarSection) lipgloss.Style {
 // rows — so an indent has nothing to say that the coloured bold header does not.
 //
 // This is what cost the `┃` bar that used to mark the workspace you are in: the bar
-// needs a column of its own ahead of the dot, and that column is the indent. The
-// marker is the name in Strong instead. #350 puts a cursor in here, and a cursor
-// does need the bar — the design system's selection treatment is `┃ ` plus Warning
-// — so that is when the two columns come back, for something that earns them.
+// needs a column of its own ahead of the dot, and that column is the indent. #350
+// puts a cursor in here, and a cursor does need the bar — the design system's
+// selection treatment is `┃ ` plus Warning — so that is when the two columns come
+// back, for something that earns them.
+//
+// The workspace you are in is marked by a band behind both its lines instead. It used
+// to be the name in Strong, which on a strip where every other label is already at
+// the terminal default was very nearly invisible: bright white against white is a
+// difference you have to look for, and this mark exists to be found without looking.
+//
+// A band is also the mark that survives a cursor arriving. "Which workspace am I in"
+// and "which row do the keys point at" are two facts, they are usually about
+// different rows, and each needs its own mark — so the band takes the background and
+// leaves the bar and the selection hue for the cursor.
+// width is the strip's whole width, gutters included: a row owns them, so its band
+// reaches the strip's edges rather than stopping a column short on each side. Its
+// text is laid out inside them.
 func (m Model) sidebarRow(v deckdata.View, it Item, width int) []string {
-	glyph := statusGlyph(it.Status, false, it.Unread)
-	nameStyle := m.styles.Label
-	if p := m.topRowSubject(); p != nil && p.project == it.ProjectName && p.workspace == it.WorkspaceName {
-		nameStyle = m.styles.Strong
-	}
+	band := m.sidebarBand(it)
+	gutter := band.Render(sidebarGutter)
+	inner := max(1, width-2*sidebarPadX)
+	glyph := statusGlyphOn(band, it.Status, false, it.Unread)
 	// Every row is the same shape — dot, space, name — whatever the row is about.
 	// Rows with a dot and rows without used to sit at different indents, so nothing
 	// lined up vertically and the drift cost columns on both kinds.
-	name := truncate(sidebarLabel(it), max(1, width-lipgloss.Width(glyph)-1))
-	meta := m.sidebarMeta(v, it, max(1, width-len(sidebarIndent)))
-	return []string{glyph + " " + nameStyle.Render(name), sidebarIndent + meta}
+	name := truncate(sidebarLabel(it), max(1, inner-lipgloss.Width(glyph)-1))
+	meta := m.sidebarMeta(band, v, it, max(1, inner-len(sidebarIndent)))
+	return []string{
+		bandFill(band, gutter+glyph+" "+band.Render(name), width),
+		bandFill(band, gutter+band.Render(sidebarIndent)+meta, width),
+	}
+}
+
+// sidebarBand is the base style a row's segments are built from: the band when this
+// is the workspace you are in, and the plain style otherwise.
+//
+// Every segment of a banded row has to carry the background itself. An enclosing
+// style cannot do it, because each inner lipgloss style ends in a full SGR reset —
+// which takes the enclosing background with it from the first coloured segment
+// onwards. The diff viewer hit this first and answered it the same way (see
+// cursorlineBg and paintCode in internal/ui), and it is the same mechanism that stops
+// an underline being used as a row separator here.
+func (m Model) sidebarBand(it Item) lipgloss.Style {
+	if p := m.topRowSubject(); p != nil && p.project == it.ProjectName && p.workspace == it.WorkspaceName {
+		return m.styles.ActiveRow
+	}
+	return m.styles.Label
+}
+
+// bandFill pads a line out to the strip's width in the band's own style, so the band
+// reaches the right edge instead of stopping where the text does.
+//
+// Explicitly rather than by wrapping the line in band.Width(width): the wrapper's
+// background would be cancelled by the first inner reset, which is the whole reason
+// each segment carries its own. Padding a plain row costs a few trailing spaces and
+// keeps one code path.
+func bandFill(band lipgloss.Style, line string, width int) string {
+	if pad := width - lipgloss.Width(line); pad > 0 {
+		return line + band.Render(strings.Repeat(" ", pad))
+	}
+	return line
 }
 
 // sidebarLabel is the name a row goes by.
@@ -576,19 +642,20 @@ func prWorkspacePrefix(name string) string {
 // `andrew/refactor-parser` under `refactor-parser`, one string twice, line after line.
 // Only the bookmark truncates: it is the field that varies in length, and the glyphs
 // and the number are the fixed part it was budgeted against.
-func (m Model) sidebarMeta(v deckdata.View, it Item, width int) string {
+func (m Model) sidebarMeta(band lipgloss.Style, v deckdata.View, it Item, width int) string {
+	muted := band.Foreground(lipgloss.Color(colMuted))
 	segs := make([]string, 0, 3)
 	if cluster := m.prGlyphCluster(it); cluster != "" {
 		// Stripped of its own colours and re-rendered muted. prGlyphCluster hands back
 		// a pre-coloured cluster because its other three call sites want the hues, and
 		// the shape of the cluster is the part worth sharing — which glyphs, in which
 		// order. The strip takes the shape and declines the palette.
-		segs = append(segs, m.styles.Muted.Render(ansi.Strip(cluster)))
+		segs = append(segs, muted.Render(ansi.Strip(cluster)))
 	}
 	if pr, ok := v.ResolvePRStatus(it); ok {
-		segs = append(segs, m.styles.Muted.Render("#"+strconv.Itoa(pr.Number)))
+		segs = append(segs, muted.Render("#"+strconv.Itoa(pr.Number)))
 	}
-	head := strings.Join(segs, " ")
+	head := strings.Join(segs, band.Render(" "))
 
 	tail := sidebarBookmark(it)
 	if tail == "" && head == "" {
@@ -598,9 +665,9 @@ func (m Model) sidebarMeta(v deckdata.View, it Item, width int) string {
 		room := width - lipgloss.Width(head)
 		if head != "" {
 			room--
-			head += " "
+			head += band.Render(" ")
 		}
-		head += m.styles.Muted.Render(truncate(tail, max(1, room)))
+		head += muted.Render(truncate(tail, max(1, room)))
 	}
 	return head
 }

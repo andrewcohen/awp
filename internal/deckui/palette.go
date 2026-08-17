@@ -17,6 +17,16 @@ const (
 	colMuted   = charm.Muted
 )
 
+// bgCursorline is charm.Cursorline: the low-contrast background behind the row you
+// are on.
+//
+// A var and not part of the const block above because it is an adaptive colour
+// rather than an ANSI index — it has to be one, since the 16 slots carry no
+// low-contrast background at all (the nearest, BgPanel, is sized for chip fills and
+// reads far too strong to read text through). charm/palette.go argues that at
+// length; this is the alias.
+var bgCursorline = charm.Cursorline
+
 // borderCells is charm.BorderCells under this package's naming convention:
 // the columns a rounded border adds to a style's width, which lipgloss v2
 // counts inside Width rather than outside it.
