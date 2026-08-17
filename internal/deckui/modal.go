@@ -199,6 +199,18 @@ type modal interface {
 	footerHelp() string
 }
 
+// hostedModal is a child hosting a live program — a pane, or a split of two — which
+// is what hostsTerminal answers about m.active and what showsSidebar renders beside.
+//
+// It exists so leaving one is sayable without knowing which of the two it is. The
+// strip's ctrl+\ has to close the arrangement it is standing beside (see sidebarKey),
+// and both kinds already spell that the same way; a type switch there would be a
+// third place that has to be edited when a third hosted kind appears.
+type hostedModal interface {
+	modal
+	close(m *Model) tea.Cmd
+}
+
 // chordModal is a modal that is not a screen of its own: a keys-only menu whose
 // body is the row list, waiting for one key to name what to do to the row you are
 // pointing at. The `|` split chord and the `p` PR menu.

@@ -384,7 +384,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). **Remembered**: the scope you leave the deck in is the one it opens in next time, saved to `~/.awp/deck-prefs.json` as you press the key. An explicit `awp deck --scope=<scope>` overrides it for that run without overwriting it — a flag is an instruction about one launch, not a change to how your deck opens. |
 | `g g` / `G` | Jump the cursor to the top (`gg` chord — press `g`, then `g`) / bottom (`G`) of the list, vim-style |
 | `ctrl+u` / `ctrl+d` | Jump the cursor half a page up / down (vim-style), then scroll the list to follow |
-| `ctrl+\` | Back into the pane you just left — the same key that leaves one, so the pair is a single gesture: out to check a row, back to carry on. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and the key is about where you have been, not about which list you are looking at. Not bound under `awp deck`, which hosts no panes: there `ctrl+\` belongs to tmux. |
+| `ctrl+\` | Back into the pane you just left — the same key that leaves one, so the pair is a single gesture: out to check a row, back to carry on. With the sidebar up the way out has a stop on it, so the gesture is a cycle: pane → sidebar → deck → pane. The row is resolved when you press the key rather than remembered from when the pane opened, so a renamed workspace is followed and a deleted one is a refusal instead of a program started in a directory that is gone; the cursor moves to that row too, so leaving again lands where the pane was. A row the current scope or filter isn't showing is still reachable — an agent that exited drops out of `attention`, and the key is about where you have been, not about which list you are looking at. Not bound under `awp deck`, which hosts no panes: there `ctrl+\` belongs to tmux. |
 | `\|` then a window key | **Split**: the workspace's agent on the left, the key's window on the right — `\|c` diff, `\|v` vcs, `\|e` editor, `\|s` shell, `\|i` ci, `\|W` watch. `\|a` is refused (the left half is already the agent), and anything else cancels the chord. Focus starts on the right, because the right is what you asked to look at. Refused only when a half would be too narrow to host a pane at all — a cramped split is legible enough to be worth having on the terminal you actually have, and `ctrl+b o` zooms a half full-screen for the moment it is not. From inside a pane the same gesture is `ctrl+\` (out to the deck) then `\|c`, which re-attaches the agent's session rather than starting a second one. See **A split, and the keys inside one** below. |
 | `L` | Switch to the **previous** pane — the one before the pane you were last in. `tmux switch-client -l` one substrate over, and the point is the same: the two most recent things you were in are one keypress apart, so pressing it twice puts you back. Resuming (`ctrl+\`) does not disturb the alternate, so holding one pane open all afternoon doesn't lose the other. One pane deep it says so and names `ctrl+\` instead. Under `awp deck` it is still `tmux switch-client -l`. |
 | `R` | Rename workspace (inline form: edit name, `enter` to rename, `esc` to cancel). Updates jj workspace, tmux session + window, and state — the on-disk directory keeps its original path. Not allowed on `default`. |
@@ -1104,7 +1104,9 @@ watch the same GitHub run. `W` runs the awp binary the deck itself is running,
 so a build in a temp path opens that build's watch view rather than an older
 install's.
 
-`ctrl+\` leaves a pane, on one press, whether one pane is up or a split of two. It
+`ctrl+\` leaves a pane, on one press, whether one pane is up or a split of two —
+stopping at the attention sidebar on the way when the strip is up, which is one more
+press and covered under **`S` is the sidebar** below. It
 has to be a key nothing inside one wants, because every other key belongs to the
 program: `esc`, `q` and `ctrl+c` all mean something to an agent. **`ctrl+b` is the
 menu**: split what is on screen, move the keyboard between halves, resize, zoom,
@@ -1206,7 +1208,7 @@ it leaves on one press from either arrangement.
 | `x` | **user actions** — opens a second menu of the actions configured for this workspace's repo, keyed by their `alias`. The next key runs one: a foreground action lands beside the agent, in the right half (replacing what is there, already split), a `background` one starts as a job and leaves the screen alone. The row is absent when the repo has no `actions` configured. Same actions the row list's `x` offers, reached from inside a pane — see [actions](#actions) |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
 | `a` | **the captain**, floated over this pane — or the whole split — which stays exactly where it is; `ctrl+\` dismisses it and gives the keys back. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
-| `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
+| `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing, and a place `ctrl+\` can put the keyboard: every deck key acts on the row under its cursor. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
@@ -1279,7 +1281,9 @@ The row list has the columns to spend and is unchanged.
 unread. The dot is an attention signal and goes quiet once you have looked, but an
 agent that stopped to ask you something is still stopped, and filing it under `idle`
 because you have already seen the question once is the strip forgetting what it is
-for. The workspace you are currently in wears its **name in bright white**.
+for. The workspace you are currently in wears a **band** behind both its lines, and
+the row the strip's cursor is on wears its **name in `Warning`, bold** — two different
+claims, usually about two different rows.
 
 **A row is two lines, both starting in the same column, and nothing is indented from
 its header.** The status dot sits in the header's own first column, so the headers'
@@ -1302,11 +1306,11 @@ idle
 ```
 
 There is one level of structure on a 36-column strip — a section and its rows — so an
-indent has nothing to say that the coloured bold header does not. That is what cost the
-muted `┃` the current workspace used to wear: the bar needs a column ahead of the dot,
-and that column *is* the indent. `#350` will put a real cursor in here, and a cursor
-does earn the bar back — the design system's selection treatment is `┃ ` plus `Warning`
-— which is a different claim from "you are here".
+indent has nothing to say that the coloured bold header does not. That edge is also why
+the strip's cursor wears no `┃` bar, where every other list in the deck does: the bar
+needs a column ahead of the status dot on *every* line — a header that skipped it would
+sit two columns left of the names under it — and at 36 columns those two come off names
+that are already truncating. A hue is enough to find one row on a strip this narrow.
 
 **Colour marks structure here, not content.** The section headers carry their hues and
 so do the status dots — six headers on a screen and one dot per row, which between them
@@ -1462,9 +1466,66 @@ one approved and waiting to merge, a workspace you were in ten minutes ago — a
 those want you, and the scope is the deck's existing answer to that question. The
 strip and `P` answer it the same way or one of them is lying.
 
-It reads and does nothing. There is no cursor in it, so `h` / `l` / `tab` still
-mean the two halves rather than three regions, and a row you want to act on is
-`ctrl+\` away with the deck's own cursor already on it. The strip's columns come
+**The strip is somewhere you can go, not just something you can see.** `ctrl+\` from
+a pane lands on it, `ctrl+\` again goes on to the deck, and from the deck the same
+key goes back into the pane you left — one key, one cycle, pane → sidebar → deck →
+pane. With the strip down, or on a terminal too narrow to fit one, `ctrl+\` does what
+it always did and leaves straight to the deck: the key gains a stop rather than
+changing what it does.
+
+Every key that works on a deck row works on the sidebar row under the cursor. `D`
+deletes it, `R` renames it, `B` links a bookmark to it — the strip is not a second,
+weaker list with a subset of verbs, it is the deck's row list in a narrow column.
+
+**`enter` goes to that workspace** — the same door a click on the row is, and the same
+one it is on the row list, resuming whatever arrangement that workspace was last left
+as. It is not a window key: it says *take me there*, and a workspace last left as a
+split comes back as that split, which it cannot do as half of somebody else's screen.
+
+**A window key keeps the pane you were in and puts its window beside it**, which is
+what `|` means everywhere else — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W`
+watch. From a split it replaces the right half, exactly as `ctrl+b` and a window key
+do in there — the left half is the agent and stays the agent. Those say *show me this thing about that row*, and the answer belongs
+beside what you are already in: you glance at the strip while working in something, so
+a window picked off it is the second thing you want on screen rather than a
+replacement for the first — and the pane is the expensive one to lose, since
+re-opening it repaints a program you were reading mid-thought.
+
+Movement is the strip's own (`j` / `k`, `ctrl+d` / `ctrl+u`, `gg` / `G`, which move
+the strip's cursor and stay put).
+
+**Everything else happens where you are.** A verb that opens one of the deck's own
+screens — the delete confirm, the rename form, the bookmark picker — floats it over
+the arrangement instead of sending you back to the row list to answer it. The pane
+keeps running underneath, keeps reading its program, and comes back the moment the
+question is answered, with the keyboard back on the strip and the cursor on the row
+you asked about. Answering a yes/no about `flaky-login-test` should not cost you the
+program you were reading, and a verb that took the pane down would be re-introducing
+the trip the strip exists to avoid.
+
+`esc` gives the keyboard back to the pane;
+`ctrl+b` still belongs to the arrangement, so `ctrl+b S` hides the strip you are
+standing on and the keys fall back into the pane.
+
+There is one cursor, not two. It is held as the *row* rather than as a position,
+because the strip lists the all scope unfiltered while the row list shows whatever
+scope and filter you set it to — so a shared index would name a different workspace on
+each. Walking the strip and going on to the deck lands you on the row you walked to,
+and if that row is one the list was filtering out, the deck clears the filter and
+returns to the all scope rather than quietly aiming your next key at something else.
+The strip scrolls to keep its cursor on screen, and still says `+N more` when the list
+stops early.
+
+The cursor is the row's **name in `Warning`, bold** — half of the app-wide selection
+treatment, without the `┃ ` bar the other half of it would add. The bar costs a column
+ahead of the status dot on every line of the strip, headers included, and at 36 columns
+that is two columns off names that are already truncating for a mark only one row at a
+time wears. It is a different claim from the band marking the workspace you are *in*:
+two facts about a row, usually about two different rows. While the pane holds the
+keyboard the mark goes away entirely — the row the keys come back to is the row you are
+in, which the band is already saying.
+
+`h` / `l` / `tab` still mean the two halves rather than three regions. The strip's columns come
 off the child's box, so the pty behind a pane is resized to what is actually left
 — a strip drawn over a full-width pane would put the cursor and every mouse click
 36 columns off. On a terminal with no room for a pane beside it the key refuses and

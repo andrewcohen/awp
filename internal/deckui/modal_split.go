@@ -112,8 +112,13 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	pressed := msg.String()
 	s.prefixArmed = false
 	if kind, ok := splitKindFor(pressed); ok {
+		item, ok := m.topRowRow()
+		if !ok {
+			m.status = "split: this pane's workspace is not on the deck any more"
+			return nil
+		}
 		m.status = ""
-		return s.replaceRight(m, kind)
+		return s.replaceRight(m, item, kind)
 	}
 	if pressed == userActionsMenuKey {
 		if actions := m.userActionsFor(); len(aliasLookup(actions)) > 0 {
@@ -242,8 +247,13 @@ func (s *splitModal) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if ua.Background {
 		return startBackgroundAction(m, ua.Name)
 	}
+	item, ok := m.topRowRow()
+	if !ok {
+		m.status = "split: this pane's workspace is not on the deck any more"
+		return nil
+	}
 	m.status = ""
-	return s.replaceRight(m, PaneKindForAction(ua.Name))
+	return s.replaceRight(m, item, PaneKindForAction(ua.Name))
 }
 
 func (s *splitModal) resize(m *Model, frac float64) {
@@ -371,6 +381,12 @@ func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 				// Held, not pressed again — the same guard a single pane has, and for
 				// the same reason: the deck's own ctrl+\ comes back in, so a repeat
 				// that gets through flaps (#307).
+				return nil
+			}
+			// The strip is the stop before the deck when it is up, whichever half has
+			// the keyboard — it belongs to the deck rather than to the arrangement, so
+			// a split reaches it the same way a lone pane does.
+			if m.enterSidebarFromPane() {
 				return nil
 			}
 			return s.close(m)
@@ -588,12 +604,11 @@ func (s *splitModal) closeHalf(m *Model) tea.Cmd {
 //
 // The new child is built before the old one is closed, so a kind this deck cannot
 // open leaves the split exactly as it was rather than half-torn-down.
-func (s *splitModal) replaceRight(m *Model, kind string) tea.Cmd {
-	item, ok := m.topRowRow()
-	if !ok {
-		m.status = "split: this pane's workspace is not on the deck any more"
-		return nil
-	}
+//
+// item is which row the new half is of — the split's own row for a window key
+// pressed inside it, the sidebar's cursor for one pressed on the strip. See
+// panePopover.splitWith, which takes it for the same reason.
+func (s *splitModal) replaceRight(m *Model, item Item, kind string) tea.Cmd {
 	_, b := s.boxes(m.childBox())
 	child, cmd, ok := m.openChild(item, kind, b)
 	// openChild installs what it built, because the paths it calls are the same ones
@@ -619,6 +634,13 @@ func (s *splitModal) replaceRight(m *Model, kind string) tea.Cmd {
 // see. The zmx sessions the panes were attached to keep running — closing a pane
 // has never meant killing what it was showing.
 func (s *splitModal) close(m *Model) tea.Cmd {
+	if m.overlayHost == s {
+		// Closed from behind something floating over it — see panePopover.close,
+		// which has the same line for the same reason. Dropped before the halves are
+		// closed, since each half's own close would otherwise see itself as the host.
+		m.overlayHost = nil
+		m.overlayReturns = false
+	}
 	var cmds []tea.Cmd
 	for _, child := range []modal{s.left, s.right} {
 		if p, ok := child.(*panePopover); ok {

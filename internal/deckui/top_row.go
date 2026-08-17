@@ -308,6 +308,11 @@ const scrollbackGlyph = "↑"
 // one thing about the list that is invisible from the rows themselves.
 func (m *Model) topRowHint() string {
 	if m.hostsTerminal() {
+		// Nothing, including with the strip up. #350 gave the key a stop, so the door
+		// could name its next one — `ctrl+\ sidebar` from a pane, `ctrl+\ deck` from
+		// the strip — but that is still a hint, which is what this row stopped
+		// printing. A cycle is more to say, not a reason to start saying it again on
+		// every frame.
 		return ""
 	}
 	return "scope: " + scopeLabel(m.scope)
