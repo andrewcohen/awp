@@ -173,6 +173,13 @@ func (v View) NeedsReReview(it Item) bool {
 // DisplayLabel returns the text that renders on a row: "#N title" when a
 // PR is resolvable from the cache, falling back to the workspace name.
 func (v View) DisplayLabel(it Item) string {
+	// A label someone chose wins, including over the PR title. It is the more
+	// deliberate of the two — you typed it, or asked for it — where a PR title is
+	// GitHub's words about the change and is here as the good default for the
+	// overwhelming majority of rows, which carry no label at all.
+	if label := strings.TrimSpace(it.DisplayName); label != "" {
+		return label
+	}
 	if pr, ok := v.ResolvePRStatus(it); ok {
 		if t := strings.TrimSpace(pr.Title); t != "" {
 			return fmt.Sprintf("#%d %s", pr.Number, t)
