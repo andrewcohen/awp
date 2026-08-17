@@ -5531,7 +5531,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Inside a pane (" + PaneMenuKey + " menu)",
 			Keys: [][2]string{
 				{PaneLeaveKey, "back to the deck, from a pane or a split"},
-				{PaneMenuKey + " then a window key", "split the pane you are in — replaces the focused half if already split"},
+				{PaneMenuKey + " then a window key", "agent on the left, that kind on the right — replaces the right half if already split"},
 				{PaneMenuKey + " h/l/tab", "move the keys to the other half"},
 				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
 				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},

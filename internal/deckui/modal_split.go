@@ -70,7 +70,7 @@ type splitModal struct {
 //
 // The window keys are on it too, and mean here what they mean in a single pane's
 // menu — that kind, on screen — except that with two halves already up there is
-// nowhere to put a third, so they replace the focused one. Same key, same
+// nowhere to put a third, so they replace the right one. Same key, same
 // vocabulary, one arrangement's worth of difference in what it does.
 //
 // The arrangement verbs come first: they are what the menu is armed for while a
@@ -88,7 +88,7 @@ func splitPrefixMenu(m *Model) deckMenu {
 		{"q", "close the focused half"},
 	}
 	verbs = append(verbs, splitKindVerbs(func(label string) string {
-		return "put " + label + " in this half"
+		return "put " + label + " in the right half"
 	})...)
 	verbs = append(verbs,
 		userActionsVerb(m.userActionsFor()),
@@ -113,7 +113,7 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	s.prefixArmed = false
 	if kind, ok := splitKindFor(pressed); ok {
 		m.status = ""
-		return s.replaceHalf(m, kind)
+		return s.replaceRight(m, kind)
 	}
 	if pressed == userActionsMenuKey {
 		if actions := m.userActionsFor(); len(aliasLookup(actions)) > 0 {
@@ -220,9 +220,9 @@ const splitHalfMinW = paneMinW + paneChromeW
 // and numbers precisely so it can be glanced at, and prose about a resize is
 // what that rule exists to keep off it.
 // actionKey reads the alias at the user actions submenu. A foreground action goes
-// into the focused half, which is what every other window key on a split's menu does
-// — with two halves already up there is nowhere to put a third. Anything
-// unrecognised closes the submenu, esc included.
+// into the right half, which is what every other window key on a split's menu does
+// — with two halves already up there is nowhere to put a third, and the left one is
+// the agent. Anything unrecognised closes the submenu, esc included.
 func (s *splitModal) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	actions := s.actions
 	s.actions = nil
@@ -235,7 +235,7 @@ func (s *splitModal) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		return startBackgroundAction(m, ua.Name)
 	}
 	m.status = ""
-	return s.replaceHalf(m, PaneKindForAction(ua.Name))
+	return s.replaceRight(m, PaneKindForAction(ua.Name))
 }
 
 func (s *splitModal) resize(m *Model, frac float64) {
@@ -567,25 +567,26 @@ func (s *splitModal) closeHalf(m *Model) tea.Cmd {
 	return tea.Batch(cmd, s.collapse(m, going))
 }
 
-// replaceHalf swaps the focused half for a fresh child of the named kind.
+// replaceRight swaps the right half for a fresh child of the named kind.
 //
 // What a window key means with two halves already up: the same "put that on
-// screen" as in a single pane's menu, with the only place to put it being the half
-// you are looking at. The other half is untouched — it is the one you are keeping.
+// screen" as in a single pane's menu, with the place to put it being the right
+// half — always, whichever half the keys are in. The left half is the agent and
+// stays the agent (see splitModal), so it is never what a window key takes off; a
+// key pressed with focus on the left used to replace the agent, which is how a
+// split ended up with no agent in it at all.
+//
+// Focus follows the new half, since it is the thing you just asked to look at.
 //
 // The new child is built before the old one is closed, so a kind this deck cannot
 // open leaves the split exactly as it was rather than half-torn-down.
-func (s *splitModal) replaceHalf(m *Model, kind string) tea.Cmd {
+func (s *splitModal) replaceRight(m *Model, kind string) tea.Cmd {
 	item, ok := m.topRowRow()
 	if !ok {
 		m.status = "split: this pane's workspace is not on the deck any more"
 		return nil
 	}
-	left, right := s.boxes(m.childBox())
-	b := left
-	if s.rightFocused {
-		b = right
-	}
+	_, b := s.boxes(m.childBox())
 	child, cmd, ok := m.openChild(item, kind, b)
 	// openChild installs what it built, because the paths it calls are the same ones
 	// that open a whole-screen pane. The split is still what is on screen.
@@ -594,14 +595,11 @@ func (s *splitModal) replaceHalf(m *Model, kind string) tea.Cmd {
 		return nil
 	}
 	var closed tea.Cmd
-	if p, isPane := s.focused().(*panePopover); isPane {
+	if p, isPane := s.right.(*panePopover); isPane {
 		closed = p.close(m)
 	}
-	if s.rightFocused {
-		s.right = child
-	} else {
-		s.left = child
-	}
+	s.right = child
+	s.rightFocused = true
 	s.label = PaneLabel(kind)
 	m.recordArrangement(s)
 	m.status = ""
@@ -684,21 +682,27 @@ func (m *Model) openSplit(item Item, kind string) (tea.Cmd, bool) {
 	// The divider where you last left it, not the middle: how wide you like the agent
 	// beside a diff is a preference, and a fresh split that always opened even meant
 	// re-dragging it every time.
-	if cmd, ok := m.openSplitKinds(item, PaneKindAgent, kind, splitLeftFrac(m.splitFrac)); ok {
+	if cmd, ok := m.openSplitKinds(item, kind, splitLeftFrac(m.splitFrac)); ok {
 		return cmd, true
 	}
 	return nil, true
 }
 
-// openSplitKinds is openSplit with both halves named and the divider placed, which
-// is what re-opening a remembered split needs: the left half is whatever you were
-// in when you split it, not necessarily the agent.
+// openSplitKinds is openSplit with the divider placed, which is what re-opening a
+// remembered split needs.
+//
+// Only the right half is named. The left half is the agent in every split this
+// deck builds — that is the layout invariant, and it is stated here rather than
+// left to each caller to pass PaneKindAgent and be trusted. An arrangement
+// recorded before the invariant held can name any left kind; it is ignored, and
+// what comes back is the agent beside the kind you had on the right.
 //
 // Reports false when the split could not be built — a terminal too narrow, a kind
 // this deck cannot open — having said why. The caller decides what to do instead;
 // re-opening a remembered arrangement falls back to the left half alone, while the
 // `|` chord has nothing to fall back to.
-func (m *Model) openSplitKinds(item Item, leftKind, rightKind string, frac float64) (tea.Cmd, bool) {
+func (m *Model) openSplitKinds(item Item, rightKind string, frac float64) (tea.Cmd, bool) {
+	const leftKind = PaneKindAgent
 	full := m.childBox()
 	if !splitFits(full) {
 		// The floor is a pane, so the number that matters is the pane's minimum, and it

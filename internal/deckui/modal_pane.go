@@ -553,13 +553,13 @@ func (m *Model) recordArrangement(s *splitModal) {
 // looked like when you left it — and worse, opening it recorded itself, so the
 // split you had set up was forgotten by the act of going back to look at it.
 //
-// Gated on the kind as well as the row: a split is an arrangement its left half is
-// part of, so `e` on a workspace whose split was agent-plus-diff means the editor,
-// not that split. Press the key the left half was and you get the pair.
+// Gated on the kind as well as the row: a split's left half is the agent, so it is
+// the agent key that brings the pair back and `e` on the same workspace means the
+// editor alone. Press the key the left half was and you get the pair.
 func (m *Model) openPaneOrArrangement(item Item, kind string) (tea.Cmd, bool) {
 	arr := m.lastPane
 	if arr.split() && arr.left.matches(item) && arr.left.kind == kind {
-		if cmd, ok := m.openSplitKinds(item, kind, arr.rightKind, arr.leftFrac); ok {
+		if cmd, ok := m.openSplitKinds(item, arr.rightKind, arr.leftFrac); ok {
 			return cmd, true
 		}
 		// A right half this deck cannot build any more (the diff viewer unwired, a
@@ -677,7 +677,7 @@ func (m *Model) openRememberedPane(it Item, arr paneArrangement) (tea.Cmd, bool)
 		// A terminal too narrow for a split now falls through to the left half
 		// alone rather than refusing: the pane is what you were working in, and the
 		// second half is the part that does not fit.
-		if cmd, ok := m.openSplitKinds(it, ref.kind, arr.rightKind, arr.leftFrac); ok {
+		if cmd, ok := m.openSplitKinds(it, arr.rightKind, arr.leftFrac); ok {
 			return cmd, true
 		}
 	}
@@ -881,16 +881,22 @@ func (p *panePopover) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	return p.splitWith(m, PaneKindForAction(ua.Name))
 }
 
-// splitWith puts kind beside this pane, keeping this pane as the left half.
+// splitWith puts kind beside this pane, in the right half.
 //
-// Reusing the live pane is the point: the agent you are watching is the reason you
-// wanted something beside it, and re-opening it as a fresh left half would resize
-// and repaint the program you were reading mid-thought. It also means the split
-// can be made of whatever pane you happen to be in rather than only of an agent —
-// see splitModal.left, which used to promise more than it now does.
+// The left half is the agent, which is the deck's layout invariant and not
+// something a split made from inside a pane gets to opt out of. When this pane is
+// the agent it is reused as the left half, and reusing it is the point: the agent
+// you are watching is the reason you wanted something beside it, and re-opening it
+// as a fresh left half would resize and repaint the program you were reading
+// mid-thought.
 //
-// The pane needs no resize here. renderPopover asks its terminal for the box it is
-// handed, so the next frame is what moves the pty to half the width.
+// When it is not — `ctrl+b c` from inside an editor — the agent is opened as the
+// left half and this pane is closed, rather than becoming a left half that is not
+// the agent. The kind you asked for is still what lands on the right: it is what
+// the key said, and the half it goes in is the half that changes.
+//
+// The reused pane needs no resize here. renderPopover asks its terminal for the box
+// it is handed, so the next frame is what moves the pty to half the width.
 func (p *panePopover) splitWith(m *Model, kind string) tea.Cmd {
 	full := m.childBox()
 	if !splitFits(full) {
@@ -906,6 +912,18 @@ func (p *panePopover) splitWith(m *Model, kind string) tea.Cmd {
 		// against.
 		m.status = "split: this pane's workspace is not on the deck any more"
 		return nil
+	}
+	if p.kind != PaneKindAgent {
+		// Built through the ordinary path so the agent half is opened, sized and
+		// recorded exactly as every other split's left half is. It installs the split
+		// itself; this pane is closed only once that has succeeded, so a refusal
+		// leaves what you were in on screen.
+		cmd, ok := m.openSplitKinds(item, kind, splitLeftFrac(m.splitFrac))
+		if !ok {
+			m.active = p
+			return nil
+		}
+		return tea.Batch(p.close(m), cmd)
 	}
 	probe := &splitModal{}
 	_, rightBox := probe.boxes(full)

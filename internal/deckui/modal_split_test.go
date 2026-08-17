@@ -249,10 +249,10 @@ func TestOnePressLeavesASplit(t *testing.T) {
 	}
 }
 
-// TestAWindowKeyReplacesTheFocusedHalf. The same keys that name a kind in a single
-// pane's menu name one here; with both halves already up, the only place to put it
-// is the half you are looking at. The other half is what you are keeping.
-func TestAWindowKeyReplacesTheFocusedHalf(t *testing.T) {
+// TestAWindowKeyReplacesTheRightHalf. The same keys that name a kind in a single
+// pane's menu name one here; with both halves already up, the place to put it is
+// the right half. The left one is the agent, which is what you are keeping.
+func TestAWindowKeyReplacesTheRightHalf(t *testing.T) {
 	m, s := openedSplit(t, "v")
 	keeping := s.left
 	before := s.right
@@ -262,10 +262,113 @@ func TestAWindowKeyReplacesTheFocusedHalf(t *testing.T) {
 		t.Fatalf("replacing a half left %T on screen", m.active)
 	}
 	if s.right == before {
-		t.Error("the focused half was not replaced")
+		t.Error("the right half was not replaced")
 	}
 	if s.left != keeping {
-		t.Error("the half that was not focused was replaced too")
+		t.Error("the agent half was replaced too")
+	}
+}
+
+// TestAWindowKeyPressedOnTheLeftStillReplacesTheRight. The agent is the left half
+// and stays it: a window key typed with the keys in the agent used to replace the
+// agent, leaving a split with no agent in it.
+func TestAWindowKeyPressedOnTheLeftStillReplacesTheRight(t *testing.T) {
+	m, s := openedSplit(t, "v")
+	agent := s.left
+	before := s.right
+	// Move the keys to the agent half, then ask for a shell.
+	m = pressDeck(t, m, menuKey())
+	m = pressDeck(t, m, runeKey("h"))
+	if s.rightFocused {
+		t.Fatal("h did not move the keys to the left half")
+	}
+	m = pressDeck(t, m, menuKey())
+	m = pressDeck(t, m, runeKey("s"))
+	if m.active != s {
+		t.Fatalf("replacing a half left %T on screen", m.active)
+	}
+	if s.left != agent {
+		t.Error("a window key pressed on the left replaced the agent")
+	}
+	if s.right == before {
+		t.Error("the right half was not replaced")
+	}
+	if p, ok := s.left.(*panePopover); !ok || p.kind != PaneKindAgent {
+		t.Errorf("the left half is %T (kind %q), want the agent", s.left, paneKindOf(s.left))
+	}
+	if !s.rightFocused {
+		t.Error("the keys did not follow the half that was just opened")
+	}
+}
+
+// TestASplitFromANonAgentPanePutsTheAgentOnTheLeft. `ctrl+b c` from inside an
+// editor is still a split of the agent and the thing you asked for — the kind you
+// named goes in the right half, which is the half that changes.
+func TestASplitFromANonAgentPanePutsTheAgentOnTheLeft(t *testing.T) {
+	m := splitDeck(t)
+	item := m.items()[0]
+	// A whole-screen editor pane, not the agent.
+	cmd, ok := m.openPane(item, "editor")
+	if !ok {
+		t.Fatal("the editor pane did not open")
+	}
+	_ = cmd
+	p, ok := m.active.(*panePopover)
+	if !ok {
+		t.Fatalf("opening the editor left %T on screen", m.active)
+	}
+	if p.kind != "editor" {
+		t.Fatalf("opened a %q pane, want the editor", p.kind)
+	}
+	m = pressDeck(t, m, menuKey())
+	m = pressDeck(t, m, runeKey("s"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("splitting from the editor left %T on screen, want a split", m.active)
+	}
+	if got := paneKindOf(s.left); got != PaneKindAgent {
+		t.Errorf("the left half is %q, want the agent", got)
+	}
+	if got := paneKindOf(s.right); got != "" {
+		t.Errorf("the right half is %q, want the shell", got)
+	}
+}
+
+// paneKindOf is the kind of a half, for the tests that check which one it is.
+func paneKindOf(c modal) string {
+	kind, _ := childKind(c)
+	return kind
+}
+
+// TestEveryEntryPointPutsTheAgentInTheLeftHalf. The invariant, checked at the
+// paths that build a split rather than at one of them: the chord, a split made
+// from inside a pane, and a remembered arrangement coming back.
+func TestEveryEntryPointPutsTheAgentInTheLeftHalf(t *testing.T) {
+	// The chord.
+	{
+		_, s := openedSplit(t, "v")
+		if got := paneKindOf(s.left); got != PaneKindAgent {
+			t.Errorf("|v put %q in the left half, want the agent", got)
+		}
+	}
+	// A remembered arrangement whose left half was not the agent — recorded
+	// before the invariant held, or by a deck that let a non-agent half be left.
+	{
+		m := splitDeck(t)
+		item := m.items()[0]
+		m.lastPane = paneArrangement{
+			left:      paneRef{project: item.ProjectName, workspace: item.WorkspaceName, kind: "editor"},
+			rightKind: "vcs",
+			hasRight:  true,
+		}
+		if _, ok := m.openPaneOrArrangement(item, "editor"); !ok {
+			t.Fatal("re-opening the arrangement was refused")
+		}
+		if s, ok := m.active.(*splitModal); ok {
+			if got := paneKindOf(s.left); got != PaneKindAgent {
+				t.Errorf("a remembered split came back with %q in the left half, want the agent", got)
+			}
+		}
 	}
 }
 
@@ -409,7 +512,7 @@ func TestThePrefixIsVisibleWhileItIsArmed(t *testing.T) {
 
 	m = pressDeck(t, m, menuKey())
 	armed := ansi.Strip(m.render())
-	for _, want := range []string{"keyboard", "zoom", "in this half"} {
+	for _, want := range []string{"keyboard", "zoom", "in the right half"} {
 		if !strings.Contains(armed, want) {
 			t.Errorf("the armed prefix does not say %q:\n%s", want, lastLine(armed))
 		}
