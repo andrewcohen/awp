@@ -23,15 +23,35 @@ Three of the four sidebar items landed (#365 sections, #367 spacing, #388 labels
 
 The strip has no cursor. #384 gave it a mouse target, and that was the cheap half on
 purpose: a click carries its own target, so it needs no answer to the focus question.
-The keyboard does. With a pane, a split half and a strip on screen at once, "where do
-the keys go" has three answers and the arrangement verbs behind `ctrl+b` (`h` / `l` /
-`tab`) currently address two regions.
+The keyboard does.
 
-What it needs, in order: a focus model that says how you get into the strip and back
-out; a cursor with the design system's selection treatment (`┃ ` + `Warning` bold),
-which costs the two columns `sidebarRow` currently spends on nothing — see the note
-at the end of that function, which reserved them for exactly this; and a decision
-about whether the strip's cursor and the row list's cursor are one thing or two.
+**The design is settled:**
+
+- `ctrl+\` from a pane goes to **the sidebar**, not the deck.
+- `ctrl+\` again goes on to **the deck**.
+- **Every key that works on a deck row works on a sidebar item.**
+
+That last point is most of the work and the best part of it. The strip stops being a
+second, weaker list with a subset of verbs and becomes the deck's row list in a narrow
+column: whatever dispatches a key against "the row under the cursor" stops caring which
+surface the cursor is on.
+
+It also dissolves the focus question that blocked this, by making the door a cycle
+rather than a mode — pane → sidebar → deck, on the key that already means "somewhere
+else". Nothing new to learn and no second binding.
+
+Still to settle:
+
+- Where the cycle goes from the deck: back to the pane, making it a true cycle, or is
+  the deck the end of the line?
+- Whether the strip is reachable with no pane open. It only renders over a hosted
+  program today (`showsSidebar`), so from the row list there is nothing to go to.
+- One cursor shared between the strip and the row list, or one each. Shared is what
+  "the same keys act on the same row" implies, and it is what makes leaving a pane land
+  you on the row you were in.
+- The cursor needs the design system's selection treatment (`┃ ` + `Warning` bold),
+  which costs the two columns `sidebarRow` spends on nothing — the note at the end of
+  that function reserved them for exactly this.
 
 ### #391 — the pinned section collapses every register into one heading
 

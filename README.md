@@ -877,6 +877,28 @@ brings the workspace's agent into the deck rather than switching tmux
 clients — there is no other client to switch to, and outside tmux that
 handoff silently does nothing.
 
+**It opens where you left it.** zdeck already resumed the arrangement you were last in
+on `ctrl+\`, but only within a run — quitting threw the answer away, so every launch put
+you on the row list and the first thing you did was press a key to get back to the
+workspace you had been in a minute earlier. The arrangement is now written to
+`~/.awp/deck-prefs.json` as `pane`, and read at startup: **the row list becomes the way
+out rather than the way in.** `ctrl+\` is already the door in both directions, so there
+is nothing new to learn.
+
+Written on every pane change rather than at exit, because a deck has no reliable exit —
+it is killed, its terminal closes, the machine restarts, and a save at exit is a save
+that does not happen on the occasions you most wanted it. Stored as one nested object
+rather than four keys side by side, because a workspace, a kind and whether there was a
+second half are one answer; flat, they could be written by different runs and read back
+as an arrangement that never existed.
+
+A workspace that has since been deleted falls back to the row list and says so. That is
+the escape hatch, and it is the same one `ctrl+\` already had — a deck that would not
+open because the thing it wanted to resume was gone would be a deck you had to repair a
+state file to use. `awp deck` is unaffected: resuming needs a pane host and the tmux
+path has none, so it keeps opening on the list, which is also why `--scope` needs no
+special case.
+
 Because it hosts its panes, zdeck is the one deck that can be the outermost
 program: it does not require running inside tmux.
 

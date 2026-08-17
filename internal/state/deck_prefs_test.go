@@ -140,7 +140,7 @@ func TestTheKeysAreTheStructsOwnTags(t *testing.T) {
 		name, _, _ := strings.Cut(fields.Field(i).Tag.Get("json"), ",")
 		tags[name] = true
 	}
-	keys := []string{deckPrefScope, deckPrefSidebar, deckPrefSidebarWidth, deckPrefSplit}
+	keys := []string{deckPrefScope, deckPrefSidebar, deckPrefSidebarWidth, deckPrefSplit, deckPrefPane}
 	for _, key := range keys {
 		if !tags[key] {
 			t.Errorf("%q is saved but DeckPrefs has no field tagged with it, so loading it back reads nothing", key)
