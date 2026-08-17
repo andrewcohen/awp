@@ -133,13 +133,39 @@ func TestCommentPromptStaysSmallForALongLine(t *testing.T) {
 	}
 }
 
-// Changing code must be gated on approval, and a removed line must say so — that
-// is the difference between commenting on code and on its deletion.
+// By default the agent is told to make the change — no approval round trip.
 //
-// Both branches have to be there. The gate is about changing code, not about
-// replying: an agent told only "propose and stop" treats a question as something
-// to propose an answer to and then waits for a yes nobody knew to give.
-func TestCommentPromptKeepsTheApprovalGateAndSide(t *testing.T) {
+// A review comment is an instruction, and the round trip this prompt exists to
+// close is "noticed while reading" → "fixed". The gate charged the uncertain
+// remark's price on every remark, so it is off unless asked for; the reviewer is
+// still in the loop, since the change arrives as a diff they are already reading.
+func TestCommentPromptTellsTheAgentToJustMakeTheChange(t *testing.T) {
+	got := commentPromptFor(sampleComment(), "")
+	for _, want := range []string{
+		"Make the change",
+		"reply saying what you did",
+		// The escape hatches survive: a question is asked, not guessed at, and an agent
+		// that wants a yes can still ask for one.
+		"reply and ask",
+		"--proposal",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the prompt does not say %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Reply before changing anything") {
+		t.Errorf("the prompt still gates the change on approval:\n%s", got)
+	}
+}
+
+// AWP_REVIEW_APPROVAL requires the gate back, and a removed line must say so —
+// that is the difference between commenting on code and on its deletion.
+//
+// Both branches of the gate have to be there. It is about changing code, not about
+// replying: an agent told only "propose and stop" treats a question as something to
+// propose an answer to and then waits for a yes nobody knew to give.
+func TestCommentPromptGatesOnApprovalWhenAsked(t *testing.T) {
+	t.Setenv("AWP_REVIEW_APPROVAL", "1")
 	got := commentPromptFor(sampleComment(), "")
 	for _, want := range []string{
 		"Reply before changing anything",
@@ -164,17 +190,42 @@ func TestCommentPromptKeepsTheApprovalGateAndSide(t *testing.T) {
 	}
 }
 
-// With no id there is nothing to thread against, so the prompt must not print a
-// reply command that cannot work.
-func TestCommentPromptWithoutAnIDOmitsTheReplyCommand(t *testing.T) {
-	c := sampleComment()
-	c.ID = ""
-	got := commentPromptFor(c, "")
-	if strings.Contains(got, "awp review reply") {
-		t.Fatalf("expected no reply command without an id:\n%s", got)
+// Only a value that means "on" turns the gate on. An empty or plainly-false
+// setting is the default, so `AWP_REVIEW_APPROVAL=0` in a shell profile does not
+// silently mean the opposite of what it says.
+func TestTheApprovalGateReadsItsSettingBothWays(t *testing.T) {
+	for _, off := range []string{"", "0", "false", "no", "off", "OFF"} {
+		t.Setenv("AWP_REVIEW_APPROVAL", off)
+		if requireProposalApproval() {
+			t.Errorf("%q turned the gate on", off)
+		}
 	}
-	if !strings.Contains(got, "Reply before changing anything") {
-		t.Fatalf("expected the gate to survive:\n%s", got)
+	for _, on := range []string{"1", "true", "yes", "on", "please"} {
+		t.Setenv("AWP_REVIEW_APPROVAL", on)
+		if !requireProposalApproval() {
+			t.Errorf("%q left the gate off", on)
+		}
+	}
+}
+
+// With no id there is nothing to thread against, so the prompt must not print a
+// reply command that cannot work — and must not trail a colon into nothing where
+// the command would have been.
+func TestCommentPromptWithoutAnIDOmitsTheReplyCommand(t *testing.T) {
+	for _, gate := range []string{"", "1"} {
+		t.Setenv("AWP_REVIEW_APPROVAL", gate)
+		c := sampleComment()
+		c.ID = ""
+		got := commentPromptFor(c, "")
+		if strings.Contains(got, "awp review reply") {
+			t.Fatalf("gate %q: expected no reply command without an id:\n%s", gate, got)
+		}
+		if strings.Contains(got, ":\n") {
+			t.Errorf("gate %q: a lead-in trails a colon with no command under it:\n%s", gate, got)
+		}
+		if !strings.Contains(got, "reply") {
+			t.Errorf("gate %q: the prompt stopped asking for a reply at all:\n%s", gate, got)
+		}
 	}
 }
 
