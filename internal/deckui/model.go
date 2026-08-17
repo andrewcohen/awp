@@ -56,7 +56,13 @@ func isDeckBackgroundMsg(msg tea.Msg) bool {
 	switch msg.(type) {
 	case refreshTickMsg, devURLTickMsg, spinner.TickMsg,
 		refreshDoneMsg, jobsListMsg, DevURLsMsg,
-		StateChangedMsg, activityExpireMsg:
+		StateChangedMsg, activityExpireMsg,
+		// The free-text box's resolution. It arrives while the box is the
+		// active modal, and the box is not what acts on it — applyIntent
+		// is, which closes the box and opens the form. Routed to the modal
+		// instead it would be delivered to huh, which would ignore it, and
+		// the box would spin forever.
+		IntentDoneMsg:
 		return true
 	default:
 		return false
@@ -163,6 +169,10 @@ type NewWorkspaceRequest struct {
 	Bookmark         string // anchor revision for the new workspace's @
 	BookmarkToCreate string // new bookmark to create on @ (blank = skip)
 	Prompt           string
+	// Label is what the deck shows for the created workspace. Blank leaves
+	// the name showing, which is what the structured form produces unless
+	// the user set one; the free-text box resolves a label every time.
+	Label string
 	// PRNumber, when > 0, pins the created workspace to this PR (the
 	// create handler calls RecordPROverride) so it links immediately.
 	// Set when creating from a virtual "mine" inbox row; 0 otherwise.
@@ -249,6 +259,16 @@ type progressEventMsg struct {
 type NewWorkspaceInitial struct {
 	Bookmark string
 	Name     string
+	// Prompt and Label pre-fill the two fields the free-text box resolves
+	// but the form would otherwise start empty. Both blank is the ordinary
+	// case — someone who opened the form directly.
+	Prompt string
+	Label  string
+	// Project is the resolved project's display name, shown on the form so
+	// that a workspace about to be created somewhere unexpected says so
+	// before it is created. Not editable here: the form's repository is
+	// whatever the deck passed to launchNewForm.
+	Project string
 	// PRNumber, when > 0, is carried through the form (not shown as a
 	// field) and pins the created workspace to this PR. Set when the form
 	// is opened from a virtual "mine" inbox row.
@@ -1042,6 +1062,17 @@ type Model struct {
 	// the ordinary create path (no PR link).
 	newWorkspacePR int
 
+	// Free-text box. The front door to a new workspace: freeTextMode is
+	// true while it owns the screen, and it hands off to the
+	// new-workspace form above once its text has been resolved. Same
+	// modal-state-inside-Model pattern as everything else here.
+	freeTextMode bool
+	freeTextForm freeTextForm
+	freeTextRepo string
+	// freeTextPR carries a PR pin across the box, the same way
+	// newWorkspacePR carries it across the form.
+	freeTextPR int
+
 	// Rename form. Same modal-state-inside-Model pattern as the
 	// new-workspace form.
 	renameMode bool
@@ -1276,6 +1307,13 @@ func (m Model) WithPinGroupHandler(h PinGroupHandler) Model {
 // the `gR` register-alias rename.
 func (m Model) WithPinGroupAliasHandler(h PinGroupAliasHandler) Model {
 	m.pinGroupAliasHandler = h
+	return m
+}
+
+// WithIntentResolver installs the resolver behind the free-text
+// new-workspace box. Without one, `n` opens the structured form directly.
+func (m Model) WithIntentResolver(r IntentResolver) Model {
+	m.intentResolver = r
 	return m
 }
 
@@ -1922,7 +1960,7 @@ func (m Model) canBackgroundRefresh() bool {
 		!m.modalOwnsDeckState() &&
 		!m.filtering &&
 		!m.findMode && !m.actionMode &&
-		!m.newWorkspaceMode
+		!m.newWorkspaceMode && !m.freeTextMode
 }
 
 // modalOwnsDeckState reports whether the active modal would be disturbed by
@@ -2033,6 +2071,9 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		}
 	}
 	if !isDeckBackgroundMsg(msg) {
+		if m.freeTextMode {
+			return m.dispatchFreeTextForm(msg)
+		}
 		if m.newWorkspaceMode {
 			return m.dispatchNewWorkspaceForm(msg)
 		}
@@ -2410,6 +2451,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// hints twice.
 		m.status = ""
 		return m, nil
+	case IntentDoneMsg:
+		return m.applyIntent(msg)
 	case ProjectsDoneMsg:
 		m.busy = false
 		op, ok := m.active.(*openPicker)
@@ -2991,7 +3034,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				m.status = "new: select a row with a known repo"
 				return m, nil
 			}
-			return m.launchNewForm(NewWorkspaceInitial{}, item.RepoRoot)
+			return m.launchNewWorkspace(NewWorkspaceInitial{Project: item.ProjectName}, item.RepoRoot)
 		case key.Matches(msg, km.ReviewPick):
 			item, ok := m.selected()
 			if !ok || strings.TrimSpace(item.RepoRoot) == "" {
@@ -3125,6 +3168,177 @@ func pickerShortHelp(l list.Model) []key.Binding {
 		)
 	}
 	return bindings
+}
+
+// launchNewWorkspace is what `n` does: the free-text box when this deck can
+// resolve free text, and the structured form when it cannot.
+//
+// The fork is here rather than inside the box so that a deck with no
+// resolver — no agent configured for it, or an embedder that never
+// installed one — has no box to get stuck in. `n` simply behaves the way it
+// always did.
+func (m *Model) launchNewWorkspace(initial NewWorkspaceInitial, repo string) (tea.Model, tea.Cmd) {
+	if m.intentResolver == nil {
+		return m.launchNewForm(initial, repo)
+	}
+	return m.launchFreeTextForm("", initial.PRNumber, repo, initial.Project)
+}
+
+// launchFreeTextForm opens the box, optionally pre-filled.
+//
+// initial is non-empty when the box is being reopened with text already in
+// it — a resolution the user rejected, say — so that returning to it does
+// not mean retyping the sentence.
+func (m *Model) launchFreeTextForm(initial string, prNumber int, repo, projectName string) (tea.Model, tea.Cmd) {
+	m.active = nil
+	if strings.TrimSpace(repo) == "" {
+		m.status = "new: select a row with a known repo"
+		return *m, nil
+	}
+	m.freeTextMode = true
+	m.freeTextRepo = repo
+	m.freeTextPR = prNumber
+	var initCmd tea.Cmd
+	m.freeTextForm, initCmd = newFreeTextForm(initial, projectName)
+	m.status = ""
+	return *m, initCmd
+}
+
+// closeFreeText clears the box's state. Its own function because three
+// paths out of the box need exactly this and a fourth that forgot one field
+// would leave the deck rendering a box the user had left.
+func (m *Model) closeFreeText() {
+	m.freeTextMode = false
+	m.freeTextForm = freeTextForm{}
+	m.freeTextRepo = ""
+	m.freeTextPR = 0
+}
+
+// dispatchFreeTextForm routes a message into the box and acts on what it
+// says.
+//
+// Submit starts the model call and leaves the box on screen in its busy
+// state; the answer arrives later as an IntentDoneMsg. Fallback and cancel
+// both close the box, the first into the structured form.
+func (m Model) dispatchFreeTextForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	form, cmd, action := m.freeTextForm.update(msg)
+	m.freeTextForm = form
+	switch action {
+	case freeTextActionCancel:
+		// No "cancelled" status: the user pressed esc and knows. See the
+		// status-message rule in AGENTS.md.
+		m.closeFreeText()
+		m.status = ""
+		return m, cmd
+	case freeTextActionFallback:
+		// The box's text becomes the form's prompt, and its slug the
+		// proposed name. Someone who typed a sentence and then asked for
+		// the form wants that sentence carried, not discarded.
+		text := form.text()
+		repo, pr := m.freeTextRepo, m.freeTextPR
+		m.closeFreeText()
+		initial := NewWorkspaceInitial{PRNumber: pr}
+		if text != "" {
+			initial.Name = workspace.SlugFromText(text)
+			initial.Prompt = text
+		}
+		updated, formCmd := m.launchNewForm(initial, repo)
+		return updated, batchCmds(cmd, formCmd)
+	case freeTextActionSubmit:
+		if m.intentResolver == nil {
+			// Cannot happen via `n` (launchNewWorkspace forks on this),
+			// but a box opened some other way must not hang on a
+			// resolution that will never arrive.
+			text := form.text()
+			repo, pr := m.freeTextRepo, m.freeTextPR
+			m.closeFreeText()
+			updated, formCmd := m.launchNewForm(NewWorkspaceInitial{
+				Name:     workspace.SlugFromText(text),
+				Prompt:   text,
+				PRNumber: pr,
+			}, repo)
+			return updated, batchCmds(cmd, formCmd)
+		}
+		m.freeTextForm = m.freeTextForm.startResolving()
+		// The spinner tick is bootstrapped here because the box may be the
+		// only thing on screen that is animating; without it the glyph sits
+		// still and the deck looks hung.
+		return m, batchCmds(cmd, m.spinner.Tick, m.intentResolver(form.text(), m.freeTextRepo))
+	}
+	return m, cmd
+}
+
+// applyIntent is what happens when a resolution comes back.
+//
+// It always ends in the structured form, pre-filled. That is the whole
+// design: the model chooses, the user confirms, and a failure is not a dead
+// end but the same form with the local fallback in it. The only difference
+// a failure makes is the status line explaining why the fields were guessed
+// rather than resolved.
+//
+// A resolution for text the box is no longer showing is dropped. The user
+// cancelled, or retyped and asked again; opening a form they did not ask
+// for would be worse than doing nothing.
+func (m Model) applyIntent(msg IntentDoneMsg) (tea.Model, tea.Cmd) {
+	if !m.freeTextMode || msg.Text != m.freeTextForm.text() {
+		return m, nil
+	}
+	pr := m.freeTextPR
+	repo := strings.TrimSpace(msg.Intent.RepoRoot)
+	if repo == "" {
+		repo = m.freeTextRepo
+	}
+	m.closeFreeText()
+
+	// A failed resolution is the one case that still stops for the user.
+	// The fields are a local guess rather than an answer — the sentence
+	// verbatim as the prompt, a slug of it as the name — and creating a
+	// workspace from a guess without showing it is how you end up deleting
+	// one. So the failure path opens the form, pre-filled, with the reason
+	// on the status line.
+	if msg.Err != nil {
+		updated, cmd := m.launchNewForm(NewWorkspaceInitial{
+			Name:     msg.Intent.Name,
+			Label:    msg.Intent.Label,
+			Prompt:   msg.Intent.Prompt,
+			Project:  msg.Intent.Project,
+			PRNumber: pr,
+		}, repo)
+		if mm, ok := updated.(Model); ok {
+			mm.status = msg.Err.Error()
+			return mm, cmd
+		}
+		return updated, cmd
+	}
+
+	return m.createFromIntent(msg.Intent, repo, pr)
+}
+
+// createFromIntent creates the workspace the resolution describes, with no
+// further confirmation.
+//
+// The two fields the box never asks about are settled here rather than by a
+// form: the new workspace is anchored on trunk, and its bookmark follows
+// deck.bookmark_prefix the way the form's auto-populated one does. Both are
+// what the form would have proposed if it had been shown and accepted
+// unedited, which is the point — going straight to creation must not
+// quietly produce a different workspace than confirming would have.
+func (m Model) createFromIntent(intent WorkspaceIntent, repo string, prNumber int) (tea.Model, tea.Cmd) {
+	trunk := ""
+	if m.trunkResolver != nil {
+		trunk = m.trunkResolver(repo)
+	}
+	if strings.TrimSpace(trunk) == "" {
+		trunk = "main"
+	}
+	return m.startCreateAction(NewWorkspaceRequest{
+		Name:             intent.Name,
+		Label:            intent.Label,
+		Prompt:           intent.Prompt,
+		Bookmark:         trunk,
+		BookmarkToCreate: computeAutoBookmark(m.bookmarkPrefix, intent.Name),
+		PRNumber:         prNumber,
+	}, repo)
 }
 
 // launchNewForm enters inline new-workspace-form mode. The form is a
@@ -4015,6 +4229,7 @@ func (m *Model) startAsyncCreateAction(req NewWorkspaceRequest, repoRoot string)
 		Bookmark:         strings.TrimSpace(req.Bookmark),
 		BookmarkToCreate: strings.TrimSpace(req.BookmarkToCreate),
 		Prompt:           strings.TrimSpace(req.Prompt),
+		Label:            strings.TrimSpace(req.Label),
 		PRNumber:         req.PRNumber,
 		// Carry the requested name so the deck can match this job back to
 		// the row that appears (via workspace-state.json) while the job is
@@ -4281,6 +4496,9 @@ func (m Model) view() string {
 		body := m.renderProgress(m.width)
 		footer := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(m.progressFooter())
 		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
+	}
+	if m.freeTextMode {
+		return m.freeTextForm.view(m.width, m.height, m.spinner.View())
 	}
 	if m.newWorkspaceMode {
 		// Render the inline new-workspace form across the entire
@@ -5546,7 +5764,7 @@ func deckKeyGroups() []keyGroup {
 			Title: "Open / create",
 			Keys: [][2]string{
 				{"enter", "summon (create or focus the workspace tmux session)"},
-				{"n", "new workspace"},
+				{"n", "new workspace: describe it, ctrl+enter creates it (ctrl+f for the form)"},
 				{"o", "open: fuzzy-pick a project from configured roots"},
 				// Listed with the doors rather than the windows: it is not one of the
 				// selected row's panes, and it opens from any row or none.

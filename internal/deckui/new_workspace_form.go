@@ -38,6 +38,7 @@ type newWorkspaceForm struct {
 	workspaceVal   *string
 	startFromVal   *string
 	promptVal      *string
+	labelVal       *string
 	bookmarkVal    *string
 	confirmSubmit  *bool
 	bookmarkPrefix string
@@ -45,6 +46,11 @@ type newWorkspaceForm struct {
 	startFromField *startFromField
 	bookmarkInput  *huh.Input // for forcing a textinput resync after external mutation
 	trunkName      string
+	// projectName is shown in the form's title. It is the one field on this
+	// screen the user cannot change, and it is on screen precisely because
+	// of that: a free-text box that guessed the wrong project would
+	// otherwise create a workspace in it silently.
+	projectName string
 
 	// Auto-population bookkeeping for the Bookmark-name field.
 	// bookmarkDirty flips true the moment the user types into the
@@ -100,7 +106,8 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial, bookmarkPrefix, trunkName 
 		pickedBookmark = ""
 	}
 
-	var promptVal string
+	promptVal := strings.TrimSpace(initial.Prompt)
+	labelVal := strings.TrimSpace(initial.Label)
 	confirmSubmit := true
 
 	autoBook := computeAutoBookmark(prefix, workspaceVal)
@@ -115,7 +122,7 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial, bookmarkPrefix, trunkName 
 	// fully suppress for a tiny static list).
 	startFromField := newStartFromField(
 		"Start from",
-		"base the new workspace's @ on this revision",
+		"",
 		&startFromVal,
 		startFromOptions(trunk, pickedBookmark),
 	)
@@ -126,9 +133,7 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial, bookmarkPrefix, trunkName 
 	// textinput, not the bound pointer, so the pointer-only write isn't
 	// enough on its own.
 	bookmarkInput := huh.NewInput().
-		Title("Bookmark name").
-		Description("the bookmark to create on the new workspace's first commit").
-		Placeholder(bookmarkPlaceholder(prefix)).
+		Title("Bookmark").
 		CharLimit(0).
 		Value(&bookmarkVal)
 
@@ -136,13 +141,15 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial, bookmarkPrefix, trunkName 
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Workspace").
-				Placeholder("workspace name").
 				CharLimit(0).
 				Value(&workspaceVal),
+			huh.NewInput().
+				Title("Label").
+				CharLimit(0).
+				Value(&labelVal),
 			startFromField,
 			huh.NewText().
 				Title("Prompt").
-				Placeholder("optional agent prompt to run after creating workspace").
 				CharLimit(0).
 				Lines(4).
 				ShowLineNumbers(false).
@@ -180,6 +187,7 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial, bookmarkPrefix, trunkName 
 		workspaceVal:   &workspaceVal,
 		startFromVal:   &startFromVal,
 		promptVal:      &promptVal,
+		labelVal:       &labelVal,
 		bookmarkVal:    &bookmarkVal,
 		confirmSubmit:  &confirmSubmit,
 		bookmarkPrefix: prefix,
@@ -187,6 +195,7 @@ func newNewWorkspaceForm(initial NewWorkspaceInitial, bookmarkPrefix, trunkName 
 		startFromField: startFromField,
 		bookmarkInput:  bookmarkInput,
 		trunkName:      trunk,
+		projectName:    strings.TrimSpace(initial.Project),
 		prevWorkspace:  workspaceVal,
 		prevBookmark:   bookmarkVal,
 		lastAutoBook:   autoBook,
@@ -206,18 +215,6 @@ func startFromOptions(trunk, picked string) []startFromOption {
 		{Label: trunk, Value: trunk},
 		{Label: pickLabel, Value: startFromPick},
 	}
-}
-
-// bookmarkPlaceholder returns the format hint shown when the Bookmark
-// name field is empty. With a prefix configured it reads "<prefix>/…"
-// so the user sees the shape they'll get; without a prefix it's a
-// generic example.
-func bookmarkPlaceholder(prefix string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		return "e.g. feat-x (blank to skip)"
-	}
-	return strings.TrimRight(prefix, "/") + "/…"
 }
 
 // computeAutoBookmark derives the default "Bookmark name" value from
@@ -412,6 +409,9 @@ func (f newWorkspaceForm) request() NewWorkspaceRequest {
 	if f.promptVal != nil {
 		r.Prompt = strings.TrimSpace(*f.promptVal)
 	}
+	if f.labelVal != nil {
+		r.Label = strings.TrimSpace(*f.labelVal)
+	}
 	return r
 }
 
@@ -424,7 +424,11 @@ func (f newWorkspaceForm) view(width, height int) string {
 	theme := charm.DefaultTheme()
 	card := theme.Card.Width(cardWidth)
 	body := f.form.WithWidth(cardWidth - 4).View()
-	rendered := card.Render(theme.Title.Render("New workspace") + "\n\n" + body)
+	title := theme.Title.Render("New workspace")
+	if f.projectName != "" {
+		title += theme.Hint.Render("  in " + f.projectName)
+	}
+	rendered := card.Render(title + "\n\n" + body)
 	if width <= 0 || height <= 0 {
 		return rendered
 	}

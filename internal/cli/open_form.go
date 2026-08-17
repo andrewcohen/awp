@@ -19,8 +19,11 @@ type openRequest struct {
 	Bookmark         string // anchor revision (jj new <bookmark>) for the new workspace's @
 	BookmarkToCreate string // new bookmark to create on @ (blank = skip)
 	Prompt           string
-	PRNumber         int // pin the created workspace to this PR (0 = none)
-	Yes              bool
+	// Label is what the deck shows for the workspace, when it should show
+	// something other than the name. Blank leaves the name showing.
+	Label    string
+	PRNumber int // pin the created workspace to this PR (0 = none)
+	Yes      bool
 	// NoSwitch suppresses the final tmux switch-client step. Used by the
 	// async create-workspace job so the subprocess prepares the workspace
 	// without yanking the user's tmux focus away from the deck.

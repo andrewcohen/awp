@@ -40,6 +40,10 @@ func TestOnlyRenderersMentionDisplayName(t *testing.T) {
 		"internal/cli/deck.go":            "copies it from the store onto the row",
 		"internal/cli/workspace_label.go": "the `awp w label` verb",
 		"internal/cli/workspace_new.go":   "--label at create time",
+		// Writes the label during creation, keyed by the normalized name
+		// PrepareWorkspace returned. It only ever writes: nothing downstream
+		// of it resolves a path, session, bookmark or PR from the label.
+		"internal/cli/app.go": "SetDisplayName during creation, so a deck row is labelled the first time it is drawn",
 	}
 
 	root, err := repoRoot()
