@@ -105,73 +105,32 @@ func TestFreeTextFormFallbackKeyIsNotText(t *testing.T) {
 	}
 }
 
-// While the model call is in flight the box holds still: the answer being
-// computed is about the sentence as it was when enter was pressed.
-func TestFreeTextFormIgnoresTypingWhileBusy(t *testing.T) {
-	f := typeInto(newTestFreeTextForm(t, ""), "look at PR 2320").startResolving()
-	f = typeInto(f, "XXX")
-	if f.text() != "look at PR 2320" {
-		t.Errorf("text = %q, want it unchanged while busy", f.text())
-	}
-}
-
-// A slow call must not trap anyone in it.
-func TestFreeTextFormEscCancelsWhileBusy(t *testing.T) {
-	f := typeInto(newTestFreeTextForm(t, ""), "look at PR 2320").startResolving()
-	_, action := send(f, tea.KeyPressMsg{Code: tea.KeyEscape})
-	if action != freeTextActionCancel {
-		t.Fatalf("action = %v, want cancel", action)
-	}
-}
-
-// The fallback stays reachable while busy — that is the whole answer to an
-// agent that has hung.
-func TestFreeTextFormFallbackWorksWhileBusy(t *testing.T) {
-	f := typeInto(newTestFreeTextForm(t, ""), "tidy up").startResolving()
-	_, action := send(f, tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
-	if action != freeTextActionFallback {
-		t.Fatalf("action = %v, want fallback", action)
-	}
-}
-
-// Submit must not fire a second time while the first call is in flight.
-func TestFreeTextFormSubmitIsInertWhileBusy(t *testing.T) {
-	f := typeInto(newTestFreeTextForm(t, ""), "do a thing").startResolving()
-	_, action := send(f, keySubmit)
-	if action != freeTextActionNone {
-		t.Fatalf("action = %v, want none", action)
-	}
-}
-
-func TestFreeTextFormViewShowsStateAndKeys(t *testing.T) {
+func TestFreeTextFormViewShowsWhatItNeedsTo(t *testing.T) {
 	f := typeInto(newTestFreeTextForm(t, ""), "fix the bug")
 
-	idle := f.view(100, 30, "")
-	if !strings.Contains(idle, "New workspace") {
+	view := f.view(100, 30)
+	if !strings.Contains(view, "New workspace") {
 		t.Error("view is missing its title")
 	}
 	// Every key the box has, named on the box.
 	for _, want := range []string{"ctrl+enter", "ctrl+g", "ctrl+f", "esc"} {
-		if !strings.Contains(idle, want) {
-			t.Errorf("the idle footer does not advertise %s", want)
+		if !strings.Contains(view, want) {
+			t.Errorf("the footer does not advertise %s", want)
 		}
 	}
 	// Where it will create, before the call rather than after it.
-	if !strings.Contains(idle, "awp") {
+	if !strings.Contains(view, "awp") {
 		t.Error("the box does not say which project it will create in")
 	}
+}
 
-	busy := f.startResolving().view(100, 30, "⠋")
-	if !strings.Contains(busy, "⠋") {
-		t.Error("the busy footer does not show the deck's spinner")
-	}
-	if !strings.Contains(busy, "ctrl+f") {
-		t.Error("the busy footer must still offer the way out")
-	}
-
-	failed := f.failed("new workspace: claude did not answer within 30s").view(100, 30, "")
-	if !strings.Contains(failed, "did not answer") {
-		t.Error("the failure is not shown to the user")
+// The box is the sentence and the keys, and nothing that repeats what the
+// card above it already said. A user typing into it is thinking about their
+// own words, not reading a prompt for them.
+func TestFreeTextFormHasNoFieldTitle(t *testing.T) {
+	view := newTestFreeTextForm(t, "").view(100, 30)
+	if strings.Contains(view, "work on") {
+		t.Error("the field still carries a title above the box")
 	}
 }
 
@@ -207,7 +166,7 @@ func TestFreeTextFormIsMultiLine(t *testing.T) {
 // the user edits it.
 func TestFreeTextFormWrapsPrefilledTextAtFullWidth(t *testing.T) {
 	f := newTestFreeTextForm(t, "the sidebar cursor drifts a column to the left whenever a row has an emoji")
-	view := f.view(120, 30, "")
+	view := f.view(120, 30)
 
 	// At the card's width this phrase is one row. At huh's ~29-column
 	// default it is split across three.

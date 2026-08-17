@@ -87,17 +87,32 @@ func TestNOpensTheFreeTextBox(t *testing.T) {
 }
 
 // Submitting asks the resolver for the typed text, against the row's repo,
-// and leaves the box up in its busy state rather than blocking.
-func TestSubmitResolvesAndWaits(t *testing.T) {
+// and hands the deck straight back: the box closes and the wait shows up as
+// an activity chip instead of a modal.
+func TestSubmitResolvesInTheBackground(t *testing.T) {
 	var gotText, gotRepo string
 	m := freeTextDeck(answering(WorkspaceIntent{}, nil, &gotText, &gotRepo))
+	m.refresher = func() tea.Cmd { return nil }
 	dm, _ := typeAndSubmit(t, m, "fix the sidebar cursor bug")
 
-	if !dm.freeTextMode {
-		t.Fatal("the box closed before the answer arrived")
+	if dm.freeTextMode {
+		t.Error("the box is still on screen after submit")
 	}
-	if !dm.freeTextForm.busy {
-		t.Error("the box is not in its in-flight state")
+	if dm.newWorkspaceMode {
+		t.Error("submit opened the structured form")
+	}
+	if dm.progressMode {
+		t.Error("submit opened a blocking progress modal")
+	}
+	if _, ok := dm.freeTextPending["fix the sidebar cursor bug"]; !ok {
+		t.Error("the submitted text is not tracked as in flight")
+	}
+	if !hasActivity(dm, intentActivityID("fix the sidebar cursor bug")) {
+		t.Error("the background work has no chip in the activity bar")
+	}
+	// The row list keeps refreshing — the deck is the user's again.
+	if !dm.canBackgroundRefresh() {
+		t.Error("the deck is still suspended after submit")
 	}
 	if gotText != "fix the sidebar cursor bug" {
 		t.Errorf("resolver asked for %q", gotText)
@@ -105,6 +120,16 @@ func TestSubmitResolvesAndWaits(t *testing.T) {
 	if gotRepo != "/repos/awp" {
 		t.Errorf("resolver given repo %q", gotRepo)
 	}
+}
+
+// hasActivity reports whether the named activity is in the bar.
+func hasActivity(m Model, id string) bool {
+	for _, a := range m.activities {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // The resolution creates the workspace, with no confirmation step.
@@ -159,9 +184,10 @@ func TestResolutionCreatesTheWorkspace(t *testing.T) {
 	}
 }
 
-// A failed resolution is not a dead end: the same form, filled in from the
-// local fallback, with the reason on the status line.
-func TestFailedResolutionStillOpensTheForm(t *testing.T) {
+// A failed resolution creates nothing and opens nothing: the user is
+// somewhere else by now. The reason goes on the status line, and the
+// sentence is held for the next `n` rather than lost with the error.
+func TestFailedResolutionCreatesNothingAndKeepsTheText(t *testing.T) {
 	fallback := WorkspaceIntent{
 		Name:     "fix-the-sidebar-cursor-bug",
 		Label:    "fix the sidebar cursor bug",
@@ -169,54 +195,101 @@ func TestFailedResolutionStillOpensTheForm(t *testing.T) {
 		Project:  "awp",
 		RepoRoot: "/repos/awp",
 	}
+	launched := false
 	m := freeTextDeck(answering(fallback, errors.New("claude did not answer within 30s"), nil, nil))
+	m.asyncJobLauncher = func(AsyncJobSpec) error { launched = true; return nil }
 	dm, _ := typeAndSubmit(t, m, "fix the sidebar cursor bug")
 
-	u, _ := dm.Update(IntentDoneMsg{
+	u, cmd := dm.Update(IntentDoneMsg{
 		Text:   "fix the sidebar cursor bug",
 		Intent: fallback,
 		Err:    errors.New("claude did not answer within 30s"),
 	})
 	dm = u.(Model)
+	// A failure dispatches nothing at all.
+	if cmd != nil {
+		execCmd(t, cmd)
+	}
 
-	if !dm.newWorkspaceMode {
-		t.Fatal("a failed resolution left the user with no form")
+	if launched {
+		t.Error("a failed resolution created a workspace from a guess")
 	}
-	if dm.freeTextMode {
-		t.Error("the box is still open after a failed resolution")
-	}
-	if got := dm.newWorkspaceForm.request().Prompt; got != "fix the sidebar cursor bug" {
-		t.Errorf("Prompt = %q, want the typed text", got)
+	if dm.newWorkspaceMode || dm.freeTextMode {
+		t.Error("a failed resolution opened something under the user")
 	}
 	if !strings.Contains(dm.status, "did not answer") {
-		t.Errorf("status = %q, want the reason the fields were guessed", dm.status)
+		t.Errorf("status = %q, want the reason nothing was created", dm.status)
+	}
+	if dm.freeTextRetry != "fix the sidebar cursor bug" {
+		t.Errorf("freeTextRetry = %q, want the typed text held for the next `n`", dm.freeTextRetry)
+	}
+
+	// And the next `n` offers it back rather than an empty box.
+	u, _ = dm.Update(keyN)
+	dm = u.(Model)
+	if got := dm.freeTextForm.text(); got != "fix the sidebar cursor bug" {
+		t.Errorf("reopened box holds %q, want the text that failed", got)
+	}
+	if dm.freeTextRetry != "" {
+		t.Error("the held text was offered but not cleared — the next `n` would repeat it")
 	}
 }
 
-// A resolution for text the box is no longer showing must not open a form
-// the user did not ask for.
-func TestStaleResolutionIsDropped(t *testing.T) {
+// An answer nobody is waiting on creates nothing. Two submissions of the
+// same sentence must not become two workspaces either.
+func TestUntrackedResolutionIsDropped(t *testing.T) {
+	launches := 0
 	m := freeTextDeck(answering(WorkspaceIntent{}, nil, nil, nil))
+	m.trunkResolver = func(string) string { return "main" }
+	m.asyncJobLauncher = func(AsyncJobSpec) error { launches++; return nil }
 	dm, _ := typeAndSubmit(t, m, "fix the sidebar cursor bug")
 
-	u, _ := dm.Update(IntentDoneMsg{
+	// Never asked for. No command at all, so nothing to run.
+	u, cmd := dm.Update(IntentDoneMsg{
 		Text:   "something else entirely",
 		Intent: WorkspaceIntent{Name: "x", RepoRoot: "/repos/awp"},
 	})
 	dm = u.(Model)
-
-	if dm.newWorkspaceMode {
-		t.Error("a stale resolution opened the form")
+	if cmd != nil {
+		execCmd(t, cmd)
 	}
-	if !dm.freeTextMode {
-		t.Error("the box was closed by a resolution that was not its own")
+	if launches != 0 {
+		t.Error("an untracked resolution created a workspace")
+	}
+
+	// Asked for once, answered twice.
+	answer := IntentDoneMsg{
+		Text:   "fix the sidebar cursor bug",
+		Intent: WorkspaceIntent{Name: "sidebar", RepoRoot: "/repos/awp"},
+	}
+	u, cmd = dm.Update(answer)
+	dm = u.(Model)
+	execCmd(t, cmd)
+	u, cmd = dm.Update(answer)
+	dm = u.(Model)
+	// The second answer is dropped, so it dispatches nothing.
+	if cmd != nil {
+		execCmd(t, cmd)
+	}
+	if launches != 1 {
+		t.Errorf("launches = %d, want 1 — one sentence, one workspace", launches)
+	}
+	if len(dm.freeTextPending) != 0 {
+		t.Errorf("freeTextPending = %v, want empty once answered", dm.freeTextPending)
 	}
 }
 
-// esc during a slow call abandons the whole thing.
-func TestEscWhileResolvingClosesTheBox(t *testing.T) {
+// esc before submitting abandons the whole thing.
+func TestEscClosesTheBox(t *testing.T) {
 	m := freeTextDeck(answering(WorkspaceIntent{}, nil, nil, nil))
-	dm, _ := typeAndSubmit(t, m, "look at PR 2320")
+	updated, cmd := m.Update(keyN)
+	dm := updated.(Model)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			u, _ := dm.Update(msg)
+			dm = u.(Model)
+		}
+	}
 
 	u, _ := dm.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	dm = u.(Model)

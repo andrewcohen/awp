@@ -377,7 +377,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `i` | CI window (`gh run watch`) |
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config). Also `ctrl+b x` from inside a pane or a split |
-| `n` | New workspace. Opens a free-text box a few lines tall: describe what you want to work on and an agent turns it into a name, label, prompt and project, then creates it. `ctrl+enter` sends it, `enter` is a newline, `ctrl+g` opens `$EDITOR`. `ctrl+f` skips the agent and opens the structured form instead; `esc` cancels. See [Describing a workspace instead of filling in a form](#describing-a-workspace-instead-of-filling-in-a-form). |
+| `n` | New workspace. Opens an empty box a few lines tall: describe the work and an agent turns it into a name, label, prompt and project, then creates it. `ctrl+enter` sends it and hands the deck straight back — the rest runs in the background, behind one chip in the activity bar. `enter` is a newline, `ctrl+g` opens `$EDITOR`. `ctrl+f` skips the agent and opens the structured form instead; `esc` cancels. See [Describing a workspace instead of filling in a form](#describing-a-workspace-instead-of-filling-in-a-form). |
 | `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
 | `f` | Find: easymotion-style section → workspace jump. Stage 1 collapses the list to just section headers — both pinned register sections (see the `m` chord) and unpinned project headers — and hints each one, so a long list fits on one screen; picking one expands only that section (the rest stay as one-line headers for context) and scopes stage 2 to its rows. `backspace` re-collapses to the header list. (In the inbox scope there are no headers, so `f` hints every row directly.) |
 | `/` | Filter rows · `esc` clears |
@@ -412,7 +412,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 
 ### Describing a workspace instead of filling in a form
 
-`n` opens one text box, a few lines tall. You describe the work the way you would say it out loud — `fix the sidebar cursor bug`, `look at PR 2320`, `spike a jj-backed undo` — and awp asks an agent to turn that into the four things a workspace needs: a directory-safe **name**, a **label** for the deck row, the **prompt** its agent starts on, and the **project**. It is the same translation the captain does when you ask it to start a workspace from an issue. Then it creates it.
+`n` opens one text box, a few lines tall, with nothing above it but the card's own title and the project it will create in. You describe the work the way you would say it out loud — `fix the sidebar cursor bug`, `look at PR 2320`, `spike a jj-backed undo` — and awp asks an agent to turn that into the four things a workspace needs: a directory-safe **name**, a **label** for the deck row, the **prompt** its agent starts on, and the **project**. It is the same translation the captain does when you ask it to start a workspace from an issue. Then it creates it.
 
 **The keys.** `ctrl+enter` sends it. `enter` is a newline, and `ctrl+g` opens `$EDITOR` — the same key the structured form's prompt field uses.
 
@@ -420,11 +420,11 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 
 **Start-from and bookmark** are not asked about: the workspace is anchored on trunk and its bookmark follows `deck.bookmark_prefix`, exactly as the form's auto-populated defaults would. Use `ctrl+f` when you need to set them.
 
-**While it is thinking.** The box stays up with your text in it, stops accepting edits, and shows a spinner. `esc` abandons it. There is a 30-second ceiling on the call.
+**It does not hold the deck.** `ctrl+enter` closes the box and you are back on the row list, free to keep working. The agent call and the workspace create that follows it both run in the background, as one `new workspace` chip in the activity bar; the new row appears the way any other backgrounded create's does. There is a 30-second ceiling on the call. Submitting the same sentence twice creates one workspace, not two.
 
-**When it fails** — offline, no agent, a timeout, an answer that will not parse — nothing is created. You land in the structured form, filled in from a local fallback (your text as the prompt and label, a slug of it as the name, the project unchanged), with the reason on the status line. A guess is worth showing you; an answer is not.
+**When it fails** — offline, no agent, a timeout, an answer that will not parse — nothing is created and nothing opens under your hands: the reason goes on the status line, and the sentence you wrote is held for the next `n`, which opens with it already in the box. Fix the wording, or press `ctrl+f` to fill the fields in yourself. awp will not create a workspace from a guess nobody has seen.
 
-**Specifying the fields exactly.** `ctrl+f` opens the structured form and skips the agent. It works from an empty box, from a half-typed sentence (carried across as the prompt), and while a call is in flight — which is also the way out of an agent that has hung. The form is unchanged apart from a new optional **Label** field, and every other door to it (creating from a PR row, the `awp workspace open` CLI flow) still opens it directly.
+**Specifying the fields exactly.** `ctrl+f` opens the structured form and skips the agent. It works from an empty box and from a half-typed sentence, which is carried across as the prompt. The form is unchanged apart from a new optional **Label** field, and every other door to it (creating from a PR row, the `awp workspace open` CLI flow) still opens it directly.
 
 Decks with no Claude agent configured (`agent` in config) skip the box: `n` opens the structured form, as before. `-p` is Claude's spelling of a headless call, and guessing another agent's would run a binary that does the wrong thing.
 

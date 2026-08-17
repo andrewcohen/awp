@@ -13,8 +13,13 @@ import (
 
 // freeTextForm is the deck's front door to a new workspace: one box, one
 // sentence, in the user's own words. What they type is handed to an agent
-// that turns it into the four things creation needs, and the answer is
-// shown in the structured form for them to accept or edit.
+// that turns it into the four things creation needs, and the workspace is
+// created from that answer without a further confirmation.
+//
+// The box is what is on screen for as long as someone is typing and not one
+// moment longer: submit closes it, and both the model call and the create
+// run in the background. So there is no busy state here, and no error
+// state — those belong to the deck the user is handed back to.
 //
 // A plain struct rather than a tea.Model, like every other modal here — see
 // doc.go. It composes into the deck's single program instead of running
@@ -39,17 +44,6 @@ type freeTextForm struct {
 	// the user was on — the agent may retarget it — and the point at which
 	// to notice that is before the call, not after.
 	projectName string
-
-	// busy is the model call in flight. The box stays on screen and keeps
-	// its text — the user is watching the sentence they wrote — but stops
-	// accepting edits, because the answer being computed is about the text
-	// as it was when they pressed enter.
-	busy bool
-
-	// status is the last failure, shown under the box. Set when a
-	// resolution came back with an error the user should see before the
-	// structured form opens under them.
-	status string
 }
 
 // freeTextAction is what an update tick tells the deck to do next.
@@ -131,8 +125,11 @@ func newFreeTextForm(initial, projectName string) (freeTextForm, tea.Cmd) {
 
 	form := huh.NewForm(
 		huh.NewGroup(
+			// No title. The card already says "New workspace" and names the
+			// project, and the field is the only thing under it — a prompt
+			// asking what you want to work on is a third line saying what the
+			// first two said, above the box you are trying to think in.
 			huh.NewText().
-				Title("What do you want to work on?").
 				CharLimit(0).
 				Lines(4).
 				ShowLineNumbers(false).
@@ -153,32 +150,12 @@ func (f freeTextForm) text() string {
 	return strings.TrimSpace(*f.textVal)
 }
 
-// startResolving moves the box into its in-flight state.
-func (f freeTextForm) startResolving() freeTextForm {
-	f.busy = true
-	f.status = ""
-	return f
-}
-
-// failed puts the box back in the user's hands with a reason.
-//
-// Used when a resolution comes back unusable but the deck wants the user to
-// read why before it moves them on.
-func (f freeTextForm) failed(msg string) freeTextForm {
-	f.busy = false
-	f.status = strings.TrimSpace(msg)
-	return f
-}
-
 // update routes a message into the box.
 //
-// Three things are handled before huh sees them. The submit key, because
-// the field is multi-line and huh has no notion of "this group is done"
-// short of moving off the field. The fallback key, because huh would
-// otherwise take ctrl+f as text. And every key at all while busy, because
-// the box is not accepting edits then — except esc, which abandons the
-// whole thing, since a person who has changed their mind during a slow call
-// should not have to wait for it.
+// Two keys are handled before huh sees them. The submit key, because the
+// field is multi-line and huh has no notion of "this group is done" short of
+// moving off the field. And the fallback key, because huh would otherwise
+// take ctrl+f as text.
 func (f freeTextForm) update(msg tea.Msg) (freeTextForm, tea.Cmd, freeTextAction) {
 	if f.form == nil {
 		return f, nil, freeTextActionNone
@@ -188,7 +165,7 @@ func (f freeTextForm) update(msg tea.Msg) (freeTextForm, tea.Cmd, freeTextAction
 		if key.Matches(keyMsg, freeTextFallbackKey) {
 			return f, nil, freeTextActionFallback
 		}
-		if !f.busy && key.Matches(keyMsg, freeTextSubmitKey) {
+		if key.Matches(keyMsg, freeTextSubmitKey) {
 			// An empty box is not a request. Rather than erroring at
 			// someone who pressed the key to see what it did, treat it as
 			// the question it probably is and open the form they can fill
@@ -198,22 +175,6 @@ func (f freeTextForm) update(msg tea.Msg) (freeTextForm, tea.Cmd, freeTextAction
 			}
 			return f, nil, freeTextActionSubmit
 		}
-		if f.busy {
-			switch keyMsg.String() {
-			case "esc", "ctrl+c":
-				return f, nil, freeTextActionCancel
-			}
-			return f, nil, freeTextActionNone
-		}
-	}
-	if f.busy {
-		// Non-key messages still reach huh — a resize has to re-lay the
-		// box out even while it is waiting.
-		m, cmd := f.form.Update(msg)
-		if updated, ok := m.(*huh.Form); ok {
-			f.form = updated
-		}
-		return f, cmd, freeTextActionNone
 	}
 
 	m, cmd := f.form.Update(msg)
@@ -238,11 +199,8 @@ func (f freeTextForm) update(msg tea.Msg) (freeTextForm, tea.Cmd, freeTextAction
 }
 
 // view renders the box in the deck's centered card, matching the structured
-// form it hands off to.
-//
-// spinnerGlyph is the deck's own spinner, passed in rather than kept here,
-// so the box animates on the same tick as everything else on screen.
-func (f freeTextForm) view(width, height int, spinnerGlyph string) string {
+// form it can hand off to.
+func (f freeTextForm) view(width, height int) string {
 	if f.form == nil {
 		return ""
 	}
@@ -258,7 +216,7 @@ func (f freeTextForm) view(width, height int, spinnerGlyph string) string {
 	b.WriteString("\n\n")
 	b.WriteString(f.form.WithWidth(freeTextFormWidth).View())
 	b.WriteString("\n")
-	b.WriteString(f.footer(theme, spinnerGlyph))
+	b.WriteString(f.footer(theme))
 
 	rendered := card.Render(b.String())
 	if width <= 0 || height <= 0 {
@@ -267,23 +225,12 @@ func (f freeTextForm) view(width, height int, spinnerGlyph string) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, rendered)
 }
 
-// footer is the one line under the box: what is happening, or what went
-// wrong, or which keys there are.
+// footer is the one line under the box: which keys there are.
 //
-// The in-flight line names the wait as work being done rather than showing
-// a bare spinner, because the box was instant a moment ago and a spinner
-// alone reads as a hang.
-func (f freeTextForm) footer(theme charm.Theme, spinnerGlyph string) string {
-	if f.busy {
-		glyph := strings.TrimSpace(spinnerGlyph)
-		if glyph != "" {
-			glyph += " "
-		}
-		return theme.Hint.Render(glyph + "thinking…  ·  esc  stop  ·  " + helpPair(freeTextFallbackKey))
-	}
-	if f.status != "" {
-		return theme.Error.Render(f.status)
-	}
+// There is no in-flight state to show any more. Submit closes the box, so
+// the spinner for what happens next belongs to the activity bar in the
+// deck the user is handed back to.
+func (f freeTextForm) footer(theme charm.Theme) string {
 	return theme.Hint.Render(helpPair(freeTextSubmitKey) + "  ·  " +
 		helpPair(freeTextEditorKey) + "  ·  " +
 		helpPair(freeTextFallbackKey) + "  ·  esc  cancel")

@@ -1093,8 +1093,8 @@ type Model struct {
 	newWorkspacePR int
 
 	// Free-text box. The front door to a new workspace: freeTextMode is
-	// true while it owns the screen, and it hands off to the
-	// new-workspace form above once its text has been resolved. Same
+	// true while it owns the screen, and it closes the moment the text is
+	// submitted — everything after that runs in the background. Same
 	// modal-state-inside-Model pattern as everything else here.
 	freeTextMode bool
 	freeTextForm freeTextForm
@@ -1102,6 +1102,19 @@ type Model struct {
 	// freeTextPR carries a PR pin across the box, the same way
 	// newWorkspacePR carries it across the form.
 	freeTextPR int
+	// freeTextPending is the resolutions still in flight, keyed by the text
+	// that was submitted — the same key IntentDoneMsg echoes back. It exists
+	// because the box closes at submit: the deck can no longer ask the open
+	// box whether an arriving answer is one it asked for, and there can be
+	// more than one in flight at a time.
+	//
+	// An answer with no entry here is dropped, so a duplicated or late
+	// reply cannot create a second workspace from one sentence.
+	freeTextPending map[string]pendingIntent
+	// freeTextRetry is text whose resolution failed, held for the next `n`
+	// to open with. Nothing was created and the box is long gone, so
+	// without this the sentence the user wrote is lost with the error.
+	freeTextRetry string
 
 	// Rename form. Same modal-state-inside-Model pattern as the
 	// new-workspace form.
@@ -3274,14 +3287,18 @@ func (m *Model) launchNewWorkspace(initial NewWorkspaceInitial, repo string) (te
 	if m.intentResolver == nil {
 		return m.launchNewForm(initial, repo)
 	}
-	return m.launchFreeTextForm("", initial.PRNumber, repo, initial.Project)
+	// A sentence whose resolution failed is offered back rather than
+	// retyped. Cleared on the way in so it is offered once.
+	retry := m.freeTextRetry
+	m.freeTextRetry = ""
+	return m.launchFreeTextForm(retry, initial.PRNumber, repo, initial.Project)
 }
 
 // launchFreeTextForm opens the box, optionally pre-filled.
 //
 // initial is non-empty when the box is being reopened with text already in
-// it — a resolution the user rejected, say — so that returning to it does
-// not mean retyping the sentence.
+// it — a resolution that failed, say — so that returning to it does not mean
+// retyping the sentence.
 func (m *Model) launchFreeTextForm(initial string, prNumber int, repo, projectName string) (tea.Model, tea.Cmd) {
 	m.active = nil
 	if strings.TrimSpace(repo) == "" {
@@ -3310,9 +3327,13 @@ func (m *Model) closeFreeText() {
 // dispatchFreeTextForm routes a message into the box and acts on what it
 // says.
 //
-// Submit starts the model call and leaves the box on screen in its busy
-// state; the answer arrives later as an IntentDoneMsg. Fallback and cancel
-// both close the box, the first into the structured form.
+// Submit closes the box and puts the whole flow — the model call and then
+// the create it leads to — in the background, behind one chip in the
+// activity bar. The point of typing a sentence instead of filling in a form
+// is to get back to what you were doing; a modal that then sits there
+// spinning through a model call and a jj workspace create gives that back.
+// Fallback and cancel both close the box too, the first into the structured
+// form.
 func (m Model) dispatchFreeTextForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	form, cmd, action := m.freeTextForm.update(msg)
 	m.freeTextForm = form
@@ -3352,59 +3373,80 @@ func (m Model) dispatchFreeTextForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}, repo)
 			return updated, batchCmds(cmd, formCmd)
 		}
-		m.freeTextForm = m.freeTextForm.startResolving()
-		// The spinner tick is bootstrapped here because the box may be the
-		// only thing on screen that is animating; without it the glyph sits
-		// still and the deck looks hung.
-		return m, batchCmds(cmd, m.spinner.Tick, m.intentResolver(form.text(), m.freeTextRepo))
+		text := form.text()
+		repo, pr := m.freeTextRepo, m.freeTextPR
+		m.closeFreeText()
+		m = m.trackIntent(text, pendingIntent{repo: repo, pr: pr})
+		m = m.startActivity(intentActivityID(text), "new workspace", 0)
+		// The spinner tick is bootstrapped here because the chip in the
+		// activity bar may be the only thing on screen that is animating;
+		// without it the glyph sits still and the work looks stalled.
+		return m, batchCmds(cmd, m.spinner.Tick, m.intentResolver(text, repo))
 	}
 	return m, cmd
 }
 
-// applyIntent is what happens when a resolution comes back.
+// pendingIntent is what the deck has to remember about a submitted
+// sentence in order to act on its answer after the box is gone: which
+// repository it was asked against, and any PR the workspace should be
+// pinned to.
+type pendingIntent struct {
+	repo string
+	pr   int
+}
+
+// intentActivityID keys the activity chip for one submitted sentence. The
+// text itself, so a second submission of the same sentence grows the
+// existing chip rather than stacking a duplicate beside it.
+func intentActivityID(text string) string {
+	return "workspace:intent:" + text
+}
+
+// trackIntent records a resolution the deck is waiting on.
+func (m Model) trackIntent(text string, p pendingIntent) Model {
+	if m.freeTextPending == nil {
+		m.freeTextPending = map[string]pendingIntent{}
+	}
+	m.freeTextPending[text] = p
+	return m
+}
+
+// applyIntent is what happens when a resolution comes back — by which
+// point the box has been closed for as long as the model call took, and the
+// user is somewhere else in the deck.
 //
-// It always ends in the structured form, pre-filled. That is the whole
-// design: the model chooses, the user confirms, and a failure is not a dead
-// end but the same form with the local fallback in it. The only difference
-// a failure makes is the status line explaining why the fields were guessed
-// rather than resolved.
+// A successful resolution creates the workspace, still in the background.
+// A failed one creates nothing: the fields are a local guess rather than an
+// answer — the sentence verbatim as the prompt, a slug of it as the name —
+// and a workspace built from a guess that nobody saw is one somebody has to
+// go and delete. So the failure lands on the status line, and the sentence
+// is held for the next `n` rather than thrown away with it. Nothing opens
+// under the user's hands.
 //
-// A resolution for text the box is no longer showing is dropped. The user
-// cancelled, or retyped and asked again; opening a form they did not ask
-// for would be worse than doing nothing.
+// An answer nobody is waiting on is dropped.
 func (m Model) applyIntent(msg IntentDoneMsg) (tea.Model, tea.Cmd) {
-	if !m.freeTextMode || msg.Text != m.freeTextForm.text() {
+	pending, ok := m.freeTextPending[msg.Text]
+	if !ok {
 		return m, nil
 	}
-	pr := m.freeTextPR
+	delete(m.freeTextPending, msg.Text)
+	// Dropped rather than finished: a `✓ new workspace` flash would be a lie
+	// on the success path, where the workspace is only now being created and
+	// the create's own chip and optimistic row take over from here.
+	m = m.dropActivity(intentActivityID(msg.Text))
+
 	repo := strings.TrimSpace(msg.Intent.RepoRoot)
 	if repo == "" {
-		repo = m.freeTextRepo
+		repo = pending.repo
 	}
-	m.closeFreeText()
 
-	// A failed resolution is the one case that still stops for the user.
-	// The fields are a local guess rather than an answer — the sentence
-	// verbatim as the prompt, a slug of it as the name — and creating a
-	// workspace from a guess without showing it is how you end up deleting
-	// one. So the failure path opens the form, pre-filled, with the reason
-	// on the status line.
 	if msg.Err != nil {
-		updated, cmd := m.launchNewForm(NewWorkspaceInitial{
-			Name:     msg.Intent.Name,
-			Label:    msg.Intent.Label,
-			Prompt:   msg.Intent.Prompt,
-			Project:  msg.Intent.Project,
-			PRNumber: pr,
-		}, repo)
-		if mm, ok := updated.(Model); ok {
-			mm.status = msg.Err.Error()
-			return mm, cmd
-		}
-		return updated, cmd
+		m.freeTextRetry = msg.Text
+		m.status = msg.Err.Error()
+		return m, nil
 	}
 
-	return m.createFromIntent(msg.Intent, repo, pr)
+	return m.createFromIntent(msg.Intent, repo, pending.pr)
 }
 
 // createFromIntent creates the workspace the resolution describes, with no
@@ -4611,7 +4653,7 @@ func (m Model) view() string {
 		return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 	}
 	if m.freeTextMode {
-		return m.freeTextForm.view(m.width, m.height, m.spinner.View())
+		return m.freeTextForm.view(m.width, m.height)
 	}
 	if m.newWorkspaceMode {
 		// Render the inline new-workspace form across the entire
