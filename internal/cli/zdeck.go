@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/andrewcohen/awp/internal/config"
 	"github.com/andrewcohen/awp/internal/deckui"
 	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -65,6 +66,71 @@ var panes = map[string]paneSpec{
 	// to a temp path opens that build's watch view and not an older install's.
 	deckui.PaneKindWatch: {"watch", ephemeral, func(deckui.Item) []string { return []string{awpSelf(), "watch"} }},
 	"":                   {"shell", ephemeral, func(deckui.Item) []string { return fields(envOr("SHELL", "sh")) }},
+	// The captain, and long-lived for the reason the agent is: it is a
+	// conversation, and one you come back to. An ephemeral captain would forget
+	// what you asked it between glances, which is most of what makes it useful.
+	deckui.PaneKindCaptain: {"captain", longLived, func(deckui.Item) []string { return captainAgentArgv() }},
+}
+
+// captainAgentArgv is the captain's agent, launched from the global config.
+//
+// A third agent launch beside codingAgentArgv and reviewAgentArgv, and it has to
+// be: the coding one appends the dev-loop preamble, which tells an agent to work in
+// units, run gates and commit — the captain has no repository to do any of that in,
+// so it would be instructions about a place that does not exist. The reviewer's is
+// closer but still wrong, being about reading someone else's change.
+//
+// config.AgentInvocation("") rather than a repo's: there is no repo, so the answer
+// comes from the global config alone.
+func captainAgentArgv() []string {
+	return fields(config.AgentInvocation(""))
+}
+
+// captainDir is where the captain's agent runs: a directory awp owns, under
+// ~/.awp.
+//
+// It needs *a* directory — a process has a cwd whether or not anyone chose one —
+// and every other candidate is worse. awp's own cwd would put the captain in
+// whichever repo the deck was launched from, which is the exact confusion the
+// captain is meant not to have; $HOME would let it wander into any project by
+// accident. A directory of its own is also somewhere its preamble can live.
+//
+// Created on demand rather than at startup: a deck that never presses `a` should
+// not leave a directory behind.
+func captainDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("open the captain: no home directory to run it in: %w", err)
+	}
+	dir := filepath.Join(home, ".awp", "captain")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("open the captain: create %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// paneDir is where a pane's process runs.
+//
+// For every kind but the captain that is the workspace's working copy, and there is
+// no fallback: the previous `if dir == "" { dir = item.RepoRoot }` is what made a
+// wrong directory silent instead of an error, and a program started in the source
+// repo instead of the workspace looks entirely normal until you read what it wrote.
+// The two rows that reach here without a Path are a workspace still being created
+// (#243 stops that upstream) and an unmanaged row, which under a pane host is a
+// leftover tmux session a zmx pane has no business guessing about.
+//
+// The captain is the exception because it is not a workspace at all. It is the one
+// pane whose directory is awp's own rather than a row's, so it is the one pane for
+// which an empty Path is correct rather than a symptom.
+func paneDir(item deckui.Item, kind string) (string, error) {
+	if kind == deckui.PaneKindCaptain {
+		return captainDir()
+	}
+	dir := strings.TrimSpace(item.Path)
+	if dir == "" {
+		return "", fmt.Errorf("open the %s pane for %q: the workspace has no working copy on disk yet — wait for it to finish setting up, or press enter to create it", deckui.PaneLabel(kind), item.WorkspaceName)
+	}
+	return dir, nil
 }
 
 // awpSelf is the awp binary to spawn for awp's own subcommands.
@@ -334,21 +400,14 @@ func (z zmxPanes) deliverPending(item deckui.Item, name string, argv []string, p
 }
 
 func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func(), error) {
-	// No fallback. A pane's directory is the workspace's working copy or it is
-	// nothing — the previous `if dir == "" { dir = item.RepoRoot }` is what made
-	// a wrong directory silent instead of an error, and a program started in the
-	// source repo instead of the workspace looks entirely normal until you read
-	// what it wrote. The two rows that reach here without a Path are a workspace
-	// still being created (#243 stops that upstream) and an unmanaged row, which
-	// under a pane host is a leftover tmux session a zmx pane has no business
-	// guessing about.
-	//
 	// Asked before the kind is resolved, because a row with no working copy has
 	// nowhere to run anything and that is the more useful thing to say — it holds
-	// for every kind, including one the config turns out not to name.
-	dir := strings.TrimSpace(item.Path)
-	if dir == "" {
-		return nil, nil, fmt.Errorf("open the %s pane for %q: the workspace has no working copy on disk yet — wait for it to finish setting up, or press enter to create it", deckui.PaneLabel(kind), item.WorkspaceName)
+	// for every kind, including one the config turns out not to name. See paneDir
+	// for why there is no fallback, and for the captain, which is the one kind
+	// whose directory is not a row's.
+	dir, err := paneDir(item, kind)
+	if err != nil {
+		return nil, nil, err
 	}
 	spec, err := z.specFor(item, kind)
 	if err != nil {
@@ -360,7 +419,15 @@ func (z zmxPanes) Open(item deckui.Item, kind string, _, _ int) (*exec.Cmd, func
 	// which workspace it belongs to, and every awp hook opens by asking (see
 	// agenthooks.InAwpWorkspace) — without it a hosted agent reports no status,
 	// so the deck shows it idle forever, and records no gates.
-	env := append(os.Environ(), workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)...)
+	//
+	// Withheld from the captain, which is not a workspace: AWP_WORKSPACE=captain
+	// would have every hook the captain's agent triggers record status and gates
+	// against a workspace no state file has an entry for. The captain is supposed
+	// to be the one agent nothing on the deck is watching.
+	env := os.Environ()
+	if kind != deckui.PaneKindCaptain {
+		env = append(env, workspaceEnvPairs(item.ProjectName, item.WorkspaceName, item.RepoRoot)...)
+	}
 
 	if spec.lifetime == ephemeral {
 		// Nothing to keep, nothing to restore.

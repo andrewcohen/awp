@@ -556,7 +556,7 @@ func (m *Model) resumePane() (tea.Cmd, bool) {
 		return nil, false
 	}
 	if !m.lastPane.set() {
-		m.status = "no pane to go back to yet — open one first (a agent, e editor, v vcs, s shell)"
+		m.status = "no pane to go back to yet — open one first (enter agent, e editor, v vcs, s shell)"
 		return nil, true
 	}
 	return m.reopenPane(m.lastPane)
@@ -580,7 +580,7 @@ func (m *Model) alternatePane() (tea.Cmd, bool) {
 			// thing to say is which key does have somewhere to go.
 			m.status = "only one pane so far — " + PaneLeaveKey + " goes back to " + m.lastPane.label()
 		} else {
-			m.status = "no pane to switch to yet — open one first (a agent, e editor, v vcs, s shell)"
+			m.status = "no pane to switch to yet — open one first (enter agent, e editor, v vcs, s shell)"
 		}
 		return nil, true
 	}
@@ -789,6 +789,7 @@ func panePrefixMenu(m *Model) deckMenu {
 	verbs := splitKindVerbs(func(label string) string { return "split, with " + label + " beside this" })
 	verbs = append(verbs,
 		[2]string{alternateKey, "go to the arrangement before this one"},
+		captainVerb(),
 		sidebarVerb(m.sidebar),
 		menuCancelVerb,
 	)
@@ -815,6 +816,8 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		m.toggleSidebar()
 	case alternateKey:
 		return m.alternateFrom(func() tea.Cmd { return p.close(m) })
+	case captainKey:
+		return m.captainFrom(func() tea.Cmd { return p.close(m) })
 	}
 	return nil
 }

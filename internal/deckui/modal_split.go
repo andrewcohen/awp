@@ -83,6 +83,7 @@ func splitPrefixMenu(m *Model) deckMenu {
 	})...)
 	verbs = append(verbs,
 		[2]string{alternateKey, "go to the arrangement before this one"},
+		captainVerb(),
 		sidebarVerb(m.sidebar),
 		menuCancelVerb,
 	)
@@ -126,6 +127,11 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case alternateKey:
 		return m.alternateFrom(func() tea.Cmd { return s.close(m) })
+	case captainKey:
+		// Takes the whole split down, both halves. The captain is a place you go
+		// rather than a half you add: it is about no workspace, so it has no
+		// business sitting beside one workspace's agent.
+		return m.captainFrom(func() tea.Cmd { return s.close(m) })
 	}
 	// Anything else — esc included — cancels, having consumed the key. It does
 	// not fall through to the focused program: a mistyped verb typing itself at
