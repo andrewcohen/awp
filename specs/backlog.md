@@ -1,34 +1,199 @@
-# TODO (Later)
+# Backlog
 
-## State / Data Model
-- [ ] Use a canonical shared-repo identity for global state keys (not workspace-root paths).
-- [ ] Add migration to merge duplicate repo buckets in `~/.awp/workspace-state.json`.
-- [ ] Add optional state cleanup command (e.g., `awp state gc` or `awp w gc-state`).
+Everything the task list is holding that is not being worked on right now, with
+enough context to pick one up cold. It lives in `specs/` because that is where this
+repo keeps the reasoning behind decisions, and most of these entries are a decision
+someone has to make before there is code to write.
 
-## Workspace UX
-- [ ] Consider multi-repo listing support (`awp w list --all`, `--repo <path>`).
-- [ ] Consider `awp w info --all` view for cross-project diagnostics.
-- [ ] When building a future awp UI / agent-deck, add first-class agent attention notifications (done/waiting for user, blocked on approval, errored, and background-session needs-attention states) owned by awp instead of ad hoc pi extensions.
+**Not in here: `awp ship` and the repo-level ship style (#376).** That is next, so it
+stays a live item rather than a filed one.
 
-## Deck Imports
-- [ ] `awp tmux-import [--apply] [--rename-agent]`: scans all tmux windows, finds ones whose cwd matches a known awp workspace path (longest-prefix), moves them into the proper `[awp]<repo>__<workspace>` session (creates if missing). Optionally renames the first moved window to `agent`. Dry-run by default.
-- [ ] `awp repo-import [--default <name>]` (name TBD): adopt a repo as awp-managed when no secondary workspaces exist yet — records the primary jj workspace under the canonical source-repo key in state so it appears in the deck. Does NOT run `jj workspace add`. Default workspace name `default` (or CLI flag).
+An entry is a *problem*, not a design. Where the design is already settled the entry
+says so; where it is not, the entry says what the open question is, because that is
+the part that is expensive to reconstruct.
 
-## Deck Theming
-- [ ] Add first-class deck theming with a cohesive palette (target: Catppuccin Macchiato), and apply consistent semantic colors across list rows, status, hints, and details panes.
+---
 
-## Deck Commands
-- [ ] Extend `.awp/config.json` with `commands: [{name, run}]`; per-command tmux window named `<name>` in workspace session.
-- [ ] Built-in defaults merged by name (user wins): `agent` (interactive), `codereview` (`tuicr -r main..@`).
-- [ ] Deck UX: list commands in details pane, picker key (`c`) or digit shortcuts; keep `l`/`t` as aliases for `logs`/`tests` if defined.
-- [ ] Focus existing window vs force-rerun policy (force-rerun key TBD).
+## The sidebar
 
-## CLI Ergonomics
-- [ ] Add shell completion command/install flow (`awp completion ...`, optional `install`).
-- [ ] Add machine-readable output mode for list/info (e.g., `--json`).
-- [ ] Consider migrating CLI parsing to Cobra once command surface grows further (doctor + workspace subcommands are increasing complexity).
+Three of the four sidebar items landed (#365 sections, #367 spacing, #388 labels,
+#389 drag-resize, #384 click). What is left is the keyboard and the grouping.
 
-## Quality / Ops
-- [ ] Upgrade Go toolchain to 1.26.2 (go.mod + CI/dev environment alignment).
-- [ ] Add integration tests covering real jj workspace flows across multiple workspaces.
-- [ ] Add regression tests for global-state key stability across workspace roots.
+### #350 — the sidebar is somewhere you can go, not just something you can see
+
+The strip has no cursor. #384 gave it a mouse target, and that was the cheap half on
+purpose: a click carries its own target, so it needs no answer to the focus question.
+The keyboard does. With a pane, a split half and a strip on screen at once, "where do
+the keys go" has three answers and the arrangement verbs behind `ctrl+b` (`h` / `l` /
+`tab`) currently address two regions.
+
+What it needs, in order: a focus model that says how you get into the strip and back
+out; a cursor with the design system's selection treatment (`┃ ` + `Warning` bold),
+which costs the two columns `sidebarRow` currently spends on nothing — see the note
+at the end of that function, which reserved them for exactly this; and a decision
+about whether the strip's cursor and the row list's cursor are one thing or two.
+
+### #391 — the pinned section collapses every register into one heading
+
+The row list sections pins **by register**, with `state.PinGroupAliases` naming them.
+The strip has one flat `pinned` heading holding all of them, so the grouping that
+registers exist to create is lost exactly where you are most likely to be looking for
+it.
+
+Open question, and the reason this is not just a loop change: the strip is 20–60
+columns and a heading costs a row. Several one-member registers would spend most of
+the section's height on headings. A single-member unnamed register may be better folded
+into its row than given a heading — but that is a judgement to make looking at a real
+deck, not in the abstract.
+
+---
+
+## The captain
+
+The captain shipped end to end (#372–#383, #386, #387, #390). Two follow-ons.
+
+### #385 — the captain belongs in a ~70% modal, not a full-screen pane
+
+Everything else full-screen in awp is a workspace's program. The captain is not a
+workspace — it has no repository — so wearing the same chrome says it is one. A modal
+would say "this is awp talking to you" instead.
+
+**Blocked on two answers:**
+
+1. **Does the sidebar stay visible beside it?** Lean yes — the sidebar is the thing
+   you would most want to check the captain's claims against.
+2. **70% of both dimensions, or wider than tall?** Lean 80% wide × 60% tall, with a
+   floor, since the captain's output is prose and prose wants width more than height.
+
+### #377 — `A` sends a message to the captain, carrying the current project
+
+Today reaching the captain means going to it. `A` from a row would send a message with
+the row's project already filled in, which is the common case: you are looking at a
+project and want the captain to do something about it.
+
+Depends on nothing, but reads better after #385 — a message sent to a modal has a
+place to land.
+
+### #370 — the captain umbrella
+
+Kept open as the umbrella. The deferred piece inside it is **the message log**: every
+communication persisted and browsable. Cut from v1 deliberately ("i think the captain
+doesnt need the message yet?"), and the spec records why. Reopen when one-way `send`
+starts hurting — the captain can talk to an agent but an agent cannot answer, which is
+the one real gap in the control surface.
+
+---
+
+## The zdeck cutover
+
+### #245 — `awp deck` becomes zdeck
+
+The big one. zdeck hosts its own panes and needs no multiplexer above it; `awp deck`
+still hands off to tmux. Everything below is a thing the cutover either has to answer
+or can drop.
+
+### #206 — decide what `C`, `p D` and CI do with no tmux
+
+These three open tmux windows. Under a pane host there is no other client to hand off
+to. Each needs to become a pane kind, become a modal, or go. Not a code task until
+that call is made.
+
+### #226 — the `?` help and README describe tmux semantics zdeck does not have
+
+Documentation debt that becomes user-facing wrongness at cutover.
+
+### #266 — rename orphans every session but the agent's
+
+`rename` moves the agent's zmx session and leaves every other kind (shell, dev server,
+vcs) under the old name, where nothing will ever reap them. #249 fixed the agent's
+case; this is the same bug for the rest.
+
+### #267 — start a long-lived action without opening its pane
+
+A dev server you want running but not looking at. Today starting one means opening its
+pane and leaving.
+
+### #364 — a pane nudges its size once, so a re-attached program reflows
+
+A program that was laid out for a different width does not redraw until something makes
+it. One synthetic resize on attach fixes it. Small, self-contained, no open questions.
+
+### #341 — the diff half persists instead of being torn down
+
+Rebuilding a diff on every split re-reads and re-highlights the whole change, which is
+the expensive path. Keeping it costs memory and a staleness question.
+
+### #237 — typing latency in a pane, worst in nvim
+
+Measured, not diagnosed. nvim is the worst case because it redraws most per keystroke.
+Needs a profile before a fix.
+
+---
+
+## The review and diff surfaces
+
+### #57 — suggest mode: send the agent your edit, not prose about it
+
+The peer of commenting. Instead of describing a change, you edit the text and the agent
+gets the diff. Comment mode says what is wrong; suggest mode says what it should be,
+and a diff is unambiguous where prose is not.
+
+### #107 — review tour: a guided walkthrough of a change
+
+The author says "read these files in this order, and here is why" and the reviewer
+follows it. A stack of commits already implies an order; this makes it explicit and
+navigable.
+
+### #150 — draft and edit the PR title and description from the diff view
+
+You have just read the change. That is the moment you know what the description should
+say, and the moment you are furthest from a browser.
+
+### #68 — render GitHub-flavored markdown in comments, starting with details/summary
+
+Mirrored threads arrive as GFM. `<details>` is the case that matters, because a
+collapsed block rendered as literal HTML is worse than either rendering or hiding it.
+
+### #295 — the approval prompt should point at the proposal, not echo it
+
+Deliberately parked until there is something to point at: it needs the proposal to have
+a stable on-screen location first.
+
+---
+
+## Bigger ideas, no design yet
+
+### #356 — a workspace is in builder mode or reviewer mode, and the mode is what surfaces ask
+
+Today "is this a review workspace" is inferred in several places from several signals
+(a `pr-N-` name, a parked reviewer brief, a pinned PR). One stored mode, asked rather
+than inferred, is the same shape as the explicit-target rule the captain's CLI follows:
+one spelling, in the place it cannot be forgotten.
+
+### #358 — a shell pane can be kept, as a named long-lived task
+
+Shell panes are ephemeral. Sometimes one is a job you want to come back to. Overlaps
+#267 — both want "a long-lived thing that is not the agent" to be first-class.
+
+### #238 — `awp verify`: an agent's work comes with proof it works
+
+An agent says it is done. The evidence is scattered across a transcript. `verify` would
+make the proof an artifact of the work rather than something you reconstruct.
+
+### #239 — awp task manager
+
+Unspecified. Note the finding from #242's research: across 151 transcripts agents did
+essentially no structured planning (0 TodoWrite, ~0 ExitPlanMode) — planning is an
+organic read-only phase, which is evidence against a task artifact agents are expected
+to maintain.
+
+### #242 — a meta agent that can drive awp
+
+Largely delivered by the captain (#370). Keep as the place the next round of "what
+should an agent driving awp be able to do" goes — the current answer is five write
+verbs plus attention, and the boundary is written down in the captain's preamble.
+
+### #154 — `v` opens jjui in-deck, `V` opens it as a window
+
+jjui in a pane works today. This is about which key means which, and it is the kind of
+thing to decide alongside the cutover (#245) rather than on its own.
