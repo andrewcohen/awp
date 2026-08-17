@@ -92,6 +92,24 @@ The big one. zdeck hosts its own panes and needs no multiplexer above it; `awp d
 still hands off to tmux. Everything below is a thing the cutover either has to answer
 or can drop.
 
+### #395 — open on the workspace you were last in, not the row list
+
+Launching the deck drops you on the row list every time, though the deck already knows
+which arrangement you were last in: `paneArrangement` is persisted for `ctrl+\` and `L`
+(#327, #359, #360). The information is there and startup does not use it. Open straight
+into it, and let `ctrl+\` be the way *out* to the list rather than the way in.
+
+Three things to settle first:
+
+- **The escape hatch.** A workspace whose agent has since died, or one that was
+  deleted, must not make the deck unopenable. Falling back to the row list covers both,
+  but deliberately rather than by accident.
+- **Does `--scope=…` mean "show me the list"?** A flag about which slice of the list to
+  show reads like an instruction to show the list.
+- **Preference or unconditional?** The sidebar and the split fraction both got a saved
+  flag. The counter-argument is that opening where you left off is simply what resume
+  means, and does not need a switch.
+
 ### #206 — decide what `C`, `p D` and CI do with no tmux
 
 These three open tmux windows. Under a pane host there is no other client to hand off
