@@ -430,7 +430,22 @@ func (m Model) sidebarRow(v deckdata.View, it Item, width int) []string {
 // And a `pr-128-…` prefix goes, because the number is on the line below. The name
 // carried it, the meta line carried it, and the strip is 36 columns wide — it was
 // spending eight of them on a field it then repeated.
+// A display label wins over all of it, and over the two rules below.
+//
+// Both of those rules are guesses at what a name is trying to say — that `default`
+// means the project, that a `pr-128-` prefix is noise the line below already carries.
+// A label is not a guess: someone said what this row is. Overriding it with either
+// rule would mean the strip and the row list calling the same workspace two things,
+// which is worse than either name alone.
+//
+// The row list's DisplayLabel prefers a PR title when there is no label; this
+// deliberately does not. The strip is 36 columns and its second line already carries
+// the PR number, so a title here would spend the width twice — see the note above
+// about the `pr-` prefix, which is the same argument.
 func sidebarLabel(it Item) string {
+	if label := strings.TrimSpace(it.DisplayName); label != "" {
+		return label
+	}
 	name := strings.TrimSpace(it.WorkspaceName)
 	if name == "default" {
 		if p := strings.TrimSpace(it.ProjectName); p != "" {

@@ -695,6 +695,36 @@ func TestAPRWorkspaceDropsTheNumberFromItsName(t *testing.T) {
 	}
 }
 
+// TestALabelWinsOverEveryGuessAboutTheName.
+//
+// The strip's two other rules — `default` means the project, a `pr-128-` prefix is
+// noise — are guesses at what a name is trying to say. A label is not a guess:
+// someone said what this row is. Letting either rule override it would have the strip
+// and the row list calling one workspace two things, which is worse than either name
+// alone and is the defect this closes.
+func TestALabelWinsOverEveryGuessAboutTheName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		it   Item
+	}{
+		{"over a plain name", Item{WorkspaceName: "fix-badge-refresh-2", DisplayName: "make the badge stop lying"}},
+		{"over the default rule", Item{WorkspaceName: "default", ProjectName: "awp", DisplayName: "make the badge stop lying"}},
+		{"over the pr- prefix rule", Item{WorkspaceName: "pr-128-refactor-parser", DisplayName: "make the badge stop lying"}},
+	} {
+		if got := sidebarLabel(tc.it); got != "make the badge stop lying" {
+			t.Errorf("%s: the strip reads %q, want the label", tc.name, got)
+		}
+	}
+}
+
+// And a whitespace label is no label, so a row cannot be labelled blank — which would
+// read as the strip having lost the workspace rather than as an empty label.
+func TestAWhitespaceLabelLeavesTheNameAlone(t *testing.T) {
+	if got := sidebarLabel(Item{WorkspaceName: "ws", DisplayName: "   "}); got != "ws" {
+		t.Errorf("the strip reads %q, want the workspace name", got)
+	}
+}
+
 // TestTheBookmarkIsDroppedWhenItIsTheNameAgain, which on a real deck is most rows:
 // a workspace named after its branch put `andrew/refactor-parser` under
 // `refactor-parser`, line after line.

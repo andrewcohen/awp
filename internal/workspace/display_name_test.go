@@ -28,8 +28,12 @@ func TestOnlyRenderersMentionDisplayName(t *testing.T) {
 	allowed := map[string]string{
 		// Where it is declared, on the entry and on the list row.
 		"internal/workspace/service.go": "declares the field, and SetDisplayName writes it",
-		// The one place that turns a row into the text on screen.
-		"internal/deckdata/view.go": "DisplayLabel — the single renderer",
+		// The two places that turn a row into text on screen. Two rather than one
+		// because the strip answers the question differently: DisplayLabel falls back
+		// to the PR title, and sidebarLabel deliberately does not, since at 36 columns
+		// the line below already carries the PR number.
+		"internal/deckdata/view.go":  "DisplayLabel — the row list's renderer",
+		"internal/deckui/sidebar.go": "sidebarLabel — the strip's renderer",
 		// The read model's row type carries it to that renderer.
 		"internal/deckdata/types.go": "declares it on the row",
 		// Populating a row from the store, and the two verbs that set it.
