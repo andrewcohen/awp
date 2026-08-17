@@ -87,6 +87,9 @@ func TestTheSidebarGivesTheColumnsBack(t *testing.T) {
 // answer twice, in the narrower of the two.
 func TestTheSidebarIsNotUpOverTheRowList(t *testing.T) {
 	m, _ := sidebarPane(t)
+	// Twice: with the strip up the leave key is a cycle, and the strip is its middle
+	// stop (#350). See TestTheLeaveKeyCyclesPaneSidebarDeck.
+	m = pressDeck(t, m, leaveKey())
 	m = pressDeck(t, m, leaveKey())
 	if m.active != nil {
 		t.Fatalf("the leave key left %T open", m.active)
@@ -106,6 +109,8 @@ func TestTheSidebarIsNotUpOverTheRowList(t *testing.T) {
 // waiting", which does not change when you switch what you are working in.
 func TestTheSidebarStaysOnAcrossPanes(t *testing.T) {
 	m, _ := sidebarPane(t)
+	// Pane → sidebar → deck, then back in. See TestTheSidebarIsNotUpOverTheRowList.
+	m = pressDeck(t, m, leaveKey())
 	m = pressDeck(t, m, leaveKey())
 	m = pressDeck(t, m, resumeKey())
 	if _, ok := m.active.(*panePopover); !ok {
@@ -635,9 +640,10 @@ func TestTheSidebarCountsEveryWorkspaceNotTheScope(t *testing.T) {
 // terminal default is a difference you have to hunt for. A band you cannot miss, and
 // it costs no column.
 //
-// #350 puts a real cursor in here and a cursor does earn the bar back — the selection
-// treatment is `┃ ` plus Warning — which is why the band takes the background and
-// leaves that alone. They are two claims about a row, usually about different rows.
+// #350 put a real cursor in here, and the same column argument kept the bar out of it:
+// the cursor is the name in Warning + bold and nothing else. That is why the band takes
+// the *background* — the two marks are two claims about a row, usually about different
+// rows, and they have to be legible on the row where both are true.
 func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 	m, p := sidebarPane(t)
 	v := m.sidebarView()

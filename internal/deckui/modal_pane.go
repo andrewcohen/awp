@@ -400,6 +400,11 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 	if m.panes == nil || !m.panes.Describes(kind) {
 		return nil, nil, false
 	}
+	// Opening a program is going into it, so the keyboard leaves the strip. Every
+	// pane the deck opens is built here, including from a key pressed on the strip
+	// itself — which is the whole point of #350, and would otherwise start a pane
+	// whose keys were still being read by the sidebar in front of it.
+	m.sidebarFocus = false
 	handover := os.Getenv(PaneExecEnv) != ""
 	// A handed-over pane is the whole terminal, so there is no size it does not
 	// fit. The emulated one has to leave room for its own chrome.
@@ -776,6 +781,17 @@ func PaneLabel(kind string) string {
 // back on is whatever it was when you opened the pane, until the next poll —
 // so leaving a pane looked like status had stopped updating.
 func (p *panePopover) close(m *Model) tea.Cmd {
+	// The strip renders only over a hosted program, so a pane going away takes the
+	// surface the keyboard was on with it — whether it went because ctrl+\ walked
+	// the cycle or because the program inside it exited on its own.
+	m.sidebarFocus = false
+	if m.overlayHost == p {
+		// It closed while something was floating over it — the program inside exited
+		// under a confirm. Forgetting it here is what stops restoreOverlayHost from
+		// putting a dead pane back on screen when the confirm goes.
+		m.overlayHost = nil
+		m.overlayReturns = false
+	}
 	_ = p.term.Close()
 	if p.restore != nil {
 		p.restore()
@@ -863,7 +879,15 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	p.prefixArmed = false
 	m.status = ""
 	if kind, ok := splitKindFor(msg.String()); ok {
-		return p.splitWith(m, kind)
+		item, ok := m.topRowRow()
+		if !ok {
+			// The pane outlived its row — a workspace deleted while you were inside
+			// it. The pane is still usable; there is just nothing to resolve a second
+			// program against.
+			m.status = "split: this pane's workspace is not on the deck any more"
+			return nil
+		}
+		return p.splitWith(m, item, kind)
 	}
 	if msg.String() == userActionsMenuKey {
 		if actions := m.userActionsFor(); len(aliasLookup(actions)) > 0 {
@@ -903,7 +927,12 @@ func (p *panePopover) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if ua.Background {
 		return startBackgroundAction(m, ua.Name)
 	}
-	return p.splitWith(m, PaneKindForAction(ua.Name))
+	item, ok := m.topRowRow()
+	if !ok {
+		m.status = "split: this pane's workspace is not on the deck any more"
+		return nil
+	}
+	return p.splitWith(m, item, PaneKindForAction(ua.Name))
 }
 
 // splitWith puts kind beside this pane, in the right half.
@@ -922,20 +951,19 @@ func (p *panePopover) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 //
 // The reused pane needs no resize here. renderPopover asks its terminal for the box
 // it is handed, so the next frame is what moves the pty to half the width.
-func (p *panePopover) splitWith(m *Model, kind string) tea.Cmd {
+//
+// item is which row the split is of, and it is an argument because there are two
+// answers: the pane's own row for a window key pressed inside it, and the row under
+// the sidebar's cursor for one pressed on the strip. It used to be read from
+// m.topRowRow() in here, which is exactly the shape of ambient state this codebase
+// keeps turning into a required argument — the strip would have been a second caller
+// with no way to say what it meant.
+func (p *panePopover) splitWith(m *Model, item Item, kind string) tea.Cmd {
 	full := m.childBox()
 	if !splitFits(full) {
 		// The floor is a pane, so the number that matters is the pane's minimum, and it
 		// is per half rather than for the terminal.
 		m.status = fmt.Sprintf("split: this terminal is %d columns, %d needed for two panes", full.w, 2*(paneMinW+paneChromeW))
-		return nil
-	}
-	item, ok := m.topRowRow()
-	if !ok {
-		// The pane outlived its row — a workspace deleted while you were inside it.
-		// The pane is still usable; there is just nothing to resolve a second program
-		// against.
-		m.status = "split: this pane's workspace is not on the deck any more"
 		return nil
 	}
 	if p.kind != PaneKindAgent {
@@ -1008,6 +1036,9 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 				// close, so a repeat that gets through flaps between the two (#307),
 				// and passing it to the program means holding the key sprays it at
 				// whatever is running.
+				return nil
+			}
+			if m.enterSidebarFromPane() {
 				return nil
 			}
 			return p.close(m)

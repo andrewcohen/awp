@@ -36,13 +36,22 @@ import (
 // it": chrome that appears a handful of times may carry a hue, and anything that
 // appears once per row may not.
 //
-// It reads and does nothing. There is no cursor in it, so no key moves one, so
-// the arrangement verbs behind ctrl+b still address two halves rather than three
-// regions — `h` / `l` / `tab` mean what they meant. A row you want to act on is
-// two keys away (ctrl+\ to the deck, and the row is under the cursor there), and
-// a sidebar that took the keyboard would have to answer what focus means with a
-// pane, a split half and a strip on screen at once. That is a bigger question
-// than "which of these wants me", which is the one it was opened for.
+// **It is somewhere you can go.** It has a cursor, and every key that works on a
+// deck row works on the row under it — the strip is not a second, weaker list with a
+// subset of verbs but the deck's own row list in a narrow column.
+//
+// It was read-only first, and the thing that blocked the keyboard was focus: a
+// pane, a split half and a strip on screen at once, and no obvious answer to which
+// of them the keys belong to. What dissolved it was making the door a cycle rather
+// than a mode. ctrl+\ already means "somewhere else"; it now means it three times —
+// pane → sidebar → deck → pane — so there is no mode to be in that one press does
+// not leave, and nothing new to learn. See sidebar_cursor.go, which is the whole of
+// the keyboard's half.
+//
+// The arrangement verbs behind ctrl+b still address two halves rather than three
+// regions: `h` / `l` / `tab` mean what they meant, and ctrl+b from the strip is
+// forwarded to the arrangement, because the strip belongs to the deck rather than to
+// what is beside it.
 //
 // It is a property of the deck rather than of the arrangement (see
 // paneArrangement, which remembers what programs were on screen): the answer to
@@ -259,6 +268,38 @@ func (m Model) renderSidebar(b box) string {
 // changed is who draws those columns.
 var sidebarGutter = strings.Repeat(" ", sidebarPadX)
 
+// The cursor wears no `┃` bar here, which is the one place the strip departs from the
+// design system's selection treatment.
+//
+// The bar costs a column ahead of the status dot on *every* line — a header that
+// skipped the slot would sit two columns left of the names under it — so the whole
+// strip pays two of its 36 columns for a mark that only one row at a time wears. On a
+// list where names are already truncating, that is the wrong trade: the bar's job is
+// to be findable at a glance down a wide screen, and this list is narrow enough that
+// a hue does it alone.
+//
+// So the cursor is the name in `Warning` + bold, which is the other half of the same
+// treatment, and the band still means "the workspace you are in". Two marks, two
+// facts, no columns.
+//
+// sidebarHasCursor reports whether the strip's cursor is on a row at all.
+//
+// The cursor is held as the row itself rather than as an index, because the strip's
+// order is not the row list's — it is scope-all, unfiltered, and partitioned into
+// bands — so an index shared between the two would name a different workspace on
+// each. An identity survives the poll that re-bands a row, which is the same
+// argument keepCursorOn makes about the row list.
+//
+// A virtual row has no workspace name and is still a row, so it answers on Virtual.
+func (m Model) sidebarHasCursor() bool {
+	return m.sidebarCursor.Virtual || strings.TrimSpace(m.sidebarCursor.WorkspaceName) != ""
+}
+
+// sidebarOnCursor reports whether this row is the one the strip's keys point at.
+func (m Model) sidebarOnCursor(it Item) bool {
+	return m.sidebarHasCursor() && sameRow(m.sidebarCursor, it)
+}
+
 // sidebarLines lays the strip out: every line it will draw, each tied to the row it
 // came from.
 //
@@ -328,15 +369,63 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 	if len(lines) == 0 {
 		text(m.styles.Muted.Render("no workspaces"))
 	}
-	// Overflow is a count rather than a scroll: nothing can move a cursor in here,
-	// so a viewport would be a scrollable region with no key that scrolls it. The
-	// number is the honest thing to say instead of a list that silently stops.
-	if len(lines) > avail {
-		hidden := len(lines) - avail
-		lines = lines[:max(0, avail-1)]
-		text(m.styles.Muted.Render("+" + strconv.Itoa(hidden+1) + " more"))
+	if len(lines) <= avail {
+		return lines
 	}
-	return lines
+	// The strip scrolls now, because the cursor can walk off the bottom of it. What
+	// it scrolls by is the cursor and nothing else: there is no wheel over these
+	// columns (see clickSidebarRow) and no key that scrolls without moving, so the
+	// window is derived from where the cursor is rather than remembered.
+	//
+	// That is why this is not a viewport. A viewport's substance is a scroll position
+	// it holds between frames, and a held position here would be a second thing that
+	// can be wrong about the same fact — a strip showing rows 20-40 with the cursor on
+	// row 3. The window is a pure function of the lines, the height and the cursor, so
+	// the two cannot disagree.
+	top := sidebarScrollTop(lines, avail, m.sidebarCursorLine(lines))
+	shown := lines[top:min(top+avail, len(lines))]
+	// A count of what is below, in the last row of the window rather than in addition
+	// to it — the honest thing to say instead of a list that silently stops. Only
+	// below: a strip scrolled down is a strip whose top the cursor came through, so
+	// what is above it is not news.
+	if hidden := len(lines) - (top + len(shown)); hidden > 0 {
+		shown = append(shown[:len(shown)-1:len(shown)-1],
+			sidebarLine{text: sidebarGutter +
+				m.styles.Muted.Render("+"+strconv.Itoa(hidden+1)+" more")})
+	}
+	return shown
+}
+
+// sidebarCursorLine is which line of the strip the cursor's row starts on, or -1
+// when the cursor is not on the strip at all.
+func (m Model) sidebarCursorLine(lines []sidebarLine) int {
+	if !m.sidebarHasCursor() {
+		return -1
+	}
+	for i, l := range lines {
+		if l.item != nil && sameRow(*l.item, m.sidebarCursor) {
+			return i
+		}
+	}
+	return -1
+}
+
+// sidebarScrollTop is the first line of the window: far enough down that the
+// cursor's row is inside it, and no further.
+//
+// A row is two lines and it scrolls as one — a window cut between a name and its
+// meta line shows half a row, which the fixed two-line cadence exists to make
+// impossible to misread.
+//
+// With no cursor the top is the top. That is the strip as it was before #350 and as
+// it still is while the pane holds the keyboard: a glance at what is waiting, which
+// is sorted so that what wants you is what is on screen.
+func sidebarScrollTop(lines []sidebarLine, avail, cursor int) int {
+	if cursor < 0 || cursor < avail {
+		return 0
+	}
+	// The cursor's row, both of its lines, against the bottom of the window.
+	return min(cursor+2-avail, max(0, len(lines)-avail))
 }
 
 // sidebarSection is the band a row sits in on the strip.
@@ -638,11 +727,10 @@ func (m Model) sidebarSectionStyle(s sidebarSection) lipgloss.Style {
 // is 36 columns and there is only one level of structure in it — a section and its
 // rows — so an indent has nothing to say that the coloured bold header does not.
 //
-// This is what cost the `┃` bar that used to mark the workspace you are in: the bar
-// needs a column of its own ahead of the dot, and that column is the indent. #350
-// puts a cursor in here, and a cursor does need the bar — the design system's
-// selection treatment is `┃ ` plus Warning — so that is when the two columns come
-// back, for something that earns them.
+// That edge survived #350's cursor, which is why the cursor has no bar: the `┃` every
+// other list in the deck wears needs a column ahead of the dot on every line, and the
+// two it costs come off names that are already truncating at 36 columns. The cursor is
+// the name's own hue instead — see the note above sidebarHasCursor.
 //
 // The workspace you are in is marked by a band behind both its lines instead. It used
 // to be the name in Strong, which on a strip where every other label is already at
@@ -661,13 +749,24 @@ func (m Model) sidebarRow(v deckdata.View, it Item, width int) []string {
 	gutter := band.Render(sidebarGutter)
 	inner := max(1, width-2*sidebarPadX)
 	glyph := statusGlyphOn(band, it.Status, false, it.Unread)
+	// The cursor is the name's own weight and hue — no bar, no column. See the note
+	// above sidebarHasCursor for why the strip declines the `┃` every other list wears.
+	//
+	// Only while the strip has the keyboard. That is the tier the design system gives
+	// a pane the keyboard has left, spent here on the mark itself rather than on a
+	// dimmer version of it: the row the keys will come back to is still the row you
+	// are in, which the band is already saying.
+	nameStyle := band
+	if m.sidebarOnCursor(it) && m.sidebarFocus {
+		nameStyle = band.Foreground(lipgloss.Color(colWarning)).Bold(true)
+	}
 	// Every row is the same shape — dot, space, name — whatever the row is about.
 	// Rows with a dot and rows without used to sit at different indents, so nothing
 	// lined up vertically and the drift cost columns on both kinds.
 	name := truncate(sidebarLabel(it), max(1, inner-lipgloss.Width(glyph)-1))
 	meta := m.sidebarMeta(band, v, it, max(1, inner-len(sidebarIndent)))
 	return []string{
-		bandFill(band, gutter+glyph+" "+band.Render(name), width),
+		bandFill(band, gutter+glyph+" "+nameStyle.Render(name), width),
 		bandFill(band, gutter+band.Render(sidebarIndent)+meta, width),
 	}
 }

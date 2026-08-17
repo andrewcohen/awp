@@ -935,6 +935,36 @@ type Model struct {
 	// dragged, which sidebarWidth reads as the default — and every read of it goes
 	// through that method, which clamps the number to what the terminal can spare.
 	sidebarW int
+	// sidebarFocus is whether the strip holds the keyboard: the middle stop of the
+	// ctrl+\ cycle, pane → sidebar → deck. Only ever set while a pane is up, since
+	// that is the only time the strip is on screen (see showsSidebar).
+	//
+	// It is what makes every deck key work on a sidebar item without the strip
+	// owning any of them: the flag routes keys past m.active to the deck's own
+	// row-mode dispatch, and cursorRow tells that dispatch which row it is aimed at.
+	sidebarFocus bool
+	// overlayHost is the arrangement a modal opened from the strip is floating over:
+	// the pane or split that was on screen, kept alive with its pty running while
+	// something else has the keyboard.
+	//
+	// It exists because m.active answers "what has the screen", and a verb pressed on
+	// the strip needs two answers at once — the confirm has the keys, the pane is
+	// still what you are working in. Without it the only way to open a confirm was to
+	// close the pane first, which meant a `D` on the strip threw away the program you
+	// were reading in order to ask you a yes/no question about a different workspace.
+	//
+	// Restored by restoreOverlayHost the moment nothing else is on screen. See
+	// sidebar_cursor.go, which is the only place one is set.
+	overlayHost modal
+	// overlayReturns is whether the keyboard goes back to the strip when the
+	// arrangement is restored. True for an overlay opened from the strip, which is
+	// every one today — kept as its own flag rather than assumed, so an overlay
+	// opened from inside a pane later does not silently move the keys.
+	overlayReturns bool
+	// sidebarCursor is the row the strip's keys point at, held as the row itself
+	// rather than as an index into anything — see sidebarHasCursor for why an index
+	// could not be shared with the row list.
+	sidebarCursor Item
 	// sidebarDragging is whether the pointer has the strip's edge. Set by a press on
 	// it and cleared by the release, so the motion in between belongs to the edge
 	// rather than to whatever is under the pointer — the same shape splitModal.dragging
@@ -2019,8 +2049,33 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			return
 		}
 		(&mm).clampDeckViewport()
+		// And put the arrangement back once whatever was floating over it has gone.
+		// Here for the same reason the clamp is: every handler that closes a modal
+		// would otherwise have to remember, and the one that forgot would leave a
+		// live pane with nothing on screen pointing at it.
+		(&mm).restoreOverlayHost()
 		model = mm
 	}()
+	// A suspended arrangement is still running, and still has to be told so. Its pty
+	// keeps producing frames, and a pane re-arms its own read on every one of them —
+	// so a pane that stops being handed its output stops asking for more, and comes
+	// back from behind a confirm frozen on the frame it was on when the confirm
+	// opened. Its exit has to reach it too, or a program that quit under an overlay
+	// is restored as a dead pane.
+	//
+	// Keys are the exception: those belong to whatever is floating. This is the same
+	// split splitModal.update makes between the half with the keyboard and the half
+	// that is merely still alive.
+	if m.overlayHost != nil {
+		if _, isKey := msg.(tea.KeyPressMsg); !isKey {
+			if hostCmd := m.overlayHost.update(&m, msg); hostCmd != nil {
+				// Batched onto whatever the rest of Update returns rather than
+				// returned here, because the message is not the host's alone — a
+				// refresh landing while a confirm is up is for both of them.
+				defer func() { cmd = tea.Batch(hostCmd, cmd) }()
+			}
+		}
+	}
 	// huh-backed form modals are stateful tea.Models — they need to
 	// receive non-KeyMsg messages too (nextFieldMsg, updateFieldMsg,
 	// the Init sequence, etc.). Route every message through the
@@ -2683,6 +2738,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if m.gotoTopPending {
 			m.gotoTopPending = false
 			if msg.String() == "g" {
+				// gg is a movement, so on the strip it moves the strip's cursor —
+				// the chord is armed by the same key on either surface and the
+				// pending flag is the deck's, so only the landing differs.
+				if m.sidebarFocus {
+					(&m).moveSidebarCursor(-len(m.sidebarRowsInOrder()))
+					return m, nil
+				}
 				m.cursor = 0
 				return m, nil
 			}
@@ -2710,6 +2772,26 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			}
 			m.status = ""
 			return m, nil
+		}
+		// The strip holding the keyboard is the one state in which a key arriving
+		// with something in m.active is not that child's. It takes the keys the
+		// cycle owns and lets everything else fall through to the row-mode switch
+		// below, which is what makes every deck key work on a sidebar item.
+		if m.sidebarFocus {
+			cmd, handled := (&m).sidebarKey(msg)
+			if handled {
+				return m, cmd
+			}
+			// Declined: the strip has stepped off to the deck (see sidebarKey), so
+			// the press is delivered again to a deck that is now on the row list. It
+			// arrives at the row-mode dispatch by the front door rather than by
+			// falling past the branches between here and there — the pin chord and
+			// the find and action modes are all reachable from the strip, and each
+			// of them is a state this key has to be read against.
+			//
+			// The recursion terminates because sidebarFocus is off by now.
+			next, after := m.Update(msg)
+			return next, tea.Batch(cmd, after)
 		}
 		if m.active != nil {
 			cmd := m.active.update(&m, msg)
@@ -4516,6 +4598,13 @@ func (m Model) view() string {
 	if m.height == 0 {
 		m.height = 24
 	}
+	// A modal opened from the strip floats over the arrangement it was opened from,
+	// rather than replacing it: the pane is what you are working in and the question
+	// is about a row on the strip. Composited the way the ctrl+b menu is — see
+	// overlayMenu, which makes the same argument about what has to stay visible.
+	if m.overlayHost != nil {
+		return overlayMenu(m.hostFrame(), m.overlayBox())
+	}
 	if m.progressMode {
 		body := m.renderProgress(m.width)
 		footer := lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)).Render(m.progressFooter())
@@ -5818,7 +5907,7 @@ func deckKeyGroups() []keyGroup {
 			// key you can only discover by pressing it is not discoverable.
 			Title: "Inside a pane (" + PaneMenuKey + " menu)",
 			Keys: [][2]string{
-				{PaneLeaveKey, "back to the deck, from a pane or a split"},
+				{PaneLeaveKey, "the door: pane → sidebar → deck → pane (straight to the deck with the strip down)"},
 				{PaneMenuKey + " then a window key", "agent on the left, that kind on the right — replaces the right half if already split"},
 				{PaneMenuKey + " h/l/tab", "move the keys to the other half"},
 				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
@@ -5830,6 +5919,21 @@ func deckKeyGroups() []keyGroup {
 				// program the pane is hosting.
 				{PaneMenuKey + " " + captainKey, "the captain (takes this pane, or the whole split, down)"},
 				{PaneMenuKey + " " + sidebarKey, "show or hide the attention sidebar"},
+			},
+		},
+		{
+			// The strip has no key list of its own — that is the point of it. What is
+			// worth writing down is only the three that differ, plus the sentence that
+			// says the rest are the ones above.
+			Title: "On the sidebar (" + PaneLeaveKey + " from a pane)",
+			Keys: [][2]string{
+				{"every key on this list", "acts on the sidebar row under the cursor"},
+				{"enter", "go to that workspace — the same door a click on the row is"},
+				{"c v e s i W", "put that row's window beside the pane you are in — what | means"},
+				{"D · R · B · …", "the deck's own screens float over the pane, which keeps running"},
+				{"j/k · ctrl+d/u · gg/G", "move the sidebar's cursor"},
+				{PaneLeaveKey, "on to the deck, standing on the row you walked to"},
+				{"esc", "back into the pane you came from"},
 			},
 		},
 		{

@@ -8,16 +8,11 @@ import (
 
 // Clicking a row on the strip to go to it.
 //
-// The strip was built to read and do nothing, and the argument for that was about
-// the *keyboard*: a strip that took the keys would have to answer what focus means
-// with a pane, a split half and a strip on screen at once, which is a bigger
-// question than "which of these wants me". That argument is untouched here. A mouse
-// does not have the problem — pointing at a thing is how you say which one you mean,
-// and it says it without taking anything away from whatever holds the keys.
-//
-// So this is the cheap half of #350, and deliberately only the cheap half. What it
-// adds is one gesture with an obvious target; the keyboard's version still needs a
-// cursor, a selection treatment, and a story about focus.
+// This was the cheap half of #350, on purpose: a click carries its own target, so it
+// needed no answer to the focus question the keyboard's half was blocked on. The
+// keyboard's half has since landed (see sidebar_cursor.go) and the two stay separate
+// — a click says which row *and* acts on it in one gesture, so it does not move the
+// keyboard onto the strip on its way.
 //
 // Going to a row means what `enter` on the row list means, and through the same
 // function: openPaneOrArrangement, so a workspace whose last arrangement was a split
