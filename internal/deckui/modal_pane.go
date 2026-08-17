@@ -481,10 +481,32 @@ func (m *Model) recordArrangementValue(arr paneArrangement) {
 	}
 	if arr.split() && arr.left == m.lastPane.left && !m.lastPane.split() {
 		m.lastPane = arr
+		m.persistArrangement()
 		return
 	}
 	m.prevPane = m.lastPane
 	m.lastPane = arr
+	m.persistArrangement()
+}
+
+// persistArrangement writes what is on screen down, so the next deck opens into it.
+//
+// Here rather than at exit, and here rather than at each of the places that build a
+// pane: this is the one funnel every change to "what was on screen" already goes
+// through, which is the same reason recordArrangementValue exists at all. A deck is
+// killed, or its terminal closes, or the machine restarts — a save at exit is a save
+// that does not happen on the occasions you most wanted it.
+//
+// A failure is dropped rather than shown. Everything else about the pane worked; what
+// was lost is only that the next launch will not start here, and a status line
+// complaining about a preferences file over the pane you just opened is noise about
+// something you did not ask for. It is the one saver whose write you did not trigger
+// deliberately, which is why this one is silent where the others say so.
+func (m *Model) persistArrangement() {
+	if m.saveArrangement == nil {
+		return
+	}
+	_ = m.saveArrangement(m.lastPane.exported())
 }
 
 // recordArrangement remembers the split as it now stands — both kinds and the

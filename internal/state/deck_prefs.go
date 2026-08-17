@@ -51,11 +51,36 @@ import (
 // omitempty, like Split and for the same reason: a strip of no width is not something
 // the drag can ask for (it clamps at a floor), so "0" and "never dragged" are the same
 // thing, and both mean the default width a fresh deck opens at.
+// Pane is the arrangement the last deck had on screen, so the next one opens into it
+// rather than onto the row list.
+//
+// A nested object rather than four keys beside each other, and that is the point: a
+// workspace, a kind and whether there was a second half are one answer. Stored flat
+// they could be written by different runs and read back as an arrangement that never
+// existed — a kind from one workspace against the name of another.
+//
+// A pointer so absent is distinguishable from empty. Nothing remembered means open the
+// row list, which is what every build before this one did and what a deleted workspace
+// falls back to.
 type DeckPrefs struct {
-	Scope        string  `json:"scope,omitempty"`
-	Sidebar      bool    `json:"sidebar"`
-	SidebarWidth int     `json:"sidebar_width,omitempty"`
-	Split        float64 `json:"split,omitempty"`
+	Scope        string    `json:"scope,omitempty"`
+	Sidebar      bool      `json:"sidebar"`
+	SidebarWidth int       `json:"sidebar_width,omitempty"`
+	Split        float64   `json:"split,omitempty"`
+	Pane         *DeckPane `json:"pane,omitempty"`
+}
+
+// DeckPane is one remembered arrangement. Mirrors deckui.Arrangement, which is the
+// deck's own spelling of the same thing — two types because this one is a file format
+// and that one is a UI value, and a file format is a thing you have to keep working
+// after the UI changes its mind.
+type DeckPane struct {
+	Project   string  `json:"project,omitempty"`
+	Workspace string  `json:"workspace"`
+	Kind      string  `json:"kind"`
+	RightKind string  `json:"right_kind,omitempty"`
+	Split     bool    `json:"split,omitempty"`
+	LeftFrac  float64 `json:"left_frac,omitempty"`
 }
 
 // The keys, named once. A save merges one key into the file's own object rather
@@ -70,6 +95,7 @@ const (
 	deckPrefSidebar      = "sidebar"
 	deckPrefSidebarWidth = "sidebar_width"
 	deckPrefSplit        = "split"
+	deckPrefPane         = "pane"
 )
 
 // DeckPrefsPath returns the path of the global deck-preferences file.
@@ -183,6 +209,47 @@ func SaveDeckSplit(frac float64) error {
 		return nil
 	}
 	return saveDeckPref(deckPrefSplit, frac)
+}
+
+// SaveDeckPane records the arrangement the deck has on screen, so the next one opens
+// into it.
+//
+// A no-op when unchanged, and this one needs it most of the four: the deck records its
+// arrangement on every pane change, several of which happen in a burst as a split is
+// built, and each would otherwise be a file rewrite.
+//
+// A zero-value pane clears the key rather than storing an empty object. "Nothing to
+// resume" and "resume nothing" are the same instruction, and an object full of empty
+// strings is a shape a future reader would have to know to disbelieve.
+func SaveDeckPane(pane DeckPane) error {
+	prefs, err := LoadDeckPrefs()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(pane.Workspace) == "" {
+		if prefs.Pane == nil {
+			return nil
+		}
+		return clearDeckPref(deckPrefPane)
+	}
+	if prefs.Pane != nil && *prefs.Pane == pane {
+		return nil
+	}
+	return saveDeckPref(deckPrefPane, pane)
+}
+
+// clearDeckPref removes one key, leaving the rest of the file alone — the same merge
+// saveDeckPref does, in the other direction.
+func clearDeckPref(key string) error {
+	raw, err := loadDeckPrefsObject()
+	if err != nil {
+		return err
+	}
+	if _, ok := raw[key]; !ok {
+		return nil
+	}
+	delete(raw, key)
+	return writeDeckPrefs(raw)
 }
 
 // saveDeckPref writes one preference, leaving every other key in the file exactly

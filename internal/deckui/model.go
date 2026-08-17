@@ -914,6 +914,13 @@ type Model struct {
 	// saveSidebarWidth records how wide the strip was dragged to — see
 	// SidebarWidthSaver.
 	saveSidebarWidth SidebarWidthSaver
+	// saveArrangement records what is on screen, so the next deck opens into it — see
+	// ArrangementSaver.
+	saveArrangement ArrangementSaver
+	// resumePending is whether the deck still owes itself the open into the
+	// arrangement it was launched with. Cleared by the first WindowSizeMsg, which is
+	// the first moment a pane can be given a size — see resumeOnLaunch.
+	resumePending bool
 	// splitFrac is where the divider goes in a *new* split: the left half's share
 	// of the width, as last left. Zero means never set, which splitLeftFrac reads
 	// as an even split.
@@ -2002,7 +2009,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		// The first size is also the moment the deck can honour the arrangement it was
+		// launched with: a pane has to be told how big it is, and until now nothing
+		// knew. Every later resize passes straight through — see resumeOnLaunch.
+		return m, m.resumeOnLaunch()
 	case paneExecDoneMsg:
 		// A handed-over pane has given the terminal back. The deck was suspended
 		// while it ran, so its rows are as stale as whenever you opened it — the

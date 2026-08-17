@@ -676,6 +676,49 @@ func rememberedSidebarWidth() int {
 // saveDeckSidebarWidth is the deck's SidebarWidthSaver.
 func saveDeckSidebarWidth(cols int) error { return state.SaveDeckSidebarWidth(cols) }
 
+// rememberedArrangement is what the last deck had on screen, so this one opens into it
+// rather than onto the row list.
+//
+// The zero value — which the deck reads as "open the list" — on an unreadable
+// preferences file, the same bargain rememberedSidebar makes.
+//
+// It is only ever acted on by a deck that hosts its own panes: resumeOnLaunch needs a
+// pane backend, and `awp deck` has none, so the tmux path ignores this and keeps
+// opening on the list. That is also why `--scope` needs no special case here — the flag
+// belongs to the command that cannot resume anyway. When the cutover (#245) gives zdeck
+// its own flags, an explicit scope should suppress the resume: naming which slice of
+// the list to show is an instruction to show the list.
+func rememberedArrangement() deckui.Arrangement {
+	prefs, err := state.LoadDeckPrefs()
+	if err != nil {
+		deckDebugLogf("deck prefs: %v", err)
+		return deckui.Arrangement{}
+	}
+	if prefs.Pane == nil {
+		return deckui.Arrangement{}
+	}
+	return deckui.Arrangement{
+		Project:   prefs.Pane.Project,
+		Workspace: prefs.Pane.Workspace,
+		Kind:      prefs.Pane.Kind,
+		RightKind: prefs.Pane.RightKind,
+		Split:     prefs.Pane.Split,
+		LeftFrac:  prefs.Pane.LeftFrac,
+	}
+}
+
+// saveDeckArrangement is the deck's ArrangementSaver.
+func saveDeckArrangement(a deckui.Arrangement) error {
+	return state.SaveDeckPane(state.DeckPane{
+		Project:   a.Project,
+		Workspace: a.Workspace,
+		Kind:      a.Kind,
+		RightKind: a.RightKind,
+		Split:     a.Split,
+		LeftFrac:  a.LeftFrac,
+	})
+}
+
 // rememberedSplitFrac is where the split's divider was when the last deck exited,
 // as the left half's share of the width. Zero — which the deck reads as an even
 // split — on an unreadable preferences file, the same bargain rememberedSidebar
@@ -1101,6 +1144,8 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithSidebarSaver(saveDeckSidebar).
 		WithSidebarWidth(rememberedSidebarWidth()).
 		WithSidebarWidthSaver(saveDeckSidebarWidth).
+		WithArrangement(rememberedArrangement()).
+		WithArrangementSaver(saveDeckArrangement).
 		WithSplitFrac(rememberedSplitFrac()).
 		WithSplitFracSaver(saveDeckSplitFrac).
 		// nil for `awp deck`; zdeck supplies one so the window keys render a
