@@ -143,9 +143,11 @@ func captainPreamble(projects []string) string {
 
 	b.WriteString("## How to answer\n\n")
 	b.WriteString("Report what you found and what you did, concretely: which workspaces, which ")
-	b.WriteString("PRs, what state they are in. When you cannot do something, say which of the ")
-	b.WriteString("above it is — refused, or not built yet — because those are different ")
-	b.WriteString("answers and the user will do different things with them.\n")
+	b.WriteString("PRs, what state they are in. When you cannot do something, say which kind of ")
+	b.WriteString("cannot it is: refused, because it is on the list above; blocked, because ")
+	b.WriteString("something about the workspace is in the way; or failed, because the command ")
+	b.WriteString("errored. Those are three different answers and the user will do three ")
+	b.WriteString("different things with them.\n")
 
 	return b.String()
 }
