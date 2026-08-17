@@ -146,10 +146,11 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case alternateKey:
 		return m.alternateFrom(func() tea.Cmd { return s.close(m) })
 	case captainKey:
-		// Takes the whole split down, both halves. The captain is a place you go
-		// rather than a half you add: it is about no workspace, so it has no
-		// business sitting beside one workspace's agent.
-		return m.captainFrom(func() tea.Cmd { return s.close(m) })
+		// Over the whole split, both halves, rather than in place of it. The captain
+		// is not a half you add — it is about no workspace, so it has no business
+		// sitting beside one workspace's agent — but it is also not worth a split you
+		// have arranged, which is what taking it down to ask a question cost.
+		return m.captainOverPane()
 	}
 	// Anything else — esc included — cancels, having consumed the key. It does
 	// not fall through to the focused program: a mistyped verb typing itself at
@@ -167,6 +168,13 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 // program. The two callers are the mouse mode and the cursor position, both of
 // which have exactly one answer per frame.
 func (m Model) hostedPane() (*panePopover, bool) {
+	// The captain first, because it is over everything: while it is up the keys are
+	// in it, so it is the pane whose cursor is the one on screen and whose program
+	// wants the mouse. The pane behind it goes on painting, but it is being read
+	// rather than typed at.
+	if m.captain != nil {
+		return m.captain, true
+	}
 	switch c := m.active.(type) {
 	case *panePopover:
 		return c, true

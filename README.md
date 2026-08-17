@@ -978,6 +978,34 @@ belongs to through `AWP_WORKSPACE`. The captain has no working copy and no entry
 any state file, so it gets neither: it runs in `~/.awp/captain`, a directory awp
 owns, and it is launched with the workspace environment deliberately withheld.
 
+**And it is drawn as a modal over what you were looking at, not in place of it.**
+It takes four fifths of the screen's width and three fifths of its height, centred
+on the screen, floated over the frame that was already there — the row list, or an
+agent's pane with the sidebar beside it — where every other pane fills the frame edge
+to edge. That is the same argument in cells: full-screen in awp means a workspace's
+program, so a captain wearing it said it was one. Wider than tall because what the
+captain prints is prose, and prose wants columns more than rows.
+
+Floating rather than replacing is what makes `a` worth pressing from inside a pane.
+The captain's subject is the deck, so what you want while reading its claims is the
+thing it is claiming about — the strip, the row you asked about, the agent you were
+watching — still on screen behind it. It used to close that pane on the way in, which
+meant asking a question cost you both the answer's context and your place: `ctrl+\`
+put you back at the row list rather than back in what you had been reading. Now
+nothing comes down, and `ctrl+\` dismisses the modal and gives the keys back to
+whatever is behind it. While it is up the keys are the captain's — the top row names
+it, and the pane behind goes on running and repainting untouched.
+
+Both the size and the centring are measured against the whole terminal rather than
+against what is left of it after the top row and the sidebar, because a floating box
+is centred against the display it floats over — measured the other way it sits a row
+low, and further right the wider the strip is. Where that would put it over the deck's
+own chrome it is pushed clear instead: an off-centre modal is the better of the two,
+since the row and the strip are the deck talking and a pane has never been allowed in
+their cells. On a terminal under the modal's floor (62x17) the fraction is abandoned
+and the captain gets the whole screen, since a clipped modal reads as a bug rather
+than as a frame. A captain in a split keeps its half.
+
 Both halves of that matter. A directory, because a process has a cwd whether or not
 anyone chose one — and every other candidate is worse, since awp's own cwd would put
 the captain in whichever repo the deck was launched from, which is the exact
@@ -1137,7 +1165,7 @@ it leaves on one press from either arrangement.
 | `q` | close the focused half; the other becomes an ordinary whole-screen pane |
 | `x` | **user actions** — opens a second menu of the actions configured for this workspace's repo, keyed by their `alias`. The next key runs one: a foreground action lands beside the agent, in the right half (replacing what is there, already split), a `background` one starts as a job and leaves the screen alone. The row is absent when the repo has no `actions` configured. Same actions the row list's `x` offers, reached from inside a pane — see [actions](#actions) |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
-| `a` | **the captain**, which takes this pane — or the whole split — down on the way. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
+| `a` | **the captain**, floated over this pane — or the whole split — which stays exactly where it is; `ctrl+\` dismisses it and gives the keys back. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
 | `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
