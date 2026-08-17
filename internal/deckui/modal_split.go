@@ -60,6 +60,10 @@ type splitModal struct {
 	// is idempotent, where the single-pane ctrl+\ that flips straight to the deck
 	// repeats as fast as the terminal sends it.
 	prefixArmed bool
+	// actions is the user actions submenu, armed by `x` at the ctrl+b menu and
+	// resolved by the alias pressed next — see panePopover.actions, which carries
+	// the argument for holding the list rather than a flag.
+	actions []UserAction
 }
 
 // splitPrefixMenu is the verb menu for a split.
@@ -71,17 +75,23 @@ type splitModal struct {
 //
 // The arrangement verbs come first: they are what the menu is armed for while a
 // split is already up, and the window keys under them are the longer list.
+//
+// Closing the focused half is `q` rather than the `x` it was, because `x` is what
+// user actions are reached by everywhere else in the deck and one key cannot be both.
+// `x` was arbitrary here — it named nothing about closing — where `x` for actions is
+// the row list's own key, so the one with a reason to be where it is kept it.
 func splitPrefixMenu(m *Model) deckMenu {
 	verbs := [][2]string{
 		{"h/l/tab", "move the keyboard to the other half"},
 		{"< >", "move the divider · = re-centres it"},
 		{"o", "zoom the focused half, and again to go back"},
-		{"x", "close the focused half"},
+		{"q", "close the focused half"},
 	}
 	verbs = append(verbs, splitKindVerbs(func(label string) string {
 		return "put " + label + " in this half"
 	})...)
 	verbs = append(verbs,
+		userActionsVerb(m.userActionsFor()),
 		[2]string{alternateKey, "go to the arrangement before this one"},
 		captainVerb(),
 		sidebarVerb(m.sidebar),
@@ -105,6 +115,14 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		m.status = ""
 		return s.replaceHalf(m, kind)
 	}
+	if pressed == userActionsMenuKey {
+		if actions := m.userActionsFor(); len(aliasLookup(actions)) > 0 {
+			s.actions = actions
+		}
+		// Silence when there are none: the verb was not on the menu, so a message
+		// about a key you were never shown reads as something having gone wrong.
+		return nil
+	}
 	switch pressed {
 	case "l", "right":
 		s.rightFocused = true
@@ -120,7 +138,7 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		s.setFrac(m, splitEvenFrac)
 	case "o":
 		s.zoomed = !s.zoomed
-	case "x":
+	case "q":
 		return s.closeHalf(m)
 	case sidebarKey:
 		m.toggleSidebar()
@@ -201,6 +219,25 @@ const splitHalfMinW = paneMinW + paneChromeW
 // pressed the key and the divider moved. The bar above reports state in glyphs
 // and numbers precisely so it can be glanced at, and prose about a resize is
 // what that rule exists to keep off it.
+// actionKey reads the alias at the user actions submenu. A foreground action goes
+// into the focused half, which is what every other window key on a split's menu does
+// — with two halves already up there is nowhere to put a third. Anything
+// unrecognised closes the submenu, esc included.
+func (s *splitModal) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	actions := s.actions
+	s.actions = nil
+	ua, ok := resolveActionKey(actions, msg.String())
+	if !ok {
+		m.status = ""
+		return nil
+	}
+	if ua.Background {
+		return startBackgroundAction(m, ua.Name)
+	}
+	m.status = ""
+	return s.replaceHalf(m, PaneKindForAction(ua.Name))
+}
+
 func (s *splitModal) resize(m *Model, frac float64) {
 	before := s.splitCol(m.childBox())
 	s.leftFrac = splitLeftFrac(s.leftFrac) + frac
@@ -311,6 +348,9 @@ func (s *splitModal) boxOf(child modal, full box) box {
 func (s *splitModal) update(m *Model, msg tea.Msg) tea.Cmd {
 	if key, isKey := msg.(tea.KeyPressMsg); isKey {
 		pressed := key.String()
+		if len(s.actions) > 0 {
+			return s.actionKey(m, key)
+		}
 		if s.prefixArmed {
 			return s.prefixKey(m, key)
 		}
@@ -397,7 +437,7 @@ func (s *splitModal) collapse(m *Model, gone modal) tea.Cmd {
 		// find. Recorded here rather than only where a key takes a half off,
 		// because this is the one place every collapse goes through: the diff
 		// viewer quitting with `q`, a pane's program exiting, a half replaced by a
-		// form. Only ctrl+b x used to record, so a split taken apart any other way
+		// form. Only ctrl+b q used to record, so a split taken apart any other way
 		// came back rebuilt.
 		m.recordArrangementValue(paneArrangement{left: paneRef{
 			project:   p.project,

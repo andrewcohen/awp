@@ -87,10 +87,18 @@ const menuBoxCols = borderCells + 4
 func (m *Model) armedMenu() (deckMenu, bool) {
 	switch c := m.active.(type) {
 	case *splitModal:
+		// The submenu first: `x` moved the menu on rather than resolving it, so the
+		// box on screen has to move with it.
+		if len(c.actions) > 0 {
+			return userActionsMenu(c.actions), true
+		}
 		if c.prefixArmed {
 			return splitPrefixMenu(m), true
 		}
 	case *panePopover:
+		if len(c.actions) > 0 {
+			return userActionsMenu(c.actions), true
+		}
 		if c.prefixArmed {
 			return panePrefixMenu(m), true
 		}

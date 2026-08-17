@@ -185,6 +185,12 @@ type panePopover struct {
 	// field of the same name carries the argument for why this is a state resolved
 	// by the next key and not by a clock.
 	prefixArmed bool
+	// actions is the user actions submenu, armed by `x` at the ctrl+b menu and
+	// resolved by the alias pressed next. Non-empty is what "armed" means, so
+	// there is no second flag that could disagree with it — and it holds the list
+	// rather than re-reading the config on the second key, so the action you press
+	// is the one you were shown.
+	actions []UserAction
 }
 
 // PaneKindAgent is the window kind whose process is the workspace's agent.
@@ -810,6 +816,7 @@ func (p *panePopover) footerHelp() string { return "" }
 func panePrefixMenu(m *Model) deckMenu {
 	verbs := splitKindVerbs(func(label string) string { return "split, with " + label + " beside this" })
 	verbs = append(verbs,
+		userActionsVerb(m.userActionsFor()),
 		[2]string{alternateKey, "go to the arrangement before this one"},
 		captainVerb(),
 		sidebarVerb(m.sidebar),
@@ -833,6 +840,17 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	if kind, ok := splitKindFor(msg.String()); ok {
 		return p.splitWith(m, kind)
 	}
+	if msg.String() == userActionsMenuKey {
+		if actions := m.userActionsFor(); len(aliasLookup(actions)) > 0 {
+			p.actions = actions
+			return nil
+		}
+		// The verb was not on the menu, so nothing is owed but the disarm that
+		// already happened. Silence rather than "no user actions configured": the
+		// key was never offered, and a message about a key you were not shown
+		// reads as something having gone wrong.
+		return nil
+	}
 	switch msg.String() {
 	case sidebarKey:
 		m.toggleSidebar()
@@ -842,6 +860,25 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 		return m.captainFrom(func() tea.Cmd { return p.close(m) })
 	}
 	return nil
+}
+
+// actionKey reads the alias at the user actions submenu. A foreground action lands
+// beside this pane the way every other window key from this menu does — you asked for
+// it from inside something you were watching, so the thing you were watching stays.
+// Anything unrecognised closes the submenu, esc included: a mistyped alias must not
+// fall through and type itself at the program.
+func (p *panePopover) actionKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
+	actions := p.actions
+	p.actions = nil
+	ua, ok := resolveActionKey(actions, msg.String())
+	if !ok {
+		m.status = ""
+		return nil
+	}
+	if ua.Background {
+		return startBackgroundAction(m, ua.Name)
+	}
+	return p.splitWith(m, PaneKindForAction(ua.Name))
 }
 
 // splitWith puts kind beside this pane, keeping this pane as the left half.
@@ -911,6 +948,9 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 		return cmd
 
 	case tea.KeyPressMsg:
+		if len(p.actions) > 0 {
+			return p.actionKey(m, msg)
+		}
 		if p.prefixArmed {
 			return p.prefixKey(m, msg)
 		}

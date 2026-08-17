@@ -5508,7 +5508,8 @@ func deckKeyGroups() []keyGroup {
 				{PaneMenuKey + " h/l/tab", "move the keys to the other half"},
 				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
 				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},
-				{PaneMenuKey + " x", "close the focused half"},
+				{PaneMenuKey + " q", "close the focused half"},
+				{PaneMenuKey + " x", "user actions, then the action's alias"},
 				{PaneMenuKey + " " + alternateKey, "go to the arrangement before this one, without stopping at the deck"},
 				// The captain's only door from in here: `a` on its own belongs to the
 				// program the pane is hosting.
