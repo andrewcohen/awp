@@ -76,7 +76,12 @@ type Spec struct {
 	Bookmark         string `json:"bookmark,omitempty"`
 	BookmarkToCreate string `json:"bookmark_to_create,omitempty"`
 	Prompt           string `json:"prompt,omitempty"`
-	PRNumber         int    `json:"pr_number,omitempty"` // pin the created workspace to this PR (0 = none)
+	// Label is what the deck shows for the created workspace (blank = its
+	// name). Carried on the spec because creation is a detached
+	// subprocess: the deck that queued the job is not there afterwards to
+	// apply it.
+	Label    string `json:"label,omitempty"`
+	PRNumber int    `json:"pr_number,omitempty"` // pin the created workspace to this PR (0 = none)
 	// PaneHosted says the deck that queued this job hosts its own agents, so
 	// the job prepares the workspace and parks the prompt rather than
 	// starting an agent in tmux the deck could not see.

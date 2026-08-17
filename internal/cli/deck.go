@@ -828,6 +828,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 				Bookmark:         req.Workspace.Bookmark,
 				BookmarkToCreate: req.Workspace.BookmarkToCreate,
 				Prompt:           req.Workspace.Prompt,
+				Label:            req.Workspace.Label,
 				PRNumber:         req.Workspace.PRNumber,
 				Yes:              true,
 				PaneHosted:       req.PaneHosted,
@@ -1186,6 +1187,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithHookInstaller(hookInstaller).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
 		WithProjectOpener(openProjectViaTmux(runner)).
+		WithIntentResolver(intentResolverFromRoots(runner, cfg.Deck.ProjectRoots, 4)).
 		WithAsyncJobLauncher(asyncLauncher).
 		WithJobsListRefresher(asyncList).
 		WithJobCancelHandler(asyncCancel).
@@ -1359,6 +1361,7 @@ func buildAsyncJobs(repoRoot string, runner Runner) (deckui.AsyncJobLauncher, de
 			Bookmark:         spec.Bookmark,
 			BookmarkToCreate: spec.BookmarkToCreate,
 			Prompt:           spec.Prompt,
+			Label:            spec.Label,
 			PRNumber:         spec.PRNumber,
 			Arg:              spec.Arg,
 			WorkspaceName:    spec.WorkspaceName,

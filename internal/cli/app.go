@@ -487,6 +487,28 @@ func openWorkspaceWithReporter(runner Runner, svc workspace.Service, req openReq
 			reporter.Log(fmt.Sprintf("bookmark skipped: cannot resolve workspace revision (%v)", revErr))
 		}
 	}
+	// The label is what the deck shows for this row. Set here rather than
+	// by the deck afterwards because a deck create is a detached
+	// subprocess: the deck is not there when the workspace appears, so a
+	// row would show its slug until something else came along to rename
+	// it. Applying it inside creation means the row is right the first
+	// time it is drawn.
+	//
+	// Note the name: `normalized`, not req.Name. The entry is keyed by the
+	// name PrepareWorkspace settled on, so labelling by the requested one
+	// silently does nothing whenever the two differ.
+	//
+	// `workspace new --label` still labels after the fact, because it has a
+	// terminal to report a failure to and this path only has a reporter.
+	//
+	// Best-effort, like the bookmark and the PR pin above: a workspace
+	// showing its name is a cosmetic problem, and it is already created.
+	if label := strings.TrimSpace(req.Label); label != "" {
+		if err := svc.SetDisplayName(normalized, label); err != nil && reporter != nil {
+			reporter.Log(fmt.Sprintf("set label %q: %v", label, err))
+		}
+	}
+
 	// Pin the workspace to its PR when the caller created it from a known
 	// PR. Done before the host split because it is a property of the
 	// workspace, not of where its agent lives. Best-effort: the workspace is

@@ -37,6 +37,11 @@ type deckDeps struct {
 	projectFinder ProjectFinder
 	projectOpener ProjectOpener
 
+	// intentResolver turns the free-text box's sentence into a
+	// WorkspaceIntent. Nil means this deck has no free-text box at all and
+	// `n` opens the structured form directly — see launchNewWorkspace.
+	intentResolver IntentResolver
+
 	asyncJobLauncher        AsyncJobLauncher
 	jobsListRefresher       JobsListRefresher
 	jobCancelHandler        JobCancelHandler
