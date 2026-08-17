@@ -40,6 +40,56 @@ func TestAHostedProcessIsNotToldItIsInsideSomethingElse(t *testing.T) {
 	}
 }
 
+// TestAHostedAgentIsNotAChildOfTheSessionThatStartedAwp.
+//
+// awp is usually developed from inside a Claude Code session, so the deck inherits
+// that session's markers and hands them to every agent it starts. The child reads
+// CLAUDE_CODE_CHILD_SESSION, concludes it is a sub-agent of a session already
+// recording, and turns transcript saving off — then works normally and writes
+// nothing down. `awp watch` reads transcripts, so the dev-loop view goes blind for
+// that workspace with no error anywhere. The captain is only where it surfaced,
+// because Claude Code happens to say so on its start-up line.
+func TestAHostedAgentIsNotAChildOfTheSessionThatStartedAwp(t *testing.T) {
+	base := []string{
+		"PATH=/usr/bin",
+		"CLAUDE_CODE_CHILD_SESSION=1",
+		"CLAUDE_CODE_SESSION_ID=abc-123",
+		"CLAUDE_CODE_ENTRYPOINT=cli",
+		"CLAUDE_CODE_MESSAGING_SOCKET=/tmp/claude/sock",
+		"CLAUDE_CODE_MESSAGING_TOKEN=secret",
+	}
+	got := Env(base)
+	for _, name := range []string{
+		"CLAUDE_CODE_CHILD_SESSION",
+		"CLAUDE_CODE_SESSION_ID",
+		"CLAUDE_CODE_ENTRYPOINT",
+		"CLAUDE_CODE_MESSAGING_SOCKET",
+		"CLAUDE_CODE_MESSAGING_TOKEN",
+	} {
+		if kv, ok := lookup(got, name); ok {
+			t.Errorf("%s survived as %q — the hosted agent is its own session, not a child of awp's", name, kv)
+		}
+	}
+}
+
+// And the other half of the rule: configuration the user chose survives, so a
+// hosted agent behaves like the same agent in a terminal. Stripping these would
+// make a pane a different place to work, which is the one thing a pane is trying not
+// to be.
+func TestAHostedAgentKeepsTheUsersOwnClaudeSettings(t *testing.T) {
+	base := []string{
+		"CLAUDE_CODE_EXECPATH=/opt/homebrew/bin/claude",
+		"CLAUDE_CODE_TMPDIR=/tmp/claude-501",
+		"CLAUDE_CODE_ENABLE_TODO_TOOLS=1",
+	}
+	got := Env(base)
+	for _, want := range base {
+		if !slices.Contains(got, want) {
+			t.Errorf("Env dropped %q, which is the user's configuration rather than a session marker", want)
+		}
+	}
+}
+
 // TestEnvStatesTermEvenWhenTheCallerDidNot: the emulator's TERM is not a
 // correction of an inherited value, it is the answer regardless.
 func TestEnvStatesTermEvenWhenTheCallerDidNot(t *testing.T) {
