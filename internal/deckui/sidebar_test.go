@@ -246,6 +246,127 @@ func TestPinnedRowsSitAtTheVeryTop(t *testing.T) {
 	}
 }
 
+// TestEachNamedRegisterGetsItsOwnHeader — #391. The strip used to put every
+// register under one `pinned` word, which is the grouping registers exist to make
+// being thrown away on the surface you read most often.
+func TestEachNamedRegisterGetsItsOwnHeader(t *testing.T) {
+	m := stripDeck([]Item{
+		{ProjectName: "a", WorkspaceName: "api-row", Status: "idle", PinGroup: "i"},
+		{ProjectName: "a", WorkspaceName: "wish-row", Status: "idle", PinGroup: "w"},
+	}).WithPinGroupAliases(map[string]string{"i": "inventory api", "w": "wishlist"})
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 40}))
+
+	for _, want := range []string{"inventory api", "wishlist"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the strip does not name register %q:\n%s", want, out)
+		}
+	}
+	// Each register's header sits above its own row, which is what makes it a
+	// section rather than a decoration.
+	if h := strings.Index(out, "inventory api"); h < 0 || h > strings.Index(out, "api-row") {
+		t.Errorf("the api row is not under its register header:\n%s", out)
+	}
+	if h := strings.Index(out, "wishlist"); h < 0 || h > strings.Index(out, "wish-row") {
+		t.Errorf("the wishlist row is not under its register header:\n%s", out)
+	}
+	// And the flat word is gone: with no unnamed register there is nothing left
+	// for a `pinned` header to be over.
+	if strings.Contains(out, sidebarSectionLabel(sectionPinned)) {
+		t.Errorf("a flat pinned header survived alongside the named registers:\n%s", out)
+	}
+}
+
+// TestUnnamedRegistersFoldOntoTheirRows. A header costs two rows of a 36-column
+// strip and a bare letter is not worth them, so an unnamed register is a chip on
+// the row's meta line instead — see sidebarPinnedGroups.
+func TestUnnamedRegistersFoldOntoTheirRows(t *testing.T) {
+	m := stripDeck([]Item{
+		{ProjectName: "a", WorkspaceName: "named-row", Status: "idle", PinGroup: "i"},
+		{ProjectName: "a", WorkspaceName: "letter-row", Status: "idle", PinGroup: "q"},
+		{ProjectName: "a", WorkspaceName: "default-row", Status: "idle", PinGroup: "default"},
+	}).WithPinGroupAliases(map[string]string{"i": "inventory api"})
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 40}))
+
+	if strings.Contains(out, "\nq\n") || strings.Contains(out, " q\n") {
+		t.Errorf("the bare register letter was spent on a header:\n%s", out)
+	}
+	if !strings.Contains(out, "[q]") {
+		t.Errorf("the folded row does not carry its register chip:\n%s", out)
+	}
+	// The default register folds without a chip: its header already says "pinned".
+	if strings.Contains(out, "[default]") {
+		t.Errorf("the default register printed a chip:\n%s", out)
+	}
+	// Named registers lead; the folded pile is the trailing `pinned` group.
+	named, folded := strings.Index(out, "inventory api"), strings.Index(out, sidebarSectionLabel(sectionPinned))
+	if named < 0 || folded < 0 {
+		t.Fatalf("expected both a named register and the folded pile:\n%s", out)
+	}
+	if named > folded {
+		t.Errorf("the folded pile sorted ahead of a named register:\n%s", out)
+	}
+	for _, row := range []string{"letter-row", "default-row"} {
+		if strings.Index(out, row) < folded {
+			t.Errorf("%s is not under the folded pinned header:\n%s", row, out)
+		}
+	}
+}
+
+// TestTheRegisterChipDoesNotCostTheRowItsIdentity. The chip is not an identity: a
+// row that has one still owes you which project it is in. Joining it in with the PR
+// segments made it count as content, which suppressed sidebarOtherIdent's fallback
+// on exactly the rows carrying a chip — a second line reading only `[q]`.
+func TestTheRegisterChipDoesNotCostTheRowItsIdentity(t *testing.T) {
+	m := stripDeck([]Item{
+		{ProjectName: "awp", WorkspaceName: "scratch-thing", Status: "idle", PinGroup: "q"},
+	})
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 40}))
+
+	if !strings.Contains(out, "[q]") {
+		t.Fatalf("the chip is missing, so this proves nothing:\n%s", out)
+	}
+	if !strings.Contains(out, "awp") {
+		t.Errorf("the chip displaced the row's project:\n%s", out)
+	}
+}
+
+// TestNamedRegistersUseTheRowListsOrder. The two surfaces disagree about the
+// unnamed registers on purpose (the strip folds them last); they must not also
+// disagree about which named register comes first.
+func TestNamedRegistersUseTheRowListsOrder(t *testing.T) {
+	aliases := map[string]string{"w": "wishlist", "i": "inventory api"}
+	groups := sidebarPinnedGroups([]Item{
+		{WorkspaceName: "wish-row", PinGroup: "w"},
+		{WorkspaceName: "api-row", PinGroup: "i"},
+	}, aliases)
+
+	var got []string
+	for _, g := range groups {
+		got = append(got, g.register)
+	}
+	want := []string{"i", "w"} // PinGroupSortKey orders by label: "inventory api" < "wishlist"
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("register order = %v, want %v (deckdata.PinGroupSortKey order)", got, want)
+	}
+}
+
+// TestANamedDefaultRegisterIsANamedRegister. Naming the gg register overrides the
+// word "pinned"; the header has to say what the user typed rather than folding it
+// in with the letters that were never named.
+func TestANamedDefaultRegisterIsANamedRegister(t *testing.T) {
+	m := stripDeck([]Item{
+		{ProjectName: "a", WorkspaceName: "core-row", Status: "idle", PinGroup: "default"},
+	}).WithPinGroupAliases(map[string]string{"default": "core"})
+	out := ansi.Strip(m.renderSidebar(box{w: sidebarDefaultWidth, h: 40}))
+
+	if !strings.Contains(out, "core") {
+		t.Errorf("the named default register does not show its alias:\n%s", out)
+	}
+	if strings.Contains(out, sidebarSectionLabel(sectionPinned)) {
+		t.Errorf("the named default register still printed the flat header:\n%s", out)
+	}
+}
+
 // TestIdleRowsAreRankedByRecencyBucket. The band has no urgency to rank by, so the
 // useful question is "where was I" — and a workspace last touched in March is not the
 // answer. An unknown time still sorts last: it is a row we have no reason to raise,
@@ -341,7 +462,7 @@ func TestCrossingARecencyBoundaryDoesMoveARow(t *testing.T) {
 // idleOrder is the workspace names in the idle band, in render order.
 func idleOrder(t *testing.T, rows []Item, now time.Time) []string {
 	t.Helper()
-	for _, g := range sidebarSections(rows, now) {
+	for _, g := range sidebarSections(rows, nil, now) {
 		if g.section != sectionIdle {
 			continue
 		}

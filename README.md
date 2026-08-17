@@ -1149,7 +1149,8 @@ top:
 
 | section | what is in it |
 |---------|---------------|
-| `pinned` | every row carrying a register, whatever its agent is doing — a pin is a statement about the workspace, not about this minute |
+| *(one per named register)* | the rows pinned to a register you have named, under that name — see below |
+| `pinned` | every row carrying a register you have **not** named, whatever its agent is doing — a pin is a statement about the workspace, not about this minute |
 | `waiting` | the agent stopped to ask you something |
 | `error` | the agent failed |
 | `ready` | the grey dot: a turn finished and you have not looked at it yet |
@@ -1164,6 +1165,28 @@ and starting a group whenever the reason changed re-opened headers that had
 already been printed further up, so the same section appeared three times down one
 strip. It also read the attention scope, which is where `idle` could not come
 from — a scope that filters idle rows out cannot fill a section of them.
+
+**The pinned band groups by register.** A register you have named with `g` gets a
+section of its own, headed by that name, ahead of everything else — the same
+grouping the row list gives pins, on the surface you are most likely to be reading
+them off. The strip used to put every register under one `pinned` word, which threw
+that grouping away exactly where you were looking for it.
+
+Registers you have *not* named do not get a header. They fold together into one
+trailing `pinned` section, and each of their rows carries its register letter as a
+muted `[q]` chip on its second line instead. A header costs two rows of a
+36-column strip — itself, plus the blank above it — against three for a workspace,
+and a bare letter is not worth a third of a row when it fits in four columns of a
+line that is often blank anyway. A name you typed is: it is content rather than
+chrome, and when a one-member register gains a second member the section is already
+there rather than the strip reshaping around it. The `gg` register folds without a
+chip, since its header already says `pinned` — unless you have named it, which
+makes it a named register like any other.
+
+Two things follow that the row list does differently, both of them the strip's
+width: the strip never shows a bare-letter header, and it puts every named register
+ahead of the folded pile where the row list interleaves them and leads with `gg`.
+The row list has the columns to spend and is unchanged.
 
 `waiting` and `error` are read off the agent's status whether or not the mark is
 unread. The dot is an attention signal and goes quiet once you have looked, but an

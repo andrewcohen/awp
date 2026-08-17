@@ -274,7 +274,7 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 	// The clock is read here rather than held on the Model: nothing else in the strip
 	// needs one, and a field would be a second thing to keep wound. sidebarSections
 	// takes it as an argument so a test can say which moment it means.
-	groups := sidebarSections(v.Items(), time.Now())
+	groups := sidebarSections(v.Items(), m.pinGroupAliases, time.Now())
 
 	lines := make([]sidebarLine, 0, 2*len(v.Items())+len(groups))
 	// Furniture — headers, separators, the overflow count — takes the inset as plain
@@ -295,7 +295,7 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 			text("")
 		}
 		text(m.sidebarSectionStyle(g.section).Render(
-			truncate(sidebarSectionLabel(g.section), inner)))
+			truncate(sidebarGroupLabel(g, m.pinGroupAliases), inner)))
 		for i, it := range g.items {
 			// And a blank row between rows, so a row is a block with air around it
 			// rather than one stripe in a wall of text. A row is two lines, and the
@@ -358,6 +358,11 @@ const (
 	// it outranks the state bands: you pinned it because you want it in front of
 	// you, and a pin that sorted under `idle` because the agent happens to be
 	// between turns is the pin not working.
+	//
+	// It is also the one band that renders as more than one group: it splits by
+	// register, so a named register is its own section rather than a row under one
+	// flat `pinned` word. See sidebarPinnedGroups for which registers get a header
+	// and which fold onto their rows.
 	sectionPinned sidebarSection = iota
 	sectionWaiting
 	sectionError
@@ -374,7 +379,11 @@ const (
 // before this, so a group always has rows.
 type sidebarGroup struct {
 	section sidebarSection
-	items   []Item
+	// register is the pin register this group is for, on a sectionPinned group
+	// whose register has been named. "" everywhere else — on every other band,
+	// and on the folded pinned group that collects the unnamed registers.
+	register string
+	items    []Item
 }
 
 // sidebarSections partitions the rows into the strip's bands, in render order.
@@ -398,7 +407,9 @@ type sidebarGroup struct {
 // What is given up is fine-grained "where was I" ordering. That was worth having on the
 // band which by definition wants nothing from you, and it was not worth the strip
 // moving while you read it.
-func sidebarSections(rows []Item, now time.Time) []sidebarGroup {
+// The pinned band is the one band that sub-partitions, into a group per register.
+// See sidebarPinnedGroups for which registers get a group of their own.
+func sidebarSections(rows []Item, aliases map[string]string, now time.Time) []sidebarGroup {
 	var byBand [sidebarSectionCount][]Item
 	for _, it := range rows {
 		band := sidebarSectionOf(it)
@@ -419,11 +430,88 @@ func sidebarSections(rows []Item, now time.Time) []sidebarGroup {
 
 	groups := make([]sidebarGroup, 0, sidebarSectionCount)
 	for band := sidebarSection(0); band < sidebarSectionCount; band++ {
-		if len(byBand[band]) > 0 {
+		switch {
+		case len(byBand[band]) == 0:
+		case band == sectionPinned:
+			groups = append(groups, sidebarPinnedGroups(byBand[band], aliases)...)
+		default:
 			groups = append(groups, sidebarGroup{section: band, items: byBand[band]})
 		}
 	}
 	return groups
+}
+
+// sidebarPinnedGroups splits the pinned band into one group per register.
+//
+// A flat `pinned` header was the whole band under one word, which threw away the
+// grouping registers exist to make — at the surface you are most likely to be
+// reading it off, since the strip is what is in front of you while you work
+// somewhere else. The row list has sectioned pins by register since they landed;
+// this is the strip catching up.
+//
+// It does not catch up exactly, and the two divergences are both the strip's width.
+// A header costs two rows here (itself, plus the blank sidebarLines puts above every
+// group), against three for a workspace, so on 36 columns a header has to be worth a
+// third of a row to print:
+//
+//   - A named register always gets one, showing its alias. The user typed that name
+//     to create this exact grouping, so it is content rather than chrome, and a
+//     one-member named register still earns its rows — when it gains a second member
+//     the section is already there rather than the strip reshaping around it.
+//   - An unnamed register does not. They fold together into one trailing `pinned`
+//     group, each row carrying its register letter as a chip on its meta line
+//     instead (see sidebarMeta). A bare letter is four columns of information and
+//     does not justify two rows of a strip this narrow.
+//
+// So the strip never shows a bare-letter header, and it orders every named register
+// ahead of the folded pile — where the row list interleaves them and puts the default
+// register first. The row list has the width to spend and keeps its own behaviour.
+//
+// Folding onto the row is only for the letter. It was considered for a single-member
+// *named* register too and is wrong: an alias runs 8–15 characters, which on the name
+// line truncates the workspace name — the one field sidebarRow exists to protect —
+// and on the muted meta line loses its hue and reads as a branch.
+func sidebarPinnedGroups(rows []Item, aliases map[string]string) []sidebarGroup {
+	named := map[string][]Item{}
+	var order []string
+	var folded []Item
+	for _, it := range rows {
+		reg := strings.TrimSpace(it.PinGroup)
+		// A named default register is a named register: the user overrode the word
+		// "pinned" with something, and that something is what the header should say.
+		if strings.TrimSpace(aliases[reg]) == "" {
+			folded = append(folded, it)
+			continue
+		}
+		if _, seen := named[reg]; !seen {
+			order = append(order, reg)
+		}
+		named[reg] = append(named[reg], it)
+	}
+	// The row list's own register order, so the two surfaces agree on which named
+	// register comes first even though they disagree about the unnamed ones.
+	sort.SliceStable(order, func(i, j int) bool {
+		return deckdata.PinGroupSortKey(aliases, order[i]) < deckdata.PinGroupSortKey(aliases, order[j])
+	})
+
+	groups := make([]sidebarGroup, 0, len(order)+1)
+	for _, reg := range order {
+		groups = append(groups, sidebarGroup{section: sectionPinned, register: reg, items: named[reg]})
+	}
+	if len(folded) > 0 {
+		groups = append(groups, sidebarGroup{section: sectionPinned, items: folded})
+	}
+	return groups
+}
+
+// sidebarGroupLabel is the header over a group: a named register's alias on the
+// pinned groups that have one, and the band's own word everywhere else — including
+// the folded pinned group, which is the one that still says "pinned".
+func sidebarGroupLabel(g sidebarGroup, aliases map[string]string) string {
+	if g.section == sectionPinned && g.register != "" {
+		return deckdata.PinGroupLabel(aliases, g.register)
+	}
+	return sidebarSectionLabel(g.section)
 }
 
 // idleRecency is the bucket a row's last activity falls in, lower being more recent.
@@ -717,15 +805,50 @@ func (m Model) sidebarMeta(band lipgloss.Style, v deckdata.View, it Item, width 
 	if tail == "" && head == "" {
 		tail = sidebarOtherIdent(it)
 	}
+	// The register chip, for a row sidebarPinnedGroups folded rather than gave a
+	// header to. It goes first because it is the row's section — the thing a header
+	// would have said above it — and muted like the rest of the line: it appears once
+	// per row, which is the frequency the design system reserves the palette against.
+	//
+	// It is prepended here rather than joined into segs above so it does not count as
+	// content when the identity fallback is chosen. It did, at first, and that dropped
+	// the project from exactly the rows carrying a chip — leaving a second line reading
+	// only `[q]`, which is the one thing sidebarOtherIdent exists to prevent: a chip is
+	// not an identity, and a row that has one still owes you which project it is in.
+	chip := ""
+	if reg := sidebarFoldedRegister(it, m.pinGroupAliases); reg != "" {
+		chip = muted.Render("[" + reg + "]")
+	}
 	if tail != "" {
-		room := width - lipgloss.Width(head)
+		room := width - lipgloss.Width(head) - lipgloss.Width(chip)
 		if head != "" {
 			room--
 			head += band.Render(" ")
 		}
 		head += muted.Render(truncate(tail, max(1, room)))
 	}
-	return head
+	if chip != "" && head != "" {
+		return chip + band.Render(" ") + head
+	}
+	return chip + head
+}
+
+// sidebarFoldedRegister is the register letter to print on a row's meta line, or ""
+// for a row that needs none.
+//
+// Exactly the rows sidebarPinnedGroups folds: pinned, with no alias on their
+// register. The default register folds without a chip — its group header already
+// says "pinned", which is the whole of what "default" means, and `[default]` on
+// every row of it would be eight columns saying it again.
+func sidebarFoldedRegister(it Item, aliases map[string]string) string {
+	reg := strings.TrimSpace(it.PinGroup)
+	if reg == "" || reg == deckdata.PinGroupDefault {
+		return ""
+	}
+	if strings.TrimSpace(aliases[reg]) != "" {
+		return "" // has a header of its own
+	}
+	return reg
 }
 
 // sidebarOtherIdent is the half of a row's identity its name line is not spending:
