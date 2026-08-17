@@ -177,7 +177,7 @@ func (a *App) attentionItems() ([]deckui.Item, error) {
 		// outside a repo is not a reason to refuse — the captain always is.
 		root = ""
 	}
-	return loadDeckItems(nil, a.attentionSessions(), false, a.svc, root, projectNameFor(root), nil, nil)
+	return loadDeckItems(nil, a.attentionSessions(), false, a.svc, root, projectNameFor(root), nil, nil, nil)
 }
 
 // attentionSessions picks the substrate to ask about live agents.
