@@ -314,9 +314,15 @@ func TestEveryRowSpendsExactlyTwoLines(t *testing.T) {
 	}
 }
 
-// TestTheRowCadenceIsWhatSeparatesRows: every name in a section is exactly two lines
-// below the last, so a meta line can never be read as belonging to the name under it.
-func TestTheRowCadenceIsWhatSeparatesRows(t *testing.T) {
+// TestRowsAreThreeLinesApart: two lines of content and a blank, so a row is a block
+// with air around it and a meta line can never be read as belonging to the name
+// under it.
+//
+// The blank is not redundant with the fixed cadence. The cadence puts the detail
+// under its name reliably, but reading it that way means counting from the section
+// header; the gap makes the pairing visible instead. It costs a third of the strip's
+// height, and was removed and then restored on that basis.
+func TestRowsAreThreeLinesApart(t *testing.T) {
 	m := stripDeck([]Item{
 		{ProjectName: "a", WorkspaceName: "one", Status: "waiting", Bookmark: "andrew/one-branch"},
 		{ProjectName: "a", WorkspaceName: "two", Status: "waiting"}, // no meta: a blank second line
@@ -338,10 +344,16 @@ func TestTheRowCadenceIsWhatSeparatesRows(t *testing.T) {
 	rows := []int{at("one"), at("two"), at("three")}
 	sort.Ints(rows)
 	for i := 1; i < len(rows); i++ {
-		if rows[i]-rows[i-1] != 2 {
-			t.Errorf("consecutive names sit %d lines apart, want 2 (%v):\n%s",
+		if rows[i]-rows[i-1] != 3 {
+			t.Errorf("consecutive names sit %d lines apart, want 3 — two lines and a blank (%v):\n%s",
 				rows[i]-rows[i-1], rows, out)
 		}
+	}
+	// And the blank is between rows, not under the last one: a trailing gap before the
+	// next section header would make that boundary two rows wide.
+	last := rows[len(rows)-1]
+	if last+1 >= len(lines) || strings.TrimSpace(lines[last+1]) == "" {
+		t.Errorf("the last row lost its second line:\n%s", out)
 	}
 }
 

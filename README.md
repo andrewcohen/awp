@@ -1075,8 +1075,10 @@ pinned
 idle
   refactor-parser
   ↻ 💬 #128
+
   flaky-login-test
   ⚠ #131 andrew/login-retry
+
   bump-deps
   beta
 ```
@@ -1104,11 +1106,16 @@ line they compete: the glyphs and the number are fixed-width and go first, so th
 name is what truncates — and the name is the one field you cannot work out from the
 others. Given a line of its own it gets the whole strip.
 
-**Always two lines, so the cadence is the separator.** Every odd line down the strip
-is a name and every even one is its detail, so a meta line cannot be read as belonging
-to the name beneath it. The version before this had variable-height rows with a blank
-row between them — two to three lines per workspace, and it still had to be scanned for
-where one row ended. This spends exactly two.
+**Always two lines, with a blank row between rows.** Three rows of the strip per
+workspace: the name, its detail, and air. The fixed two lines mean a row is never a
+different height from its neighbour — the version before this had variable-height rows
+and had to be scanned for where one ended — and the blank makes the pairing visible
+rather than something the eye works out by counting from the section header.
+
+The blank costs a third of the strip's height, on a surface whose whole point is
+fitting more workspaces than the badge can count, so it was tried without: the cadence
+alone does put each detail under its own name, reliably. It reads as a wall
+nonetheless, and finding which two lines went together was work. The row is spent.
 
 **And the second line always says something.** A blank one keeps the cadence in the
 line count and loses it on screen: what the eye reads as a row is a block of text, so a
