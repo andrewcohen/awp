@@ -6854,11 +6854,22 @@ func (m Model) prBlockedGlyphForItem(item Item) string {
 // stale unread flag from an old state file — the agent is gone, so there's
 // nothing for the user to act on.
 func statusGlyph(status string, dim bool, unread bool) string {
+	return statusGlyphOn(lipgloss.NewStyle(), status, dim, unread)
+}
+
+// statusGlyphOn is statusGlyph drawn on a given base style, so a caller painting a
+// band behind a row can hand the glyph the background too.
+//
+// It has to be the glyph's own style rather than an enclosing one: the glyph ends in
+// a full SGR reset, which would cancel an outer background for everything after it.
+// The blank returned for an invisible dot goes through base for the same reason — the
+// band must not have a hole in it where a row has no state to report.
+func statusGlyphOn(base lipgloss.Style, status string, dim bool, unread bool) string {
 	if !statusGlyphVisible(status, unread) {
-		return " "
+		return base.Render(" ")
 	}
 	color := statusColor(status, dim, unread)
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(statusDot)
+	return base.Foreground(lipgloss.Color(color)).Render(statusDot)
 }
 
 // statusDot is the glyph a row's agent state is carried on. Named because it is

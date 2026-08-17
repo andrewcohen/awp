@@ -1248,6 +1248,25 @@ the deck in a narrow one and the strip stays down for want of columns, but it co
 back when the room does. A terminal too narrow to show it refuses the key and
 records nothing, rather than storing an answer the width chose for you.
 
+**The workspace you are in wears a band** — a low-contrast background behind both of
+its lines, the same `Cursorline` tint the diff viewer puts behind the row its cursor is
+on. It was the name in bold white first, which on a strip where every other label sits
+at the terminal default is a difference you have to hunt for; this mark exists to be
+found without looking, and a background costs no column.
+
+It spans the strip's whole width, gutters included. The strip's horizontal inset used
+to be padding applied outside every line, which put those two columns outside any
+row's style by construction — so the band stopped a column short on each side and read
+as a highlight of the label rather than of the row. The inset is now drawn by each
+line in its own style, so a row owns its gutters and the band reaches both edges.
+
+That matters for what comes next. "Which workspace am I in" and "which row do the keys
+point at" are two different facts about a row, usually about two different rows, so
+they need two different marks: the band takes the background, and the `┃ ` + yellow
+selection treatment stays free for the keyboard cursor (#350). Every segment of a
+banded row carries the background itself, because an enclosing style would be cancelled
+by the first inner reset — the same constraint the diff viewer's cursorline has.
+
 **Click a row to go to it.** The strip has no keyboard cursor and is not meant to
 have one yet: a strip that took the keys would have to answer what focus means with a
 pane, a split half and a strip on screen at once, which is a bigger question than

@@ -383,7 +383,7 @@ func TestASecondLineAlwaysSaysSomething(t *testing.T) {
 		// And with no project at all, the name is the last resort that always exists.
 		{Item{WorkspaceName: "bare"}, "bare"},
 	} {
-		got := ansi.Strip(m.sidebarMeta(v, tc.item, sidebarDefaultWidth))
+		got := ansi.Strip(m.sidebarMeta(m.styles.Label, v, tc.item, sidebarDefaultWidth))
 		if got != tc.want {
 			t.Errorf("%s: second line %q, want %q", tc.item.WorkspaceName, got, tc.want)
 		}
@@ -417,14 +417,19 @@ func TestTheSidebarCountsEveryWorkspaceNotTheScope(t *testing.T) {
 	}
 }
 
-// TestTheSidebarMarksTheWorkspaceYouAreIn — its name in Strong, and no other row's.
+// TestTheSidebarMarksTheWorkspaceYouAreIn — a band behind its lines, and no other
+// row's.
 //
-// It was a muted `┃`, the tier the design system gives a pane the keyboard has left,
-// and the bar needed a column ahead of the status dot. That column was the indent
-// that made the strip's rows sit off the left edge its headers set, so the marker
-// moved into the name's own weight. #350 puts a real cursor in here and a cursor does
-// earn the bar back — the selection treatment is `┃ ` plus Warning — which is a
-// different claim from "you are here".
+// It was a muted `┃` first, the tier the design system gives a pane the keyboard has
+// left, and the bar needed a column ahead of the status dot — the column that made the
+// strip's rows sit off the left edge its headers set. So the marker moved into the
+// name's own weight, and Strong on a strip where every other label is already at the
+// terminal default is a difference you have to hunt for. A band you cannot miss, and
+// it costs no column.
+//
+// #350 puts a real cursor in here and a cursor does earn the bar back — the selection
+// treatment is `┃ ` plus Warning — which is why the band takes the background and
+// leaves that alone. They are two claims about a row, usually about different rows.
 func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 	m, p := sidebarPane(t)
 	v := m.sidebarView()
@@ -434,20 +439,89 @@ func TestTheSidebarMarksTheWorkspaceYouAreIn(t *testing.T) {
 	}
 	marked := 0
 	for _, it := range rows {
-		line := m.sidebarRow(v, it, sidebarDefaultWidth)[0]
 		isMine := it.ProjectName == p.project && it.WorkspaceName == p.workspace
-		strong := strings.Contains(line, m.styles.Strong.Render(sidebarLabel(it)))
-		if strong != isMine {
-			t.Errorf("%s: marked %v, want %v (the pane is of %s/%s)",
-				it.WorkspaceName, strong, isMine, p.project, p.workspace)
+		// Read off the rendered line rather than off the style: a plain
+		// lipgloss.NewStyle() reports a non-nil background (its no-colour value), so
+		// asking the style is a question that is always answered yes.
+		banded := bandedRow(m.sidebarRow(v, it, sidebarDefaultWidth))
+		if banded != isMine {
+			t.Errorf("%s: banded %v, want %v (the pane is of %s/%s)",
+				it.WorkspaceName, banded, isMine, p.project, p.workspace)
 		}
-		if strong {
+		if banded {
 			marked++
 		}
 	}
 	if marked != 1 {
 		t.Errorf("%d rows are marked, want exactly the one the pane is of", marked)
 	}
+}
+
+// TestTheBandReachesBothEdgesOfEveryLineOfTheRow.
+//
+// Two ways this goes wrong and neither fails anything. A band applied as one enclosing
+// style is cancelled by the first inner SGR reset, so it stops at the status dot — and
+// a band that is not padded to the strip's width stops where the text does, which
+// looks like a highlight of the label rather than of the row.
+func TestTheBandReachesBothEdgesOfEveryLineOfTheRow(t *testing.T) {
+	m, p := sidebarPane(t)
+	v := m.sidebarView()
+	var mine Item
+	for _, it := range v.Items() {
+		if it.ProjectName == p.project && it.WorkspaceName == p.workspace {
+			mine = it
+		}
+	}
+	if mine.WorkspaceName == "" {
+		t.Fatal("the pane's own workspace is not on the strip")
+	}
+	const width = sidebarDefaultWidth
+	for i, line := range m.sidebarRow(v, mine, width) {
+		if got := lipgloss.Width(line); got != width {
+			t.Errorf("line %d of the banded row is %d columns, want the strip's %d — the band stops early",
+				i, got, width)
+		}
+		// The background has to be re-stated after the row's own coloured segments,
+		// so it appears more than once on a line that has any.
+		if n := strings.Count(line, bgSGR); n < 2 {
+			t.Errorf("line %d states a background %d times; an enclosing one would be cancelled by the first inner reset:\n%q",
+				i, n, line)
+		}
+	}
+}
+
+// TestAnUnbandedRowStatesNoBackground. Only the row you are in wears one — a band on
+// every row is not a mark.
+func TestAnUnbandedRowStatesNoBackground(t *testing.T) {
+	m, p := sidebarPane(t)
+	v := m.sidebarView()
+	for _, it := range v.Items() {
+		if it.ProjectName == p.project && it.WorkspaceName == p.workspace {
+			continue
+		}
+		for i, line := range m.sidebarRow(v, it, sidebarDefaultWidth) {
+			if strings.Contains(line, bgSGR) {
+				t.Errorf("%s line %d wears a background and is not the workspace you are in:\n%q",
+					it.WorkspaceName, i, line)
+			}
+		}
+	}
+}
+
+// bgSGR is the escape a background colour opens with — `48;` in the SGR parameter
+// list. Matched as a fragment rather than a whole sequence because lipgloss picks the
+// encoding from the terminal's profile (truecolor `48;2;r;g;b`, 256-colour `48;5;n`),
+// and which one a test process gets is not this test's subject.
+const bgSGR = "48;"
+
+// bandedRow reports whether any line of a rendered row states a background.
+func bandedRow(lines []string) bool {
+	for _, l := range lines {
+		if strings.Contains(l, bgSGR) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestTheSidebarRefusesATerminalWithNoRoomBesideAPane. A flag set on a terminal

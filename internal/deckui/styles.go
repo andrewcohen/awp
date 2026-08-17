@@ -24,6 +24,19 @@ type deckStyles struct {
 	Strong   lipgloss.Style
 	Bar      lipgloss.Style // the ┃ selection bar prefix
 	Label    lipgloss.Style // plain terminal-default fg — a normal/active (un-muted) row label
+	// ActiveRow is the band behind the sidebar row whose pane is open: a
+	// low-contrast background you read the row's own text through.
+	//
+	// Not the `┃ ` + Warning selection treatment, and the difference is that these are
+	// two different facts about a row. The bar means "this is what the keys point at";
+	// the band means "this is the workspace you are in". Both can be true at once —
+	// which is exactly what happens when #350 puts a cursor in the strip — so they
+	// cannot be the same mark.
+	//
+	// A background rather than a foreground because the row's foreground is already
+	// spoken for: the status dot carries agent state, and the deck's rule is that a
+	// row label stays at the terminal default so the dot is the thing that speaks.
+	ActiveRow lipgloss.Style
 
 	// ProjectHeader is the project-header treatment for the all /
 	// attention scopes — teal (Accent) + bold, so the structural
@@ -61,17 +74,18 @@ type deckStyles struct {
 
 func newDeckStyles() deckStyles {
 	s := deckStyles{
-		Muted:    lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
-		Accent:   lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
-		Warning:  lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)),
-		Selected: lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
-		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)),
-		Danger:   lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)),
-		Info:     lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
-		Spinner:  lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner)),
-		Strong:   lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong)).Bold(true),
-		Bar:      lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
-		Label:    lipgloss.NewStyle(),
+		Muted:     lipgloss.NewStyle().Foreground(lipgloss.Color(colMuted)),
+		Accent:    lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
+		Warning:   lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)),
+		Selected:  lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
+		Success:   lipgloss.NewStyle().Foreground(lipgloss.Color(colSuccess)),
+		Danger:    lipgloss.NewStyle().Foreground(lipgloss.Color(colDanger)),
+		Info:      lipgloss.NewStyle().Foreground(lipgloss.Color(colInfo)),
+		Spinner:   lipgloss.NewStyle().Foreground(lipgloss.Color(colSpinner)),
+		Strong:    lipgloss.NewStyle().Foreground(lipgloss.Color(colStrong)).Bold(true),
+		Bar:       lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
+		Label:     lipgloss.NewStyle(),
+		ActiveRow: lipgloss.NewStyle().Background(bgCursorline),
 
 		ProjectHeader: lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)).Bold(true),
 		FindHeader:    lipgloss.NewStyle().Foreground(lipgloss.Color(colWarning)).Bold(true),
