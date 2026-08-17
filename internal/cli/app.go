@@ -843,13 +843,20 @@ func (a *App) runMiniDeck(args []string) error {
 // the one surface that says what the command can do disagreed with the prompt
 // telling it to. A subcommand that runs and is not documented is a subcommand
 // nobody outside the prompt can find.
-const reviewUsage = `Usage: awp review [pr#]
+const reviewUsage = `Usage: awp review [pr#] [--project <name|path>] [--no-attach]
        awp review add [--file <path> --line <n> [--end-line <n>]] [--side new|old] [--text <line>] [--end-text <line>] (--body <text> | --body-file <path>) [--type comment|suggestion|question|praise] [--workspace <name>]
        awp review reply --to <comment-id> (--body <text> | --body-file <path>) [--type comment|suggestion|question|praise] [--proposal] [--workspace <name>]
        awp review list [--json] [--workspace <name>]
        awp review publish [--pr <n>] [--verdict approve|comment|request-changes] [--summary <text> | --summary-file <path>] [--dry-run] [--workspace <name>]
 
-With no argument, opens an interactive picker over ` + "`gh pr list`" + `.`
+With no argument, opens an interactive picker over ` + "`gh pr list`" + `.
+
+  --project <name|path>   review a PR in that project rather than the repo you are
+                          standing in. Requires a PR number.
+  --no-attach             prepare the review workspace, start its reviewing agent,
+                          and return — no tmux session and no switch. Requires a PR
+                          number. This is the form to use from a script or an agent:
+                          nothing it does can stop and wait for an answer.`
 
 func (a *App) runReview(args []string) error {
 	if isHelpArgSlice(args) {
@@ -859,8 +866,40 @@ func (a *App) runReview(args []string) error {
 	if isReviewSubcommand(args) {
 		return runReviewSubcommand(a.runner, a.svc, args, a.out)
 	}
+	// The two flags that make this callable by something with nobody at its stdin.
+	// Parsed before the arity check so `awp review 123 --no-attach` is one PR number
+	// and a flag rather than two arguments.
+	project, args, err := takeProjectFlag(args)
+	if err != nil {
+		return err
+	}
+	noAttach := false
+	kept := args[:0:0]
+	for _, arg := range args {
+		if arg == "--no-attach" {
+			noAttach = true
+			continue
+		}
+		kept = append(kept, arg)
+	}
+	args = kept
+
 	if len(args) > 1 {
 		return errors.New("review takes at most one PR number")
+	}
+	if len(args) == 0 && (noAttach || strings.TrimSpace(project) != "") {
+		// Refusing rather than picking. The picker is a terminal UI over `gh pr
+		// list`; opening one for a caller that asked for the non-interactive form
+		// would hang it on a list nobody is looking at, and a hang is worse than an
+		// error because it reads as work in progress.
+		return errors.New("review: give a PR number — --project and --no-attach are the non-interactive form, and a picker would have nobody to ask")
+	}
+	if noAttach || strings.TrimSpace(project) != "" {
+		n, err := parsePRNumberArg(args[0])
+		if err != nil {
+			return err
+		}
+		return a.reviewDetached(project, n, noAttach)
 	}
 	if a.review == nil {
 		return errors.New("review is not configured")
