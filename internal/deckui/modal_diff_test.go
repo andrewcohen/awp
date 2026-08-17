@@ -87,7 +87,9 @@ func TestDiffModalFallsBackToReviewWindowWhenUnwired(t *testing.T) {
 	if m.active != nil {
 		t.Fatalf("expected no modal without a loader, got %T", m.active)
 	}
-	if got.Action != ActionOpenWindow || got.Arg != "review" {
+	// Carrying the scope, not a bare `review`: the fallback stands in for the key
+	// that was pressed, so it has to show what that key would have shown.
+	if got.Action != ActionOpenWindow || got.Arg != ReviewStackArg {
 		t.Fatalf("expected review-window fallback, got action=%v arg=%q", got.Action, got.Arg)
 	}
 }
@@ -393,23 +395,31 @@ func TestDiffModalOpensAtTheStackBase(t *testing.T) {
 	}
 }
 
-// `C` is the same review in a tmux window beside the agent rather than in the
-// deck's popup. It emits a sentinel rather than a built command: naming the base
-// runs jj, which belongs in the action handler, not in the TUI.
-func TestShiftCOpensTheReviewWindowRatherThanTheModal(t *testing.T) {
-	var got ActionRequest
+// `C` is the forge hub, and its `c` opens the same viewer the deck's own `c` does.
+//
+// It used to open the review in a tmux window instead, which is what this test
+// asserted. The window is gone rather than rebound: it has no meaning under a pane
+// host (#206), and `| c` already puts the change beside the agent.
+func TestTheForgeHubsReviewVerbOpensTheViewer(t *testing.T) {
+	var dispatched []ActionRequest
 	m := New([]Item{{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/repo", Path: "/repo/ws"}},
-		func(r ActionRequest) error { got = r; return nil }).
+		func(r ActionRequest) error { dispatched = append(dispatched, r); return nil }).
 		WithDiffViewer(func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }, nil)
 	m.width, m.height = 120, 40
 
 	m, cmd := pressKey(m, "C")
 	m = drain(m, cmd)
-	if _, ok := m.active.(*diffModal); ok {
-		t.Fatal("expected no in-deck modal for C — it opens the tmux window")
+	if _, ok := m.active.(forgeMenuModal); !ok {
+		t.Fatalf("expected C to arm the forge hub, got %T", m.active)
 	}
-	if got.Action != ActionOpenWindow || got.Arg != ReviewStackArg {
-		t.Fatalf("expected the review-window sentinel, got action=%v arg=%q", got.Action, got.Arg)
+
+	m, cmd = pressKey(m, "c")
+	m = drain(m, cmd)
+	if _, ok := m.active.(*diffModal); !ok {
+		t.Fatalf("expected the diff modal after C c, got %T", m.active)
+	}
+	if len(dispatched) != 0 {
+		t.Fatalf("the review is in the deck now — nothing should open a window, got %v", dispatched)
 	}
 }
 

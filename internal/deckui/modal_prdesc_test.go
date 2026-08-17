@@ -29,21 +29,21 @@ func pressRune(m Model, r rune) (Model, tea.Cmd) {
 	return updated.(Model), cmd
 }
 
-// `p d` opens in the deck. It used to cost a tmux window — one to make, one to
+// `C d` opens in the deck. It used to cost a tmux window — one to make, one to
 // switch to, one to come back from — for something you mostly want to glance at.
-func TestPRMenuDOpensTheDescriptionInTheDeck(t *testing.T) {
+func TestForgeMenuDOpensTheDescriptionInTheDeck(t *testing.T) {
 	var askedFor int
 	m := prDescDeck(t, func(item Item, number int) (PRDescription, error) {
 		askedFor = number
 		return PRDescription{Number: number, Title: "Add a thing", Author: "andrewcohen", State: "OPEN", Body: "why the thing"}, nil
 	})
 
-	m, _ = pressRune(m, 'p')
+	m, _ = pressRune(m, 'C')
 	m, cmd := pressRune(m, 'd')
 
 	pd, ok := m.active.(*prDescModal)
 	if !ok {
-		t.Fatalf("expected the description modal after p d, got %T", m.active)
+		t.Fatalf("expected the description modal after C d, got %T", m.active)
 	}
 	if !pd.loading {
 		t.Fatal("the modal should open loading rather than blocking the keyboard on gh")
@@ -82,7 +82,7 @@ func TestAFailedDescriptionFetchSaysSo(t *testing.T) {
 	m := prDescDeck(t, func(Item, int) (PRDescription, error) {
 		return PRDescription{}, errors.New("gh: not authenticated")
 	})
-	m, _ = pressRune(m, 'p')
+	m, _ = pressRune(m, 'C')
 	m, cmd := pressRune(m, 'd')
 	updated, _ := m.Update(execCmd(t, cmd))
 	pd := updated.(Model).active.(*prDescModal)
@@ -117,24 +117,24 @@ func TestALateFetchForAnotherPRIsIgnored(t *testing.T) {
 	}
 }
 
-// With no loader installed, `p d` says so instead of opening a box that can
+// With no loader installed, `C d` says so instead of opening a box that can
 // never fill — and points at the key that still works.
 func TestWithoutALoaderTheDeckSaysHowToRead(t *testing.T) {
 	m := prDescDeck(t, nil)
-	m, _ = pressRune(m, 'p')
+	m, _ = pressRune(m, 'C')
 	m, _ = pressRune(m, 'd')
 	if _, ok := m.active.(*prDescModal); ok {
 		t.Fatal("expected no modal without a loader")
 	}
-	if !strings.Contains(m.status, "p D") {
+	if !strings.Contains(m.status, "C D") {
 		t.Fatalf("the refusal should name the key that does work, got %q", m.status)
 	}
 }
 
-// `p D` keeps the tmux window, in a window named for what is in it. The session
+// `C D` keeps the tmux window, in a window named for what is in it. The session
 // already has agent / editor / review / vcs; this used to join them as `pr`,
 // which named the subject rather than which of the PR things you have open.
-func TestPRMenuShiftDOpensTheDescriptionWindow(t *testing.T) {
+func TestForgeMenuShiftDOpensTheDescriptionWindow(t *testing.T) {
 	var req ActionRequest
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	m := New([]Item{item}, func(r ActionRequest) error { req = r; return nil }).
@@ -143,7 +143,7 @@ func TestPRMenuShiftDOpensTheDescriptionWindow(t *testing.T) {
 		}, nil)
 	m.width, m.height = 120, 40
 
-	m, _ = pressRune(m, 'p')
+	m, _ = pressRune(m, 'C')
 	m, cmd := pressRune(m, 'D')
 	if _, ok := m.active.(*prDescModal); ok {
 		t.Fatal("D is the window, not the in-deck modal")
@@ -177,7 +177,7 @@ func TestBothDescriptionKeysRefuseAPRlessRow(t *testing.T) {
 				return PRDescription{}, nil
 			})
 		m.width, m.height = 120, 40
-		m, _ = pressRune(m, 'p')
+		m, _ = pressRune(m, 'C')
 		m, _ = pressRune(m, k)
 		if _, ok := m.active.(*prDescModal); ok {
 			t.Fatalf("p %c opened a modal for a row with no PR", k)
@@ -200,7 +200,7 @@ func TestTheDescriptionModalClosesOnEscAndOnD(t *testing.T) {
 		{"d", runeKey("d")},
 	} {
 		m := prDescDeck(t, func(Item, int) (PRDescription, error) { return PRDescription{Body: "b"}, nil })
-		m, _ = pressRune(m, 'p')
+		m, _ = pressRune(m, 'C')
 		m, _ = pressRune(m, 'd')
 		if _, ok := m.active.(*prDescModal); !ok {
 			t.Fatalf("fixture is wrong: no modal to close for %s", tc.name)

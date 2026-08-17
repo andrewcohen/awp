@@ -36,7 +36,7 @@ func TestTheStatusBarIsAlwaysOneRow(t *testing.T) {
 // m.height either way, so a chord that drops the deck's top row scrolls the list
 // up without changing a single measurement.
 func TestAnArmedChordDoesNotPushTheDeckUp(t *testing.T) {
-	arm := map[string]tea.KeyPressMsg{"|": runeKey("|"), "p": runeKey("p")}
+	arm := map[string]tea.KeyPressMsg{"|": runeKey("|"), "C": runeKey("C")}
 	for key, press := range arm {
 		for _, width := range []int{60, 100, 200} {
 			m := splitDeck(t)

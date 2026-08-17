@@ -2580,7 +2580,7 @@ func TestPRStatusLabelHonorsPROverride(t *testing.T) {
 	}
 }
 
-func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
+func TestForgeMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	var gotReq ActionRequest
 	calls := 0
@@ -2589,12 +2589,12 @@ func TestPRMenuMergeKeyOpensConfirmThenDispatches(t *testing.T) {
 		"/r": {"feat": {Number: 99, Title: "Add merge key", State: PRStateOpen}},
 	}, nil)
 
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("m"))
 	m := updated.(Model)
 	cm, ok := m.active.(*confirmMergeModal)
 	if !ok {
-		t.Fatalf("expected confirm-merge modal after p m")
+		t.Fatalf("expected confirm-merge modal after C m")
 	}
 	if cm.status.Number != 99 {
 		t.Fatalf("expected merge status Number 99, got %d", cm.status.Number)
@@ -2661,14 +2661,14 @@ func TestMergeSuccessRefetchesPRStatus(t *testing.T) {
 	}
 }
 
-func TestPRMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
+func TestForgeMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	calls := 0
 	model := New([]Item{item}, func(ActionRequest) error { calls++; return nil }).
 		WithPRStatusSeed(map[string]map[string]PRStatus{
 			"/r": {"feat": {Number: 7, State: PRStateOpen}},
 		}, nil)
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("m"))
 	updated, _ = updated.(Model).Update(runeKey("n"))
 	m := updated.(Model)
@@ -2680,13 +2680,13 @@ func TestPRMenuMergeKeyCancelDoesNotDispatch(t *testing.T) {
 	}
 }
 
-func TestPRMenuMergeKeyNoopsWhenPRNotOpen(t *testing.T) {
+func TestForgeMenuMergeKeyNoopsWhenPRNotOpen(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	model := New([]Item{item}, func(ActionRequest) error { return nil }).
 		WithPRStatusSeed(map[string]map[string]PRStatus{
 			"/r": {"feat": {Number: 7, State: PRStateMerged}},
 		}, nil)
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("m"))
 	m := updated.(Model)
 	if m.active != nil {
@@ -2697,7 +2697,7 @@ func TestPRMenuMergeKeyNoopsWhenPRNotOpen(t *testing.T) {
 	}
 }
 
-func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
+func TestForgeMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	calls := 0
 	handler := func(ActionRequest) error { calls++; return nil }
@@ -2706,20 +2706,20 @@ func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 			Number: 42, URL: "https://example/pr/42", State: PRStateOpen, MergeStateStatus: PRMergeStateDirty,
 		}},
 	}, nil)
-	updated, _ := model.Update(runeKey("p"))
-	if _, ok := updated.(Model).active.(prMenuModal); !ok {
-		t.Fatalf("expected pr menu after p")
+	updated, _ := model.Update(runeKey("C"))
+	if _, ok := updated.(Model).active.(forgeMenuModal); !ok {
+		t.Fatalf("expected the forge hub after C")
 	}
 	updated, _ = updated.(Model).Update(runeKey("r"))
 	m := updated.(Model)
-	if _, ok := m.active.(prMenuModal); ok {
-		t.Fatalf("expected pr menu dismissed after r")
+	if _, ok := m.active.(forgeMenuModal); ok {
+		t.Fatalf("expected the hub dismissed after r")
 	}
 	// Repair now routes through the send-prompt form prepopulated with
 	// the repair prompt, so the user can review/edit before sending —
 	// it must NOT dispatch straight to the agent.
 	if !m.promptMode {
-		t.Fatalf("expected promptMode after p r")
+		t.Fatalf("expected promptMode after C r")
 	}
 	if calls != 0 {
 		t.Fatalf("repair should not dispatch straight to the agent; got calls=%d", calls)
@@ -2732,14 +2732,14 @@ func TestPRMenuRepairKeyOpensPrepopulatedPromptForm(t *testing.T) {
 	}
 }
 
-func TestPRMenuRepairKeyNoopsWhenNothingToRepair(t *testing.T) {
+func TestForgeMenuRepairKeyNoopsWhenNothingToRepair(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	calls := 0
 	model := New([]Item{item}, func(ActionRequest) error { calls++; return nil }).
 		WithPRStatusSeed(map[string]map[string]PRStatus{
 			"/r": {"feat": {Number: 42, State: PRStateOpen, CIState: PRCIPassing, MergeStateStatus: PRMergeStateClean}},
 		}, nil)
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("r"))
 	if calls != 0 {
 		t.Fatalf("handler should not run; got calls=%d", calls)
@@ -2749,19 +2749,19 @@ func TestPRMenuRepairKeyNoopsWhenNothingToRepair(t *testing.T) {
 	}
 }
 
-func TestPRMenuSetKeyPersistsNumber(t *testing.T) {
+func TestForgeMenuSetKeyPersistsNumber(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat"}
 	gotPR := -1
 	model := New([]Item{item}, nil).WithPRNumberLinkHandler(func(_ Item, n int) error {
 		gotPR = n
 		return nil
 	})
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("s"))
 	m := updated.(Model)
 	pm, ok := m.active.(*prNumberModal)
 	if !ok {
-		t.Fatalf("expected pr-number modal after p s")
+		t.Fatalf("expected pr-number modal after C s")
 	}
 	pm.input.SetValue("123")
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2773,7 +2773,7 @@ func TestPRMenuSetKeyPersistsNumber(t *testing.T) {
 	}
 }
 
-func TestPRMenuSetKeyForcesPRStatusRefetch(t *testing.T) {
+func TestForgeMenuSetKeyForcesPRStatusRefetch(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Path: "/ws/path", Bookmark: "feat"}
 	fetched := 0
 	var fetchedRepos []string
@@ -2790,12 +2790,12 @@ func TestPRMenuSetKeyForcesPRStatusRefetch(t *testing.T) {
 	fetched = 0
 	fetchedRepos = nil
 
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("s"))
 	m := updated.(Model)
 	pm, ok := m.active.(*prNumberModal)
 	if !ok {
-		t.Fatalf("expected pr-number modal after p s")
+		t.Fatalf("expected pr-number modal after C s")
 	}
 	pm.input.SetValue("77")
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2832,19 +2832,19 @@ func drainCmd(cmd tea.Cmd) {
 	}
 }
 
-func TestPRMenuSetKeyBlankClearsOverride(t *testing.T) {
+func TestForgeMenuSetKeyBlankClearsOverride(t *testing.T) {
 	item := Item{ProjectName: "proj", WorkspaceName: "ws", RepoRoot: "/r", Bookmark: "feat", PRNumber: 42}
 	gotPR := -1
 	model := New([]Item{item}, nil).WithPRNumberLinkHandler(func(_ Item, n int) error {
 		gotPR = n
 		return nil
 	})
-	updated, _ := model.Update(runeKey("p"))
+	updated, _ := model.Update(runeKey("C"))
 	updated, _ = updated.(Model).Update(runeKey("s"))
 	m := updated.(Model)
 	pm, ok := m.active.(*prNumberModal)
 	if !ok {
-		t.Fatalf("expected pr-number modal after p s")
+		t.Fatalf("expected pr-number modal after C s")
 	}
 	pm.input.SetValue("")
 	_, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
