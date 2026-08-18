@@ -67,10 +67,21 @@ export function Say(session: string, text: string): $CancellablePromise<void> {
 }
 
 /**
- * Turns reads the session's transcript and returns the conversation.
+ * Turns returns what the caller does not already have.
+ * 
+ * The whole conversation used to cross the bridge on every change, and the
+ * change signal fires once a second while an agent works. A 7MB transcript
+ * projects to megabytes of JSON, so the cost was not rendering it — it was
+ * serialising it, shipping it, and parsing it again, sixty times a minute, to
+ * deliver one new turn.
+ * 
+ * The cursor is a count rather than an id because the projection is a pure
+ * function of the file: the first n turns of a longer read are the same n turns.
+ * A count that no longer fits means the file was replaced, which is a reset
+ * rather than an append.
  */
-export function Turns(session: string): $CancellablePromise<$models.ChatTurn[] | null> {
-    return $Call.ByID(2583491866, session);
+export function Turns(session: string, have: number): $CancellablePromise<$models.ChatSince> {
+    return $Call.ByID(2583491866, session, have);
 }
 
 /**

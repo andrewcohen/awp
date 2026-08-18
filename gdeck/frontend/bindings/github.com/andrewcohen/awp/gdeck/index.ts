@@ -11,6 +11,7 @@ export {
 };
 
 export type {
+    ChatSince,
     ChatTool,
     ChatTurn,
     Workspace

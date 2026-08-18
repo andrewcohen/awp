@@ -9,7 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import * as ChatBinding from "@bindings/chat";
-import { sampleTurns } from "./sampleChat";
+import { manyTurns, sampleTurns } from "./sampleChat";
 
 // The agent's conversation, from its transcript rather than from its screen.
 //
@@ -55,13 +55,53 @@ const diffOptions = {
   theme: { light: "github-light", dark: "github-dark" },
 } as const;
 
+// WhenVisible mounts its child the first time it comes near the viewport, and
+// leaves it mounted after.
+//
+// A diff is a syntax-highlighted DOM tree, and a screenful of chat can hold
+// several. Building them all up front is what makes scrolling stutter: the work
+// is not the scroll, it is the layout of nodes nobody has looked at yet. Once
+// built, a diff stays — unmounting on the way past would rebuild it every time
+// the reader scrolled back, which is worse than holding it.
+function WhenVisible({ estimate, children }: { estimate: number; children: React.ReactNode }) {
+  const [seen, setSeen] = useState(false);
+  const slot = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (seen || !slot.current) {
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+        }
+      },
+      // A screen of margin, so a diff is ready by the time it is reached rather
+      // than popping in under the cursor.
+      { rootMargin: "600px 0px" },
+    );
+    io.observe(slot.current);
+    return () => io.disconnect();
+  }, [seen]);
+
+  return (
+    <div ref={slot} style={seen ? undefined : { minHeight: estimate }}>
+      {seen ? children : null}
+    </div>
+  );
+}
+
 function ToolRow({ tool }: { tool: ChatTool }) {
   // A diff is the one result worth showing before it is asked for: it is what
   // the agent did, where everything else is what it looked at.
   if (tool.Patch !== "") {
+    const lines = tool.Patch.split("\n").length;
     return (
       <div className="border-border overflow-hidden rounded-lg border text-xs">
-        <PatchDiff patch={tool.Patch} options={diffOptions} />
+        <WhenVisible estimate={Math.min(400, 24 + lines * 18)}>
+          <PatchDiff patch={tool.Patch} options={diffOptions} />
+        </WhenVisible>
       </div>
     );
   }
@@ -113,7 +153,14 @@ const Block = memo(function Block({ block }: { block: Block }) {
     : "";
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
+    // content-visibility lets the engine skip layout and paint for blocks that
+    // are scrolled out of view, which is most of them. The intrinsic size is a
+    // guess at a block's height so the scrollbar does not lurch as real heights
+    // replace it.
+    <div
+      className="flex min-w-0 flex-col gap-2"
+      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+    >
       <div className="text-muted-foreground flex items-baseline gap-2 text-[11px]">
         <span className="text-foreground/70 font-medium">{mine ? "you" : "agent"}</span>
         {when && <span>{when}</span>}
@@ -207,31 +254,39 @@ export function ChatView({ session }: { session: string }) {
   const bottom = useRef<HTMLDivElement | null>(null);
   const mock = session === "";
 
+  // What this view already has. A ref rather than state: it is a position in a
+  // stream, not something rendered, and making it state would re-run the loader
+  // that sets it.
+  const have = useRef(0);
+
   const load = useCallback(() => {
     if (session === "") {
-      setTurns(sampleTurns as ChatTurn[]);
+      const want = Number(new URLSearchParams(location.search).get("mock")) || 0;
+      setTurns((want > 1 ? manyTurns(want) : sampleTurns) as ChatTurn[]);
       return;
     }
-    ChatBinding.Turns(session).then(
-      (rows) => {
-        const next = (rows as ChatTurn[]) ?? [];
-        setTurns((prev) => {
-          // Only replace when something actually changed. The transcript is
-          // stat'd every second while an agent works, and swapping in an equal
-          // array re-renders every block for nothing.
-          const same =
-            prev.length === next.length &&
-            prev[prev.length - 1]?.At === next[next.length - 1]?.At &&
-            prev[prev.length - 1]?.Text === next[next.length - 1]?.Text;
-          return same ? prev : next;
-        });
+    // Only what is new crosses the bridge. Asking for the whole conversation
+    // once a second is what made this slow — a long transcript is megabytes of
+    // JSON, and almost all of it was already on screen.
+    ChatBinding.Turns(session, have.current).then(
+      (since) => {
+        const fresh = (since.Turns as ChatTurn[]) ?? [];
+        if (since.Reset) {
+          have.current = since.Total;
+          setTurns(fresh);
+        } else if (fresh.length > 0) {
+          have.current = since.Total;
+          setTurns((prev) => [...prev, ...fresh]);
+        }
         // A message shows locally the moment it is sent, and is dropped once it
         // comes back in the transcript — which is the only place it becomes
         // real. Matching on text rather than an id because the transcript has
         // no idea this client wrote it.
-        setPending((waiting) =>
-          waiting.filter((text) => !next.some((t) => t.Kind === "user" && t.Text.includes(text))),
-        );
+        if (fresh.length > 0) {
+          setPending((waiting) =>
+            waiting.filter((text) => !fresh.some((t) => t.Kind === "user" && t.Text.includes(text))),
+          );
+        }
         setError("");
       },
       (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
@@ -239,6 +294,8 @@ export function ChatView({ session }: { session: string }) {
   }, [session]);
 
   useEffect(() => {
+    have.current = 0;
+    setTurns([]);
     load();
     if (mock) {
       return;

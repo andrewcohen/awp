@@ -55,7 +55,7 @@ export function Sidebar({
   };
 
   return (
-    <nav className="flex w-72 shrink-0 flex-col border-r border-border">
+    <nav className="border-border flex h-full min-w-0 flex-col border-r">
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-0.5 p-2">
           {views.map((v) => (

@@ -6,6 +6,14 @@ import { Artifact } from "./Artifact";
 import { Boundary } from "./Boundary";
 import { ChatView } from "./ChatView";
 import { Sidebar, type Workspace } from "./Sidebar";
+import { RightPanel } from "./RightPanel";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import { Button } from "@/components/ui/button";
+import { PanelRight } from "lucide-react";
 import { paneFonts } from "./palette";
 import { useTheme } from "./theme";
 import * as Panes from "@bindings/panes";
@@ -42,6 +50,11 @@ const titleBarHeight = 38;
 // under ~/.awp for a throwaway surface is one someone has to clean up later.
 const lastViewKey = "gdeck.view";
 const lastFontKey = "gdeck.font";
+// The panel's width is a preference about this window, and react-resizable-panels
+// persists a whole layout under one key rather than a number per panel.
+const layoutKey = "gdeck.layout";
+const panelOpenKey = "gdeck.panel";
+const leftKey = "gdeck.left";
 
 function App() {
   const [status, setStatus] = useState<Status>({ state: "loading" });
@@ -51,6 +64,15 @@ function App() {
   );
   const [font] = useState<string>(() => localStorage.getItem(lastFontKey) ?? paneFonts[0].family);
   const [theme, setTheme] = useTheme();
+  const [panelOpen, setPanelOpen] = useState<boolean>(
+    () => localStorage.getItem(panelOpenKey) === "1",
+  );
+  // Read once: the group owns the layout after mount, and feeding a changing
+  // default back in would fight the drag.
+  const [panelWidth] = useState<number>(() => Number(localStorage.getItem(layoutKey)) || 30);
+  const [leftWidth] = useState<number>(() => Number(localStorage.getItem(leftKey)) || 20);
+
+  useEffect(() => localStorage.setItem(panelOpenKey, panelOpen ? "1" : "0"), [panelOpen]);
 
   useEffect(() => localStorage.setItem(lastViewKey, chosen), [chosen]);
   useEffect(() => localStorage.setItem(lastFontKey, font), [font]);
@@ -129,7 +151,7 @@ function App() {
   };
 
   return (
-    <div className="bg-background text-foreground flex h-screen flex-col overflow-hidden">
+    <div className="bg-background text-foreground relative flex h-screen flex-col overflow-hidden">
       <div
         className="shrink-0"
         style={{
@@ -138,20 +160,83 @@ function App() {
           WebkitAppRegion: "drag",
         }}
       />
+      {!panelOpen && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="show panel"
+          title="show panel"
+          className="text-muted-foreground absolute top-1 right-2 z-10"
+          onClick={() => setPanelOpen(true)}
+        >
+          <PanelRight className="size-4" />
+        </Button>
+      )}
       <main className="flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar
-          workspaces={workspaces}
-          chosen={chosen}
-          onChoose={setChosen}
-          theme={theme}
-          onTheme={setTheme}
-        />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3">
-          {/* Keyed on the view so a crash in one does not leave its error
-              sitting over the next thing clicked; picking another row gives a
-              fresh boundary, which is also the recovery path. */}
-          <Boundary key={`${chosen}:${font}`}>{body()}</Boundary>
-        </div>
+        <ResizablePanelGroup
+          orientation="horizontal"
+          // Persisted by hand rather than with the library's storage option:
+          // one number, read on mount and written when a drag ends. Sizes are
+          // strings here because this version reads a bare number as pixels.
+          defaultLayout={
+            panelOpen
+              ? { left: leftWidth, main: 100 - leftWidth - panelWidth, right: panelWidth }
+              : { left: leftWidth, main: 100 - leftWidth }
+          }
+          onLayoutChanged={(layout) => {
+            // Written on drag end rather than during: the callback fires per
+            // frame while dragging, and a terminal is on the other side of it.
+            if (Number.isFinite(layout.right)) {
+              localStorage.setItem(layoutKey, String(layout.right));
+            }
+            if (Number.isFinite(layout.left)) {
+              localStorage.setItem(leftKey, String(layout.left));
+            }
+          }}
+          className="min-h-0 min-w-0 flex-1"
+        >
+          {/* The workspace list is a panel like the others now. It was a fixed
+              288px column, which is the wrong width twice: too wide on a laptop
+              where the pane wants every pixel, too narrow on a monitor where
+              project and workspace names are what you are scanning. */}
+          <ResizablePanel id="left" minSize="12" className="flex min-h-0 min-w-0 flex-col">
+            <Sidebar
+              workspaces={workspaces}
+              chosen={chosen}
+              onChoose={setChosen}
+              theme={theme}
+              onTheme={setTheme}
+            />
+          </ResizablePanel>
+          <ResizableHandle withHandle />
+
+          <ResizablePanel id="main" minSize="30" className="flex min-h-0 min-w-0 flex-col">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3">
+              {/* Keyed on the view so a crash in one does not leave its error
+                  sitting over the next thing clicked; picking another row gives
+                  a fresh boundary, which is also the recovery path. */}
+              <Boundary key={`${chosen}:${font}`}>{body()}</Boundary>
+            </div>
+          </ResizablePanel>
+
+          {panelOpen && (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                id="right"
+                minSize="18"
+                // Dragging this handle resizes the pane on the left, which
+                // resizes the pty, which reflows the agent. Nothing to prevent —
+                // it is what resizing a terminal means — but it is not free.
+                className="flex min-h-0 min-w-0 flex-col"
+              >
+                <Boundary key="right-panel">
+                  <RightPanel onClose={() => setPanelOpen(false)} />
+                </Boundary>
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
       </main>
     </div>
   );
