@@ -111,6 +111,15 @@ export function setPaneSinks(
   resizeSink = onResize;
 }
 
+// focusPane puts the keyboard back in the terminal.
+//
+// Needed on a tab switch as well as on mount: the terminal never unmounts, so
+// coming back from the chat runs no mount effect, and the keyboard is still
+// wherever the click left it.
+export function focusPane(): void {
+  term?.focus();
+}
+
 export function clearPaneSinks(): void {
   dataSink = undefined;
   resizeSink = undefined;

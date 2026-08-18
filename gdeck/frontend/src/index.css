@@ -137,4 +137,9 @@ body,
   height: 100%;
   margin: 0;
   background: var(--background);
+  /* The window is a frame, not a document. Anything that needs to scroll —
+     the workspace list, the chat, a pane's scrollback — scrolls inside its own
+     box, so a scrollbar on the page itself is always a layout bug rather than
+     content that is legitimately too tall. */
+  overflow: hidden;
 }

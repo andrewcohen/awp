@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Monitor, Moon, Sun } from "lucide-react";
-import { paneFonts } from "./palette";
 import type { ThemeMode } from "./theme";
 
 // One row per workspace, from zmx's live sessions rather than from deckdata.
@@ -24,8 +23,6 @@ type Props = {
   onChoose: (id: string) => void;
   theme: ThemeMode;
   onTheme: (mode: ThemeMode) => void;
-  font: string;
-  onFont: (family: string) => void;
 };
 
 // Follow the OS, or override it. Icons rather than a label because the row is
@@ -48,8 +45,6 @@ export function Sidebar({
   onChoose,
   theme,
   onTheme,
-  font,
-  onFont,
 }: Props) {
   // Clicking a row is asking to work in that workspace, so the pane takes the
   // keyboard on mount — but a clicked button keeps focus, and would take it
@@ -138,27 +133,6 @@ export function Sidebar({
         ))}
       </div>
 
-      {/* Back in the sidebar until a preferences dialog exists to hold it.
-          Choosing a terminal face is a looking-at-it decision, and a decision
-          made by looking is not one anybody remembers afterwards — the list has
-          to be somewhere you can get at it, or the choice quietly reverts to
-          whatever the constant says. Each name renders in its own face so the
-          list previews itself. */}
-      <div className="flex flex-col gap-0.5 p-2">
-        <p className="text-muted-foreground px-3 pb-1 text-xs">font</p>
-        {paneFonts.map((f) => (
-          <Button
-            key={f.family}
-            variant={f.family === font ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => onFont(f.family)}
-            className="h-auto w-full justify-start px-3 py-1 text-left"
-            style={{ fontFamily: f.family }}
-          >
-            {f.label}
-          </Button>
-        ))}
-      </div>
     </nav>
   );
 }

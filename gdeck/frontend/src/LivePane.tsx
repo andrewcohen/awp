@@ -190,7 +190,11 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
   }, [session, fontFamily]);
 
   return (
-    <section style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    // h-full *and* w-full: this section is a flex item inside an absolutely
+    // positioned layer, so without both it sizes to its content and the
+    // terminal's container stops tracking the window — which reads as a pane
+    // that will not reflow.
+    <section className="flex h-full w-full min-w-0 flex-1 flex-col">
       <div
         ref={container}
         className="flex-1 overflow-hidden rounded-md"

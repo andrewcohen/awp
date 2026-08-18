@@ -1,7 +1,9 @@
 version: '3'
 
 vars:
-  APP_NAME: "gdeck"
+  # The bundle is called awp because that is what it is — gdeck is the name of
+  # the surface inside the repo, not of the application someone alt-tabs to.
+  APP_NAME: "awp"
   BIN_DIR: "bin"
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
