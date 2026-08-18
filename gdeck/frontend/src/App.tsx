@@ -28,13 +28,20 @@ type Status =
   | { state: "ok"; ms: number }
   | { state: "failed"; error: string };
 
-// A zmx session, as much of one as picking a pane needs. The generated bindings
-// carry the full type; this is the shape the list reads.
-type Session = { Name: string; Cmd: string; Ended: boolean; Clients: number };
+// A sidebar row: a workspace, and the agent a click attaches to. Grouping and
+// the agent-only rule live in Go — see Panes.Workspaces for why the list is not
+// sessions.
+type Workspace = {
+  Project: string;
+  Workspace: string;
+  Agent: string;
+  Cmd: string;
+  Others: number;
+};
 
 function App() {
   const [status, setStatus] = useState<Status>({ state: "loading" });
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   // Opens on the artifact rather than the pane, for two reasons that happen to
   // agree. It is the thing a terminal cannot do, so it is what this surface is
   // for; and its check is whether untrusted agent HTML is isolated from the
@@ -61,14 +68,23 @@ function App() {
 
   useEffect(() => {
     void Panes.LaunchedFrom().then(setLaunchedFrom);
-    Panes.Sessions().then(
+    Panes.Workspaces().then(
       (rows) => {
-        const live = (rows as Session[]).filter((s) => !s.Ended);
-        setSessions(live);
-        void Probe.Report("sessions-list", true, `${live.length} live of ${rows.length}`);
+        const list = rows as Workspace[];
+        setWorkspaces(list);
+        const attachable = list.filter((w) => w.Agent !== "").length;
+        void Probe.Report(
+          "workspaces-list",
+          true,
+          `${list.length} workspaces, ${attachable} with a live agent`,
+        );
       },
       (err: unknown) =>
-        void Probe.Report("sessions-list", false, err instanceof Error ? err.message : String(err)),
+        void Probe.Report(
+          "workspaces-list",
+          false,
+          err instanceof Error ? err.message : String(err),
+        ),
     );
   }, []);
 
@@ -134,42 +150,66 @@ function App() {
           </button>
         ))}
         <hr style={{ border: 0, borderTop: `1px solid ${macchiato.black}`, margin: "0.75rem 0" }} />
-        {sessions.length === 0 && (
-          <p style={{ color: macchiato.brightBlack, padding: "0 1rem" }}>no live zmx sessions</p>
+        {workspaces.length === 0 && (
+          <p style={{ color: macchiato.brightBlack, padding: "0 1rem" }}>no awp workspaces running</p>
         )}
-        {sessions.map((s) => {
-          const isHost = s.Name === launchedFrom;
+        {workspaces.map((w) => {
+          const isHost = w.Agent !== "" && w.Agent === launchedFrom;
+          const idle = w.Agent === "";
           return (
             <button
-              key={s.Name}
-              onClick={() => setChosen(s.Name)}
+              key={`${w.Project}/${w.Workspace}`}
+              onClick={() => setChosen(w.Agent)}
               // The session gdeck was launched from is the one row where a
               // stray click costs the developer their own terminal's layout.
               // Disabled rather than merely marked: nothing in the POC needs it,
               // and it is the row nearest the top of an alphabetical list.
-              disabled={isHost}
-              title={isHost ? "gdeck was launched from this session" : s.Name}
+              // Idle as well as host: a workspace with no live agent has
+              // nothing to attach to, and a row that looks clickable and does
+              // nothing is worse than one that says why.
+              disabled={isHost || idle}
+              title={
+                isHost
+                  ? "gdeck was launched from this workspace's agent"
+                  : idle
+                    ? "no live agent in this workspace"
+                    : w.Agent
+              }
               style={{
                 display: "block",
                 width: "100%",
                 textAlign: "left",
-                padding: "0.35rem 1rem",
+                // The marked row keeps its indent by paying for the accent out
+                // of the padding, so it does not sit a pixel off from the rest.
+                padding: isHost ? "0.35rem 1rem 0.35rem calc(1rem - 2px)" : "0.35rem 1rem",
                 border: 0,
+                borderLeft: isHost ? `2px solid ${macchiato.yellow}` : undefined,
                 font: "inherit",
-                cursor: isHost ? "not-allowed" : "pointer",
-                background: s.Name === chosen ? macchiato.black : "transparent",
-                color: isHost
-                  ? macchiato.brightBlack
-                  : s.Name === chosen
+                cursor: isHost || idle ? "not-allowed" : "pointer",
+                background: w.Agent !== "" && w.Agent === chosen ? macchiato.black : "transparent",
+                // Not dimmed. A row nobody may click still has to be findable —
+                // dimming it to the same grey as every second line hid it in a
+                // list of fifteen, which is the opposite of warning about it.
+                // The accent and the note carry "you cannot click this"; the
+                // name and command stay legible so it can be recognised.
+                color:
+                  w.Agent !== "" && w.Agent === chosen
                     ? macchiato.yellow
-                    : macchiato.text,
+                    : idle
+                      ? macchiato.brightBlack
+                      : macchiato.text,
               }}
             >
-              {s.Name}
+              <span style={{ color: macchiato.cyan }}>{w.Project}</span> / {w.Workspace}
               <span style={{ display: "block", color: macchiato.brightBlack }}>
-                {isHost ? "gdeck's own terminal" : s.Cmd || "—"}
-                {s.Clients > 0 ? ` · ${s.Clients} client${s.Clients === 1 ? "" : "s"}` : ""}
+                {idle ? "no live agent" : w.Cmd || "—"}
+                {w.Others > 0 ? ` · +${w.Others} other` : ""}
               </span>
+              {isHost && (
+                <span style={{ display: "block", color: macchiato.yellow }}>
+                  gdeck's own terminal — attaching would reflow it
+                </span>
+              )}
             </button>
           );
         })}

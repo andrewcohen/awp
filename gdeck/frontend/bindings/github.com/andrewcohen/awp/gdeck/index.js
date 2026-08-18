@@ -8,3 +8,7 @@ export {
     Panes,
     Probe
 };
+
+export {
+    Workspace
+} from "./models.js";
