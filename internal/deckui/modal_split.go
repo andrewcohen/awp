@@ -91,6 +91,7 @@ func splitPrefixMenu(m *Model) deckMenu {
 		return "put " + label + " in the right half"
 	})...)
 	verbs = append(verbs,
+		fullscreenShellVerb(),
 		userActionsVerb(m.userActionsFor()),
 		[2]string{alternateKey, "go to the arrangement before this one"},
 		captainVerb(),
@@ -148,6 +149,11 @@ func (s *splitModal) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	case sidebarKey:
 		m.toggleSidebar()
 		return nil
+	case fullscreenShellKey:
+		// Both halves go, the way they do for `L`: a shell on the whole screen is one
+		// arrangement replacing another, not a third region.
+		m.status = ""
+		return m.fullscreenShell(func() tea.Cmd { return s.close(m) })
 	case alternateKey:
 		return m.alternateFrom(func() tea.Cmd { return s.close(m) })
 	case captainKey:

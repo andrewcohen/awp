@@ -58,9 +58,15 @@ import (
 // "do I want to see what is waiting" does not change when you switch panes, so
 // it stays on until you turn it off.
 
-// sidebarKey is the verb, in both ctrl+b menus. Capital `S` because `s` is
-// already the window key for a shell, and the two live in the same menu.
-const sidebarKey = "S"
+// sidebarKey is the verb, in both ctrl+b menus. `A` for attention, which is what
+// the strip is a view of.
+//
+// It was `S` until the shell needed both of its cases: `s` splits to a shell and
+// `S` opens one full-screen (see fullscreenShellKey), which is one key doing one
+// thing in two sizes. The sidebar had `S` only because `s` was taken, which is a
+// worse claim on it than the shell's own — so the strip took a letter that says
+// what it is instead of one that says what it was not.
+const sidebarKey = "A"
 
 // sidebarDefaultWidth is the strip's width until you drag its edge, in columns.
 //
@@ -144,7 +150,7 @@ func (m *Model) sidebarCols() int {
 	return 0
 }
 
-// toggleSidebar is what ctrl+b S does.
+// toggleSidebar is what ctrl+b A does.
 //
 // A terminal too narrow refuses and says the width it wants, rather than setting
 // a flag that renders nothing — a key that appears to do nothing reads as broken,
