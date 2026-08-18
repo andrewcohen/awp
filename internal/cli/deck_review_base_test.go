@@ -17,11 +17,16 @@ import (
 // of jj because `trunk()..@` includes @, so whether the query excludes @ decides
 // whether the change is offered as its own parent — which is the thing under
 // test, not a string the query happens to contain.
+//
+// parentMoved makes the parent bookmark resolve to a commit that is not an
+// ancestor of @ — a parent rewritten after @ branched off it — which is jj's
+// "gaps in" case and the reason the resolver asks before returning a base.
 type reviewBaseRunner struct {
-	trunk    string
-	parent   string
-	atCursor string
-	revs     []string
+	trunk       string
+	parent      string
+	atCursor    string
+	parentMoved bool
+	revs        []string
 }
 
 func (r *reviewBaseRunner) Run(_ context.Context, _ string, _ string, args ...string) (string, error) {
@@ -35,6 +40,11 @@ func (r *reviewBaseRunner) Run(_ context.Context, _ string, _ string, args ...st
 	switch {
 	case revset == "trunk()":
 		return r.trunk + "\n", nil
+	case strings.HasSuffix(revset, "~ ::@"):
+		if r.parentMoved {
+			return "7a8f6e8b90f2\n", nil
+		}
+		return "\n", nil
 	case strings.HasPrefix(revset, "heads("):
 		// @ is in trunk()..@ and is the nearest thing to @ there is, so a bookmark on
 		// it wins heads() outright — unless the query took @ out of the set.
@@ -292,5 +302,49 @@ func TestDiffSubjectCarriesTheOwnBookmark(t *testing.T) {
 	// The workspace root, not wherever in it you were standing.
 	if item.Path != "/ws/pr-2336" {
 		t.Fatalf("Path = %q, want the workspace root", item.Path)
+	}
+}
+
+// A base is picked as a name, and the name is resolved again when the diff is
+// read. A parent rewritten in between resolves to a commit @ never descended
+// from, so `parent..@` has a gap in it and jj refuses the whole call:
+//
+//	load diff: "jj" exited 1: Error: Cannot diff revsets with gaps in.
+//	Hint: Revision 7a8f6e8b90f2 would need to be in the set.
+//
+// Pressing `c` then failed outright rather than falling back — a review that
+// cannot be opened at all, for a base awp chose itself.
+func TestResolveReviewStackBaseWillNotReturnABaseWithNoRangeToAt(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent", parentMoved: true}
+	if got := resolveReviewStackBase(r, "/ws/child", "andrew/child"); got != "trunk()" {
+		t.Fatalf("base = %q, want trunk() — `%s..@` is a range jj will not diff", got, got)
+	}
+}
+
+// And the label follows the base it fell back to: naming the rewritten parent
+// while diffing against trunk is the footer confidently describing another diff.
+func TestResolveReviewStackBaseNamedFallsBackWithTrunksName(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent", parentMoved: true}
+	revset, label := resolveReviewStackBaseNamed(r, "/ws/child", "andrew/child")
+	if revset != "trunk()" || label != "main" {
+		t.Fatalf("base = %q labelled %q, want trunk() labelled main", revset, label)
+	}
+}
+
+// A parent still in @'s ancestry is used, checked and all: the guard must not
+// flatten every stacked review to trunk.
+func TestResolveReviewStackBaseKeepsAConnectedParent(t *testing.T) {
+	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent"}
+	if got := resolveReviewStackBase(r, "/ws/child", "andrew/child"); got != "andrew/parent" {
+		t.Fatalf("base = %q, want andrew/parent", got)
+	}
+	var asked bool
+	for _, rv := range r.revs {
+		if strings.HasSuffix(rv, "~ ::@") {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Fatalf("the resolver never checked the range exists: %v", r.revs)
 	}
 }

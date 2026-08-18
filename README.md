@@ -497,6 +497,34 @@ never source — so a line in the middle of a block comment or a multi-line stri
 is coloured as if it were code. And a file whose extension no lexer claims
 renders exactly as it does today rather than being guessed at.
 
+### When the diff will not load
+
+A diff that fails to load — a revset that doesn't resolve, a stale working copy,
+a repo `jj` will not read — shows **the failing command's own output**, in place
+of the panes, headed `Could not load the diff`. That is where jj's `Error:` and
+`Hint:` lines are; the footer keeps a one-line summary, and the panel names
+`~/.awp/awp.log` for anything longer than the body has rows (`awp logs`).
+
+It used to be the footer alone, and a footer is one row: the message arrived as
+`load diff: "jj" exited 1:` followed by jj's stderr on the lines beneath, the
+status bar was truncated to the terminal's width across the whole blob, and every
+line after the first — the only part that said *why* — was replaced by a single
+`…`. Every failure this surface reports is now one line on the footer and whole
+in the log, for the same reason.
+
+A refresh that fails while a diff is already on screen **keeps the diff** and
+reports on the footer: the panel is for the case where the panes would otherwise
+be two empty boxes.
+
+**A base with no range to `@` falls back to trunk.** Stack-base resolution finds
+the parent by walking `@`'s ancestry, but what it returns is a bookmark *name*,
+and the name is resolved a second time when the diff is read. A parent rewritten
+in between resolves to a commit `@` never descended from, so `parent..@` has a
+gap in it and jj refuses the whole call — `Error: Cannot diff revsets with gaps
+in.` — which made `c` fail outright, for a base awp picked itself. The resolver
+now checks the range exists before returning the base, and reviews against
+`trunk()` (footer named accordingly) when it does not.
+
 ### More or less code around a hunk (`+` / `_`)
 
 A hunk on its own says what changed, not what it does. `+` widens the unchanged

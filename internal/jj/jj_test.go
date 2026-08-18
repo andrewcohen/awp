@@ -497,3 +497,84 @@ func TestDiffGitPassesTheContextItWasGiven(t *testing.T) {
 		}
 	}
 }
+
+// jj's complaint is what makes a failure actionable, so it has to be in the
+// message — once. awp's runners already quote the command's output, and the
+// duplicate is what a one-row status bar spends its width on.
+func TestTheCommandsOutputAppearsOnce(t *testing.T) {
+	const complaint = "Error: Cannot diff revsets with gaps in.\nHint: Revision 7a8f6e8b90f2 would need to be in the set."
+	runnerErr := errors.New(`"jj" exited 1:` + "\n" + complaint)
+
+	got := formatCommandError("load diff", runnerErr, complaint).Error()
+	if n := strings.Count(got, "Cannot diff revsets"); n != 1 {
+		t.Fatalf("jj's complaint appears %d times, want 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "load diff") || !strings.Contains(got, "would need to be in the set") {
+		t.Fatalf("expected the action and the whole complaint, got:\n%s", got)
+	}
+}
+
+// A runner that says nothing about the output still gets it attached — that is
+// the case the attachment exists for.
+func TestOutputIsAttachedWhenTheErrorDoesNotCarryIt(t *testing.T) {
+	long := strings.Repeat("jj is unhappy about this particular revset. ", 20)
+	got := formatCommandError("load diff", errors.New("exit status 1"), long).Error()
+	if !strings.Contains(got, "jj is unhappy") {
+		t.Fatalf("expected the output attached, got:\n%s", got)
+	}
+}
+
+// And a capped snippet counts as carrying it: the runners ellipsise long output,
+// so the message holds a prefix of itself rather than the whole thing.
+func TestATruncatedSnippetCountsAsCarried(t *testing.T) {
+	long := strings.Repeat("jj is unhappy about this particular revset. ", 40)
+	runnerErr := errors.New(`"jj" exited 1:` + "\n" + long[:800] + "…")
+	if n := strings.Count(formatCommandError("load diff", runnerErr, long).Error(), "jj is unhappy"); n > 20 {
+		t.Fatalf("the output was attached again on top of the runner's snippet (%d mentions)", n)
+	}
+}
+
+// A base whose range to @ has a gap in it is one jj will refuse to diff, so the
+// question has to be answerable before the diff is attempted.
+func TestConnectedToWorkingCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{name: "an ancestor of @ leaves nothing outside ::@", out: "\n", want: true},
+		{name: "a bookmark that moved is outside it", out: "7a8f6e8b90f2\n", want: false},
+		{
+			// A leaked stderr line read as a commit would call every base disconnected
+			// and flatten every review to trunk.
+			name: "a leaked diagnostic is not a commit",
+			out:  "Warning: Refused to snapshot some files:\n  some/path\n",
+			want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fakeRunner{out: tc.out}
+			got, err := New(r).ConnectedToWorkingCopy("andrew/parent")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("connected = %t, want %t", got, tc.want)
+			}
+			// Asked as "what part of the base is not an ancestor of @", so a divergent
+			// bookmark is judged on every commit it resolves to.
+			if want := `(andrew/parent) ~ ::@`; !slicesContain(r.lastArgs, want) {
+				t.Fatalf("revset asked for = %v, want %q", r.lastArgs, want)
+			}
+		})
+	}
+}
+
+func slicesContain(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
