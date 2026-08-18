@@ -28,7 +28,7 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as zmx$0 from "../internal/zmx/models.js";
+import * as $models from "./models.js";
 
 /**
  * Close ends the attach client. The session outlives it — that is the point of
@@ -94,16 +94,22 @@ export function Send(dataB64) {
 }
 
 /**
- * Sessions lists what zmx is holding, so the frontend has something real to
- * attach to.
- * @returns {$CancellablePromise<zmx$0.Session[]>}
+ * Workspaces groups zmx's sessions into what the sidebar shows.
+ * 
+ * Derived from the sessions rather than from deckdata, which is the deck's own
+ * view-model and the more complete answer: it knows workspaces that exist on
+ * disk with nothing running in them at all, and it knows which of them want
+ * attention. Neither is a question this POC asks — a pane needs something live
+ * to attach to — so the cheaper source is the honest one until the sidebar has
+ * to say more than "here is what you can open".
+ * @returns {$CancellablePromise<$models.Workspace[]>}
  */
-export function Sessions() {
-    return $Call.ByID(167259848).then(/** @type {($result: any) => any} */(($result) => {
+export function Workspaces() {
+    return $Call.ByID(625515787).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType1($result);
     }));
 }
 
 // Private type creation functions
-const $$createType0 = zmx$0.Session.createFrom;
+const $$createType0 = $models.Workspace.createFrom;
 const $$createType1 = $Create.Array($$createType0);

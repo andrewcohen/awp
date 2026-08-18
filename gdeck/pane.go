@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"sync"
 
 	"github.com/creack/pty"
@@ -56,14 +57,85 @@ const (
 	paneExitEvent = "pane:exit"
 )
 
-// Sessions lists what zmx is holding, so the frontend has something real to
-// attach to.
-func (p *Panes) Sessions() ([]zmx.Session, error) {
+// Workspace is one row of the sidebar: a workspace, and the agent in it.
+//
+// The list is workspaces rather than sessions because a session is not what
+// anyone is looking for. `zmx ls` returns the editor beside the agent and calls
+// both a row, so a workspace being worked in appears twice and the list is
+// twice as long as the thing it describes. The deck's own list has always been
+// one row per workspace for the same reason.
+//
+// Agent is the session a click attaches to, and is the only one a click ever
+// attaches to — an editor is nvim, and putting someone else's nvim in a pane is
+// not a thing this POC is asking about. A workspace whose agent has exited keeps
+// its row with Agent empty, because "this workspace has no agent right now" is
+// an answer, and silently dropping it would make the list disagree with the deck.
+type Workspace struct {
+	Project   string
+	Workspace string
+	// Agent is the zmx session name to attach to, or "" when there is none.
+	Agent string
+	// Cmd is what the agent is running, for the row's second line.
+	Cmd string
+	// Others counts the workspace's non-agent sessions, so the row can say the
+	// editor is there without listing it as somewhere to go.
+	Others int
+}
+
+// Workspaces groups zmx's sessions into what the sidebar shows.
+//
+// Derived from the sessions rather than from deckdata, which is the deck's own
+// view-model and the more complete answer: it knows workspaces that exist on
+// disk with nothing running in them at all, and it knows which of them want
+// attention. Neither is a question this POC asks — a pane needs something live
+// to attach to — so the cheaper source is the honest one until the sidebar has
+// to say more than "here is what you can open".
+func (p *Panes) Workspaces() ([]Workspace, error) {
 	sessions, err := zmxClient().List(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("listing zmx sessions: %w", err)
 	}
-	return sessions, nil
+
+	byKey := map[string]*Workspace{}
+	var order []string
+	for _, s := range sessions {
+		project, workspace, kind, ok := s.Identity()
+		if !ok {
+			// `zmx ls` lists every session on the machine, including ones awp
+			// did not create. Those have no workspace to file under.
+			continue
+		}
+		key := project + "\x00" + workspace
+		row, seen := byKey[key]
+		if !seen {
+			row = &Workspace{Project: project, Workspace: workspace}
+			byKey[key] = row
+			order = append(order, key)
+		}
+		switch {
+		case kind != "agent":
+			row.Others++
+		case s.Live():
+			row.Agent, row.Cmd = s.Name, s.Cmd
+		default:
+			// An ended agent is listed but not attachable: zmx keeps a session
+			// after its command exits so the output can still be read, so
+			// "listed" and "running" are different questions.
+			row.Cmd = s.Cmd
+		}
+	}
+
+	rows := make([]Workspace, 0, len(order))
+	for _, key := range order {
+		rows = append(rows, *byKey[key])
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Project != rows[j].Project {
+			return rows[i].Project < rows[j].Project
+		}
+		return rows[i].Workspace < rows[j].Workspace
+	})
+	return rows, nil
 }
 
 // LaunchedFrom names the zmx session gdeck itself was started from, or "" when
