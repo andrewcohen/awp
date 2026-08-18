@@ -69,7 +69,11 @@ func main() {
 		Width:  paneWindowW,
 		Height: paneWindowH,
 		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
+			// Matched by titleBarHeight in App.tsx, which reserves the strip the
+			// traffic lights sit in. The page owns the top edge with this title
+			// bar style, so if nothing reserves that space the content renders
+			// underneath the lights.
+			InvisibleTitleBarHeight: 52,
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
 		// Catppuccin Macchiato base, so the window does not flash white before

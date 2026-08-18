@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal, FitAddon } from "ghostty-web";
 import { Events } from "@wailsio/runtime";
 import { paneTheme } from "./palette";
-import * as Panes from "../bindings/github.com/andrewcohen/awp/gdeck/panes";
-import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
+import { mountPaneTerminal, resetPane, setPaneSinks, clearPaneSinks } from "./paneTerminal";
+import * as Panes from "@bindings/panes";
+import * as Probe from "@bindings/probe";
 
 // A real agent, attached over a pty, rendered by libghostty in the webview.
 //
@@ -12,6 +12,9 @@ import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
 // latency — a terminal that is right and late is not a terminal anyone will
 // work in. So the pane measures itself and reports numbers rather than a
 // verdict, because "feels fine" is not a claim that survives being wrong.
+//
+// The Terminal is borrowed, not built — see paneTerminal for what building one
+// per view did to the wasm state they share.
 
 // A pty is bytes, and JSON is text, so both directions go base64. The pane's
 // output cannot be decoded as UTF-8 on the way through: a 64KB read can split a
@@ -72,28 +75,79 @@ class echoTimer {
   }
 }
 
-export function LivePane({ session }: { session: string }) {
-  const host = useRef<HTMLDivElement | null>(null);
+export function LivePane({ session, fontFamily }: { session: string; fontFamily: string }) {
+  const container = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string>("");
   const [exited, setExited] = useState(false);
   const timer = useRef(new echoTimer());
 
   useEffect(() => {
-    const parent = host.current;
+    const parent = container.current;
     if (!parent) {
       return;
     }
 
-    const term = new Terminal({
-      theme: paneTheme,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      fontSize: 13,
-      scrollback: 10_000,
+    const { term } = mountPaneTerminal(parent, fontFamily);
+    resetPane();
+    setExited(false);
+    timer.current = new echoTimer();
+
+    // Clicking a workspace is asking to work in it, so the keyboard should
+    // already be there. Without this the pane renders, looks attached, and
+    // swallows the first thing typed at it — the one interaction where "it
+    // looks ready but isn't" costs you a keystroke you meant for the agent.
+    term.focus();
+
+    setPaneSinks(
+      (data) => {
+        timer.current.sent();
+        void Panes.Send(fromBytes(data));
+      },
+      (cols, rows) => void Panes.Resize(cols, rows),
+    );
+
+    // The wheel, on a full-screen program, belongs to the program.
+    //
+    // An alternate-screen program has no terminal scrollback — measured here as
+    // buffer=alternate, length == rows — so there is nothing for the wheel to
+    // move through and the agent owns its own transcript. What it does have is
+    // mouse reporting, and a wheel notch is a mouse event: that is how scrolling
+    // an agent works in Ghostty, and ghostty-web never does it. Its handler goes
+    // straight from "alternate screen" to synthesising arrow keys, which walks
+    // the input history instead and looks like the pane typing to itself.
+    //
+    // So: ask the program. hasMouseTracking() is the terminal reporting that the
+    // program asked for mouse events, and the pty is already ours to write to,
+    // so the notch goes down as an SGR report and the program scrolls itself.
+    term.attachCustomWheelEventHandler((event: WheelEvent) => {
+      if (term.buffer.active.type !== "alternate") {
+        return false;
+      }
+      if (!term.wasmTerm?.hasMouseTracking()) {
+        return true;
+      }
+      const cell = term.renderer?.getMetrics();
+      const box = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+      const col =
+        cell && box
+          ? Math.min(term.cols, Math.max(1, Math.floor((event.clientX - box.left) / cell.width) + 1))
+          : 1;
+      const row =
+        cell && box
+          ? Math.min(term.rows, Math.max(1, Math.floor((event.clientY - box.top) / cell.height) + 1))
+          : 1;
+      const lines = Math.min(
+        10,
+        Math.max(1, Math.round(Math.abs(event.deltaY) / (cell?.height ?? 20))),
+      );
+      const button = event.deltaY > 0 ? 65 : 64;
+      let report = "";
+      for (let i = 0; i < lines; i++) {
+        report += `\x1b[<${button};${col};${row}M`;
+      }
+      void Panes.Send(fromBytes(report));
+      return true;
     });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(parent);
-    fit.fit();
 
     const offData = Events.On("pane:data", (event: { data: string }) => {
       timer.current.received();
@@ -102,37 +156,46 @@ export function LivePane({ session }: { session: string }) {
     const offExit = Events.On("pane:exit", () => setExited(true));
 
     // The pty is opened at the size the emulator settled on rather than a
-    // guessed one: a zmx session takes its shape from the client attached to
-    // it, so opening at the wrong size means the program lays its first frame
-    // out for a terminal that does not exist and reflows when corrected.
-    Panes.Open(session, term.cols, term.rows).catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : String(err)),
-    );
+    // guessed one: a zmx session takes its shape from the client attached to it,
+    // so opening at the wrong size means the program lays its first frame out
+    // for a terminal that does not exist and reflows when corrected.
+    //
+    // No history prefill. It was written to give the wheel something to reach,
+    // and the measurement said the agent is on the alternate screen — which has
+    // no scrollback at all, so the history landed in a buffer the alt screen
+    // hides. Scrolling works now because the wheel reaches the program instead.
+    const opening = performance.now();
+    void Panes.Open(session, term.cols, term.rows)
+      .then(() =>
+        Probe.Report(
+          "pane-open-cost",
+          true,
+          `${Math.round(performance.now() - opening)}ms buffer=${term.buffer.active.type} ` +
+            `rows=${term.rows} length=${term.buffer.active.length}`,
+        ),
+      )
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
 
-    term.onData((data: string) => {
-      timer.current.sent();
-      void Panes.Send(fromBytes(data));
-    });
-    term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
-      void Panes.Resize(cols, rows);
-    });
-    fit.observeResize();
+    // Clicking a sidebar button leaves focus on the button, so the next
+    // keystroke goes to the browser rather than the agent. Taking it back when
+    // the window is re-entered means alt-tabbing away and back lands you where
+    // you were, which is what a terminal does.
+    const refocus = () => term.focus();
+    window.addEventListener("focus", refocus);
 
     return () => {
-      // Report on the way out rather than on a timer: the sample set is only
-      // interesting once someone has finished typing into it.
       void Probe.Report("pane-echo-latency", true, timer.current.summary());
+      window.removeEventListener("focus", refocus);
       offData();
       offExit();
-      fit.dispose();
-      term.dispose();
+      clearPaneSinks();
       void Panes.Close();
     };
-  }, [session]);
+  }, [session, fontFamily]);
 
   return (
     <section style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <div ref={host} style={{ flex: 1, minHeight: 0 }} />
+      <div ref={container} style={{ flex: 1, minHeight: 0 }} />
       {exited && <p style={{ color: paneTheme.brightBlack }}>{session} ended</p>}
       {error !== "" && <pre style={{ color: paneTheme.red, whiteSpace: "pre-wrap" }}>{error}</pre>}
     </section>

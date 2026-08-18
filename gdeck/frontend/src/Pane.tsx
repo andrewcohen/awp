@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal } from "ghostty-web";
+import type { Terminal } from "ghostty-web";
 import { paneTheme } from "./palette";
-import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
+import { mountPaneTerminal, resetPane, clearPaneSinks } from "./paneTerminal";
+import * as Probe from "@bindings/probe";
 
 // A pane with no process behind it: libghostty interpreting bytes this file
 // hands it directly.
@@ -12,8 +13,9 @@ import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
 // answer if the emulator has already been shown correct against bytes chosen for
 // the purpose. There is no process here, no IPC, and nothing asynchronous — if
 // this frame is wrong, the emulator or the renderer is wrong.
-const cols = 80;
-const rows = 20;
+// No fixed size any more: the shared terminal is sized by the window it sits
+// in, and a static pane that forced 80x20 would resize the live one every time
+// it was opened.
 
 // Bytes chosen to fail loudly rather than to look nice.
 //
@@ -112,7 +114,7 @@ async function snapshot(parent: HTMLElement, check: string): Promise<void> {
   }
 }
 
-export function Pane() {
+export function Pane({ fontFamily }: { fontFamily: string }) {
   const host = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<Status>({ state: "starting" });
 
@@ -122,23 +124,21 @@ export function Pane() {
       return;
     }
 
-    let term: Terminal | undefined;
+    // Borrowed, not built: the shared terminal, cleared and written to. See
+    // paneTerminal — a Terminal per view is what put a live agent's bytes into
+    // this pane's cells, which is the bug this file was supposed to rule out.
+    const { term } = mountPaneTerminal(parent, fontFamily);
+    resetPane();
+    clearPaneSinks();
     try {
-      term = new Terminal({
-        cols,
-        rows,
-        theme: paneTheme,
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 13,
-        cursorBlink: false,
-        // Nothing types into this pane, so an emulator that answers keystrokes
-        // would only be answering the browser's own focus behaviour.
-        disableStdin: true,
-      });
-      term.open(parent);
       term.write(script);
       setStatus({ state: "ok" });
-      void Probe.Report("pane-render-static", true, `${term.cols}x${term.rows}`);
+      const cell = term.renderer?.getMetrics();
+      void Probe.Report(
+        "pane-render-static",
+        true,
+        `${term.cols}x${term.rows} cell=${cell?.width}x${cell?.height} baseline=${cell?.baseline}`,
+      );
       void Probe.Report("pane-buffer-static", true, describeBuffer(term));
       void snapshot(parent, "pane-render-static");
     } catch (err: unknown) {
@@ -147,8 +147,7 @@ export function Pane() {
       void Probe.Report("pane-render-static", false, error);
     }
 
-    return () => term?.dispose();
-  }, []);
+  }, [fontFamily]);
 
   return (
     <section>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { macchiato } from "./palette";
-import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
+import * as Probe from "@bindings/probe";
 
 // The reason this surface exists: HTML an agent produced, rendered as HTML.
 //

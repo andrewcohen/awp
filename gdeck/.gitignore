@@ -7,3 +7,8 @@ frontend/node_modules
 # Hence the tracked .gitkeep and the ignore-contents-not-directory pattern.
 frontend/dist/*
 !frontend/dist/.gitkeep
+
+# `wails3 generate icons` writes a Windows .ico from a built-in default path,
+# with or without the flag, so the directory has to exist even though gdeck is
+# macOS-only. Its contents are generated.
+build/windows/

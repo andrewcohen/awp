@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -47,6 +49,9 @@ type livePane struct {
 	// done closes when the reader goroutine has seen EOF, so Close can tell a
 	// pane that exited on its own from one it is ending.
 	done chan struct{}
+	// opened is when the attach was started, so the wait for the first frame can
+	// be reported separately from the spawn.
+	opened time.Time
 }
 
 // Event names the frontend listens on. Output is base64 because a pty carries
@@ -142,11 +147,34 @@ func (p *Panes) Workspaces() ([]Workspace, error) {
 // it was not started from one.
 //
 // Read before anything strips it, and offered to the frontend so that row can be
-// marked. Attaching to it is not a crash — vterm.Env keeps `zmx attach` from
-// hijacking the calling client — but it is still a second client on the terminal
-// the developer is sitting in, and the session will take gdeck's pane size. The
-// first thing a POC gets clicked on is whatever is at the top of the list.
+// marked — marked, not withheld. Attaching to it is the most informative test
+// gdeck has: the pane shows the conversation building gdeck, driven from inside
+// gdeck. vterm.Env keeps `zmx attach` from hijacking the calling client, so this
+// is a new client; the only cost is that the session takes the pane's size while
+// attached and returns to the other client's on close.
 func (p *Panes) LaunchedFrom() string { return os.Getenv("ZMX_SESSION") }
+
+// History is what the session printed before this pane existed, escape
+// sequences intact, base64 for the same reason the live stream is.
+//
+// A pane has no scrollback without it, and that is not a rendering bug however
+// much it looks like one: `zmx attach` replays the session's *current screen*,
+// so the wheel has nothing above the first frame to scroll to. `zmx history`
+// answers the other question — what came before — and the deck has never needed
+// to ask it, because a tmux or zmx client brings its own scrollback with it. A
+// webview terminal starts empty and has to be told.
+//
+// Read without attaching, so nothing here resizes the session.
+func (p *Panes) History(session string) (string, error) {
+	if session == "" {
+		return "", errors.New("pane history: no session named; pass one of the names Workspaces returns")
+	}
+	out, err := zmxClient().History(context.Background(), session)
+	if err != nil {
+		return "", fmt.Errorf("pane history: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString([]byte(out)), nil
+}
 
 // Open attaches to a session and starts streaming it. Any pane already open is
 // closed first — see the note on Panes about why there is only ever one.
@@ -164,8 +192,12 @@ func (p *Panes) Open(session string, cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return fmt.Errorf("pane open %s: want a positive size, got %dx%d", session, cols, rows)
 	}
+	closing := time.Now()
 	if err := p.Close(); err != nil {
 		return err
+	}
+	if took := time.Since(closing); took > time.Millisecond {
+		slog.Info("gdeck pane closed previous", "ms", took.Milliseconds())
 	}
 
 	// os.Environ() rather than a bare environment, and AttachCmd rather than a
@@ -175,13 +207,19 @@ func (p *Panes) Open(session string, cols, rows int) error {
 	// steal the terminal gdeck was launched from and lose whatever agent was in
 	// it. AttachCmd runs the environment through vterm.Env, which drops that
 	// marker along with the other "you are already inside me" variables.
+	// Split into spawn and first-byte, because "attaching is slow" has two very
+	// different causes and they are fixed in different places: forking a process
+	// onto a pty is awp's cost, while the wait for the first frame is the zmx
+	// daemon deciding to hand this client the session's screen.
+	started := time.Now()
 	cmd := zmx.AttachCmd("", session, nil, os.Environ())
 	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}) //nolint:gosec // cols and rows are checked positive above and bounded by the caller's terminal size.
 	if err != nil {
 		return fmt.Errorf("pane open %s: starting `zmx attach` on a pty: %w", session, err)
 	}
+	slog.Info("gdeck pane spawned", "session", session, "ms", time.Since(started).Milliseconds())
 
-	live := &livePane{session: session, cmd: cmd, tty: tty, done: make(chan struct{})}
+	live := &livePane{session: session, cmd: cmd, tty: tty, done: make(chan struct{}), opened: started}
 	p.mu.Lock()
 	p.current = live
 	p.mu.Unlock()
@@ -201,8 +239,21 @@ func (l *livePane) stream() {
 
 	app := application.Get()
 	buf := make([]byte, 64*1024)
+	first, drawn := true, false
+	total := 0
 	for {
 		n, err := l.tty.Read(buf)
+		total += n
+		if n > 0 && first {
+			first = false
+			slog.Info("gdeck pane first byte", "session", l.session,
+				"ms", time.Since(l.opened).Milliseconds(), "bytes", n)
+		}
+		if !drawn && total > 2048 {
+			drawn = true
+			slog.Info("gdeck pane screen", "session", l.session,
+				"ms", time.Since(l.opened).Milliseconds(), "bytes", total)
+		}
 		if n > 0 && app != nil {
 			app.Event.Emit(paneDataEvent, base64.StdEncoding.EncodeToString(buf[:n]))
 		}
