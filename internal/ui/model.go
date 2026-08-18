@@ -249,6 +249,11 @@ type Model struct {
 	// matching it is a no-op.
 	fingerprint uint64
 	loaded      bool
+	// loadErr is the last diff load failure, kept whole. The status line gets one
+	// line of it and the next keystroke takes even that away, so the reason a diff
+	// would not load — which is jj's own sentence, on jj's stderr — has to live
+	// somewhere the reader can still read it. See renderLoadErrorOverlay.
+	loadErr error
 	// comments are the findings anchored into this diff, placed during the
 	// geometry pass (see comments.go).
 	comments []review.Comment
@@ -418,7 +423,11 @@ type Model struct {
 // reports a failure by calling this. See failure_log_test.go, which enforces it.
 func (m *Model) fail(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	m.status = msg
+	// The log gets the message whole; the footer is one row, so it gets one line of
+	// it. A command's error carries its stderr underneath the first line, and a
+	// multi-line status does not truncate — it wraps, pushing the footer into the
+	// body (in the deck's diff modal it lands mid-sentence in a " · " join).
+	m.status = firstLine(msg)
 	m.statusErr = true
 	awplog.Errorf("diff: %s", msg)
 }
@@ -707,9 +716,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case diffLoadedMsg:
 		m.refreshing = false
 		if msg.err != nil {
+			m.loadErr = msg.err
 			m.fail("error: %v", msg.err)
 			return m, scheduleRefresh(m.RefreshInterval)
 		}
+		m.loadErr = nil
 		// Unchanged diff: leave every bit of view state alone. Live refresh
 		// polls on a timer, so most reloads land here, and doing nothing is
 		// what makes the polling invisible.
@@ -1640,6 +1651,13 @@ func (m Model) Body(width, height int) string {
 	}
 	if m.merging {
 		return m.renderMergeOverlay(width, height)
+	}
+	// Nothing loaded and a reason why: the panes would be two empty boxes, and the
+	// reason would be a footer line one keystroke from gone. A load that fails while
+	// a diff is already on screen keeps the diff — the status line and the log carry
+	// that one.
+	if !m.loaded && m.loadErr != nil {
+		return renderLoadErrorOverlay(m.loadErr, width, height)
 	}
 	leftWidth, rightWidth := m.paneWidthsFor(width)
 	if m.hideLeft {

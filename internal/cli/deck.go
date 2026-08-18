@@ -2725,6 +2725,15 @@ func resolveReviewStackBaseNamed(runner Runner, dir, ownBookmark string) (revset
 	}
 	query += `)`
 	if parent, err := j.BookmarkNameAt(query); err == nil && strings.TrimSpace(parent) != "" {
+		// The query found the parent by walking @'s ancestry, but what comes back is a
+		// *name*, and the name is resolved a second time when the diff is read. A
+		// bookmark that has moved since @ branched off it resolves to a commit @ never
+		// descended from, so `parent..@` has a gap in it and jj refuses to diff the
+		// range at all — the whole review fails rather than falling back. Ask before
+		// returning a base whose range does not exist.
+		if ok, err := j.ConnectedToWorkingCopy(parent); err == nil && !ok {
+			return "trunk()", trunk
+		}
 		return parent, parent
 	}
 	return "trunk()", trunk

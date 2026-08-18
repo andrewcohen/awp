@@ -530,6 +530,49 @@ func (c *Client) IsRevisionEmpty(revision string) (bool, error) {
 	return strings.TrimSpace(out) == "", nil
 }
 
+// ConnectedToWorkingCopy reports whether `<base>..@` is a range jj will diff:
+// every commit base resolves to has to be an ancestor of @, or the range has a
+// gap in it and jj refuses the whole call —
+//
+//	Error: Cannot diff revsets with gaps in.
+//	Hint: Revision 7a8f6e8b90f2 would need to be in the set.
+//
+// Which is what a bookmark that has moved out from under @ produces: the name
+// still resolves, so nothing about it looks wrong until it is one end of a range.
+// A base is picked from @'s ancestry, but it is picked as a *name*, and the name
+// is resolved again when the diff is read — by which time a rewritten parent
+// points somewhere @ never descended from.
+//
+// Asks what part of base is *not* an ancestor of @, so a base resolving to
+// several commits (a divergent bookmark) is judged on all of them rather than on
+// whichever one a `heads()` happened to pick.
+func (c *Client) ConnectedToWorkingCopy(base string) (bool, error) {
+	revset := fmt.Sprintf("(%s) ~ ::@", base)
+	out, err := c.runner.Run(context.Background(), "", "jj", "--ignore-working-copy", "log", "--no-graph", "-r", revset, "-T", `commit_id.short() ++ "\n"`)
+	if err != nil {
+		return false, formatCommandError(fmt.Sprintf("check whether %q is behind @", base), err, out)
+	}
+	return !hasRevisionLine(out), nil
+}
+
+// hasRevisionLine reports whether jj's log output names any commit, ignoring the
+// diagnostics CombinedOutput merges in from stderr — the same reason
+// firstBookmarkName filters them, and here a leaked "Warning:" line read as a
+// commit would call every base disconnected.
+func hasRevisionLine(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if line != strings.TrimLeft(line, " \t") {
+			continue
+		}
+		s := strings.TrimSpace(line)
+		if s == "" || isJJDiagnosticLine(s) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func (c *Client) AbandonRevision(revision string) error {
 	out, err := c.runner.Run(context.Background(), "", "jj", "abandon", revision)
 	if err != nil {
@@ -538,12 +581,40 @@ func (c *Client) AbandonRevision(revision string) error {
 	return nil
 }
 
+// formatCommandError names what was being attempted and attaches jj's own words
+// about why it failed — which is the only part of a failed `jj` invocation worth
+// reading, and the part a bare "exit status 1" drops.
+//
+// Attached only if the error is not already carrying it. awp's runners put the
+// output in the message themselves, so the naive version said everything twice:
+// `load diff: "jj" exited 1: Error: Cannot diff revsets with gaps in. … Error:
+// Cannot diff revsets with gaps in. …` — read on a one-row status bar, the
+// duplicate is what the width goes on.
 func formatCommandError(action string, err error, output string) error {
 	output = strings.TrimSpace(output)
-	if output == "" {
+	if output == "" || errCarriesOutput(err, output) {
 		return fmt.Errorf("%s: %w", action, err)
 	}
 	return fmt.Errorf("%s: %w\n%s", action, err, output)
+}
+
+// outputProbe is how much of the output has to appear in the message to count as
+// the message already quoting it. The runners cap the snippet they attach (800
+// bytes, ellipsised), so a long output is only ever present as a prefix of
+// itself — and a runner that attaches nothing shares no prefix at all.
+const outputProbe = 64
+
+func errCarriesOutput(err error, output string) bool {
+	msg := err.Error()
+	if strings.Contains(msg, output) {
+		return true
+	}
+	if len(output) <= outputProbe {
+		return false
+	}
+	// A byte cut can land mid-rune, in which case this says no and the output is
+	// attached twice — the harmless direction.
+	return strings.Contains(msg, output[:outputProbe])
 }
 
 func trackCandidates(revision string) []string {
