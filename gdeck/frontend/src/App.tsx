@@ -3,9 +3,10 @@ import { init } from "ghostty-web";
 import { Pane } from "./Pane";
 import { LivePane } from "./LivePane";
 import { Artifact } from "./Artifact";
-import { macchiato } from "./palette";
-import * as Panes from "../bindings/github.com/andrewcohen/awp/gdeck/panes";
-import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
+import { Boundary } from "./Boundary";
+import { macchiato, paneFonts } from "./palette";
+import * as Panes from "@bindings/panes";
+import * as Probe from "@bindings/probe";
 
 // The POC's first question, asked on screen rather than in a test: does
 // libghostty's wasm instantiate inside a Wails webview at all?
@@ -31,6 +32,11 @@ type Status =
 // A sidebar row: a workspace, and the agent a click attaches to. Grouping and
 // the agent-only rule live in Go — see Panes.Workspaces for why the list is not
 // sessions.
+// Matches Mac.InvisibleTitleBarHeight in main.go; the traffic lights sit inside
+// it. Stated in both places because the window is created in Go and the space is
+// reserved in CSS, and there is no way for one to read the other.
+const titleBarHeight = 52;
+
 type Workspace = {
   Project: string;
   Workspace: string;
@@ -47,8 +53,9 @@ function App() {
   // for; and its check is whether untrusted agent HTML is isolated from the
   // Wails bindings, which is an invariant that should be re-asserted on every
   // launch rather than whenever someone happens to click the row.
-  const [chosen, setChosen] = useState<string>("artifact");
+  const [chosen, setChosen] = useState<string>("");
   const [launchedFrom, setLaunchedFrom] = useState<string>("");
+  const [font, setFont] = useState<string>(paneFonts[0].family);
 
   useEffect(() => {
     const started = performance.now();
@@ -103,18 +110,36 @@ function App() {
   }
 
   return (
-    <main style={{ display: "flex", height: "100vh" }}>
-      {/* The dumbest sidebar that can pick a pane: zmx's own session list, not
-          the deck's rows. Which workspaces exist and which of them have an agent
-          waiting is deckdata's question and a different one — this list only has
-          to name something real to attach to. */}
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      {/* The window hides its title bar and insets the traffic lights, so the
+          page owns the top edge — including the strip the lights sit in. Nothing
+          reserved it, which is why content ran underneath them.
+
+          Reserved once here rather than as top padding on each column: two
+          paddings that have to agree about a number is how they stop agreeing.
+          -webkit-app-region: drag gives the strip the one behaviour a title bar
+          had that we still want. */}
+      <div
+        style={{
+          height: titleBarHeight,
+          flexShrink: 0,
+          // @ts-expect-error -- WebkitAppRegion is a real WebKit property that
+          // React's CSS typings do not carry.
+          WebkitAppRegion: "drag",
+        }}
+      />
+      <main style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      {/* One row per workspace, from zmx's live sessions rather than from
+          deckdata. Which workspaces exist on disk and which of them want
+          attention is deckdata's question and a different one — this list only
+          has to name something live to attach to. See Panes.Workspaces. */}
       <nav
         style={{
           width: 260,
           flexShrink: 0,
           borderRight: `1px solid ${macchiato.black}`,
           overflowY: "auto",
-          padding: "2.5rem 0 0",
+          padding: "0.75rem 0 0",
         }}
       >
         {/* Attaching is not looking. A zmx session takes its size from the
@@ -159,18 +184,29 @@ function App() {
           return (
             <button
               key={`${w.Project}/${w.Workspace}`}
-              onClick={() => setChosen(w.Agent)}
-              // The session gdeck was launched from is the one row where a
-              // stray click costs the developer their own terminal's layout.
-              // Disabled rather than merely marked: nothing in the POC needs it,
-              // and it is the row nearest the top of an alphabetical list.
-              // Idle as well as host: a workspace with no live agent has
-              // nothing to attach to, and a row that looks clickable and does
-              // nothing is worse than one that says why.
-              disabled={isHost || idle}
+              onClick={(e) => {
+                setChosen(w.Agent);
+                // Hand focus back immediately. The pane focuses itself on
+                // mount, but a clicked button keeps focus afterwards, so
+                // without this the first keystroke after every switch is eaten
+                // by the sidebar.
+                e.currentTarget.blur();
+              }}
+              // Only idle rows are disabled. A workspace with no live agent
+              // has nothing to attach to, and a row that looks clickable and
+              // does nothing is worse than one that says why.
+              //
+              // gdeck's own session is emphatically not that. Driving the
+              // conversation that is building gdeck from inside gdeck is the
+              // most informative test available, and forbidding it protected
+              // nobody from anything: the reflow is cosmetic, it reverses on
+              // close, and ZMX_SESSION is stripped, so this is a new client
+              // rather than a hijack of the calling one. The row is marked so
+              // it is not clicked by accident, not withheld.
+              disabled={idle}
               title={
                 isHost
-                  ? "gdeck was launched from this workspace's agent"
+                  ? "gdeck was launched from this workspace's agent — attaching reflows it"
                   : idle
                     ? "no live agent in this workspace"
                     : w.Agent
@@ -185,7 +221,7 @@ function App() {
                 border: 0,
                 borderLeft: isHost ? `2px solid ${macchiato.yellow}` : undefined,
                 font: "inherit",
-                cursor: isHost || idle ? "not-allowed" : "pointer",
+                cursor: idle ? "not-allowed" : "pointer",
                 background: w.Agent !== "" && w.Agent === chosen ? macchiato.black : "transparent",
                 // Not dimmed. A row nobody may click still has to be findable —
                 // dimming it to the same grey as every second line hid it in a
@@ -207,25 +243,78 @@ function App() {
               </span>
               {isHost && (
                 <span style={{ display: "block", color: macchiato.yellow }}>
-                  gdeck's own terminal — attaching would reflow it
+                  gdeck's own terminal — attaching reflows it, closing reflows back
                 </span>
               )}
             </button>
           );
         })}
+        <hr style={{ border: 0, borderTop: `1px solid ${macchiato.black}`, margin: "0.75rem 0" }} />
+        {/* A face is chosen by looking at it, so they are listed rather than
+            configured. Switching remounts the pane, which for a live one means
+            a detach and re-attach — cheap, and the session survives it. */}
+        <p style={{ color: macchiato.brightBlack, padding: "0 1rem", margin: "0 0 0.25rem" }}>font</p>
+        {paneFonts.map((f) => (
+          <button
+            key={f.family}
+            onClick={() => setFont(f.family)}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "0.15rem 1rem",
+              border: 0,
+              font: "inherit",
+              fontFamily: f.family,
+              cursor: "pointer",
+              background: "transparent",
+              color: f.family === font ? macchiato.yellow : macchiato.text,
+            }}
+          >
+            {f.family === font ? "› " : "  "}
+            {f.label}
+            <span style={{ color: macchiato.brightBlack }}> {f.note}</span>
+          </button>
+        ))}
       </nav>
 
-      <div style={{ flex: 1, minWidth: 0, padding: "2.5rem 1rem 1rem" }}>
-        {chosen === "" && <Pane />}
-        {chosen === "artifact" && <Artifact />}
-        {chosen !== "" && chosen !== "artifact" && <LivePane key={chosen} session={chosen} />}
-        <p style={{ color: macchiato.brightBlack, marginTop: "0.75rem" }}>
-          libghostty wasm instantiated in {status.ms}ms
-          {chosen === "" && " · pick a session to attach"}
-          {chosen !== "" && chosen !== "artifact" && ` · attached to ${chosen}`}
-        </p>
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          // The pane is the tallest thing gdeck has and it is sized to the box
+          // it is given, so anything else sharing that column has to be counted
+          // in the column's height rather than added under it. Laid out as a
+          // flex column with the pane on `flex: 1`, an extra line below shrinks
+          // the pane instead of overflowing the div and putting a scrollbar
+          // beside a terminal that has nothing to scroll.
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "hidden",
+          padding: "0.75rem 1rem 1rem",
+        }}
+      >
+        {/* Keyed on the view so a crash in one does not leave its error sitting
+            over the next thing clicked — picking another row gives a fresh
+            boundary, which is also the recovery path. */}
+        <Boundary key={`${chosen}:${font}`}>
+          {chosen === "" && <Pane fontFamily={font} />}
+          {chosen === "artifact" && <Artifact />}
+          {chosen !== "" && chosen !== "artifact" && <LivePane session={chosen} fontFamily={font} />}
+        </Boundary>
+        {/* Only where there is room for it. An attached pane gets the whole
+            column: a line of build telemetry under someone's agent is the
+            developer's note to themselves left on the user's screen. */}
+        {(chosen === "" || chosen === "artifact") && (
+          <p style={{ color: macchiato.brightBlack, margin: "0.75rem 0 0" }}>
+            libghostty wasm instantiated in {status.ms}ms
+            {chosen === "" && " · pick a workspace to attach"}
+          </p>
+        )}
       </div>
-    </main>
+      </main>
+    </div>
   );
 }
 
