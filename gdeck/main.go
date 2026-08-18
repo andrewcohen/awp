@@ -44,6 +44,7 @@ func main() {
 		Description: "awp's deck as a desktop window (POC)",
 		Services: []application.Service{
 			application.NewService(&Probe{}),
+			application.NewService(&Panes{}),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
