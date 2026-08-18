@@ -73,7 +73,7 @@ func main() {
 			// traffic lights sit in. The page owns the top edge with this title
 			// bar style, so if nothing reserves that space the content renders
 			// underneath the lights.
-			InvisibleTitleBarHeight: 52,
+			InvisibleTitleBarHeight: 38,
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
 		// Catppuccin Macchiato base, so the window does not flash white before

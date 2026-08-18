@@ -1,4 +1,5 @@
 import ReactDOM from "react-dom/client";
+import "./index.css";
 import App from "./App";
 
 // No StrictMode, and this is not laziness about double-render bugs.

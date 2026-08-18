@@ -49,6 +49,13 @@ const script = [
   "  └──────────┴──────────┘",
   "  ────────────────────────  ← one unbroken rule",
   "",
+  // The progress-bar case. Shade characters are dot patterns in the font
+  // outline, so drawn as text at fractional origins each cell falls out of
+  // phase with the next and a bar reads as moire. Drawn as geometry they are
+  // flat fills, and the eighth blocks step evenly.
+  "  \x1b[38;5;213m▓▓▓▓▓▓▓▓▒▒▒▒░░░░\x1b[0m 55%  ← shades",
+  "  █▉▊▋▌▍▎▏ ▁▂▃▄▅▆▇█        ← eighths, both axes",
+  "",
   "  ascii            | ← column 20",
   "  wide + ZWJ    👩‍💻 | ← two cells, two columns",
   "  combining      é | ← e + U+0301, one cell",
@@ -151,7 +158,11 @@ export function Pane({ fontFamily }: { fontFamily: string }) {
 
   return (
     <section>
-      <div ref={host} />
+      <div
+        ref={host}
+        className="overflow-hidden rounded-md"
+        style={{ backgroundColor: paneTheme.background }}
+      />
       {status.state === "failed" && (
         <pre style={{ color: paneTheme.red, whiteSpace: "pre-wrap" }}>
           pane failed to render:{"\n"}

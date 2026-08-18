@@ -7,29 +7,18 @@
     "dev": "vite",
     "build:dev": "tsc && vite build --minify false --mode development",
     "build": "tsc && vite build --mode production",
-    "preview": "vite preview",
-    "postinstall": "patch -p1 -N -s -d node_modules/ghostty-web/dist < ../patches/ghostty-web-renderer.patch || true"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@base-ui/react": "^1.7.0",
-    "@fontsource-variable/ibm-plex-sans": "^5.3.0",
     "@wailsio/runtime": "latest",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
     "ghostty-web": "^0.4.0",
-    "lucide-react": "^1.32.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "shadcn": "^4.18.0",
-    "tailwind-merge": "^3.6.0",
-    "tw-animate-css": "^1.4.0"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^6.0.0",
-    "tailwindcss": "^4.3.3",
     "typescript": "^5.2.2",
     "vite": "^8.0.5"
   }
