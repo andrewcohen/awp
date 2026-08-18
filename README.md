@@ -1997,3 +1997,57 @@ is why the archive links against nothing but libc. Zig is invoked through `mise
 exec zig@0.16.0` rather than listed in `mise.toml`, so nobody who will never make
 this build has a toolchain fetched on their behalf. Nothing about the default
 build changes: `go build ./...` stays cgo-free.
+
+## gdeck (proof of concept)
+
+`gdeck` is the deck as a **desktop window** instead of a TUI — Go, but rendering
+through a webview via [Wails v3](https://v3.wails.io) rather than lipgloss.
+
+It exists for the one thing neither terminal frontend can do: an agent that
+produces rich content — a rendered diff, a chart, an HTML report — can only be
+*transcribed* into a terminal, and Wails v3's multi-window support means such a
+thing gets its own window rather than competing with the sidebar for rows.
+
+**The pane is not a lookalike.** `awp deck` interprets a pane's bytes with
+libghostty-vt as a cgo archive; the webview gets the same library compiled to
+wasm, via [ghostty-web](https://github.com/coder/ghostty-web). One emulator, two
+bindings — so `internal/vterm`'s corpus stays the oracle for both, and a
+fidelity question has one answer rather than two. It also deletes a class of bug
+rather than porting it: `displayCol` / `cellForCol` exist because the deck draws
+a cursor at a column of a *rendered string* while the emulator counts cells, and
+a webview terminal renders its own cells, so there is no translation to get
+wrong.
+
+It is scoped to the questions the two existing surfaces cannot answer, and
+deliberately has no new-workspace flow, no review, no keybinding parity, and no
+packaging. `awp deck` remains the one to use for work.
+
+Building it needs the frontend built first, which is what the Taskfile is for:
+
+```sh
+go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+cd gdeck && wails3 dev          # or: wails3 generate bindings && (cd frontend && npm run build)
+```
+
+`gdeck/frontend/dist` is embedded by `main.go`, so the directory is tracked (via
+a `.gitkeep`) even when unbuilt — otherwise `go build ./...` cannot compile
+`gdeck` at all until someone has run npm.
+
+**POC results are logged, not screenshotted.** The `Probe` service exists so each
+question this surface is meant to answer lands in `gdeck`'s log as a `gdeck
+probe check=… result=…` line. A result nobody recorded gets remembered as better
+than it was, and nobody diffs two screenshots. Latency is reported as a number
+rather than a verdict, because whether a pane *feels* right is exactly what a
+pass/fail line cannot carry.
+
+Answered so far:
+
+| check | result |
+|-------|--------|
+| `wasm-instantiate` | libghostty's wasm compiles and instantiates inside WKWebView in ~35ms |
+
+That one was the day-one gate: WKWebView is particular about WebAssembly served
+over a custom URL scheme, which is how Wails serves frontend assets. It passes
+because ghostty-web sidesteps the scheme entirely — its bundle carries the wasm
+inline as a base64 `data:` URL and compiles it from an ArrayBuffer, with
+`./ghostty-vt.wasm` only as a fallback.
