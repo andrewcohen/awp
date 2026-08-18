@@ -1,6 +1,9 @@
 package zmx
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestSessionNameRoundTrips(t *testing.T) {
 	for _, tc := range []struct{ project, workspace, kind string }{
@@ -41,5 +44,29 @@ func TestCreatedAndCmdAreParsed(t *testing.T) {
 	}
 	if _, isLabel := s.Labels["cmd"]; isLabel {
 		t.Error("cmd leaked into Labels, where it reads as a user-set label")
+	}
+}
+
+// `zmx ls` points out the session the caller is inside with a leading marker,
+// and that session is the one awp most needs to see: it is the workspace the
+// developer is working in. Parsed naively the marker rides along on the first
+// field's key, the name comes out empty, and the line is rejected — so awp
+// lists every session except its own and calls that workspace empty.
+func TestTheCallersOwnSessionIsNotDroppedFromTheListing(t *testing.T) {
+	const tail = "\tpid=42\tclients=2\tcreated=1786125121\tstart_dir=/tmp\tcmd=claude --model opus"
+	marked, ok := parseSession("→ name=awp.p.w.agent" + tail)
+	if !ok {
+		t.Fatal("the marked line did not parse, so awp cannot see the session it is running in")
+	}
+
+	plain, ok := parseSession("  name=awp.p.w.agent" + tail)
+	if !ok {
+		t.Fatal("the unmarked line did not parse")
+	}
+	if !reflect.DeepEqual(marked, plain) {
+		t.Errorf("the marker changed the session:\n marked = %+v\n plain  = %+v", marked, plain)
+	}
+	if _, isLabel := marked.Labels[currentMarker]; isLabel {
+		t.Error("the marker leaked into Labels, where it reads as a user-set label")
 	}
 }

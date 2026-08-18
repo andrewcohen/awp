@@ -340,8 +340,20 @@ func (c Client) Lookup(ctx context.Context, name string) (Session, bool, error) 
 
 // parseSession reads one `zmx ls` line: tab-separated key=value pairs, with
 // anything unrecognised kept as a label.
+// currentMarker is what `zmx ls` puts in front of the session the caller is
+// itself inside, to point it out among the rest.
+//
+// It has to come off before the fields are read, and getting that wrong is
+// invisible rather than loud: the marker sits against the first field, so the
+// key cuts as "→ name" instead of "name", the Name stays empty, and the line is
+// rejected as unparseable. The session that disappears is always the caller's
+// own — so awp lists every session except the one it is running in, and the
+// workspace it is running in reads as having nothing in it. Which is exactly the
+// row a developer looks for first.
+const currentMarker = "→"
+
 func parseSession(line string) (Session, bool) {
-	line = strings.TrimSpace(line)
+	line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), currentMarker))
 	if line == "" {
 		return Session{}, false
 	}
