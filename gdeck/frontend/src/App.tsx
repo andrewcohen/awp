@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { init } from "ghostty-web";
 import { Pane } from "./Pane";
 import { LivePane } from "./LivePane";
+import { Artifact } from "./Artifact";
 import { macchiato } from "./palette";
 import * as Panes from "../bindings/github.com/andrewcohen/awp/gdeck/panes";
 import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
@@ -34,7 +35,12 @@ type Session = { Name: string; Cmd: string; Ended: boolean; Clients: number };
 function App() {
   const [status, setStatus] = useState<Status>({ state: "loading" });
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [chosen, setChosen] = useState<string>("");
+  // Opens on the artifact rather than the pane, for two reasons that happen to
+  // agree. It is the thing a terminal cannot do, so it is what this surface is
+  // for; and its check is whether untrusted agent HTML is isolated from the
+  // Wails bindings, which is an invariant that should be re-asserted on every
+  // launch rather than whenever someone happens to click the row.
+  const [chosen, setChosen] = useState<string>("artifact");
   const [launchedFrom, setLaunchedFrom] = useState<string>("");
 
   useEffect(() => {
@@ -102,6 +108,32 @@ function App() {
         <p style={{ color: macchiato.yellow, padding: "0 1rem 0.75rem", margin: 0 }}>
           attaching resizes the session to this pane
         </p>
+        {/* The two views that need no session, listed with the ones that do so
+            everything the POC answers is reachable in one run. */}
+        {[
+          { id: "", label: "static pane", note: "hardcoded bytes" },
+          { id: "artifact", label: "artifact", note: "sandboxed agent HTML" },
+        ].map((v) => (
+          <button
+            key={v.id}
+            onClick={() => setChosen(v.id)}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "0.35rem 1rem",
+              border: 0,
+              font: "inherit",
+              cursor: "pointer",
+              background: v.id === chosen ? macchiato.black : "transparent",
+              color: v.id === chosen ? macchiato.yellow : macchiato.text,
+            }}
+          >
+            {v.label}
+            <span style={{ display: "block", color: macchiato.brightBlack }}>{v.note}</span>
+          </button>
+        ))}
+        <hr style={{ border: 0, borderTop: `1px solid ${macchiato.black}`, margin: "0.75rem 0" }} />
         {sessions.length === 0 && (
           <p style={{ color: macchiato.brightBlack, padding: "0 1rem" }}>no live zmx sessions</p>
         )}
@@ -144,10 +176,13 @@ function App() {
       </nav>
 
       <div style={{ flex: 1, minWidth: 0, padding: "2.5rem 1rem 1rem" }}>
-        {chosen === "" ? <Pane /> : <LivePane key={chosen} session={chosen} />}
+        {chosen === "" && <Pane />}
+        {chosen === "artifact" && <Artifact />}
+        {chosen !== "" && chosen !== "artifact" && <LivePane key={chosen} session={chosen} />}
         <p style={{ color: macchiato.brightBlack, marginTop: "0.75rem" }}>
           libghostty wasm instantiated in {status.ms}ms
-          {chosen === "" ? " · pick a session to attach" : ` · attached to ${chosen}`}
+          {chosen === "" && " · pick a session to attach"}
+          {chosen !== "" && chosen !== "artifact" && ` · attached to ${chosen}`}
         </p>
       </div>
     </main>

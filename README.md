@@ -2044,10 +2044,48 @@ Answered so far:
 
 | check | result |
 |-------|--------|
-| `wasm-instantiate` | libghostty's wasm compiles and instantiates inside WKWebView in ~35ms |
+| `wasm-instantiate` | libghostty's wasm compiles and instantiates inside WKWebView in ~25-40ms |
+| `pane-render-static` | SGR, 256/truecolour, box drawing and graphemes render from hardcoded bytes |
+| `pane-buffer-static` | the emulator's own cells, reported alongside the picture |
+| `sessions-list` | `zmx ls` reaches the webview |
+| `artifact-sandboxed` | agent HTML runs at an opaque origin with scripts blocked |
+| `pane-echo-latency` | keystroke to echo, p50/p90/max — **needs a human at the keyboard** |
 
 That one was the day-one gate: WKWebView is particular about WebAssembly served
 over a custom URL scheme, which is how Wails serves frontend assets. It passes
 because ghostty-web sidesteps the scheme entirely — its bundle carries the wasm
 inline as a base64 `data:` URL and compiles it from an ArrayBuffer, with
 `./ghostty-vt.wasm` only as a fallback.
+
+### What a pane costs to look at
+
+Attaching is not reading. A zmx session takes its size from the client looking
+at it, so opening a pane **reflows that agent to the pane's shape**, and closing
+it reflows again for whatever client is left — visible and unwelcome on an agent
+mid-answer. Nothing in gdeck can avoid it; it is what attaching means. So the
+sidebar says so above the list rather than after the click, and the row for the
+session gdeck was launched from is disabled outright: that is the one click that
+costs the developer their own terminal's layout, and it sorts near the top.
+
+`zmx attach` branching on `ZMX_SESSION` is handled by going through
+`zmx.AttachCmd`, which runs the environment through `vterm.Env`. Stripping the
+marker stops the hijack. It does not stop the reflow.
+
+### Agent HTML is untrusted, and the bindings are what make that matter
+
+The danger is not the markup, it is what sits beside it: a Wails webview has
+bindings on it, and this page can call `Panes.Send` — which writes to a live
+agent's terminal — and `Probe.Snapshot`, which writes files. Markup reaching
+those needs no exploit, only a `<script>` tag.
+
+So the artifact frame is `sandbox=""` with nothing added back, and `srcdoc`
+rather than a URL so it never touches the asset server's origin. No
+`allow-scripts` and no `allow-same-origin`, and the pair is the point: granting
+both is equivalent to no sandbox at all, since content with both can remove the
+attribute from its own frame. A CSP inside the document covers what `sandbox`
+does not — what the frame may *load* — so an embedded tracking pixel cannot
+phone home from the developer's machine.
+
+`artifact-sandboxed` re-asserts it on every launch by asking the frame rather
+than re-reading the attribute, which would only confirm that a string is still a
+string. gdeck opens on that view for the same reason.
