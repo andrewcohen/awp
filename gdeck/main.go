@@ -29,6 +29,15 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// Where the POC window sits, in screen points. See the comment on the window
+// options for why it is nailed down rather than centred.
+const (
+	paneWindowX = 60
+	paneWindowY = 80
+	paneWindowW = 1200
+	paneWindowH = 800
+)
+
 func main() {
 	app := application.New(application.Options{
 		Name:        "gdeck",
@@ -45,9 +54,19 @@ func main() {
 	})
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:  "gdeck",
-		Width:  1200,
-		Height: 800,
+		Title: "gdeck",
+		// Fixed position and size, which a real window would not want.
+		//
+		// Checking this surface means looking at it, and the only way to
+		// screenshot a window without also capturing whatever else is on the
+		// desktop is to know the rectangle it occupies in advance. A full-screen
+		// grab of someone's machine to check a layout is a bad trade. So the POC
+		// window is placed rather than centred, and `screencapture -R
+		// paneWindowX,paneWindowY,paneWindowW,paneWindowH` captures exactly it.
+		X:      paneWindowX,
+		Y:      paneWindowY,
+		Width:  paneWindowW,
+		Height: paneWindowH,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			TitleBar:                application.MacTitleBarHiddenInset,

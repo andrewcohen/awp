@@ -34,3 +34,26 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 export function Report(check, ok, detail) {
     return $Call.ByID(1046292212, check, ok, detail);
 }
+
+/**
+ * Snapshot writes a PNG the frontend produced of its own canvas and returns the
+ * path, so a layout can be checked without photographing the developer's screen.
+ * 
+ * A screen capture is the obvious way to see what a window looks like and the
+ * wrong one: the frame contains whatever else was on the desktop — mail, chat,
+ * another project's terminal — and none of that is the app's to collect. What is
+ * actually being checked here is a canvas the pane drew, and a canvas can export
+ * itself. So the image comes out of toDataURL and arrives here, bounded to
+ * exactly the pixels gdeck rendered.
+ * 
+ * The name is validated rather than trusted. Nothing hostile is expected from
+ * gdeck's own frontend, but this method turns a string from the webview into a
+ * filesystem path, and that is the shape of a path traversal whoever writes the
+ * next caller should not have to notice.
+ * @param {string} check
+ * @param {string} dataURL
+ * @returns {$CancellablePromise<string>}
+ */
+export function Snapshot(check, dataURL) {
+    return $Call.ByID(300952938, check, dataURL);
+}

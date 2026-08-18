@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { init } from "ghostty-web";
+import { Pane } from "./Pane";
+import { macchiato } from "./palette";
 import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
 
 // The POC's first question, asked on screen rather than in a test: does
@@ -14,6 +16,10 @@ import * as Probe from "../bindings/github.com/andrewcohen/awp/gdeck/probe";
 // /ghostty-vt.wasm only as fallbacks. So the expected result here is a pass —
 // but "expected to pass" and "passes" are different claims, and everything
 // after this step assumes the second one.
+//
+// Everything else waits on it. init() loads the module the Terminal class
+// constructs against, so rendering a pane before it resolves would fail for a
+// reason that has nothing to do with the pane.
 type Status =
   | { state: "loading" }
   | { state: "ok"; ms: number }
@@ -39,17 +45,21 @@ function App() {
   }, []);
 
   return (
-    <main style={{ padding: "2rem" }}>
-      <h1 style={{ font: "inherit", fontWeight: 700, marginBottom: "1rem" }}>gdeck</h1>
+    <main style={{ padding: "1.5rem" }}>
       {status.state === "loading" && <p>instantiating libghostty wasm…</p>}
-      {status.state === "ok" && (
-        <p style={{ color: "#a6da95" }}>libghostty wasm instantiated in {status.ms}ms</p>
-      )}
       {status.state === "failed" && (
-        <pre style={{ color: "#ed8796", whiteSpace: "pre-wrap" }}>
+        <pre style={{ color: macchiato.red, whiteSpace: "pre-wrap" }}>
           libghostty wasm failed to instantiate:{"\n"}
           {status.error}
         </pre>
+      )}
+      {status.state === "ok" && (
+        <>
+          <Pane />
+          <p style={{ color: macchiato.brightBlack, marginTop: "1rem" }}>
+            libghostty wasm instantiated in {status.ms}ms
+          </p>
+        </>
       )}
     </main>
   );
