@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { MessageSquare, SquareTerminal } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LivePane } from "./LivePane";
+import { focusPane } from "./paneTerminal";
 import { ChatView } from "./ChatView";
 
 // One session, two readings.
@@ -27,35 +28,64 @@ export function AgentPane({ session, fontFamily }: { session: string; fontFamily
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex items-center gap-1">
-        {modes.map(({ id, label, icon: Icon }) => (
-          <Button
-            key={id}
-            size="sm"
-            variant={mode === id ? "secondary" : "ghost"}
-            onClick={(e) => {
-              setMode(id);
-              // The terminal takes focus when it mounts; a button that keeps it
-              // would swallow the first keystroke after the switch.
-              e.currentTarget.blur();
-            }}
-          >
-            <Icon className="size-4" />
-            {label}
-          </Button>
-        ))}
-        <span className="text-muted-foreground ml-2 truncate text-xs">{session}</span>
-      </div>
+      <Tabs value={mode} onValueChange={(v) => {
+          const next = v as Mode;
+          setMode(next);
+          // The terminal does not unmount when the chat covers it, so nothing
+          // re-runs a mount effect on the way back — focus has to be handed
+          // over explicitly or the first keystroke goes to the tab strip.
+          if (next === "terminal") {
+            requestAnimationFrame(focusPane);
+          }
+        }}>
+        <div className="flex items-center gap-3">
+          <TabsList>
+            {modes.map(({ id, label, icon: Icon }) => (
+              <TabsTrigger
+                key={id}
+                value={id}
+                // The terminal takes focus when it is shown; a trigger that
+                // keeps focus would swallow the first keystroke after a switch.
+                onMouseUp={(e) => e.currentTarget.blur()}
+              >
+                <Icon className="size-4" />
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <span className="text-muted-foreground min-w-0 truncate text-xs">{session}</span>
+        </div>
+      </Tabs>
 
-      {/* The terminal stays mounted while the chat is on top of it.
-          Unmounting would detach the pty and re-attach on the way back, which
-          costs a reflow of the agent each way — and the whole argument for the
-          chat tab is that it is a second view of a session, not a second
-          session. Hidden rather than conditional, so switching tabs is free. */}
-      <div className={mode === "terminal" ? "flex min-h-0 flex-1" : "hidden"}>
-        <LivePane session={session} fontFamily={fontFamily} />
+      {/* The terminal stays mounted while the chat is over it, and stays
+          *sized*, which is the harder half.
+
+          Unmounting would detach the pty and re-attach on the way back, and
+          attaching reflows the agent — the chat is a second reading of a
+          session, not a second session. But hiding it with display:none is no
+          better: the resize observer then measures a zero-size container, fit()
+          derives a degenerate grid, and that size is sent to the pty, so
+          opening the chat would reflow the agent to nothing.
+
+          So both layers fill the same box and the terminal is only ever made
+          invisible. visibility:hidden keeps its geometry, so it is still the
+          size it will be when it comes back. */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <div
+          className={
+            mode === "terminal"
+              ? "absolute inset-0 flex min-w-0"
+              : "invisible pointer-events-none absolute inset-0 flex min-w-0"
+          }
+        >
+          <LivePane session={session} fontFamily={fontFamily} />
+        </div>
+        {mode === "chat" && (
+          <div className="bg-background absolute inset-0 flex flex-col">
+            <ChatView session={session} />
+          </div>
+        )}
       </div>
-      {mode === "chat" && <ChatView session={session} />}
     </div>
   );
 }

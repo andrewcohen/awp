@@ -143,7 +143,7 @@ func readTurns(path string) ([]ChatTurn, error) {
 	}
 	defer func() { _ = file.Close() }()
 
-	var turns []ChatTurn
+	turns := []ChatTurn{}
 	// A result arrives on a later line than the call it answers, so calls are
 	// indexed by id and filled in when their result shows up. Matched by id
 	// rather than by name and arguments: an agent runs the same command twice
@@ -197,6 +197,13 @@ func readTurns(path string) ([]ChatTurn, error) {
 		// bubble between every call and its output.
 		if turn.Text == "" && turn.Thinking == "" && len(turn.Tools) == 0 {
 			continue
+		}
+		// Empty rather than nil, because a nil slice marshals as JSON null and
+		// the frontend then maps over nothing. The bridge is the seam where Go's
+		// "nil is an empty list" stops being true, so it is fixed on this side
+		// once instead of guarded at every call site over there.
+		if turn.Tools == nil {
+			turn.Tools = []ChatTool{}
 		}
 		turns = append(turns, turn)
 		for i, id := range ids {

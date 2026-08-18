@@ -4,6 +4,7 @@ import { Pane } from "./Pane";
 import { AgentPane } from "./AgentPane";
 import { Artifact } from "./Artifact";
 import { Boundary } from "./Boundary";
+import { ChatView } from "./ChatView";
 import { Sidebar, type Workspace } from "./Sidebar";
 import { paneFonts } from "./palette";
 import { useTheme } from "./theme";
@@ -48,9 +49,7 @@ function App() {
   const [chosen, setChosen] = useState<string>(
     () => localStorage.getItem(lastViewKey) ?? "artifact",
   );
-  const [font, setFont] = useState<string>(
-    () => localStorage.getItem(lastFontKey) ?? paneFonts[0].family,
-  );
+  const [font] = useState<string>(() => localStorage.getItem(lastFontKey) ?? paneFonts[0].family);
   const [theme, setTheme] = useTheme();
 
   useEffect(() => localStorage.setItem(lastViewKey, chosen), [chosen]);
@@ -104,6 +103,11 @@ function App() {
   }, [workspaces, chosen]);
 
   const body = () => {
+    // ?mock=1 renders the chat against a fixture, so its layout can be looked
+    // at in a browser where the Go bindings do not exist.
+    if (new URLSearchParams(location.search).has("mock")) {
+      return <ChatView session="" />;
+    }
     if (status.state === "loading") {
       return <p className="text-muted-foreground p-6">instantiating libghostty wasm…</p>;
     }
@@ -125,7 +129,7 @@ function App() {
   };
 
   return (
-    <div className="bg-background text-foreground flex h-screen flex-col">
+    <div className="bg-background text-foreground flex h-screen flex-col overflow-hidden">
       <div
         className="shrink-0"
         style={{
@@ -134,15 +138,13 @@ function App() {
           WebkitAppRegion: "drag",
         }}
       />
-      <main className="flex min-h-0 flex-1">
+      <main className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar
           workspaces={workspaces}
           chosen={chosen}
           onChoose={setChosen}
           theme={theme}
           onTheme={setTheme}
-          font={font}
-          onFont={setFont}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3">
           {/* Keyed on the view so a crash in one does not leave its error
