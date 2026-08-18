@@ -928,7 +928,7 @@ type Model struct {
 	lastPane paneArrangement
 	prevPane paneArrangement
 	// sidebar is whether the attention strip is up beside a hosted program, which
-	// ctrl+b S toggles. A property of the deck rather than of the arrangement — see
+	// ctrl+b A toggles. A property of the deck rather than of the arrangement — see
 	// sidebar.go, where that is argued.
 	sidebar bool
 	// sidebarW is how many columns the strip was last dragged to. Zero means never
@@ -5951,6 +5951,7 @@ func deckKeyGroups() []keyGroup {
 			Keys: [][2]string{
 				{PaneLeaveKey, "the door: pane → sidebar → deck → pane (straight to the deck with the strip down)"},
 				{PaneMenuKey + " then a window key", "agent on the left, that kind on the right — replaces the right half if already split"},
+				{PaneMenuKey + " " + fullscreenShellKey, "a shell on the whole screen, instead of this pane or split"},
 				{PaneMenuKey + " h/l/tab", "move the keys to the other half"},
 				{PaneMenuKey + " < > =", "move the divider · = re-centres it"},
 				{PaneMenuKey + " o", "zoom the focused half, and again to go back"},

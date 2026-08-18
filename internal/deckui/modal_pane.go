@@ -209,6 +209,14 @@ const (
 	PaneKindWatch = "watch"
 )
 
+// PaneKindShell is the shell's kind, which is the empty string: a shell is what a
+// window key with no kind after it opens, and the backend reads the absence as
+// "the user's shell" rather than looking a name up.
+//
+// Named so a call site asking for one can say which of the two things an empty
+// kind is — the shell, or a caller that forgot to pass anything.
+const PaneKindShell = ""
+
 // PaneKindActionPrefix namespaces the kind of a user action's pane.
 //
 // A user action is named by whoever wrote the config, so without a namespace an
@@ -662,6 +670,48 @@ func (m *Model) alternateFrom(close func() tea.Cmd) tea.Cmd {
 	return tea.Batch(closed, opened)
 }
 
+// fullscreenShellKey is the ctrl+b verb for a shell on the whole screen.
+//
+// The same letter as the window key that splits to one, in the other case: `s`
+// puts a shell beside the agent, `S` gives it the terminal. A shell is the kind
+// most often wanted at full width — a build's output, a command whose lines are
+// longer than half a screen — and until this key the only way to one was out to
+// the deck and back in, which takes the arrangement down anyway and costs two
+// screens on the way.
+const fullscreenShellKey = "S"
+
+// fullscreenShellVerb is how the ctrl+b menus name the key. It says "instead of
+// this" because the neighbouring window keys all say "beside", and the difference
+// between `s` and `S` is exactly that.
+func fullscreenShellVerb() [2]string {
+	return [2]string{fullscreenShellKey, "a shell on the whole screen, instead of this"}
+}
+
+// fullscreenShell takes the arrangement down and opens a shell filling the deck.
+//
+// Same order and same reason as alternateFrom: the row is resolved before
+// anything closes, so a pane whose workspace has gone keeps its screen and gets a
+// message rather than being dropped for a shell that cannot be opened. close is
+// passed in for the same reason too — a pane closes itself, a split closes both
+// halves.
+func (m *Model) fullscreenShell(close func() tea.Cmd) tea.Cmd {
+	item, ok := m.topRowRow()
+	if !ok {
+		m.status = "shell: this pane's workspace is not on the deck any more"
+		return nil
+	}
+	closed := close()
+	opened, handled := m.openPane(item, PaneKindShell)
+	if !handled {
+		// No backend for a shell, so the deck is now on its row list with nothing
+		// said. Only reachable from a host that describes some kinds and not this
+		// one; openPane says so itself when the open fails.
+		m.status = "shell: this deck cannot host one"
+		return closed
+	}
+	return tea.Batch(closed, opened)
+}
+
 // reopenPane resolves a remembered pane against the rows as they are now and
 // opens it, which is the half resumePane and alternatePane share.
 func (m *Model) reopenPane(arr paneArrangement) (tea.Cmd, bool) {
@@ -857,6 +907,7 @@ func (p *panePopover) footerHelp() string { return "" }
 func panePrefixMenu(m *Model) deckMenu {
 	verbs := splitKindVerbs(func(label string) string { return "split, with " + label + " beside this" })
 	verbs = append(verbs,
+		fullscreenShellVerb(),
 		userActionsVerb(m.userActionsFor()),
 		[2]string{alternateKey, "go to the arrangement before this one"},
 		captainVerb(),
@@ -903,6 +954,8 @@ func (p *panePopover) prefixKey(m *Model, msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case sidebarKey:
 		m.toggleSidebar()
+	case fullscreenShellKey:
+		return m.fullscreenShell(func() tea.Cmd { return p.close(m) })
 	case alternateKey:
 		return m.alternateFrom(func() tea.Cmd { return p.close(m) })
 	case captainKey:

@@ -160,13 +160,13 @@ func (m *Model) enterSidebarFromPane() bool {
 // it means the same thing on every deck surface and this is one.
 //
 // ctrl+b is the arrangement's, not the strip's, and the arrangement is still on
-// screen. Forwarded rather than swallowed so ctrl+b S can still hide the strip you
+// screen. Forwarded rather than swallowed so ctrl+b A can still hide the strip you
 // are standing on — see the guard in Update, which hands the keyboard back when it
 // goes.
 func (m *Model) sidebarKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if !m.showsSidebar() {
 		// The strip went away underneath the keyboard: the terminal was resized under
-		// the minimum, or ctrl+b S hid it. The keys belong to whatever is still there.
+		// the minimum, or ctrl+b A hid it. The keys belong to whatever is still there.
 		m.sidebarFocus = false
 		return nil, false
 	}

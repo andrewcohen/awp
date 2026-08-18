@@ -34,7 +34,7 @@ func sidebarDeck(t *testing.T) Model {
 	return m
 }
 
-// sidebarPane opens a pane and turns the strip on with ctrl+b S.
+// sidebarPane opens a pane and turns the strip on with ctrl+b A.
 func sidebarPane(t *testing.T) (Model, *panePopover) {
 	t.Helper()
 	m := sidebarDeck(t)

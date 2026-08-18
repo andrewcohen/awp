@@ -1106,7 +1106,7 @@ install's.
 
 `ctrl+\` leaves a pane, on one press, whether one pane is up or a split of two —
 stopping at the attention sidebar on the way when the strip is up, which is one more
-press and covered under **`S` is the sidebar** below. It
+press and covered under **`A` is the sidebar** below. It
 has to be a key nothing inside one wants, because every other key belongs to the
 program: `esc`, `q` and `ctrl+c` all mean something to an agent. **`ctrl+b` is the
 menu**: split what is on screen, move the keyboard between halves, resize, zoom,
@@ -1202,17 +1202,18 @@ it leaves on one press from either arrangement.
 |---|---|
 | a window key — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch | **split**: the agent on the left, that kind on the right. Already split, there is nowhere to put a third, so it **replaces the right half** — whichever half the keys are in, since the left one is the agent and stays the agent |
 | `h` / `l` / `tab` | move the keyboard to the left half / the right half / the other one |
-| `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle. **Where you leave it is remembered globally**, in `~/.awp/deck-prefs.json` beside `P`'s scope and `S`'s sidebar, so the next split — and the next deck — opens there. Stored as a fraction rather than a column count, so it means the same layout on a terminal of another width, and the clamp that keeps a half above a pane's minimum means a divider set on a wide screen degrades sensibly on a narrow one |
+| `<` / `>` | move the divider left / right by 5% of the width; `=` puts it back in the middle. **Where you leave it is remembered globally**, in `~/.awp/deck-prefs.json` beside `P`'s scope and `A`'s sidebar, so the next split — and the next deck — opens there. Stored as a fraction rather than a column count, so it means the same layout on a terminal of another width, and the clamp that keeps a half above a pane's minimum means a divider set on a wide screen degrades sensibly on a narrow one |
 | `o` | zoom the focused half to the whole screen, and again to go back — both halves stay open, so nothing is re-opened |
 | `q` | close the focused half; the other becomes an ordinary whole-screen pane |
 | `x` | **user actions** — opens a second menu of the actions configured for this workspace's repo, keyed by their `alias`. The next key runs one: a foreground action lands beside the agent, in the right half (replacing what is there, already split), a `background` one starts as a job and leaves the screen alone. The row is absent when the repo has no `actions` configured. Same actions the row list's `x` offers, reached from inside a pane — see [actions](#actions) |
+| `S` | **a shell on the whole screen**, instead of this pane or split — the same letter as the window key that splits to one, in its other case: `s` puts a shell beside the agent, `S` gives it the terminal. Both halves of a split go, the way they do for `L`: it is one arrangement replacing another, not a third region |
 | `L` | go to the arrangement before this one, without stopping at the deck. The same key the row list binds, doing the same thing — see below |
 | `a` | **the captain**, floated over this pane — or the whole split — which stays exactly where it is; `ctrl+\` dismisses it and gives the keys back. The same letter the row list uses, deliberately: inside a pane every key belongs to the hosted program, so a bare `a` there is the agent's `a`, and this menu is the captain's only door from where you spend most of your time |
-| `S` | show or hide the sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing, and a place `ctrl+\` can put the keyboard: every deck key acts on the row under its cursor. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in |
+| `A` | show or hide the **attention** sidebar — a strip down the left carrying every workspace, sectioned by what its agent is doing, and a place `ctrl+\` can put the keyboard: every deck key acts on the row under its cursor. 36 columns until you **drag its right edge** to another width. Both the flag and the width are **remembered** globally in `~/.awp/deck-prefs.json`, the same file `P`'s scope goes in. It was `S` until the shell needed both of its cases; `A` says what the strip is instead of what was left over |
 | `ctrl+\|` | nothing — it re-arms, so holding the key down cannot do anything |
 | anything else | cancels, and is swallowed rather than typed at the program |
 
-A single pane's menu carries the window keys, `L`, `a` and `S`, and nothing else: focus,
+A single pane's menu carries the window keys, `S`, `L`, `a` and `A`, and nothing else: focus,
 size, zoom and close-a-half have nothing to act on until there are two halves, so
 they are absent rather than listed and inert.
 
@@ -1229,10 +1230,10 @@ there is no other arrangement to go to, the key says so and leaves the pane you
 are in alone — it does not close the pane and drop you on the deck, which would be
 the key doing half of itself.
 
-**`S` is the sidebar.** The top row's badge says *how many* workspaces want you and
+**`A` is the sidebar.** The top row's badge says *how many* workspaces want you and
 not *which*, which is enough to know something is waiting and not enough to decide
 whether to leave what you are in — and leaving to find out is the thing that row was
-added to avoid. `S` puts a 36-column strip down the left of the pane or the split,
+added to avoid. `A` puts a 36-column strip down the left of the pane or the split,
 carrying **every workspace**, sectioned so the ones wanting you are the ones at the
 top:
 
@@ -1504,7 +1505,7 @@ program you were reading, and a verb that took the pane down would be re-introdu
 the trip the strip exists to avoid.
 
 `esc` gives the keyboard back to the pane;
-`ctrl+b` still belongs to the arrangement, so `ctrl+b S` hides the strip you are
+`ctrl+b` still belongs to the arrangement, so `ctrl+b A` hides the strip you are
 standing on and the keys fall back into the pane.
 
 There is one cursor, not two. It is held as the *row* rather than as a position,
@@ -1535,7 +1536,7 @@ surprises you on the next resize.
 Whether the strip is up is the deck's state, not the arrangement's: unlike the two
 halves — which are remembered per workspace, see below — the
 answer to "do I want to see what is waiting" does not change when you switch panes,
-so it stays on until you press `S` again. It is only ever up over a hosted program.
+so it stays on until you press `A` again. It is only ever up over a hosted program.
 Over the row list every row it would carry is already on screen in more detail,
 with a cursor on it.
 
