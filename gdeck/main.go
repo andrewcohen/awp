@@ -45,6 +45,7 @@ func main() {
 		Services: []application.Service{
 			application.NewService(&Probe{}),
 			application.NewService(&Panes{}),
+			application.NewService(&Chat{}),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

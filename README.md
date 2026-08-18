@@ -2089,3 +2089,39 @@ phone home from the developer's machine.
 `artifact-sandboxed` re-asserts it on every launch by asking the frame rather
 than re-reading the attribute, which would only confirm that a string is still a
 string. gdeck opens on that view for the same reason.
+
+### Two readings of one session
+
+The agent pane has tabs: **terminal** and **chat**. Same session, two views of it.
+
+The terminal is what the agent *drew*. The chat is what it *said*, read from the
+Claude Code transcript that `internal/watch` already locates for a workspace —
+`~/.claude/projects/<slug>/<session>.jsonl`. Those differ more than they sound:
+a TUI wraps to a width, redraws in place and forgets everything above the
+viewport, so the pane is the only place to see what is happening *now*, and the
+transcript is the only place the last hour survives in a form that can be
+scrolled, expanded and rendered.
+
+What that buys, concretely: a tool call is one line that opens rather than four
+hundred lines of output nobody asked for, and an `Edit` renders as a **diff**
+rather than as the JSON arguments that produced one. The patch is built in Go —
+the transcript stores an edit as two strings, and trimming their common head and
+tail leaves the part that changed — then rendered with
+[`@pierre/diffs`](https://diffs.com).
+
+Typing in the chat sends through `zmx paste`, not by writing to the pty. An
+agent's input is a line editor, so text arriving as keystrokes gets interpreted:
+a newline submits, and a multi-line message would send itself one line at a
+time. Paste wraps it in bracketed-paste markers, which is how a terminal says
+"this is text, not typing" — the same path `internal/cli/prompt_sender.go` uses.
+It also works with no pane attached, since it addresses the session rather than
+this client's pty.
+
+The terminal tab stays mounted while the chat is on top of it. Unmounting would
+detach and re-attach the pty, and **attaching reflows the agent** — the chat is
+meant to be a second reading of a session, not a second session.
+
+Two things measured against a real 7MB transcript rather than assumed: the
+projection yields 300 turns, 190 tool calls and 17 patches; and all 205 thinking
+blocks are empty, carrying a signature and no text. Thinking is parsed and will
+render where it exists, but it does not survive into the transcript here.

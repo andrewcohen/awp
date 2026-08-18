@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { init } from "ghostty-web";
 import { Pane } from "./Pane";
-import { LivePane } from "./LivePane";
+import { AgentPane } from "./AgentPane";
 import { Artifact } from "./Artifact";
 import { Boundary } from "./Boundary";
 import { Sidebar, type Workspace } from "./Sidebar";
@@ -121,7 +121,7 @@ function App() {
     if (chosen === "artifact") {
       return <Artifact />;
     }
-    return <LivePane session={chosen} fontFamily={font} />;
+    return <AgentPane session={chosen} fontFamily={font} />;
   };
 
   return (
