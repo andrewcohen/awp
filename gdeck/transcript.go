@@ -103,13 +103,43 @@ type contentBlock struct {
 // conversation is the part being asked about.
 const maxTurns = 300
 
-// Turns reads the session's transcript and returns the conversation.
-func (c *Chat) Turns(session string) ([]ChatTurn, error) {
+// ChatSince is the conversation from a point the caller already has.
+type ChatSince struct {
+	// Total is how many turns exist, so the caller knows where it is up to.
+	Total int
+	// Turns are the ones after the caller's position, or all of them when the
+	// transcript has been replaced.
+	Turns []ChatTurn
+	// Reset says the caller should discard what it had: the count went
+	// backwards, which means a different transcript, not more of this one.
+	Reset bool
+}
+
+// Turns returns what the caller does not already have.
+//
+// The whole conversation used to cross the bridge on every change, and the
+// change signal fires once a second while an agent works. A 7MB transcript
+// projects to megabytes of JSON, so the cost was not rendering it — it was
+// serialising it, shipping it, and parsing it again, sixty times a minute, to
+// deliver one new turn.
+//
+// The cursor is a count rather than an id because the projection is a pure
+// function of the file: the first n turns of a longer read are the same n turns.
+// A count that no longer fits means the file was replaced, which is a reset
+// rather than an append.
+func (c *Chat) Turns(session string, have int) (ChatSince, error) {
 	path, err := transcriptFor(session)
 	if err != nil {
-		return nil, err
+		return ChatSince{Turns: []ChatTurn{}}, err
 	}
-	return readTurns(path)
+	all, err := readTurns(path)
+	if err != nil {
+		return ChatSince{Turns: []ChatTurn{}}, err
+	}
+	if have < 0 || have > len(all) {
+		return ChatSince{Total: len(all), Turns: all, Reset: true}, nil
+	}
+	return ChatSince{Total: len(all), Turns: all[have:]}, nil
 }
 
 // transcriptFor maps a zmx session to the transcript of the workspace it runs
@@ -185,7 +215,7 @@ func readTurns(path string) ([]ChatTurn, error) {
 				ids = append(ids, b.ID)
 			case "tool_result":
 				if at, ok := pending[b.ToolUseID]; ok {
-					turns[at.turn].Tools[at.tool].Detail = resultText(b.Content)
+					turns[at.turn].Tools[at.tool].Detail = clampDetail(resultText(b.Content))
 					turns[at.turn].Tools[at.tool].IsError = b.IsError
 					delete(pending, b.ToolUseID)
 				}
@@ -480,4 +510,23 @@ func splitLines(s string) []string {
 		return nil
 	}
 	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+}
+
+// maxDetail is how much of a tool's output crosses the bridge.
+//
+// A single Read or test run can return hundreds of kilobytes, and a transcript
+// holds hundreds of them — most of the weight of the projection is output nobody
+// expands. The tail is kept rather than the head: the end of a command's output
+// is where the error is.
+const maxDetail = 4000
+
+func clampDetail(s string) string {
+	if len(s) <= maxDetail {
+		return s
+	}
+	cut := s[len(s)-maxDetail:]
+	if i := strings.IndexByte(cut, '\n'); i >= 0 && i < 200 {
+		cut = cut[i+1:]
+	}
+	return fmt.Sprintf("… %d earlier bytes not shown\n%s", len(s)-len(cut), cut)
 }

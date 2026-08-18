@@ -67,3 +67,21 @@ export const sampleTurns = [
     ],
   },
 ];
+
+
+// A transcript-sized fixture. `?mock=300` renders three hundred turns, which is
+// what the tail of a real session looks like — the only honest way to measure
+// scrolling, since three turns tell you nothing about a view whose cost is
+// proportional to how many diffs are mounted.
+export function manyTurns(count: number) {
+  const out: (typeof sampleTurns)[number][] = [];
+  for (let i = 0; i < count; i++) {
+    const base = sampleTurns[i % sampleTurns.length];
+    out.push({
+      ...base,
+      At: new Date(Date.now() - (count - i) * 60_000).toISOString(),
+      Text: `${base.Text} (${i + 1})`,
+    });
+  }
+  return out;
+}
