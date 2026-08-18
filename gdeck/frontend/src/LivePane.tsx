@@ -78,7 +78,6 @@ class echoTimer {
 export function LivePane({ session, fontFamily }: { session: string; fontFamily: string }) {
   const container = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string>("");
-  const [exited, setExited] = useState(false);
   const timer = useRef(new echoTimer());
 
   useEffect(() => {
@@ -89,7 +88,6 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
 
     const { term } = mountPaneTerminal(parent, fontFamily);
     resetPane();
-    setExited(false);
     timer.current = new echoTimer();
 
     // Clicking a workspace is asking to work in it, so the keyboard should
@@ -153,7 +151,6 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
       timer.current.received();
       term.write(toBytes(event.data));
     });
-    const offExit = Events.On("pane:exit", () => setExited(true));
 
     // The pty is opened at the size the emulator settled on rather than a
     // guessed one: a zmx session takes its shape from the client attached to it,
@@ -187,7 +184,6 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
       void Probe.Report("pane-echo-latency", true, timer.current.summary());
       window.removeEventListener("focus", refocus);
       offData();
-      offExit();
       clearPaneSinks();
       void Panes.Close();
     };
@@ -195,8 +191,19 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
 
   return (
     <section style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <div ref={container} style={{ flex: 1, minHeight: 0 }} />
-      {exited && <p style={{ color: paneTheme.brightBlack }}>{session} ended</p>}
+      <div
+        ref={container}
+        className="flex-1 overflow-hidden rounded-md"
+        // Painted in the terminal's own background, not the chrome's.
+        //
+        // A terminal is a grid of whole cells, so the container is almost never
+        // an exact multiple of the cell width — and ghostty-web also reserves
+        // room for a scrollbar. The remainder is bare container, which reads as
+        // a gutter down the right edge only because it was a different colour
+        // from the pane it borders. Matching it makes the leftover invisible
+        // without pretending the grid can be fractional.
+        style={{ minHeight: 0, backgroundColor: paneTheme.background }}
+      />
       {error !== "" && <pre style={{ color: paneTheme.red, whiteSpace: "pre-wrap" }}>{error}</pre>}
     </section>
   );

@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import wails from "@wailsio/runtime/plugins/vite";
 import { fileURLToPath, URL } from "node:url";
 
@@ -18,7 +19,11 @@ export default defineConfig({
       "@bindings": fileURLToPath(
         new URL("./bindings/github.com/andrewcohen/awp/gdeck", import.meta.url),
       ),
+      // shadcn's convention. Kept distinct from @bindings, which is generated
+      // code from Go — the two are aliases to very different kinds of thing and
+      // shadcn will happily write components into whichever one it finds first.
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-  plugins: [react(), wails("./bindings")],
+  plugins: [react(), tailwindcss(), wails("./bindings")],
 });

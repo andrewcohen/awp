@@ -55,21 +55,6 @@ export function History(session: string): $CancellablePromise<string> {
 }
 
 /**
- * LaunchedFrom names the zmx session gdeck itself was started from, or "" when
- * it was not started from one.
- * 
- * Read before anything strips it, and offered to the frontend so that row can be
- * marked — marked, not withheld. Attaching to it is the most informative test
- * gdeck has: the pane shows the conversation building gdeck, driven from inside
- * gdeck. vterm.Env keeps `zmx attach` from hijacking the calling client, so this
- * is a new client; the only cost is that the session takes the pane's size while
- * attached and returns to the other client's on close.
- */
-export function LaunchedFrom(): $CancellablePromise<string> {
-    return $Call.ByID(837023151);
-}
-
-/**
  * Open attaches to a session and starts streaming it. Any pane already open is
  * closed first — see the note on Panes about why there is only ever one.
  * 

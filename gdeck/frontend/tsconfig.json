@@ -22,7 +22,8 @@
        generator's collision-proof layout on disk and off the page. Mirrored in
        vite.config.ts, which resolves imports for the actual build. */
     "paths": {
-      "@bindings/*": ["./bindings/github.com/andrewcohen/awp/gdeck/*"]
+      "@bindings/*": ["./bindings/github.com/andrewcohen/awp/gdeck/*"],
+      "@/*": ["./src/*"]
     },
     "baseUrl": ".",
 

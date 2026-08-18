@@ -46,6 +46,7 @@ export function ensurePaneTerminal(fontFamily: string): PaneTerminal {
   if (!term || !host || !fit) {
     host = document.createElement("div");
     host.style.height = "100%";
+    host.style.width = "100%";
     term = new Terminal({
       theme: paneTheme,
       fontFamily,
@@ -73,6 +74,12 @@ export function mountPaneTerminal(parent: HTMLElement, fontFamily: string): Pane
   }
   setPaneFont(fontFamily);
   pane.fit.fit();
+  // Re-armed on every mount, not once at construction. observeResize watches
+  // the element the terminal is currently in, and this one moves between views
+  // — so an observer set up against a previous parent stops seeing the window
+  // change shape, which is a terminal that renders at yesterday's size and
+  // never reflows.
+  pane.fit.observeResize();
   return pane;
 }
 

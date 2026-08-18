@@ -24,26 +24,31 @@ export const macchiato = {
   brightWhite: "#a5adcb",
 } as const;
 
-// The face a pane is drawn in, named once so the static pane and the live one
-// cannot drift onto different fonts and be compared as if they were the same.
+// The pane keeps Macchiato in either mode, deliberately. A terminal's colours
+// are the agent's colours — the same bytes the deck renders — so they answer to
+// what the program emits, not to the window's chrome. If a light pane is wanted
+// later it is a Latte table beside this one, not a tint of the chrome tokens.
+// The stylistic sets from the Ghostty config: cv01 for the @, cv04 for the
+// cursive l. Measured to work through canvas — see below — but not applied,
+// because the installed Maple Mono build already renders them: setting the tags
+// on top of a build that has them baked in changes nothing at best, and pins
+// two tags against the build's own defaults at worst.
 //
-// Maple Mono is the developer's working face, and matching it is not cosmetic
-// here: gdeck's whole claim is that a pane in a webview is the same pane, and a
-// pane that renders in a different typeface than `awp deck` invites every
-// difference to be blamed on the surface. The fallbacks are the platform's own
-// monospace rather than a second choice of face — if Maple Mono is missing, a
-// generic mono is an obvious substitution, where a near-miss is a confusing one.
-// Stylistic sets are deliberately absent. Ghostty is configured here with
-// `font-feature = +cv01, +cv04` and `font-thicken = true`, and none of the three
-// can cross: ghostty-web draws glyphs through Canvas2D, whose font API is family,
-// size, weight, stretch and letter-spacing — there is no font-feature-settings on
-// a canvas context. Ghostty proper shapes the text itself, which is what buys it
-// the choice. Matching those would mean a feature-frozen Maple Mono build
-// installed under its own family name, which is a decision about what a face is
-// rather than a setting, so it waits.
+// Applied as CSS on the canvas element rather than through the 2D context,
+// which has no font-feature-settings — the spec's font shorthand does not carry
+// features and there is no property for them. WebKit nonetheless honours the
+// element's computed style when rasterising canvas text, which was measured
+// rather than assumed: the same glyphs at the same size lay down measurably
+// different ink with these on. An earlier claim here that features were
+// unreachable through canvas was simply wrong.
+export const paneFontFeatures = '"cv01" 1, "cv04" 1';
+
 export const paneFontFamily = '"Maple Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
-// The faces worth comparing, all already installed on this machine.
+// The faces worth comparing, all already installed on this machine. Unused
+// while the picker is out of the sidebar — it belongs in a preferences dialog,
+// not in the navigation — and kept because the list is the useful part: which
+// faces are installed, and which of them need no configuration to look right.
 //
 // A terminal font is a taste decision, and taste decisions do not survive being
 // made from a constant: each guess costs an edit, and by the time the third one
