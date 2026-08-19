@@ -42,6 +42,10 @@ export type Conversation = {
   title: string;
   busy: boolean;
   error: string;
+  // Typed while the agent was working, waiting for the next turn boundary.
+  // Shown as pending rather than as part of the conversation, because it has
+  // not been said yet.
+  queued: string[];
 };
 
 export const emptyConversation = (): Conversation => ({
@@ -51,6 +55,7 @@ export const emptyConversation = (): Conversation => ({
   title: "",
   busy: false,
   error: "",
+  queued: [],
 });
 
 // The turn the agent is currently speaking into, created on demand.
@@ -133,6 +138,18 @@ export function apply(state: Conversation, event: UiEvent): Conversation {
         return { ...state, turns };
       }
       return state;
+    }
+
+    case "queued":
+      return { ...state, queued: [...state.queued, event.text] };
+
+    case "unqueued": {
+      // One occurrence, not all of them: two identical messages queued in a row
+      // are two messages, and removing both on the first delivery would drop one
+      // from the view while the agent still holds it.
+      const at = state.queued.indexOf(event.text);
+      if (at < 0) return state;
+      return { ...state, queued: state.queued.filter((_, i) => i !== at) };
     }
 
     case "permission":

@@ -76,6 +76,14 @@ export class Conversation {
   readonly log = new EventLog();
   title: string;
   busy = false;
+  // Messages typed while a turn was running, waiting for it to end.
+  //
+  // They used to be dropped: say() returned early when busy and the caller was
+  // told `said: true`, so a message typed mid-turn vanished and nothing said
+  // so. Queueing matches what Claude Code does with input during a turn, and
+  // the queue is visible in the conversation so it is obvious the message is
+  // waiting rather than lost.
+  readonly queued: string[] = [];
   private pendingPermission: ((optionId: string) => void) | null = null;
 
   constructor(
@@ -392,11 +400,24 @@ export class AgentHost {
     return chat;
   }
 
-  // One prompt at a time per conversation. The agent would accept a second, but
-  // two overlapping turns in one chat is not a thing the UI has a shape for —
-  // unlike two conversations, which genuinely run at once.
+  // One turn at a time per conversation, with anything sent meanwhile queued.
+  //
+  // Whether the agent would accept a genuinely concurrent prompt on one session
+  // is untested — ACP models a turn as a request, and a second in flight is at
+  // best undefined. What is certain is that dropping the message was wrong.
+  //
+  // Queued messages go in at the next turn boundary, which is Claude Code's own
+  // behaviour for input typed during a turn. It is not interruption: a queued
+  // "stop" arrives after the thing it wanted to stop. That is what the stop
+  // button is for, and the UI says which is which.
   async say(chat: Conversation, text: string): Promise<void> {
-    if (chat.busy || !text) return;
+    if (!text) return;
+    if (chat.busy) {
+      chat.queued.push(text);
+      chat.log.emit({ kind: "queued", text });
+      this.onSessionsChanged();
+      return;
+    }
     chat.busy = true;
     this.onSessionsChanged();
     chat.log.emit({ kind: "user", text });
@@ -411,6 +432,16 @@ export class AgentHost {
     } finally {
       chat.busy = false;
       this.onSessionsChanged();
+    }
+
+    // Whatever was typed while that ran, in the order it was typed. Sent after
+    // the flag is cleared so this is an ordinary turn rather than a special
+    // case, and one at a time so a queue of three does not become three
+    // concurrent turns.
+    const next = chat.queued.shift();
+    if (next !== undefined) {
+      chat.log.emit({ kind: "unqueued", text: next });
+      await this.say(chat, next);
     }
   }
 

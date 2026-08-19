@@ -12,6 +12,11 @@
 
 export type UiEvent =
   | { kind: "user"; text: string }
+  // Typed while a turn was running, and waiting for the next boundary. The pair
+  // exists so the view can show a message as pending and then stop, rather than
+  // guessing when it was delivered.
+  | { kind: "queued"; text: string }
+  | { kind: "unqueued"; text: string }
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
   | { kind: "tool"; id: string; title: string; status: string }

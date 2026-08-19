@@ -10,6 +10,8 @@ export type PermissionOption = { id: string; name: string; kind?: string };
 
 export type UiEvent =
   | { kind: "user"; text: string }
+  | { kind: "queued"; text: string }
+  | { kind: "unqueued"; text: string }
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
   | { kind: "tool"; id: string; title: string; status: string }
