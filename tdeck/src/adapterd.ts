@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { unlinkSync } from "node:fs";
 import type { Socket } from "bun";
 import { ensureRuntimeDir, socketPath } from "./paths.ts";
+import { SocketWriter } from "./socketwrite.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adapterBin = join(here, "..", "node_modules", ".bin", "claude-agent-acp");
@@ -65,6 +66,7 @@ const adapter = Bun.spawn([adapterBin], {
 // answers. A newcomer therefore replaces the incumbent, the same way `zmx
 // attach` from inside a session moves the client rather than nesting.
 let client: Socket<undefined> | null = null;
+let out: SocketWriter | null = null;
 
 // What the agent said while nobody was listening.
 //
@@ -86,8 +88,12 @@ let used = false;
 adapter.stdout.pipeTo(
   new WritableStream<Uint8Array>({
     write(chunk) {
-      if (client) client.write(chunk);
-      else detachedOutput.push(chunk);
+      if (out) out.write(chunk);
+      // Copied on the way into the buffer: `write` hands over a view that the
+      // stream is free to reuse for the next read, and this one is held across
+      // an arbitrary detachment. A live client is written synchronously, so it
+      // does not need the copy.
+      else detachedOutput.push(new Uint8Array(chunk));
     },
   }),
 ).catch((err: unknown) => {
@@ -103,19 +109,24 @@ Bun.listen<undefined>({
         client.end();
       }
       client = socket;
+      out = new SocketWriter(socket);
 
       // The handshake, ahead of the protocol stream: one JSON line saying
       // whether this adapter is fresh. The client reads it, then treats the
       // rest of the socket as ACP.
-      socket.write(new TextEncoder().encode(JSON.stringify({ fresh: !used }) + "\n"));
+      out.write(new TextEncoder().encode(JSON.stringify({ fresh: !used }) + "\n"));
       used = true;
 
       if (detachedOutput.length) {
         console.log(`flushing ${detachedOutput.length} chunks buffered while detached`);
-        for (const chunk of detachedOutput) socket.write(chunk);
+        for (const chunk of detachedOutput) out.write(chunk);
         detachedOutput = [];
       }
       console.log("client attached");
+    },
+
+    drain() {
+      out?.drain();
     },
 
     data(_socket, chunk) {
@@ -126,6 +137,7 @@ Bun.listen<undefined>({
     close(socket) {
       if (client === socket) {
         client = null;
+        out = null;
         console.log("client detached; the agent keeps working");
       }
     },

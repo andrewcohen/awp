@@ -9,7 +9,9 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { openSync } from "node:fs";
 import type { Socket, SocketHandler } from "bun";
+import { SocketWriter } from "./socketwrite.ts";
 import {
   daemonLogPath,
   ensureRuntimeDir,
@@ -27,11 +29,28 @@ export type Link = {
   fresh: boolean;
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
+  // Resolves when the daemon goes away. Worth surfacing rather than leaving to
+  // be discovered: an ACP connection whose stream has closed does not fail
+  // until the next call, so a server that ignores this keeps answering requests
+  // and only reports "ACP connection closed" once somebody tries to use it.
+  closed: Promise<void>;
 };
 
-// What the server needs in order to pick a conversation back up. Small enough
-// to be a file; the agent owns everything that actually matters.
-export type State = { sessionId: string; modes: unknown };
+// What the server needs in order to pick its conversations back up. Small
+// enough to be a file; the agent owns everything that actually matters.
+//
+// A list rather than one session, because a reattach has to restore every chat
+// the daemon is holding. Restoring only the last would leave the others running
+// with nobody reading them — the failure the daemon exists to prevent, applied
+// to all but one.
+export type SessionRecord = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  modes: unknown;
+};
+
+export type State = { sessions: SessionRecord[] };
 
 export async function loadState(): Promise<State | null> {
   try {
@@ -68,12 +87,25 @@ async function dial(
 
 function startDaemon(): void {
   ensureRuntimeDir();
-  const log = Bun.file(daemonLogPath);
+  // Appended, via a raw fd, rather than Bun.file(path) — which writes from
+  // offset zero. A new daemon that logs fewer bytes than the last one leaves
+  // the previous run's tail sitting after its own, so `tail` shows two
+  // processes' output as though it were one story. That is not a cosmetic
+  // problem: it is how a daemon that had just started cleanly appeared to have
+  // flushed a buffer it never had.
+  const log = openSync(daemonLogPath, "a");
   Bun.spawn([process.execPath, daemonScript], {
     stdin: "ignore",
     stdout: log,
     stderr: log,
-    // The whole point: it must not die when this process does.
+    // The whole point: it must not die when this process does. Verified —
+    // a detached child survives a normal parent exit.
+    //
+    // It does NOT survive `bun --watch`, which kills the whole process group on
+    // reload, so in development the daemon has to be started separately
+    // (`bun run daemon`). Convenient here, and correct under a real desktop
+    // shell where the parent is long-lived; not something to rely on while
+    // editing this file.
     detached: true,
   }).unref();
 }
@@ -93,6 +125,14 @@ export async function connect(): Promise<Link> {
     announce = resolve;
   });
 
+  // Assigned once the socket exists; the drain handler above closes over it.
+  let writer: SocketWriter | null = null;
+
+  let hangUp: () => void = () => {};
+  const closed = new Promise<void>((resolve) => {
+    hangUp = resolve;
+  });
+
   let sawHandshake = false;
   // Bytes, not a string. Splitting the handshake off by decoding the chunk and
   // re-encoding the remainder would corrupt any multi-byte character that
@@ -108,7 +148,13 @@ export async function connect(): Promise<Link> {
   const handlers: SocketHandler<undefined> = {
     data(_s: Socket<undefined>, chunk: Uint8Array) {
       if (sawHandshake) {
-        controller?.enqueue(chunk);
+        // Copied, not passed through. The buffer a socket handler is given can
+        // be reused for the next read, and a ReadableStream queue holds a
+        // reference rather than the bytes — so a fast producer overwrites data
+        // that has been enqueued but not yet consumed. It surfaces as
+        // "Unterminated string" from the ndJSON parser, some way from the
+        // cause, and only under load.
+        controller?.enqueue(new Uint8Array(chunk));
         return;
       }
 
@@ -134,14 +180,21 @@ export async function connect(): Promise<Link> {
       }
       announce(fresh);
 
-      const rest = merged.subarray(newline + 1);
+      // `slice`, not `subarray`: a view would keep the merged buffer alive and
+      // share its bytes, which is the same aliasing hazard as above.
+      const rest = merged.slice(newline + 1);
       if (rest.length) controller?.enqueue(rest);
+    },
+    drain() {
+      writer?.drain();
     },
     close() {
       controller?.close();
+      hangUp();
     },
     error(_s: Socket<undefined>, err: Error) {
       controller?.error(err);
+      hangUp();
     },
   };
 
@@ -159,13 +212,15 @@ export async function connect(): Promise<Link> {
       throw new Error(`adapter daemon did not come up; see ${daemonLogPath}`);
   }
 
+  writer = new SocketWriter(socket);
   const live = socket;
+  const out = writer;
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
-      live.write(chunk);
+      out.write(chunk);
       live.flush();
     },
   });
 
-  return { fresh: await handshake, readable, writable };
+  return { fresh: await handshake, readable, writable, closed };
 }
