@@ -22,6 +22,31 @@ import { api, type SessionSummary, type Workspace } from "./api";
 // tabs are gone and with them the whole reason the middle panel had to tell a
 // pty what size it was.
 
+// What is on screen lives in the URL; how it is arranged lives in localStorage.
+//
+// The split is the useful one. Which conversation you are reading and which
+// directory the history panel is showing are facts about *this view* — they can
+// be linked to, reopened tomorrow, or pasted to somebody so they land on the
+// same chat. Panel widths and the theme are facts about this window and belong
+// nowhere near a link.
+//
+// Written with replaceState rather than pushState: clicking through six
+// conversations should not put six entries in the back button, and the browser
+// back button meaning "previous chat" is a promise the rest of the app does not
+// keep.
+function readUrl(): { session: string; cwd: string } {
+  const params = new URLSearchParams(location.search);
+  return { session: params.get("session") ?? "", cwd: params.get("cwd") ?? "" };
+}
+
+function writeUrl(session: string, cwd: string): void {
+  const params = new URLSearchParams();
+  if (session) params.set("session", session);
+  if (cwd) params.set("cwd", cwd);
+  const query = params.toString();
+  history.replaceState(null, "", query ? `?${query}` : location.pathname);
+}
+
 // Layout is a preference about this window, and react-resizable-panels persists
 // a whole layout under one key rather than a number per panel.
 const layoutKey = "tdeck.layout";
@@ -36,13 +61,15 @@ const lastSessionKey = "tdeck.session";
 export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  // The URL wins over the remembered session: someone who followed a link meant
+  // that link, not wherever they were last time.
   const [chosen, setChosen] = useState<string>(
-    () => localStorage.getItem(lastSessionKey) ?? "",
+    () => readUrl().session || (localStorage.getItem(lastSessionKey) ?? ""),
   );
   const [opening, setOpening] = useState(false);
   // A directory being looked at without a conversation open on it — the case
   // where a terminal agent already owns the workspace.
-  const [inspecting, setInspecting] = useState("");
+  const [inspecting, setInspecting] = useState(() => readUrl().cwd);
   const [error, setError] = useState("");
   const [theme, setTheme] = useTheme();
   // Open unless explicitly hidden. It was opt-in while the panel was a
@@ -51,7 +78,7 @@ export default function App() {
   // started — and the only place the resume and attach controls live. A useful
   // panel behind a toggle nobody presses is a feature nobody has.
   const [panelOpen, setPanelOpenState] = useState<boolean>(
-    () => localStorage.getItem(panelOpenKey) !== "0",
+    () => readUrl().cwd !== "" || localStorage.getItem(panelOpenKey) !== "0",
   );
 
   // Written here rather than in an effect on the value, so only an actual
@@ -73,7 +100,8 @@ export default function App() {
 
   useEffect(() => {
     if (chosen) localStorage.setItem(lastSessionKey, chosen);
-  }, [chosen]);
+    writeUrl(chosen, inspecting);
+  }, [chosen, inspecting]);
 
   const refresh = useCallback(async () => {
     try {
@@ -87,9 +115,14 @@ export default function App() {
       setSessions(list);
       setWorkspaces(spaces);
       setError("");
-      // A remembered session the backend no longer has — a restart with a
-      // cleared state file, say — would leave the middle panel pointed at
-      // nothing, so fall back to the first real one.
+      // A session the daemon does not have — a stale link, or a daemon that has
+      // been restarted since — falls back to the first real one, and the URL is
+      // rewritten to match.
+      //
+      // Known limitation: that silently discards the link rather than offering
+      // to resume what it named. Resuming would need the conversation's cwd,
+      // which the link does not carry, and guessing it is worse than landing
+      // somewhere usable. A link that carried both could do better.
       setChosen((current) =>
         list.some((s) => s.sessionId === current)
           ? current
