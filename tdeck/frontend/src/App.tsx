@@ -25,26 +25,48 @@ import { api, type SessionSummary, type Workspace } from "./api";
 // What is on screen lives in the URL; how it is arranged lives in localStorage.
 //
 // The split is the useful one. Which conversation you are reading and which
-// directory the history panel is showing are facts about *this view* — they can
+// workspace the history panel is showing are facts about *this view* — they can
 // be linked to, reopened tomorrow, or pasted to somebody so they land on the
 // same chat. Panel widths and the theme are facts about this window and belong
 // nowhere near a link.
 //
-// Written with replaceState rather than pushState: clicking through six
-// conversations should not put six entries in the back button, and the browser
-// back button meaning "previous chat" is a promise the rest of the app does not
-// keep.
-function readUrl(): { session: string; cwd: string } {
-  const params = new URLSearchParams(location.search);
-  return { session: params.get("session") ?? "", cwd: params.get("cwd") ?? "" };
+// Paths rather than query strings, because these are things rather than
+// filters:
+//
+//   /s/<sessionId>            a conversation
+//   /w/<project>/<workspace>  a workspace, whether or not a chat is open on it
+//
+// A workspace is addressed by project and name rather than by its directory:
+// awp already identifies it that way, and the alternative is an absolute path
+// percent-encoded into a URL, which is unreadable and unguessable. The cost is
+// that resolving one needs the workspace list, so the panel opens a moment
+// after the page does.
+//
+// replaceState rather than pushState: clicking through six conversations should
+// not put six entries in the back button, and back meaning "previous chat" is a
+// promise the rest of the app does not keep.
+type View = { session: string; project: string; workspace: string };
+
+function readUrl(): View {
+  const parts = location.pathname
+    .split("/")
+    .filter(Boolean)
+    .map(decodeURIComponent);
+  if (parts[0] === "s" && parts[1])
+    return { session: parts[1], project: "", workspace: "" };
+  if (parts[0] === "w" && parts[1] && parts[2]) {
+    return { session: "", project: parts[1], workspace: parts[2] };
+  }
+  return { session: "", project: "", workspace: "" };
 }
 
-function writeUrl(session: string, cwd: string): void {
-  const params = new URLSearchParams();
-  if (session) params.set("session", session);
-  if (cwd) params.set("cwd", cwd);
-  const query = params.toString();
-  history.replaceState(null, "", query ? `?${query}` : location.pathname);
+function writeUrl(view: View): void {
+  const path = view.session
+    ? `/s/${encodeURIComponent(view.session)}`
+    : view.project
+      ? `/w/${encodeURIComponent(view.project)}/${encodeURIComponent(view.workspace)}`
+      : "/";
+  if (path !== location.pathname) history.replaceState(null, "", path);
 }
 
 // Layout is a preference about this window, and react-resizable-panels persists
@@ -66,10 +88,13 @@ export default function App() {
   const [chosen, setChosen] = useState<string>(
     () => readUrl().session || (localStorage.getItem(lastSessionKey) ?? ""),
   );
+  // A workspace named by the URL, held until the workspace list arrives and can
+  // say which directory it means.
+  const [wanted] = useState<View>(readUrl);
   const [opening, setOpening] = useState(false);
   // A directory being looked at without a conversation open on it — the case
   // where a terminal agent already owns the workspace.
-  const [inspecting, setInspecting] = useState(() => readUrl().cwd);
+  const [inspecting, setInspecting] = useState("");
   const [error, setError] = useState("");
   const [theme, setTheme] = useTheme();
   // Open unless explicitly hidden. It was opt-in while the panel was a
@@ -78,7 +103,8 @@ export default function App() {
   // started — and the only place the resume and attach controls live. A useful
   // panel behind a toggle nobody presses is a feature nobody has.
   const [panelOpen, setPanelOpenState] = useState<boolean>(
-    () => readUrl().cwd !== "" || localStorage.getItem(panelOpenKey) !== "0",
+    () =>
+      readUrl().project !== "" || localStorage.getItem(panelOpenKey) !== "0",
   );
 
   // Written here rather than in an effect on the value, so only an actual
@@ -100,8 +126,7 @@ export default function App() {
 
   useEffect(() => {
     if (chosen) localStorage.setItem(lastSessionKey, chosen);
-    writeUrl(chosen, inspecting);
-  }, [chosen, inspecting]);
+  }, [chosen]);
 
   const refresh = useCallback(async () => {
     try {
@@ -160,6 +185,35 @@ export default function App() {
   );
 
   const session = sessions.find((s) => s.sessionId === chosen) ?? null;
+
+  // A /w/<project>/<workspace> link, resolved once the list can say which
+  // directory it means. Runs until it matches: the list arrives a moment after
+  // the page, and a link to a workspace that does not exist simply never
+  // resolves rather than erroring at someone.
+  useEffect(() => {
+    if (!wanted.project || inspecting) return;
+    const match = workspaces.find(
+      (w) => w.project === wanted.project && w.name === wanted.workspace,
+    );
+    if (!match) return;
+    if (match.sessionId) setChosen(match.sessionId);
+    else setInspecting(match.path);
+  }, [workspaces, wanted, inspecting]);
+
+  // The address bar follows the view. A conversation names itself; a workspace
+  // being inspected without one is named by the workspace it belongs to.
+  useEffect(() => {
+    const shown = inspecting
+      ? workspaces.find((w) => w.path === inspecting)
+      : workspaces.find((w) => w.sessionId === chosen);
+    writeUrl(
+      chosen && !inspecting
+        ? { session: chosen, project: "", workspace: "" }
+        : shown
+          ? { session: "", project: shown.project, workspace: shown.name }
+          : { session: chosen, project: "", workspace: "" },
+    );
+  }, [chosen, inspecting, workspaces]);
 
   return (
     <div className="bg-background text-foreground relative flex h-screen flex-col overflow-hidden">

@@ -252,7 +252,15 @@ Bun.serve({
   // a crafted path cannot walk out of it.
   fetch: async (req) => {
     if (!built) return new Response("not found", { status: 404 });
-    const path = join(bundle, new URL(req.url).pathname);
+    const name = new URL(req.url).pathname;
+
+    // Client-side routes — /s/<session>, /w/<project>/<workspace> — are views,
+    // not files. Reloading on one has to serve the page rather than 404, or a
+    // link only works when followed from inside the app, which is the opposite
+    // of the point of having links.
+    if (name.startsWith("/s/") || name.startsWith("/w/")) return new Response(Bun.file(page));
+
+    const path = join(bundle, name);
     if (!path.startsWith(bundle)) return new Response("not found", { status: 404 });
     const file = Bun.file(path);
     return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
