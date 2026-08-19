@@ -232,6 +232,28 @@ the seam. What waits for evidence is the rest of an agent host — supervision,
 restart policy, multi-client fan-out — none of which is needed to keep a session
 alive across a window closing.
 
+**Done, and it works.** `src/adapterd.ts` owns the adapter and lends it out over
+a unix socket; the server dials in. Tested by killing the server four seconds
+into a 25-item generation: the daemon logged `client detached; the agent keeps
+working`, buffered 13 chunks while nobody was listening, and flushed them when a
+new server attached — which picked the count up at 6 and carried it to 25.
+
+Two things that fell out of building it:
+
+- **A reconnecting client must not send `initialize`.** ACP sends it once per
+  connection and an adapter that already has one errors. The daemon writes a
+  one-line handshake (`{"fresh":false}`) ahead of the protocol stream, so the
+  protocol knowledge stays on the protocol side and the daemon remains a byte
+  pipe. The client reuses the session id it recorded rather than opening a new
+  one, which would abandon the very turn the daemon exists to protect.
+- **A reattached client never sees `done`.** The reply to a `prompt` is
+  addressed to the client that asked, so it arrives at a dead socket and the
+  agent logs `Got response to unknown request N`. All the *output* is delivered;
+  only the completion is lost, so the UI streams to the end of a turn and then
+  sits there looking busy. Fixing it properly means the daemon tracking
+  outstanding requests, which is the first protocol awareness it does not have.
+  Deferred until there is a UI to be annoyed by it.
+
 ## The hard part, which none of this touches
 
 Everything above settles the transport, and the transport was the easy question.
