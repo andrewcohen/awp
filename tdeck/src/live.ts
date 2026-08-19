@@ -1,33 +1,23 @@
-// Which agents are already running, so tdeck does not start a second one.
+// Which agents are already running in a directory, so tdeck does not start a
+// second one in the same checkout.
 //
-// Two ways to duplicate work by accident, and this exists to close both:
+// This once also decided which *conversation* was being written to, by stating
+// transcript files under ~/.claude/projects. That half is gone: `session/list`
+// carries `updatedAt` and it is the same signal from the same record, so the
+// filesystem version was a Claude-specific reimplementation of something the
+// protocol already hands over.
 //
-//   1. Clicking a workspace whose zmx agent is already working spawns another
-//      agent in the same working tree. Two agents, one checkout, editing.
-//   2. Resuming the conversation that agent is driving attaches a second writer
-//      to it. The earlier belief that the agent would refuse this was wrong —
-//      see the correction in tdeck.md — so the guard has to be here.
+// What remains has no protocol answer and never will. Whether a pty somewhere
+// is running an agent in this directory is a fact about processes on this
+// machine, and ACP has nothing to say about programs it is not speaking to.
 //
 // Nothing is written to say who owns what. Ownership is *derived*, every time,
-// from things that cannot go stale: a live process list, and the modification
-// time of the file the agent is appending to. A flag in a state file would be
-// wrong exactly when it matters — after a crash, a kill -9, a laptop sleep —
-// and that is when someone is most likely to click the row again.
-
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { readdir, stat } from "node:fs/promises";
+// from a live process list. A flag in a state file would be wrong exactly when
+// it matters — after a crash, a kill -9, a laptop sleep — and that is when
+// someone is most likely to click the row again.
 
 // A zmx session running an agent, as zmx itself reports it.
 export type LiveAgent = { name: string; dir: string; clients: number };
-
-// How recently a transcript must have been touched to count as being written.
-//
-// Long enough to cover an agent thinking between tool calls, short enough that
-// a conversation abandoned an hour ago is not called live. This is a heuristic
-// and is treated as one everywhere it is used: it decides whether to *ask*, not
-// whether to allow.
-const liveWindowMs = 3 * 60 * 1000;
 
 // Parse `zmx ls`. Its lines are tab-separated key=value pairs, with the caller's
 // own session marked by a leading arrow.
@@ -66,34 +56,4 @@ export async function liveAgents(): Promise<LiveAgent[]> {
     // The consequence is fewer warnings, not a broken screen.
     return [];
   }
-}
-
-// Claude Code writes one transcript per session, in a directory named after the
-// cwd with every non-alphanumeric character replaced by a dash. Reading only the
-// names and modification times — never the contents, which is the mistake this
-// whole surface was built to stop making.
-function transcriptDir(cwd: string): string {
-  return join(homedir(), ".claude", "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
-}
-
-// Session ids whose transcript was appended to just now, which is the closest
-// thing to "someone is talking to this conversation right now".
-export async function activeSessions(cwd: string): Promise<Set<string>> {
-  const active = new Set<string>();
-  try {
-    const dir = transcriptDir(cwd);
-    const names = await readdir(dir);
-    const now = Date.now();
-    await Promise.all(
-      names
-        .filter((name) => name.endsWith(".jsonl"))
-        .map(async (name) => {
-          const info = await stat(join(dir, name));
-          if (now - info.mtimeMs < liveWindowMs) active.add(name.replace(/\.jsonl$/, ""));
-        }),
-    );
-  } catch {
-    // No transcripts for this directory yet.
-  }
-  return active;
 }

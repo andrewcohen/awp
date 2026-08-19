@@ -48,6 +48,9 @@ export type SessionSummary = {
   title: string;
   cwd: string;
   busy: boolean;
+  // What the agent is asking permission for, if it is stopped waiting for one.
+  // Distinct from busy: busy means working, this means stuck without you.
+  waitingOn: string | null;
   modes: Modes | null;
   config: ConfigOption[];
 };
@@ -80,6 +83,8 @@ export type Workspace = {
   lastActiveAt: string;
   // Set when a tdeck conversation is already open on this directory.
   sessionId?: string;
+  // What the agent is waiting on, when tdeck holds the conversation.
+  waitingOn?: string | null;
   // A zmx agent is running in this directory. Opening a chat here would put a
   // second agent in the same checkout.
   terminalAgent?: boolean;

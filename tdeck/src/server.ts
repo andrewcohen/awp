@@ -43,7 +43,12 @@ void daemon.closed.then(() => {
   process.exit(1);
 });
 
-type SessionSummary = { sessionId: string; cwd: string };
+type SessionSummary = {
+  sessionId: string;
+  cwd: string;
+  busy: boolean;
+  waitingOn: string | null;
+};
 
 // A fresh daemon has no conversations. Opening one here means the page always
 // has something to show without a "new chat" click being the first thing
@@ -235,14 +240,29 @@ Bun.serve({
         liveAgents(),
         daemon.request<SessionSummary[]>({ cmd: "sessions" }),
       ]);
-      const open = new Map(sessions.map((chat) => [chat.cwd, chat.sessionId]));
+      const open = new Map(sessions.map((chat) => [chat.cwd, chat]));
       const busyDirs = new Set(agents.map((agent) => agent.dir));
       return Response.json(
-        spaces.map((workspace) => ({
-          ...workspace,
-          sessionId: open.get(workspace.path),
-          terminalAgent: busyDirs.has(workspace.path),
-        })),
+        spaces.map((workspace) => {
+          const chat = open.get(workspace.path);
+          return {
+            ...workspace,
+            sessionId: chat?.sessionId,
+            terminalAgent: busyDirs.has(workspace.path),
+            // Where tdeck holds the conversation, the protocol is the truth and
+            // awp's stored status is a stale echo of a different agent. Where it
+            // does not, the store is all there is — those are agents nobody is
+            // speaking ACP to, which is what the hooks were written for.
+            status: chat
+              ? chat.waitingOn
+                ? "waiting"
+                : chat.busy
+                  ? "working"
+                  : "idle"
+              : workspace.status,
+            waitingOn: chat?.waitingOn ?? null,
+          };
+        }),
       );
     },
   },

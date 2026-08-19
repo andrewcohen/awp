@@ -168,13 +168,23 @@ export function Sidebar({
                           <ItemTitle className="truncate font-normal">
                             {workspace.displayName}
                           </ItemTitle>
-                          {(workspace.bookmark !== "" ||
-                            workspace.prNumber > 0) && (
-                            <ItemDescription className="truncate">
-                              {workspace.prNumber > 0 &&
-                                `#${workspace.prNumber} `}
-                              {workspace.bookmark}
+                          {/* What it is stuck on, when it is stuck on you. This
+                              is the row's most useful line whenever it exists,
+                              so it displaces the bookmark rather than sitting
+                              beside it. */}
+                          {workspace.waitingOn ? (
+                            <ItemDescription className="text-amber-600 truncate dark:text-amber-400">
+                              needs you: {workspace.waitingOn}
                             </ItemDescription>
+                          ) : (
+                            (workspace.bookmark !== "" ||
+                              workspace.prNumber > 0) && (
+                              <ItemDescription className="truncate">
+                                {workspace.prNumber > 0 &&
+                                  `#${workspace.prNumber} `}
+                                {workspace.bookmark}
+                              </ItemDescription>
+                            )
                           )}
                         </ItemContent>
                         {/* Two different facts, deliberately not merged. The
