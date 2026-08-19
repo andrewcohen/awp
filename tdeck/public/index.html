@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>acp chat</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; height: 100vh; display: flex; flex-direction: column;
+        font: 14px/1.6 ui-sans-serif, system-ui, sans-serif;
+      }
+      #log { flex: 1; overflow: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: .75rem; }
+      .turn { max-width: 52rem; }
+      .who { font-size: 11px; opacity: .55; }
+      .user .body { background: color-mix(in oklab, currentColor 8%, transparent); border-radius: .5rem; padding: .5rem .75rem; width: fit-content; }
+      .body { white-space: pre-wrap; }
+      .thought { opacity: .55; font-size: 12px; border-left: 2px solid currentColor; padding-left: .75rem; }
+      .tool { font: 12px/1.5 ui-monospace, monospace; opacity: .8; border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+              border-radius: .4rem; padding: .35rem .6rem; width: fit-content; }
+      .tool[data-status="completed"] { opacity: .5; }
+      .tool[data-status="failed"] { border-color: #d33; color: #d33; opacity: 1; }
+      .permission { border: 1px solid #e0a; border-radius: .5rem; padding: .75rem; }
+      .permission button { font: inherit; margin-right: .5rem; padding: .25rem .75rem; cursor: pointer; }
+      form { display: flex; gap: .5rem; padding: 1rem; border-top: 1px solid color-mix(in oklab, currentColor 15%, transparent); }
+      input { flex: 1; font: inherit; padding: .6rem .8rem; border-radius: .5rem;
+              border: 1px solid color-mix(in oklab, currentColor 25%, transparent); background: transparent; color: inherit; }
+      button { font: inherit; padding: .6rem 1rem; border-radius: .5rem; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div id="log"></div>
+    <div id="modes" style="display:flex;gap:.5rem;align-items:center;padding:.5rem 1rem;font-size:12px;opacity:.8"></div>
+    <form id="composer">
+      <input id="text" placeholder="ask the agent" autocomplete="off" autofocus />
+      <button>send</button>
+    </form>
+
+    <script type="module">
+      const log = document.getElementById("log");
+      // The current assistant turn, so streamed chunks append to one element
+      // instead of producing a paragraph per token.
+      let streaming = null;
+      let thought = null;
+
+      const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+      const scroll = (was) => { if (was) log.scrollTop = log.scrollHeight; };
+
+      function turn(cls, who) {
+        const el = document.createElement("div");
+        el.className = `turn ${cls}`;
+        el.innerHTML = `<div class="who">${who}</div><div class="body"></div>`;
+        log.append(el);
+        return el.querySelector(".body");
+      }
+
+      new EventSource("/events").onmessage = (msg) => {
+        const e = JSON.parse(msg.data);
+        const was = atBottom();
+
+        if (e.kind === "user") {
+          streaming = thought = null;
+          turn("user", "you").textContent = e.text;
+        } else if (e.kind === "text") {
+          if (!streaming) streaming = turn("agent", "agent");
+          streaming.textContent += e.text;
+        } else if (e.kind === "thought") {
+          if (!thought) { thought = turn("agent thought", "thinking"); }
+          thought.textContent += e.text;
+        } else if (e.kind === "tool") {
+          const el = document.createElement("div");
+          el.className = "tool";
+          el.dataset.id = e.id;
+          el.dataset.status = e.status;
+          el.textContent = `${e.title}`;
+          log.append(el);
+          streaming = null;
+        } else if (e.kind === "tool_update") {
+          const el = log.querySelector(`.tool[data-id="${CSS.escape(e.id)}"]`);
+          if (el && e.status) el.dataset.status = e.status;
+        } else if (e.kind === "permission") {
+          const el = document.createElement("div");
+          el.className = "permission";
+          el.innerHTML = `<div>the agent wants to: <b></b></div>`;
+          el.querySelector("b").textContent = e.title;
+          for (const opt of e.options) {
+            const b = document.createElement("button");
+            b.textContent = opt.name;
+            b.onclick = () => {
+              fetch("/permit", { method: "POST", body: JSON.stringify({ optionId: opt.id }) });
+              el.remove();
+            };
+            el.append(b);
+          }
+          log.append(el);
+        } else if (e.kind === "done") {
+          streaming = thought = null;
+        } else if (e.kind === "error") {
+          const el = turn("agent", "error");
+          el.style.color = "#d33";
+          el.textContent = e.message;
+        }
+        scroll(was);
+      };
+
+      // Modes come from the agent, so the UI lists whatever it offers rather
+      // than hard-coding a notion of "auto".
+      const modeBar = document.getElementById("modes");
+      fetch("/modes").then((r) => r.json()).then(({ availableModes, currentModeId }) => {
+        if (!availableModes?.length) { modeBar.textContent = "no session modes"; return; }
+        modeBar.append("mode:");
+        for (const m of availableModes) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = m.name ?? m.id;
+          b.style.padding = ".15rem .6rem";
+          b.dataset.mode = m.id;
+          if (m.id === currentModeId) b.style.fontWeight = "700";
+          b.onclick = () => {
+            fetch("/mode", { method: "POST", body: JSON.stringify({ modeId: m.id }) });
+            for (const other of modeBar.querySelectorAll("button")) other.style.fontWeight = "400";
+            b.style.fontWeight = "700";
+          };
+          modeBar.append(b);
+        }
+      });
+
+      document.getElementById("composer").onsubmit = (ev) => {
+        ev.preventDefault();
+        const box = document.getElementById("text");
+        const text = box.value.trim();
+        if (!text) return;
+        box.value = "";
+        fetch("/say", { method: "POST", body: JSON.stringify({ text }) });
+      };
+    </script>
+  </body>
+</html>
