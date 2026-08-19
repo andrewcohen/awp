@@ -438,6 +438,20 @@ export function ChatView({
   const [chat, setChat] = useState<Conversation>(emptyConversation);
   const [showAll, setShowAll] = useState(false);
 
+  // The daemon knows whether a turn is running; the fold only guesses.
+  //
+  // apply() sets busy on a text chunk and clears it on `done`, which is right
+  // while events are flowing and wrong forever afterwards if a `done` never
+  // reached the log — a turn orphaned by an old server restart, say. The
+  // symptom is a conversation that finished hours ago and still says "working".
+  //
+  // So the summary reconciles it. The fold keeps its own flag for the moment
+  // between sending and the next poll, but it cannot outvote the server.
+  useEffect(() => {
+    if (!session.busy)
+      setChat((prev) => (prev.busy ? { ...prev, busy: false } : prev));
+  }, [session.busy]);
+
   useEffect(() => {
     setChat(emptyConversation());
     setShowAll(false);
