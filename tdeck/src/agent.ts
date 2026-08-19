@@ -396,7 +396,7 @@ export class AgentHost {
     // `_meta.systemPrompt` takes `{append}` on top of the claude_code preset,
     // so this is the supported seam rather than a flag smuggled past the
     // adapter.
-    const append = await devLoopPrompt(cwd);
+    const append = [surfaceNote, await devLoopPrompt(cwd)].filter(Boolean).join("\n\n");
     const session = await this.conn.newSession({
       cwd,
       mcpServers: [],
@@ -535,6 +535,28 @@ export class AgentHost {
   }
 
 }
+
+// What this surface can display, told to the agent.
+//
+// Without it the agent reasons from its tools and concludes wrongly. Asked for a
+// video it answered: "this interface only accepts still images back from a tool
+// — there is no video channel." The first half is true; a tool result carries
+// image blocks and nothing else. The second is not: tdeck renders video and
+// audio, and the route to it is a file on disk linked from markdown.
+//
+// The agent had no way to know that, and no amount of rendering work fixes a
+// capability nobody is told about. So the surface introduces itself. Kept to
+// what is actionable — where to put a file and how to reference it — because
+// this is prepended to every turn's context in every session.
+const surfaceNote = [
+  "You are talking to a person through tdeck, a graphical chat rather than a terminal.",
+  "It renders markdown, syntax-highlighted diffs, images, audio and video inline.",
+  "",
+  "To show a picture, chart, recording or screen capture: write the file to disk and",
+  "reference it in markdown with its absolute path, e.g. ![](/tmp/chart.png). Video",
+  "(.mp4, .webm, .mov) and audio (.mp3, .wav, .m4a) get a player; images get a",
+  "click-to-enlarge thumbnail. This works for content a tool result cannot carry.",
+].join("\n");
 
 // awp names its dev-loop files after the directory: leading slash dropped, the
 // remaining separators turned into dashes, and dots left alone — the real files
