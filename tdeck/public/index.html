@@ -36,6 +36,13 @@
     </form>
 
     <script type="module">
+      // Every route names a conversation now. This page shows the first one;
+      // picking between them is the real UI's job, not this one's.
+      const sessions = await fetch("/sessions").then((r) => r.json());
+      const session = sessions[0]?.sessionId ?? "";
+      const post = (path, body) =>
+        fetch(path, { method: "POST", body: JSON.stringify({ session, ...body }) });
+
       const log = document.getElementById("log");
       // The current assistant turn, so streamed chunks append to one element
       // instead of producing a paragraph per token.
@@ -53,7 +60,7 @@
         return el.querySelector(".body");
       }
 
-      new EventSource("/events").onmessage = (msg) => {
+      new EventSource(`/events?session=${encodeURIComponent(session)}`).onmessage = (msg) => {
         const e = JSON.parse(msg.data);
         const was = atBottom();
 
@@ -86,7 +93,7 @@
             const b = document.createElement("button");
             b.textContent = opt.name;
             b.onclick = () => {
-              fetch("/permit", { method: "POST", body: JSON.stringify({ optionId: opt.id }) });
+              post("/permit", { optionId: opt.id });
               el.remove();
             };
             el.append(b);
@@ -105,7 +112,7 @@
       // Modes come from the agent, so the UI lists whatever it offers rather
       // than hard-coding a notion of "auto".
       const modeBar = document.getElementById("modes");
-      fetch("/modes").then((r) => r.json()).then(({ availableModes, currentModeId }) => {
+      Promise.resolve(sessions[0]?.modes ?? { availableModes: [], currentModeId: null }).then(({ availableModes, currentModeId }) => {
         if (!availableModes?.length) { modeBar.textContent = "no session modes"; return; }
         modeBar.append("mode:");
         for (const m of availableModes) {
@@ -116,7 +123,7 @@
           b.dataset.mode = m.id;
           if (m.id === currentModeId) b.style.fontWeight = "700";
           b.onclick = () => {
-            fetch("/mode", { method: "POST", body: JSON.stringify({ modeId: m.id }) });
+            post("/mode", { modeId: m.id });
             for (const other of modeBar.querySelectorAll("button")) other.style.fontWeight = "400";
             b.style.fontWeight = "700";
           };
@@ -130,7 +137,7 @@
         const text = box.value.trim();
         if (!text) return;
         box.value = "";
-        fetch("/say", { method: "POST", body: JSON.stringify({ text }) });
+        post("/say", { text });
       };
     </script>
   </body>

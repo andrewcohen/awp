@@ -6,6 +6,7 @@
   "scripts": {
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
+    "daemon": "bun src/adapterd.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
