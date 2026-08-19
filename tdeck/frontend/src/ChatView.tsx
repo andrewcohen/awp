@@ -46,6 +46,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type SessionSummary } from "./api";
+import type { Media } from "./turns";
 import { ConfigBar } from "./ConfigBar";
 import {
   apply,
@@ -123,7 +124,58 @@ function WhenVisible({
   );
 }
 
+// What the agent handed back, shown rather than described.
+//
+// Capped in height and click-to-open rather than free-standing: a screenshot is
+// a citation inside a conversation, the same argument as the diff frame, and a
+// full-resolution capture left unbounded is a page of chat to scroll past.
+const MediaBlock = memo(function MediaBlock({ media }: { media: Media }) {
+  if (media.kind === "video") {
+    return (
+      <video
+        controls
+        preload="metadata"
+        src={media.src}
+        className="border-border max-h-80 w-fit max-w-full rounded-lg border"
+      />
+    );
+  }
+  if (media.kind === "audio") {
+    return <audio controls src={media.src} className="w-full max-w-md" />;
+  }
+  return (
+    <a href={media.src} target="_blank" rel="noreferrer" className="w-fit">
+      <img
+        src={media.src}
+        alt="agent output"
+        loading="lazy"
+        className="border-border max-h-80 w-fit max-w-full rounded-lg border object-contain"
+      />
+    </a>
+  );
+});
+
 const ToolRow = memo(function ToolRow({ tool }: { tool: Tool }) {
+  // Media first and outside the disclosure. Everything else a tool returns is
+  // evidence you open when you want it; a picture is the result itself, and
+  // hiding it behind a chevron would be the transcription problem again in a
+  // different costume.
+  if (tool.media.length > 0) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <div className="text-muted-foreground flex items-center gap-2 text-sm">
+          <Badge variant="secondary" className="shrink-0 font-normal">
+            {tool.name}
+          </Badge>
+          {tool.isError && <CircleAlert className="text-destructive size-4" />}
+        </div>
+        {tool.media.map((media, i) => (
+          <MediaBlock key={i} media={media} />
+        ))}
+      </div>
+    );
+  }
+
   // A diff is the one result worth showing before it is asked for: it is what
   // the agent did, where everything else is what it looked at.
   if (tool.patch !== "") {

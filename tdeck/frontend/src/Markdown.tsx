@@ -110,6 +110,32 @@ const components = {
   td: (props: { children?: React.ReactNode }) => (
     <td className="border-border/50 border-b px-2 py-1 align-top" {...props} />
   ),
+  // An agent citing a screenshot writes ![](/abs/path), and a browser cannot
+  // open a file:// URL from an http page — it fails silently, leaving a broken
+  // image and no reason why. Absolute paths are rewritten through the server,
+  // which is the only party that can read the disk.
+  img: (props: { src?: string; alt?: string }) => {
+    const src = props.src ?? "";
+    const resolved =
+      src.startsWith("/") && !src.startsWith("//")
+        ? `/file?path=${encodeURIComponent(src)}`
+        : src;
+    return (
+      <a
+        href={resolved}
+        target="_blank"
+        rel="noreferrer"
+        className="block w-fit"
+      >
+        <img
+          src={resolved}
+          alt={props.alt ?? ""}
+          loading="lazy"
+          className="border-border my-2 max-h-80 w-fit max-w-full rounded-lg border object-contain"
+        />
+      </a>
+    );
+  },
   hr: () => <hr className="border-border my-3" />,
 };
 

@@ -231,6 +231,32 @@ Bun.serve({
       },
     },
 
+    // A file on disk, for the page to show.
+    //
+    // An agent citing a screenshot writes an absolute path, and a browser cannot
+    // open file:// from an http page — it fails silently, which is the worst way
+    // for an image to be missing. This is the only party that can read the disk.
+    //
+    // Deliberately narrow. Media only, by content type, because the job is
+    // showing a picture rather than exposing a filesystem over HTTP: without
+    // that check this route would serve ~/.ssh/id_rsa to anything that could
+    // reach the port. It is still a real widening of what the port does, which
+    // is why it is worth saying out loud — the port is localhost-only, and the
+    // people who can reach it can already read the files.
+    "/file": async (req) => {
+      const path = new URL(req.url).searchParams.get("path") ?? "";
+      if (!path.startsWith("/")) {
+        return Response.json({ error: "an absolute path is required" }, { status: 400 });
+      }
+      const file = Bun.file(path);
+      if (!(await file.exists())) return new Response("not found", { status: 404 });
+      const type = file.type.split(";")[0] ?? "";
+      if (!/^(image|video|audio)\//.test(type)) {
+        return Response.json({ error: `refusing to serve ${type || "unknown"}` }, { status: 415 });
+      }
+      return new Response(file, { headers: { "content-type": type } });
+    },
+
     // awp's workspaces, annotated with what tdeck and the terminal are each
     // holding. The annotations are the only thing tdeck adds; the rest is awp's
     // state, read and passed through.

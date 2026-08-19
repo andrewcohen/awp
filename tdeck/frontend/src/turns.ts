@@ -15,6 +15,23 @@
 
 import type { UiEvent } from "./api";
 
+// Something the agent produced that is worth looking at rather than reading.
+//
+// This is the whole reason the surface exists — an agent can hand back a
+// screenshot, a rendered chart, a recording, and a terminal can only describe
+// it. ACP carries them as content blocks with base64 data and a mime type, and
+// they were being silently dropped: the fold handled "diff" and text and let
+// everything else fall out of the loop, so a tool that returned an image showed
+// an empty row and no sign anything was lost.
+export type Media = {
+  // A data: URI, built once here rather than in render — a component that
+  // rebuilds a multi-megabyte string on every keystroke is a stutter nobody
+  // traces back to an image.
+  src: string;
+  mimeType: string;
+  kind: "image" | "audio" | "video";
+};
+
 export type Tool = {
   id: string;
   name: string;
@@ -23,6 +40,7 @@ export type Tool = {
   isError: boolean;
   file: string;
   patch: string;
+  media: Media[];
 };
 
 export type Turn = {
@@ -114,6 +132,7 @@ export function apply(state: Conversation, event: UiEvent): Conversation {
         isError: event.status === "failed",
         file: "",
         patch: "",
+        media: [],
       };
       turns[turns.length - 1] = { ...turn, tools: [...turn.tools, tool] };
       return { ...state, turns, busy: true };
@@ -196,9 +215,19 @@ function contentOf(content: unknown): Partial<Tool> {
   if (!Array.isArray(content)) return {};
   const out: Partial<Tool> = {};
   const text: string[] = [];
+  const media: Media[] = [];
 
   for (const block of content) {
     const kind = str(block, "type");
+    // An image or audio block, wherever it sits: ACP nests one inside
+    // { type: "content", content: … } for tool results and sends it bare
+    // elsewhere, so both shapes are checked rather than guessed at.
+    const found =
+      mediaOf(block) ?? mediaOf((block as { content?: unknown }).content);
+    if (found) {
+      media.push(found);
+      continue;
+    }
     if (kind === "diff") {
       const path = str(block, "path");
       out.file = path;
@@ -216,12 +245,35 @@ function contentOf(content: unknown): Partial<Tool> {
     if (body) text.push(body);
   }
 
+  if (media.length) out.media = media;
   if (text.length) {
     const joined = text.join("\n");
     out.detail = joined;
     out.summary = joined.split("\n")[0]?.slice(0, 120) ?? "";
   }
   return out;
+}
+
+// A content block turned into something with a src, or null if it is not media.
+//
+// The mime type decides how it is shown rather than the block's own kind: ACP
+// has no video block, but a video/* arriving as a resource is still a video and
+// should get a player rather than an <img> that fails to decode.
+function mediaOf(block: unknown): Media | null {
+  const type = str(block, "type");
+  if (type !== "image" && type !== "audio" && type !== "resource") return null;
+  const mimeType = str(block, "mimeType");
+  const data = str(block, "data");
+  if (!mimeType || !data) return null;
+  const kind = mimeType.startsWith("video/")
+    ? "video"
+    : mimeType.startsWith("audio/")
+      ? "audio"
+      : mimeType.startsWith("image/")
+        ? "image"
+        : null;
+  if (!kind) return null;
+  return { src: `data:${mimeType};base64,${data}`, mimeType, kind };
 }
 
 function str(obj: unknown, key: string): string {
