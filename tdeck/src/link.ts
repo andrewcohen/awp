@@ -179,7 +179,13 @@ export class Daemon {
       listeners = new Set();
       this.listeners.set(session, listeners);
       this.seen.set(session, []);
-      void this.request({ cmd: "subscribe", session });
+      // Caught, not floated. A page left open on a conversation the daemon no
+      // longer has — a stale link, or a daemon restarted since — subscribes to
+      // nothing, and an unhandled rejection takes the whole server down with
+      // it. One browser tab from an hour ago should not be able to do that.
+      void this.request({ cmd: "subscribe", session }).catch((err: unknown) => {
+        console.error(`subscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
     } else {
       // A later subscriber gets what the earlier one already received. Sent
       // synchronously, before any live event can arrive, so the order the
@@ -195,7 +201,9 @@ export class Daemon {
       if (set.size > 0) return;
       this.listeners.delete(session);
       this.seen.delete(session);
-      void this.request({ cmd: "unsubscribe", session });
+      void this.request({ cmd: "unsubscribe", session }).catch(() => {
+        // Unsubscribing from something already gone is the expected case here.
+      });
     };
   }
 }

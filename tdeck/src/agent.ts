@@ -85,6 +85,13 @@ export class Conversation {
   // waiting rather than lost.
   readonly queued: string[] = [];
   private pendingPermission: ((optionId: string) => void) | null = null;
+  // What the agent is currently asking permission for, if anything.
+  //
+  // This is the attention signal the whole fleet view wants, and it is exact:
+  // the agent is stopped, waiting for a person, and the protocol said so. awp's
+  // hooks approximate this from outside the agent because nothing was speaking
+  // to it; where tdeck is the client there is nothing to approximate.
+  waitingOn: string | null = null;
 
   constructor(
     readonly sessionId: string,
@@ -99,8 +106,9 @@ export class Conversation {
   // Parks the agent's permission request until a browser answers it. The
   // promise living here rather than on the connection is what lets two
   // conversations wait on different questions at the same time.
-  park(resolve: (optionId: string) => void): void {
+  park(title: string, resolve: (optionId: string) => void): void {
     this.pendingPermission = resolve;
+    this.waitingOn = title;
   }
 
   // A no-op when nothing is waiting: a stale click from a reloaded page is not
@@ -108,6 +116,7 @@ export class Conversation {
   permit(optionId: string): void {
     const resolve = this.pendingPermission;
     this.pendingPermission = null;
+    this.waitingOn = null;
     resolve?.(optionId);
   }
 
@@ -117,6 +126,11 @@ export class Conversation {
       title: this.title,
       cwd: this.cwd,
       busy: this.busy,
+      // Distinct from busy on purpose. Busy means the agent is working and you
+      // can look away; waiting means it has stopped and cannot continue without
+      // you. Collapsing them into one flag is how a fleet view ends up unable to
+      // say which of eighteen workspaces needs a person.
+      waitingOn: this.waitingOn,
       modes: this.modes,
       config: this.config,
     };
@@ -130,7 +144,13 @@ export class Conversation {
 class ChatClient implements Client {
   commands: Command[] = [];
 
-  constructor(private readonly find: (sessionId: string) => Conversation | undefined) {}
+  constructor(
+    private readonly find: (sessionId: string) => Conversation | undefined,
+    // Rung when something the fleet view cares about changes — a conversation
+    // starting to wait on a person, or stopping. The permission handler is the
+    // only place that knows, and it is not on AgentHost.
+    private readonly changed: () => void,
+  ) {}
 
   async sessionUpdate({ sessionId, update }: SessionNotification): Promise<void> {
     const chat = this.find(sessionId);
@@ -220,9 +240,12 @@ class ChatClient implements Client {
       name: o.name,
       kind: o.kind,
     }));
-    chat.log.emit({ kind: "permission", title: toolCall?.title ?? "run a tool", options: rendered });
+    const title = toolCall?.title ?? "run a tool";
+    chat.log.emit({ kind: "permission", title, options: rendered });
+    this.changed();
     return new Promise((resolve) => {
-      chat.park((optionId) => {
+      chat.park(title, (optionId) => {
+        this.changed();
         chat.log.emit({ kind: "permission_resolved", optionId });
         resolve({ outcome: { outcome: "selected", optionId } });
       });
@@ -256,7 +279,10 @@ export class AgentHost {
 
   static async start(stream: Stream): Promise<AgentHost> {
     let host!: AgentHost;
-    const client = new ChatClient((id) => host.chats.get(id));
+    const client = new ChatClient(
+      (id) => host.chats.get(id),
+      () => host.onSessionsChanged(),
+    );
     const conn = new ClientSideConnection(() => client, stream);
     host = new AgentHost(conn, client);
 

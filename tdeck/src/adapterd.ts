@@ -33,8 +33,12 @@ import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { AgentHost, type Conversation } from "./agent.ts";
 import { ensureRuntimeDir, instanceName, socketPath } from "./paths.ts";
 import { SocketWriter } from "./socketwrite.ts";
-import { activeSessions } from "./live.ts";
 import type { Frame, Request } from "./protocol.ts";
+
+// How recently a conversation must have been touched to count as being written
+// to. Long enough to cover an agent thinking between tool calls, short enough
+// that something abandoned an hour ago is not called live.
+const liveWindowMs = 3 * 60 * 1000;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adapterBin = join(here, "..", "node_modules", ".bin", "claude-agent-acp");
@@ -172,11 +176,29 @@ async function run(viewer: Viewer, request: Request): Promise<unknown> {
       return chatOr(request.session).summary();
 
     case "history": {
-      const [past, active] = await Promise.all([
-        host.history(request.cwd),
-        activeSessions(request.cwd),
-      ]);
-      return past.map((entry) => ({ ...entry, live: active.has(entry.sessionId) }));
+      // Liveness comes from the protocol, not from the filesystem.
+      //
+      // This used to stat transcripts under ~/.claude/projects to find the one
+      // being appended to. `session/list` already carries `updatedAt`, and it is
+      // the same signal from the same underlying record: measured against this
+      // repo, the live conversation read 3 seconds old and the next 2500. So the
+      // filesystem version was a Claude-specific reimplementation of a field the
+      // agent hands over, and it is gone.
+      //
+      // Recency is a heuristic either way, and it decides whether to *ask*
+      // before attaching, never whether to allow.
+      const past = await host.history(request.cwd);
+      const now = Date.now();
+      return past.map((entry) => {
+        const at = Date.parse(entry.updatedAt);
+        return {
+          ...entry,
+          // A conversation this daemon is running is live by definition, with no
+          // guessing involved — that case is exact and the timestamp is not.
+          live: entry.open ? host.get(entry.sessionId)?.busy === true
+            : Number.isFinite(at) && now - at < liveWindowMs,
+        };
+      });
     }
 
     case "commands":
