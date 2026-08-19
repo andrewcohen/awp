@@ -114,13 +114,37 @@ Measured against real sessions:
 
 - **An idle session loads and replays.** `loadSession` on a conversation started
   by the terminal replayed it as `user_message_chunk` / `agent_message_chunk`.
-- **A live session refuses.** Loading the currently-running conversation failed —
-  Claude Code protecting a session that already has a writer. The one-writer rule
-  enforces itself; tdeck does not have to police it.
+  Confirmed again in the real client: resuming a past session in this repo
+  replayed 107 events.
+- `session/list` takes a **`cwd` filter**, which is the join with a workspace: a
+  workspace is a directory, and its history is the sessions that ran there. The
+  awp repo has 19.
 - `sessionCapabilities` advertises `list`, `resume`, `fork`, `close`, `delete`.
 
-So: **the terminal owns live sessions, tdeck owns idle and new ones**, and `list`
-can show both without tdeck reading anyone's files.
+### Correction: a live session does *not* refuse
+
+The original probe reported that loading the currently-running conversation
+failed, and this document concluded that "the one-writer rule enforces itself;
+tdeck does not have to police it". **That is wrong**, and it was wrong in the
+direction that matters.
+
+Resuming the live session that was building tdeck — from inside tdeck — returned
+`200` and attached cleanly. Nothing refused. Two clients were briefly holding one
+conversation, and the only reason nothing was corrupted is that neither was
+prompted while it lasted.
+
+So the earlier probe failed for some other reason, and the conclusion drawn from
+it was a guess dressed as a measurement. The rule has to be tdeck's after all:
+
+- the client can attach to a session someone else is driving,
+- so it needs a way to **let go** — `/close`, added with resume rather than after
+  it, because resume without it is a trap,
+- and the UI has to say which sessions are live elsewhere rather than assuming
+  the agent will decline.
+
+The general lesson is worth more than the specific one: a negative result from a
+single probe is weak evidence. "It failed once" became "the agent enforces this",
+and a safety property got built on it.
 
 ### One adapter hosts many sessions at once
 

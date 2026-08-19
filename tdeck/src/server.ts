@@ -126,6 +126,45 @@ Bun.serve({
     // awp's workspaces, annotated with which of them a conversation is already
     // open on. The annotation is the only thing tdeck adds: everything else is
     // awp's state, read and passed through.
+    // Past conversations in a directory — including ones started from a
+    // terminal, which is the point. ?cwd= is required rather than defaulted:
+    // listing every session ever is not a thing any screen here wants.
+    "/history": async (req) => {
+      const cwd = new URL(req.url).searchParams.get("cwd") ?? "";
+      if (!cwd) return Response.json({ error: "cwd is required" }, { status: 400 });
+      return Response.json(await host.history(cwd));
+    },
+
+    "/resume": {
+      POST: async (req) => {
+        const payload = await jsonBody(req);
+        try {
+          const chat = await host.resume(
+            str(payload.sessionId),
+            str(payload.cwd),
+            str(payload.title) || "resumed",
+          );
+          return Response.json(chat.summary());
+        } catch (err) {
+          // A live session refuses, and the message says so — Claude Code
+          // enforcing one writer. Passed through rather than flattened, because
+          // "it is open somewhere else" and "it does not exist" want different
+          // reactions from whoever clicked.
+          return Response.json(
+            { error: err instanceof Error ? err.message : String(err) },
+            { status: 409 },
+          );
+        }
+      },
+    },
+
+    "/close": {
+      POST: async (req) => {
+        const payload = await jsonBody(req);
+        return Response.json({ closed: await host.close(str(payload.sessionId)) });
+      },
+    },
+
     "/workspaces": async () => {
       const open = new Map(host.list().map((chat) => [chat.cwd, chat.sessionId]));
       const workspaces = (await readWorkspaces()).map((workspace) => ({
