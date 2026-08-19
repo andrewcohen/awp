@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/resizable";
 import { Boundary } from "./Boundary";
 import { ChatView } from "./ChatView";
-import { RightPanel } from "./RightPanel";
+import { History } from "./History";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
 import { api, type SessionSummary, type Workspace } from "./api";
@@ -214,8 +214,33 @@ export default function App() {
                 minSize="18"
                 className="flex min-h-0 min-w-0 flex-col"
               >
-                <Boundary key="right-panel">
-                  <RightPanel onClose={() => setPanelOpen(false)} />
+                <Boundary key={`history:${session?.cwd ?? ""}`}>
+                  {session ? (
+                    // The right panel is the history of wherever the current
+                    // conversation is working. It was a placeholder waiting for
+                    // "the workspace diff"; past conversations turn out to be
+                    // the thing you reach for far more often, and they are the
+                    // only way to get at work the terminal started.
+                    <History
+                      cwd={session.cwd}
+                      openIds={sessions.map((s) => s.sessionId)}
+                      onChoose={setChosen}
+                      onClose={() => setPanelOpen(false)}
+                      onResumed={(resumed) => {
+                        setSessions((have) =>
+                          have.some((s) => s.sessionId === resumed.sessionId)
+                            ? have
+                            : [...have, resumed],
+                        );
+                        setChosen(resumed.sessionId);
+                        void refresh();
+                      }}
+                    />
+                  ) : (
+                    <p className="text-muted-foreground p-4 text-sm">
+                      no conversation selected
+                    </p>
+                  )}
                 </Boundary>
               </ResizablePanel>
             </>

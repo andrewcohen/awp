@@ -39,6 +39,15 @@ export type Modes = { availableModes: Mode[]; currentModeId: string | null };
 // The alternative was a hand-built control per setting — which is what a first
 // pass did, and it invented a /effort slash command on the grounds that ACP had
 // no concept of reasoning effort. It has one. The client just was not asking.
+// A conversation the agent has on disk but tdeck does not have open.
+export type PastSession = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  updatedAt: string;
+  open: boolean;
+};
+
 export type ConfigOption = {
   id: string;
   name: string;
@@ -287,6 +296,79 @@ export class AgentHost {
     });
     console.log(`initialized: protocol ${init.protocolVersion}`);
     return host;
+  }
+
+  // Conversations the agent knows about, which is a larger set than the ones
+  // tdeck has open — it includes everything Claude Code has ever run in that
+  // directory, from this window or from a terminal.
+  //
+  // Filtered by cwd, which is what makes this the join with a workspace: a
+  // workspace is a directory, and its history is the sessions that ran there.
+  async history(cwd: string): Promise<PastSession[]> {
+    if (!this.conn.listSessions) return [];
+    try {
+      const res = await this.conn.listSessions({ cwd });
+      return (res.sessions ?? []).map((session) => ({
+        sessionId: session.sessionId,
+        cwd: session.cwd,
+        title: session.title ?? "untitled",
+        updatedAt: session.updatedAt ?? "",
+        // Already open here, so the UI offers "switch to" rather than "resume".
+        open: this.chats.has(session.sessionId),
+      }));
+    } catch (err) {
+      console.log(`listing sessions failed: ${messageOf(err)}`);
+      return [];
+    }
+  }
+
+  // Pick up a conversation that already exists.
+  //
+  // The agent replays it as it loads — user and agent message chunks, in order —
+  // which is why the Conversation is registered *before* the call: the replay
+  // arrives as ordinary session updates addressed to a session id, and an
+  // unknown id is dropped on the floor.
+  //
+  // A live session refuses, and that is Claude Code protecting a conversation
+  // that already has a writer. Not a case to work around: the error is the
+  // correct answer, and the caller shows it.
+  async resume(sessionId: string, cwd: string, title: string): Promise<Conversation> {
+    const existing = this.chats.get(sessionId);
+    if (existing) return existing;
+    if (!this.conn.loadSession) throw new Error("this agent cannot load past sessions");
+
+    const chat = new Conversation(sessionId, cwd, null, title);
+    this.chats.set(sessionId, chat);
+    try {
+      const res = await this.conn.loadSession({ sessionId, cwd, mcpServers: [] });
+      chat.modes = res?.modes
+        ? {
+            availableModes: res.modes.availableModes.map((m) => ({ id: m.id, name: m.name ?? m.id })),
+            currentModeId: res.modes.currentModeId ?? null,
+          }
+        : null;
+      chat.config = configOptionsOf(res);
+      console.log(`resumed session ${sessionId} (${this.chats.size} open)`);
+      await this.persist();
+      return chat;
+    } catch (err) {
+      // Registered above, so it has to come back out — otherwise a failed
+      // resume leaves a chat in the sidebar that no agent is behind.
+      this.chats.delete(sessionId);
+      throw err;
+    }
+  }
+
+  // Let go of a conversation. Local only: the agent keeps it, the daemon keeps
+  // running, this window just stops holding it.
+  //
+  // Needed the moment resume exists, because resume can attach to a session
+  // that is already being driven somewhere else — see the note on resume — and
+  // the fix for that is to be able to put it back down.
+  async close(sessionId: string): Promise<boolean> {
+    const gone = this.chats.delete(sessionId);
+    if (gone) await this.persist();
+    return gone;
   }
 
   list(): Conversation[] {

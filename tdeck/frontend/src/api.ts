@@ -54,6 +54,14 @@ export type Command = { name: string; description: string };
 
 // One of awp's workspaces, read from awp's own state. tdeck does not compute
 // any of this — see src/workspaces.ts on the backend for why that matters.
+export type PastSession = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  updatedAt: string;
+  open: boolean;
+};
+
 export type Workspace = {
   project: string;
   projectPath: string;
@@ -89,7 +97,29 @@ export const api = {
 
   commands: (): Promise<Command[]> => fetch("/commands").then((r) => r.json()),
 
-  workspaces: (): Promise<Workspace[]> => fetch("/workspaces").then((r) => r.json()),
+  workspaces: (): Promise<Workspace[]> =>
+    fetch("/workspaces").then((r) => r.json()),
+
+  // Conversations the agent has on disk for a directory, including ones started
+  // from a terminal.
+  history: (cwd: string): Promise<PastSession[]> =>
+    fetch(`/history?cwd=${encodeURIComponent(cwd)}`).then((r) => r.json()),
+
+  resume: async (past: PastSession): Promise<SessionSummary> => {
+    const res = await post("/resume", {
+      sessionId: past.sessionId,
+      cwd: past.cwd,
+      title: past.title,
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? "could not resume that conversation");
+    }
+    return (await res.json()) as SessionSummary;
+  },
+
+  // Local only: the agent keeps the conversation, this window stops holding it.
+  close: (sessionId: string) => post("/close", { sessionId }),
 
   say: (session: string, text: string) => post("/say", { session, text }),
 
