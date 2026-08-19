@@ -153,3 +153,35 @@ test("two identical queued messages are two messages", () => {
   ]);
   expect(chat.queued).toEqual(["again"]);
 });
+
+test("image and audio blocks become media instead of vanishing", () => {
+  // These used to fall out of the content loop entirely: a tool that returned a
+  // screenshot showed an empty row and nothing said anything was lost.
+  const chat = fold([
+    { kind: "tool", id: "t1", title: "Screenshot", status: "pending" },
+    {
+      kind: "tool_update",
+      id: "t1",
+      content: [
+        { type: "image", mimeType: "image/png", data: "AAAA" },
+        { type: "content", content: { type: "audio", mimeType: "audio/wav", data: "BBBB" } },
+        { type: "resource", mimeType: "video/mp4", data: "CCCC" },
+      ],
+    },
+  ]);
+  const tool = chat.turns[0]!.tools[0]!;
+  expect(tool.media.map((m) => m.kind)).toEqual(["image", "audio", "video"]);
+  expect(tool.media[0]!.src).toBe("data:image/png;base64,AAAA");
+});
+
+test("a resource that is not media stays out of the media list", () => {
+  const chat = fold([
+    { kind: "tool", id: "t1", title: "Read", status: "pending" },
+    {
+      kind: "tool_update",
+      id: "t1",
+      content: [{ type: "resource", mimeType: "application/json", data: "e30=" }],
+    },
+  ]);
+  expect(chat.turns[0]!.tools[0]!.media).toEqual([]);
+});
