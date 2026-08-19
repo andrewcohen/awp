@@ -46,6 +46,9 @@ export type PastSession = {
   title: string;
   updatedAt: string;
   open: boolean;
+  // Filled in by the route from transcript activity: someone is talking to this
+  // conversation right now, most likely a terminal agent.
+  live?: boolean;
 };
 
 export type ConfigOption = {

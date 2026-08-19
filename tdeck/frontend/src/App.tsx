@@ -36,6 +36,9 @@ export default function App() {
     () => localStorage.getItem(lastSessionKey) ?? "",
   );
   const [opening, setOpening] = useState(false);
+  // A directory being looked at without a conversation open on it — the case
+  // where a terminal agent already owns the workspace.
+  const [inspecting, setInspecting] = useState("");
   const [error, setError] = useState("");
   const [theme, setTheme] = useTheme();
   const [panelOpen, setPanelOpen] = useState<boolean>(
@@ -156,11 +159,18 @@ export default function App() {
               workspaces={workspaces}
               sessions={sessions}
               chosen={chosen}
-              onChoose={setChosen}
+              onChoose={(id) => {
+                setInspecting("");
+                setChosen(id);
+              }}
               // Clicking a workspace with no conversation opens one *in that
               // directory*, which is the whole join between awp and tdeck: the
               // agent starts where the work is.
               onOpenWorkspace={(workspace) => void openChat(workspace.path)}
+              onInspect={(workspace) => {
+                setInspecting(workspace.path);
+                setPanelOpen(true);
+              }}
               onNew={() => void openChat()}
               opening={opening}
               theme={theme}
@@ -214,18 +224,21 @@ export default function App() {
                 minSize="18"
                 className="flex min-h-0 min-w-0 flex-col"
               >
-                <Boundary key={`history:${session?.cwd ?? ""}`}>
-                  {session ? (
+                <Boundary key={`history:${inspecting || session?.cwd || ""}`}>
+                  {inspecting || session ? (
                     // The right panel is the history of wherever the current
                     // conversation is working. It was a placeholder waiting for
                     // "the workspace diff"; past conversations turn out to be
                     // the thing you reach for far more often, and they are the
                     // only way to get at work the terminal started.
                     <History
-                      cwd={session.cwd}
+                      cwd={inspecting || session!.cwd}
                       openIds={sessions.map((s) => s.sessionId)}
                       onChoose={setChosen}
-                      onClose={() => setPanelOpen(false)}
+                      onClose={() => {
+                        setPanelOpen(false);
+                        setInspecting("");
+                      }}
                       onResumed={(resumed) => {
                         setSessions((have) =>
                           have.some((s) => s.sessionId === resumed.sessionId)
@@ -233,6 +246,7 @@ export default function App() {
                             : [...have, resumed],
                         );
                         setChosen(resumed.sessionId);
+                        setInspecting("");
                         void refresh();
                       }}
                     />

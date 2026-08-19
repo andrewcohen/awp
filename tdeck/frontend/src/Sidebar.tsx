@@ -17,6 +17,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
+import { Badge } from "@/components/ui/badge";
 import type { SessionSummary, Workspace } from "./api";
 import type { ThemeMode } from "./theme";
 
@@ -66,6 +67,7 @@ export function Sidebar({
   chosen,
   onChoose,
   onOpenWorkspace,
+  onInspect,
   onNew,
   opening,
   theme,
@@ -76,6 +78,9 @@ export function Sidebar({
   chosen: string;
   onChoose: (sessionId: string) => void;
   onOpenWorkspace: (workspace: Workspace) => void;
+  // A workspace whose agent is already running in a terminal. Clicking shows
+  // what is there rather than starting a second agent in the same checkout.
+  onInspect: (workspace: Workspace) => void;
   onNew: () => void;
   opening: boolean;
   theme: ThemeMode;
@@ -141,11 +146,18 @@ export function Sidebar({
                         ].join(" ")}
                         render={
                           <button
-                            onClick={() =>
-                              workspace.sessionId
-                                ? onChoose(workspace.sessionId)
-                                : onOpenWorkspace(workspace)
-                            }
+                            onClick={() => {
+                              if (workspace.sessionId)
+                                return onChoose(workspace.sessionId);
+                              // An agent is already working here. Opening a
+                              // chat would put a second one in the same
+                              // checkout, so this shows the directory's
+                              // conversations instead and lets the choice be
+                              // deliberate.
+                              if (workspace.terminalAgent)
+                                return onInspect(workspace);
+                              onOpenWorkspace(workspace);
+                            }}
                           />
                         }
                       >
@@ -165,9 +177,18 @@ export function Sidebar({
                             </ItemDescription>
                           )}
                         </ItemContent>
-                        {/* A conversation is open on this workspace. Not the
-                            same thing as the agent being busy — that is the
-                            dot — so it is a separate, quieter mark. */}
+                        {/* Two different facts, deliberately not merged. The
+                            dot is what the agent is doing; these say who is
+                            holding it. */}
+                        {workspace.terminalAgent && (
+                          <Badge
+                            variant="secondary"
+                            className="shrink-0 font-normal"
+                            title="an agent is running here in a terminal"
+                          >
+                            term
+                          </Badge>
+                        )}
                         {workspace.sessionId !== undefined && (
                           <ItemMedia variant="icon">
                             <span className="bg-primary/60 size-1.5 rounded-full" />

@@ -11,6 +11,7 @@ import { mkdirSync } from "node:fs";
 import { AgentHost, type Conversation } from "./agent.ts";
 import { runtimeDir } from "./paths.ts";
 import { readWorkspaces } from "./workspaces.ts";
+import { activeSessions, liveAgents } from "./live.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = 4317;
@@ -132,7 +133,12 @@ Bun.serve({
     "/history": async (req) => {
       const cwd = new URL(req.url).searchParams.get("cwd") ?? "";
       if (!cwd) return Response.json({ error: "cwd is required" }, { status: 400 });
-      return Response.json(await host.history(cwd));
+      // Marked live where a transcript is being appended to right now, so the
+      // UI can ask before attaching a second writer to a conversation someone
+      // else is holding. A heuristic, and it decides whether to warn — never
+      // whether to allow.
+      const [past, active] = await Promise.all([host.history(cwd), activeSessions(cwd)]);
+      return Response.json(past.map((entry) => ({ ...entry, live: active.has(entry.sessionId) })));
     },
 
     "/resume": {
@@ -167,11 +173,20 @@ Bun.serve({
 
     "/workspaces": async () => {
       const open = new Map(host.list().map((chat) => [chat.cwd, chat.sessionId]));
-      const workspaces = (await readWorkspaces()).map((workspace) => ({
-        ...workspace,
-        sessionId: open.get(workspace.path),
-      }));
-      return Response.json(workspaces);
+      // A terminal agent already working here is the other way to duplicate
+      // work: opening a chat on this workspace would put a second agent in the
+      // same checkout. Derived from the live process list every time rather
+      // than recorded, because a recorded flag is wrong after a crash — which
+      // is exactly when someone clicks the row again.
+      const [spaces, agents] = await Promise.all([readWorkspaces(), liveAgents()]);
+      const busyDirs = new Set(agents.map((agent) => agent.dir));
+      return Response.json(
+        spaces.map((workspace) => ({
+          ...workspace,
+          sessionId: open.get(workspace.path),
+          terminalAgent: busyDirs.has(workspace.path),
+        })),
+      );
     },
 
     // A dropped file, turned into somewhere the agent can look.
