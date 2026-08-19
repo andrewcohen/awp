@@ -11,11 +11,11 @@ import { useEffect, useState } from "react";
 //
 // shadcn's tokens already define both palettes, keyed on a `dark` class at the
 // root, so switching is a class toggle and nothing here needs to know a colour.
-// The terminal is untouched: a pane's colours are the agent's colours, answering
-// to what the program emits rather than to the window around it.
+// tdeck has no terminal, so this is the whole of the theming story: one class
+// on the root, and every surface follows it.
 export type ThemeMode = "system" | "light" | "dark";
 
-const key = "gdeck.theme";
+const key = "tdeck.theme";
 
 function systemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;

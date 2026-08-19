@@ -37,7 +37,10 @@ export type SessionSummary = {
 
 export type Command = { name: string; description: string };
 
-async function post(path: string, body: Record<string, unknown>): Promise<Response> {
+async function post(
+  path: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
   return fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -46,7 +49,8 @@ async function post(path: string, body: Record<string, unknown>): Promise<Respon
 }
 
 export const api = {
-  sessions: (): Promise<SessionSummary[]> => fetch("/sessions").then((r) => r.json()),
+  sessions: (): Promise<SessionSummary[]> =>
+    fetch("/sessions").then((r) => r.json()),
 
   open: (cwd?: string): Promise<SessionSummary> =>
     post("/sessions", cwd ? { cwd } : {}).then((r) => r.json()),
@@ -55,15 +59,22 @@ export const api = {
 
   say: (session: string, text: string) => post("/say", { session, text }),
 
-  permit: (session: string, optionId: string) => post("/permit", { session, optionId }),
+  permit: (session: string, optionId: string) =>
+    post("/permit", { session, optionId }),
 
-  setMode: (session: string, modeId: string) => post("/mode", { session, modeId }),
+  setMode: (session: string, modeId: string) =>
+    post("/mode", { session, modeId }),
 
   // Everything the agent says for one conversation. The backend replays what it
   // has already shown before streaming what is new, so a reload or a session
   // switch rebuilds the conversation rather than starting from blank.
-  events: (session: string, onEvent: (event: UiEvent) => void): (() => void) => {
-    const source = new EventSource(`/events?session=${encodeURIComponent(session)}`);
+  events: (
+    session: string,
+    onEvent: (event: UiEvent) => void,
+  ): (() => void) => {
+    const source = new EventSource(
+      `/events?session=${encodeURIComponent(session)}`,
+    );
     source.onmessage = (message) => {
       try {
         onEvent(JSON.parse(message.data) as UiEvent);
