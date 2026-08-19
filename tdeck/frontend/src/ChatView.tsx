@@ -328,8 +328,8 @@ function Composer({
           }
         }}
         onKeyDown={(e) => {
-          // Enter sends, shift+enter breaks the line — the convention every chat
-          // uses.
+          // Enter sends whether or not the agent is working; a message typed
+          // mid-turn is queued rather than refused.
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             send();
@@ -500,7 +500,12 @@ export function ChatView({
         <MessageScroller className="min-h-0 min-w-0 flex-1">
           <MessageScrollerViewport>
             <MessageScrollerContent
-              className="mx-auto w-full max-w-[60rem] min-w-0 px-4 pb-2"
+              // pb-6 rather than pb-2: the last message used to sit under the
+              // viewport's bottom fade, which is a gradient over exactly the row
+              // you most want to read. The fade is gone from the viewport and
+              // the space stays, because a message flush against the composer
+              // reads as cramped.
+              className="mx-auto w-full max-w-[60rem] min-w-0 px-4 pb-6"
               // Announced to a screen reader while the agent is mid-answer.
               aria-busy={chat.busy}
             >
@@ -571,6 +576,25 @@ export function ChatView({
                   </div>
                 </div>
               )}
+
+              {chat.queued.map((text, i) => (
+                // Sent but not said. Dimmed and labelled rather than rendered
+                // as an ordinary message, because the agent has not seen it
+                // yet — showing it as part of the conversation would be a lie
+                // that resolves itself a minute later.
+                <Message key={`queued-${i}`} align="end" className="opacity-60">
+                  <MessageContent className="min-w-0">
+                    <MessageHeader className="text-muted-foreground">
+                      you · queued
+                    </MessageHeader>
+                    <Bubble align="end">
+                      <BubbleContent className="bg-muted whitespace-pre-wrap">
+                        {text}
+                      </BubbleContent>
+                    </Bubble>
+                  </MessageContent>
+                </Message>
+              ))}
 
               {chat.busy && !chat.permission && (
                 <div className="text-muted-foreground flex items-center gap-2 text-sm">

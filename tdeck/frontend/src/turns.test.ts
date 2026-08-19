@@ -120,3 +120,36 @@ test("a file past the size cap degrades rather than hanging", () => {
   expect(patch).toContain("-line 0");
   expect(patch).toContain("+line 0");
 });
+
+test("a message typed mid-turn is queued, then delivered", () => {
+  const queued = fold([
+    { kind: "user", text: "first" },
+    { kind: "text", text: "working" },
+    { kind: "queued", text: "second" },
+  ]);
+  // Not part of the conversation yet — the agent has not seen it.
+  expect(queued.queued).toEqual(["second"]);
+  expect(queued.turns).toHaveLength(2);
+
+  const delivered = (
+    [
+      { kind: "done", stopReason: "end_turn" },
+      { kind: "unqueued", text: "second" },
+      { kind: "user", text: "second" },
+    ] as UiEvent[]
+  ).reduce(apply, queued);
+  expect(delivered.queued).toEqual([]);
+  expect(delivered.turns[delivered.turns.length - 1]?.text).toBe("second");
+});
+
+test("two identical queued messages are two messages", () => {
+  // Removing by value has to remove one, not all: dropping both on the first
+  // delivery would lose a message from the view that the agent still holds.
+  const chat = fold([
+    { kind: "user", text: "go" },
+    { kind: "queued", text: "again" },
+    { kind: "queued", text: "again" },
+    { kind: "unqueued", text: "again" },
+  ]);
+  expect(chat.queued).toEqual(["again"]);
+});
