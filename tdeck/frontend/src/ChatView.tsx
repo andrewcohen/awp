@@ -5,7 +5,6 @@ import {
   ChevronRight,
   CircleAlert,
   CornerDownLeft,
-  Loader2,
   Paperclip,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +28,21 @@ import {
   MessageHeader,
 } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { Separator } from "@/components/ui/separator";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type SessionSummary } from "./api";
 import { ConfigBar } from "./ConfigBar";
@@ -122,15 +135,19 @@ const ToolRow = memo(function ToolRow({ tool }: { tool: Tool }) {
     // inside it, the way a quoted block does.
     return (
       <div className="border-border overflow-hidden rounded-lg border">
-        <div className="text-muted-foreground bg-muted/40 flex items-center gap-2 border-b px-2.5 py-1.5 text-sm">
-          <span className="truncate font-mono">{tool.file}</span>
-          <span className="ml-auto shrink-0 font-mono">
+        <Item size="sm" className="bg-muted/40 border-b">
+          <ItemContent className="min-w-0">
+            <ItemTitle className="truncate font-mono font-normal">
+              {tool.file}
+            </ItemTitle>
+          </ItemContent>
+          <ItemActions className="font-mono text-sm">
             <span className="text-emerald-600 dark:text-emerald-400">
               +{added}
-            </span>{" "}
+            </span>
             <span className="text-rose-600 dark:text-rose-400">−{removed}</span>
-          </span>
-        </div>
+          </ItemActions>
+        </Item>
         <div className="max-h-64 overflow-auto text-sm">
           <WhenVisible estimate={Math.min(256, 24 + body.length * 18)}>
             <PatchDiff
@@ -144,22 +161,35 @@ const ToolRow = memo(function ToolRow({ tool }: { tool: Tool }) {
     );
   }
   return (
-    <Collapsible className="group/tool border-border rounded-lg border">
-      <CollapsibleTrigger className="hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left">
-        <ChevronRight className="text-muted-foreground size-3.5 shrink-0 transition-transform group-data-[state=open]/tool:rotate-90" />
-        <Badge variant="secondary" className="shrink-0 font-normal">
-          {tool.name}
-        </Badge>
-        <span className="text-muted-foreground truncate font-mono text-sm">
-          {tool.summary}
-        </span>
+    <Collapsible className="group/tool">
+      {/* Item rather than a hand-built row: the media / title / actions
+          alignment, the hover treatment and the sizes are decisions already
+          made, and a tool row is exactly the shape it is for. */}
+      <Item
+        size="sm"
+        variant="outline"
+        className="hover:bg-muted/40 rounded-lg"
+        render={<CollapsibleTrigger />}
+      >
+        <ItemMedia variant="icon">
+          <ChevronRight className="text-muted-foreground transition-transform group-data-[state=open]/tool:rotate-90" />
+        </ItemMedia>
+        <ItemContent className="min-w-0 flex-row items-center gap-2">
+          <Badge variant="secondary" className="shrink-0 font-normal">
+            {tool.name}
+          </Badge>
+          <span className="text-muted-foreground truncate font-mono text-sm">
+            {tool.summary}
+          </span>
+        </ItemContent>
         {tool.isError && (
-          <CircleAlert className="text-destructive ml-auto size-3.5 shrink-0" />
+          <ItemActions>
+            <CircleAlert className="text-destructive size-4" />
+          </ItemActions>
         )}
-      </CollapsibleTrigger>
+      </Item>
       <CollapsibleContent>
-        <Separator />
-        <pre className="text-muted-foreground max-h-72 overflow-auto p-2.5 font-mono text-sm leading-relaxed whitespace-pre-wrap">
+        <pre className="text-muted-foreground border-border mt-1 max-h-72 overflow-auto rounded-lg border p-2.5 font-mono text-sm leading-relaxed whitespace-pre-wrap">
           {tool.detail || "no output"}
         </pre>
       </CollapsibleContent>
@@ -356,17 +386,15 @@ function Composer({
           disabled={uploading}
           onClick={() => picker.current?.click()}
         >
-          {uploading ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Paperclip className="size-4" />
-          )}
+          {uploading ? <Spinner /> : <Paperclip className="size-4" />}
         </Button>
 
         <ConfigBar session={session} onChanged={onSessionChanged} />
 
-        <span className="text-muted-foreground ml-auto hidden text-sm sm:inline">
-          <CornerDownLeft className="mr-1 inline size-3.5" />
+        <span className="text-muted-foreground ml-auto hidden items-center gap-1.5 text-sm sm:flex">
+          <Kbd>
+            <CornerDownLeft className="size-3" />
+          </Kbd>
           to send
         </span>
         <Button
@@ -376,11 +404,7 @@ function Composer({
           className="size-8"
           aria-label="send"
         >
-          {busy ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <ArrowUp className="size-4" />
-          )}
+          {busy ? <Spinner /> : <ArrowUp className="size-4" />}
         </Button>
       </div>
     </div>
@@ -453,9 +477,14 @@ export function ChatView({
                 <p className="text-destructive text-sm">{chat.error}</p>
               )}
               {chat.turns.length === 0 && chat.error === "" && (
-                <p className="text-muted-foreground text-sm">
-                  nothing here yet — say something
-                </p>
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>Nothing here yet</EmptyTitle>
+                    <EmptyDescription>
+                      Ask the agent something. It works in {session.cwd}.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
               )}
               {!showAll && hidden > 0 && (
                 <Button
@@ -514,7 +543,7 @@ export function ChatView({
 
               {chat.busy && !chat.permission && (
                 <div className="text-muted-foreground flex items-center gap-2 text-sm">
-                  <Loader2 className="size-3 animate-spin" />
+                  <Spinner />
                   working
                 </div>
               )}
