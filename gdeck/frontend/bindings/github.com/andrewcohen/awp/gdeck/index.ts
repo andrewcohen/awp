@@ -11,6 +11,7 @@ export {
 };
 
 export type {
+    AgentStatus,
     ChatSince,
     ChatTool,
     ChatTurn,

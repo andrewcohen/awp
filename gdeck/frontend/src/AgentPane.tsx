@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MessageSquare, SquareTerminal } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LivePane } from "./LivePane";
 import { focusPane } from "./paneTerminal";
+import { Badge } from "@/components/ui/badge";
+import * as Panes from "@bindings/panes";
 import { ChatView } from "./ChatView";
 
 // One session, two readings.
@@ -23,8 +25,42 @@ const modes: { id: Mode; label: string; icon: typeof MessageSquare }[] = [
   { id: "chat", label: "chat", icon: MessageSquare },
 ];
 
+// Session names are project.workspace.kind — see zmx.SessionName — and the
+// status store is keyed by workspace name.
+function workspaceOf(session: string): { project: string; workspace: string } {
+  const parts = session.split(".");
+  return parts.length === 4
+    ? { project: parts[1], workspace: parts[2] }
+    : { project: "", workspace: "" };
+}
+
+const statusTone: Record<string, string> = {
+  working: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  waiting: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  error: "bg-destructive/15 text-destructive",
+};
+
 export function AgentPane({ session, fontFamily }: { session: string; fontFamily: string }) {
   const [mode, setMode] = useState<Mode>("terminal");
+  const [status, setStatus] = useState<{ Status: string; Prompt: string } | null>(null);
+
+  useEffect(() => {
+    const { project, workspace } = workspaceOf(session);
+    if (workspace === "") {
+      return;
+    }
+    // Polled, because the store is written by hooks in another process and
+    // there is nothing to subscribe to from here. A second is well inside the
+    // time it takes to notice a state change, and reads one small JSON file.
+    const read = () =>
+      Panes.Status(project, workspace).then(
+        (s) => setStatus(s as { Status: string; Prompt: string }),
+        () => setStatus(null),
+      );
+    void read();
+    const timer = setInterval(read, 1000);
+    return () => clearInterval(timer);
+  }, [session]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -53,7 +89,17 @@ export function AgentPane({ session, fontFamily }: { session: string; fontFamily
               </TabsTrigger>
             ))}
           </TabsList>
-          <span className="text-muted-foreground min-w-0 truncate text-xs">{session}</span>
+          {status?.Status && (
+            <Badge
+              variant="secondary"
+              className={`shrink-0 font-normal ${statusTone[status.Status.toLowerCase()] ?? ""}`}
+            >
+              {status.Status}
+            </Badge>
+          )}
+          <span className="text-muted-foreground min-w-0 truncate text-xs">
+            {status?.Prompt || session}
+          </span>
         </div>
       </Tabs>
 

@@ -147,6 +147,21 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
       return true;
     });
 
+    // Dragging a file into a terminal has always typed its path, so it does
+    // here too — quoted, because paths have spaces in them and the shell on the
+    // other side will not guess.
+    const offDrop = Events.On(
+      "files:dropped",
+      (event: { data: { paths: string[]; target: string } }) => {
+        const { paths, target } = event.data ?? { paths: [], target: "" };
+        if (target !== "term-drop" || !paths?.length) {
+          return;
+        }
+        const typed = paths.map((p) => (/[\s"']/.test(p) ? `'${p.replace(/'/g, "'\\''")}'` : p)).join(" ");
+        void Panes.Send(fromBytes(typed));
+      },
+    );
+
     const offData = Events.On("pane:data", (event: { data: string }) => {
       timer.current.received();
       term.write(toBytes(event.data));
@@ -184,6 +199,7 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
       void Probe.Report("pane-echo-latency", true, timer.current.summary());
       window.removeEventListener("focus", refocus);
       offData();
+      offDrop();
       clearPaneSinks();
       void Panes.Close();
     };
@@ -197,6 +213,8 @@ export function LivePane({ session, fontFamily }: { session: string; fontFamily:
     <section className="flex h-full w-full min-w-0 flex-1 flex-col">
       <div
         ref={container}
+        id="term-drop"
+        data-file-drop-target
         className="flex-1 overflow-hidden rounded-md"
         // Painted in the terminal's own background, not the chrome's.
         //

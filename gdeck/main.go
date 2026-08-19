@@ -21,7 +21,12 @@ import (
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
+
+// filesDroppedEvent carries dropped paths and the id of the element they landed
+// on, so the frontend can decide what the drop meant.
+const filesDroppedEvent = "files:dropped"
 
 // frontend/dist is embedded, so it must exist even when unbuilt — see the
 // .gitkeep and the note in gdeck/.gitignore.
@@ -39,6 +44,12 @@ const (
 )
 
 func main() {
+	// Before anything is spawned: a GUI app does not inherit the shell's PATH,
+	// and every binary this surface runs lives in the part that goes missing.
+	// See path.go.
+	restorePath()
+	reportTools()
+
 	app := application.New(application.Options{
 		Name:        "gdeck",
 		Description: "awp's deck as a desktop window (POC)",
@@ -55,7 +66,7 @@ func main() {
 		},
 	})
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title: "gdeck",
 		// Fixed position and size, which a real window would not want.
 		//
@@ -83,6 +94,27 @@ func main() {
 		// hexes the developer's terminal theme resolves to.
 		BackgroundColour: application.NewRGB(24, 25, 38),
 		URL:              "/",
+		// Files dragged from the OS onto an element marked
+		// `data-file-drop-target` arrive here as real paths — which is the
+		// point. A browser drop hands over a File object the page can read,
+		// and an agent cannot: it needs somewhere on disk to look. The paths
+		// are what make a dropped screenshot something the agent can open.
+		EnableFileDrop: true,
+	})
+
+	// Forwarded to the frontend rather than acted on here, because which
+	// element was dropped on decides what a drop means: the chat attaches the
+	// file to a message, the terminal types its path the way dragging a file
+	// into a terminal always has.
+	window.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		target := ""
+		if details := e.Context().DropTargetDetails(); details != nil {
+			target = details.ElementID
+		}
+		app.Event.Emit(filesDroppedEvent, map[string]any{
+			"paths":  e.Context().DroppedFiles(),
+			"target": target,
+		})
 	})
 
 	if err := app.Run(); err != nil {
