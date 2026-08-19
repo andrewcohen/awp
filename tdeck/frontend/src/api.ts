@@ -60,6 +60,9 @@ export type PastSession = {
   title: string;
   updatedAt: string;
   open: boolean;
+  // Someone is appending to this conversation right now — almost always a
+  // terminal agent. Resuming it would make tdeck a second writer.
+  live?: boolean;
 };
 
 export type Workspace = {
@@ -75,6 +78,9 @@ export type Workspace = {
   lastActiveAt: string;
   // Set when a tdeck conversation is already open on this directory.
   sessionId?: string;
+  // A zmx agent is running in this directory. Opening a chat here would put a
+  // second agent in the same checkout.
+  terminalAgent?: boolean;
 };
 
 async function post(

@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { History as HistoryIcon, PanelRightClose } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Empty,
   EmptyDescription,
@@ -28,10 +39,11 @@ import { api, type PastSession, type SessionSummary } from "./api";
 // up replays it. `session/list` filters by cwd, which is why this belongs beside
 // a workspace — a workspace is a directory, and its history is what ran there.
 //
-// The refusal case is not what this document originally claimed. Resuming a
-// session that is live in another client does not fail; it attaches, and two
-// writers share one conversation. So the button says what it is doing and there
-// is a way to let go again — see /close.
+// Resuming a session that is live in another client does not fail — it
+// attaches, and two writers share one conversation. That was measured, having
+// previously been assumed to be impossible. So the guard is here rather than in
+// the agent: a conversation being written to right now is marked, and attaching
+// to it takes a deliberate second click.
 
 function when(iso: string): string {
   if (!iso) return "";
@@ -60,6 +72,9 @@ export function History({
   const [past, setPast] = useState<PastSession[] | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  // The live conversation someone is about to attach to, held until they
+  // confirm. Null the rest of the time, which is the common case.
+  const [confirming, setConfirming] = useState<PastSession | null>(null);
 
   useEffect(() => {
     setPast(null);
@@ -147,14 +162,24 @@ export function History({
                   </ItemMedia>
                 ) : (
                   <ItemActions>
+                    {entry.live && !here && (
+                      <Badge variant="secondary" className="font-normal">
+                        in use
+                      </Badge>
+                    )}
                     <Button
                       size="sm"
                       variant={here ? "secondary" : "ghost"}
-                      onClick={() =>
-                        here ? onChoose(entry.sessionId) : void resume(entry)
-                      }
+                      onClick={() => {
+                        if (here) return onChoose(entry.sessionId);
+                        // Live means somebody is typing into it. Attaching is
+                        // allowed — the protocol permits it — but not by
+                        // accident.
+                        if (entry.live) return setConfirming(entry);
+                        void resume(entry);
+                      }}
                     >
-                      {here ? "open" : "resume"}
+                      {here ? "open" : entry.live ? "attach" : "resume"}
                     </Button>
                   </ItemActions>
                 )}
@@ -163,6 +188,36 @@ export function History({
           })}
         </div>
       </ScrollArea>
+
+      <AlertDialog
+        open={confirming !== null}
+        onOpenChange={(open) => !open && setConfirming(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>This conversation is in use</AlertDialogTitle>
+            <AlertDialogDescription>
+              Something is writing to “{confirming?.title}” right now — most
+              likely an agent in a terminal. Attaching does not take it over or
+              stop it; you both hold the same conversation, and whatever either
+              of you sends goes into it. Nothing prevents this, which is why you
+              are being asked.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Leave it alone</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const entry = confirming;
+                setConfirming(null);
+                if (entry) void resume(entry);
+              }}
+            >
+              Attach anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   );
 }
