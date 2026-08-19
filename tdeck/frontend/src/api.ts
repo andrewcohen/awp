@@ -1,0 +1,77 @@
+// The seam between the page and the Bun server.
+//
+// These types are hand-mirrored from src/events.ts on the backend. They are not
+// generated, which is a deliberate trade: gdeck generated its bindings from Go
+// and the generator was a step everyone forgot to run, so the types were
+// authoritative and stale at the same time. Two small files that disagree
+// loudly at the first render beat one that lies.
+
+export type PermissionOption = { id: string; name: string; kind?: string };
+
+export type UiEvent =
+  | { kind: "user"; text: string }
+  | { kind: "text"; text: string }
+  | { kind: "thought"; text: string }
+  | { kind: "tool"; id: string; title: string; status: string }
+  | { kind: "tool_update"; id: string; status?: string; content?: unknown }
+  | { kind: "plan"; entries: unknown[] }
+  | { kind: "permission"; title: string; options: PermissionOption[] }
+  | { kind: "permission_resolved"; optionId: string }
+  | { kind: "mode"; modeId: string }
+  | { kind: "usage"; used: number; size: number; cost?: number }
+  | { kind: "title"; title: string }
+  | { kind: "done"; stopReason: string }
+  | { kind: "error"; message: string }
+  | { kind: "other"; update: unknown };
+
+export type Mode = { id: string; name: string };
+export type Modes = { availableModes: Mode[]; currentModeId: string | null };
+
+export type SessionSummary = {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  busy: boolean;
+  modes: Modes | null;
+};
+
+export type Command = { name: string; description: string };
+
+async function post(path: string, body: Record<string, unknown>): Promise<Response> {
+  return fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export const api = {
+  sessions: (): Promise<SessionSummary[]> => fetch("/sessions").then((r) => r.json()),
+
+  open: (cwd?: string): Promise<SessionSummary> =>
+    post("/sessions", cwd ? { cwd } : {}).then((r) => r.json()),
+
+  commands: (): Promise<Command[]> => fetch("/commands").then((r) => r.json()),
+
+  say: (session: string, text: string) => post("/say", { session, text }),
+
+  permit: (session: string, optionId: string) => post("/permit", { session, optionId }),
+
+  setMode: (session: string, modeId: string) => post("/mode", { session, modeId }),
+
+  // Everything the agent says for one conversation. The backend replays what it
+  // has already shown before streaming what is new, so a reload or a session
+  // switch rebuilds the conversation rather than starting from blank.
+  events: (session: string, onEvent: (event: UiEvent) => void): (() => void) => {
+    const source = new EventSource(`/events?session=${encodeURIComponent(session)}`);
+    source.onmessage = (message) => {
+      try {
+        onEvent(JSON.parse(message.data) as UiEvent);
+      } catch (err) {
+        // One malformed frame should not take the stream down with it.
+        console.error("bad event", err, message.data);
+      }
+    };
+    return () => source.close();
+  },
+};

@@ -10,8 +10,17 @@ import { fileURLToPath } from "node:url";
 import { AgentHost, type Conversation } from "./agent.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const page = join(here, "..", "public", "index.html");
 const PORT = 4317;
+
+// The built frontend if there is one, else the throwaway page the experiment
+// shipped with. Two reasons to keep the fallback rather than requiring a build:
+// the backend stays runnable on a fresh checkout, and a broken frontend build
+// leaves something that can still talk to the agent.
+const bundle = join(here, "..", "frontend", "dist");
+const fallbackPage = join(here, "..", "public", "index.html");
+const built = await Bun.file(join(bundle, "index.html")).exists();
+const page = built ? join(bundle, "index.html") : fallbackPage;
+console.log(built ? "serving the built frontend" : "serving the fallback page (run: bun run build)");
 
 const host = await AgentHost.start();
 
@@ -137,5 +146,15 @@ Bun.serve({
       },
     },
   },
-  fetch: () => new Response("not found", { status: 404 }),
+  // Anything not matched above is a bundle asset — the hashed JS, CSS and font
+  // files Vite emits. Resolved against the build directory and nothing else, so
+  // a crafted path cannot walk out of it.
+  fetch: async (req) => {
+    if (!built) return new Response("not found", { status: 404 });
+    const name = new URL(req.url).pathname;
+    const path = join(bundle, name);
+    if (!path.startsWith(bundle)) return new Response("not found", { status: 404 });
+    const file = Bun.file(path);
+    return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
+  },
 });
