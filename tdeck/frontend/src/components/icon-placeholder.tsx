@@ -23,11 +23,13 @@ export function IconPlaceholder({
   hugeicons?: string;
   phosphor?: string;
   remixicon?: string;
-  className?: string;
-}) {
+  // Everything else — role, aria-label, data-slot — belongs to the icon that
+  // ends up rendered. Spinner, for one, sets all three on the placeholder and
+  // expects them on the svg.
+} & React.SVGProps<SVGSVGElement>) {
   const icons = Lucide as unknown as Record<
     string,
-    React.ComponentType<{ className?: string }>
+    React.ComponentType<React.SVGProps<SVGSVGElement>>
   >;
   const Icon = lucide ? icons[lucide] : undefined;
   if (!Icon) return null;

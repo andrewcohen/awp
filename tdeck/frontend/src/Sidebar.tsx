@@ -1,5 +1,19 @@
-import { Loader2, MessageSquarePlus, Monitor, Moon, Sun } from "lucide-react";
+import { MessageSquarePlus, Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { SessionSummary } from "./api";
@@ -51,47 +65,52 @@ export function Sidebar({
           disabled={opening}
           onClick={onNew}
         >
-          {opening ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <MessageSquarePlus className="size-4" />
-          )}
+          {opening ? <Spinner /> : <MessageSquarePlus className="size-4" />}
         </Button>
       </div>
       <Separator />
 
       <ScrollArea className="min-h-0 flex-1">
         <ul className="flex flex-col gap-0.5 p-2">
-          {sessions.map((session) => {
-            const active = session.sessionId === chosen;
-            return (
-              <li key={session.sessionId}>
-                <button
-                  onClick={() => onChoose(session.sessionId)}
-                  className={[
-                    "flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left",
-                    active ? "bg-muted" : "hover:bg-muted/50",
-                  ].join(" ")}
-                >
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {session.busy && (
-                      <Loader2 className="text-muted-foreground size-3 shrink-0 animate-spin" />
-                    )}
-                    <span className="truncate text-sm">{session.title}</span>
-                  </span>
+          {sessions.map((session) => (
+            <li key={session.sessionId}>
+              <Item
+                size="sm"
+                className={[
+                  "w-full rounded-md text-left",
+                  session.sessionId === chosen
+                    ? "bg-muted"
+                    : "hover:bg-muted/50",
+                ].join(" ")}
+                render={<button onClick={() => onChoose(session.sessionId)} />}
+              >
+                {session.busy && (
+                  <ItemMedia variant="icon">
+                    <Spinner className="text-muted-foreground size-3" />
+                  </ItemMedia>
+                )}
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="truncate font-normal">
+                    {session.title}
+                  </ItemTitle>
                   {/* The directory the agent is working in — the closest thing
                       to a workspace until awp's own state is wired in. */}
-                  <span className="text-muted-foreground truncate text-sm">
+                  <ItemDescription className="truncate">
                     {session.cwd.split("/").slice(-2).join("/")}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-          {sessions.length === 0 && (
-            <li className="text-muted-foreground px-2 py-1.5 text-sm">
-              no conversations
+                  </ItemDescription>
+                </ItemContent>
+              </Item>
             </li>
+          ))}
+          {sessions.length === 0 && (
+            <Empty className="py-6">
+              <EmptyHeader>
+                <EmptyTitle>No conversations</EmptyTitle>
+                <EmptyDescription>
+                  Start one with the button above.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           )}
         </ul>
       </ScrollArea>
