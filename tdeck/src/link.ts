@@ -48,6 +48,7 @@ export type SessionRecord = {
   cwd: string;
   title: string;
   modes: unknown;
+  config?: unknown;
 };
 
 export type State = { sessions: SessionRecord[] };

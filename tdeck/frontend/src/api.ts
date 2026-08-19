@@ -18,6 +18,7 @@ export type UiEvent =
   | { kind: "permission"; title: string; options: PermissionOption[] }
   | { kind: "permission_resolved"; optionId: string }
   | { kind: "mode"; modeId: string }
+  | { kind: "config"; options: ConfigOption[] }
   | { kind: "usage"; used: number; size: number; cost?: number }
   | { kind: "title"; title: string }
   | { kind: "done"; stopReason: string }
@@ -27,12 +28,26 @@ export type UiEvent =
 export type Mode = { id: string; name: string };
 export type Modes = { availableModes: Mode[]; currentModeId: string | null };
 
+// Whatever the agent lets you change about a session, described by the agent:
+// model, reasoning effort, permission mode, fast mode, and anything it adds
+// later. One generic shape, so the UI renders settings it has never heard of.
+export type ConfigOption = {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type: "select" | "boolean";
+  value: string | boolean | null;
+  options: { value: string; name: string; group?: string }[];
+};
+
 export type SessionSummary = {
   sessionId: string;
   title: string;
   cwd: string;
   busy: boolean;
   modes: Modes | null;
+  config: ConfigOption[];
 };
 
 export type Command = { name: string; description: string };
@@ -64,6 +79,13 @@ export const api = {
 
   setMode: (session: string, modeId: string) =>
     post("/mode", { session, modeId }),
+
+  setConfig: (
+    session: string,
+    configId: string,
+    value: string | boolean,
+  ): Promise<SessionSummary> =>
+    post("/config", { session, configId, value }).then((r) => r.json()),
 
   // Everything the agent says for one conversation. The backend replays what it
   // has already shown before streaming what is new, so a reload or a session

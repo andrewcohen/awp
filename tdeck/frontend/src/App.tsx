@@ -167,7 +167,19 @@ export default function App() {
                   path. */}
               {session ? (
                 <Boundary key={session.sessionId}>
-                  <ChatView session={session} />
+                  <ChatView
+                    session={session}
+                    // A setting changed inside the chat is a fact about the
+                    // session, so it goes back to the list the sidebar reads —
+                    // rather than being held twice and drifting.
+                    onSessionChanged={(updated) =>
+                      setSessions((have) =>
+                        have.map((s) =>
+                          s.sessionId === updated.sessionId ? updated : s,
+                        ),
+                      )
+                    }
+                  />
                 </Boundary>
               ) : (
                 <p className="text-muted-foreground p-6 text-sm">

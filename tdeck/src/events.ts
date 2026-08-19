@@ -20,6 +20,7 @@ export type UiEvent =
   | { kind: "permission"; title: string; options: PermissionOption[] }
   | { kind: "permission_resolved"; optionId: string }
   | { kind: "mode"; modeId: string }
+  | { kind: "config"; options: unknown[] }
   | { kind: "usage"; used: number; size: number; cost?: number }
   | { kind: "title"; title: string }
   | { kind: "done"; stopReason: string }
