@@ -85,6 +85,13 @@ export function Send(dataB64: string): $CancellablePromise<void> {
 }
 
 /**
+ * Status reports the live state of the workspace a session belongs to.
+ */
+export function Status(project: string, workspace: string): $CancellablePromise<$models.AgentStatus> {
+    return $Call.ByID(3422918283, project, workspace);
+}
+
+/**
  * Workspaces groups zmx's sessions into what the sidebar shows.
  * 
  * Derived from the sessions rather than from deckdata, which is the deck's own

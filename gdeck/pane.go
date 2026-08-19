@@ -16,6 +16,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/andrewcohen/awp/internal/state"
 	"github.com/andrewcohen/awp/internal/zmx"
 )
 
@@ -329,4 +330,46 @@ func zmxClient() zmx.Client {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	})
+}
+
+// AgentStatus is what the agent is doing right now, from the store the deck's
+// status dots read.
+//
+// The chat cannot answer this and never will: a transcript gains a line after
+// something finishes, so it is a record rather than a monitor. awp does not read
+// status from the transcript either — Claude Code hooks push it
+// (UserPromptSubmit, PreToolUse, Stop → `awp internal report-status`) into the
+// workspace store, which is event-driven and current. So the answer already
+// exists; it just was not being asked for here.
+type AgentStatus struct {
+	// Status is awp's own vocabulary — "working", "waiting", "idle" and the
+	// variants report-status writes. Left as written rather than normalised,
+	// because internal/workspace.attention.go is where that vocabulary is
+	// interpreted and a second interpretation here would drift from it.
+	Status string
+	// Prompt is the last thing the user asked, which is what the deck shows
+	// beside a working row.
+	Prompt string
+	Unread bool
+}
+
+// Status reports the live state of the workspace a session belongs to.
+func (p *Panes) Status(project, workspace string) (AgentStatus, error) {
+	repos, err := state.NewJSONStore().LoadAll()
+	if err != nil {
+		return AgentStatus{}, fmt.Errorf("reading workspace state: %w", err)
+	}
+	for _, entries := range repos {
+		for _, entry := range entries {
+			// Matched on the project's directory name and the workspace's own
+			// name, which is what the session name is built from — see
+			// zmx.SessionName. The store is keyed by repo path, and a session
+			// only knows the project as a slug.
+			if entry.Name != workspace {
+				continue
+			}
+			return AgentStatus{Status: entry.Status, Prompt: entry.ActivePrompt, Unread: entry.Unread}, nil
+		}
+	}
+	return AgentStatus{}, nil
 }

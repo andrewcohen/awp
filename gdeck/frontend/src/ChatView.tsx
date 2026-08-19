@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Events } from "@wailsio/runtime";
 import { PatchDiff } from "@pierre/diffs/react";
-import { ChevronRight, CircleAlert, CornerDownLeft } from "lucide-react";
+import { ChevronRight, CircleAlert, CornerDownLeft, Paperclip } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import * as ChatBinding from "@bindings/chat";
 import { manyTurns, sampleTurns } from "./sampleChat";
+import { Markdown } from "./Markdown";
 
 // The agent's conversation, from its transcript rather than from its screen.
 //
@@ -96,12 +97,27 @@ function ToolRow({ tool }: { tool: ChatTool }) {
   // A diff is the one result worth showing before it is asked for: it is what
   // the agent did, where everything else is what it looked at.
   if (tool.Patch !== "") {
-    const lines = tool.Patch.split("\n").length;
+    const body = tool.Patch.split("\n").slice(2);
+    const added = body.filter((l) => l.startsWith("+")).length;
+    const removed = body.filter((l) => l.startsWith("-")).length;
+    // A diff is a citation inside a conversation, not the document. Left
+    // unbounded a 200-line edit is a page of chat that has to be scrolled past
+    // to reach what the agent said next — so it gets a fixed frame and scrolls
+    // inside it, the way a quoted block does.
     return (
-      <div className="border-border overflow-hidden rounded-lg border text-xs">
-        <WhenVisible estimate={Math.min(400, 24 + lines * 18)}>
-          <PatchDiff patch={tool.Patch} options={diffOptions} />
-        </WhenVisible>
+      <div className="border-border overflow-hidden rounded-lg border">
+        <div className="text-muted-foreground bg-muted/40 flex items-center gap-2 border-b px-2.5 py-1.5 text-xs">
+          <span className="truncate font-mono">{tool.File}</span>
+          <span className="ml-auto shrink-0 font-mono">
+            <span className="text-emerald-600 dark:text-emerald-400">+{added}</span>{" "}
+            <span className="text-rose-600 dark:text-rose-400">−{removed}</span>
+          </span>
+        </div>
+        <div className="max-h-64 overflow-auto text-xs">
+          <WhenVisible estimate={Math.min(256, 24 + body.length * 18)}>
+            <PatchDiff patch={tool.Patch} options={diffOptions} renderCustomHeader={() => null} />
+          </WhenVisible>
+        </div>
       </div>
     );
   }
@@ -112,12 +128,12 @@ function ToolRow({ tool }: { tool: ChatTool }) {
         <Badge variant="secondary" className="shrink-0 font-normal">
           {tool.Name}
         </Badge>
-        <span className="text-muted-foreground truncate font-mono text-[11px]">{tool.Summary}</span>
+        <span className="text-muted-foreground truncate font-mono text-xs">{tool.Summary}</span>
         {tool.IsError && <CircleAlert className="text-destructive ml-auto size-3.5 shrink-0" />}
       </CollapsibleTrigger>
       <CollapsibleContent>
         <Separator />
-        <pre className="text-muted-foreground max-h-72 overflow-auto p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+        <pre className="text-muted-foreground max-h-72 overflow-auto p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap">
           {tool.Detail || "no output"}
         </pre>
       </CollapsibleContent>
@@ -161,7 +177,7 @@ const Block = memo(function Block({ block }: { block: Block }) {
       className="flex min-w-0 flex-col gap-2"
       style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
     >
-      <div className="text-muted-foreground flex items-baseline gap-2 text-[11px]">
+      <div className="text-muted-foreground flex items-baseline gap-2 text-xs">
         <span className="text-foreground/70 font-medium">{mine ? "you" : "agent"}</span>
         {when && <span>{when}</span>}
       </div>
@@ -169,23 +185,26 @@ const Block = memo(function Block({ block }: { block: Block }) {
       <div
         className={
           mine
-            ? "bg-muted/60 border-border w-fit max-w-[46rem] rounded-lg border px-3 py-2"
-            : "flex max-w-[52rem] min-w-0 flex-col gap-2"
+            ? "bg-muted/60 border-border w-fit max-w-full rounded-lg border px-3 py-2"
+            : "flex max-w-full min-w-0 flex-col gap-2"
         }
       >
         {block.turns.map((turn, i) => (
           <div key={i} className="flex min-w-0 flex-col gap-2">
-            {turn.Text !== "" && (
-              <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{turn.Text}</p>
-            )}
+            {turn.Text !== "" &&
+              (mine ? (
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{turn.Text}</p>
+              ) : (
+                <Markdown text={turn.Text} />
+              ))}
             {turn.Thinking !== "" && (
               <Collapsible className="group/think">
-                <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-[11px]">
+                <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs">
                   <ChevronRight className="size-3 transition-transform group-data-[state=open]/think:rotate-90" />
                   thinking
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <p className="text-muted-foreground border-border mt-1 border-l pl-3 text-[11px] leading-relaxed whitespace-pre-wrap">
+                  <p className="text-muted-foreground border-border mt-1 border-l pl-3 text-xs leading-relaxed whitespace-pre-wrap">
                     {turn.Thinking}
                   </p>
                 </CollapsibleContent>
@@ -204,18 +223,46 @@ const Block = memo(function Block({ block }: { block: Block }) {
 // The composer owns its draft, so typing does not re-render the conversation.
 function Composer({ onSend }: { onSend: (text: string) => void }) {
   const [draft, setDraft] = useState("");
+  const [attached, setAttached] = useState<string[]>([]);
   const box = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    // Go forwards the paths and says which element they landed on; anything
+    // dropped elsewhere belongs to another view.
+    const off = Events.On("files:dropped", (event: { data: { paths: string[]; target: string } }) => {
+      const { paths, target } = event.data ?? { paths: [], target: "" };
+      if (target !== "chat-drop" || !paths?.length) {
+        return;
+      }
+      setAttached((have) => [...have, ...paths.filter((p) => !have.includes(p))]);
+      box.current?.focus();
+    });
+    return off;
+  }, []);
 
   const send = () => {
     const text = draft.trim();
-    if (text !== "") {
-      setDraft("");
-      onSend(text);
+    if (text === "" && attached.length === 0) {
+      return;
     }
+    // Paths, not contents. The agent has a filesystem and a Read tool; sending
+    // it a path is how a screenshot becomes something it can look at, and the
+    // alternative — base64 through a line editor — is not a thing a terminal
+    // can carry.
+    const message = [...attached, text].filter(Boolean).join("\n");
+    setDraft("");
+    setAttached([]);
+    onSend(message);
   };
 
   return (
-    <div className="border-border bg-background focus-within:ring-ring/40 relative max-w-[52rem] rounded-xl border shadow-sm focus-within:ring-2">
+    <div
+      // The drop target. Marked with the attribute Wails looks for, and given
+      // an id so the Go side can say which element a drop landed on.
+      id="chat-drop"
+      data-file-drop-target
+      className="border-border bg-background focus-within:ring-ring/40 relative rounded-xl border shadow-sm focus-within:ring-2"
+    >
       <Textarea
         ref={box}
         value={draft}
@@ -231,10 +278,27 @@ function Composer({ onSend }: { onSend: (text: string) => void }) {
         }}
         rows={2}
         placeholder="message the agent"
-        className="max-h-40 min-h-16 resize-none border-0 bg-transparent pr-24 text-[13px] shadow-none focus-visible:ring-0"
+        className="max-h-40 min-h-16 resize-none border-0 bg-transparent pr-24 text-sm shadow-none focus-visible:ring-0"
       />
+      {attached.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
+          {attached.map((path) => (
+            <Badge key={path} variant="secondary" className="max-w-full gap-1 font-normal">
+              <Paperclip className="size-3 shrink-0" />
+              <span className="truncate">{path.split("/").pop()}</span>
+              <button
+                className="text-muted-foreground hover:text-foreground ml-0.5"
+                aria-label={`remove ${path}`}
+                onClick={() => setAttached((have) => have.filter((p) => p !== path))}
+              >
+                ×
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
       <div className="absolute right-2 bottom-2 flex items-center gap-2">
-        <span className="text-muted-foreground hidden text-[11px] sm:inline">
+        <span className="text-muted-foreground hidden text-xs sm:inline">
           <CornerDownLeft className="mr-1 inline size-3" />
           to send
         </span>
@@ -338,10 +402,10 @@ export function ChatView({ session }: { session: string }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
       <ScrollArea className="min-h-0 min-w-0 flex-1">
-        <div className="flex min-w-0 flex-col gap-6 px-1 pr-4 pb-2">
-          {error !== "" && <p className="text-destructive text-[13px]">{error}</p>}
+        <div className="mx-auto flex w-full max-w-[60rem] min-w-0 flex-col gap-6 px-4 pb-2">
+          {error !== "" && <p className="text-destructive text-sm">{error}</p>}
           {turns.length === 0 && error === "" && (
-            <p className="text-muted-foreground text-[13px]">no transcript for this session yet</p>
+            <p className="text-muted-foreground text-sm">no transcript for this session yet</p>
           )}
           {!showAll && hidden > 0 && (
             <Button variant="ghost" size="sm" className="self-start" onClick={() => setShowAll(true)}>
@@ -355,18 +419,20 @@ export function ChatView({ session }: { session: string }) {
             // Shown dimmed until the transcript confirms it: the agent has been
             // told, and the record has not caught up.
             <div key={text} className="flex min-w-0 flex-col gap-2 opacity-60">
-              <div className="text-muted-foreground text-[11px]">
+              <div className="text-muted-foreground text-xs">
                 <span className="text-foreground/70 font-medium">you</span> · sending
               </div>
-              <div className="bg-muted/60 border-border w-fit max-w-[46rem] rounded-lg border px-3 py-2">
-                <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{text}</p>
+              <div className="bg-muted/60 border-border w-fit max-w-full rounded-lg border px-3 py-2">
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
               </div>
             </div>
           ))}
           <div ref={bottom} />
         </div>
       </ScrollArea>
-      <Composer onSend={send} />
+      <div className="mx-auto w-full max-w-[60rem] px-4">
+        <Composer onSend={send} />
+      </div>
     </div>
   );
 }

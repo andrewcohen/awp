@@ -33,7 +33,22 @@ export const sampleTurns = [
   {
     Kind: "assistant",
     At: "2026-08-18T14:02:31Z",
-    Text: "Clean at 12px — the fills are flat and the eighths step evenly. One rounding edge remains: at odd cell heights the half block is a pixel short, which is visible only when it abuts a full block.",
+    Text: `Clean at 12px — the fills are flat and the eighths step evenly.
+
+One rounding edge remains:
+
+- \`Math.round(ch / 2)\` is computed twice, so an **odd** cell height leaves the bottom half a pixel taller
+- visible only where a half block abuts a full one
+
+| size | cell | waste |
+| --- | --- | --- |
+| 12px | 8x14 | 0.2px |
+| 18px | 11x21 | 0.1px |
+
+\`\`\`ts
+const halfH = Math.round(ch / 2);
+fill(x0, y0 + halfH, cw, ch - halfH);
+\`\`\``,
     Thinking: "The half block uses Math.round(ch / 2) for its height but starts at y0, so an odd cell leaves the bottom half a pixel taller than the top. Better to derive the second half from the first rather than rounding twice.",
     Tools: [
       {
