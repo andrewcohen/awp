@@ -7,7 +7,9 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdirSync } from "node:fs";
 import { AgentHost, type Conversation } from "./agent.ts";
+import { runtimeDir } from "./paths.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = 4317;
@@ -21,6 +23,12 @@ const fallbackPage = join(here, "..", "public", "index.html");
 const built = await Bun.file(join(bundle, "index.html")).exists();
 const page = built ? join(bundle, "index.html") : fallbackPage;
 console.log(built ? "serving the built frontend" : "serving the fallback page (run: bun run build)");
+
+// Where dropped files land. Counter rather than a timestamp so the names are
+// stable to read in a log and unique within a run.
+const dropDir = join(runtimeDir, "drops");
+mkdirSync(dropDir, { recursive: true });
+let dropCount = 1;
 
 const host = await AgentHost.start();
 
@@ -113,6 +121,35 @@ Bun.serve({
     },
 
     "/commands": () => Response.json(host.commands),
+
+    // A dropped file, turned into somewhere the agent can look.
+    //
+    // gdeck got real OS paths from the window manager, because a native drop
+    // carries one. A browser drop does not: it hands the page a File with the
+    // bytes and no location, and an agent with a Read tool needs a location. So
+    // the bytes come here and a path goes back.
+    //
+    // Under ~/.awp/tdeck/drops rather than the system temp directory, because
+    // these outlive the request — the agent reads the file at some later point
+    // in the turn, and a cleaner that runs in between would make a dropped
+    // screenshot intermittently unreadable.
+    "/upload": {
+      POST: async (req) => {
+        const form = await req.formData();
+        const paths: string[] = [];
+        for (const entry of form.getAll("file")) {
+          if (!(entry instanceof File)) continue;
+          // The name comes from the browser, so it is untrusted: basename it,
+          // and prefix a counter so two screenshots taken in the same second do
+          // not overwrite each other.
+          const safe = (entry.name.split("/").pop() ?? "file").replace(/[^\w.\-]/g, "_");
+          const path = join(dropDir, `${dropCount++}-${safe}`);
+          await Bun.write(path, entry);
+          paths.push(path);
+        }
+        return Response.json({ paths });
+      },
+    },
 
     "/say": {
       POST: async (req) => {
