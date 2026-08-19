@@ -81,7 +81,7 @@ export function Sidebar({
                   </span>
                   {/* The directory the agent is working in — the closest thing
                       to a workspace until awp's own state is wired in. */}
-                  <span className="text-muted-foreground truncate text-xs">
+                  <span className="text-muted-foreground truncate text-sm">
                     {session.cwd.split("/").slice(-2).join("/")}
                   </span>
                 </button>
@@ -89,7 +89,7 @@ export function Sidebar({
             );
           })}
           {sessions.length === 0 && (
-            <li className="text-muted-foreground px-2 py-1.5 text-xs">
+            <li className="text-muted-foreground px-2 py-1.5 text-sm">
               no conversations
             </li>
           )}
