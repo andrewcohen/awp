@@ -129,6 +129,10 @@ export const api = {
 
   say: (session: string, text: string) => post("/say", { session, text }),
 
+  // Stop the turn in progress. The turn ends through the ordinary path with a
+  // stopReason of "cancelled", so nothing here has to mark the chat idle.
+  cancel: (session: string) => post("/cancel", { session }),
+
   permit: (session: string, optionId: string) =>
     post("/permit", { session, optionId }),
 

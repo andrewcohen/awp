@@ -1,70 +1,22 @@
-// The client side of the socket: find or start the daemon, dial it, and hand
-// back something ndJsonStream can wrap.
+// Dialling the daemon, and speaking the protocol in protocol.ts to it.
 //
-// The awkward part is the handshake. The daemon writes one JSON line before the
-// protocol stream, saying whether the adapter is fresh, and that line has to be
-// consumed here rather than by the ACP parser — which would reject it. So the
-// socket's first chunk is split: the line goes to the caller, the remainder
-// becomes the first bytes of the protocol stream.
+// Much smaller than it was. When the UI server held the ACP client this file
+// had to split a handshake off the front of a byte stream, decide whether the
+// adapter was fresh, and keep a state file so sessions could be reattached.
+// All of that existed to survive a restart; the daemon now owns the
+// conversations, so a restart loses nothing and none of it is needed.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openSync } from "node:fs";
 import type { Socket, SocketHandler } from "bun";
 import { SocketWriter } from "./socketwrite.ts";
-import {
-  daemonLogPath,
-  ensureRuntimeDir,
-  socketPath,
-  statePath,
-} from "./paths.ts";
+import { daemonLogPath, ensureRuntimeDir, socketPath } from "./paths.ts";
+import { isPush, type Command, type Frame } from "./protocol.ts";
+import type { UiEvent } from "./events.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const daemonScript = join(here, "adapterd.ts");
-
-export type Link = {
-  // Whether this adapter has never had a client. False means the agent is
-  // already initialized and already has our session, so the caller must skip
-  // `initialize` and reuse the session it recorded.
-  fresh: boolean;
-  readable: ReadableStream<Uint8Array>;
-  writable: WritableStream<Uint8Array>;
-  // Resolves when the daemon goes away. Worth surfacing rather than leaving to
-  // be discovered: an ACP connection whose stream has closed does not fail
-  // until the next call, so a server that ignores this keeps answering requests
-  // and only reports "ACP connection closed" once somebody tries to use it.
-  closed: Promise<void>;
-};
-
-// What the server needs in order to pick its conversations back up. Small
-// enough to be a file; the agent owns everything that actually matters.
-//
-// A list rather than one session, because a reattach has to restore every chat
-// the daemon is holding. Restoring only the last would leave the others running
-// with nobody reading them — the failure the daemon exists to prevent, applied
-// to all but one.
-export type SessionRecord = {
-  sessionId: string;
-  cwd: string;
-  title: string;
-  modes: unknown;
-  config?: unknown;
-};
-
-export type State = { sessions: SessionRecord[] };
-
-export async function loadState(): Promise<State | null> {
-  try {
-    return (await Bun.file(statePath).json()) as State;
-  } catch {
-    return null;
-  }
-}
-
-export async function saveState(state: State): Promise<void> {
-  ensureRuntimeDir();
-  await Bun.write(statePath, JSON.stringify(state, null, 2));
-}
 
 // A socket with no listener behind it, and a socket that is simply not there,
 // are both "no daemon yet". Anything else is a bug here rather than a race, and
@@ -75,153 +27,175 @@ function isAbsent(err: unknown): boolean {
   return code === "ENOENT" || code === "ECONNREFUSED";
 }
 
-async function dial(
-  handlers: SocketHandler<undefined>,
-): Promise<Socket<undefined> | null> {
-  try {
-    return await Bun.connect<undefined>({ unix: socketPath, socket: handlers });
-  } catch (err) {
-    if (isAbsent(err)) return null;
-    throw err;
-  }
-}
-
 function startDaemon(): void {
   ensureRuntimeDir();
   // Appended, via a raw fd, rather than Bun.file(path) — which writes from
   // offset zero. A new daemon that logs fewer bytes than the last one leaves
   // the previous run's tail sitting after its own, so `tail` shows two
-  // processes' output as though it were one story. That is not a cosmetic
-  // problem: it is how a daemon that had just started cleanly appeared to have
-  // flushed a buffer it never had.
+  // processes' output as though it were one story.
   const log = openSync(daemonLogPath, "a");
   Bun.spawn([process.execPath, daemonScript], {
     stdin: "ignore",
     stdout: log,
     stderr: log,
-    // The whole point: it must not die when this process does. Verified —
-    // a detached child survives a normal parent exit.
-    //
-    // It does NOT survive `bun --watch`, which kills the whole process group on
-    // reload, so in development the daemon has to be started separately
-    // (`bun run daemon`). Convenient here, and correct under a real desktop
-    // shell where the parent is long-lived; not something to rely on while
-    // editing this file.
+    // Verified: a detached child survives a normal parent exit. It does NOT
+    // survive `bun --watch`, which kills the process group on reload, so in
+    // development the daemon is started separately (`bun run daemon`).
     detached: true,
+    // Inherited so TDECK_INSTANCE reaches the daemon: a development instance
+    // that auto-started a default-instance daemon would talk to the agents it
+    // was supposed to be isolated from.
+    env: process.env,
   }).unref();
 }
 
-export async function connect(): Promise<Link> {
-  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-  const readable = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
-    },
-  });
+export class Daemon {
+  private next = 1;
+  private readonly waiting = new Map<
+    number,
+    { resolve: (data: unknown) => void; reject: (err: Error) => void }
+  >();
+  // One set of handlers per subscribed conversation.
+  private readonly listeners = new Map<string, Set<(event: UiEvent) => void>>();
+  // What each subscribed conversation has shown since this process attached.
+  //
+  // The daemon replays on subscribe, but only for the first subscriber: the
+  // second one here joins an existing set and no command goes down the wire, so
+  // without this a page opened beside another — or a tab switched away from and
+  // back — shows an empty conversation until the next token arrives. Found by
+  // watching exactly that happen.
+  //
+  // Grows with the conversation, which is the same thing the daemon's own log
+  // does, and is dropped when the last subscriber leaves.
+  private readonly seen = new Map<string, UiEvent[]>();
+  private onSessions: () => void = () => {};
 
-  // Resolved by the first chunk, which always contains the handshake line
-  // because the daemon writes it alone before anything else can arrive.
-  let announce: (fresh: boolean) => void = () => {};
-  const handshake = new Promise<boolean>((resolve) => {
-    announce = resolve;
-  });
+  private constructor(
+    private readonly out: SocketWriter,
+    readonly closed: Promise<void>,
+  ) {}
 
-  // Assigned once the socket exists; the drain handler above closes over it.
-  let writer: SocketWriter | null = null;
+  static async connect(): Promise<Daemon> {
+    let hangUp: () => void = () => {};
+    const closed = new Promise<void>((resolve) => {
+      hangUp = resolve;
+    });
 
-  let hangUp: () => void = () => {};
-  const closed = new Promise<void>((resolve) => {
-    hangUp = resolve;
-  });
+    let daemon!: Daemon;
+    let pending = "";
 
-  let sawHandshake = false;
-  // Bytes, not a string. Splitting the handshake off by decoding the chunk and
-  // re-encoding the remainder would corrupt any multi-byte character that
-  // happened to straddle a chunk boundary — a whole class of bug that only
-  // shows up once someone puts an emoji in a prompt. The newline is a single
-  // byte, so the split can be done without decoding anything but the line.
-  let pending = new Uint8Array(0);
-  const NEWLINE = 0x0a;
+    const handlers: SocketHandler<undefined> = {
+      data(_socket: Socket<undefined>, chunk: Uint8Array) {
+        pending += new TextDecoder().decode(chunk);
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            daemon.receive(JSON.parse(line) as Frame);
+          } catch {
+            console.error("unparseable frame from the daemon; ignoring");
+          }
+        }
+      },
+      drain() {
+        daemon.drain();
+      },
+      close() {
+        hangUp();
+      },
+      error(_socket: Socket<undefined>, err: Error) {
+        console.error(`daemon socket error: ${err.message}`);
+        hangUp();
+      },
+    };
 
-  // Built before dialling, not attached afterwards: the daemon writes its
-  // handshake the instant a client opens, so a socket that connects before its
-  // data handler exists can drop the first thing it is sent.
-  const handlers: SocketHandler<undefined> = {
-    data(_s: Socket<undefined>, chunk: Uint8Array) {
-      if (sawHandshake) {
-        // Copied, not passed through. The buffer a socket handler is given can
-        // be reused for the next read, and a ReadableStream queue holds a
-        // reference rather than the bytes — so a fast producer overwrites data
-        // that has been enqueued but not yet consumed. It surfaces as
-        // "Unterminated string" from the ndJSON parser, some way from the
-        // cause, and only under load.
-        controller?.enqueue(new Uint8Array(chunk));
-        return;
-      }
-
-      const merged = new Uint8Array(pending.length + chunk.length);
-      merged.set(pending);
-      merged.set(chunk, pending.length);
-      const newline = merged.indexOf(NEWLINE);
-      if (newline < 0) {
-        pending = merged;
-        return;
-      }
-
-      sawHandshake = true;
-      pending = new Uint8Array(0);
-      let fresh = true;
+    const dial = async (): Promise<Socket<undefined> | null> => {
       try {
-        const line = new TextDecoder().decode(merged.subarray(0, newline));
-        fresh = Boolean((JSON.parse(line) as { fresh?: unknown }).fresh);
-      } catch {
-        // A daemon that speaks no handshake is one from an older build.
-        // Treating it as fresh fails loudly at `initialize` rather than
-        // quietly doing the wrong thing.
+        return await Bun.connect<undefined>({ unix: socketPath, socket: handlers });
+      } catch (err) {
+        if (isAbsent(err)) return null;
+        throw err;
       }
-      announce(fresh);
+    };
 
-      // `slice`, not `subarray`: a view would keep the merged buffer alive and
-      // share its bytes, which is the same aliasing hazard as above.
-      const rest = merged.slice(newline + 1);
-      if (rest.length) controller?.enqueue(rest);
-    },
-    drain() {
-      writer?.drain();
-    },
-    close() {
-      controller?.close();
-      hangUp();
-    },
-    error(_s: Socket<undefined>, err: Error) {
-      controller?.error(err);
-      hangUp();
-    },
-  };
-
-  let socket = await dial(handlers);
-  if (!socket) {
-    console.log("no adapter daemon; starting one");
-    startDaemon();
-    // The daemon spawns the adapter before it binds, so the wait covers a
-    // process start rather than just a bind.
-    for (let attempt = 0; attempt < 100 && !socket; attempt++) {
-      await Bun.sleep(100);
-      socket = await dial(handlers);
+    let socket = await dial();
+    if (!socket) {
+      console.log("no adapter daemon; starting one");
+      startDaemon();
+      for (let attempt = 0; attempt < 100 && !socket; attempt++) {
+        await Bun.sleep(100);
+        socket = await dial();
+      }
+      if (!socket) throw new Error(`adapter daemon did not come up; see ${daemonLogPath}`);
     }
-    if (!socket)
-      throw new Error(`adapter daemon did not come up; see ${daemonLogPath}`);
+
+    daemon = new Daemon(new SocketWriter(socket), closed);
+    return daemon;
   }
 
-  writer = new SocketWriter(socket);
-  const live = socket;
-  const out = writer;
-  const writable = new WritableStream<Uint8Array>({
-    write(chunk) {
-      out.write(chunk);
-      live.flush();
-    },
-  });
+  drain(): void {
+    this.out.drain();
+  }
 
-  return { fresh: await handshake, readable, writable, closed };
+  private receive(frame: Frame): void {
+    if (isPush(frame)) {
+      if (frame.push === "sessions") {
+        this.onSessions();
+        return;
+      }
+      this.seen.get(frame.session)?.push(frame.event);
+      for (const listener of this.listeners.get(frame.session) ?? []) listener(frame.event);
+      return;
+    }
+    const waiter = this.waiting.get(frame.id);
+    if (!waiter) return;
+    this.waiting.delete(frame.id);
+    if (frame.ok) waiter.resolve(frame.data);
+    else waiter.reject(new Error(frame.error));
+  }
+
+  request<T>(command: Command): Promise<T> {
+    const id = this.next++;
+    return new Promise<T>((resolve, reject) => {
+      this.waiting.set(id, { resolve: resolve as (data: unknown) => void, reject });
+      this.out.write(new TextEncoder().encode(JSON.stringify({ id, ...command }) + "\n"));
+    });
+  }
+
+  // Told when a conversation is opened, closed, or moves between busy and idle,
+  // so the UI's list can be re-read without polling for it.
+  onSessionsChanged(fn: () => void): void {
+    this.onSessions = fn;
+  }
+
+  // Follow one conversation. Returns an unsubscribe.
+  //
+  // Subscriptions are counted, because two browser tabs on the same chat are an
+  // ordinary thing and the first one to close must not silence the second.
+  subscribe(session: string, onEvent: (event: UiEvent) => void): () => void {
+    let listeners = this.listeners.get(session);
+    if (!listeners) {
+      listeners = new Set();
+      this.listeners.set(session, listeners);
+      this.seen.set(session, []);
+      void this.request({ cmd: "subscribe", session });
+    } else {
+      // A later subscriber gets what the earlier one already received. Sent
+      // synchronously, before any live event can arrive, so the order the
+      // caller sees is the order things happened.
+      for (const event of this.seen.get(session) ?? []) onEvent(event);
+    }
+    listeners.add(onEvent);
+
+    return () => {
+      const set = this.listeners.get(session);
+      if (!set) return;
+      set.delete(onEvent);
+      if (set.size > 0) return;
+      this.listeners.delete(session);
+      this.seen.delete(session);
+      void this.request({ cmd: "unsubscribe", session });
+    };
+  }
 }

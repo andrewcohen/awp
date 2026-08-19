@@ -6,6 +6,7 @@ import {
   CircleAlert,
   CornerDownLeft,
   Paperclip,
+  Square,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -260,6 +261,9 @@ function Composer({
   onSessionChanged: (session: SessionSummary) => void;
   busy: boolean;
 }) {
+  // Stopping is not the same button as sending, and making it one would be the
+  // usual mistake: the send button is disabled while the draft is empty, which
+  // is exactly the state you are in when you want to stop something.
   const [draft, setDraft] = useState("");
   const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -397,15 +401,28 @@ function Composer({
           </Kbd>
           to send
         </span>
-        <Button
-          onClick={send}
-          disabled={draft.trim() === "" && attached.length === 0}
-          size="icon"
-          className="size-8"
-          aria-label="send"
-        >
-          {busy ? <Spinner /> : <ArrowUp className="size-4" />}
-        </Button>
+        {busy ? (
+          <Button
+            onClick={() => void api.cancel(session.sessionId)}
+            size="icon"
+            variant="destructive"
+            className="size-8"
+            aria-label="stop"
+            title="stop"
+          >
+            <Square className="size-3.5 fill-current" />
+          </Button>
+        ) : (
+          <Button
+            onClick={send}
+            disabled={draft.trim() === "" && attached.length === 0}
+            size="icon"
+            className="size-8"
+            aria-label="send"
+          >
+            <ArrowUp className="size-4" />
+          </Button>
+        )}
       </div>
     </div>
   );

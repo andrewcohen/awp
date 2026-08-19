@@ -1,20 +1,24 @@
-// tdeck's backend: a Bun server that owns the agent and serves the UI.
+// tdeck's UI host: a Bun server that serves the page and relays to the daemon.
+//
+// It owns nothing. Every conversation, every in-flight turn and the ACP
+// connection itself live in the daemon, so this process can be restarted on
+// every saved file — which `bun --watch` does — without a turn noticing. That
+// is the whole reason for the split; see protocol.ts.
 //
 // The UI is a served page rather than something a desktop shell embeds
-// directly, which keeps the shell a later decision — Electrobun wraps this
-// without the frontend knowing, and if Electrobun disappoints nothing here
-// changes.
+// directly, which keeps the shell a later decision.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
-import { AgentHost, type Conversation } from "./agent.ts";
-import { runtimeDir } from "./paths.ts";
+import { Daemon } from "./link.ts";
+import { dropDir, instanceName, port } from "./paths.ts";
 import { readWorkspaces } from "./workspaces.ts";
-import { activeSessions, liveAgents } from "./live.ts";
+import { liveAgents } from "./live.ts";
+import type { UiEvent } from "./events.ts";
+import type { Command } from "./protocol.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const PORT = 4317;
 
 // The built frontend if there is one, else the throwaway page the experiment
 // shipped with. Two reasons to keep the fallback rather than requiring a build:
@@ -24,31 +28,34 @@ const bundle = join(here, "..", "frontend", "dist");
 const fallbackPage = join(here, "..", "public", "index.html");
 const built = await Bun.file(join(bundle, "index.html")).exists();
 const page = built ? join(bundle, "index.html") : fallbackPage;
-console.log(built ? "serving the built frontend" : "serving the fallback page (run: bun run build)");
 
 // Where dropped files land. Counter rather than a timestamp so the names are
 // stable to read in a log and unique within a run.
-const dropDir = join(runtimeDir, "drops");
 mkdirSync(dropDir, { recursive: true });
 let dropCount = 1;
 
-const host = await AgentHost.start();
+const daemon = await Daemon.connect();
 
-// Exit rather than serve a corpse. An ACP connection whose stream has closed
-// keeps looking healthy — routes answer, the page loads — until something tries
-// to reach the agent, and then every request fails with "ACP connection closed"
-// while the server sits there claiming to be up. Dying is the honest signal, and
-// the next start brings the daemon back.
-void host.closed.then(() => {
+// Exit rather than serve a corpse. Without the daemon there is no agent, and a
+// server that kept answering would look healthy while every request failed.
+void daemon.closed.then(() => {
   console.error("the adapter daemon went away; exiting so it is obvious");
   process.exit(1);
 });
 
-// A fresh start has no conversations; a reattach brings its own. Opening one
-// here means the page always has something to show without a "new chat" click
-// being the first thing anybody does.
-if (host.list().length === 0) await host.open(process.cwd());
-console.log(`open http://localhost:${PORT}`);
+type SessionSummary = { sessionId: string; cwd: string };
+
+// A fresh daemon has no conversations. Opening one here means the page always
+// has something to show without a "new chat" click being the first thing
+// anybody does — and only when there are none, so a server restart no longer
+// adds a conversation each time.
+const existing = await daemon.request<SessionSummary[]>({ cmd: "sessions" });
+if (existing.length === 0) await daemon.request({ cmd: "open", cwd: process.cwd() });
+
+console.log(
+  `${built ? "serving the built frontend" : "serving the fallback page (run: bun run build)"} — ` +
+    `tdeck [${instanceName}] on http://localhost:${port}`,
+);
 
 async function jsonBody(req: Request): Promise<Record<string, unknown>> {
   try {
@@ -60,39 +67,41 @@ async function jsonBody(req: Request): Promise<Record<string, unknown>> {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-// Every route below addresses one conversation. Naming the session in the
-// request rather than keeping a "current" one on the server is what lets two
-// browser tabs — or two panes of one window — watch different chats at once.
-function chatFrom(payload: Record<string, unknown>): Conversation | null {
-  return host.get(str(payload.session)) ?? null;
+// Relays one command and answers with whatever the daemon said. The daemon owns
+// the vocabulary, so most routes below are this and nothing else.
+async function relay(command: Command): Promise<Response> {
+  try {
+    return Response.json(await daemon.request(command));
+  } catch (err) {
+    // 409 rather than 500: the interesting failures are "that session is gone"
+    // and "that conversation refused", which are the caller's situation rather
+    // than the server falling over.
+    return Response.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 409 },
+    );
+  }
 }
 
-const noSuchSession = () => Response.json({ error: "no such session" }, { status: 404 });
-
 Bun.serve({
-  port: PORT,
+  port,
   // Bun closes a request that has been idle for 10 seconds. For an event stream
   // watching an agent think, ten seconds of silence is normal — so the default
   // hangs up on exactly the conversations worth watching, and the page goes
-  // quiet with no error anywhere. Measured: a session whose first token took
-  // longer than that appeared to produce nothing at all.
+  // quiet with no error anywhere.
   idleTimeout: 0,
   routes: {
     "/": () => new Response(Bun.file(page)),
 
     "/sessions": {
-      GET: () => Response.json(host.list().map((chat) => chat.summary())),
-      POST: async (req) => {
-        const cwd = str((await jsonBody(req)).cwd) || process.cwd();
-        const chat = await host.open(cwd);
-        return Response.json(chat.summary());
-      },
+      GET: () => relay({ cmd: "sessions" }),
+      POST: async (req) =>
+        relay({ cmd: "open", cwd: str((await jsonBody(req)).cwd) || process.cwd() }),
     },
 
     "/events": (req) => {
-      const wanted = new URL(req.url).searchParams.get("session") ?? "";
-      const chat = host.get(wanted) ?? host.list()[0];
-      if (!chat) return noSuchSession();
+      const session = new URL(req.url).searchParams.get("session") ?? "";
+      if (!session) return Response.json({ error: "session is required" }, { status: 400 });
 
       // Server-sent events rather than a websocket: the traffic is one-way and
       // the reconnect behaviour is free. What comes back the other way is a
@@ -101,9 +110,9 @@ Bun.serve({
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder();
-          unsubscribe = chat.log.subscribe((line) => {
+          unsubscribe = daemon.subscribe(session, (event: UiEvent) => {
             try {
-              controller.enqueue(encoder.encode(line));
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
             } catch {
               // The viewer went away mid-write; cancel() will clean up.
             }
@@ -122,83 +131,82 @@ Bun.serve({
       });
     },
 
-    "/commands": () => Response.json(host.commands),
+    "/commands": () => relay({ cmd: "commands" }),
 
-    // awp's workspaces, annotated with which of them a conversation is already
-    // open on. The annotation is the only thing tdeck adds: everything else is
-    // awp's state, read and passed through.
-    // Past conversations in a directory — including ones started from a
-    // terminal, which is the point. ?cwd= is required rather than defaulted:
-    // listing every session ever is not a thing any screen here wants.
-    "/history": async (req) => {
+    "/history": (req) => {
       const cwd = new URL(req.url).searchParams.get("cwd") ?? "";
       if (!cwd) return Response.json({ error: "cwd is required" }, { status: 400 });
-      // Marked live where a transcript is being appended to right now, so the
-      // UI can ask before attaching a second writer to a conversation someone
-      // else is holding. A heuristic, and it decides whether to warn — never
-      // whether to allow.
-      const [past, active] = await Promise.all([host.history(cwd), activeSessions(cwd)]);
-      return Response.json(past.map((entry) => ({ ...entry, live: active.has(entry.sessionId) })));
+      return relay({ cmd: "history", cwd });
     },
 
     "/resume": {
       POST: async (req) => {
         const payload = await jsonBody(req);
-        try {
-          const chat = await host.resume(
-            str(payload.sessionId),
-            str(payload.cwd),
-            str(payload.title) || "resumed",
-          );
-          return Response.json(chat.summary());
-        } catch (err) {
-          // A live session refuses, and the message says so — Claude Code
-          // enforcing one writer. Passed through rather than flattened, because
-          // "it is open somewhere else" and "it does not exist" want different
-          // reactions from whoever clicked.
-          return Response.json(
-            { error: err instanceof Error ? err.message : String(err) },
-            { status: 409 },
-          );
-        }
+        return relay({
+          cmd: "resume",
+          sessionId: str(payload.sessionId),
+          cwd: str(payload.cwd),
+          title: str(payload.title) || "resumed",
+        });
       },
     },
 
     "/close": {
+      POST: async (req) => relay({ cmd: "close", sessionId: str((await jsonBody(req)).sessionId) }),
+    },
+
+    "/say": {
       POST: async (req) => {
         const payload = await jsonBody(req);
-        return Response.json({ closed: await host.close(str(payload.sessionId)) });
+        return relay({ cmd: "say", session: str(payload.session), text: str(payload.text) });
       },
     },
 
-    "/workspaces": async () => {
-      const open = new Map(host.list().map((chat) => [chat.cwd, chat.sessionId]));
-      // A terminal agent already working here is the other way to duplicate
-      // work: opening a chat on this workspace would put a second agent in the
-      // same checkout. Derived from the live process list every time rather
-      // than recorded, because a recorded flag is wrong after a crash — which
-      // is exactly when someone clicks the row again.
-      const [spaces, agents] = await Promise.all([readWorkspaces(), liveAgents()]);
-      const busyDirs = new Set(agents.map((agent) => agent.dir));
-      return Response.json(
-        spaces.map((workspace) => ({
-          ...workspace,
-          sessionId: open.get(workspace.path),
-          terminalAgent: busyDirs.has(workspace.path),
-        })),
-      );
+    "/cancel": {
+      POST: async (req) => relay({ cmd: "cancel", session: str((await jsonBody(req)).session) }),
+    },
+
+    "/permit": {
+      POST: async (req) => {
+        const payload = await jsonBody(req);
+        return relay({
+          cmd: "permit",
+          session: str(payload.session),
+          optionId: str(payload.optionId),
+        });
+      },
+    },
+
+    "/mode": {
+      POST: async (req) => {
+        const payload = await jsonBody(req);
+        return relay({ cmd: "mode", session: str(payload.session), modeId: str(payload.modeId) });
+      },
+    },
+
+    "/config": {
+      POST: async (req) => {
+        const payload = await jsonBody(req);
+        const value = payload.value;
+        if (typeof value !== "string" && typeof value !== "boolean") {
+          return Response.json({ error: "value must be a string or a boolean" }, { status: 400 });
+        }
+        return relay({
+          cmd: "config",
+          session: str(payload.session),
+          configId: str(payload.configId),
+          value,
+        });
+      },
     },
 
     // A dropped file, turned into somewhere the agent can look.
     //
-    // gdeck got real OS paths from the window manager, because a native drop
-    // carries one. A browser drop does not: it hands the page a File with the
-    // bytes and no location, and an agent with a Read tool needs a location. So
-    // the bytes come here and a path goes back.
-    //
-    // Under ~/.awp/tdeck/drops rather than the system temp directory, because
-    // these outlive the request — the agent reads the file at some later point
-    // in the turn, and a cleaner that runs in between would make a dropped
+    // A browser drop hands the page a File with the bytes and no location, and
+    // an agent with a Read tool needs a location. So the bytes come here and a
+    // path goes back. Under the runtime directory rather than the system temp
+    // directory, because these outlive the request — the agent reads the file
+    // later in the turn, and a cleaner running in between would make a dropped
     // screenshot intermittently unreadable.
     "/upload": {
       POST: async (req) => {
@@ -218,62 +226,33 @@ Bun.serve({
       },
     },
 
-    "/say": {
-      POST: async (req) => {
-        const payload = await jsonBody(req);
-        const chat = chatFrom(payload);
-        if (!chat) return noSuchSession();
-        // Not awaited: a prompt runs for minutes and the POST is a doorbell,
-        // not the conversation. What the agent says arrives on /events.
-        void host.say(chat, str(payload.text));
-        return new Response(null, { status: 204 });
-      },
-    },
-
-    "/permit": {
-      POST: async (req) => {
-        const payload = await jsonBody(req);
-        const chat = chatFrom(payload);
-        if (!chat) return noSuchSession();
-        chat.permit(str(payload.optionId));
-        return new Response(null, { status: 204 });
-      },
-    },
-
-    // One route for every setting the agent exposes — model, effort, permission
-    // mode, fast mode. They are one mechanism in the protocol, so they are one
-    // route here rather than a hand-built endpoint per setting.
-    "/config": {
-      POST: async (req) => {
-        const payload = await jsonBody(req);
-        const chat = chatFrom(payload);
-        if (!chat) return noSuchSession();
-        const value = payload.value;
-        if (typeof value !== "string" && typeof value !== "boolean") {
-          return Response.json({ error: "value must be a string or a boolean" }, { status: 400 });
-        }
-        await host.setConfig(chat, str(payload.configId), value);
-        return Response.json(chat.summary());
-      },
-    },
-
-    "/mode": {
-      POST: async (req) => {
-        const payload = await jsonBody(req);
-        const chat = chatFrom(payload);
-        if (!chat) return noSuchSession();
-        void host.setMode(chat, str(payload.modeId));
-        return new Response(null, { status: 204 });
-      },
+    // awp's workspaces, annotated with what tdeck and the terminal are each
+    // holding. The annotations are the only thing tdeck adds; the rest is awp's
+    // state, read and passed through.
+    "/workspaces": async () => {
+      const [spaces, agents, sessions] = await Promise.all([
+        readWorkspaces(),
+        liveAgents(),
+        daemon.request<SessionSummary[]>({ cmd: "sessions" }),
+      ]);
+      const open = new Map(sessions.map((chat) => [chat.cwd, chat.sessionId]));
+      const busyDirs = new Set(agents.map((agent) => agent.dir));
+      return Response.json(
+        spaces.map((workspace) => ({
+          ...workspace,
+          sessionId: open.get(workspace.path),
+          terminalAgent: busyDirs.has(workspace.path),
+        })),
+      );
     },
   },
+
   // Anything not matched above is a bundle asset — the hashed JS, CSS and font
   // files Vite emits. Resolved against the build directory and nothing else, so
   // a crafted path cannot walk out of it.
   fetch: async (req) => {
     if (!built) return new Response("not found", { status: 404 });
-    const name = new URL(req.url).pathname;
-    const path = join(bundle, name);
+    const path = join(bundle, new URL(req.url).pathname);
     if (!path.startsWith(bundle)) return new Response("not found", { status: 404 });
     const file = Bun.file(path);
     return (await file.exists()) ? new Response(file) : new Response("not found", { status: 404 });
