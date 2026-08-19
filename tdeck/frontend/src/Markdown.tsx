@@ -114,12 +114,34 @@ const components = {
   // open a file:// URL from an http page — it fails silently, leaving a broken
   // image and no reason why. Absolute paths are rewritten through the server,
   // which is the only party that can read the disk.
+  //
+  // Markdown has one image syntax and no video syntax, so a recording written to
+  // disk and linked the only way markdown allows would render as an <img> that
+  // cannot decode — a broken-image icon where a video should be. The extension
+  // decides the element instead. That matters more than it looks: a tool result
+  // can only carry still images, so writing a file and linking it is the *only*
+  // route an agent has to show a video at all.
   img: (props: { src?: string; alt?: string }) => {
     const src = props.src ?? "";
     const resolved =
       src.startsWith("/") && !src.startsWith("//")
         ? `/file?path=${encodeURIComponent(src)}`
         : src;
+    const path = src.split("?")[0] ?? "";
+
+    if (/\.(mp4|webm|mov|m4v)$/i.test(path)) {
+      return (
+        <video
+          controls
+          preload="metadata"
+          src={resolved}
+          className="border-border my-2 max-h-80 w-fit max-w-full rounded-lg border"
+        />
+      );
+    }
+    if (/\.(mp3|wav|ogg|m4a|flac)$/i.test(path)) {
+      return <audio controls src={resolved} className="my-2 w-full max-w-md" />;
+    }
     return (
       <a
         href={resolved}
