@@ -179,7 +179,16 @@ export function History({
                         void resume(entry);
                       }}
                     >
-                      {here ? "open" : entry.live ? "attach" : "resume"}
+                      {/* Three words for three different things, and the
+                          distinction matters enough to spend a longer label on.
+                          "resume" and "attach" are the same operation — load
+                          this conversation — differing only in whether someone
+                          else is already writing to it. "switch to" is not that
+                          operation at all: tdeck already holds this one and the
+                          click is navigation. Calling it "open" put it in the
+                          same family as the other two, which is exactly what it
+                          is not. */}
+                      {here ? "switch to" : entry.live ? "attach" : "resume"}
                     </Button>
                   </ItemActions>
                 )}
