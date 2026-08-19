@@ -1,12 +1,17 @@
 // The ACP half: one connection to the agent, many conversations over it, and
 // the client handlers the agent calls back into.
 //
-// The adapter is `@agentclientprotocol/claude-agent-acp`, which wraps the Claude
-// Agent SDK and speaks ACP over a stream. On a Bun host it could be *imported*
-// rather than run as a process — that is the argument that decided ACP over raw
-// stream-json — but importing it would put the agent inside the process whose
-// restarts we are trying to survive. So it lives in the daemon (adapterd.ts) and
-// this talks to it down a socket.
+// This runs *inside the daemon*, over the adapter's own stdio. It used to run in
+// the UI server and reach the adapter down a socket, which cost a `done` every
+// time the server restarted: a turn is a JSON-RPC request, its reply is
+// addressed to whoever asked, and a restarted server is not that process. All
+// the output arrived and the completion did not.
+//
+// Owning the connection here fixes that by construction and deletes a pile of
+// machinery with it — the fresh/reattach handshake, the initialize-twice
+// problem, and a state file whose whole job was surviving a restart that no
+// longer loses anything. Conversations now live exactly as long as the daemon,
+// which is also exactly as long as the agents do.
 //
 // One connection, N sessions, and that is measured rather than assumed:
 // experiments/acp-chat/probe-concurrent.mjs prompted two sessions milliseconds
@@ -23,10 +28,12 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
+  type Stream,
   type ReadTextFileRequest,
 } from "@agentclientprotocol/sdk";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { EventLog, type Command, type PermissionOption } from "./events.ts";
-import { connect, loadState, saveState, type SessionRecord } from "./link.ts";
 
 export type Mode = { id: string; name: string };
 export type Modes = { availableModes: Mode[]; currentModeId: string | null };
@@ -232,58 +239,18 @@ export class AgentHost {
   private constructor(
     private readonly conn: Agent,
     private readonly client: ChatClient,
-    // Resolves when the daemon goes away, so the caller can decide what to do
-    // about it rather than finding out at the next request.
-    readonly closed: Promise<void>,
   ) {}
 
-  static async start(): Promise<AgentHost> {
-    const link = await connect();
+  // Told when the set of conversations changes, so the daemon can nudge every
+  // attached UI. One callback rather than an event emitter: there is exactly one
+  // listener and it is the process this object lives in.
+  onSessionsChanged: () => void = () => {};
+
+  static async start(stream: Stream): Promise<AgentHost> {
     let host!: AgentHost;
     const client = new ChatClient((id) => host.chats.get(id));
-    const conn = new ClientSideConnection(() => client, ndJsonStream(link.writable, link.readable));
-    host = new AgentHost(conn, client, link.closed);
-
-    // A reconnect picks up an adapter that is already initialized and already
-    // holds our sessions. Sending `initialize` again is an error, and asking
-    // for new sessions would abandon conversations that may be mid-turn — the
-    // work the daemon exists to protect. So the two paths genuinely differ, and
-    // the daemon's handshake is what tells them apart.
-    if (!link.fresh) {
-      const state = await loadState();
-      // `sessions?` rather than `sessions.` — a state file written by an older
-      // build has a single `sessionId` and no list at all, and reading through
-      // it would throw on the one path whose whole job is recovery.
-      if (state?.sessions?.length) {
-        for (const record of state.sessions) {
-          host.chats.set(
-            record.sessionId,
-            new Conversation(
-              record.sessionId,
-              record.cwd,
-              record.modes as Modes | null,
-              record.title,
-              (record.config as ConfigOption[]) ?? [],
-            ),
-          );
-        }
-        console.log(`reattached to ${state.sessions.length} session(s)`);
-        // Known consequence, visible in the log as "Got response to unknown
-        // request N": a turn in flight was requested by the client that died,
-        // so its JSON-RPC reply arrives addressed to nobody. All the agent's
-        // output is delivered — that is the buffer's job — but this connection
-        // never sees the `done` for a turn it did not start, so a reattached UI
-        // streams a turn to its end and then sits there looking busy.
-        //
-        // Fixing it properly means the daemon tracking outstanding requests,
-        // which is the first protocol awareness it does not have.
-        return host;
-      }
-      // A daemon in use with nothing recorded: something else is driving it, or
-      // the state file was removed. Falling through will fail at `initialize`
-      // with the agent's own error, which is more useful than a guess here.
-      console.log("daemon is in use but no sessions were recorded; trying a fresh handshake");
-    }
+    const conn = new ClientSideConnection(() => client, stream);
+    host = new AgentHost(conn, client);
 
     const init = await conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
@@ -352,7 +319,7 @@ export class AgentHost {
         : null;
       chat.config = configOptionsOf(res);
       console.log(`resumed session ${sessionId} (${this.chats.size} open)`);
-      await this.persist();
+      this.onSessionsChanged();
       return chat;
     } catch (err) {
       // Registered above, so it has to come back out — otherwise a failed
@@ -370,7 +337,7 @@ export class AgentHost {
   // the fix for that is to be able to put it back down.
   async close(sessionId: string): Promise<boolean> {
     const gone = this.chats.delete(sessionId);
-    if (gone) await this.persist();
+    if (gone) this.onSessionsChanged();
     return gone;
   }
 
@@ -383,7 +350,24 @@ export class AgentHost {
   }
 
   async open(cwd: string): Promise<Conversation> {
-    const session = await this.conn.newSession({ cwd, mcpServers: [] });
+    // Started the way awp starts an agent, when awp has an opinion about this
+    // directory.
+    //
+    // awp runs `claude --append-system-prompt-file ~/.awp/dev-loop/<slug>.md`,
+    // and that file is where the working discipline lives — one committable unit
+    // at a time, gates green before anything is marked done. An agent tdeck
+    // started without it is a visibly worse agent in the same repo, which is a
+    // confusing thing to discover an hour in.
+    //
+    // `_meta.systemPrompt` takes `{append}` on top of the claude_code preset,
+    // so this is the supported seam rather than a flag smuggled past the
+    // adapter.
+    const append = await devLoopPrompt(cwd);
+    const session = await this.conn.newSession({
+      cwd,
+      mcpServers: [],
+      ...(append ? { _meta: { systemPrompt: { append } } } : {}),
+    });
 
     // Modes come from the agent. A client that invented its own "auto" would
     // only ever see the prompts the agent bothered to send, and would diverge
@@ -404,7 +388,7 @@ export class AgentHost {
     );
     this.chats.set(chat.sessionId, chat);
     console.log(`session ${chat.sessionId} (${this.chats.size} open)`);
-    await this.persist();
+    this.onSessionsChanged();
     return chat;
   }
 
@@ -414,6 +398,7 @@ export class AgentHost {
   async say(chat: Conversation, text: string): Promise<void> {
     if (chat.busy || !text) return;
     chat.busy = true;
+    this.onSessionsChanged();
     chat.log.emit({ kind: "user", text });
     try {
       const res = await this.conn.prompt({
@@ -425,7 +410,22 @@ export class AgentHost {
       chat.log.emit({ kind: "error", message: messageOf(err) });
     } finally {
       chat.busy = false;
-      await this.persist();
+      this.onSessionsChanged();
+    }
+  }
+
+  // Stop the turn in progress.
+  //
+  // A notification, not a request: there is no reply to wait for, and the turn
+  // ends by the prompt returning with a stopReason of "cancelled" through the
+  // ordinary path. So nothing here marks the conversation idle — say() already
+  // owns that, and a second writer of the same flag is how they disagree.
+  async cancel(chat: Conversation): Promise<void> {
+    if (!chat.busy) return;
+    try {
+      await this.conn.cancel({ sessionId: chat.sessionId });
+    } catch (err) {
+      chat.log.emit({ kind: "error", message: messageOf(err) });
     }
   }
 
@@ -440,7 +440,7 @@ export class AgentHost {
       await this.conn.setSessionMode({ sessionId: chat.sessionId, modeId });
       if (chat.modes) chat.modes = { ...chat.modes, currentModeId: modeId };
       chat.log.emit({ kind: "mode", modeId });
-      await this.persist();
+      this.onSessionsChanged();
     } catch (err) {
       chat.log.emit({ kind: "error", message: messageOf(err) });
     }
@@ -465,7 +465,7 @@ export class AgentHost {
       const res = await this.conn.setSessionConfigOption(request);
       chat.config = configOptionsOf(res);
       chat.log.emit({ kind: "config", options: chat.config });
-      await this.persist();
+      this.onSessionsChanged();
     } catch (err) {
       chat.log.emit({ kind: "error", message: messageOf(err) });
     }
@@ -477,15 +477,23 @@ export class AgentHost {
     return this.client.commands;
   }
 
-  private async persist(): Promise<void> {
-    const sessions: SessionRecord[] = this.list().map((chat) => ({
-      sessionId: chat.sessionId,
-      cwd: chat.cwd,
-      title: chat.title,
-      modes: chat.modes,
-      config: chat.config,
-    }));
-    await saveState({ sessions });
+}
+
+// awp names its dev-loop files after the directory: leading slash dropped, the
+// remaining separators turned into dashes, and dots left alone — the real files
+// read "Users-acohen-go-src-github.com-andrewcohen-awp.md", with github.com
+// intact. Flattening the dots too would miss every file, silently, and the only
+// symptom would be an agent that behaves slightly worse than the one next to it.
+//
+// Absent for a directory awp has never seen, which is the ordinary case for a
+// scratch chat.
+async function devLoopPrompt(cwd: string): Promise<string> {
+  const slug = cwd.replace(/^\//, "").replaceAll("/", "-");
+  const path = join(homedir(), ".awp", "dev-loop", `${slug}.md`);
+  try {
+    return await Bun.file(path).text();
+  } catch {
+    return "";
   }
 }
 

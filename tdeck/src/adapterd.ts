@@ -1,36 +1,40 @@
-// The agent host: one long-lived process that owns the ACP adapter and lends it
-// out over a unix socket.
+// The agent host: one long-lived process that owns the adapter, the ACP
+// connection, and every conversation.
 //
-// Why this exists, and why it exists *now* rather than in a later phase:
+// It started as a byte pipe — the adapter's stdio bridged to a socket, with the
+// UI server holding the ACP client. That survived a server restart in the sense
+// that the agent kept working and its output was buffered, but not in the sense
+// that mattered: a turn is a JSON-RPC request, its reply is addressed to the
+// process that asked, and a restarted server is not that process. Every restart
+// mid-turn produced a conversation that streamed to its end and then span
+// forever, because the `done` had been addressed to somebody who no longer
+// existed.
 //
-// An agent that is a child of the UI process dies with the UI process. Restart
-// the server — which happens every few seconds during development, and once per
-// update forever after — and an agent three tool calls into something loses the
-// work. `loadSession` makes restarting *cheap*, because the conversation is on
-// disk, but it does not make it *free*: what was in flight is gone.
+// Buffering harder cannot fix that. The request has to be owned by something
+// that does not die. So the ACP client moved in here and the UI server became a
+// subscriber over the small protocol in protocol.ts.
 //
-// That is exactly what zmx protects for terminal programs, and zmx was measured
-// and rejected for this: it keeps a terminal grid rather than a byte stream, so
-// a 245-byte JSON-RPC line came back as 249 bytes with four carriage returns
-// inserted at column boundaries and no longer parsed. Durability for a protocol
-// needs every byte, once, in order — which a socket gives and a screen does not.
+// What that bought, beyond the fix: the handshake is gone, the initialize-twice
+// problem is gone, the state file whose only job was surviving a restart is
+// gone, and several clients can watch the same conversation without fighting
+// over one JSON-RPC stream. Conversations now live exactly as long as the
+// daemon — which is exactly as long as the agents behind them do, so there is
+// nothing left to reconcile.
 //
-// So: zmx's architecture with a different payload. The adapter's stdio is
-// bridged to a unix socket, the UI dials in, and closing the UI detaches rather
-// than kills.
-//
-// Deliberately dumb. It moves bytes and does not parse them — no JSON-RPC
-// awareness, no session tracking, no restart policy. Supervision and multi-client
-// fan-out wait for evidence they are needed; what could not wait is the seam,
-// because starting on stdio bakes in "agents die with the window" and moving a
-// transport afterwards is the expensive kind of change.
+// zmx is still the shape being copied, and still rejected as the mechanism: it
+// keeps a terminal grid rather than a byte stream, so a 245-byte JSON-RPC line
+// came back as 249 with carriage returns inserted at column boundaries.
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unlinkSync } from "node:fs";
 import type { Socket } from "bun";
-import { ensureRuntimeDir, socketPath } from "./paths.ts";
+import { ndJsonStream } from "@agentclientprotocol/sdk";
+import { AgentHost, type Conversation } from "./agent.ts";
+import { ensureRuntimeDir, instanceName, socketPath } from "./paths.ts";
 import { SocketWriter } from "./socketwrite.ts";
+import { activeSessions } from "./live.ts";
+import type { Frame, Request } from "./protocol.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adapterBin = join(here, "..", "node_modules", ".bin", "claude-agent-acp");
@@ -38,8 +42,7 @@ const adapterBin = join(here, "..", "node_modules", ".bin", "claude-agent-acp");
 ensureRuntimeDir();
 
 // A socket file outlives the process that made it, so a crash leaves one behind
-// and the next bind fails on an address nobody is listening to. Removing it
-// first is safe because a *live* daemon is excluded by the lock below.
+// and the next bind fails on an address nobody is listening to.
 try {
   unlinkSync(socketPath);
 } catch {
@@ -58,94 +61,193 @@ const adapter = Bun.spawn([adapterBin], {
   },
 });
 
-// Exactly one client at a time.
-//
-// The alternative — fanning one ACP connection out to several — is not a
-// buffering problem but a protocol one: JSON-RPC replies are addressed to
-// whoever asked, and two clients sharing a stream would each see the other's
-// answers. A newcomer therefore replaces the incumbent, the same way `zmx
-// attach` from inside a session moves the client rather than nesting.
-let client: Socket<undefined> | null = null;
-let out: SocketWriter | null = null;
+const host = await AgentHost.start(
+  ndJsonStream(
+    new WritableStream<Uint8Array>({
+      write(chunk) {
+        adapter.stdin.write(chunk);
+        adapter.stdin.flush();
+      },
+    }),
+    adapter.stdout,
+  ),
+);
 
-// What the agent said while nobody was listening.
-//
-// This is the durability the whole file is for. Close the window mid-turn and
-// the agent keeps working; its output lands here and is delivered when a client
-// comes back. Dropping it instead would make the socket a reconnect convenience
-// rather than a guarantee, which is not worth a daemon.
-let detachedOutput: Uint8Array[] = [];
+// Attached UIs. Several are fine now — they are subscribers, not co-owners of a
+// JSON-RPC stream — which is what makes a second window, or a reloaded page
+// beside an open one, a non-event.
+type Viewer = {
+  out: SocketWriter;
+  // Which conversations this viewer is watching, so a page showing one chat is
+  // not sent the tokens of five others.
+  watching: Set<string>;
+  // Unsubscribes from each conversation's log, by session id.
+  stop: Map<string, () => void>;
+};
+const viewers = new Map<Socket<undefined>, Viewer>();
 
-// Whether a client has ever attached.
-//
-// Stands in for "has this adapter been initialized", which is the one piece of
-// protocol state a byte pipe cannot avoid caring about: ACP's `initialize` is
-// sent once per connection, and a reconnecting client that sends it again gets
-// an error. The daemon tells the client which case it is in and lets the client
-// decide; that keeps the protocol knowledge on the protocol side.
-let used = false;
+const encoder = new TextEncoder();
+function send(viewer: Viewer, frame: Frame): void {
+  viewer.out.write(encoder.encode(JSON.stringify(frame) + "\n"));
+}
 
-adapter.stdout.pipeTo(
-  new WritableStream<Uint8Array>({
-    write(chunk) {
-      if (out) out.write(chunk);
-      // Copied on the way into the buffer: `write` hands over a view that the
-      // stream is free to reuse for the next read, and this one is held across
-      // an arbitrary detachment. A live client is written synchronously, so it
-      // does not need the copy.
-      else detachedOutput.push(new Uint8Array(chunk));
-    },
-  }),
-).catch((err: unknown) => {
-  console.log(`adapter stdout closed: ${err instanceof Error ? err.message : String(err)}`);
-});
+host.onSessionsChanged = () => {
+  for (const viewer of viewers.values()) send(viewer, { push: "sessions" });
+};
+
+function chatOr(sessionId: string): Conversation {
+  const chat = host.get(sessionId);
+  if (!chat) throw new Error(`no such session: ${sessionId}`);
+  return chat;
+}
+
+async function run(viewer: Viewer, request: Request): Promise<unknown> {
+  switch (request.cmd) {
+    case "sessions":
+      return host.list().map((chat) => chat.summary());
+
+    case "open":
+      return (await host.open(request.cwd)).summary();
+
+    case "resume":
+      return (await host.resume(request.sessionId, request.cwd, request.title)).summary();
+
+    case "close":
+      return { closed: await host.close(request.sessionId) };
+
+    case "say":
+      // Not awaited. A turn runs for minutes and the reply to this command is
+      // "I have told the agent", not "the agent has finished" — which arrives
+      // as events, to every viewer watching, including ones that connect
+      // halfway through.
+      void host.say(chatOr(request.session), request.text);
+      return { said: true };
+
+    case "cancel":
+      await host.cancel(chatOr(request.session));
+      return { cancelled: true };
+
+    case "permit":
+      chatOr(request.session).permit(request.optionId);
+      return { permitted: true };
+
+    case "mode":
+      await host.setMode(chatOr(request.session), request.modeId);
+      return chatOr(request.session).summary();
+
+    case "config":
+      await host.setConfig(chatOr(request.session), request.configId, request.value);
+      return chatOr(request.session).summary();
+
+    case "history": {
+      const [past, active] = await Promise.all([
+        host.history(request.cwd),
+        activeSessions(request.cwd),
+      ]);
+      return past.map((entry) => ({ ...entry, live: active.has(entry.sessionId) }));
+    }
+
+    case "commands":
+      return host.commands;
+
+    case "subscribe": {
+      if (viewer.watching.has(request.session)) return { subscribed: true };
+      const chat = chatOr(request.session);
+      viewer.watching.add(request.session);
+      // subscribe() replays what the conversation has already shown before
+      // following it, so a page that has just loaded gets the conversation
+      // rather than the next token of it.
+      viewer.stop.set(
+        request.session,
+        chat.log.subscribe((line) => {
+          // The log speaks in SSE lines because that is what the browser wants;
+          // here the payload is what matters, so it is unwrapped and re-framed.
+          const payload = line.slice("data: ".length).trimEnd();
+          if (payload) {
+            viewer.out.write(
+              encoder.encode(
+                `{"push":"event","session":${JSON.stringify(request.session)},"event":${payload}}\n`,
+              ),
+            );
+          }
+        }),
+      );
+      return { subscribed: true };
+    }
+
+    case "unsubscribe": {
+      viewer.stop.get(request.session)?.();
+      viewer.stop.delete(request.session);
+      viewer.watching.delete(request.session);
+      return { unsubscribed: true };
+    }
+  }
+}
 
 Bun.listen<undefined>({
   unix: socketPath,
   socket: {
     open(socket) {
-      if (client) {
-        console.log("second client attached; dropping the first");
-        client.end();
-      }
-      client = socket;
-      out = new SocketWriter(socket);
-
-      // The handshake, ahead of the protocol stream: one JSON line saying
-      // whether this adapter is fresh. The client reads it, then treats the
-      // rest of the socket as ACP.
-      out.write(new TextEncoder().encode(JSON.stringify({ fresh: !used }) + "\n"));
-      used = true;
-
-      if (detachedOutput.length) {
-        console.log(`flushing ${detachedOutput.length} chunks buffered while detached`);
-        for (const chunk of detachedOutput) out.write(chunk);
-        detachedOutput = [];
-      }
-      console.log("client attached");
+      viewers.set(socket, {
+        out: new SocketWriter(socket),
+        watching: new Set(),
+        stop: new Map(),
+      });
+      console.log(`viewer attached (${viewers.size})`);
     },
 
-    drain() {
-      out?.drain();
+    drain(socket) {
+      viewers.get(socket)?.out.drain();
     },
 
-    data(_socket, chunk) {
-      adapter.stdin.write(chunk);
-      adapter.stdin.flush();
+    data(socket, chunk) {
+      const viewer = viewers.get(socket);
+      if (!viewer) return;
+      // Requests are newline-delimited JSON and can be split across reads, so
+      // the tail is held until its newline arrives.
+      pending.set(socket, (pending.get(socket) ?? "") + new TextDecoder().decode(chunk));
+      const buffered = pending.get(socket) ?? "";
+      const lines = buffered.split("\n");
+      pending.set(socket, lines.pop() ?? "");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let request: Request;
+        try {
+          request = JSON.parse(line) as Request;
+        } catch {
+          console.log("unparseable command from a viewer; ignoring");
+          continue;
+        }
+        void run(viewer, request).then(
+          (data) => send(viewer, { id: request.id, ok: true, data }),
+          (err: unknown) =>
+            send(viewer, {
+              id: request.id,
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+        );
+      }
     },
 
     close(socket) {
-      if (client === socket) {
-        client = null;
-        out = null;
-        console.log("client detached; the agent keeps working");
-      }
+      const viewer = viewers.get(socket);
+      // Every subscription this viewer held, released — otherwise a reloaded
+      // page leaks a listener per conversation it had open, and a day of
+      // reloads is a conversation fanning out to a hundred dead sockets.
+      for (const stop of viewer?.stop.values() ?? []) stop();
+      viewers.delete(socket);
+      pending.delete(socket);
+      console.log(`viewer detached (${viewers.size}); the agents keep working`);
     },
 
     error(_socket, err) {
-      console.log(`client error: ${err.message}`);
+      console.log(`viewer error: ${err.message}`);
     },
   },
 });
 
-console.log(`adapterd listening on ${socketPath} (pid ${process.pid})`);
+// Partial reads, per socket.
+const pending = new Map<Socket<undefined>, string>();
+
+console.log(`adapterd [${instanceName}] listening on ${socketPath} (pid ${process.pid})`);
