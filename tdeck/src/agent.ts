@@ -31,6 +31,26 @@ import { connect, loadState, saveState, type SessionRecord } from "./link.ts";
 export type Mode = { id: string; name: string };
 export type Modes = { availableModes: Mode[]; currentModeId: string | null };
 
+// Everything the agent lets you change about a session, as the agent describes
+// it: permission mode, model, reasoning effort, fast mode, and whatever it adds
+// next. ACP calls these config options and they are one generic mechanism, so
+// this passes them through rather than naming any of them.
+//
+// The alternative was a hand-built control per setting — which is what a first
+// pass did, and it invented a /effort slash command on the grounds that ACP had
+// no concept of reasoning effort. It has one. The client just was not asking.
+export type ConfigOption = {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  type: "select" | "boolean";
+  value: string | boolean | null;
+  // Flattened from ACP's options-or-groups union, keeping the group as a label
+  // so a grouped model list still reads as one.
+  options: { value: string; name: string; group?: string }[];
+};
+
 // One chat. Owns its own event log, so a viewer subscribes to a conversation
 // rather than to the process and a reload rebuilds only what it is looking at.
 export class Conversation {
@@ -44,6 +64,7 @@ export class Conversation {
     readonly cwd: string,
     public modes: Modes | null,
     title?: string,
+    public config: ConfigOption[] = [],
   ) {
     this.title = title ?? "new chat";
   }
@@ -70,6 +91,7 @@ export class Conversation {
       cwd: this.cwd,
       busy: this.busy,
       modes: this.modes,
+      config: this.config,
     };
   }
 }
@@ -138,6 +160,14 @@ class ChatClient implements Client {
         log.emit({ kind: "title", title });
         break;
       }
+      case "config_option_update":
+        // The agent's own account of what is currently set. Worth taking rather
+        // than tracking locally: changing the model rebuilds the effort options,
+        // because which levels exist depends on the model — so a client that
+        // remembered its own answers would show levels the agent has withdrawn.
+        chat.config = configOptionsOf(update);
+        log.emit({ kind: "config", options: chat.config });
+        break;
       case "available_commands_update":
         // Held, not broadcast. This is ~9KB of slash-command definitions and it
         // arrives twice per turn; shipping it down the event stream would be
@@ -216,7 +246,13 @@ export class AgentHost {
         for (const record of state.sessions) {
           host.chats.set(
             record.sessionId,
-            new Conversation(record.sessionId, record.cwd, record.modes as Modes | null, record.title),
+            new Conversation(
+              record.sessionId,
+              record.cwd,
+              record.modes as Modes | null,
+              record.title,
+              (record.config as ConfigOption[]) ?? [],
+            ),
           );
         }
         console.log(`reattached to ${state.sessions.length} session(s)`);
@@ -240,7 +276,14 @@ export class AgentHost {
     const init = await conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
       // writeTextFile stays false; see ChatClient.writeTextFile.
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: false } },
+      //
+      // configOptions.boolean has to be advertised or the agent withholds every
+      // boolean setting — fast mode, among others — from the list it sends. An
+      // empty object is the whole of the opt-in.
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: false },
+        session: { configOptions: { boolean: {} } },
+      },
     });
     console.log(`initialized: protocol ${init.protocolVersion}`);
     return host;
@@ -267,7 +310,13 @@ export class AgentHost {
         }
       : null;
 
-    const chat = new Conversation(session.sessionId, cwd, modes);
+    const chat = new Conversation(
+      session.sessionId,
+      cwd,
+      modes,
+      undefined,
+      configOptionsOf(session),
+    );
     this.chats.set(chat.sessionId, chat);
     console.log(`session ${chat.sessionId} (${this.chats.size} open)`);
     await this.persist();
@@ -312,6 +361,31 @@ export class AgentHost {
     }
   }
 
+  // Set one of the agent's own settings — model, effort, permission mode, fast
+  // mode. One method for all of them, because ACP made them one thing.
+  //
+  // The response carries the whole option list back, and it is taken rather than
+  // patched locally: the sets are interdependent, so choosing a model can change
+  // which effort levels exist.
+  async setConfig(chat: Conversation, configId: string, value: string | boolean): Promise<void> {
+    if (!this.conn.setSessionConfigOption) {
+      chat.log.emit({ kind: "error", message: "this agent has no configurable options" });
+      return;
+    }
+    try {
+      const request =
+        typeof value === "boolean"
+          ? { sessionId: chat.sessionId, configId, type: "boolean" as const, value }
+          : { sessionId: chat.sessionId, configId, value };
+      const res = await this.conn.setSessionConfigOption(request);
+      chat.config = configOptionsOf(res);
+      chat.log.emit({ kind: "config", options: chat.config });
+      await this.persist();
+    } catch (err) {
+      chat.log.emit({ kind: "error", message: messageOf(err) });
+    }
+  }
+
   // Whatever the agent last advertised. Empty until the first turn, since the
   // agent sends the list as part of one rather than at initialize.
   get commands(): Command[] {
@@ -324,6 +398,7 @@ export class AgentHost {
       cwd: chat.cwd,
       title: chat.title,
       modes: chat.modes,
+      config: chat.config,
     }));
     await saveState({ sessions });
   }
@@ -348,6 +423,43 @@ function stringOf(obj: unknown, key: string): string {
 function costOf(update: unknown): number | undefined {
   const amount = field(field(update, "cost"), "amount");
   return typeof amount === "number" ? amount : undefined;
+}
+
+// ACP's config options, flattened into something a picker can render without
+// knowing the union. Select values may arrive as a flat list or as groups; the
+// group survives as a label rather than as a second level of structure, since a
+// grouped model list still reads as one list.
+function configOptionsOf(source: unknown): ConfigOption[] {
+  const list = field(source, "configOptions");
+  if (!Array.isArray(list)) return [];
+  return list.map((raw) => {
+    const type = stringOf(raw, "type") === "boolean" ? "boolean" : "select";
+    const value = field(raw, "currentValue");
+    const options: ConfigOption["options"] = [];
+    const values = field(raw, "options");
+    if (Array.isArray(values)) {
+      for (const entry of values) {
+        const grouped = field(entry, "options");
+        if (Array.isArray(grouped)) {
+          const group = stringOf(entry, "name");
+          for (const inner of grouped) {
+            options.push({ value: stringOf(inner, "value"), name: stringOf(inner, "name"), group });
+          }
+          continue;
+        }
+        options.push({ value: stringOf(entry, "value"), name: stringOf(entry, "name") });
+      }
+    }
+    return {
+      id: stringOf(raw, "id"),
+      name: stringOf(raw, "name"),
+      description: stringOf(raw, "description") || undefined,
+      category: stringOf(raw, "category") || undefined,
+      type,
+      value: typeof value === "string" || typeof value === "boolean" ? value : null,
+      options,
+    };
+  });
 }
 
 function commandsOf(update: unknown): Command[] {

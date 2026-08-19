@@ -173,6 +173,23 @@ Bun.serve({
       },
     },
 
+    // One route for every setting the agent exposes — model, effort, permission
+    // mode, fast mode. They are one mechanism in the protocol, so they are one
+    // route here rather than a hand-built endpoint per setting.
+    "/config": {
+      POST: async (req) => {
+        const payload = await jsonBody(req);
+        const chat = chatFrom(payload);
+        if (!chat) return noSuchSession();
+        const value = payload.value;
+        if (typeof value !== "string" && typeof value !== "boolean") {
+          return Response.json({ error: "value must be a string or a boolean" }, { status: 400 });
+        }
+        await host.setConfig(chat, str(payload.configId), value);
+        return Response.json(chat.summary());
+      },
+    },
+
     "/mode": {
       POST: async (req) => {
         const payload = await jsonBody(req);

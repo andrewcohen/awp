@@ -30,15 +30,9 @@ import {
 } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Separator } from "@/components/ui/separator";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type SessionSummary } from "./api";
+import { ConfigBar } from "./ConfigBar";
 import {
   apply,
   emptyConversation,
@@ -224,38 +218,23 @@ const Block = memo(function Block({ turn }: { turn: Turn }) {
   );
 });
 
-// Effort is not an ACP concept, so it goes the way a person would send it.
-//
-// The protocol has session modes and nothing for reasoning effort — but the
-// agent advertises a /effort slash command, and a slash command is just a
-// prompt. Sending one is honest: it is exactly what typing it would do, it
-// stays correct if the levels change, and it does not invent a setting the
-// agent does not have. What it costs is that the current level is not readable
-// back, so this remembers what it last asked for rather than claiming to know.
-const effortLevels = ["low", "medium", "high", "xhigh", "max"] as const;
-const effortKey = "tdeck.effort";
-
 // The composer owns its draft, so typing does not re-render the conversation.
 function Composer({
   session,
   onSend,
+  onSessionChanged,
   busy,
 }: {
   session: SessionSummary;
   onSend: (text: string) => void;
+  onSessionChanged: (session: SessionSummary) => void;
   busy: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [mode, setMode] = useState(session.modes?.currentModeId ?? "");
-  const [effort, setEffort] = useState(
-    () => localStorage.getItem(effortKey) ?? "",
-  );
   const box = useRef<HTMLTextAreaElement | null>(null);
   const picker = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => setMode(session.modes?.currentModeId ?? ""), [session.modes]);
 
   const send = () => {
     const text = draft.trim();
@@ -384,56 +363,7 @@ function Composer({
           )}
         </Button>
 
-        {session.modes && session.modes.availableModes.length > 0 && (
-          <Select
-            value={mode}
-            onValueChange={(next) => {
-              if (typeof next !== "string") return;
-              setMode(next);
-              void api.setMode(session.sessionId, next);
-            }}
-          >
-            <SelectTrigger
-              size="sm"
-              className="h-8 w-auto gap-1 border-0 shadow-none"
-              aria-label="permission mode"
-            >
-              <SelectValue placeholder="mode" />
-            </SelectTrigger>
-            <SelectContent>
-              {session.modes.availableModes.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {m.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-
-        <Select
-          value={effort}
-          onValueChange={(next) => {
-            if (typeof next !== "string") return;
-            setEffort(next);
-            localStorage.setItem(effortKey, next);
-            onSend(`/effort ${next}`);
-          }}
-        >
-          <SelectTrigger
-            size="sm"
-            className="h-8 w-auto gap-1 border-0 shadow-none"
-            aria-label="reasoning effort"
-          >
-            <SelectValue placeholder="effort" />
-          </SelectTrigger>
-          <SelectContent>
-            {effortLevels.map((level) => (
-              <SelectItem key={level} value={level}>
-                {level}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ConfigBar session={session} onChanged={onSessionChanged} />
 
         <span className="text-muted-foreground ml-auto hidden text-sm sm:inline">
           <CornerDownLeft className="mr-1 inline size-3.5" />
@@ -457,7 +387,13 @@ function Composer({
   );
 }
 
-export function ChatView({ session }: { session: SessionSummary }) {
+export function ChatView({
+  session,
+  onSessionChanged,
+}: {
+  session: SessionSummary;
+  onSessionChanged: (session: SessionSummary) => void;
+}) {
   const [chat, setChat] = useState<Conversation>(emptyConversation);
   const [showAll, setShowAll] = useState(false);
 
@@ -598,7 +534,12 @@ export function ChatView({ session }: { session: SessionSummary }) {
               ` · $${chat.usage.cost.toFixed(3)}`}
           </span>
         )}
-        <Composer session={session} onSend={send} busy={chat.busy} />
+        <Composer
+          session={session}
+          onSend={send}
+          onSessionChanged={onSessionChanged}
+          busy={chat.busy}
+        />
       </div>
     </div>
   );
