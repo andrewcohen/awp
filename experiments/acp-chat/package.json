@@ -1,0 +1,11 @@
+{
+  "name": "acp-chat",
+  "private": true,
+  "type": "module",
+  "description": "The smallest thing that is a chat UI over an ACP agent.",
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.3.0",
+    "@agentclientprotocol/claude-agent-acp": "0.70.0"
+  }
+}
