@@ -1,15 +1,13 @@
-// The ACP half: one adapter process, one connection, and the client handlers
-// the agent calls back into.
+// The ACP half: the connection to the agent, and the client handlers it calls
+// back into.
 //
 // The adapter is `@agentclientprotocol/claude-agent-acp`, which wraps the Claude
-// Agent SDK and speaks ACP over a stream. On a Bun host it could be imported
-// rather than spawned — that is the argument that decided ACP over raw
-// stream-json — but it is spawned here anyway, because the next unit moves it
-// behind a unix socket so an agent outlives the window. Importing it would put
-// the agent *inside* the process whose restarts we are trying to survive.
+// Agent SDK and speaks ACP over a stream. On a Bun host it could be *imported*
+// rather than run as a process — that is the argument that decided ACP over raw
+// stream-json — but importing it would put the agent inside the process whose
+// restarts we are trying to survive. So it lives in the daemon (adapterd.ts) and
+// this talks to it down a socket.
 
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -22,9 +20,7 @@ import {
   type ReadTextFileRequest,
 } from "@agentclientprotocol/sdk";
 import type { Command, EventLog, PermissionOption } from "./events.ts";
-
-const here = dirname(fileURLToPath(import.meta.url));
-const adapterBin = join(here, "..", "node_modules", ".bin", "claude-agent-acp");
+import { connect, loadState, saveState } from "./link.ts";
 
 export type Mode = { id: string; name: string };
 export type Modes = { availableModes: Mode[]; currentModeId: string | null };
@@ -145,22 +141,39 @@ export class AgentHost {
   ) {}
 
   static async start(log: EventLog, cwd: string): Promise<AgentHost> {
-    const proc = Bun.spawn([adapterBin], {
-      cwd,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "inherit",
-    });
-
-    const stream = ndJsonStream(
-      new WritableStream<Uint8Array>({
-        write: (chunk) => void proc.stdin.write(chunk),
-      }),
-      proc.stdout,
-    );
-
+    const link = await connect();
     const client = new ChatClient(log);
-    const conn = new ClientSideConnection(() => client, stream);
+    const conn = new ClientSideConnection(() => client, ndJsonStream(link.writable, link.readable));
+
+    // A reconnect picks up an adapter that is already initialized and already
+    // holds our session. Sending `initialize` again is an error, and asking for
+    // a `newSession` would abandon a conversation that may be mid-turn — the
+    // work this daemon exists to protect. So the two paths genuinely differ,
+    // and the daemon's handshake is what tells them apart.
+    if (!link.fresh) {
+      const state = await loadState();
+      if (state) {
+        // Known consequence, visible in the log as "Got response to unknown
+        // request N": a turn that was in flight was requested by the client
+        // that died, so its JSON-RPC *reply* arrives addressed to nobody. The
+        // agent's output is all delivered — that is the buffer's job, and it
+        // works — but this connection never sees the `done` for a turn it did
+        // not start, so a reattached UI shows a conversation that streams to
+        // its end and then sits there looking busy.
+        //
+        // Fixing it properly means the daemon knowing which requests are
+        // outstanding, which is the first piece of protocol awareness it does
+        // not have. Deferred until the UI exists to be annoyed by it; a
+        // client-side "no output for N seconds after a reattach" would do.
+        console.log(`reattached to session ${state.sessionId}`);
+        return new AgentHost(conn, client, log, state.sessionId, state.modes as Modes | null);
+      }
+      // A daemon with no state file: something else was driving it, or the file
+      // was removed. Falling through to a fresh handshake will fail at
+      // `initialize` with the agent's own error, which is more useful than a
+      // guess made here.
+      console.log("daemon is in use but no session was recorded; trying a fresh handshake");
+    }
 
     const init = await conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
@@ -185,6 +198,7 @@ export class AgentHost {
       console.log(`modes: ${modes.availableModes.map((m) => m.id).join(", ")} (current ${modes.currentModeId})`);
     }
 
+    await saveState({ sessionId: session.sessionId, modes });
     return new AgentHost(conn, client, log, session.sessionId, modes);
   }
 
