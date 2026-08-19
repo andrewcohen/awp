@@ -52,6 +52,23 @@ export type SessionSummary = {
 
 export type Command = { name: string; description: string };
 
+// One of awp's workspaces, read from awp's own state. tdeck does not compute
+// any of this — see src/workspaces.ts on the backend for why that matters.
+export type Workspace = {
+  project: string;
+  projectPath: string;
+  name: string;
+  displayName: string;
+  path: string;
+  status: string;
+  bookmark: string;
+  prNumber: number;
+  unread: boolean;
+  lastActiveAt: string;
+  // Set when a tdeck conversation is already open on this directory.
+  sessionId?: string;
+};
+
 async function post(
   path: string,
   body: Record<string, unknown>,
@@ -71,6 +88,8 @@ export const api = {
     post("/sessions", cwd ? { cwd } : {}).then((r) => r.json()),
 
   commands: (): Promise<Command[]> => fetch("/commands").then((r) => r.json()),
+
+  workspaces: (): Promise<Workspace[]> => fetch("/workspaces").then((r) => r.json()),
 
   say: (session: string, text: string) => post("/say", { session, text }),
 

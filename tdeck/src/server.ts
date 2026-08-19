@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 import { AgentHost, type Conversation } from "./agent.ts";
 import { runtimeDir } from "./paths.ts";
+import { readWorkspaces } from "./workspaces.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = 4317;
@@ -121,6 +122,18 @@ Bun.serve({
     },
 
     "/commands": () => Response.json(host.commands),
+
+    // awp's workspaces, annotated with which of them a conversation is already
+    // open on. The annotation is the only thing tdeck adds: everything else is
+    // awp's state, read and passed through.
+    "/workspaces": async () => {
+      const open = new Map(host.list().map((chat) => [chat.cwd, chat.sessionId]));
+      const workspaces = (await readWorkspaces()).map((workspace) => ({
+        ...workspace,
+        sessionId: open.get(workspace.path),
+      }));
+      return Response.json(workspaces);
+    },
 
     // A dropped file, turned into somewhere the agent can look.
     //

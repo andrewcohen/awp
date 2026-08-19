@@ -14,7 +14,7 @@ export default defineConfig({
     // the built bundle — which the Bun server serves itself — behaves exactly
     // like the dev page.
     proxy: Object.fromEntries(
-      ["/sessions", "/events", "/say", "/permit", "/mode", "/config", "/commands", "/upload"].map((path) => [
+      ["/sessions", "/events", "/say", "/permit", "/mode", "/config", "/workspaces", "/commands", "/upload"].map((path) => [
         path,
         {
           target: "http://localhost:4317",
