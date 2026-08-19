@@ -26,7 +26,11 @@ import { api, type SessionSummary, type Workspace } from "./api";
 // a whole layout under one key rather than a number per panel.
 const layoutKey = "tdeck.layout";
 const leftKey = "tdeck.left";
-const panelOpenKey = "tdeck.panel";
+// v2: the previous key holds a value nobody chose. An effect persisted the
+// default on mount, so every reader has "0" stored whether they ever hid the
+// panel or not, and there is no way to tell a preference from an artefact.
+// Renaming discards the artefact.
+const panelOpenKey = "tdeck.panel.v2";
 const lastSessionKey = "tdeck.session";
 
 export default function App() {
@@ -41,9 +45,23 @@ export default function App() {
   const [inspecting, setInspecting] = useState("");
   const [error, setError] = useState("");
   const [theme, setTheme] = useTheme();
-  const [panelOpen, setPanelOpen] = useState<boolean>(
-    () => localStorage.getItem(panelOpenKey) === "1",
+  // Open unless explicitly hidden. It was opt-in while the panel was a
+  // placeholder reading "the workspace diff goes here"; now it holds the
+  // directory's conversations, which is the only route to work a terminal
+  // started — and the only place the resume and attach controls live. A useful
+  // panel behind a toggle nobody presses is a feature nobody has.
+  const [panelOpen, setPanelOpenState] = useState<boolean>(
+    () => localStorage.getItem(panelOpenKey) !== "0",
   );
+
+  // Written here rather than in an effect on the value, so only an actual
+  // choice is stored. Persisting from an effect records the default too, which
+  // makes "I have never touched this" indistinguishable from "I want it off" —
+  // and then changing the default changes nothing for anyone.
+  const setPanelOpen = useCallback((open: boolean) => {
+    localStorage.setItem(panelOpenKey, open ? "1" : "0");
+    setPanelOpenState(open);
+  }, []);
   // Read once: the group owns the layout after mount, and feeding a changing
   // default back in would fight the drag.
   const [panelWidth] = useState<number>(
@@ -53,10 +71,6 @@ export default function App() {
     () => Number(localStorage.getItem(leftKey)) || 20,
   );
 
-  useEffect(
-    () => localStorage.setItem(panelOpenKey, panelOpen ? "1" : "0"),
-    [panelOpen],
-  );
   useEffect(() => {
     if (chosen) localStorage.setItem(lastSessionKey, chosen);
   }, [chosen]);
