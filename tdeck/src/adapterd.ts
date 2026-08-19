@@ -41,12 +41,44 @@ const adapterBin = join(here, "..", "node_modules", ".bin", "claude-agent-acp");
 
 ensureRuntimeDir();
 
+// One daemon per instance, enforced by asking.
+//
 // A socket file outlives the process that made it, so a crash leaves one behind
-// and the next bind fails on an address nobody is listening to.
+// and the next bind fails on an address nobody is listening to — which is why
+// this unlinks before binding. But unlinking is stealing the address, and doing
+// it unconditionally orphans a daemon that is alive and well: it keeps running
+// on an unlinked inode, holding its adapter and every conversation in it, while
+// being unreachable by anything. Three of them accumulated in an afternoon
+// before anyone noticed, each with its own agent process idling.
+//
+// An earlier version of this comment claimed the case was "excluded by the lock
+// below". There was no lock. So there is one now, and it is the only kind that
+// cannot go stale: connect, and see whether anybody answers.
+async function alreadyListening(): Promise<boolean> {
+  try {
+    const probe = await Bun.connect<undefined>({
+      unix: socketPath,
+      socket: { data() {}, error() {} },
+    });
+    probe.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (await alreadyListening()) {
+  console.error(
+    `a daemon is already listening on ${socketPath}\n` +
+      `stop it first, or run a separate instance with TDECK_INSTANCE=<name>`,
+  );
+  process.exit(1);
+}
+
 try {
   unlinkSync(socketPath);
 } catch {
-  // Nothing there, which is the normal case.
+  // Nothing there, which is the normal case for a first start.
 }
 
 const adapter = Bun.spawn([adapterBin], {
