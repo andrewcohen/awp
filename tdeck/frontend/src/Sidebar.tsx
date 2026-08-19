@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { MessageSquarePlus, Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,21 +14,45 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
-import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import type { SessionSummary } from "./api";
+import { Spinner } from "@/components/ui/spinner";
+import type { SessionSummary, Workspace } from "./api";
 import type { ThemeMode } from "./theme";
 
-// The conversations, and which one you are reading.
+// awp's workspaces, and the conversations open on them.
 //
-// This is the honest, minimal version of the thing tdeck.md warns about: a list
-// of chats is not the deck. The deck's job is attention across a fleet — which
-// of eighteen workspaces needs you — and "sessions in a sidebar" is not that.
-// What it does carry is the one signal that matters while an agent is working:
-// a session that is busy says so, so a chat you are not reading is not silent.
+// tdeck.md's warning was that a list of chats is not the deck: the deck's job is
+// attention across a fleet — which of eighteen workspaces needs you — and
+// "sessions in a sidebar" is not that. So the fleet is the primary structure
+// here and conversations hang off it, rather than the other way round.
 //
-// Workspaces, projects and PR status come next, from awp's own state.
+// This is still only half the job. The rows say what each agent is doing, which
+// is what awp's own state already knows; they do not yet sort or group by what
+// needs *you*. That is the interesting problem, and having the data on screen
+// does not solve it.
+
+// awp's status vocabulary, passed through from the store rather than remapped.
+// A second spelling of these would be a second answer to "what is this agent
+// doing", and the two would disagree eventually.
+const statusColor: Record<string, string> = {
+  working: "bg-emerald-500",
+  waiting: "bg-amber-500",
+  error: "bg-rose-500",
+  starting: "bg-sky-500",
+  idle: "bg-muted-foreground/40",
+  exited: "bg-muted-foreground/25",
+};
+
+function StatusDot({ status }: { status: string }) {
+  return (
+    <span
+      title={status}
+      aria-label={status}
+      className={`size-2 rounded-full ${statusColor[status] ?? statusColor.idle}`}
+    />
+  );
+}
 
 const themes: { mode: ThemeMode; icon: typeof Sun; label: string }[] = [
   { mode: "light", icon: Sun, label: "light" },
@@ -36,22 +61,46 @@ const themes: { mode: ThemeMode; icon: typeof Sun; label: string }[] = [
 ];
 
 export function Sidebar({
+  workspaces,
   sessions,
   chosen,
   onChoose,
+  onOpenWorkspace,
   onNew,
   opening,
   theme,
   onTheme,
 }: {
+  workspaces: Workspace[];
   sessions: SessionSummary[];
   chosen: string;
   onChoose: (sessionId: string) => void;
+  onOpenWorkspace: (workspace: Workspace) => void;
   onNew: () => void;
   opening: boolean;
   theme: ThemeMode;
   onTheme: (mode: ThemeMode) => void;
 }) {
+  // Grouped by project, because a workspace name alone is ambiguous — half of
+  // them are called "default".
+  const projects = useMemo(() => {
+    const groups = new Map<string, Workspace[]>();
+    for (const workspace of workspaces) {
+      const group = groups.get(workspace.project);
+      if (group) group.push(workspace);
+      else groups.set(workspace.project, [workspace]);
+    }
+    return [...groups.entries()];
+  }, [workspaces]);
+
+  // Conversations with no workspace behind them — a scratch chat, or one opened
+  // in a directory awp does not know about. Without this they would vanish from
+  // the sidebar entirely once workspaces became the organising structure.
+  const loose = useMemo(() => {
+    const known = new Set(workspaces.map((w) => w.sessionId).filter(Boolean));
+    return sessions.filter((s) => !known.has(s.sessionId));
+  }, [workspaces, sessions]);
+
   return (
     <aside className="flex h-full min-w-0 flex-col">
       <div className="flex items-center gap-2 px-3 py-2">
@@ -71,48 +120,118 @@ export function Sidebar({
       <Separator />
 
       <ScrollArea className="min-h-0 flex-1">
-        <ul className="flex flex-col gap-0.5 p-2">
-          {sessions.map((session) => (
-            <li key={session.sessionId}>
-              <Item
-                size="sm"
-                className={[
-                  "w-full rounded-md text-left",
-                  session.sessionId === chosen
-                    ? "bg-muted"
-                    : "hover:bg-muted/50",
-                ].join(" ")}
-                render={<button onClick={() => onChoose(session.sessionId)} />}
-              >
-                {session.busy && (
-                  <ItemMedia variant="icon">
-                    <Spinner className="text-muted-foreground size-3" />
-                  </ItemMedia>
-                )}
-                <ItemContent className="min-w-0">
-                  <ItemTitle className="truncate font-normal">
-                    {session.title}
-                  </ItemTitle>
-                  {/* The directory the agent is working in — the closest thing
-                      to a workspace until awp's own state is wired in. */}
-                  <ItemDescription className="truncate">
-                    {session.cwd.split("/").slice(-2).join("/")}
-                  </ItemDescription>
-                </ItemContent>
-              </Item>
-            </li>
+        <div className="flex flex-col gap-3 p-2">
+          {projects.map(([project, rows]) => (
+            <div key={project} className="flex flex-col gap-0.5">
+              <h2 className="text-muted-foreground px-2 py-1 text-sm font-medium">
+                {project}
+              </h2>
+              <ul className="flex flex-col gap-0.5">
+                {rows.map((workspace) => {
+                  const active =
+                    workspace.sessionId !== undefined &&
+                    workspace.sessionId === chosen;
+                  return (
+                    <li key={`${workspace.projectPath}/${workspace.name}`}>
+                      <Item
+                        size="sm"
+                        className={[
+                          "w-full rounded-md text-left",
+                          active ? "bg-muted" : "hover:bg-muted/50",
+                        ].join(" ")}
+                        render={
+                          <button
+                            onClick={() =>
+                              workspace.sessionId
+                                ? onChoose(workspace.sessionId)
+                                : onOpenWorkspace(workspace)
+                            }
+                          />
+                        }
+                      >
+                        <ItemMedia variant="icon">
+                          <StatusDot status={workspace.status} />
+                        </ItemMedia>
+                        <ItemContent className="min-w-0">
+                          <ItemTitle className="truncate font-normal">
+                            {workspace.displayName}
+                          </ItemTitle>
+                          {(workspace.bookmark !== "" ||
+                            workspace.prNumber > 0) && (
+                            <ItemDescription className="truncate">
+                              {workspace.prNumber > 0 &&
+                                `#${workspace.prNumber} `}
+                              {workspace.bookmark}
+                            </ItemDescription>
+                          )}
+                        </ItemContent>
+                        {/* A conversation is open on this workspace. Not the
+                            same thing as the agent being busy — that is the
+                            dot — so it is a separate, quieter mark. */}
+                        {workspace.sessionId !== undefined && (
+                          <ItemMedia variant="icon">
+                            <span className="bg-primary/60 size-1.5 rounded-full" />
+                          </ItemMedia>
+                        )}
+                      </Item>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           ))}
-          {sessions.length === 0 && (
+
+          {loose.length > 0 && (
+            <div className="flex flex-col gap-0.5">
+              <h2 className="text-muted-foreground px-2 py-1 text-sm font-medium">
+                other
+              </h2>
+              <ul className="flex flex-col gap-0.5">
+                {loose.map((session) => (
+                  <li key={session.sessionId}>
+                    <Item
+                      size="sm"
+                      className={[
+                        "w-full rounded-md text-left",
+                        session.sessionId === chosen
+                          ? "bg-muted"
+                          : "hover:bg-muted/50",
+                      ].join(" ")}
+                      render={
+                        <button onClick={() => onChoose(session.sessionId)} />
+                      }
+                    >
+                      {session.busy && (
+                        <ItemMedia variant="icon">
+                          <Spinner className="text-muted-foreground size-3" />
+                        </ItemMedia>
+                      )}
+                      <ItemContent className="min-w-0">
+                        <ItemTitle className="truncate font-normal">
+                          {session.title}
+                        </ItemTitle>
+                        <ItemDescription className="truncate">
+                          {session.cwd.split("/").slice(-2).join("/")}
+                        </ItemDescription>
+                      </ItemContent>
+                    </Item>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {projects.length === 0 && loose.length === 0 && (
             <Empty className="py-6">
               <EmptyHeader>
-                <EmptyTitle>No conversations</EmptyTitle>
+                <EmptyTitle>Nothing to show</EmptyTitle>
                 <EmptyDescription>
-                  Start one with the button above.
+                  No awp workspaces and no conversations yet.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
           )}
-        </ul>
+        </div>
       </ScrollArea>
 
       <Separator />

@@ -11,7 +11,7 @@ import { ChatView } from "./ChatView";
 import { RightPanel } from "./RightPanel";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
-import { api, type SessionSummary } from "./api";
+import { api, type SessionSummary, type Workspace } from "./api";
 
 // Three panels: conversations, the chat, and a column for things that are about
 // the workspace rather than the conversation.
@@ -31,6 +31,7 @@ const lastSessionKey = "tdeck.session";
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [chosen, setChosen] = useState<string>(
     () => localStorage.getItem(lastSessionKey) ?? "",
   );
@@ -59,8 +60,15 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const list = await api.sessions();
+      // Both together: the workspace rows carry which session is open on them,
+      // so fetching them apart would show a workspace as unopened for a beat
+      // after its chat appeared.
+      const [list, spaces] = await Promise.all([
+        api.sessions(),
+        api.workspaces(),
+      ]);
       setSessions(list);
+      setWorkspaces(spaces);
       setError("");
       // A remembered session the backend no longer has — a restart with a
       // cleared state file, say — would leave the middle panel pointed at
@@ -84,18 +92,22 @@ export default function App() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const openChat = useCallback(async () => {
-    setOpening(true);
-    try {
-      const session = await api.open();
-      setSessions((have) => [...have, session]);
-      setChosen(session.sessionId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setOpening(false);
-    }
-  }, []);
+  const openChat = useCallback(
+    async (cwd?: string) => {
+      setOpening(true);
+      try {
+        const session = await api.open(cwd);
+        setSessions((have) => [...have, session]);
+        setChosen(session.sessionId);
+        void refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setOpening(false);
+      }
+    },
+    [refresh],
+  );
 
   const session = sessions.find((s) => s.sessionId === chosen) ?? null;
 
@@ -141,9 +153,14 @@ export default function App() {
             className="flex min-h-0 min-w-0 flex-col"
           >
             <Sidebar
+              workspaces={workspaces}
               sessions={sessions}
               chosen={chosen}
               onChoose={setChosen}
+              // Clicking a workspace with no conversation opens one *in that
+              // directory*, which is the whole join between awp and tdeck: the
+              // agent starts where the work is.
+              onOpenWorkspace={(workspace) => void openChat(workspace.path)}
               onNew={() => void openChat()}
               opening={opening}
               theme={theme}
