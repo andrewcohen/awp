@@ -59,12 +59,20 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
+)
+
+const (
+	// frameInterval is the shortest gap between two repaints of one pane, so a
+	// program that prints faster than anyone can read costs what 100 Hz costs
+	// instead of what its output rate costs. See AwaitOutput.
+	frameInterval = 10 * time.Millisecond
 )
 
 // ghosttyTerm is a process on a pty with libghostty-vt interpreting its output.
@@ -90,6 +98,11 @@ type ghosttyTerm struct {
 	fmtBuf  []byte
 	closed  bool
 	w, h    int
+
+	// lastFrame is when AwaitOutput last released a repaint, which is what the
+	// next one is spaced against. Guarded by mu because the frame it paces is a
+	// formatter pass taken under the same lock.
+	lastFrame time.Time
 
 	// modkeys is the one input mode the terminal cannot be asked about, read out
 	// of the program's own output instead. Guarded by mu with the encoders.
@@ -267,10 +280,43 @@ func (t *ghosttyTerm) Size() (int, int) {
 	return t.w, t.h
 }
 
+// AwaitOutput is the next repaint this pane needs, at most one per frameInterval.
+//
+// Every chunk the pty delivers used to be one frame. That is the right number
+// when a program prints a line and waits, and badly wrong for the programs awp
+// actually hosts: an agent streaming tokens, or anything with a spinner, delivers
+// chunks far faster than a screen changes meaningfully, and each one cost a full
+// formatter pass over the whole buffer. The frames nobody could perceive were
+// most of them.
+//
+// So the wait is in two parts: for something to have happened at all, and then
+// for the rest of the frame's window. Both are necessary. Waiting only on dirty
+// is the old behaviour; sleeping only after emitting would not throttle a
+// continuous stream at all, because dirty would already be set on re-arm and the
+// next frame would go out immediately.
+//
+// The fold afterwards is what makes a burst cost one frame rather than a queue of
+// them. It is safe to drop those signals because they are not the frame's
+// content: render reads the terminal's live state when the paint happens, which is
+// after this returns, so a write during the window is already on screen. A write
+// landing after the fold sets dirty again and gets the next frame.
 func (t *ghosttyTerm) AwaitOutput() tea.Cmd {
 	gen, dirty := t.gen, t.dirty
 	return func() tea.Msg {
 		<-dirty
+		t.mu.Lock()
+		wait := frameInterval - time.Since(t.lastFrame)
+		t.mu.Unlock()
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+		select {
+		case <-dirty:
+		default:
+		}
+		t.mu.Lock()
+		t.lastFrame = time.Now()
+		t.mu.Unlock()
 		return OutputMsg{Gen: gen}
 	}
 }
