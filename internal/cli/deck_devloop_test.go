@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andrewcohen/awp/internal/watch"
 	"github.com/andrewcohen/awp/internal/workspace"
@@ -150,5 +152,44 @@ func TestBuildDevLoopSummaryEmptyStateIsNil(t *testing.T) {
 	)
 	if got := buildDevLoopSummary(watch.DefaultLoop(), ws, "working"); got != nil {
 		t.Errorf("buildDevLoopSummary with empty state = %+v, want nil", got)
+	}
+}
+
+// TestSlowFoldDoesNotQueueTheNextRefresh is the bound on how many scans of one
+// transcript can be outstanding at once.
+//
+// The scan fan-out is best-effort and bounded by deckEnrichTimeout, so a
+// transcript that folds slower than the timeout leaves its goroutine running
+// after the refresh has given up on it. The next refresh arrives
+// refreshInterval later and asks for the same transcript. It used to block on
+// the fold's mutex — a wait no timeout applies to — so every refresh for the
+// duration of the slow fold added another waiter, one per workspace, unbounded.
+//
+// Now it declines. The measurement is the second caller's latency: queueing
+// shows up as it taking as long as the fold it is waiting on.
+func TestSlowFoldDoesNotQueueTheNextRefresh(t *testing.T) {
+	e := &devLoopFoldEntry{}
+
+	// Stand in for a fold in progress: hold the entry's lock the way the
+	// goroutine doing the reading would.
+	e.mu.Lock()
+	released := make(chan struct{})
+	go func() {
+		<-released
+		e.mu.Unlock()
+	}()
+	defer close(released)
+
+	start := time.Now()
+	_, err := e.state(watch.DefaultLoop(), "working")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, errFoldBusy) {
+		t.Fatalf("state while a fold was running returned err=%v, want errFoldBusy — a second scan of one transcript should be declined, not queued", err)
+	}
+	// Generous, because the assertion is "did not wait for the fold" and the fold
+	// here never finishes at all. Blocking would hang until the deferred close.
+	if elapsed > time.Second {
+		t.Fatalf("state took %s to decline — it queued behind the running fold instead of skipping it", elapsed)
 	}
 }

@@ -2233,9 +2233,36 @@ func devLoopFold(transcript string) *devLoopFoldEntry {
 	return e
 }
 
+// errFoldBusy is a fold this refresh declined to queue behind. Not a failure —
+// see state.
+var errFoldBusy = errors.New("dev-loop fold: a scan of this transcript is already running")
+
 // state folds whatever is new in this entry's transcript and derives the answer.
+//
+// A fold already running is skipped rather than waited for, and that is what
+// bounds this. The scan fan-out is best-effort and bounded by deckEnrichTimeout,
+// so when a transcript takes longer than the timeout the refresh returns without
+// it — but the goroutine doing the work is still holding this lock, and the next
+// refresh, arriving refreshInterval later, used to queue its own goroutine behind
+// it. Nothing bounded that queue: one more waiter per workspace per refresh, for
+// as long as the slow fold took, and the wait is on a mutex so no timeout applies
+// to it.
+//
+// Declining means at most one goroutine per transcript exists at any moment,
+// whatever the deck does around it. The caller already has the right behaviour
+// for a missing summary — buildDevLoopSummary returns nil, and the refresher
+// leaves the workspace's cached snapshot untouched rather than wiping it — which
+// is the same thing it does for a transcript that could not be read. A skipped
+// scan costs one refresh's worth of staleness on a meta line.
+//
+// TryLock rather than a ctx check inside the fold because the fold is a file
+// parse with no cancellation point, and because the thing worth preventing is
+// starting redundant work rather than stopping work already underway: the
+// in-progress fold is reading exactly what the skipped one would have read.
 func (e *devLoopFoldEntry) state(loop watch.Loop, status string) (watch.State, error) {
-	e.mu.Lock()
+	if !e.mu.TryLock() {
+		return watch.State{}, errFoldBusy
+	}
 	defer e.mu.Unlock()
 	return e.reader.State(loop, status, time.Now())
 }
