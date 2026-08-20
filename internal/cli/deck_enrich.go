@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -68,10 +69,26 @@ func newHeadEnricher() *headEnricher {
 // path. Specs it could not finish in time are absent — see the timeout note at
 // the call site — and stay absent from the cache too, so the next refresh
 // retries them.
-func (h *headEnricher) heads(j *jj.Client, specs []headSpec, timeout time.Duration) map[string]workspaceHead {
+//
+// Nothing this starts outlives the call. That is the difference between the
+// timeout meaning "stop waiting" and meaning "stop": it used to select between
+// wg.Wait() and time.After, so on the slow path it returned while every goroutine
+// and every jj subprocess it had started kept running. The deck asks for this
+// again every refreshInterval, so the batch nobody was waiting for was still
+// holding a core when the next batch started on top of it — and post-wake, with a
+// cold page cache making every read slow, they all take the slow path at once.
+//
+// So the timeout cancels the work rather than merely abandoning it, and the wait
+// afterwards is unconditional. Cancelling is what makes waiting affordable: ctx
+// reaches the jj subprocess, so the goroutines come back promptly rather than
+// when jj happens to finish.
+func (h *headEnricher) heads(ctx context.Context, j *jj.Client, specs []headSpec, timeout time.Duration) map[string]workspaceHead {
 	if j == nil || len(specs) == 0 {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	live := make(map[string]workspaceHead, len(specs))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -79,7 +96,7 @@ func (h *headEnricher) heads(j *jj.Client, specs []headSpec, timeout time.Durati
 		wg.Add(1)
 		go func(s headSpec) {
 			defer wg.Done()
-			head, ok := h.head(j, s)
+			head, ok := h.head(ctx, j, s)
 			if !ok {
 				return
 			}
@@ -88,12 +105,8 @@ func (h *headEnricher) heads(j *jj.Client, specs []headSpec, timeout time.Durati
 			mu.Unlock()
 		}(s)
 	}
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(timeout):
-	}
+	wg.Wait()
+
 	mu.Lock()
 	defer mu.Unlock()
 	out := make(map[string]workspaceHead, len(live))
@@ -107,7 +120,7 @@ func (h *headEnricher) heads(j *jj.Client, specs []headSpec, timeout time.Durati
 // last read. ok is false only when there is nothing to say and nothing to
 // remember — a path with no jj repo under it — which the caller leaves out of
 // the result the same way a failed read always was.
-func (h *headEnricher) head(j *jj.Client, s headSpec) (workspaceHead, bool) {
+func (h *headEnricher) head(ctx context.Context, j *jj.Client, s headSpec) (workspaceHead, bool) {
 	sig, err := jj.OpHead(s.path)
 	switch {
 	case err != nil:
@@ -132,10 +145,21 @@ func (h *headEnricher) head(j *jj.Client, s headSpec) (workspaceHead, bool) {
 		}
 	}
 
-	id, desc, _ := j.HeadDescription(s.path)
+	// Both errors matter now, where they used to be discarded. A cancelled read
+	// returns empty fields and a nil-shaped success, and the sig it would be
+	// cached against is still valid — so caching it would answer every later
+	// refresh with the blank row this one gave up on, until the repo happened to
+	// record an operation. A read that did not finish is not an answer: nothing is
+	// remembered, and the caller leaves the row's existing value alone.
+	id, desc, err := j.HeadDescription(ctx, s.path)
+	if err != nil {
+		return workspaceHead{}, false
+	}
 	var bookmarkCommit string
 	if s.bookmark != "" {
-		bookmarkCommit, _ = j.BookmarkCommitID(s.path, s.bookmark)
+		if bookmarkCommit, err = j.BookmarkCommitID(ctx, s.path, s.bookmark); err != nil {
+			return workspaceHead{}, false
+		}
 	}
 	head := workspaceHead{changeID: id, bookmarkCommitID: bookmarkCommit, desc: desc}
 	if sig != "" {

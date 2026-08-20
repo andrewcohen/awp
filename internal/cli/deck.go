@@ -743,6 +743,12 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	if panes == nil && os.Getenv("TMUX") == "" {
 		return fmt.Errorf("awp deck must run inside tmux (hint: bind a display-popup -E awp deck)")
 	}
+
+	// The scope the deck's own background reads run in. Rooted here rather than
+	// threaded down from main because nothing above the deck has a reason to
+	// cancel it, and what actually needs cancelling — the per-refresh enrichment
+	// fan-out — derives a child with its own deadline per batch.
+	ctx := context.Background()
 	if charm.IsDumbTerminal() {
 		return fmt.Errorf("awp deck not available in dumb terminal")
 	}
@@ -796,7 +802,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	if panes != nil {
 		sessionSource = panes.sessionSource()
 	}
-	items, err := loadDeckItems(nil, sessionSource, true, svc, repoRoot, projectName, nil, nil, nil)
+	items, err := loadDeckItems(ctx, nil, sessionSource, true, svc, repoRoot, projectName, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -900,7 +906,7 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 	enricher := newHeadEnricher()
 	refresher := func() tea.Cmd {
 		return func() tea.Msg {
-			items, err := loadDeckItems(j, sessionSource, false, svc, repoRoot, projectName, in, out, enricher)
+			items, err := loadDeckItems(ctx, j, sessionSource, false, svc, repoRoot, projectName, in, out, enricher)
 			return deckui.RefreshDoneMsg(items, err)
 		}
 	}
@@ -1777,7 +1783,7 @@ func isShellCommand(cmd string) bool {
 // one is a caller with nothing to reuse — the fast first paint, or a one-shot
 // read from another command — and gets a cold cache it then throws away, which
 // is exactly the behaviour this function had before the cache existed.
-func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer, enricher *headEnricher) ([]deckui.Item, error) {
+func loadDeckItems(ctx context.Context, j *jj.Client, sessions deckSessions, fastSessions bool, svc workspace.Service, repoRoot, projectName string, in io.Reader, out io.Writer, enricher *headEnricher) ([]deckui.Item, error) {
 	_ = j
 	_ = in
 	_ = out
@@ -1860,15 +1866,19 @@ func loadDeckItems(j *jj.Client, sessions deckSessions, fastSessions bool, svc w
 		// subprocess running `jj workspace add`, etc.) a concurrent log can
 		// block until that op finishes — and a truly stuck jj would block
 		// forever. Since this runs inside the deck's refresher cmd, a blocked
-		// wg.Wait() would wedge m.refreshing=true permanently and kill the
-		// deck's background poll. So bound the wait: take whatever enrichment
-		// completed in time and proceed; stragglers keep writing under the lock
-		// (harmless — we read a snapshot), and the next refresh re-enriches the
-		// rows that timed out.
+		// wait would wedge m.refreshing=true permanently and kill the deck's
+		// background poll. So the batch is bounded by deckEnrichTimeout, and
+		// the next refresh re-enriches the rows that did not make it.
+		//
+		// Bounded by cancelling it, though, not by walking away from it: heads
+		// waits for its own goroutines, and what makes that safe is that the
+		// timeout reaches the jj process (ExecRunner is exec.CommandContext, so
+		// cancel is a kill). Walking away is what it used to do, and it meant a
+		// slow batch was still running when the next refresh started another.
 		if enricher == nil {
 			enricher = newHeadEnricher()
 		}
-		headByPath = enricher.heads(j, specs, deckEnrichTimeout)
+		headByPath = enricher.heads(ctx, j, specs, deckEnrichTimeout)
 	}
 
 	// Dev-loop progress summaries (rendered on the row meta line, see

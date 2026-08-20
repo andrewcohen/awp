@@ -331,9 +331,15 @@ func (c *Client) ReviewedCommitID(dir string) (string, error) {
 // call. --ignore-working-copy skips the snapshot pass so this is safe to
 // call repeatedly during deck refresh without churning state. Either
 // field may be empty; both are when jj errors.
-func (c *Client) HeadDescription(dir string) (changeID, description string, err error) {
+// ctx is a required argument, not a context.Background() inside, because this is
+// one of the calls the deck makes once per workspace on a timer — tens of
+// subprocesses per refresh, none of which anyone is waiting for once the refresh
+// that wanted them has given up. Without a cancellable ctx reaching the process,
+// "the fan-out timed out" meant the caller stopped waiting while the processes
+// kept running, and the next refresh started its own batch on top.
+func (c *Client) HeadDescription(ctx context.Context, dir string) (changeID, description string, err error) {
 	const tmpl = `change_id.shortest(8) ++ "\t" ++ description.first_line()`
-	out, runErr := c.runner.Run(context.Background(), dir, "jj", "--ignore-working-copy", "log", "-r", "@", "--no-graph", "-T", tmpl)
+	out, runErr := c.runner.Run(ctx, dir, "jj", "--ignore-working-copy", "log", "-r", "@", "--no-graph", "-T", tmpl)
 	if runErr != nil {
 		return "", "", formatCommandError("resolve head description", runErr, out)
 	}
@@ -356,12 +362,15 @@ func (c *Client) HeadDescription(dir string) (changeID, description string, err 
 // bookmark of the same name. Returns "" with no error when the bookmark
 // has never been pushed/fetched (revset matches nothing); errors from
 // jj invocation are returned.
-func (c *Client) BookmarkCommitID(dir, name string) (string, error) {
+// ctx is a required argument for the same reason it is on HeadDescription: this
+// is the deck's other per-workspace read, made on the same timer, and it has to
+// be able to be called off.
+func (c *Client) BookmarkCommitID(ctx context.Context, dir, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", nil
 	}
-	out, runErr := c.runner.Run(context.Background(), dir, "jj", "--ignore-working-copy", "log",
+	out, runErr := c.runner.Run(ctx, dir, "jj", "--ignore-working-copy", "log",
 		"-r", `remote_bookmarks(exact:"`+name+`", exact:"origin")`, "--no-graph", "-T", "commit_id")
 	if runErr != nil {
 		return "", formatCommandError("resolve bookmark commit-id", runErr, out)

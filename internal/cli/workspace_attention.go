@@ -177,7 +177,10 @@ func (a *App) attentionItems() ([]deckui.Item, error) {
 		// outside a repo is not a reason to refuse — the captain always is.
 		root = ""
 	}
-	return loadDeckItems(nil, a.attentionSessions(), false, a.svc, root, projectNameFor(root), nil, nil, nil)
+	// Rooted here for the same reason it is in runDeckWithCharm: this is a
+	// one-shot read with no caller that would cancel it, and the fan-out inside
+	// bounds itself.
+	return loadDeckItems(context.Background(), nil, a.attentionSessions(), false, a.svc, root, projectNameFor(root), nil, nil, nil)
 }
 
 // attentionSessions picks the substrate to ask about live agents.

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -858,7 +859,7 @@ func sendCommentToAgentFor(send promptSender) deckui.CommentSender {
 		// comment was written against. Best-effort: an unresolvable change id
 		// falls back to "your working copy", which is correct for a
 		// workspace-scoped review anyway.
-		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(item.Path)
+		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(context.Background(), item.Path)
 		if err := send(item, commentPromptFor(c, revision), noopReporter{}); err != nil {
 			return err
 		}
@@ -910,7 +911,7 @@ func sendUnsentToAgentFor(send promptSender) func(deckui.Item) (int, error) {
 			// zero is the answer to it. The viewer says so.
 			return 0, nil
 		}
-		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(item.Path)
+		revision, _, _ := jj.New(runnerOrExec(nil)).HeadDescription(context.Background(), item.Path)
 		if err := send(item, unsentPromptFor(unsent, revision), noopReporter{}); err != nil {
 			return 0, err
 		}

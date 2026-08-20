@@ -379,7 +379,7 @@ func TestBookmarkCommitIDReturnsCommitID(t *testing.T) {
 	r := &fakeRunner{out: "deadbeefcafef00d1234567890abcdef12345678\n"}
 	c := New(r)
 
-	commit, err := c.BookmarkCommitID("/repo", "andrew/foo")
+	commit, err := c.BookmarkCommitID(context.Background(), "/repo", "andrew/foo")
 	if err != nil {
 		t.Fatalf("BookmarkCommitID returned error: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestBookmarkCommitIDReturnsCommitID(t *testing.T) {
 
 func TestBookmarkCommitIDEmptyNameReturnsEmpty(t *testing.T) {
 	r := &fakeRunner{}
-	commit, err := New(r).BookmarkCommitID("/repo", "")
+	commit, err := New(r).BookmarkCommitID(context.Background(), "/repo", "")
 	if err != nil {
 		t.Fatalf("BookmarkCommitID returned error: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestBookmarkCommitIDEmptyNameReturnsEmpty(t *testing.T) {
 func TestBookmarkCommitIDEmptyOutputForUnknownBookmark(t *testing.T) {
 	// jj prints nothing (and exits 0) when the revset matches no commits.
 	r := &fakeRunner{out: ""}
-	commit, err := New(r).BookmarkCommitID("/repo", "andrew/does-not-exist")
+	commit, err := New(r).BookmarkCommitID(context.Background(), "/repo", "andrew/does-not-exist")
 	if err != nil {
 		t.Fatalf("BookmarkCommitID returned error: %v", err)
 	}

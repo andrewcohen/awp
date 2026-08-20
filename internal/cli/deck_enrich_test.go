@@ -72,7 +72,7 @@ func TestIdleRefreshesRunNoJJ(t *testing.T) {
 	runner := &countingRunner{out: "abcd1234\twip: something"}
 	h := newHeadEnricher()
 
-	first := h.heads(jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
+	first := h.heads(context.Background(), jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
 	if first[ws].desc != "wip: something" {
 		t.Fatalf("first read = %+v, want the runner's description", first[ws])
 	}
@@ -82,7 +82,7 @@ func TestIdleRefreshesRunNoJJ(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		got := h.heads(jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
+		got := h.heads(context.Background(), jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
 		if got[ws] != first[ws] {
 			t.Fatalf("refresh %d = %+v, want the cached %+v", i, got[ws], first[ws])
 		}
@@ -100,12 +100,12 @@ func TestAnOperationBringsTheReadBack(t *testing.T) {
 	runner := &countingRunner{out: "abcd1234\twip: before"}
 	h := newHeadEnricher()
 
-	h.heads(jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
+	h.heads(context.Background(), jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
 	before := runner.count()
 
 	recordOp("op2")
 	runner.out = "abcd1234\twip: after"
-	got := h.heads(jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
+	got := h.heads(context.Background(), jj.New(runner), []headSpec{{path: ws}}, enrichTimeout)
 
 	if runner.count() == before {
 		t.Fatal("a new operation ran no jj — the deck would show stale rows forever")
@@ -122,10 +122,10 @@ func TestChangingTheBookmarkReReads(t *testing.T) {
 	runner := &countingRunner{out: "abcd1234\twip: x"}
 	h := newHeadEnricher()
 
-	h.heads(jj.New(runner), []headSpec{{path: ws, bookmark: "andrew/one"}}, enrichTimeout)
+	h.heads(context.Background(), jj.New(runner), []headSpec{{path: ws, bookmark: "andrew/one"}}, enrichTimeout)
 	before := runner.count()
 
-	h.heads(jj.New(runner), []headSpec{{path: ws, bookmark: "andrew/two"}}, enrichTimeout)
+	h.heads(context.Background(), jj.New(runner), []headSpec{{path: ws, bookmark: "andrew/two"}}, enrichTimeout)
 	if runner.count() == before {
 		t.Fatal("a different bookmark reused the cached commit-id")
 	}
@@ -138,7 +138,7 @@ func TestADeletedWorkspaceRunsNoJJ(t *testing.T) {
 	runner := &countingRunner{}
 	h := newHeadEnricher()
 
-	got := h.heads(jj.New(runner), []headSpec{{path: filepath.Join(t.TempDir(), "gone")}}, enrichTimeout)
+	got := h.heads(context.Background(), jj.New(runner), []headSpec{{path: filepath.Join(t.TempDir(), "gone")}}, enrichTimeout)
 
 	if runner.count() != 0 {
 		t.Fatalf("a path with no repo ran %d jj commands, want 0", runner.count())
@@ -159,13 +159,94 @@ func TestAnUnreadableHeadKeepsAsking(t *testing.T) {
 	runner := &countingRunner{out: "abcd1234\twip: x"}
 	h := newHeadEnricher()
 
-	h.heads(jj.New(runner), []headSpec{{path: dir}}, enrichTimeout)
+	h.heads(context.Background(), jj.New(runner), []headSpec{{path: dir}}, enrichTimeout)
 	before := runner.count()
 	if before == 0 {
 		t.Fatal("an unreadable head ran no jj")
 	}
-	h.heads(jj.New(runner), []headSpec{{path: dir}}, enrichTimeout)
+	h.heads(context.Background(), jj.New(runner), []headSpec{{path: dir}}, enrichTimeout)
 	if runner.count() == before {
 		t.Fatal("an unreadable head was cached; it has nothing to invalidate against")
+	}
+}
+
+// blockingRunner is a jj.Runner that hangs until its ctx is cancelled, which is
+// what a jj waiting on the repo's operation-log lock looks like from here. It
+// records how many of its calls are still in flight so a test can ask the
+// question that matters: when heads returned, was anything still running?
+type blockingRunner struct {
+	mu      sync.Mutex
+	running int
+	started chan struct{}
+}
+
+func newBlockingRunner(specs int) *blockingRunner {
+	return &blockingRunner{started: make(chan struct{}, specs)}
+}
+
+func (r *blockingRunner) Run(ctx context.Context, _ string, _ string, _ ...string) (string, error) {
+	r.mu.Lock()
+	r.running++
+	r.mu.Unlock()
+	r.started <- struct{}{}
+	// The real runner is exec.CommandContext, so a cancel is a kill and the call
+	// returns. This models that, and nothing else about it.
+	<-ctx.Done()
+	r.mu.Lock()
+	r.running--
+	r.mu.Unlock()
+	return "", ctx.Err()
+}
+
+func (r *blockingRunner) inFlight() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running
+}
+
+// TestSlowFanOutLeavesNothingRunning is the guarantee that makes the timeout
+// mean "stop" rather than "stop waiting".
+//
+// heads used to select between wg.Wait() and time.After, so a batch that ran
+// long returned while every goroutine and every jj subprocess it started kept
+// going. The deck asks again every refreshInterval, so those batches stacked:
+// the one nobody was waiting for still held a core when the next one started.
+// Post-wake, with a cold page cache, they all take the slow path at once.
+func TestSlowFanOutLeavesNothingRunning(t *testing.T) {
+	const workspaces = 4
+	specs := make([]headSpec, 0, workspaces)
+	for i := 0; i < workspaces; i++ {
+		ws, _ := fakeWorkspace(t, "op1")
+		specs = append(specs, headSpec{path: ws})
+	}
+
+	runner := newBlockingRunner(workspaces)
+	h := newHeadEnricher()
+
+	const timeout = 150 * time.Millisecond
+	start := time.Now()
+	got := h.heads(context.Background(), jj.New(runner), specs, timeout)
+	elapsed := time.Since(start)
+
+	// Every read hung, so there is nothing to report — and, importantly, nothing
+	// cached either: a cancelled read is not an answer, and caching the blank it
+	// returned would answer later refreshes with it until the repo moved.
+	if len(got) != 0 {
+		t.Fatalf("heads returned %d entries from reads that never completed: %+v", len(got), got)
+	}
+
+	// The call is bounded by the timeout rather than by the reads finishing.
+	if elapsed > timeout*4 {
+		t.Fatalf("heads took %s with a %s timeout — the deadline is not bounding the batch", elapsed, timeout)
+	}
+
+	// The point of the test, and checked with no grace period on purpose. For a
+	// heads that waits on its own WaitGroup this is deterministic: every Run has
+	// returned before Wait does, so zero is guaranteed rather than likely. Polling
+	// with a sleep here instead would pass for a heads that abandoned the batch and
+	// merely let the deferred cancel catch up with it afterwards, which is the
+	// weaker property and not the one the doc comment claims.
+	if n := runner.inFlight(); n != 0 {
+		t.Fatalf("%d jj calls still running the instant heads returned — the batch outlived its caller", n)
 	}
 }
