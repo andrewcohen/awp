@@ -231,16 +231,24 @@ func (m *Model) sidebarKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.goToSidebarRow(m.sidebarCursor), true
 	}
 
-	// A key that opens a program keeps the pane you were in and puts the program
-	// beside it, which is what `|` means everywhere else. The strip is a thing you
-	// glance at *while working in something*, so a row you pick off it is nearly
-	// always the second thing you want on screen rather than a replacement for the
-	// first — and the pane is the expensive one to lose, since re-opening it repaints
-	// a program you were reading mid-thought.
+	// A key that opens a program takes you to the row it was picked off, with the
+	// program beside that row's own agent. The rows on the strip are the ones you
+	// are not in, so picking one is a move.
+	//
+	// It used to keep the pane you were in and put the other row's program beside
+	// it, on the argument that the strip is glanced at while working and the pane is
+	// the expensive thing to lose. What that produced was one workspace's agent
+	// beside another workspace's diff — two halves about different work, which the
+	// labels say only if you read them. Adding a program beside what you are already
+	// in is ctrl+b, which still does exactly that, so the two gestures divide
+	// cleanly: the strip goes somewhere, ctrl+b adds something here.
+	//
+	// The row you are already in keeps the old behaviour, because there the two are
+	// the same act and re-opening the agent would repaint a program you were reading
+	// mid-thought.
 	//
 	// The same keys, the same vocabulary: `c` diff, `v` vcs, `e` editor, `s` shell,
-	// `i` ci, `W` watch. From a split it replaces the focused half, exactly as ctrl+b
-	// and a window key do in there.
+	// `i` ci, `W` watch.
 	if kind, ok := sidebarProgramKind(msg); ok {
 		return m.openBesideFromSidebar(kind), true
 	}
@@ -383,6 +391,20 @@ func (m *Model) openBesideFromSidebar(kind string) tea.Cmd {
 	// like a keybinding fault rather than a focus one. Left behind while the
 	// fallback below always did it.
 	m.leaveSidebar()
+	// A row that is not the one on screen is a move, not an addition. Putting its
+	// program beside the arrangement you are in pairs one workspace's agent with
+	// another's diff: two halves about different work, which the labels say only if
+	// you read them. So picking another row's program goes to that row — its own
+	// agent, with the program beside it — which is what the strip is for, since the
+	// rows on it are the ones you are not in.
+	//
+	// Same row keeps the old behaviour, and that is the case the paragraph above
+	// this function argues for: the strip is a thing you glance at while working,
+	// and a program picked off the row you are already in is the second thing you
+	// want on screen rather than a replacement for the first.
+	if !m.arrangementIsOn(row) {
+		return m.goToRowArrangement(m.active, row, kind)
+	}
 	switch active := m.active.(type) {
 	case *panePopover:
 		return active.splitWith(m, row, kind)
@@ -458,4 +480,52 @@ func (m *Model) moveSidebarCursor(delta int) {
 		return
 	}
 	m.sidebarCursor = rows[min(max(i+delta, 0), len(rows)-1)]
+}
+
+// arrangementIsOn reports whether what is on screen is already about this row.
+//
+// Read off the agent half, which is the left one by construction in a split and
+// the pane itself otherwise — a pane names the row it was opened for, so this is
+// the row rather than a guess at it. Anything that is not a hosted arrangement
+// answers false: there is nothing on screen to add to, so the row is somewhere to
+// go.
+func (m *Model) arrangementIsOn(row Item) bool {
+	var p *panePopover
+	switch c := m.active.(type) {
+	case *panePopover:
+		p = c
+	case *splitModal:
+		half, ok := c.left.(*panePopover)
+		if !ok {
+			return false
+		}
+		p = half
+	default:
+		return false
+	}
+	return p.project == row.ProjectName && p.workspace == row.WorkspaceName
+}
+
+// goToRowArrangement leaves what is on screen and opens the row's own agent with
+// kind beside it.
+//
+// The new arrangement is installed before the old one is closed, and the close is
+// what tears down its pty. That order is deliberate and is the one splitWith
+// already uses for the same handover: close sets m.active to nil only when it is
+// still the thing being closed, so installing first is what keeps it from
+// clearing the arrangement that replaced it. A refusal puts back what was there.
+func (m *Model) goToRowArrangement(current modal, row Item, kind string) tea.Cmd {
+	cmd, ok := m.openSplitKinds(row, kind, splitLeftFrac(m.splitFrac))
+	if !ok {
+		m.active = current
+		return nil
+	}
+	var closed tea.Cmd
+	switch c := current.(type) {
+	case *panePopover:
+		closed = c.close(m)
+	case *splitModal:
+		closed = c.close(m)
+	}
+	return tea.Batch(closed, cmd)
 }
