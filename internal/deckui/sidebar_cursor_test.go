@@ -500,20 +500,35 @@ func TestTheStripSitsAtTheTopWithNoCursor(t *testing.T) {
 // The strip is glanced at *while working in something*, so a row picked off it is
 // nearly always the second thing you want on screen rather than a replacement for
 // the first.
-func TestOpeningAProgramFromTheStripKeepsThePane(t *testing.T) {
+func TestOpeningAProgramFromTheStripGoesToItsRow(t *testing.T) {
 	m, p := sidebarPane(t)
 	m = pressDeck(t, m, leaveKey())
 	m = pressDeck(t, m, runeKey("j"))
 	target := m.sidebarCursor
+	if target.WorkspaceName == p.workspace {
+		t.Fatal("j did not move to another row, so this says nothing about crossing workspaces")
+	}
 
 	m = pressDeck(t, m, runeKey("e"))
 
 	s, ok := m.active.(*splitModal)
 	if !ok {
-		t.Fatalf("e gave %T, want a split with the pane still in it", m.active)
+		t.Fatalf("e gave %T, want a split on the strip's row", m.active)
 	}
-	if s.left != p {
-		t.Error("the pane that was up is not the left half — it was re-opened or dropped")
+	// The left half is that row's agent, not the one that was up. This used to
+	// assert the opposite — the pane you were in was kept and the other row's
+	// program went beside it — on the argument that the strip is glanced at while
+	// working and the pane is the expensive thing to lose. What that produced was
+	// one workspace's agent beside another's editor: two halves about different
+	// work, which the labels say only if you read them. The rows on the strip are
+	// the ones you are not in, so picking one means going there; adding a program
+	// beside what you are in is ctrl+b, which is still exactly that.
+	left, ok := s.left.(*panePopover)
+	if !ok {
+		t.Fatalf("the left half is %T, want the agent pane", s.left)
+	}
+	if left.workspace != target.WorkspaceName {
+		t.Errorf("the left half is the agent of %s, want the strip's row %s", left.workspace, target.WorkspaceName)
 	}
 	right, ok := s.right.(*panePopover)
 	if !ok {
@@ -606,7 +621,15 @@ func TestAProgramFromTheStripReplacesTheRightHalf(t *testing.T) {
 	if !m.sidebarFocus {
 		t.Fatal("the leave key did not put the keyboard on the strip")
 	}
-	m = pressDeck(t, m, runeKey("j"))
+	// The row the split is already about: replacing the right half is what happens
+	// within a row. Another row is a move instead — see
+	// TestOpeningAProgramFromTheStripGoesToItsRow.
+	for _, r := range m.sidebarRowsInOrder() {
+		if lp, ok := left.(*panePopover); ok && r.WorkspaceName == lp.workspace {
+			m.sidebarCursor = r
+			break
+		}
+	}
 	target := m.sidebarCursor
 	m = pressDeck(t, m, runeKey("e"))
 
@@ -802,5 +825,85 @@ func TestRevisionPickerFromASidebarSplit(t *testing.T) {
 	}
 	if got := dm.inner.ScopeLabel(); got != "feat: one that landed" {
 		t.Fatalf("the viewer is reading %q, want the picked revision", got)
+	}
+}
+
+// A program picked off the strip for *another* workspace takes you to that
+// workspace, rather than pasting its diff beside the agent you were in.
+//
+// "Keep the pane you were in and put the program beside it" is right when the row
+// is the one you are already working in — the strip is a thing you glance at while
+// working, and the program is the second thing you want on screen. It is wrong
+// across workspaces: it leaves workspace A's agent beside workspace B's diff, two
+// halves of a split that are about different work, and the label on each says so
+// only if you read it.
+func TestPickingAnotherRowsProgramGoesToThatRow(t *testing.T) {
+	m, p := sidebarPane(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	current := p.workspace
+
+	m = pressDeck(t, m, leaveKey())
+	rows := m.sidebarRowsInOrder()
+	var other Item
+	for _, r := range rows {
+		if r.WorkspaceName != current {
+			other = r
+			break
+		}
+	}
+	if other.WorkspaceName == "" {
+		t.Fatal("need a second workspace on the strip")
+	}
+	m.sidebarCursor = other
+
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("`c` opened %T, want a split (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+
+	left, ok := s.left.(*panePopover)
+	if !ok {
+		t.Fatalf("the left half is %T, want the agent pane", s.left)
+	}
+	if left.workspace != other.WorkspaceName {
+		t.Fatalf("the split pairs the agent of %q with the diff of %q — both halves should be about %q", left.workspace, other.WorkspaceName, other.WorkspaceName)
+	}
+	if _, ok := s.right.(*diffModal); !ok {
+		t.Fatalf("the right half is %T, want the diff", s.right)
+	}
+}
+
+// And the row you are already in keeps the pane you were in, which is the case
+// the strip was built around: glance at it while working, and what you pick is
+// the second thing you want on screen rather than a replacement for the first.
+func TestPickingYourOwnRowsProgramKeepsThePane(t *testing.T) {
+	m, p := sidebarPane(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	was := p.term
+
+	m = pressDeck(t, m, leaveKey())
+	for _, r := range m.sidebarRowsInOrder() {
+		if r.WorkspaceName == p.workspace {
+			m.sidebarCursor = r
+			break
+		}
+	}
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("`c` opened %T, want a split (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+
+	left, ok := s.left.(*panePopover)
+	if !ok {
+		t.Fatalf("the left half is %T, want the agent pane", s.left)
+	}
+	// The same terminal, not a fresh one: re-opening the agent would repaint a
+	// program you were reading mid-thought, which is what this path exists to avoid.
+	if left.term != was {
+		t.Error("the agent was re-opened rather than kept — picking a program for the row you are in should not restart it")
 	}
 }

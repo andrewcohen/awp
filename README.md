@@ -1511,14 +1511,22 @@ one it is on the row list, resuming whatever arrangement that workspace was last
 as. It is not a window key: it says *take me there*, and a workspace last left as a
 split comes back as that split, which it cannot do as half of somebody else's screen.
 
-**A window key keeps the pane you were in and puts its window beside it**, which is
-what `|` means everywhere else — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W`
-watch. From a split it replaces the right half, exactly as `ctrl+b` and a window key
-do in there — the left half is the agent and stays the agent. Those say *show me this thing about that row*, and the answer belongs
-beside what you are already in: you glance at the strip while working in something, so
-a window picked off it is the second thing you want on screen rather than a
-replacement for the first — and the pane is the expensive one to lose, since
-re-opening it repaints a program you were reading mid-thought.
+**A window key takes you to the row you picked it off**, with the window beside that
+row's own agent — `c` diff, `v` vcs, `e` editor, `s` shell, `i` ci, `W` watch. The
+rows on the strip are the ones you are *not* in, so picking one is a move.
+
+It used to keep the pane you were in and put the other row's window beside it, on the
+argument that you glance at the strip while working and the pane is the expensive
+thing to lose. What that produced was one workspace's agent beside another
+workspace's diff — two halves about different work, which the labels say only if you
+read them. Adding a window beside what you are already in is `ctrl+b`, which still
+does exactly that, so the two gestures divide cleanly: **the strip goes somewhere,
+`ctrl+b` adds something here.**
+
+Picking a window for the row you are *already* in keeps the pane, since there the two
+are the same act and re-opening the agent would repaint a program you were reading
+mid-thought. From a split on that row it replaces the right half, exactly as `ctrl+b`
+and a window key do in there — the left half is the agent and stays the agent.
 
 Movement is the strip's own (`j` / `k`, `ctrl+d` / `ctrl+u`, `gg` / `G`, which move
 the strip's cursor and stay put).
