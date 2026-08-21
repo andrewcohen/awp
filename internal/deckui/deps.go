@@ -34,8 +34,9 @@ type deckDeps struct {
 	bookmarkLinkHandler  BookmarkLinkHandler
 	userActionsResolver  UserActionsResolver
 
-	projectFinder ProjectFinder
-	projectOpener ProjectOpener
+	projectFinder   ProjectFinder
+	projectOpener   ProjectOpener
+	projectImporter ProjectImporter
 
 	// intentResolver turns the free-text box's sentence into a
 	// WorkspaceIntent. Nil means this deck has no free-text box at all and

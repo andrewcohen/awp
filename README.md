@@ -378,7 +378,7 @@ Backed by `lsof` on macOS and `ss` on Linux. On other OSes the feature is a sile
 | `r` | Pick a PR to review |
 | `x` | User actions menu (configurable via `actions` in config). Also `ctrl+b x` from inside a pane or a split |
 | `n` | New workspace. Opens an empty box a few lines tall: describe the work and an agent turns it into a name, label, prompt and project, then creates it. `ctrl+enter` sends it and hands the deck straight back — the rest runs in the background, behind one chip in the activity bar. `enter` is a newline, `ctrl+g` opens `$EDITOR`. `ctrl+f` skips the agent and opens the structured form instead; `esc` cancels. See [Describing a workspace instead of filling in a form](#describing-a-workspace-instead-of-filling-in-a-form). |
-| `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style) |
+| `o` | Open: fuzzy-pick a project from configured roots (tmux-sessionizer style). Imports it as a `default` workspace; under `zdeck` it then opens that workspace's agent pane in place |
 | `f` | Find: easymotion-style section → workspace jump. Stage 1 collapses the list to just section headers — both pinned register sections (see the `m` chord) and unpinned project headers — and hints each one, so a long list fits on one screen; picking one expands only that section (the rest stay as one-line headers for context) and scopes stage 2 to its rows. `backspace` re-collapses to the header list. (In the inbox scope there are no headers, so `f` hints every row directly.) |
 | `/` | Filter rows · `esc` clears |
 | `P` | Cycle scope: all → attention (mini-deck criteria: active agent or unread notification) → inbox (open-PR workspaces sectioned by next move — see below). **Remembered**: the scope you leave the deck in is the one it opens in next time, saved to `~/.awp/deck-prefs.json` as you press the key. An explicit `awp deck --scope=<scope>` overrides it for that run without overwriting it — a flag is an instruction about one launch, not a change to how your deck opens. |
@@ -753,7 +753,9 @@ Shell commands run after a workspace's jj layout exists but before the agent sta
 
 ### `deck.project_roots`
 
-List of directories the deck's `o` (open) screen scans for projects. Tilde-expanded. The walker descends up to 4 levels and stops at any directory containing `.git` or `.jj`. Selecting a project summons (or creates) a tmux session named `[awp]<basename>__default` at that path and records a `default` workspace entry under that repo root in `~/.awp/workspace-state.json`, so the project appears in the deck on subsequent launches.
+List of directories the deck's `o` (open) screen scans for projects. Tilde-expanded. The walker descends up to 4 levels and stops at any directory containing `.git` or `.jj`. Selecting a project records a `default` workspace entry under that repo root in `~/.awp/workspace-state.json`, so the project appears in the deck on subsequent launches.
+
+What happens next depends on which deck you are in. Under `awp deck` the pick summons (or creates) a tmux session named `[awp]<basename>__default` at that path and switches the client to it. Under `zdeck` — a deck that hosts its own panes — there is no tmux client to switch, so the pick opens the imported workspace's agent pane in place instead, the same as pressing enter on its row.
 
 When the deck exits, `deck-cleanup` also kills any leftover `[awp]<repo>__<workspace>` tmux sessions that no longer have a matching entry in the workspace state file (the current session is always preserved). This keeps stray sessions from accumulating after a project is deleted from the deck.
 

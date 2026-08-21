@@ -660,6 +660,17 @@ type ProjectsDoneMsg struct {
 // picker. The deck quits afterwards (handler is expected to switch tmux).
 type ProjectOpener func(ProjectItem) error
 
+// ProjectImporter is the pane-hosting deck's answer to ProjectOpener: it
+// records the project's default workspace so the deck has a row for it and
+// returns that row, without starting an agent or touching tmux.
+//
+// A deck that hosts its own panes has no tmux client to switch, so
+// ProjectOpener's switch-client was a silent no-op there and `o` → enter
+// looked broken — see the same refusal for ActionSummon in
+// internal/cli/deck.go. Importing and then opening the row's agent pane is
+// that gesture with the tmux client removed.
+type ProjectImporter func(ProjectItem) (Item, error)
+
 // PRFetcher returns a tea.Cmd that fetches PRs and emits a PRFetchDoneMsg.
 // repoRoot scopes the fetch to the selected item's repository.
 type PRFetcher func(repoRoot string) tea.Cmd
@@ -1391,6 +1402,14 @@ func (m Model) WithProjectFinder(f ProjectFinder) Model {
 // project from the open screen. The deck quits after a successful pick.
 func (m Model) WithProjectOpener(o ProjectOpener) Model {
 	m.projectOpener = o
+	return m
+}
+
+// WithProjectImporter installs the handler a pane-hosting deck uses instead
+// of the ProjectOpener: it records the picked project's default workspace
+// and returns the row, which the deck then opens as a pane in place.
+func (m Model) WithProjectImporter(i ProjectImporter) Model {
+	m.projectImporter = i
 	return m
 }
 
