@@ -695,3 +695,50 @@ func TestTheStripsCursorStopsAtTheEnds(t *testing.T) {
 			m.sidebarCursor.WorkspaceName, last.WorkspaceName)
 	}
 }
+
+// Opening a program beside the pane has to hand the keyboard to what it opened.
+//
+// The reported path: in an agent pane, ctrl+\ to the strip, then `c` for a diff
+// beside it. The split came up and could not be typed into — every key went on
+// going to the strip, whose own handler reads j and k as cursor movement and
+// answers most of the rest by opening a deck screen about the row it is on. So
+// the diff was on screen and unreachable, and the same key from ctrl+b — which
+// never involves the strip — worked, which is what made it look like a keybinding
+// problem rather than a focus one.
+//
+// The fallback branch of openBesideFromSidebar always called leaveSidebar; the two
+// branches that actually run did not.
+func TestOpeningBesideFromTheStripHandsOverTheKeyboard(t *testing.T) {
+	m, _ := sidebarPane(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	// ctrl+\ from the pane is the strip's stop in the cycle.
+	m = pressDeck(t, m, leaveKey())
+	if !m.sidebarFocus {
+		t.Fatalf("ctrl+\\ did not give the strip the keyboard (status %q)", m.status)
+	}
+	m.sidebarCursor = m.sidebarRowsInOrder()[0]
+
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("`c` from the strip opened %T, want a split with the diff beside the pane (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+	if _, ok := s.focused().(*diffModal); !ok {
+		t.Fatalf("the focused half is %T, want the diff that was just opened", s.focused())
+	}
+
+	// The keyboard is the point: the strip must have let go of it, or every key
+	// from here is read against the strip's row instead of the diff.
+	if m.sidebarFocus {
+		t.Fatal("the strip still holds the keyboard after opening a diff beside the pane, so nothing typed can reach the diff")
+	}
+
+	// And the claim that actually matters, rather than its proxy: a key gets there.
+	// `\` toggles the viewer's left column, which is visible in the frame.
+	before := ansi.Strip(m.render())
+	m = pressDeck(t, m, runeKey("\\"))
+	if after := ansi.Strip(m.render()); after == before {
+		t.Fatal("a key pressed after opening the diff changed nothing on screen — it is not reaching the viewer")
+	}
+}
