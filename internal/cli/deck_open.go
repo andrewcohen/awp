@@ -100,6 +100,45 @@ func isRepoDir(path string) bool {
 	return false
 }
 
+// importProjectAsWorkspace is the deckui.ProjectImporter used by a deck that
+// hosts its own panes (zdeck). It records the project's default workspace in
+// workspace-state.json and returns the row for it — no tmux session, no
+// agent. The deck opens the agent pane itself, so starting one here would
+// give the workspace two (see the ActionSummon refusal in deck.go).
+func importProjectAsWorkspace() deckui.ProjectImporter {
+	return func(p deckui.ProjectItem) (deckui.Item, error) {
+		path := strings.TrimSpace(p.Path)
+		if path == "" {
+			return deckui.Item{}, fmt.Errorf("import: empty project path")
+		}
+		if workspace.IsHomeDir(path) {
+			return deckui.Item{}, fmt.Errorf("import: refusing to import $HOME as a project")
+		}
+		path = filepath.Clean(path)
+		repoName := strings.TrimSpace(filepath.Base(path))
+		if repoName == "" {
+			return deckui.Item{}, fmt.Errorf("import: cannot derive repo name from %q", path)
+		}
+		if err := state.NewJSONStore().Update(path, func(entries map[string]workspace.Entry) map[string]workspace.Entry {
+			if entries == nil {
+				entries = map[string]workspace.Entry{}
+			}
+			if _, ok := entries["default"]; !ok {
+				entries["default"] = workspace.Entry{Name: "default", Path: path}
+			}
+			return entries
+		}); err != nil {
+			return deckui.Item{}, fmt.Errorf("import: record workspace: %w", err)
+		}
+		return deckui.Item{
+			ProjectName:   repoName,
+			WorkspaceName: "default",
+			Path:          path,
+			RepoRoot:      path,
+		}, nil
+	}
+}
+
 // openProjectViaTmux is the deckui.ProjectOpener used by the deck. It
 // summons (or creates) a tmux session named [awp]<basename>__default at
 // the project path and switches the client to it.

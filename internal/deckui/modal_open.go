@@ -69,11 +69,14 @@ func (p *openPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 		if filtering {
 			break
 		}
-		if m.projectOpener == nil {
-			return nil
-		}
 		it, ok := p.list.SelectedItem().(projectItem)
 		if !ok {
+			return nil
+		}
+		if m.hostsAgents() {
+			return p.importAndOpen(m, it.project)
+		}
+		if m.projectOpener == nil {
 			return nil
 		}
 		if err := m.projectOpener(it.project); err != nil {
@@ -91,6 +94,33 @@ func (p *openPicker) update(m *Model, msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	p.list, cmd = p.list.Update(msg)
 	return cmd
+}
+
+// importAndOpen is the pane-hosting deck's pick: record the project's
+// default workspace, close the picker, open that row's agent pane, and ask
+// for a refresh so the row itself shows up in the list behind it.
+//
+// The tmux branch above quits the deck and lets switch-client do the moving.
+// There is no client here to move, so the deck does the whole gesture itself.
+func (p *openPicker) importAndOpen(m *Model, pr ProjectItem) tea.Cmd {
+	if m.projectImporter == nil {
+		m.status = "open: this deck cannot import a project — no project importer wired"
+		return nil
+	}
+	item, err := m.projectImporter(pr)
+	if err != nil {
+		m.status = "open: " + err.Error()
+		return nil
+	}
+	m.active = nil
+	m.status = ""
+	paneCmd, ok := m.openPaneOrArrangement(item, PaneKindAgent)
+	if !ok {
+		m.status = "open: imported " + item.ProjectName + " but could not open its agent pane"
+	}
+	var refreshCmd tea.Cmd
+	*m, refreshCmd = m.requestRefresh(false)
+	return tea.Batch(paneCmd, refreshCmd)
 }
 
 func (p *openPicker) view(m *Model, b box) (left, right string) {

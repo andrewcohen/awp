@@ -1197,6 +1197,10 @@ func runDeckWithCharm(runner Runner, svc workspace.Service, in io.Reader, out io
 		WithHookInstaller(hookInstaller).
 		WithProjectFinder(projectFinderFromRoots(cfg.Deck.ProjectRoots, 4)).
 		WithProjectOpener(openProjectViaTmux(runner)).
+		// A deck that hosts its own panes takes this branch instead: there is
+		// no tmux client for the opener above to switch, so `o` â enter did
+		// nothing visible there.
+		WithProjectImporter(importProjectAsWorkspace()).
 		WithIntentResolver(intentResolverFromRoots(runner, cfg.Deck.ProjectRoots, 4)).
 		WithAsyncJobLauncher(asyncLauncher).
 		WithJobsListRefresher(asyncList).

@@ -1,6 +1,8 @@
 package deckui
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -88,3 +90,64 @@ func TestOpenPickerEscClosesToRowMode(t *testing.T) {
 		t.Fatal("esc must not open any project")
 	}
 }
+
+// A deck that hosts its own panes has no tmux client for the ProjectOpener's
+// switch-client to move, so `o` → enter went through the motions and nothing
+// appeared. It takes the importer instead: record the project, then open its
+// agent pane in place.
+func TestOpenPickerImportsAndOpensAPaneOnAPaneHost(t *testing.T) {
+	var opened, imported string
+	m := openPickerModel(t, &opened).
+		WithPaneBackend(allKinds()).
+		WithProjectImporter(func(p ProjectItem) (Item, error) {
+			imported = p.Name
+			return Item{ProjectName: p.Name, WorkspaceName: "default", Path: p.Path, RepoRoot: p.Path}, nil
+		})
+	m.width, m.height = 120, 40
+
+	updated, cmd := m.Update(keyO)
+	dm := updated.(Model)
+	updated, _ = dm.Update(execCmd(t, cmd)) // ProjectsDoneMsg
+	dm = updated.(Model)
+
+	updated, _ = dm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	dm = updated.(Model)
+
+	if imported != "alpha" {
+		t.Fatalf("projectImporter not invoked with the selection, imported=%q", imported)
+	}
+	if opened != "" {
+		t.Fatalf("a pane host must not take the tmux opener, opened=%q", opened)
+	}
+	if _, ok := dm.active.(*panePopover); !ok {
+		t.Fatalf("expected the imported project's pane to open, active=%T status=%q", dm.active, dm.status)
+	}
+}
+
+// The importer failing is the one thing the user has to be told about: the
+// picker closes on success, so a silent failure looks like the same no-op
+// this whole branch exists to fix.
+func TestOpenPickerReportsAnImportFailure(t *testing.T) {
+	var opened string
+	m := openPickerModel(t, &opened).
+		WithPaneBackend(allKinds()).
+		WithProjectImporter(func(ProjectItem) (Item, error) { return Item{}, errImportFailed })
+	m.width, m.height = 120, 40
+
+	updated, cmd := m.Update(keyO)
+	dm := updated.(Model)
+	updated, _ = dm.Update(execCmd(t, cmd)) // ProjectsDoneMsg
+	dm = updated.(Model)
+
+	updated, _ = dm.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	dm = updated.(Model)
+
+	if !strings.Contains(dm.status, errImportFailed.Error()) {
+		t.Fatalf("import failure not surfaced, status=%q", dm.status)
+	}
+	if _, ok := dm.active.(*openPicker); !ok {
+		t.Fatalf("picker should stay open after a failed import, active=%T", dm.active)
+	}
+}
+
+var errImportFailed = errors.New("no write access to workspace state")
