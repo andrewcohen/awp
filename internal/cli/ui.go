@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -85,7 +87,7 @@ func scopeOptionsFor(runner Runner, item deckui.Item, dir string) []ui.ScopeOpti
 		{"w", deckui.ScopeWorking},
 		{"t", deckui.ScopeTrunk},
 	}
-	out := make([]ui.ScopeOption, 0, len(scopes))
+	out := make([]ui.ScopeOption, 0, len(scopes)+1)
 	for _, s := range scopes {
 		it, sc := item, s.scope
 		if strings.TrimSpace(dir) != "" {
@@ -98,8 +100,73 @@ func scopeOptionsFor(runner Runner, item deckui.Item, dir string) []ui.ScopeOpti
 			Base:  func() string { return base(it, sc) },
 		})
 	}
+	// And one entry standing for every individual commit, which is the answer the
+	// three fixed ranges cannot give: they are ranges ending at @, so a change that
+	// has already landed is not reachable through any of them. Last in the menu
+	// because it is the one that asks a second question.
+	readIn := item.Path
+	if strings.TrimSpace(dir) != "" {
+		readIn = dir
+	}
+	out = append(out, ui.ScopeOption{
+		Key:     "r",
+		Label:   "a revision…",
+		Choices: revisionChoicesFor(runner, readIn),
+	})
 	return out
 }
+
+// revisionChoicesFor lists the repo's recent changes as scope options, read when
+// the picker is opened rather than when the menu is built.
+//
+// One option per change, keyed by its change id — which is what the picker shows
+// as the entry's name and what `/` filters on, so a half-remembered id finds its
+// change. Each one loads exactly that revision: DiffGit with a single revset is
+// the same call the fixed ranges make, so a picked commit reads through the same
+// path and relocates comments and the cursor the same way.
+func revisionChoicesFor(runner Runner, dir string) func() ([]ui.ScopeOption, error) {
+	return func() ([]ui.ScopeOption, error) {
+		if runner == nil {
+			runner = NewExecRunner()
+		}
+		client := jj.New(runner)
+		ctx, cancel := context.WithTimeout(context.Background(), revisionPickerTimeout)
+		defer cancel()
+		changes, err := client.RecentChanges(ctx, dir, revisionPickerLimit)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ui.ScopeOption, 0, len(changes))
+		for _, ch := range changes {
+			rev, desc := ch.ID, ch.Description
+			if desc == "" {
+				// A change with no description is still worth offering — it is usually
+				// the one being written — so it gets said rather than shown blank.
+				desc = "(no description)"
+			}
+			out = append(out, ui.ScopeOption{
+				Key:   rev,
+				Label: desc,
+				Load: func(contextLines int) (string, error) {
+					return client.DiffGit(dir, rev, contextLines)
+				},
+				// A single revision is read against its own parent, which is what the
+				// diff of a commit means. Naming it would repeat the entry's own label.
+				Base: func() string { return "" },
+			})
+		}
+		return out, nil
+	}
+}
+
+// How much history the revision picker offers, and how long it will wait for it.
+// The list is filtered with `/` rather than paged, so the limit is about what is
+// plausible to scroll rather than what fits; the timeout is short because this
+// runs while someone is holding a menu open.
+const (
+	revisionPickerLimit   = 50
+	revisionPickerTimeout = 3 * time.Second
+)
 
 // scopeRevset is the revision a scope reads. Empty for the working copy, which
 // is `jj diff`'s own default.

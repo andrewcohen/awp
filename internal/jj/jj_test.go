@@ -578,3 +578,48 @@ func slicesContain(args []string, want string) bool {
 	}
 	return false
 }
+
+func TestRecentChangesParsesAndDedupes(t *testing.T) {
+	// The revset unions the stack with recent ancestors, so a change in both comes
+	// back twice — and jj's diagnostics arrive on the same stream, indented.
+	r := &fakeRunner{out: "qpvuntsm\twip: the one being written\n" +
+		"Warning: Refused to snapshot some files:\n" +
+		"  big.bin: 2.0GiB\n" +
+		"kntqzsrx\tfeat: one that landed\n" +
+		"qpvuntsm\twip: the one being written\n" +
+		"zzzzzzzz\t\n"}
+
+	changes, err := New(r).RecentChanges(context.Background(), "/repo", 50)
+	if err != nil {
+		t.Fatalf("RecentChanges: %v", err)
+	}
+	want := []Change{
+		{ID: "qpvuntsm", Description: "wip: the one being written"},
+		{ID: "kntqzsrx", Description: "feat: one that landed"},
+		{ID: "zzzzzzzz", Description: ""},
+	}
+	if len(changes) != len(want) {
+		t.Fatalf("got %d changes %+v, want %d — the union returns duplicates and stderr is merged in", len(changes), changes, len(want))
+	}
+	for i := range want {
+		if changes[i] != want[i] {
+			t.Errorf("change %d = %+v, want %+v", i, changes[i], want[i])
+		}
+	}
+}
+
+// A limit of zero is "offer nothing", answered without running jj: latest(::@, 0)
+// is a revset jj would reject, and there is no question to ask anyway.
+func TestRecentChangesZeroLimitRunsNothing(t *testing.T) {
+	r := &fakeRunner{}
+	changes, err := New(r).RecentChanges(context.Background(), "/repo", 0)
+	if err != nil {
+		t.Fatalf("RecentChanges: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("got %+v, want none", changes)
+	}
+	if r.lastName != "" {
+		t.Errorf("expected no jj invocation, got name=%q args=%v", r.lastName, r.lastArgs)
+	}
+}

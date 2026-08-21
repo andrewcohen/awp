@@ -276,6 +276,23 @@ func PRLabel(item Item) string {
 	return fmt.Sprintf("%s#%d", project, item.PRNumber)
 }
 
+// scopeMenu is the viewer's `-` menu as one of the deck's own, when the chord is
+// up.
+//
+// The deck draws its menus as a floating popover (see menu.go), and this one has
+// to go there rather than in a footer for a reason the other menus do not face:
+// the diff viewer is also half of a split, and a half renders its own chrome
+// without the viewer's footer among it. The footer version was invisible in a
+// split — which is the layout where switching range matters most, since the two
+// halves are usually two readings of the same work.
+func (dm *diffModal) scopeMenu() (deckMenu, bool) {
+	verbs, up := dm.inner.ScopeMenu()
+	if !up {
+		return deckMenu{}, false
+	}
+	return menu(append(verbs, menuCancelVerb)...), true
+}
+
 func (dm *diffModal) footerHelp() string {
 	status, isErr := dm.inner.Status()
 	style := dm.muted
@@ -323,11 +340,16 @@ func (dm *diffModal) update(m *Model, msg tea.Msg) tea.Cmd {
 		dm.wheel(wheel)
 		return nil
 	}
-	// While the viewer's filter has focus, or its `?` overlay is up, every key
-	// belongs to it — including the ones that would otherwise close the modal.
-	// Grabbing esc/q with the help open would close the diff instead of the help,
-	// so the only way out of the reference would be out of the view.
-	if key, ok := msg.(tea.KeyPressMsg); ok && !dm.inner.Filtering() && !dm.inner.HelpVisible() {
+	// While something inside the viewer has the keyboard — its filter, its `?`
+	// overlay, its revision list — every key belongs to it, including the ones that
+	// would otherwise close the modal. Grabbing esc/q with the help open would
+	// close the diff instead of the help, so the only way out of the reference
+	// would be out of the view.
+	//
+	// Asked as one question rather than by naming each mode, because naming them is
+	// how the revision list came to be missing from this guard: two modes were
+	// listed, a third was added elsewhere, and esc in it closed the diff.
+	if key, ok := msg.(tea.KeyPressMsg); ok && !dm.inner.OwnsKeyboard() {
 		switch key.String() {
 		// Deliberately not `c`: that opens the comment box inside the viewer.
 		// `c` opened this modal from the row list, but once it is up the key

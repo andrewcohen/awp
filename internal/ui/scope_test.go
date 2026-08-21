@@ -1,9 +1,13 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+// errRevisionsUnavailable stands in for a jj that would not answer.
+var errRevisionsUnavailable = errors.New("list recent changes: jj exited 1")
 
 // The `-` chord. It lives here rather than in a host because there are two hosts:
 // the deck's modal had its own copy and standalone `awp diff` had none, so the same
@@ -234,5 +238,96 @@ func TestTheEditorKeySaysWhenNothingCanOpenAFile(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "EDITOR") {
 		t.Errorf("status %q does not say what is missing", m.status)
+	}
+}
+
+// The `- r` submenu: one entry standing for every individual commit, because the
+// fixed ranges all end at @ and so cannot reach a change that has already landed.
+
+// revisionScopeModel is scopeModel plus the submenu entry, whose choices are two
+// changes.
+func revisionScopeModel(t *testing.T, asked *[]string) Model {
+	t.Helper()
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.WithScopes([]ScopeOption{
+		{Key: "c", Label: "vs stack base",
+			Load: func(int) (string, error) { *asked = append(*asked, "base"); return sampleDiff, nil }},
+		{Key: "r", Label: "a revision…", Choices: func() ([]ScopeOption, error) {
+			return []ScopeOption{
+				{Key: "qpvuntsm", Label: "wip: the one being written",
+					Load: func(int) (string, error) { *asked = append(*asked, "qpvuntsm"); return sampleDiff, nil }},
+				{Key: "kntqzsrx", Label: "feat: one that landed",
+					Load: func(int) (string, error) { *asked = append(*asked, "kntqzsrx"); return sampleDiff, nil }},
+			}, nil
+		}},
+	})
+	return m
+}
+
+func TestScopeSubmenuPicksARevision(t *testing.T) {
+	var asked []string
+	m := revisionScopeModel(t, &asked)
+	m = press(m, "-")
+	m = press(m, "r")
+	if m.scopePick {
+		t.Fatal("the chord should be closed once its key was answered")
+	}
+	if !m.scopeListing {
+		t.Fatal("expected the revision list up after - r")
+	}
+	// Down one, then take it: the second entry, so the test distinguishes picking
+	// from defaulting to whatever was first.
+	m = press(m, "down")
+	m = press(m, "enter")
+	if m.scopeListing {
+		t.Fatal("expected the list closed once a revision was picked")
+	}
+	if got := m.ScopeLabel(); got != "feat: one that landed" {
+		t.Fatalf("chrome says the range is %q, want the picked revision — a picked revision is not one of the installed scopes and has no index to be found at", got)
+	}
+	// LoadDiff is now that revision's reader, so the refresh tick keeps reading the
+	// commit you picked. Invoked directly because the reload rides a tea.Cmd, which
+	// press does not run — same as TestScopeChordSwitchesTheRange.
+	if _, err := m.LoadDiff(contextDefault); err != nil {
+		t.Fatalf("LoadDiff: %v", err)
+	}
+	if len(asked) == 0 || asked[len(asked)-1] != "kntqzsrx" {
+		t.Fatalf("loads were %v, want the picked revision's reader to be the one installed", asked)
+	}
+}
+
+func TestScopeSubmenuEscapesWithoutPicking(t *testing.T) {
+	var asked []string
+	m := revisionScopeModel(t, &asked)
+	before := m.ScopeLabel()
+	m = press(m, "-")
+	m = press(m, "r")
+	m = press(m, "esc")
+	if m.scopeListing {
+		t.Fatal("esc should close the revision list")
+	}
+	if got := m.ScopeLabel(); got != before {
+		t.Fatalf("range moved to %q on a cancelled pick, want %q", got, before)
+	}
+}
+
+// A submenu entry that cannot resolve says so, rather than putting up an empty
+// list — "nothing to pick" and "the command that would have told us failed" are
+// answered differently.
+func TestScopeSubmenuReportsAResolveFailure(t *testing.T) {
+	m := commentModel(t, fileWith("a.go", 1, "alpha", "beta"))
+	m.WithScopes([]ScopeOption{
+		{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { return sampleDiff, nil }},
+		{Key: "r", Label: "a revision…", Choices: func() ([]ScopeOption, error) {
+			return nil, errRevisionsUnavailable
+		}},
+	})
+	m = press(m, "-")
+	m = press(m, "r")
+	if m.scopeListing {
+		t.Fatal("expected no list when the choices could not be read")
+	}
+	if !m.statusErr || !strings.Contains(m.status, errRevisionsUnavailable.Error()) {
+		t.Fatalf("status is %q (err=%v), want it to name what failed", m.status, m.statusErr)
 	}
 }
