@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -160,6 +161,13 @@ type Model struct {
 	scopes     []ScopeOption
 	scopeIndex int
 	scopePick  bool
+	// The `- r` submenu: scopeListing is whether the revision list is up,
+	// scopeList the list itself, and chosenLabel the name of a revision picked
+	// from it — which is not one of scopes, so it has no index and carries its own
+	// label (see ScopeLabel).
+	scopeListing bool
+	scopeList    list.Model
+	chosenLabel  string
 	// pendingZ is the `z` chord waiting for its second key: `zz` centres the diff on
 	// the cursor, `zR` and `zM` open and close every fold, all spelled as vim
 	// spells them.
@@ -628,6 +636,19 @@ func (m Model) Filtering() bool {
 		m.publishing || m.merging
 }
 
+// OwnsKeyboard reports whether something inside the viewer has the keyboard, and
+// so that a host must not treat keys as its own bindings.
+//
+// One predicate rather than a host testing each mode it happens to know about.
+// Filtering and HelpVisible were the two, and a host checked both by name — so
+// the revision list, added third, was not in any host's guard and `esc` closed
+// the whole diff instead of the list. That left no way from the list back into
+// the diff, which is the same trap HelpVisible's comment describes and the reason
+// it exists. Anything added here is covered everywhere at once.
+func (m Model) OwnsKeyboard() bool {
+	return m.Filtering() || m.HelpVisible() || m.scopeListing
+}
+
 // HelpVisible reports whether the `?` overlay is up. Like Filtering, it tells a
 // host to keep its hands off the keyboard: `esc` and `q` close the overlay, and a
 // host that grabbed them first would close the whole view instead — leaving no
@@ -861,6 +882,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// while it is.
 	if m.scopePick {
 		return m.handleScopeKey(key)
+	}
+	// The revision list the chord can open owns the keyboard for as long as it is
+	// up, which is more than one keypress — so it is checked here beside the chord
+	// rather than with the one-key modes below.
+	if m.scopeListing {
+		return m.handleScopeListKey(msg)
 	}
 	// So does `z`, and for the same reason — one keypress deep, nothing else up.
 	if m.pendingZ {
@@ -1645,6 +1672,9 @@ func (m Model) Body(width, height int) string {
 		// In place of the panes rather than over them, so the body keeps the exact
 		// height the host budgeted and the footer does not move.
 		return renderHelpOverlay(m.helpVP, width, height)
+	}
+	if m.scopeListing {
+		return m.renderScopeList(width, height)
 	}
 	if m.publishing {
 		return m.renderPublishOverlay(width, height)

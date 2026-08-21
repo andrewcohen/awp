@@ -596,3 +596,131 @@ func TestAWheelBelowTheDiffModalIsNotItsToTake(t *testing.T) {
 		t.Errorf("a notch on the status bar moved the diff:\n%s", after)
 	}
 }
+
+// The `-` menu has to work from the deck's `c` as well as from standalone
+// `awp diff`. The scope chord lives in internal/ui and both hosts install the
+// same list, but nothing until now checked that the key reaches it through the
+// modal — which is the half the deck owns, since a deck that ate `-` would look
+// exactly like a viewer that had no scopes.
+func TestDiffModalScopeChordOpensTheMenu(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }).
+		WithDiffScopes(func(Item) []ui.ScopeOption {
+			return []ui.ScopeOption{
+				{Key: "c", Label: "vs stack base",
+					Load: func(int) (string, error) { return diffModalSample, nil }},
+				{Key: "w", Label: "working copy",
+					Load: func(int) (string, error) { return diffModalSample, nil }},
+				{Key: "r", Label: "a revision…",
+					Choices: func() ([]ui.ScopeOption, error) {
+						return []ui.ScopeOption{{Key: "qpvuntsm", Label: "wip: something",
+							Load: func(int) (string, error) { return diffModalSample, nil }}}, nil
+					}},
+			}
+		})
+
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	if _, ok := m.active.(*diffModal); !ok {
+		t.Fatal("expected the diff modal open")
+	}
+
+	m, cmd = pressKey(m, "-")
+	m = drain(m, cmd)
+	// A floating popover, the way every other deck menu is drawn — not the footer.
+	// The footer is not on screen in a split, where each half renders its own
+	// chrome, so a menu that lived there was invisible in the layout that wants it
+	// most.
+	frame := ansi.Strip(m.render())
+	if !strings.Contains(frame, "vs stack base") || !strings.Contains(frame, "working copy") {
+		t.Fatalf("`-` did not float the scope menu over the frame:\n%s", frame)
+	}
+	// And the revision picker is offered in it, since the three ranges all end at
+	// @ and cannot reach a change that already landed.
+	if !strings.Contains(frame, "a revision") {
+		t.Fatalf("the menu does not offer the revision picker:\n%s", frame)
+	}
+	if _, armed := m.armedMenu(); !armed {
+		t.Fatal("the deck does not consider a menu armed, so nothing composites it")
+	}
+}
+
+// And picking one through the modal, which is the path `c` actually takes. The
+// list renders in the viewer's Body, which the deck already shows — only the
+// footer is the deck's own — so this is the half that could have been wired
+// wrong without the menu test noticing.
+func TestDiffModalPicksARevision(t *testing.T) {
+	var loaded []string
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }).
+		WithDiffScopes(func(Item) []ui.ScopeOption {
+			return []ui.ScopeOption{
+				{Key: "c", Label: "vs stack base",
+					Load: func(int) (string, error) { loaded = append(loaded, "base"); return diffModalSample, nil }},
+				{Key: "r", Label: "a revision…",
+					Choices: func() ([]ui.ScopeOption, error) {
+						return []ui.ScopeOption{
+							{Key: "qpvuntsm", Label: "wip: the one being written",
+								Load: func(int) (string, error) { loaded = append(loaded, "qpvuntsm"); return diffModalSample, nil }},
+						}, nil
+					}},
+			}
+		})
+
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	dm, ok := m.active.(*diffModal)
+	if !ok {
+		t.Fatal("expected the diff modal open")
+	}
+
+	m, cmd = pressKey(m, "-")
+	m = drain(m, cmd)
+	m, cmd = pressKey(m, "r")
+	m = drain(m, cmd)
+
+	// The list is up in the body, where the deck renders the viewer's own.
+	body, _ := dm.view(&m, m.childBox())
+	if !strings.Contains(ansi.Strip(body), "qpvuntsm") {
+		t.Fatalf("the revision list is not in the body the deck renders:\n%s", ansi.Strip(body))
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_ = drain(updated.(Model), cmd)
+
+	footer := ansi.Strip(dm.footerHelp())
+	if !strings.Contains(footer, "wip: the one being written") {
+		t.Fatalf("the footer does not name the picked revision:\n%s", footer)
+	}
+}
+
+// esc in the revision list closes the list, not the whole diff — the full-screen
+// case, where the modal's own guard is what decides.
+func TestEscInTheRevisionListKeepsTheFullScreenDiff(t *testing.T) {
+	m := diffModalModel(t, func(Item, DiffScope, int) (string, error) { return diffModalSample, nil }).
+		WithDiffScopes(func(Item) []ui.ScopeOption {
+			return []ui.ScopeOption{
+				{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { return diffModalSample, nil }},
+				{Key: "r", Label: "a revision…", Choices: func() ([]ui.ScopeOption, error) {
+					return []ui.ScopeOption{{Key: "qpvuntsm", Label: "wip: something",
+						Load: func(int) (string, error) { return diffModalSample, nil }}}, nil
+				}},
+			}
+		})
+	m, cmd := pressKey(m, "c")
+	m = drain(m, cmd)
+	m, cmd = pressKey(m, "-")
+	m = drain(m, cmd)
+	m, cmd = pressKey(m, "r")
+	m = drain(m, cmd)
+	if !strings.Contains(ansi.Strip(m.render()), "qpvuntsm") {
+		t.Fatalf("the revision list is not on screen:\n%s", ansi.Strip(m.render()))
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = drain(updated.(Model), cmd)
+	if m.active == nil {
+		t.Fatal("esc in the revision list closed the whole diff — the list owns the keyboard while it is up, so esc belongs to it")
+	}
+	if strings.Contains(ansi.Strip(m.render()), "qpvuntsm") {
+		t.Fatal("esc did not close the revision list")
+	}
+}

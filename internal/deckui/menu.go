@@ -79,6 +79,16 @@ func (mn deckMenu) render(width int) string {
 // Padding(1, 2)'s four.
 const menuBoxCols = borderCells + 4
 
+// scopeChordModal is a modal carrying the diff viewer's `-` chord.
+//
+// Narrower than chordModal on purpose: that one describes a modal whose body is
+// the row list, and the diff viewer's body is its own. What the two share is only
+// that a menu floats over whatever is on screen, which is this interface and
+// nothing more.
+type scopeChordModal interface {
+	scopeMenu() (deckMenu, bool)
+}
+
 // armedMenu is the menu of whatever is waiting for a key, and whether anything is.
 //
 // One answer for every menu the deck has — asked once here rather than tested
@@ -107,12 +117,25 @@ func (m *Model) armedMenu() (deckMenu, bool) {
 		if c.prefixArmed {
 			return splitPrefixMenu(m), true
 		}
+		// A chord armed inside the focused half is the half's, not the split's: the
+		// keys went there, so the menu naming them belongs to it. Only the focused
+		// one is asked, because only one half has the keyboard.
+		if sc, ok := c.focused().(scopeChordModal); ok {
+			if mn, up := sc.scopeMenu(); up {
+				return mn, true
+			}
+		}
 	case *panePopover:
 		if len(c.actions) > 0 {
 			return userActionsMenu(c.actions), true
 		}
 		if c.prefixArmed {
 			return panePrefixMenu(m), true
+		}
+	}
+	if sc, ok := m.active.(scopeChordModal); ok {
+		if mn, up := sc.scopeMenu(); up {
+			return mn, true
 		}
 	}
 	if c, ok := m.active.(chordModal); ok {

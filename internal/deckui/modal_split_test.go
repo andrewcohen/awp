@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/andrewcohen/awp/internal/ui"
 )
 
 // The `|` split.
@@ -904,5 +906,125 @@ func TestASaveThatFailsIsSaidNotRefused(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "disk is full") {
 		t.Errorf("status is %q, which does not say the preference was not saved", m.status)
+	}
+}
+
+// The `-` menu has to be visible from a diff that is half of a split, which is the
+// layout it was invisible in: a half renders its own chrome and the viewer's
+// footer is not among it, so a menu drawn into that footer appeared nowhere. It
+// floats over the frame instead, the way an armed ctrl+b does.
+func TestScopeMenuFloatsOverASplit(t *testing.T) {
+	m := splitDeck(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	m = m.WithDiffScopes(func(Item) []ui.ScopeOption {
+		return []ui.ScopeOption{
+			{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { return "", nil }},
+			{Key: "w", Label: "working copy", Load: func(int) (string, error) { return "", nil }},
+			{Key: "r", Label: "a revision…", Choices: func() ([]ui.ScopeOption, error) {
+				return []ui.ScopeOption{{Key: "qpvuntsm", Label: "wip: something",
+					Load: func(int) (string, error) { return "", nil }}}, nil
+			}},
+		}
+	})
+	m = pressDeck(t, m, runeKey("|"))
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("|c opened %T (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+	if _, ok := s.focused().(*diffModal); !ok {
+		t.Fatalf("the focused half is %T, want the diff viewer — the rest of this test is about its chord", s.focused())
+	}
+
+	m = pressDeck(t, m, runeKey("-"))
+	if _, armed := m.armedMenu(); !armed {
+		t.Fatal("`-` in a split's diff half armed no menu, so nothing composites one")
+	}
+	frame := ansi.Strip(m.render())
+	for _, want := range []string{"vs stack base", "working copy", "a revision"} {
+		if !strings.Contains(frame, want) {
+			t.Fatalf("the floating menu does not offer %q:\n%s", want, frame)
+		}
+	}
+}
+
+// The path that was reported broken: into the agent pane, ctrl+b, c for a diff
+// beside it, and `-` in that diff. Distinct from |c above — that builds the split
+// from the row list, this one from inside a pane, and they are different
+// constructors with their own idea of which half has the keyboard.
+func TestScopeMenuOpensFromAPaneSplit(t *testing.T) {
+	m := splitDeck(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	m = m.WithDiffScopes(func(Item) []ui.ScopeOption {
+		return []ui.ScopeOption{
+			{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { return "", nil }},
+			{Key: "w", Label: "working copy", Load: func(int) (string, error) { return "", nil }},
+		}
+	})
+	// Into the agent pane first.
+	m = pressDeck(t, m, agentKey())
+	if _, ok := m.active.(*panePopover); !ok {
+		t.Fatalf("expected the agent pane, got %T (status %q)", m.active, m.status)
+	}
+	// ctrl+b, then c.
+	m = pressDeck(t, m, menuKey())
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("ctrl+b c opened %T (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+	if _, ok := s.focused().(*diffModal); !ok {
+		t.Fatalf("the focused half is %T — `-` goes to whichever half has the keyboard, so it would never reach the viewer", s.focused())
+	}
+
+	m = pressDeck(t, m, runeKey("-"))
+	if _, armed := m.armedMenu(); !armed {
+		t.Fatal("`-` in the diff half of a ctrl+b split armed no menu")
+	}
+	if frame := ansi.Strip(m.render()); !strings.Contains(frame, "working copy") {
+		t.Fatalf("the floating menu is not on the frame:\n%s", frame)
+	}
+}
+
+// And esc in the revision list closes the list, not the diff.
+//
+// The list owns the keyboard while it is up, so the modal must keep its hands
+// off — the same bargain the `?` overlay and the file filter have. It did not:
+// the modal's guard named those two by hand, so esc closed the whole diff and
+// there was no way from the list back into what you were reading.
+func TestEscInTheRevisionListKeepsTheDiff(t *testing.T) {
+	m := splitDeck(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	m = m.WithDiffScopes(func(Item) []ui.ScopeOption {
+		return []ui.ScopeOption{
+			{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { return "", nil }},
+			{Key: "r", Label: "a revision…", Choices: func() ([]ui.ScopeOption, error) {
+				return []ui.ScopeOption{{Key: "qpvuntsm", Label: "wip: something",
+					Load: func(int) (string, error) { return "", nil }}}, nil
+			}},
+		}
+	})
+	m = pressDeck(t, m, runeKey("|"))
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("|c opened %T (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+
+	m = pressDeck(t, m, runeKey("-"))
+	m = pressDeck(t, m, runeKey("r"))
+	if !strings.Contains(ansi.Strip(m.render()), "qpvuntsm") {
+		t.Fatalf("the revision list is not on screen:\n%s", ansi.Strip(m.render()))
+	}
+
+	m = pressDeck(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.active == nil {
+		t.Fatal("esc in the revision list closed the whole diff — the list owns the keyboard while it is up, so it should have closed the list")
+	}
+	if strings.Contains(ansi.Strip(m.render()), "qpvuntsm") {
+		t.Fatal("esc did not close the revision list")
 	}
 }

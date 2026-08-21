@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/andrewcohen/awp/internal/ui"
 	"github.com/andrewcohen/awp/internal/vterm"
 )
 
@@ -740,5 +741,66 @@ func TestOpeningBesideFromTheStripHandsOverTheKeyboard(t *testing.T) {
 	m = pressDeck(t, m, runeKey("\\"))
 	if after := ansi.Strip(m.render()); after == before {
 		t.Fatal("a key pressed after opening the diff changed nothing on screen — it is not reaching the viewer")
+	}
+}
+
+// The `- r` picker on the path that was reported broken, end to end: agent pane,
+// ctrl+\ to the strip, `c` for a diff beside it, then the scope chord and the
+// revision list inside that diff.
+//
+// This is the test the feature shipped without. It was backed out on the strength
+// of "the split diff is unusable", which turned out to be the strip keeping the
+// keyboard (see TestOpeningBesideFromTheStripHandsOverTheKeyboard) and nothing to
+// do with the picker — but nothing here had ever driven the picker from a split at
+// all, so there was no way to tell the two apart.
+func TestRevisionPickerFromASidebarSplit(t *testing.T) {
+	m, _ := sidebarPane(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return "", nil }
+	m = m.WithDiffScopes(func(Item) []ui.ScopeOption {
+		return []ui.ScopeOption{
+			{Key: "c", Label: "vs stack base", Load: func(int) (string, error) { return "", nil }},
+			{Key: "w", Label: "working copy", Load: func(int) (string, error) { return "", nil }},
+			{Key: "r", Label: "a revision…", Choices: func() ([]ui.ScopeOption, error) {
+				return []ui.ScopeOption{
+					{Key: "qpvuntsm", Label: "wip: the one being written",
+						Load: func(int) (string, error) { return "", nil }},
+					{Key: "kntqzsrx", Label: "feat: one that landed",
+						Load: func(int) (string, error) { return "", nil }},
+				}, nil
+			}},
+		}
+	})
+	m = pressDeck(t, m, leaveKey())
+	m.sidebarCursor = m.sidebarRowsInOrder()[0]
+	m = pressDeck(t, m, runeKey("c"))
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		t.Fatalf("`c` from the strip opened %T, want a split (status %q)", m.active, m.status)
+	}
+	t.Cleanup(func() { s.close(&m) })
+
+	// The chord, floating over the split.
+	m = pressDeck(t, m, runeKey("-"))
+	if _, armed := m.armedMenu(); !armed {
+		t.Fatal("`-` armed no menu in the diff half of a strip-opened split")
+	}
+	if frame := ansi.Strip(m.render()); !strings.Contains(frame, "a revision") {
+		t.Fatalf("the menu does not offer the revision picker:\n%s", frame)
+	}
+
+	// The list, and picking the second entry rather than defaulting to the first.
+	m = pressDeck(t, m, runeKey("r"))
+	if frame := ansi.Strip(m.render()); !strings.Contains(frame, "kntqzsrx") {
+		t.Fatalf("the revision list is not on screen:\n%s", frame)
+	}
+	m = pressDeck(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = pressDeck(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	dm, ok := s.focused().(*diffModal)
+	if !ok {
+		t.Fatalf("the focused half is %T, want the diff", s.focused())
+	}
+	if got := dm.inner.ScopeLabel(); got != "feat: one that landed" {
+		t.Fatalf("the viewer is reading %q, want the picked revision", got)
 	}
 }

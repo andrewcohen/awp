@@ -253,8 +253,9 @@ func TestScopeOptionsFor(t *testing.T) {
 	r := &reviewBaseRunner{trunk: "main", parent: "andrew/parent-change"}
 	item := deckuiItemForBase("/ws/child", "andrew/child")
 	opts := scopeOptionsFor(r, item, "/ws/child")
-	if len(opts) != 3 {
-		t.Fatalf("expected three scopes, got %d", len(opts))
+	// Three ranges and the revision picker.
+	if len(opts) != 4 {
+		t.Fatalf("expected three ranges plus the revision picker, got %d", len(opts))
 	}
 	// The first is the default the view opens on: the whole change against its
 	// stack base, which is what a review is normally of.
@@ -281,6 +282,21 @@ func TestScopeOptionsFor(t *testing.T) {
 	}
 	if base := opts[1].Base(); base != "" {
 		t.Errorf("the working copy has no base to name, got %q", base)
+	}
+	// The revision picker is last, and it is a submenu rather than a range: it has
+	// choices to resolve and no loader of its own, because which revision it reads
+	// is the question it exists to ask. Last because it is the one that asks a
+	// second question, and because the three ranges all end at @ — so it is the
+	// only entry that reaches a change that has already landed.
+	pick := opts[len(opts)-1]
+	if pick.Key != "r" {
+		t.Errorf("the last scope is %q, want the revision picker on r", pick.Key)
+	}
+	if pick.Choices == nil {
+		t.Error("the revision picker has no choices to resolve")
+	}
+	if pick.Load != nil {
+		t.Error("the revision picker should have no loader of its own — it stands for whichever revision is picked")
 	}
 }
 

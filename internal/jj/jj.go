@@ -723,3 +723,61 @@ func isJJDiagnosticLine(line string) bool {
 		strings.HasPrefix(low, "hint:") ||
 		strings.HasPrefix(low, "error:")
 }
+
+// Change is one revision as the revision picker offers it: what to ask for it by,
+// and what it says about itself.
+type Change struct {
+	// ID is the shortest unambiguous change id, which is what a revset takes.
+	ID string
+	// Description is the first line, empty for a change that has none.
+	Description string
+}
+
+// RecentChanges lists the revisions worth offering in a picker, nearest first.
+//
+// The revset is the current stack and then its recent ancestors, in that order,
+// because those are two different questions with one answer each. The stack is
+// what a review is normally of and it is what you are most likely to want; the
+// ancestors are how you reach something that has already landed. Merging them into
+// one list rather than offering a mode to switch keeps the picker one keypress
+// deep — `/` narrows it, which is a better answer to "there are a lot of these"
+// than a second menu.
+//
+// ctx is a required argument for the reason it is on HeadDescription: this runs
+// from a TUI, where the reader has already moved on by the time a hung jj would
+// finish.
+func (c *Client) RecentChanges(ctx context.Context, dir string, limit int) ([]Change, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	const tmpl = `change_id.shortest(8) ++ "\t" ++ description.first_line() ++ "\n"`
+	// latest() bounds the ancestors; the stack is unbounded because a stack long
+	// enough for that to matter is not a stack. Deduped below rather than in the
+	// revset, since `|` may return a change that is in both halves.
+	revset := "(trunk()..@) | latest(::@, " + strconv.Itoa(limit) + ")"
+	out, err := c.runner.Run(ctx, dir, "jj", "--ignore-working-copy", "log",
+		"-r", revset, "--no-graph", "-T", tmpl)
+	if err != nil {
+		return nil, formatCommandError("list recent changes", err, out)
+	}
+	seen := map[string]bool{}
+	changes := make([]Change, 0, limit)
+	for _, line := range strings.Split(out, "\n") {
+		// Indented lines are jj diagnostics that CombinedOutput merged in from
+		// stderr, the same hazard firstBookmarkName guards against.
+		if line == "" || line != strings.TrimLeft(line, " \t") {
+			continue
+		}
+		id, desc, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		changes = append(changes, Change{ID: id, Description: strings.TrimSpace(desc)})
+	}
+	return changes, nil
+}
