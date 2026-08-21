@@ -375,6 +375,14 @@ func (m *Model) openBesideFromSidebar(kind string) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	// The keyboard goes with it. A program opened from the strip is the thing you
+	// just asked for, so it is the thing the next key is meant for — and if the
+	// strip keeps the keyboard, its own handler reads that key first: j and k move
+	// its cursor, and most of the rest opens a deck screen about the row it is on.
+	// The program is then on screen and unreachable, which is what made this look
+	// like a keybinding fault rather than a focus one. Left behind while the
+	// fallback below always did it.
+	m.leaveSidebar()
 	switch active := m.active.(type) {
 	case *panePopover:
 		return active.splitWith(m, row, kind)
@@ -383,7 +391,6 @@ func (m *Model) openBesideFromSidebar(kind string) tea.Cmd {
 	}
 	// No arrangement to respect. Nothing reaches here today — the strip is only ever
 	// on screen over one — but the fallback is the plain thing rather than nothing.
-	m.leaveSidebar()
 	cmd, _ := m.openPaneOrArrangement(row, kind)
 	return cmd
 }
