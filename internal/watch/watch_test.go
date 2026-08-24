@@ -212,6 +212,7 @@ func TestPerUnitGateReset(t *testing.T) {
 		line("user", tr("b1", false)),
 		line("assistant", tu("TaskUpdate", "u2", map[string]any{"taskId": "1", "status": "completed"})),
 		line("assistant", tu("TaskUpdate", "u3", map[string]any{"taskId": "2", "status": "in_progress"})),
+		line("user", tr("u3", false)),
 	)
 	// Unit B is current; Unit A's build gate must NOT carry over.
 	if g := gate(st, "build"); g.Result != "" {
@@ -249,6 +250,7 @@ func TestTaskListReconstruction(t *testing.T) {
 		line("assistant", tu("TaskCreate", "c2", map[string]any{"subject": "second"})),
 		line("assistant", tu("TaskUpdate", "u1", map[string]any{"taskId": "1", "status": "completed"})),
 		line("assistant", tu("TaskUpdate", "u2", map[string]any{"taskId": "2", "subject": "second (renamed)"})),
+		line("user", tr("u2", false)),
 	)
 	if len(st.Todos) != 2 {
 		t.Fatalf("want 2 todos, got %d: %+v", len(st.Todos), st.Todos)
@@ -273,6 +275,7 @@ func TestTaskCreateSkipsSubjectlessCreate(t *testing.T) {
 		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "first real"})),
 		line("assistant", tu("TaskCreate", "c2", map[string]any{"subject": "second real"})),
 		line("assistant", tu("TaskUpdate", "u1", map[string]any{"taskId": "1", "status": "in_progress"})),
+		line("user", tr("u1", false)),
 	)
 	if len(st.Todos) != 2 {
 		t.Fatalf("want 2 todos (phantom skipped), got %d: %+v", len(st.Todos), st.Todos)
@@ -404,5 +407,54 @@ func TestGeneratePreambleUsesCommandOverMatch(t *testing.T) {
 	}
 	if strings.Contains(p, `pnpm lint\b`) {
 		t.Fatalf("preamble should not show the raw match regex:\n%s", p)
+	}
+}
+
+// A TaskUpdate the completion gate denied is not a completion.
+//
+// TaskUpdate carries a PreToolUse hook — the dev-loop's own gate — and a denied
+// call still leaves its request in the transcript, with an error result behind
+// it. Read as an outcome, a refused completion did the very thing it had just
+// been refused permission to do: end the unit and wipe its gate lights. Every
+// retry wiped them again, so the agent re-ran gates one at a time and was told
+// each time that the next one had not run.
+func TestABlockedTaskUpdateIsNotACompletion(t *testing.T) {
+	st := build(t,
+		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "Unit A"})),
+		line("assistant", tu("TaskUpdate", "u1", map[string]any{"taskId": "1", "status": "in_progress"})),
+		line("user", tr("u1", false)),
+		line("assistant", tu("Bash", "b1", map[string]any{"command": "go test ./..."})),
+		line("user", tr("b1", false)),
+		// The gate denies the completion: exit 2, an error result.
+		line("assistant", tu("TaskUpdate", "u2", map[string]any{"taskId": "1", "status": "completed"})),
+		line("user", tr("u2", true)),
+		line("assistant", tu("Bash", "b2", map[string]any{"command": "gofmt -l ."})),
+		line("user", tr("b2", false)),
+	)
+	if g := gate(st, "test"); g.Result != "pass" {
+		t.Errorf("the test gate is %q after a refused completion, want it still green — the refusal wiped it", g.Result)
+	}
+	if len(st.Todos) != 1 || st.Todos[0].Status != "in_progress" {
+		t.Errorf("todos = %+v, want the unit still in progress", st.Todos)
+	}
+}
+
+// The same call, allowed: the unit ends and its gates reset, exactly as before.
+func TestAnAllowedTaskUpdateStillCompletes(t *testing.T) {
+	st := build(t,
+		line("assistant", tu("TaskCreate", "c1", map[string]any{"subject": "Unit A"})),
+		line("assistant", tu("TaskUpdate", "u1", map[string]any{"taskId": "1", "status": "in_progress"})),
+		line("user", tr("u1", false)),
+		line("assistant", tu("Bash", "b1", map[string]any{"command": "go test ./..."})),
+		line("user", tr("b1", false)),
+		line("assistant", tu("TaskUpdate", "u2", map[string]any{"taskId": "1", "status": "completed"})),
+		line("user", tr("u2", false)),
+		line("assistant", tu("Edit", "e1", map[string]any{"file_path": "app/foo.ts"})),
+	)
+	if g := gate(st, "test"); g.Result != "" {
+		t.Errorf("the test gate is %q after the unit completed, want it reset", g.Result)
+	}
+	if len(st.Todos) != 1 || st.Todos[0].Status != "completed" {
+		t.Errorf("todos = %+v, want the unit completed", st.Todos)
 	}
 }

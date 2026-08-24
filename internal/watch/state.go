@@ -197,6 +197,9 @@ type folder struct {
 	st      State
 	gates   map[string]*GateState
 	pending map[string]string // tool_use ID -> gate name
+	// pendingTask holds a TaskUpdate that has been asked for and not yet
+	// answered — see taskChange, and the tool_result arm that applies one.
+	pendingTask map[string]taskChange
 
 	currentTodo string
 	started     bool           // has implementation begun in the current unit?
@@ -211,12 +214,98 @@ type folder struct {
 	checklist   []Todo // latest markdown "- [x]" checklist snapshot
 }
 
+// taskChange is a TaskUpdate the transcript has recorded being *asked for*,
+// held until its result says whether it happened.
+//
+// A tool_use block is a request, not an outcome. TaskUpdate has a PreToolUse
+// hook on it — the dev-loop's own completion gate — and a hook that denies the
+// call leaves the request in the transcript with an error result behind it. Read
+// as an outcome, a denied completion was doing exactly what it had just been
+// refused permission to do: ending the unit and wiping its gate lights. Every
+// retry of the blocked call wiped them again, so the agent re-ran gates one at a
+// time and was told each time that the next one had not run.
+type taskChange struct {
+	id      string
+	status  string
+	subject string
+	ts      time.Time
+}
+
 func newFolder() *folder {
 	return &folder{
-		gates:    map[string]*GateState{},
-		pending:  map[string]string{},
-		units:    map[int]string{},
-		taskByID: map[string]*Todo{},
+		gates:       map[string]*GateState{},
+		pending:     map[string]string{},
+		pendingTask: map[string]taskChange{},
+		units:       map[int]string{},
+		taskByID:    map[string]*Todo{},
+	}
+}
+
+// flushUnanswered applies the held TaskUpdates that this line proves will never
+// be answered, and is what keeps the wait from being indefinite.
+//
+// A result follows its request in the very next line, so a change still held
+// when a line arrives that is not its result got no result at all — an
+// interrupted session, or a transcript that ends mid-call. Those changes are
+// taken at their word, which is what the folder did with every change before
+// results were consulted at all.
+//
+// Called before this line's own blocks are folded, so a request made here is not
+// flushed by its own arrival.
+func (f *folder) flushUnanswered(blocks []block) {
+	if len(f.pendingTask) == 0 {
+		return
+	}
+	answered := make(map[string]bool, len(blocks))
+	for _, b := range blocks {
+		if b.Type == "tool_result" && b.ToolUseID != "" {
+			answered[b.ToolUseID] = true
+		}
+	}
+	ids := make([]string, 0, len(f.pendingTask))
+	for id := range f.pendingTask {
+		if !answered[id] {
+			ids = append(ids, id)
+		}
+	}
+	// Sorted: two changes held at once (parallel TaskUpdates in one message)
+	// have to land in a fixed order, and map order is not one. The ids are the
+	// tool_use ids in the order the model emitted them.
+	sort.Strings(ids)
+	for _, id := range ids {
+		ch := f.pendingTask[id]
+		delete(f.pendingTask, id)
+		f.applyTaskChange(ch)
+	}
+}
+
+// applyTaskChange folds a TaskUpdate that actually landed.
+//
+// This is the half of the old inline handler that was always correct — the
+// status moves, and a unit boundary resets the loop — now reached only from the
+// result rather than from the request.
+func (f *folder) applyTaskChange(ch taskChange) {
+	t := f.taskByID[ch.id]
+	if t == nil {
+		return
+	}
+	if ch.subject != "" {
+		t.Content = ch.subject
+	}
+	if ch.status == "" {
+		return
+	}
+	t.Status = ch.status
+	if ch.status == "in_progress" && ch.id != f.currentTask {
+		f.currentTask = ch.id
+		f.resetUnit(ch.ts)
+	}
+	// Finishing the current unit resets the loop for the next one: clear the
+	// gate lights and drop back toward implement, so later work — even ad-hoc,
+	// un-tracked edits — doesn't inherit the completed unit's stale green gates.
+	if ch.status == "completed" && ch.id == f.currentTask {
+		f.currentTask = ""
+		f.resetUnit(ch.ts)
 	}
 }
 
@@ -249,6 +338,7 @@ func (f *folder) line(loop Loop, raw []byte) {
 		return
 	}
 	blocks := decodeBlocks(ln.Message.Content)
+	f.flushUnanswered(blocks)
 	for _, b := range blocks {
 		switch b.Type {
 		case "tool_use":
@@ -284,26 +374,13 @@ func (f *folder) line(loop Loop, raw []byte) {
 					Subject string `json:"subject"`
 				}
 				_ = json.Unmarshal(b.Input, &in)
-				if t := taskByID[in.TaskID]; t != nil {
-					if in.Subject != "" {
-						t.Content = in.Subject
-					}
-					if in.Status != "" {
-						t.Status = in.Status
-						if in.Status == "in_progress" && in.TaskID != f.currentTask {
-							f.currentTask = in.TaskID
-							resetUnit(ln.Timestamp)
-						}
-						// Finishing the current unit resets the loop for the
-						// next one: clear the gate lights and drop back toward
-						// implement, so later work — even ad-hoc, un-tracked
-						// edits — doesn't inherit the completed unit's stale
-						// green gates.
-						if in.Status == "completed" && in.TaskID == f.currentTask {
-							f.currentTask = ""
-							resetUnit(ln.Timestamp)
-						}
-					}
+				// Held until the result, which is what says the update happened
+				// rather than that it was attempted. See taskChange.
+				f.pendingTask[b.ID] = taskChange{
+					id:      in.TaskID,
+					status:  in.Status,
+					subject: in.Subject,
+					ts:      ln.Timestamp,
 				}
 			default:
 				// A task list "exists" once any TaskCreate has landed or a
@@ -316,6 +393,12 @@ func (f *folder) line(loop Loop, raw []byte) {
 				st.LastActivity = ln.Timestamp
 			}
 		case "tool_result":
+			if ch, ok := f.pendingTask[b.ToolUseID]; ok {
+				delete(f.pendingTask, b.ToolUseID)
+				if !b.IsError {
+					f.applyTaskChange(ch)
+				}
+			}
 			if name, ok := pending[b.ToolUseID]; ok {
 				g := gates[name]
 				if b.IsError {
