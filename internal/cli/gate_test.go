@@ -653,12 +653,15 @@ func TestGateCheckHookNamesTheUnitBeingCompleted(t *testing.T) {
 	}
 }
 
-// A completion of some other unit is not answered out of this one's gate record.
+// A completion of some other unit is answered out of the gates on record.
 //
-// Green gates belong to the unit they were run for. Spending them on a task that
-// was never in progress would make "mark one unit in_progress, then complete
-// every other" a way past the gate entirely.
-func TestGateCheckHookRefusesToSpendAnotherUnitsGates(t *testing.T) {
+// Refusing it was tried and had to come out. TaskUpdate sends no subject on a
+// status-only change, so both halves of that refusal printed the snapshot's label
+// — "unit 'X' can't be marked complete: the gates on record belong to unit 'X'" —
+// and behind the nonsense was a trap: an agent tidying a task it finished an hour
+// ago could get past it only by marking a done unit in_progress and re-running
+// gates on work it had already shipped. A real agent spent four turns there.
+func TestCompletingAnOlderTaskIsNotRefused(t *testing.T) {
 	const root = "/tmp/awp-gate-other-unit"
 	fs := newFakeStore()
 	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass", "build": "pass"})
@@ -667,13 +670,9 @@ func TestGateCheckHookRefusesToSpendAnotherUnitsGates(t *testing.T) {
 	withGateRepo(t, root, gateConfigJSON)
 
 	var stderr bytes.Buffer
-	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed","subject":"some other unit"}}`)
-	err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr)
-	if !errors.Is(err, ErrGateBlocked) {
-		t.Fatalf("a unit with no gates of its own completed on another unit's green gates (err %v)", err)
-	}
-	if !contains(stderr.String(), "some other unit") || !contains(stderr.String(), "prompt plumbing") {
-		t.Errorf("reason = %q, want it to name both the unit refused and the one the gates belong to", stderr.String())
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed"}}`)
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("tidying an older task was blocked: %v (%s)", err, stderr.String())
 	}
 }
 
