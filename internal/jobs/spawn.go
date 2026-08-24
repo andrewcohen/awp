@@ -101,10 +101,9 @@ func (s *Store) Spawn(spec Spec, title string, opts SpawnOptions) (Job, error) {
 		return Job{}, fmt.Errorf("start run-job: %w", err)
 	}
 
-	// Capture pid + start time before the supervising goroutine has a
-	// chance to call Wait (which we deliberately don't do — we want
-	// the child fully detached). We stuff these into the record so
-	// orphan detection has something to compare against later.
+	// Captured before the reaper goroutine below can run, since Wait
+	// invalidates cmd.Process. These go into the record so orphan
+	// detection has something to compare against later.
 	pid := cmd.Process.Pid
 	startTime, _ := PIDStartTime(pid)
 
@@ -119,11 +118,23 @@ func (s *Store) Spawn(spec Spec, title string, opts SpawnOptions) (Job, error) {
 		return Job{}, fmt.Errorf("record pid: %w", err)
 	}
 
-	// Release the cmd.Process struct so Go's wait reaping doesn't
-	// turn the child into a zombie when the deck exits. Setsid + a
-	// non-Wait call on Linux means the init process inherits and
-	// reaps; we don't need to track the child further.
-	_ = cmd.Process.Release()
+	// Reap it when it ends. Detaching is about who the child *obeys* —
+	// Setsid gives it its own session, so it survives the deck and takes
+	// no signal sent to the deck's group — and none of that changes who
+	// its parent is. Until the parent waits, an exited child stays a
+	// zombie in the process table.
+	//
+	// This used to call cmd.Process.Release() instead, on the theory that
+	// letting go of the handle handed the child to init. It does not: it
+	// only lets Go's finalizer free the struct. Measured, a deck spawning
+	// a pr-status job every few seconds accumulated one <defunct> child
+	// per spawn — several hundred inside an hour — because nothing here
+	// ever waited on one.
+	//
+	// A goroutine per live job, blocked on Wait, is what that costs. It
+	// holds nothing else: the log file is the child's own descriptor, and
+	// Wait closes only pipes it opened itself, of which there are none.
+	go func() { _ = cmd.Wait() }()
 
 	out, err := s.Get(id)
 	if err != nil {
