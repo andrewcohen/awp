@@ -490,11 +490,17 @@ When applicable, run:
 
 - `mise exec -- gofmt -l .` (no output = everything is formatted)
 - `mise exec -- golangci-lint run ./...` (must be `0 issues`)
-- `go test ./...`
-- `go vet ./...`
-- `go build ./...`
+- `make test` (`go test ./...`)
+- `make vet` (`go vet ./...`)
+- `make build` (`go build ./...`)
 
 If you cannot run something, state what was not run and why.
+
+The last three go through `make` rather than `go` directly because the Makefile
+sets the macOS deployment target Wails needs — `gdeck` is in `./...`, and without
+those flags every full build ends in a screenful of `ld: warning: object file …
+was built for newer 'macOS' version` that hides whatever else the gate said. See
+`CGO_ENV` in the Makefile. A bare `go build ./...` is not wrong, just noisy.
 
 ### The default gate does not cover the terminal emulator
 
@@ -510,13 +516,13 @@ So a change to how a pane interprets bytes, encodes a key, or answers a query is
 `internal/vterm`:
 
 ```sh
-CGO_ENABLED=1 \
-CGO_CFLAGS="-I$HOME/.cache/awp/libghostty-vt/out/include" \
-CGO_LDFLAGS="$HOME/.cache/awp/libghostty-vt/out/lib/libghostty-vt.a" \
-  mise exec -- go test -tags ghosttyvt ./...
+make ghostty-test
 ```
 
-(`make ghostty-lib` builds the archive if it is not cached yet.)
+That target carries the three flags the tagged build needs — the include path,
+the archive, and the macOS deployment target — and builds the archive first if it
+is not cached yet. Spelling them by hand is how you end up compiling none of
+these tests and reading it as a pass.
 
 That is the trade for deleting the pure-Go emulator. Two emulators meant the
 default gate always had one to test against — and it also meant every fidelity

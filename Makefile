@@ -5,6 +5,7 @@
 #
 #   make install    the ordinary build, the way it has always been installed
 #   make ghostty    the same, plus the libghostty-vt pane emulator
+#   make ghostty-test  the tagged suite `make test` cannot compile
 #   make check      the five gates: format, lint, vet, test, build
 #
 # go is invoked through mise because it is not on PATH by itself here.
@@ -28,23 +29,76 @@ GHOSTTY_OUT   := $(GHOSTTY_CACHE)/out
 GHOSTTY_LIB   := $(GHOSTTY_OUT)/lib/libghostty-vt.a
 GHOSTTY_URL   := https://github.com/ghostty-org/ghostty/releases/download/tip/libghostty-vt-source.tar.gz
 
-.PHONY: install ghostty ghostty-lib check fmt lint vet test build clean-ghostty
+# Two things in this tree arrive at the linker as prebuilt objects with their own
+# macOS deployment target, and ld warns once per object when the link targets
+# something older than they do. Neither is a real problem and both are loud
+# enough to bury whatever else a build said:
+#
+#   libghostty-vt.a — Zig builds it at its own default (13.0), and it is what
+#     `make ghostty` links. This is the one you hit if you only build zdeck.
+#   gdeck's Wails — Cocoa sources with no target of their own, so they compile
+#     against the installed SDK (26.0 here). Wails expects the build to state a
+#     target, which is why its own generated gdeck/build/darwin/Taskfile.yml sets
+#     this same pair of flags; only the repo-wide targets here were missing them.
+#
+# Both flags, not just the linker one: the warning is a mismatch between how the
+# objects were compiled and how they are linked, so setting only the link target
+# moves it rather than removing it. Sources we compile get retargeted by
+# CGO_CFLAGS; a prebuilt archive cannot be, which is what the floor below is
+# about.
+#
+# The number has a floor: at least the minos of every prebuilt object the link
+# pulls in. libghostty-vt.a is the binding one — `otool -l $(GHOSTTY_LIB) | grep
+# -A3 LC_BUILD_VERSION` says what Zig built it at, and a Zig upgrade that raises
+# that default is what would bring the warning back, on `make ghostty` only.
+#
+# Empty off darwin — the flags are clang's and other toolchains reject them.
+MACOS_MIN := 13.0
+ifeq ($(shell uname -s),Darwin)
+MACOS_CFLAGS := -mmacosx-version-min=$(MACOS_MIN)
+# -O2 -g is go's own default CGO_CFLAGS. Setting the variable replaces that
+# default rather than adding to it, so it has to be restated or every cgo shim in
+# the tree quietly loses its optimization to a warning fix.
+CGO_ENV      := CGO_CFLAGS="-O2 -g $(MACOS_CFLAGS)" CGO_LDFLAGS="$(MACOS_CFLAGS)"
+# go hands CGO_LDFLAGS to both the cgo compile and the final link, so an archive
+# named there arrives at ld twice and ld says so — once per `make ghostty`, about
+# a duplicate it is already handling correctly. Only the ghostty target names an
+# archive, so only it needs this.
+DUP_LIB_QUIET := -Wl,-no_warn_duplicate_libraries
+else
+MACOS_CFLAGS :=
+CGO_ENV      :=
+DUP_LIB_QUIET :=
+endif
+
+.PHONY: install ghostty ghostty-lib ghostty-test check fmt lint vet test build clean-ghostty
 
 install:
-	$(GO) install ./...
+	$(CGO_ENV) $(GO) install ./...
 
 # ghostty installs over the same binary install does, so the two are one keystroke
 # apart in both directions. That matters: this build is the experiment, and going
 # back to the thing it is being compared against must not be a research task.
 ghostty: $(GHOSTTY_LIB)
 	CGO_ENABLED=1 \
-	CGO_CFLAGS="-I$(GHOSTTY_OUT)/include" \
-	CGO_LDFLAGS="$(GHOSTTY_LIB)" \
+	CGO_CFLAGS="-O2 -g -I$(GHOSTTY_OUT)/include $(MACOS_CFLAGS)" \
+	CGO_LDFLAGS="$(GHOSTTY_LIB) $(MACOS_CFLAGS) $(DUP_LIB_QUIET)" \
 	$(GO) install -tags ghosttyvt ./...
 	@echo
 	@echo "installed with the libghostty-vt emulator, which is what a pane runs on."
 	@echo "  awp zdeck        panes"
 	@echo "  make install     the ordinary build: no emulator, so no panes"
+
+# The tagged suite: everything that drives a real terminal is behind
+# -tags ghosttyvt, so a plain `make test` compiles none of it. Run this when you
+# touch internal/vterm. One target rather than a command to remember — the flags
+# are the same three the ghostty build needs, and a wrong one skips the tests it
+# was supposed to run rather than failing.
+ghostty-test: $(GHOSTTY_LIB)
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="-O2 -g -I$(GHOSTTY_OUT)/include $(MACOS_CFLAGS)" \
+	CGO_LDFLAGS="$(GHOSTTY_LIB) $(MACOS_CFLAGS) $(DUP_LIB_QUIET)" \
+	$(GO) test -tags ghosttyvt ./...
 
 ghostty-lib: $(GHOSTTY_LIB)
 
@@ -76,10 +130,10 @@ lint:
 	$(LINT) run ./...
 
 vet:
-	$(GO) vet ./...
+	$(CGO_ENV) $(GO) vet ./...
 
 test:
-	$(GO) test ./...
+	$(CGO_ENV) $(GO) test ./...
 
 build:
-	$(GO) build ./...
+	$(CGO_ENV) $(GO) build ./...
