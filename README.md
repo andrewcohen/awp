@@ -1568,7 +1568,10 @@ each. Walking the strip and going on to the deck lands you on the row you walked
 and if that row is one the list was filtering out, the deck clears the filter and
 returns to the all scope rather than quietly aiming your next key at something else.
 The strip scrolls to keep its cursor on screen, and still says `+N more` when the list
-stops early.
+stops early — **N workspaces, not N lines**. A row is two lines with a blank between
+rows and a blank and a header per group, so counting lines said `+124 more` over sixty
+workspaces: a number three times the thing it appeared to name, and the only thing on
+the strip worth counting is workspaces.
 
 The cursor is the row's **name in `Warning`, bold** — half of the app-wide selection
 treatment, without the `┃ ` bar the other half of it would add. The bar costs a column
