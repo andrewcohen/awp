@@ -22,16 +22,9 @@ import (
 // this repo's preamble — what its workspace is and how to title it, plus the
 // dev loop where one is configured (see agentPreamble) — in the system prompt,
 // which persists across the session and works even with no task prompt, rather
-// than as a one-shot prompt prefix. The review flow intentionally uses
-// config.AgentInvocation directly (a reviewer shouldn't be told to work in
-// units / run gates / commit).
+// than as a one-shot prompt prefix.
 func codingAgentInvocation(repoRoot string) string {
-	inv := config.AgentInvocation(repoRoot)
-	path, ok := agentPreambleFile(repoRoot)
-	if !ok {
-		return inv
-	}
-	return inv + " " + appendPreambleFlag + " " + shellSingleQuote(path)
+	return agentInvocation(repoRoot, agentPreambleFile)
 }
 
 // codingAgentArgv is codingAgentInvocation for callers that exec the agent
@@ -48,40 +41,60 @@ func codingAgentInvocation(repoRoot string) string {
 // could disagree about — whether a preamble applies, where it is, what the
 // flag is called — is single-sourced.
 func codingAgentArgv(repoRoot string) []string {
+	return agentArgv(repoRoot, agentPreambleFile)
+}
+
+// reviewAgentInvocation and reviewAgentArgv launch an agent whose job is to read
+// someone else's change. Same two forms, same reason; only the preamble differs.
+//
+// A reviewer gets the workspace section and not the loop one. Its row has a title
+// like any other and is the better for being titled — a review workspace called
+// `pr-2320-jordan-survey-s-a5f9` says nothing a person wants to read. What it must
+// not be told is to work in units, run gates and commit: a reviewer given that
+// starts doing the author's job on their PR.
+//
+// The two flavors used to differ by having a preamble at all, which is why the
+// reviewer had none. Splitting the text is what lets the distinction be about
+// content rather than about presence.
+func reviewAgentInvocation(repoRoot string) string {
+	return agentInvocation(repoRoot, reviewPreambleFile)
+}
+
+func reviewAgentArgv(repoRoot string) []string {
+	return agentArgv(repoRoot, reviewPreambleFile)
+}
+
+// agentInvocation and agentArgv are the two renderings of "start Claude here with
+// this preamble", so which preamble a flavor gets is the one thing its own
+// function says.
+func agentInvocation(repoRoot string, preamble func(string) (string, bool)) string {
+	inv := config.AgentInvocation(repoRoot)
+	path, ok := preamble(repoRoot)
+	if !ok {
+		return inv
+	}
+	return inv + " " + appendPreambleFlag + " " + shellSingleQuote(path)
+}
+
+func agentArgv(repoRoot string, preamble func(string) (string, bool)) []string {
 	argv := fields(config.AgentInvocation(repoRoot))
-	if path, ok := agentPreambleFile(repoRoot); ok {
+	if path, ok := preamble(repoRoot); ok {
 		argv = append(argv, appendPreambleFlag, path)
 	}
 	return argv
 }
 
-// reviewAgentArgv is the same launch without the preamble, for an agent whose
-// job is to read someone else's change.
-//
-// The preamble's loop section tells an agent to work in units, run gates and
-// commit. A reviewer given that starts doing the author's job on their PR, so the
-// tmux review path has always reached for config.AgentInvocation directly. Named
-// here so the pane path says the same thing the same way, rather than
-// open-coding "the coding one, minus the preamble" and drifting the next time
-// a flag is added.
-//
-// The workspace section would be fair to give a reviewer — a review workspace is
-// a row like any other, and titling it is the same courtesy. It is left out with
-// the rest for now rather than splitting the preamble in two at its one excluded
-// caller.
-func reviewAgentArgv(repoRoot string) []string {
-	return fields(config.AgentInvocation(repoRoot))
-}
-
 // appendPreambleFlag is how Claude is told to read the agent preamble.
 const appendPreambleFlag = "--append-system-prompt-file"
 
-// agentPreambleFile writes this repo's agent preamble and returns its path. ok
-// is false for an agent that is not Claude, for an empty preamble, or when the
+// agentPreambleFile writes this repo's coding preamble and returns its path;
+// reviewPreambleFile writes the reviewer's, which is the workspace section alone.
+//
+// ok is false for an agent that is not Claude, for an empty preamble, or when the
 // file could not be written — in which case the agent starts without one rather
 // than not at all.
 //
-// No longer gated on a dev_loop. The preamble is two sections now (see
+// Neither is gated on a dev_loop. The preamble is two sections now (see
 // agentPreamble), and the workspace one holds for every repo awp has: a project
 // with no loop configured used to get no preamble at all, so its agents were
 // never told the one thing every awp agent can do.
@@ -90,6 +103,22 @@ const appendPreambleFlag = "--append-system-prompt-file"
 // Claude reads the file directly, so the launch command stays short and there
 // is no shell-quoting of the content, which inline embedding garbles.
 func agentPreambleFile(repoRoot string) (string, bool) {
+	return preambleFile(repoRoot, agentPreamble(repoRoot), "")
+}
+
+func reviewPreambleFile(repoRoot string) (string, bool) {
+	return preambleFile(repoRoot, workspacePreamble(), "review")
+}
+
+// preambleFile is the shared half: refuse for an agent that cannot read one, then
+// write it where that flavor's file lives.
+//
+// A flavor of its own rather than one file rewritten per launch, because Claude
+// reads the path at startup rather than when we hand it over: a coding agent
+// starting a moment after a reviewer would replace the file under it, and the
+// reviewer would come up told to work in units and commit — the one thing this
+// distinction exists to prevent, arriving as a race.
+func preambleFile(repoRoot, text, flavor string) (string, bool) {
 	cfg, _ := config.Load(repoRoot)
 	agent := strings.TrimSpace(cfg.Agent)
 	if agent == "" {
@@ -98,11 +127,10 @@ func agentPreambleFile(repoRoot string) (string, bool) {
 	if !strings.Contains(agent, "claude") {
 		return "", false // --append-system-prompt is Claude-specific
 	}
-	preamble := agentPreamble(repoRoot)
-	if strings.TrimSpace(preamble) == "" {
+	if strings.TrimSpace(text) == "" {
 		return "", false
 	}
-	path, err := writeAgentPreamble(repoRoot, preamble)
+	path, err := writeAgentPreamble(repoRoot, text, flavor)
 	if err != nil {
 		return "", false
 	}
@@ -112,7 +140,7 @@ func agentPreambleFile(repoRoot string) (string, bool) {
 // writeAgentPreamble persists the generated preamble to a stable per-repo
 // path under ~/.awp so the agent launch command can `cat` it instead of
 // carrying the whole text inline.
-func writeAgentPreamble(repoRoot, preamble string) (string, error) {
+func writeAgentPreamble(repoRoot, preamble, flavor string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -120,6 +148,9 @@ func writeAgentPreamble(repoRoot, preamble string) (string, error) {
 	name := strings.ReplaceAll(strings.Trim(repoRoot, "/"), "/", "-")
 	if name == "" {
 		name = "default"
+	}
+	if flavor != "" {
+		name += "." + flavor
 	}
 	dir := filepath.Join(home, ".awp", "agent-preamble")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

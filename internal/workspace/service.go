@@ -1012,7 +1012,7 @@ func (s *service) UpdatePrompt(workspaceName, prompt string) error {
 type PendingPrompt struct {
 	Text string
 	// Review says the recipient is a reviewer, so whatever starts the agent
-	// must start one without the dev-loop preamble.
+	// must start one without the preamble's dev-loop half.
 	//
 	// The two agent flavors are not interchangeable and the difference is not
 	// visible from the prompt text: a reviewer told to work in units, run
