@@ -1055,12 +1055,22 @@ any state file, so it gets neither: it runs in `~/.awp/captain`, a directory awp
 owns, and it is launched with the workspace environment deliberately withheld.
 
 **And it is drawn as a modal over what you were looking at, not in place of it.**
-It takes four fifths of the screen's width and three fifths of its height, centred
+It takes three fifths of the screen's width and four fifths of its height, centred
 on the screen, floated over the frame that was already there — the row list, or an
 agent's pane with the sidebar beside it — where every other pane fills the frame edge
 to edge. That is the same argument in cells: full-screen in awp means a workspace's
-program, so a captain wearing it said it was one. Wider than tall because what the
-captain prints is prose, and prose wants columns more than rows.
+program, so a captain wearing it said it was one. **Taller than wide**, which is the
+opposite of what it opened as: the first argument was that the captain prints prose
+and prose wants columns, which is true of a paragraph and wrong about this box. What
+is in it is a *conversation* — it grows downward and is read by scrolling, so rows are
+what it runs out of, while past roughly 120 columns a line gets harder to read rather
+than easier. The extra width was going to whitespace while the exchange scrolled off
+the top.
+
+`ctrl+\` closes it, from anywhere. It is handed every key while it is up, so the leave
+key cannot mean what it means in a pane — stepping aside to the strip moved the keys
+somewhere that could not receive them, and with no other way out that made a trap of a
+modal.
 
 Floating rather than replacing is what makes `a` worth pressing from inside a pane.
 The captain's subject is the deck, so what you want while reading its claims is the

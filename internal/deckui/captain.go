@@ -94,15 +94,22 @@ func (m *Model) captainBox() box {
 }
 
 // captainWidthNum / captainWidthDen and captainHeightNum / captainHeightDen are
-// how much of its region the captain gets: four fifths of the width, three fifths
+// how much of its region the captain gets: three fifths of the width, four fifths
 // of the height.
 //
-// Wider than tall because the captain's output is prose, and prose wants columns
-// more than it wants rows. Spelled as integer fractions rather than as a float so
-// the arithmetic is the same on every terminal and a test can name the answer.
+// Taller than wide, which is the opposite of what it opened as. The first argument
+// was that the captain's output is prose and prose wants columns — true of a
+// paragraph, and wrong about this box: what is in it is a *conversation*, which
+// grows downward and is read by scrolling. Rows are what it runs out of. Columns it
+// stops using: past roughly 120 a line of prose gets harder to read rather than
+// easier, so the extra width went to whitespace while the exchange scrolled off the
+// top.
+//
+// Spelled as integer fractions rather than as a float so the arithmetic is the same
+// on every terminal and a test can name the answer.
 const (
-	captainWidthNum, captainWidthDen   = 4, 5
-	captainHeightNum, captainHeightDen = 3, 5
+	captainWidthNum, captainWidthDen   = 3, 5
+	captainHeightNum, captainHeightDen = 4, 5
 )
 
 // captainMinW / captainMinH are the terminal the captain will not go below —

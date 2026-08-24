@@ -14,6 +14,11 @@ func captainOverPane(t *testing.T) Model {
 	t.Helper()
 	m := splitDeck(t)
 	m.sidebar = true
+	// A strip wide enough that the screen-centred box would start inside it, which
+	// is what makes this fixture about the clamp. At the default width the captain
+	// clears the strip on a 200-column terminal and nothing is pushed — a fine
+	// screen, and not the one this is asking about.
+	m.sidebarW = 60
 	m = pressDeck(t, m, agentKey())
 	under, ok := m.active.(*panePopover)
 	if !ok {
@@ -54,10 +59,12 @@ func TestTheCaptainIsSmallerThanTheScreen(t *testing.T) {
 	if want := m.height * captainHeightNum / captainHeightDen; got.h != want {
 		t.Errorf("the captain is %d rows, want %d", got.h, want)
 	}
-	// Wider than tall, in the sense that matters: it keeps more of its width than
-	// of its height, because what it prints is prose.
-	if captainWidthNum*captainHeightDen <= captainHeightNum*captainWidthDen {
-		t.Error("the captain keeps no more of its width than of its height")
+	// Taller than wide, in the sense that matters: it keeps more of its height than
+	// of its width, because what is in it is a conversation. It grows downward and
+	// is read by scrolling, so rows are what it runs out of; past roughly 120
+	// columns a line of prose gets harder to read rather than easier.
+	if captainHeightNum*captainWidthDen <= captainWidthNum*captainHeightDen {
+		t.Error("the captain keeps no more of its height than of its width")
 	}
 }
 
@@ -227,15 +234,15 @@ func TestTheCaptainsRegionHasAFloor(t *testing.T) {
 		what:   "a big terminal gets the fraction",
 		screen: box{w: 200, h: 40},
 		in:     box{w: 200, h: 40},
-		want:   box{x: 20, y: 8, w: 160, h: 24},
+		want:   box{x: 40, y: 4, w: 120, h: 32},
 	}, {
 		// Sized and centred against the screen; the region only clamps. The
-		// screen-centred column, 20, is inside a strip 30 wide, so it is pushed to
+		// screen-centred column, 40, is inside a strip 60 wide, so it is pushed to
 		// the strip's edge — a modal off centre, rather than one drawn over chrome.
 		what:   "the chrome's cells are not taken",
 		screen: box{w: 200, h: 40},
-		in:     box{x: 30, y: 1, w: 170, h: 39},
-		want:   box{x: 30, y: 8, w: 160, h: 24},
+		in:     box{x: 60, y: 1, w: 140, h: 39},
+		want:   box{x: 60, y: 4, w: 120, h: 32},
 	}, {
 		// Under the floor on either axis the fraction is abandoned rather than
 		// honoured — a clipped captain reads as a bug, not as a modal.
