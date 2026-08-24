@@ -196,3 +196,68 @@ func TestTheHelpOverlayNamesTheCaptain(t *testing.T) {
 		t.Errorf("the ? overlay never says %s %s opens the captain", PaneMenuKey, captainKey)
 	}
 }
+
+// ctrl+\ closes the captain, over the row list and over a pane with the strip up.
+//
+// The captain is handed every key before anything else the deck would route, so a
+// leave key that gave the keyboard to the strip behind it moved the keys somewhere
+// that could not receive them: the strip did not respond, the captain went on
+// swallowing, and the one key that leaves a pane appeared to do nothing. There is
+// no other way out of the captain, so this is not a degraded gesture — it is the
+// difference between a modal and a trap.
+func TestCtrlBackslashClosesTheCaptainOverTheRowList(t *testing.T) {
+	m := captainDeck(t)
+	m = pressDeck(t, m, runeKey(captainKey))
+	p := captainPane(t, &m)
+	t.Cleanup(func() { p.close(&m) })
+
+	m = pressDeck(t, m, leaveKey())
+	if m.captain != nil {
+		t.Fatal("the captain is still up after ctrl+\\")
+	}
+	if !fakeOf(t, p).isClosed() {
+		t.Error("the captain's process was left running behind a closed modal")
+	}
+}
+
+// The case that was the trap: a strip is on screen, so the leave key had somewhere
+// else to go, and the captain kept the keyboard anyway.
+func TestCtrlBackslashClosesTheCaptainOverAPaneWithTheStripUp(t *testing.T) {
+	m, under := sidebarPane(t)
+	if !m.showsSidebar() {
+		t.Fatal("the strip is not up, so this is not the case that broke")
+	}
+	m.sidebarFocus = false
+	// From inside a pane the captain is the menu's verb: `a` alone belongs to the
+	// program.
+	m = pressDeck(t, m, menuKey())
+	m = pressDeck(t, m, runeKey(captainKey))
+	p := captainPane(t, &m)
+	t.Cleanup(func() { p.close(&m) })
+
+	m = pressDeck(t, m, leaveKey())
+	if m.captain != nil {
+		t.Fatalf("the captain is still up after ctrl+\\ (sidebarFocus=%v)", m.sidebarFocus)
+	}
+	if !fakeOf(t, p).isClosed() {
+		t.Error("the captain's process was left running behind a closed modal")
+	}
+	// And what it floated over is still there, which is the point of an overlay.
+	if m.active != under {
+		t.Errorf("the pane behind the captain is %T, want the one it was opened over", m.active)
+	}
+}
+
+// A pane in an arrangement still steps aside to the strip, which is the cycle the
+// strip is part of: pane → sidebar → deck → pane. Only the captain skips it.
+func TestCtrlBackslashStillEntersTheStripFromAPane(t *testing.T) {
+	m, p := sidebarPane(t)
+	m.sidebarFocus = false
+	m = pressDeck(t, m, leaveKey())
+	if m.active != p {
+		t.Fatalf("the pane closed instead of stepping aside: active is %T", m.active)
+	}
+	if !m.sidebarFocus {
+		t.Error("the keyboard did not go to the strip")
+	}
+}

@@ -1187,7 +1187,14 @@ func (p *panePopover) update(m *Model, msg tea.Msg) tea.Cmd {
 				// whatever is running.
 				return nil
 			}
-			if m.enterSidebarFromPane() {
+			// The captain closes rather than stepping aside. It is an overlay, and
+			// while it is up it is handed every key before anything else the deck
+			// would route (see Update) — so giving the keyboard to the strip behind it
+			// moved the keys somewhere that could not receive them: the strip's cursor
+			// did not respond, the captain went on swallowing, and the key that is the
+			// only way out of a pane appeared to do nothing at all. A pane in an
+			// arrangement still steps aside, which is the cycle the strip is part of.
+			if m.captain != p && m.enterSidebarFromPane() {
 				return nil
 			}
 			return p.close(m)
