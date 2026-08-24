@@ -156,8 +156,17 @@ func (a *App) serviceForProject(name string) (workspace.Service, string, error) 
 // demand a flag would be a worse CLI for the sake of a rule that is about a
 // different caller. A verb that accepts it says which project it resolved to, so a
 // wrong answer is visible immediately — see App.sendTarget.
+//
+// SourceRepoRoot, not RepoRoot: `jj root` inside a secondary workspace answers with
+// that *workspace's* directory, and every caller here means the project the
+// workspace belongs to. It read as `proj/proj` in `awp w label`'s confirmation —
+// the project named after the workspace, since a project's name is its root's
+// basename — while the label itself landed correctly, because workspace.Service
+// resolves the source repo for itself (see service.List, where getting this wrong
+// once corrupted state rather than merely printing it wrong). A primary repo is its
+// own source, so nothing changes for a command run at the top of one.
 func (a *App) ambientRepoRoot() (string, error) {
-	root, err := jj.New(a.runner).RepoRoot()
+	root, err := jj.New(a.runner).SourceRepoRoot()
 	if err != nil {
 		return "", fmt.Errorf("no project given and this is not a repository: pass %s <name|path>", projectFlag)
 	}
