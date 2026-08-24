@@ -531,6 +531,14 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 // a terminal and wrap it in a popover" is how a pane ends up outside
 // vterm.CloseAll's registry, or drawn at a size its pty never heard about.
 func (m *Model) paneRunning(cmd *exec.Cmd, b box, seed panePopover) (*panePopover, tea.Cmd, error) {
+	// A pane's program talks to the pty and to nothing else. creack/pty wires the
+	// pty into the three descriptors it finds empty and leaves any the caller
+	// filled in — so a command carrying the deck's own os.Stdout draws over the
+	// deck's screen while the pane it is supposedly in stays blank, which reads as
+	// the program never starting. Cleared here rather than trusted of every
+	// builder: a command is built to be run, and where it runs is this function's
+	// answer.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	w, h := paneDims(b.w, b.h)
 	m.paneGen++
 	term, err := m.terminalOpener()(m.paneGen, w, h, cmd, m.hostColors)

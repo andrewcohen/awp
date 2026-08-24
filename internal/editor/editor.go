@@ -60,12 +60,16 @@ func BuildArgs(editorCmd, filePath string, line int) []string {
 // An empty dir still means "inherit", because that is what exec means by it and
 // there is no better answer for a caller that genuinely has no directory. The
 // point of the parameter is that a caller has to say so out loud.
+//
+// The command's stdio is left unset, which is what makes it runnable anywhere.
+// tea.ExecProcess fills in the terminal's own for a command it hands the screen
+// to, and creack/pty fills in the pty for one hosted in a pane — but both only
+// where the field is nil, so naming os.Stdout here silently pinned the editor to
+// the deck's own screen. Hosted in a pane it then drew over the deck instead of
+// into the pane, which reads as the editor not opening at all.
 func OpenExecCmd(dir, editorCmd, filePath string, line int) *exec.Cmd {
 	args := BuildArgs(editorCmd, filePath, line)
 	cmd := exec.Command(args[0], args[1:]...) //nolint:gosec
 	cmd.Dir = dir
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	return cmd
 }
