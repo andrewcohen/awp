@@ -347,6 +347,14 @@ func (t *fakeTerm) Close() error {
 	return nil
 }
 
+// isClosed is whether the deck has let go of this terminal, which for a real one
+// is whether the client it started is still attached to a session.
+func (t *fakeTerm) isClosed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
 // AwaitOutput resolves on the next change to the screen, and never on a screen
 // that never changes — a command that resolved immediately would have the deck
 // repainting in a loop.

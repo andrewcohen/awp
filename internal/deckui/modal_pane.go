@@ -380,12 +380,59 @@ func paneWorkspaceLabel(it Item) string {
 // openPane hosts the given window kind for the selected row, filling the deck.
 // It reports false when there is no backend for it, so the caller can fall back
 // to tmux.
+//
+// Whatever arrangement was up goes first — see closeArrangement for why it has to
+// be first and not last.
 func (m *Model) openPane(item Item, kind string) (tea.Cmd, bool) {
+	closed := m.closeArrangement()
 	p, cmd, handled := m.newPane(item, kind, m.childBox(), true)
 	if handled && p != nil {
 		m.active = p
 	}
-	return cmd, handled
+	return tea.Batch(closed, cmd), handled
+}
+
+// closeArrangement tears down every pane the deck is holding — the arrangement on
+// screen, and the one parked behind a modal — and is what opening another one
+// calls first.
+//
+// First, rather than after the new pane is up, and that ordering is the whole
+// point. A pane is a `zmx attach` client, and a session takes its size from, and
+// accepts input from, exactly one client: the leader. The daemon hands leadership
+// to a client at attach only when there is no leader (`handleInit`), and otherwise
+// moves it on the first *keyboard* input from another client — mouse reports are
+// explicitly excluded, being terminal chatter rather than someone typing.
+//
+// So a pane left running behind the one you just opened keeps the session it was
+// attached to, and the new client is a spectator: zmx drops its mouse events on the
+// floor, and ignores the size it reports, so a split's half never reflows. Pressing
+// any key flips leadership and both start working, which is exactly what this looked
+// like from the outside — the mouse and the reflow "needing a keystroke first".
+//
+// A pane opened over another used to leak the old client outright — one live `zmx
+// attach` per pane per deck run, each of them still leading a session the deck would
+// open again later. Closing the outgoing arrangement before the new client attaches
+// leaves the session with no leader for the new one to claim.
+//
+// The cost is that an open that then fails leaves the deck on its row list rather
+// than back in the pane you were in. That is the honest order: the pane you were in
+// is the one holding the session hostage.
+func (m *Model) closeArrangement() tea.Cmd {
+	var cmds []tea.Cmd
+	// The parked one as well as the visible one: a verb pressed on the strip steps
+	// the arrangement aside into overlayHost (see suspendForOverlay), and a pane
+	// opened from the modal that floated over it would otherwise orphan a client
+	// nothing on the deck can reach any more.
+	for _, held := range []modal{m.active, m.overlayHost} {
+		switch c := held.(type) {
+		case *panePopover:
+			cmds = append(cmds, c.close(m))
+		case *splitModal:
+			cmds = append(cmds, c.close(m))
+		}
+	}
+	m.overlayReturns = false
+	return tea.Batch(cmds...)
 }
 
 // newPane builds a pane for the kind, sized and started for the box it will be
@@ -590,12 +637,20 @@ func (m *Model) recordArrangement(s *splitModal) {
 func (m *Model) openPaneOrArrangement(item Item, kind string) (tea.Cmd, bool) {
 	arr := m.lastPane
 	if arr.split() && arr.left.matches(item) && arr.left.kind == kind {
+		// Ahead of the open rather than inside openSplitKinds, which has two callers
+		// that mean to keep what is on screen — splitWith reuses the pane it is
+		// splitting as the left half, and goToRowArrangement holds the old
+		// arrangement until the new one is built. See closeArrangement.
+		closed := m.closeArrangement()
 		if cmd, ok := m.openSplitKinds(item, arr.rightKind, arr.leftFrac); ok {
-			return cmd, true
+			return tea.Batch(closed, cmd), true
 		}
 		// A right half this deck cannot build any more (the diff viewer unwired, a
 		// kind dropped from the config) is not a reason to refuse the key. Fall
-		// through to the single pane, which is what the row asked for.
+		// through to the single pane, which is what the row asked for — carrying the
+		// close, which has already happened.
+		cmd, handled := m.openPane(item, kind)
+		return tea.Batch(closed, cmd), handled
 	}
 	return m.openPane(item, kind)
 }
