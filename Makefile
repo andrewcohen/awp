@@ -29,17 +29,10 @@ GHOSTTY_OUT   := $(GHOSTTY_CACHE)/out
 GHOSTTY_LIB   := $(GHOSTTY_OUT)/lib/libghostty-vt.a
 GHOSTTY_URL   := https://github.com/ghostty-org/ghostty/releases/download/tip/libghostty-vt-source.tar.gz
 
-# Two things in this tree arrive at the linker as prebuilt objects with their own
-# macOS deployment target, and ld warns once per object when the link targets
-# something older than they do. Neither is a real problem and both are loud
-# enough to bury whatever else a build said:
-#
-#   libghostty-vt.a — Zig builds it at its own default (13.0), and it is what
-#     `make ghostty` links. This is the one you hit if you only build zdeck.
-#   gdeck's Wails — Cocoa sources with no target of their own, so they compile
-#     against the installed SDK (26.0 here). Wails expects the build to state a
-#     target, which is why its own generated gdeck/build/darwin/Taskfile.yml sets
-#     this same pair of flags; only the repo-wide targets here were missing them.
+# libghostty-vt.a arrives at the linker as a prebuilt object with its own macOS
+# deployment target — Zig builds it at Zig's default (13.0) — and ld warns when
+# the link targets something older than that. Not a real problem, and loud enough
+# to bury whatever else the build said.
 #
 # Both flags, not just the linker one: the warning is a mismatch between how the
 # objects were compiled and how they are linked, so setting only the link target
