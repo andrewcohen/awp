@@ -58,6 +58,14 @@ func runPRStatusFromSpec(runner Runner, job jobs.Job, reporter deckui.Reporter) 
 	}
 	store := state.NewJSONStore()
 
+	// Which of these repos gh can serve at all, answered before anything is asked
+	// of gh — including the account-global identity lookup, which used to run in
+	// repos[0] whatever that turned out to be.
+	repos = onGitHub(runner, repos, reporter)
+	if len(repos) == 0 {
+		return nil
+	}
+
 	// sem bounds the total number of concurrent `gh` invocations. A slot
 	// is held only for the duration of a leaf gh exec — never while a
 	// goroutine waits on its children — so the fan-out can't deadlock no
@@ -218,6 +226,47 @@ func fetchRepoPRStatus(runner Runner, store *state.JSONStore, repo string, sem c
 	numbers := sortedPRNumbers(byHead)
 	deckDebugLogf("prStatus fetched repo=%s count=%d topup=%d truncated=%t numbers=%v",
 		repo, len(statuses), len(topUps), truncated, numbers)
+}
+
+// onGitHub is the repos of this batch that gh can serve, having recorded an
+// empty result for the ones it cannot.
+//
+// awp's projects are not all on GitHub — this developer's are split across
+// GitHub, GitLab and Bitbucket — and every gh call against a GitLab remote fails
+// the same way: slowly, four times per repo, once a minute, forever. The remote
+// is a local question with a local answer, so it is asked once here instead.
+//
+// The empty cache entry is the other half of the skip. Without something landing,
+// the deck's poll never sees the repo finish: its activity bar counts a repo it
+// will never tick off, and — until the cooldown moved to the asking (see
+// prStatusRefreshCmd) — the repo was due again five seconds later. An empty entry
+// is also the true answer: a repo gh cannot see has no PRs as far as awp is
+// concerned.
+//
+// Reported as a Step rather than an error, because a GitLab project on the deck
+// is a normal thing to have and not a failure of this job.
+func onGitHub(runner Runner, repos []string, reporter deckui.Reporter) []string {
+	out := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		host := github.New(runner, repo).OriginHost()
+		if host == "github.com" {
+			out = append(out, repo)
+			continue
+		}
+		persistPRStatusBulkMerge(
+			map[string]map[string]deckui.PRStatus{repo: {}},
+			nil,
+			map[string]bool{repo: true},
+			time.Now(),
+		)
+		where := host
+		if where == "" {
+			where = "no origin remote"
+		}
+		reporter.Step(fmt.Sprintf("%s — skipped: %s", repo, where))
+		deckDebugLogf("prStatus skip repo=%s host=%q", repo, host)
+	}
+	return out
 }
 
 // pinnedWorkspacesByPR walks this repo's workspace state and returns, for every

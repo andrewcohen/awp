@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/andrewcohen/awp/internal/jobs"
@@ -111,6 +112,13 @@ type repoStubRunner struct {
 }
 
 func (r *repoStubRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
+	// Where the repo is hosted is asked before anything is asked of gh, and a repo
+	// that is not on GitHub is skipped without a single gh call — see
+	// fetchRepoPRStatus. A stub that did not answer this would have every test in
+	// here exercising the skip.
+	if name == "git" {
+		return "git@github.com:o/r.git", nil
+	}
 	if name == "gh" && len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
 		return `{"owner":{"login":"o"},"name":"r"}`, nil
 	}
@@ -121,4 +129,91 @@ func (r *repoStubRunner) Run(_ context.Context, dir string, name string, args ..
 		return "testuser", nil
 	}
 	return r.prListByDir[dir], nil
+}
+
+// forgeStubRunner answers the origin-host probe per repo dir and records every
+// gh call, so a test can say both where a repo is hosted and whether anything was
+// asked of gh about it.
+type forgeStubRunner struct {
+	originByDir map[string]string
+	mu          sync.Mutex
+	ghDirs      []string
+}
+
+func (r *forgeStubRunner) Run(_ context.Context, dir string, name string, args ...string) (string, error) {
+	if name == "git" {
+		return r.originByDir[dir], nil
+	}
+	r.mu.Lock()
+	r.ghDirs = append(r.ghDirs, dir)
+	r.mu.Unlock()
+	if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		return `{"owner":{"login":"o"},"name":"r"}`, nil
+	}
+	if len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
+		return `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`, nil
+	}
+	if len(args) >= 2 && args[0] == "api" && args[1] == "user" {
+		return "testuser", nil
+	}
+	return `[{"number":3,"headRefName":"andrew/x","url":"https://example/x/3","state":"OPEN","isDraft":false,"reviewDecision":"","statusCheckRollup":[],"mergeStateStatus":"CLEAN"}]`, nil
+}
+
+func (r *forgeStubRunner) ghCallsFor(dir string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, d := range r.ghDirs {
+		if d == dir {
+			n++
+		}
+	}
+	return n
+}
+
+// TestARepoThatIsNotOnGitHubIsSkippedWithoutAskingGH.
+//
+// awp's projects are not all on GitHub, and gh fails the same way on every call
+// against a GitLab remote. Four failed subprocesses per repo per minute is the
+// cost of asking anyway — and because nothing landed in the cache, the deck never
+// started the repo's cooldown and asked again on the next refresh.
+//
+// The empty cache entry is the other half: it is what says the question was asked
+// and answered.
+func TestARepoThatIsNotOnGitHubIsSkippedWithoutAskingGH(t *testing.T) {
+	home := withTempHome(t)
+	gitlab := t.TempDir()
+	hub := t.TempDir()
+
+	runner := &forgeStubRunner{originByDir: map[string]string{
+		gitlab: "git@gitlab.com:fastgrowingtrees/harbor-works.git",
+		hub:    "git@github.com:andrewcohen/awp.git",
+	}}
+	job := jobs.Job{ID: "test-job", Spec: jobs.Spec{Action: jobs.ActionPRStatus, Repos: []string{gitlab, hub}}}
+	if err := runPRStatusFromSpec(runner, job, noopReporter{}); err != nil {
+		t.Fatalf("runPRStatusFromSpec: %v", err)
+	}
+
+	if n := runner.ghCallsFor(gitlab); n != 0 {
+		t.Errorf("the GitLab repo cost %d gh calls, want none", n)
+	}
+	if n := runner.ghCallsFor(hub); n == 0 {
+		t.Error("the GitHub repo was not fetched at all, so the skip is too broad")
+	}
+
+	body, err := os.ReadFile(filepath.Join(home, ".awp", prStatusCacheName))
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var cache prStatusCacheFile
+	if err := json.Unmarshal(body, &cache); err != nil {
+		t.Fatalf("parse cache: %v", err)
+	}
+	entry, present := cache.Repos[gitlab]
+	if !present {
+		t.Fatal("the skipped repo landed nothing in the cache, so the deck will ask again next refresh")
+	}
+	if len(entry.PRs) != 0 {
+		t.Errorf("the skipped repo cached %d PRs", len(entry.PRs))
+	}
 }
