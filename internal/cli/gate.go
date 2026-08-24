@@ -294,23 +294,23 @@ func runGateCheckHook(out, errOut io.Writer) error {
 		resetGateUnit(root, wsName, in.TaskID, in.Subject)
 		return nil
 	case "completed":
-		// The unit being completed is the one in the payload, not whichever one
-		// the workspace snapshot is currently bound to.
+		// The unit named in a refusal is the one in the payload where it says so,
+		// and the snapshot's otherwise.
 		//
-		// Those differ more often than they should. The snapshot's Task is
-		// re-derived by the deck's transcript scan, which promotes the first
-		// incomplete task whenever it cannot see a current one — so a denial
-		// arrived in the name of a task nobody had touched, telling the agent that
-		// *that* unit could not be completed. Naming the wrong unit in a refusal is
-		// worse than saying nothing: it sends the reader to the wrong work.
+		// The snapshot's Task is re-derived by the deck's transcript scan, which
+		// promotes the first incomplete task whenever it cannot see a current one —
+		// so a denial could arrive in the name of a task nobody had touched, telling
+		// the agent that *that* unit could not be completed.
+		//
+		// The gates on record are what answers, whichever unit is being completed.
+		// Refusing when the snapshot was bound to a different id was tried and had
+		// to come out: TaskUpdate sends no subject on a status-only change, so both
+		// halves of that refusal printed the snapshot's label and it read "unit 'X'
+		// can't be marked complete: the gates on record belong to unit 'X'" — an
+		// unwinnable sentence. Behind it was a real trap, since an agent tidying a
+		// task it finished an hour ago had no way past it but marking a done unit
+		// in_progress and re-running gates on work it had already shipped.
 		unit := unitLabelOf(in.Subject, root, wsName)
-		if bound := currentUnitKey(root, wsName); bound != "" && in.TaskID != "" && bound != in.TaskID {
-			// The gates on record were run for a different unit, so they are not
-			// evidence about this one. Say whose they are, and what to do about it.
-			_, _ = fmt.Fprintf(errOut, "%s can't be marked complete: the gates on record belong to %s. Mark this unit in_progress and run its gates.\n",
-				unit, currentUnitLabel(root, wsName))
-			return ErrGateBlocked
-		}
 		gates := currentGates(root, wsName)
 		if !gatesAllGreen(loop, gates) {
 			_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, unit))
@@ -445,16 +445,6 @@ func unitLabelOf(subject, root, wsName string) string {
 		return "unit '" + s + "'"
 	}
 	return currentUnitLabel(root, wsName)
-}
-
-// currentUnitKey is the task id the recorded gates belong to, or "" when no unit
-// has been bound — which is what an agent that runs gates without ever marking a
-// task in_progress leaves behind, and is deliberately not treated as a mismatch.
-func currentUnitKey(root, wsName string) string {
-	if cur := currentDevLoop(root, wsName); cur != nil {
-		return strings.TrimSpace(cur.UnitKey)
-	}
-	return ""
 }
 
 func currentUnitLabel(root, wsName string) string {
