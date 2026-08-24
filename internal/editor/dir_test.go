@@ -82,3 +82,17 @@ func TestNobodyOpensAnEditorFromNowhereByAccident(t *testing.T) {
 			"pass the working copy the file lives in, or add a reason and allow it here", offenders)
 	}
 }
+
+// The command carries no descriptors of its own.
+//
+// tea.ExecProcess fills in the terminal's for a command it hands the screen to,
+// and creack/pty fills in the pty for one hosted in a pane — but each only where
+// the field is nil. Naming os.Stdout here pinned the editor to the deck's own
+// screen, so hosting it in a pane painted over the deck and left the pane blank,
+// which reads as the editor never opening.
+func TestOpenExecCmdLeavesItsStdioToWhoeverRunsIt(t *testing.T) {
+	cmd := OpenExecCmd("/repo", "nvim", "/repo/a.go", 12)
+	if cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
+		t.Errorf("stdio is pre-wired: in=%v out=%v err=%v", cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	}
+}
