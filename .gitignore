@@ -1,7 +1,7 @@
 build/
 .claude/
 
-# Every JS surface here (gdeck's frontend, the ACP experiments, tdeck) installs
-# its own tree, and one of them vendors a 292MB `claude` binary — well past the
-# size jj will snapshot. Ignored once at the root rather than per directory.
+# A JS surface here (the ACP experiments) installs its own tree, and one of them
+# vendors a 292MB `claude` binary — well past the size jj will snapshot. Ignored
+# once at the root rather than per directory.
 node_modules/

@@ -496,11 +496,13 @@ When applicable, run:
 
 If you cannot run something, state what was not run and why.
 
-The last three go through `make` rather than `go` directly because the Makefile
-sets the macOS deployment target Wails needs — `gdeck` is in `./...`, and without
-those flags every full build ends in a screenful of `ld: warning: object file …
+The last three go through `make` because the Makefile states the macOS
+deployment target the prebuilt libghostty-vt archive was built at, and a link
+that targets something older ends in a screenful of `ld: warning: object file …
 was built for newer 'macOS' version` that hides whatever else the gate said. See
-`CGO_ENV` in the Makefile. A bare `go build ./...` is not wrong, just noisy.
+`CGO_ENV` in the Makefile. The default gate compiles no emulator, so a bare `go
+test ./...` is equally quiet today; the tagged targets below are the ones that
+would not be.
 
 ### The default gate does not cover the terminal emulator
 
