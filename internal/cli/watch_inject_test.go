@@ -100,9 +100,38 @@ func TestCodingAgentInvocationSkipsNonClaude(t *testing.T) {
 	}
 }
 
-func TestCodingAgentInvocationSkipsUnconfigured(t *testing.T) {
+// A repo with no dev_loop still gets a preamble — the workspace half of it.
+//
+// It used to get none, so its agents were never told the one thing every awp
+// agent can do: title the row they appear on. The loop half is the part a
+// dev_loop turns on, and it is absent here rather than the whole file being.
+func TestARepoWithNoDevLoopStillGetsTheWorkspacePreamble(t *testing.T) {
 	dir := writeRepoConfig(t, `{"agent": "claude"}`)
-	if strings.Contains(codingAgentInvocation(dir), "--append-system-prompt") {
-		t.Fatal("no dev_loop should mean no injection")
+	if !strings.Contains(codingAgentInvocation(dir), appendPreambleFlag) {
+		t.Fatal("a Claude agent in a repo without a dev_loop got no preamble at all")
+	}
+	text := agentPreamble(dir)
+	if !strings.Contains(text, "awp w label") {
+		t.Errorf("the preamble does not tell the agent how to title its workspace:\n%s", text)
+	}
+	if strings.Contains(text, "one small, independently committable unit") {
+		t.Errorf("a repo with no dev_loop was given the loop instruction:\n%s", text)
+	}
+}
+
+// And a repo with one gets both halves, in that order.
+func TestARepoWithADevLoopGetsBothHalves(t *testing.T) {
+	dir := writeRepoConfig(t, `{
+		"agent": "claude",
+		"dev_loop": {"phases": ["implement"], "gates": [{"name": "test", "phase": "implement", "match": "go test"}]}
+	}`)
+	text := agentPreamble(dir)
+	title := strings.Index(text, "awp w label")
+	loop := strings.Index(text, "one small, independently committable unit")
+	if title < 0 || loop < 0 {
+		t.Fatalf("the preamble is missing a half (title=%d loop=%d):\n%s", title, loop, text)
+	}
+	if title > loop {
+		t.Error("the loop instruction comes before the workspace's own")
 	}
 }

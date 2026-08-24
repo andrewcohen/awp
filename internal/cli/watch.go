@@ -18,17 +18,16 @@ import (
 )
 
 // codingAgentInvocation returns the agent launch command for a coding
-// workspace. When the repo has a configured dev_loop and the agent is Claude,
-// it appends `--append-system-prompt` with the generated loop instruction, so
-// a new agent starts already following the loop that `awp watch` observes —
-// in the system prompt (persists across the session, works even with no task
-// prompt) rather than a one-shot prompt prefix. The preamble is flattened to
-// a single line because tmux send-keys can't carry embedded newlines. The
-// review flow intentionally uses config.AgentInvocation directly (a reviewer
-// shouldn't be told to work in units / run gates / commit).
+// workspace. For a Claude agent it appends `--append-system-prompt-file` with
+// this repo's preamble — what its workspace is and how to title it, plus the
+// dev loop where one is configured (see agentPreamble) — in the system prompt,
+// which persists across the session and works even with no task prompt, rather
+// than as a one-shot prompt prefix. The review flow intentionally uses
+// config.AgentInvocation directly (a reviewer shouldn't be told to work in
+// units / run gates / commit).
 func codingAgentInvocation(repoRoot string) string {
 	inv := config.AgentInvocation(repoRoot)
-	path, ok := devLoopPreambleFile(repoRoot)
+	path, ok := agentPreambleFile(repoRoot)
 	if !ok {
 		return inv
 	}
@@ -50,41 +49,48 @@ func codingAgentInvocation(repoRoot string) string {
 // flag is called — is single-sourced.
 func codingAgentArgv(repoRoot string) []string {
 	argv := fields(config.AgentInvocation(repoRoot))
-	if path, ok := devLoopPreambleFile(repoRoot); ok {
+	if path, ok := agentPreambleFile(repoRoot); ok {
 		argv = append(argv, appendPreambleFlag, path)
 	}
 	return argv
 }
 
-// reviewAgentArgv is the same launch without the dev-loop preamble, for an
-// agent whose job is to read someone else's change.
+// reviewAgentArgv is the same launch without the preamble, for an agent whose
+// job is to read someone else's change.
 //
-// The preamble tells an agent to work in units, run gates and commit. A
-// reviewer given that starts doing the author's job on their PR, so the tmux
-// review path has always reached for config.AgentInvocation directly. Named
+// The preamble's loop section tells an agent to work in units, run gates and
+// commit. A reviewer given that starts doing the author's job on their PR, so the
+// tmux review path has always reached for config.AgentInvocation directly. Named
 // here so the pane path says the same thing the same way, rather than
 // open-coding "the coding one, minus the preamble" and drifting the next time
 // a flag is added.
+//
+// The workspace section would be fair to give a reviewer — a review workspace is
+// a row like any other, and titling it is the same courtesy. It is left out with
+// the rest for now rather than splitting the preamble in two at its one excluded
+// caller.
 func reviewAgentArgv(repoRoot string) []string {
 	return fields(config.AgentInvocation(repoRoot))
 }
 
-// appendPreambleFlag is how Claude is told to read the dev-loop preamble.
+// appendPreambleFlag is how Claude is told to read the agent preamble.
 const appendPreambleFlag = "--append-system-prompt-file"
 
-// devLoopPreambleFile writes this repo's dev-loop preamble and returns its
-// path. ok is false when no preamble applies — no dev_loop configured, an
-// agent that is not Claude, an empty preamble — or when it could not be
-// written, in which case the agent starts without one rather than not at all.
+// agentPreambleFile writes this repo's agent preamble and returns its path. ok
+// is false for an agent that is not Claude, for an empty preamble, or when the
+// file could not be written — in which case the agent starts without one rather
+// than not at all.
+//
+// No longer gated on a dev_loop. The preamble is two sections now (see
+// agentPreamble), and the workspace one holds for every repo awp has: a project
+// with no loop configured used to get no preamble at all, so its agents were
+// never told the one thing every awp agent can do.
 //
 // The preamble goes by file path rather than inline because it is multi-line:
 // Claude reads the file directly, so the launch command stays short and there
 // is no shell-quoting of the content, which inline embedding garbles.
-func devLoopPreambleFile(repoRoot string) (string, bool) {
+func agentPreambleFile(repoRoot string) (string, bool) {
 	cfg, _ := config.Load(repoRoot)
-	if !watch.IsConfigured(cfg) {
-		return "", false
-	}
 	agent := strings.TrimSpace(cfg.Agent)
 	if agent == "" {
 		agent = config.DefaultAgent
@@ -92,21 +98,21 @@ func devLoopPreambleFile(repoRoot string) (string, bool) {
 	if !strings.Contains(agent, "claude") {
 		return "", false // --append-system-prompt is Claude-specific
 	}
-	preamble := watch.GeneratePreamble(watch.Resolve(cfg))
+	preamble := agentPreamble(repoRoot)
 	if strings.TrimSpace(preamble) == "" {
 		return "", false
 	}
-	path, err := writeDevLoopPreamble(repoRoot, preamble)
+	path, err := writeAgentPreamble(repoRoot, preamble)
 	if err != nil {
 		return "", false
 	}
 	return path, true
 }
 
-// writeDevLoopPreamble persists the generated preamble to a stable per-repo
+// writeAgentPreamble persists the generated preamble to a stable per-repo
 // path under ~/.awp so the agent launch command can `cat` it instead of
 // carrying the whole text inline.
-func writeDevLoopPreamble(repoRoot, preamble string) (string, error) {
+func writeAgentPreamble(repoRoot, preamble string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -115,7 +121,7 @@ func writeDevLoopPreamble(repoRoot, preamble string) (string, error) {
 	if name == "" {
 		name = "default"
 	}
-	dir := filepath.Join(home, ".awp", "dev-loop")
+	dir := filepath.Join(home, ".awp", "agent-preamble")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
@@ -134,7 +140,7 @@ Usage:
   awp watch --transcript PATH  Replay a specific transcript file
   awp watch --repo PATH        Repo root to resolve dev_loop config from
   awp watch --suggest          Print a prompt to configure dev_loop in .awp/config.json
-  awp watch --preamble         Print the dev-loop instruction to give an agent
+  awp watch --preamble         Print what an agent started here is told (its system-prompt append)
   awp watch --help             Show this help
 
 The view shows the agent's units of work (from its task/todo list, or a
@@ -184,11 +190,13 @@ func (a *App) runWatch(args []string) error {
 		if root == "" {
 			root, _ = os.Getwd()
 		}
-		cfg, _ := config.Load(root)
 		if suggest {
 			fmt.Fprintln(a.out, watch.SuggestConfigPrompt(root))
 		} else {
-			fmt.Fprintln(a.out, watch.GeneratePreamble(watch.Resolve(cfg)))
+			// What an agent started here is actually told, dev loop and all, rather
+			// than the loop section alone — the question this answers is "what is in
+			// my agent's system prompt", and half of it is not an answer.
+			fmt.Fprintln(a.out, agentPreamble(root))
 		}
 		return nil
 	}
