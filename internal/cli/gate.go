@@ -294,9 +294,26 @@ func runGateCheckHook(out, errOut io.Writer) error {
 		resetGateUnit(root, wsName, in.TaskID, in.Subject)
 		return nil
 	case "completed":
+		// The unit being completed is the one in the payload, not whichever one
+		// the workspace snapshot is currently bound to.
+		//
+		// Those differ more often than they should. The snapshot's Task is
+		// re-derived by the deck's transcript scan, which promotes the first
+		// incomplete task whenever it cannot see a current one — so a denial
+		// arrived in the name of a task nobody had touched, telling the agent that
+		// *that* unit could not be completed. Naming the wrong unit in a refusal is
+		// worse than saying nothing: it sends the reader to the wrong work.
+		unit := unitLabelOf(in.Subject, root, wsName)
+		if bound := currentUnitKey(root, wsName); bound != "" && in.TaskID != "" && bound != in.TaskID {
+			// The gates on record were run for a different unit, so they are not
+			// evidence about this one. Say whose they are, and what to do about it.
+			_, _ = fmt.Fprintf(errOut, "%s can't be marked complete: the gates on record belong to %s. Mark this unit in_progress and run its gates.\n",
+				unit, currentUnitLabel(root, wsName))
+			return ErrGateBlocked
+		}
 		gates := currentGates(root, wsName)
 		if !gatesAllGreen(loop, gates) {
-			_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, currentUnitLabel(root, wsName)))
+			_, _ = fmt.Fprintln(errOut, gateDenyReason(loop, gates, unit))
 			return ErrGateBlocked
 		}
 		// Required gates are green → allow. Seal the unit so the next recorded
@@ -304,7 +321,7 @@ func runGateCheckHook(out, errOut io.Writer) error {
 		// in_progress.
 		sealGates(root, wsName)
 		if reds := redOptionalGates(loop, gates); len(reds) > 0 {
-			printPreToolUseContext(out, optionalGateAdvisory(loop, gates, reds, currentUnitLabel(root, wsName)))
+			printPreToolUseContext(out, optionalGateAdvisory(loop, gates, reds, unit))
 		}
 		return nil
 	default:
@@ -415,6 +432,31 @@ func sealGates(root, wsName string) {
 // e.g. "unit 'prompt plumbing'", falling back to "the current unit" when the
 // unit's content isn't known. The full phrase (not just the name) is returned
 // so callers can drop it straight into a sentence without double-wording.
+// unitLabelOf is the noun phrase for the unit a hook payload names, falling
+// back to the snapshot's when the payload carried no subject.
+//
+// TaskUpdate only sends `subject` when the call is changing it, so most
+// completions arrive with an id and no words. The snapshot is the right fallback
+// for those — it is the unit that went in_progress — and where the two disagree
+// the caller has already refused, so a label read from it is not describing
+// somebody else's work.
+func unitLabelOf(subject, root, wsName string) string {
+	if s := strings.TrimSpace(subject); s != "" {
+		return "unit '" + s + "'"
+	}
+	return currentUnitLabel(root, wsName)
+}
+
+// currentUnitKey is the task id the recorded gates belong to, or "" when no unit
+// has been bound — which is what an agent that runs gates without ever marking a
+// task in_progress leaves behind, and is deliberately not treated as a mismatch.
+func currentUnitKey(root, wsName string) string {
+	if cur := currentDevLoop(root, wsName); cur != nil {
+		return strings.TrimSpace(cur.UnitKey)
+	}
+	return ""
+}
+
 func currentUnitLabel(root, wsName string) string {
 	entries, err := stateStore().Load(root)
 	if err != nil {

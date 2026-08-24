@@ -624,3 +624,81 @@ func parseAdditionalContext(t *testing.T, s string) string {
 func contains(s, sub string) bool {
 	return bytes.Contains([]byte(s), []byte(sub))
 }
+
+// The unit a denial names is the unit being completed.
+//
+// The snapshot's Task is re-derived by the deck's transcript scan, which
+// promotes the first incomplete task when it cannot see a current one — so a
+// refusal used to arrive in the name of a task nobody had touched, sending the
+// reader to the wrong work.
+func TestGateCheckHookNamesTheUnitBeingCompleted(t *testing.T) {
+	const root = "/tmp/awp-gate-names-unit"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-names-unit", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	var stderr bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"1","status":"completed","subject":"reap the zombies"}}`)
+	err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr)
+	if !errors.Is(err, ErrGateBlocked) {
+		t.Fatalf("expected ErrGateBlocked, got %v", err)
+	}
+	if !contains(stderr.String(), "reap the zombies") {
+		t.Errorf("reason = %q, want it to name the unit the TaskUpdate named", stderr.String())
+	}
+	if contains(stderr.String(), "prompt plumbing") {
+		t.Errorf("reason = %q, want it not to name the snapshot's own unit", stderr.String())
+	}
+}
+
+// A completion of some other unit is not answered out of this one's gate record.
+//
+// Green gates belong to the unit they were run for. Spending them on a task that
+// was never in progress would make "mark one unit in_progress, then complete
+// every other" a way past the gate entirely.
+func TestGateCheckHookRefusesToSpendAnotherUnitsGates(t *testing.T) {
+	const root = "/tmp/awp-gate-other-unit"
+	fs := newFakeStore()
+	seedGateWorkspace(fs, root, "feat-x", map[string]string{"fmt": "pass", "test": "pass", "build": "pass"})
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-other-unit", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	var stderr bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"9","status":"completed","subject":"some other unit"}}`)
+	err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr)
+	if !errors.Is(err, ErrGateBlocked) {
+		t.Fatalf("a unit with no gates of its own completed on another unit's green gates (err %v)", err)
+	}
+	if !contains(stderr.String(), "some other unit") || !contains(stderr.String(), "prompt plumbing") {
+		t.Errorf("reason = %q, want it to name both the unit refused and the one the gates belong to", stderr.String())
+	}
+}
+
+// An agent that never marks anything in_progress still gets its gates counted:
+// with no unit bound there is nothing to mismatch against, and the recorded
+// gates are the only evidence there is.
+func TestGateCheckHookWithNoUnitBoundStillAllows(t *testing.T) {
+	const root = "/tmp/awp-gate-unbound"
+	fs := newFakeStore()
+	fs.byRepo[root] = map[string]workspace.Entry{
+		"feat-x": {
+			Name: "feat-x",
+			Path: filepath.Join(root, "feat-x"),
+			DevLoop: &workspace.DevLoopSnapshot{
+				Gates: map[string]string{"fmt": "pass", "test": "pass", "build": "pass"},
+			},
+		},
+	}
+	withFakeStore(t, fs)
+	withWorkspaceEnv(t, "feat-x", "awp-gate-unbound", root)
+	withGateRepo(t, root, gateConfigJSON)
+
+	var stderr bytes.Buffer
+	withStdin(t, `{"tool_name":"TaskUpdate","tool_input":{"taskId":"4","status":"completed","subject":"whatever"}}`)
+	if err := runGateCheck([]string{"--hook"}, &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatalf("a completion with green gates and no bound unit was blocked: %v (%s)", err, stderr.String())
+	}
+}
