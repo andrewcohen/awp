@@ -1,6 +1,7 @@
 package deckui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -905,5 +906,45 @@ func TestPickingYourOwnRowsProgramKeepsThePane(t *testing.T) {
 	// program you were reading mid-thought, which is what this path exists to avoid.
 	if left.term != was {
 		t.Error("the agent was re-opened rather than kept — picking a program for the row you are in should not restart it")
+	}
+}
+
+// TestTheStripCountsWorkspacesNotLines.
+//
+// A row is two lines, with a blank between rows and a blank and a header per
+// group, so the count read about three times the number it appears to name: a
+// strip over sixty workspaces said "+124 more". The only thing on the strip worth
+// counting is workspaces, which is what the notice looks like it is counting.
+func TestTheStripCountsWorkspacesNotLines(t *testing.T) {
+	items := make([]Item, 0, 20)
+	for i := range 20 {
+		items = append(items, Item{
+			ProjectName: "proj", WorkspaceName: "ws" + string(rune('a'+i)),
+			Path: "/tmp", RepoRoot: "/tmp", Status: "idle",
+		})
+	}
+	m := stripDeck(items)
+	m.sidebar = true
+	b := box{w: sidebarDefaultWidth, h: 12}
+
+	lines := m.sidebarLines(b)
+	notice := ansi.Strip(lines[len(lines)-1].text)
+	if !strings.Contains(notice, "more") {
+		t.Fatalf("the strip does not overflow here, so this proves nothing: %q", notice)
+	}
+	n := 0
+	if _, err := fmt.Sscanf(strings.TrimSpace(notice), "+%d more", &n); err != nil {
+		t.Fatalf("cannot read a count out of %q: %v", notice, err)
+	}
+
+	shown := sidebarRowsIn(lines)
+	if got, want := shown+n, len(m.sidebarRowsInOrder()); got != want {
+		t.Errorf("%d rows on screen plus %q accounts for %d workspaces, but the strip has %d",
+			shown, notice, got, want)
+	}
+	// And the number the old code would have printed, so the test fails against it
+	// rather than only against a wilder wrong answer.
+	if lineCount := len(lines) - 1; n == lineCount {
+		t.Errorf("the count is %d, which is the number of lines below the fold — it is counting lines", n)
 	}
 }

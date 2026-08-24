@@ -394,12 +394,42 @@ func (m Model) sidebarLines(b box) []sidebarLine {
 	// to it — the honest thing to say instead of a list that silently stops. Only
 	// below: a strip scrolled down is a strip whose top the cursor came through, so
 	// what is above it is not news.
-	if hidden := len(lines) - (top + len(shown)); hidden > 0 {
-		shown = append(shown[:len(shown)-1:len(shown)-1],
-			sidebarLine{text: sidebarGutter +
-				m.styles.Muted.Render("+"+strconv.Itoa(hidden+1)+" more")})
+	//
+	// Workspaces, not lines. A row is two lines with a blank between rows and a blank
+	// and a header per group, so counting lines said "+124 more" over sixty
+	// workspaces — a number three times the thing it appears to count, and appearing
+	// to count the only thing on the strip worth counting.
+	if len(lines) > top+len(shown) {
+		// The notice takes the last shown line with it, so that line's row is below
+		// the fold too.
+		hidden := sidebarRowsIn(lines[top+len(shown)-1:])
+		if hidden > 0 {
+			shown = append(shown[:len(shown)-1:len(shown)-1],
+				sidebarLine{text: sidebarGutter +
+					m.styles.Muted.Render("+"+strconv.Itoa(hidden)+" more")})
+		}
 	}
 	return shown
+}
+
+// sidebarRowsIn counts the workspaces among these lines.
+//
+// A row owns two consecutive lines and both carry the same pointer (see the render
+// loop, which is what makes either line clickable), so counting the pointer changing
+// counts the rows.
+func sidebarRowsIn(lines []sidebarLine) int {
+	n := 0
+	var last *Item
+	for _, l := range lines {
+		if l.item == nil {
+			continue
+		}
+		if l.item != last {
+			n++
+			last = l.item
+		}
+	}
+	return n
 }
 
 // sidebarCursorLine is which line of the strip the cursor's row starts on, or -1
