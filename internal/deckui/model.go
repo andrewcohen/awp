@@ -1047,7 +1047,7 @@ type Model struct {
 	refreshing        bool                           // true while a m.refresher() command is in flight
 	refreshPending    bool                           // a change signal arrived mid-refresh; re-run on completion
 	prStatusByRepo    map[string]map[string]PRStatus // repoRoot → headRefName → status
-	prStatusFetchedAt map[string]time.Time           // repoRoot → wall clock of last successful fetch
+	prStatusFetchedAt map[string]time.Time           // repoRoot → wall clock of the last fetch asked for, landed or not
 	// pinChordMode is true after the user presses `m` and before the
 	// second key of the pin chord (mm / m<letter> / mD / mR) arrives.
 	// While pending, renderList highlights the register letter in each
@@ -1934,6 +1934,23 @@ func (m Model) prStatusRefreshCmd(now time.Time) (Model, tea.Cmd) {
 	repos := m.prStatusRepos(now)
 	if len(repos) == 0 {
 		return m, nil
+	}
+	// Asking is what starts the cooldown, not being answered.
+	//
+	// Only a landed result used to stamp this map, so a repo whose fetch failed
+	// — a remote `gh` cannot serve, a network that was down, a rate limit — was
+	// due again on the very next refresh, and the deck spawned a fresh pr-status
+	// job every five seconds for as long as the failure lasted. Measured, that
+	// was one repo on a GitLab remote turning a once-a-minute poll into a
+	// fourteen-a-minute one, for every repo in the batch.
+	//
+	// A success stamps it again when it lands, which is the same value a few
+	// seconds later. What this changes is only the case where nothing lands.
+	if m.prStatusFetchedAt == nil {
+		m.prStatusFetchedAt = make(map[string]time.Time)
+	}
+	for _, repo := range repos {
+		m.prStatusFetchedAt[repo] = now
 	}
 	m = m.startActivity("pr-status", "pr-status", len(repos))
 	return m, m.prStatusFetcher(repos)

@@ -73,3 +73,38 @@ func TestTheRefreshPollIsWhatRefreshesThePRBadges(t *testing.T) {
 		t.Errorf("a refresh past the cooldown asked for %d fan-outs, want 2", fetches)
 	}
 }
+
+// TestAFetchThatLandsNothingStillCoolsDown.
+//
+// The cooldown used to be started by the answer rather than by the question, so a
+// repo whose fetch never landed a result was due again on the next 5s refresh —
+// and the job that fans out to `gh` is a spawned subprocess. Measured on a real
+// deck: one repo on a GitLab remote, which `gh` cannot serve and which therefore
+// never wrote a cache entry, turned a once-a-minute poll into a fetch every few
+// seconds for every repo in the batch.
+//
+// The fan-out here ends with no PRStatusRepoDoneMsg at all, which is exactly what
+// the poller emits for a repo that never lands: the closing message and nothing
+// else.
+func TestAFetchThatLandsNothingStillCoolsDown(t *testing.T) {
+	fetches := 0
+	m := New(nil, nil).WithPRStatusFetcher(func([]string) tea.Cmd {
+		fetches++
+		return func() tea.Msg { return PRStatusDoneMsg{FetchedAt: time.Now()} }
+	})
+
+	m, _ = prPolled(m)
+	if fetches != 1 {
+		t.Fatalf("the first refresh asked for %d fan-outs, want 1", fetches)
+	}
+	// Only the closing message: the repo landed nothing.
+	updated, _ := m.Update(PRStatusDoneMsg{FetchedAt: time.Now()})
+	m = updated.(Model)
+
+	for i := 0; i < 3; i++ {
+		m, _ = prPolled(m)
+	}
+	if fetches != 1 {
+		t.Errorf("three refreshes after a fetch that landed nothing asked for %d fan-outs in total, want 1", fetches)
+	}
+}
