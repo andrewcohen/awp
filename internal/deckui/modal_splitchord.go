@@ -37,7 +37,7 @@ type splitAction struct {
 var splitActions = []splitAction{
 	{key: "c", kind: SplitKindDiff, label: "diff"},
 	{key: "v", kind: "vcs", label: "vcs"},
-	{key: "e", kind: "editor", label: "editor"},
+	{key: "e", kind: PaneKindEditor, label: "editor"},
 	{key: "s", kind: "", label: "shell"},
 	{key: "i", kind: PaneKindCI, label: "ci"},
 	{key: "W", kind: PaneKindWatch, label: "watch"},

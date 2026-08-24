@@ -2,6 +2,7 @@ package deckui
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/andrewcohen/awp/internal/ui"
+	"github.com/andrewcohen/awp/internal/vterm"
 )
 
 // The `|` split.
@@ -1027,4 +1029,97 @@ func TestEscInTheRevisionListKeepsTheDiff(t *testing.T) {
 	if strings.Contains(ansi.Strip(m.render()), "qpvuntsm") {
 		t.Fatal("esc did not close the revision list")
 	}
+}
+
+// `e` in a diff half opens the editor in that half, not over the whole terminal.
+//
+// Handing $EDITOR the terminal takes the agent beside the diff off screen too,
+// which is the half you split the screen to keep — the point of reading a change
+// next to the agent that wrote it is that both are visible.
+func TestTheDiffsEditorOpensInItsOwnHalf(t *testing.T) {
+	m, s := splitWithDiff(t)
+	m.diffOpen = func(Item, string, string, int) *exec.Cmd { return exec.Command("true") }
+
+	next, _ := m.Update(diffEditMsg{item: m.itemsAll[0], dir: "/tmp", path: "internal/ui/model.go", line: 12})
+	m = next.(Model)
+	if m.active != s {
+		t.Fatalf("the split is no longer the deck's child (%T, status %q)", m.active, m.status)
+	}
+	p, ok := s.right.(*panePopover)
+	if !ok {
+		t.Fatalf("the diff half is a %T, want the editor's pane (status %q)", s.right, m.status)
+	}
+	t.Cleanup(func() { p.close(&m) })
+	if !s.rightFocused {
+		t.Error("the keyboard did not follow the editor into the half")
+	}
+	if p.returnTo == nil {
+		t.Error("the pane has nothing to give the half back to when the editor quits")
+	}
+	if got := boxOfHalf(&m, s, p).w; got >= m.width {
+		t.Errorf("the editor's pane is %d columns of a %d-column terminal — it took the whole width", got, m.width)
+	}
+}
+
+// And quitting the editor gives the half back to the diff, on the file and the
+// line it was opened from. A collapse would take the review down with it and
+// leave reopening it as the way back.
+func TestQuittingTheEditorGivesTheHalfBackToTheDiff(t *testing.T) {
+	m, s := splitWithDiff(t)
+	diff := s.right
+	m.diffOpen = func(Item, string, string, int) *exec.Cmd { return exec.Command("true") }
+
+	next, _ := m.Update(diffEditMsg{item: m.itemsAll[0], dir: "/tmp", path: "a.go", line: 1})
+	m = next.(Model)
+	p, ok := s.right.(*panePopover)
+	if !ok {
+		t.Fatalf("the diff half is a %T, want the editor's pane", s.right)
+	}
+
+	next, _ = m.Update(vterm.ExitMsg{Gen: p.term.Gen()})
+	m = next.(Model)
+	if m.active != s {
+		t.Fatalf("the split went away with the editor: active is %T", m.active)
+	}
+	if s.right != diff {
+		t.Errorf("the half came back as %T, want the diff it was opened from", s.right)
+	}
+}
+
+// With the diff filling the deck there is no half to host anything, so the
+// editor gets the terminal the way it always has.
+func TestAFullScreenDiffStillHandsTheEditorTheTerminal(t *testing.T) {
+	m := splitDeck(t)
+	m.diffLoad = func(Item, DiffScope, int) (string, error) { return sampleSplitDiff, nil }
+	next, _ := m.openDiffModal(ScopeStackBase)
+	m = next.(Model)
+	if _, ok := m.active.(*diffModal); !ok {
+		t.Fatalf("the diff did not open: active is %T (status %q)", m.active, m.status)
+	}
+	ran := false
+	m.diffOpen = func(Item, string, string, int) *exec.Cmd {
+		ran = true
+		return exec.Command("true")
+	}
+	next, cmd := m.Update(diffEditMsg{item: m.itemsAll[0], dir: "/tmp", path: "a.go", line: 1})
+	m = next.(Model)
+	if !ran {
+		t.Fatal("the editor command was never built")
+	}
+	if cmd == nil {
+		t.Error("nothing was returned to run the editor with")
+	}
+	if _, isPane := m.active.(*panePopover); isPane {
+		t.Error("a full-screen diff opened the editor in a pane")
+	}
+}
+
+// boxOfHalf is the region a half is drawn in, measured the way the renderer
+// measures it.
+func boxOfHalf(m *Model, s *splitModal, half modal) box {
+	left, right := s.boxes(m.childBox())
+	if half == s.left {
+		return left
+	}
+	return right
 }

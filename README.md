@@ -1177,6 +1177,15 @@ and comment index would spend a third of half a terminal on navigation, and the
 diff is what you opened the half to read. `\` brings them back for the file you
 need to jump around in, and the cursors they hold were never lost.
 
+**`e` in a diff half opens `$EDITOR` in that half**, not over the terminal. A
+full-screen diff still hands the editor the whole screen — that is the region it
+is in, and the deck suspends behind it — but in a split the whole screen includes
+the agent you split the screen to keep beside the change. The half goes back to
+the diff when the editor quits, on the file and the line you pressed `e` from,
+rather than collapsing the split and leaving reopening the review as the way
+back. A half too narrow to host a program falls back to the whole terminal and
+says so.
+
 A split wears **the same top row a single pane and the row list do** — see [the
 top row](#the-top-row), which is where it is described: the badge, the name of the
 half the keys are in, and how to leave, spanning the terminal above both halves. It is the deck's row rather than either half's,

@@ -448,6 +448,22 @@ func (s *splitModal) deliver(m *Model, child modal, msg tea.Msg) tea.Cmd {
 // collapse ends the split, leaving whichever half is still alive as the deck's
 // child. Closing the last one leaves the row list.
 func (s *splitModal) collapse(m *Model, gone modal) tea.Cmd {
+	// A half that was a detour comes back rather than taking the split down with
+	// it: `e` in the diff viewer hosts $EDITOR in the diff's own half, and quitting
+	// the editor is done with the editor, not with the review. See
+	// panePopover.returnTo.
+	if p, isPane := gone.(*panePopover); isPane && p.returnTo != nil {
+		back := p.returnTo
+		p.returnTo = nil
+		if gone == s.left {
+			s.left = back
+		} else {
+			s.right = back
+		}
+		s.focusHalf(back)
+		m.active = s
+		return nil
+	}
 	survivor := s.left
 	if gone == s.left {
 		survivor = s.right
