@@ -158,6 +158,67 @@ func (c *Client) ListPRs() ([]PRSummary, error) {
 	return prs, nil
 }
 
+// OriginHost is the hostname of the repository's `origin` remote — "github.com"
+// for a repo gh can serve, "gitlab.com" or "bitbucket.org" for one it cannot.
+//
+// It answers the question nothing else here can: whether asking gh about this
+// repo is worth a subprocess. Every other method assumes the answer is yes, and
+// on a repo where it is no they each fail slowly and identically, with an error
+// about a remote rather than about the PR that was asked for.
+//
+// git rather than gh or jj. gh resolves which repository it is talking about from
+// the git remotes, so this is the same lookup it does, done locally and once
+// instead of over the network per call — and `jj git remote list` takes the repo's
+// import/export lock, which is not a thing to do to a workspace every minute
+// merely to find out where it is hosted.
+//
+// A repo with no origin, or one this cannot read, comes back "" rather than an
+// error: the question is where the code is hosted, and "nowhere gh can reach" is
+// an answer to it. An empty host is never GitHub, which is what every caller does
+// with it.
+func (c *Client) OriginHost() string {
+	out, err := c.runner.Run(context.Background(), c.dir, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return ""
+	}
+	return remoteHost(strings.TrimSpace(out))
+}
+
+// OnGitHub reports whether gh can serve this repository at all.
+func (c *Client) OnGitHub() bool { return c.OriginHost() == "github.com" }
+
+// remoteHost pulls the hostname out of a git remote URL, in either of the two
+// shapes git writes: the scp-like `git@host:owner/repo.git` and the URL-like
+// `ssh://git@host/owner/repo` (or https://). Anything it cannot read is "".
+func remoteHost(url string) string {
+	if url == "" {
+		return ""
+	}
+	if i := strings.Index(url, "://"); i >= 0 {
+		rest := url[i+3:]
+		if at := strings.LastIndex(rest, "@"); at >= 0 {
+			// Credentials or a user, both of which sit before the host.
+			if slash := strings.Index(rest, "/"); slash < 0 || at < slash {
+				rest = rest[at+1:]
+			}
+		}
+		host, _, _ := strings.Cut(rest, "/")
+		host, _, _ = strings.Cut(host, ":") // a port
+		return strings.ToLower(host)
+	}
+	// scp-like: [user@]host:path. The colon before the path is what makes it one,
+	// so a string without a colon is a local path and has no host.
+	rest := url
+	if at := strings.LastIndex(rest, "@"); at >= 0 {
+		rest = rest[at+1:]
+	}
+	host, _, found := strings.Cut(rest, ":")
+	if !found {
+		return ""
+	}
+	return strings.ToLower(host)
+}
+
 // PRState mirrors gh's PR state field.
 type PRState string
 

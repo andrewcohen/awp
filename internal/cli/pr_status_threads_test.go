@@ -35,6 +35,10 @@ type threadStubRunner struct {
 func (r *threadStubRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
 	joined := strings.Join(args, " ")
 	switch {
+	case name == "git":
+		// The host probe that runs before any gh call — see fetchRepoPRStatus. A
+		// repo that answers with anything else is skipped, gh and all.
+		return "git@github.com:o/r.git", nil
 	case name != "gh":
 		return "", nil
 	case strings.HasPrefix(joined, "repo view"):
