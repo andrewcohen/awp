@@ -2609,6 +2609,8 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m = m.tickActivity("pr-status", 1)
 		m = m.keepCursorOn(prevRow, hadPrevRow)
 		return m, nil
+	case diffEditMsg:
+		return m.openEditorFromDiff(msg)
 	case PRStatusDoneMsg:
 		// Per-repo updates have already landed via PRStatusRepoDoneMsg.
 		// The closing message just finishes the global activity.
@@ -3051,7 +3053,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.status = "send prompt: type message · enter submit · ctrl+g $EDITOR · esc cancel"
 			return m, initCmd
 		case key.Matches(msg, km.EditorWindow):
-			return m.trigger(ActionOpenWindow, "editor")
+			return m.trigger(ActionOpenWindow, PaneKindEditor)
 		case key.Matches(msg, km.ReviewWindow):
 			return m.openDiffModal(ScopeStackBase)
 		case key.Matches(msg, km.ForgeMenu):
@@ -4000,6 +4002,83 @@ func (m Model) openDiffModal(scope DiffScope) (tea.Model, tea.Cmd) {
 	m.active = dm
 	m.status = "diff (" + scope.String() + "): loading…"
 	return m, loadCmd
+}
+
+// openEditorFromDiff answers the viewer's `e`: $EDITOR on the file under the
+// cursor, in whichever region the diff itself occupies.
+//
+// A diff filling the deck hands the editor the whole terminal, because that is
+// the region it is in — the deck suspends, the editor gets every column, and the
+// deck repaints when it exits.
+//
+// A diff that is half of a split gets the editor in that half. Handing over the
+// whole terminal there took the agent beside it off screen as well, which is the
+// half you split the screen to keep: the point of reading a diff next to the
+// agent that wrote it is that both are visible. The half goes back to the diff
+// when the editor quits — see panePopover.returnTo — so `e`, edit, `:q` lands
+// back on the line you pressed it from.
+func (m Model) openEditorFromDiff(msg diffEditMsg) (tea.Model, tea.Cmd) {
+	if m.diffOpen == nil {
+		m.status = "no editor configured"
+		return m, nil
+	}
+	cmd := m.diffOpen(msg.item, msg.dir, msg.path, msg.line)
+	if cmd == nil {
+		m.status = "no editor configured"
+		return m, nil
+	}
+	if s, half, ok := m.diffHalf(); ok {
+		b := m.boxOf(half)
+		if paneFits(b.w, b.h) {
+			p, start, err := m.paneRunning(cmd, b, panePopover{
+				label:     "editor · " + filepath.Base(msg.path),
+				kind:      PaneKindEditor,
+				project:   msg.item.ProjectName,
+				workspace: msg.item.WorkspaceName,
+				returnTo:  half,
+			})
+			if err != nil {
+				m.status = "editor: " + err.Error()
+				return m, nil
+			}
+			if half == s.left {
+				s.left = p
+			} else {
+				s.right = p
+			}
+			s.focusHalf(p)
+			m.status = ""
+			return m, start
+		}
+		// Too narrow to host a program: the whole terminal is the honest fallback
+		// rather than refusing to open the file at all.
+		m.status = fmt.Sprintf("editor: this half is %d columns, too narrow to host one", b.w)
+	}
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// diffHalf is the split on screen and the half of it showing a diff, when that
+// is what is on screen at all.
+//
+// The half rather than a bool, because what asks is about to put something in
+// its place. A split's left half is the agent by construction, so at most one
+// half is ever a diff.
+func (m Model) diffHalf() (*splitModal, modal, bool) {
+	s, ok := m.active.(*splitModal)
+	if !ok {
+		return nil, nil, false
+	}
+	for _, half := range []modal{s.left, s.right} {
+		if _, isDiff := half.(*diffModal); isDiff {
+			return s, half, true
+		}
+	}
+	return nil, nil, false
 }
 
 // WindowKind is the pane kind a window arg names.

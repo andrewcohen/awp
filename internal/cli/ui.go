@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -214,21 +215,17 @@ func diffBaseResolverFor(runner Runner) deckui.DiffBaseResolver {
 	}
 }
 
-// openDiffFileInEditor opens a file at a line from the diff modal.
-// tea.ExecProcess
-// is the right tool here — $EDITOR is an external program, not a nested
+// openDiffFileInEditor is the $EDITOR process for a file at a line, for the deck
+// to run wherever the diff it was asked from is: the whole terminal via
+// tea.ExecProcess when the diff fills it, a pane in the diff's own half when it
+// is half of a split. $EDITOR is an external program either way, never a nested
 // Bubble Tea program (see the deckui package doc).
 //
 // dir comes from the viewer, which is the only thing that knows it: it is the root
 // the diff's paths were resolved against. The row is not consulted for it — a host
 // deriving the directory a second way is how the two would come to disagree.
-func openDiffFileInEditor(_ deckui.Item, dir, filePath string, line int) tea.Cmd {
-	return tea.ExecProcess(editor.OpenExecCmd(dir, "", filePath, line), func(err error) tea.Msg {
-		if err != nil {
-			return err
-		}
-		return nil
-	})
+func openDiffFileInEditor(_ deckui.Item, dir, filePath string, line int) *exec.Cmd {
+	return editor.OpenExecCmd(dir, "", filePath, line)
 }
 
 // diffSubjectFor resolves what a standalone `awp diff` is a review of: the

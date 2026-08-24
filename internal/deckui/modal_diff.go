@@ -2,6 +2,7 @@ package deckui
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -49,14 +50,33 @@ func (s DiffScope) String() string {
 // WithDiffViewer so the deck package doesn't shell out itself.
 type DiffLoader func(item Item, scope DiffScope, contextLines int) (string, error)
 
-// DiffOpener returns the command that opens filePath at line for a
-// workspace — an external $EDITOR process, which tea.ExecProcess handles.
+// DiffOpener is the $EDITOR process that opens filePath at line for a
+// workspace. A command rather than a tea.Cmd, because where it runs is not this
+// dependency's question: a diff filling the deck hands the editor the whole
+// terminal, and a diff that is half of a split hosts it in that half. The
+// dependency says what to run; the deck says where.
 //
 // dir is the directory the editor runs in, and it comes from the viewer rather
 // than being derived from the item: it is the root the viewer resolved filePath
 // against, so the two are one fact and cannot disagree about which working copy
 // this file is in.
-type DiffOpener func(item Item, dir, filePath string, line int) tea.Cmd
+//
+// nil means there is no editor to run, which the deck reports rather than
+// executing.
+type DiffOpener func(item Item, dir, filePath string, line int) *exec.Cmd
+
+// diffEditMsg is the viewer asking for a file to be opened in $EDITOR.
+//
+// A message rather than the viewer running the editor itself, because the answer
+// depends on the layout the viewer cannot see: which half of a split it is in,
+// and whether that half is wide enough to host a program. The deck holds the
+// arrangement, so the deck decides — see Model.openEditorFromDiff.
+type diffEditMsg struct {
+	item Item
+	dir  string
+	path string
+	line int
+}
 
 // DiffBaseResolver names what a scope's diff is against, for the modal's footer:
 // the trunk branch, or a stacked parent's bookmark. Empty when there is nothing
@@ -215,7 +235,9 @@ func newDiffModal(item Item, scope DiffScope, load DiffLoader, open DiffOpener, 
 			if open == nil {
 				return nil
 			}
-			return open(item, dir, filePath, line)
+			return func() tea.Msg {
+				return diffEditMsg{item: item, dir: dir, path: filePath, line: line}
+			}
 		},
 	)
 	if base != nil {

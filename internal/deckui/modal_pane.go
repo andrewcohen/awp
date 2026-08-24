@@ -180,6 +180,18 @@ type panePopover struct {
 	// exit is only worth reporting on its own if it happened before you could
 	// have read anything — see paneQuickExit.
 	opened time.Time
+	// returnTo is what goes back in this pane's place when its program ends,
+	// rather than the place itself going away.
+	//
+	// A pane is normally the destination: you open an agent, you leave it, the
+	// arrangement it was in ends. A pane opened *from* something else is a
+	// detour — `e` in the diff viewer opens $EDITOR on the file under the cursor
+	// — and a detour ends by coming back. Without this the half collapsed when
+	// the editor quit, taking the diff and everything you had scrolled to with
+	// it, and the way back was to reopen the review and find your place again.
+	//
+	// Nil for every pane you opened on purpose, which is nearly all of them.
+	returnTo modal
 	// prefixArmed is whether the last key was the reserved one, so the next key
 	// is read as a verb rather than typed at the hosted program. The split's own
 	// field of the same name carries the argument for why this is a state resolved
@@ -208,6 +220,12 @@ const (
 	PaneKindCI    = "ci"
 	PaneKindWatch = "watch"
 )
+
+// PaneKindEditor is the workspace's $EDITOR. Named for the reason PaneKindAgent
+// is: the split chord, the deck's `e`, and the diff viewer's own `e` all have to
+// mean the same kind, and the third of those was written after the string had
+// already been spelled out twice.
+const PaneKindEditor = "editor"
 
 // PaneKindShell is the shell's kind, which is the empty string: a shell is what a
 // window key with no kind after it opens, and the backend reads the absence as
@@ -483,8 +501,13 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 		}
 		return nil, m.handOverTerminal(cmd, restore, PaneLabel(kind)), true
 	}
-	m.paneGen++
-	term, err := m.terminalOpener()(m.paneGen, w, h, cmd, m.hostColors)
+	p, startCmd, err := m.paneRunning(cmd, b, panePopover{
+		label:     PaneLabel(kind) + " · " + paneWorkspaceLabel(item),
+		kind:      kind,
+		project:   item.ProjectName,
+		workspace: item.WorkspaceName,
+		restore:   restore,
+	})
 	if err != nil {
 		if restore != nil {
 			restore()
@@ -492,23 +515,33 @@ func (m *Model) newPane(item Item, kind string, b box, remember bool) (*panePopo
 		m.status = PaneLabel(kind) + ": " + err.Error()
 		return nil, nil, true
 	}
-
-	p := &panePopover{
-		term:      term,
-		label:     PaneLabel(kind) + " · " + paneWorkspaceLabel(item),
-		kind:      kind,
-		project:   item.ProjectName,
-		workspace: item.WorkspaceName,
-		restore:   restore,
-		setW:      w,
-		setH:      h,
-		opened:    time.Now(),
-	}
 	if remember {
 		m.recordPane(ref)
 	}
 	m.status = ""
-	return p, tea.Batch(term.AwaitOutput(), term.AwaitExit()), true
+	return p, startCmd, true
+}
+
+// paneRunning starts a command on a terminal sized for the box and returns the
+// pane showing it, with the command that pumps its frames.
+//
+// The one place a pane's terminal is opened. seed carries the fields that differ
+// per caller — the label, which row it is of, what to undo when it closes — and
+// this fills in the ones that come from starting it. A second spelling of "open
+// a terminal and wrap it in a popover" is how a pane ends up outside
+// vterm.CloseAll's registry, or drawn at a size its pty never heard about.
+func (m *Model) paneRunning(cmd *exec.Cmd, b box, seed panePopover) (*panePopover, tea.Cmd, error) {
+	w, h := paneDims(b.w, b.h)
+	m.paneGen++
+	term, err := m.terminalOpener()(m.paneGen, w, h, cmd, m.hostColors)
+	if err != nil {
+		return nil, nil, err
+	}
+	p := seed
+	p.term = term
+	p.setW, p.setH = w, h
+	p.opened = time.Now()
+	return &p, tea.Batch(term.AwaitOutput(), term.AwaitExit()), nil
 }
 
 // termOpener is what starts the terminal a pane's process runs in.
