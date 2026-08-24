@@ -473,9 +473,15 @@ func TestDefaultWindowCommandAgentIncludesOptions(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	got := defaultWindowCommandWithRepo("agent", repo)
+	// The preamble follows the options — every Claude agent gets one now, dev_loop
+	// or not (see agentPreamble) — so what this pins is the options, not the whole
+	// line.
 	want := "claude --dangerously-skip-permissions"
-	if got != want {
-		t.Fatalf("defaultWindowCommandWithRepo agent = %q want %q", got, want)
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("defaultWindowCommandWithRepo agent = %q want it to start with %q", got, want)
+	}
+	if rest := strings.TrimPrefix(got, want); rest != "" && !strings.HasPrefix(rest, " "+appendPreambleFlag+" ") {
+		t.Fatalf("defaultWindowCommandWithRepo agent = %q — unexpected trailer %q", got, rest)
 	}
 }
 
