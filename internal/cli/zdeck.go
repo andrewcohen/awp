@@ -784,8 +784,9 @@ type hostedAgent struct {
 	dir    string
 	prompt string
 	// review says the recipient reviews someone else's change, so it must start
-	// without the dev-loop preamble. A reviewer told to work in units, run gates
-	// and commit starts doing the author's job on their PR.
+	// without the loop half of the preamble. A reviewer told to work in units, run
+	// gates and commit starts doing the author's job on their PR; it still gets the
+	// workspace half, since its row has a title like any other.
 	review bool
 }
 

@@ -304,7 +304,12 @@ func runReviewOpts(runner Runner, svc workspace.Service, prNumber int, in io.Rea
 		if err := tmuxClient.NewWindowInSession(sessionName, "agent", wsPath, env); err != nil {
 			return err
 		}
-		if err := tmuxClient.SendCommand(sessionName+":agent", config.AgentInvocation(repoRoot)+" "+shellSingleQuote(prompt)); err != nil {
+		// reviewAgentInvocation, not config.AgentInvocation: a reviewer gets the
+		// workspace preamble (its row has a title too) and not the loop one. The
+		// pane host's reviewer goes through reviewAgentArgv for the same reason,
+		// and the two would otherwise disagree about what a reviewer is told
+		// depending on which host started it.
+		if err := tmuxClient.SendCommand(sessionName+":agent", reviewAgentInvocation(repoRoot)+" "+shellSingleQuote(prompt)); err != nil {
 			return err
 		}
 	} else {

@@ -282,16 +282,18 @@ func TestAParkedReviewPromptStartsAReviewer(t *testing.T) {
 		return cmd.Args
 	}
 
-	// The comparison only means something if the coding agent does get a
-	// preamble from this fixture — otherwise both sides are trivially equal
+	// The comparison only means something if the coding agent does get the loop
+	// instruction from this fixture — otherwise both sides are trivially equal
 	// and the test would pass with the distinction deleted.
 	coding := argvFor(workspace.PendingPrompt{Text: "review PR 12"})
-	if !slices.Contains(coding, appendPreambleFlag) {
-		t.Fatalf("fixture is wrong: the coding agent got no preamble to distinguish from: %v", coding)
+	if text := preambleTextIn(t, coding); !strings.Contains(text, loopInstruction) {
+		t.Fatalf("fixture is wrong: the coding agent got no loop instruction to distinguish from:\n%s", text)
 	}
 	review := argvFor(workspace.PendingPrompt{Text: "review PR 12", Review: true})
-	if slices.Contains(review, appendPreambleFlag) {
-		t.Errorf("a parked review prompt started an agent carrying the dev-loop preamble: %v", review)
+	if text := preambleTextIn(t, review); strings.Contains(text, loopInstruction) {
+		t.Errorf("a parked review prompt started an agent carrying the loop instruction:\n%s", text)
+	} else if !strings.Contains(text, titleInstruction) {
+		t.Errorf("the reviewer was not told it may title its row:\n%s", text)
 	}
 	if !slices.Contains(review, "review PR 12") {
 		t.Errorf("the review prompt did not reach the agent: %v", review)

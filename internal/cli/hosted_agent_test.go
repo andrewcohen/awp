@@ -116,12 +116,13 @@ func TestStartingTheAgentGivesItThePrompt(t *testing.T) {
 	}
 }
 
-// TestAReviewerStartsWithoutTheDevLoopPreamble. The two flavors are not
+// TestAReviewerStartsWithoutTheLoopInstruction. The two flavors are not
 // interchangeable and the difference is not visible in the prompt text: a
 // reviewer told to work in units, run gates and commit starts doing the author's
-// job on someone else's PR. The pane path makes the same distinction from the
-// parked prompt's Review flag; this is the same decision one step earlier.
-func TestAReviewerStartsWithoutTheDevLoopPreamble(t *testing.T) {
+// job on someone else's PR. It still gets the workspace section — its row has a
+// title like any other. The pane path makes the same distinction from the parked
+// prompt's Review flag; this is the same decision one step earlier.
+func TestAReviewerStartsWithoutTheLoopInstruction(t *testing.T) {
 	repo := writeRepoConfig(t, `{
 		"agent": "claude",
 		"dev_loop": {"phases": ["implement"], "gates": [{"name": "test", "phase": "implement", "match": "go test"}]}
@@ -142,15 +143,21 @@ func TestAReviewerStartsWithoutTheDevLoopPreamble(t *testing.T) {
 		return shimArgv(t, argvLog)
 	}
 
-	coding := argvFor(false)
-	// The comparison only means something if the coding flavor does get a preamble
-	// from this fixture — otherwise both sides are trivially equal and this would
-	// pass with the distinction deleted.
-	if !slicesContains(coding, appendPreambleFlag) {
-		t.Fatalf("the coding agent started without a preamble (%v), so this test proves nothing", coding)
+	// The comparison only means something if the coding flavor does get the loop
+	// instruction from this fixture — otherwise both sides are trivially equal and
+	// this would pass with the distinction deleted.
+	coding := preambleTextIn(t, argvFor(false))
+	if !strings.Contains(coding, loopInstruction) {
+		t.Fatalf("the coding agent was not told about the loop, so this test proves nothing:\n%s", coding)
 	}
-	if reviewer := argvFor(true); slicesContains(reviewer, appendPreambleFlag) {
-		t.Errorf("the reviewer started with the dev-loop preamble: %v", reviewer)
+	// A reviewer is told about its row and not about the loop — presence is no
+	// longer the distinction, content is.
+	reviewer := preambleTextIn(t, argvFor(true))
+	if strings.Contains(reviewer, loopInstruction) {
+		t.Errorf("the reviewer started with the dev-loop instruction:\n%s", reviewer)
+	}
+	if !strings.Contains(reviewer, titleInstruction) {
+		t.Errorf("the reviewer was not told it may title its row:\n%s", reviewer)
 	}
 }
 
@@ -287,13 +294,4 @@ func (r *refusesLabels) Run(ctx context.Context, dir, name string, args ...strin
 		return "", errors.New("no such session")
 	}
 	return r.liveSessionRunner.Run(ctx, dir, name, args...)
-}
-
-func slicesContains(haystack []string, want string) bool {
-	for _, s := range haystack {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
