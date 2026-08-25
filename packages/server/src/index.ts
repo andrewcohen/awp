@@ -10,8 +10,9 @@
 //     the *calling* client rather than making a new one, which steals the
 //     terminal awp was launched from. The child's environment must not carry
 //     that marker.
-//   - A pty carries bytes and JSON carries text. A 64KB read can split a UTF-8
-//     sequence across two messages, so the transport does not decode — only the
-//     emulator knows how to hold half of one.
+//   - A 64KB read can split a UTF-8 sequence across two messages, and something
+//     has to hold half of one. bun-pty does: one TextDecoder across reads, in
+//     streaming mode. That is why this path can be string-native, and why
+//     gdeck's base64 transport does not carry over.
 
 export const serverVersion = 0;

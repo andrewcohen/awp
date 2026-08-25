@@ -139,6 +139,108 @@ workspace, which is the failure mode worth naming rather than discovering.
 `unstable/` is upstream's own label. The contract package is where that churn is
 absorbed, so a breaking rename touches one file rather than every call site.
 
+## The pty under Bun
+
+Measured 2026-08-25 with a disposable probe, before any of it was wrapped in an
+Effect service — a release-candidate API and an unproven native binding failing
+at the same time gives a failure two suspects and rules out neither.
+
+**node-pty does not work under Bun.** It loads, and it spawns: the native module
+is reachable and returns a pid. Then no callback ever fires — not `onData`, not
+`onExit`, not after two seconds for a process as short as `/bin/echo hi`. The
+identical script under Node streams the output and exits in 27ms. Bun's node-api
+does not drive node-pty's read loop.
+
+Two things were ruled out on the way there, and both are worth knowing:
+
+- `posix_spawnp failed` is not the node-api problem, it comes first. node-pty
+  ships `prebuilds/darwin-arm64/spawn-helper` mode `-rw-r--r--`, and Bun's
+  installer does not restore the executable bit that npm would. Anyone
+  debugging node-pty under Bun hits this before reaching the real wall.
+- The first probe "failed" its resize check because it fed `stty size` to a
+  `cat`, which echoed the command back. An echo of a question is not an answer
+  to it, and a probe that cannot tell the difference reports a working feature
+  as broken.
+
+**bun-pty 0.4.10 works.** Spawn, stream, write, and a resize the kernel actually
+performed — `stty size` reported `30 100` before and `12 40` after. It is a Rust
+FFI binding via `bun:ffi`, sources vendored at `~/.references/bun-pty@0.4.10`.
+
+Its one limitation: `onData` is `string` and `write` takes `string`, with no
+encoding switch in `IPtyForkOptions`. Bytes never surface. The decode is done
+correctly for the case that matters — one `TextDecoder("utf-8")` held across
+reads with `{ stream: true }`, so a character split across a 64KB boundary is
+buffered and emitted whole, which is exactly what gdeck warned about. What it
+cannot carry is a byte sequence that is not valid UTF-8: those become U+FFFD
+before the emulator sees them, and the emulator is what should be deciding.
+
+Nothing that actually flows through a pane needs those bytes. Agent output is
+text. ANSI escapes are ASCII. Mouse SGR reports and key encodings are ASCII, and
+even the inline-image protocols — Sixel, kitty graphics, iTerm2 — carry their
+payloads base64-encoded inside ASCII escape sequences. What is left is `cat`-ing
+a binary, which renders as garbage on a real terminal too. So bun-pty is
+adopted, and `PtySpawner` is typed in `string`.
+
+**This deletes base64 from the transport.** gdeck sent pty traffic as base64
+because its pty was in Go: raw `[]byte` had to cross into JSON, and a 64KB read
+could split a UTF-8 sequence across two events with only the emulator able to
+hold half of one. Neither is true here. bun-pty holds the partial sequence
+itself, and ghostty-web's `write` takes `string | Uint8Array` while its `onData`
+emits `string` — so the path is string-native end to end. Along with the
+encoding goes `LivePane`'s hand-rolled per-byte `atob`/`btoa` loop, which
+existed only to serve it.
+
+The knowledge survives the code: a split multi-byte sequence is still the hazard
+on this path. It is now handled one layer down, inside the binding, rather than
+by us.
+
+### zmx through bun-pty
+
+`bun run probe:zmx`, run from a plain terminal on 2026-08-25:
+
+|                      | probe  | gdeck (Go) |
+| -------------------- | ------ | ---------- |
+| spawn                | 16.4ms | 3ms        |
+| first byte           | 44.5ms | 9ms        |
+| screen live          | 52.7ms | 11ms       |
+| keystroke round trip | 9.1ms  | —          |
+
+It works: session created, size reported as `30 100`, keystroke echoed, clean
+exit, nothing left behind.
+
+**The first three rows do not compare.** The probe _creates_ a session — zmx
+forks a shell which then runs the command — from a cold Bun process whose first
+`spawn` also pays bun-pty's one-time `dlopen` and FFI init. gdeck's 25ms was
+attaching to a session that already existed, from a warm process. Reading these
+as a 2× regression would be wrong, and so would reading them as a pass.
+
+The row that does transfer is the last one. **9.1ms from keystroke to echo**,
+through zmx, through a pty, under Bun — against gdeck's p50 of 8ms for a pane
+that did not stutter. That is the latency a person feels, and it is at parity.
+
+A warm attach to a pre-existing session, which is what the daemon actually does,
+is still unmeasured.
+
+### Running anything against a real zmx
+
+`zmx attach` from inside a session steals the caller's terminal, and this repo
+is developed from inside one. Stripping `ZMX_SESSION` from the child stops the
+hijack — and that is **not** sufficient, which was learned by doing it wrong: a
+probe that stripped the marker correctly still opened a new client, and a
+session takes its size from the client looking at it, so it reflowed and
+redrew the session it was being run from.
+
+Two rules, and conflating them is the mistake:
+
+- **Spawning zmx as a child:** strip `ZMX_SESSION`. Always.
+- **Probing or testing against a real zmx:** refuse to run inside a session. Not
+  strip — refuse. No environment edit makes it safe.
+
+`packages/server/src/zmx-session.ts` holds both. The Go tree paired its
+equivalent guard with a reflective test asserting every real-zmx test called it,
+because a guard is only as good as nobody forgetting; that test belongs here as
+soon as there is more than one caller.
+
 ## What the gdeck prototype already answered
 
 gdeck and tdeck were deleted in `chore: delete the gdeck and tdeck surfaces`.
@@ -184,10 +286,12 @@ conclusions were drawn from screenshots of an unpatched build before this was
 noticed. Confirm a marker reaches `.vite/deps/ghostty-web.js` before believing a
 result.
 
-**Bytes are base64 in both directions.** A pty carries bytes and JSON carries
-text; a 64KB read can split a UTF-8 sequence across two messages, and the
-emulator is the only thing that knows how to hold half of one. The transport
-must not attempt to decode.
+**A 64KB read can split a UTF-8 sequence across two messages** — and something
+has to be able to hold half of one. gdeck's answer was base64 in both
+directions, because its pty was in Go and raw `[]byte` had to cross into JSON.
+**That answer does not carry over**; see _The pty under Bun_. The hazard does.
+It is now handled inside bun-pty rather than by the transport, which is the only
+reason this path can be string-native.
 
 **The pane measures itself.** Latency is reported as a number, not a verdict —
 whether a pane feels right is exactly what a pass/fail line cannot carry.
@@ -224,8 +328,7 @@ stack is either already proven in gdeck or is ordinary.
 2. **Workspace scaffold.** Bun workspaces, base tsconfig, the pinned dependency
    set installing without peer conflict.
 3. **pty under Bun.** Spawn `zmx attach` with `ZMX_SESSION` stripped, bytes both
-   directions, resize. Falls back to a small native pty helper if node-pty does
-   not work under Bun's node-api.
+   directions, resize. Answered — see _The pty under Bun_ below.
 4. **Electrobun window over the Vite renderer.** Dev loop and production build.
 5. **`@awp-kit/pane`.** Port `paneTerminal.ts` and regenerate the renderer patch
    against ghostty-web 0.4.0. Static pane from a byte fixture, no daemon.
