@@ -5,33 +5,35 @@
 // fail. Imported by the multiplexer and by anything displaying a session.
 //
 // Ported from the Go implementation. Its comments are evidence that a rule was
-// once right, not proof that it is: one of them was already found wrong on the
-// way in — see the note on identityLabels. So the properties the rest of the
-// system depends on are proved in naming.test.ts, and the claims that are
-// really claims about *zmx* are re-measured by `bun run probe:claims` rather
-// than inherited. Anything below marked UNVERIFIED is waiting on that probe.
+// once right, not proof that it is: one was found wrong on the way in — see the
+// note on identityLabels. So the properties the rest of the system depends on
+// are proved in naming.test.ts, and the claims that are really claims about
+// *zmx* were re-measured by `bun run probe:claims` on 2026-08-25 rather than
+// inherited. The limit and the silent slash refusal both held; only the
+// illustration of the limit was wrong.
 
 import { createHash } from "node:crypto";
 
 /**
- * The longest name zmx will accept. **UNVERIFIED here** — inherited from Go and
- * re-measured by `bun run probe:claims`.
+ * The longest name zmx will accept. **Re-measured 2026-08-25** by
+ * `bun run probe:claims`: 46 accepted, 47 refused with
  *
- * The reasoning, which is sound whether or not the number is: zmx turns a name
- * into a socket path, so the bound is what a unix socket address holds.
- * `sun_path` is 104 bytes on darwin, and the daemon's socket directory under a
- * macOS per-user TMPDIR spends 56 of them. The Go original reports zmx refusing
- * 47 with "max 46 for socket directory /var/folders/…/T/zmx-502".
+ *   error: session name is too long (47 bytes, max 46 for socket directory
+ *   "/var/folders/…/T/zmx-502")
  *
- * If it is right, 46 is a floor rather than a guess: that TMPDIR is a fixed
- * width by construction and a Linux socket directory is shorter, so a name that
- * fits here fits there.
+ * zmx turns a name into a socket path, so the bound is what a unix socket
+ * address holds: `sun_path` is 104 bytes on darwin, and the daemon's socket
+ * directory under a macOS per-user TMPDIR spends 56 of them.
  *
- * Being wrong in either direction is survivable but not free. Too high and zmx
- * refuses a name awp thinks is legal. Too low and names are shortened that need
- * not have been — and since a name is an address, changing this later renames
- * every session that was being shortened, which reads as every one of them
- * having disappeared.
+ * 46 is a floor rather than a guess: that TMPDIR is a fixed width by
+ * construction and a Linux socket directory is shorter, so a name that fits
+ * here fits there. And zmx names its own max in the refusal, which is a better
+ * message than any check here would write.
+ *
+ * Worth not getting wrong later. Too high and zmx refuses a name awp thinks is
+ * legal. Too low and names are shortened that need not have been — and since a
+ * name is an address, changing this renames every session that was being
+ * shortened, which reads to a developer as all of them having disappeared.
  */
 export const MAX_SESSION_NAME = 46;
 
@@ -72,6 +74,12 @@ export const LABEL_KIND = "awp_kind";
  *
  * Everything outside a conservative ASCII set becomes `_`, which is also what
  * makes a dot-split of a name safe: no segment can contain a dot.
+ *
+ * The slash is the one that matters most. Measured 2026-08-25: zmx refuses a
+ * name containing one and says **nothing at all** — no error, no session, no
+ * exit code to notice. Without this reduction that failure is invisible, and a
+ * workspace named after a branch (`feature/thing`) would silently never get a
+ * session.
  */
 export const sanitize = (value: string): string => {
   let out = "";
