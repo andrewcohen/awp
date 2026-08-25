@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "daemon": "bun run src/main.ts"
+  },
   "dependencies": {
     "@awp-kit/protocol": "workspace:*",
     "@effect/platform-node-shared": "4.0.0-rc.112",
