@@ -94,7 +94,9 @@ describe("the contract", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const rpc = yield* client;
-          const chunks = yield* Stream.runCollect(rpc.Attach({ session: "alpha" }));
+          const chunks = yield* Stream.runCollect(
+            rpc.Attach({ session: "alpha", cols: 100, rows: 30 }),
+          );
           // Escape sequences arrive intact, byte for byte. There is no byte
           // stage anywhere on this path and nothing should have introduced one.
           expect(chunks.join("")).toBe(output.join(""));
@@ -111,7 +113,9 @@ describe("the contract", () => {
           // at it rather than catch it. Result.isFailure is a type guard, which
           // is why .failure is reachable below without a cast — reading the
           // discriminant by hand would narrow nothing.
-          const result = yield* Effect.result(Stream.runCollect(rpc.Attach({ session: "gone" })));
+          const result = yield* Effect.result(
+            Stream.runCollect(rpc.Attach({ session: "gone", cols: 100, rows: 30 })),
+          );
           expect(Result.isFailure(result)).toBe(true);
           if (Result.isFailure(result)) {
             // The point of a schema-backed error: it arrives as itself, with

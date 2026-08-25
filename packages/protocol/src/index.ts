@@ -106,9 +106,14 @@ export class AwpRpcs extends RpcGroup.make(
    * Chunks are `String`, not bytes. There is no byte stage anywhere on this
    * path — the pty hands out strings and `term.write` takes them — so encoding
    * to bytes here would exist only to be undone at the other end.
+   *
+   * The size is part of attaching, not a call that follows it. A client knows
+   * its own geometry before it asks, and opening at some default and resizing
+   * afterwards would reflow the real session twice — visibly, since the first
+   * reflow is at the wrong size and whatever is running redraws for it.
    */
   Rpc.make("Attach", {
-    payload: { session: Schema.String },
+    payload: { session: Schema.String, cols: Schema.Int, rows: Schema.Int },
     success: Schema.String,
     error: AttachRefused,
     stream: true,
