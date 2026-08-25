@@ -122,7 +122,7 @@ Versions confirmed against the npm registry on 2026-08-25.
 | Diffs / trees    | @pierre/diffs, @pierre/trees | 1.3.6, 1.0.0-beta.6 | diffs already proven in gdeck                      |
 | Terminal         | ghostty-web                  | 0.4.0               | libghostty→wasm, canvas renderer                   |
 | Backend          | effect                       | 4.0.0-rc.112        | dist-tag `rc`                                      |
-| Backend platform | @effect/platform-bun         | 4.0.0-rc.112        |                                                    |
+| Backend platform | @effect/platform-node-shared | 4.0.0-rc.112        | not platform-bun — see below                       |
 | Lint             | oxlint                       | 1.80.0              | oxc; no formatter of its own                       |
 | Format           | oxfmt                        | 0.65.0              | oxc; pre-1.0                                       |
 | Test             | vitest                       | 4.1.11              | peers vite ^8                                      |
@@ -138,6 +138,20 @@ workspace, which is the failure mode worth naming rather than discovering.
 
 `unstable/` is upstream's own label. The contract package is where that churn is
 absorbed, so a breaking rename touches one file rather than every call site.
+
+### platform-node-shared, not platform-bun
+
+`@effect/platform-bun`'s barrel imports `bun` — through `BunRedis` — so anything
+that touches it cannot be loaded by a test runner on Node, and vitest is on
+Node.
+
+Nothing is given up by avoiding it: `BunChildProcessSpawner` is literally
+`export * from "@effect/platform-node-shared/NodeChildProcessSpawner"`. There is
+no Bun-specific spawner. One dependency serves the daemon under Bun and the
+tests under vitest.
+
+platform-bun will earn its place when the daemon needs a socket server, and gets
+added then — when something imports it, not in anticipation.
 
 ## The pty under Bun
 
