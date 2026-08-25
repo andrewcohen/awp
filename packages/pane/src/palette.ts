@@ -13,7 +13,15 @@ import type { ITheme } from "ghostty-web";
 export type ColorScheme = "light" | "dark";
 
 export const macchiato = {
-  base: "#181926",
+  // base, and not crust.
+  //
+  // This was #181926 — Catppuccin's crust, two steps below base — and being two
+  // steps too dark is not a matter of taste. A program picks its own colours on
+  // the assumption that the terminal's background is roughly where the theme
+  // says it is: Claude Code paints a message block in #373737, which is a
+  // subtle lift off #24273a and a stark slab off #181926. The palette being
+  // wrong made a correct program look wrong.
+  base: "#24273a",
   text: "#cad3f5",
   black: "#494d64",
   red: "#ed8796",
