@@ -286,10 +286,19 @@ Per-unit gates, each run as its own command:
 - [ ] `bun run lint` — oxlint
 - [ ] `bun run typecheck` — `tsc --build`
 - [ ] `bun run test` — vitest
+- [ ] `bun run doctor` — react-doctor
 
 `archive/` is excluded from every one of them. oxfmt reformatted 43 files in
 there the first time it ran, which is the one way a reference tree stops being
 a reference.
+
+react-doctor is advisory rather than blocking: it reports and exits 0 whatever
+it finds, so the gate records that it ran and the findings are for a person to
+read. Two notes on it. Its supply-chain scan sends the dependency list to
+Socket.dev and is **off** in the `doctor` script — `doctor:supply-chain` is
+there for when that is wanted deliberately. And it reaches a score API even
+without that flag, degrading to "Score unavailable" when the network is not
+there, so a verify is never blocked by being offline.
 
 The Go gates in `archive/` are not run; that tree is reference only.
 
