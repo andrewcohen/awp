@@ -20,8 +20,8 @@
 
 import { Context, type Effect } from "effect";
 import { Data } from "effect";
-import { LABEL_KIND, LABEL_PROJECT, LABEL_WORKSPACE, parseSessionName } from "./naming.js";
-import type { SessionIdentity } from "./naming.js";
+import { LABEL_KIND, LABEL_PROJECT, LABEL_WORKSPACE, parseSessionName } from "./naming";
+import type { SessionIdentity } from "./naming";
 
 /**
  * A session as the multiplexer reports it.

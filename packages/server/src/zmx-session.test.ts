@@ -5,7 +5,7 @@ import {
   insideZmxSession,
   requireOutsideZmxSession,
   zmxChildEnv,
-} from "./zmx-session.js";
+} from "./zmx-session";
 
 // None of this touches zmx. That is the point of the split: the rules about
 // when it is safe to talk to zmx are ordinary logic and get ordinary tests,

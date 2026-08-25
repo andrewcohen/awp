@@ -17,9 +17,9 @@
 
 import { Effect, Layer } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { Multiplexer, MultiplexerError } from "./multiplexer.js";
-import { parseSessionList, requireName } from "./zmx-parse.js";
-import { zmxChildEnv } from "./zmx-session.js";
+import { Multiplexer, MultiplexerError } from "./multiplexer";
+import { parseSessionList, requireName } from "./zmx-parse";
+import { zmxChildEnv } from "./zmx-session";
 
 /**
  * Refuse an empty name rather than handing a process manager a blank argument
