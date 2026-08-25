@@ -304,6 +304,20 @@ foreground colour. That is stronger evidence the patched glyph path is live than
 the dark screenshot alone — it shows the patch reading the theme rather than
 holding hexes. Prefer checks with that property.
 
+## Debug tools live in the accessory column
+
+`apps/amoeba/src/renderer/debug/` is a collection, not a panel. The meter there
+answers what "feels laggy" means — what the pointing device emitted, how many
+reports the pane made of it, how much came back, and whether frames are being
+dropped — and it exists because guessing at that question twice produced two
+wrong answers.
+
+Two things worth keeping about its shape. Nothing is behind a flag: a debug tool
+nobody can find is a debug tool nobody uses, and a 4Hz timer is not a cost worth
+hiding it for. And it shows peaks beside live figures, because by the time a
+hand leaves the trackpad the live figure is zero — a reading only anyone fast
+enough to catch is not a reading.
+
 ## Working here
 
 - **Run each gate as its own command.** The dev-loop hook records one gate per
