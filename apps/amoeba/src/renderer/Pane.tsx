@@ -4,21 +4,43 @@ import {
   mountPaneTerminal,
   paneFontFamily,
   paneReady,
+  paletteFor,
   paneThemeFor,
   resetPane,
   setPaneSinks,
   setPaneTheme,
   writePane,
 } from "@awp-kit/pane";
+import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
 import { type Attachment, attach, resize, write } from "./daemon";
-import { currentColorScheme } from "./useColorScheme";
+import { currentColorScheme } from "./theme";
+import { colors, space } from "./tokens.stylex";
 
 // The pane, with a session behind it.
 //
 // The terminal is borrowed rather than built. See @awp-kit/pane — building one
 // per view writes into freed wasm state, which is the single cause behind four
 // different complaints in gdeck.
+
+const styles = stylex.create({
+  failure: {
+    padding: `${space.titlebar} ${space.gutter} ${space.gutter}`,
+    whiteSpace: "pre-wrap",
+    color: colors.warn,
+    margin: 0,
+    font: "inherit",
+  },
+  // The container is painted the terminal's own background, not left
+  // transparent. FitAddon sizes the canvas in whole cells, so it is always a
+  // little smaller than the column, and the chrome showing through that
+  // remainder reads as a seam down the edge of the pane rather than as the
+  // rounding it is. That colour is the pane's, not the chrome's, so it arrives
+  // as a dynamic value rather than a token — and it is read from the palette
+  // rather than off the built theme, whose `background` is optional and would
+  // have to be defaulted to something that is not a colour.
+  backdrop: (base: string) => ({ width: "100%", height: "100%", backgroundColor: base }),
+});
 
 export function Pane({
   session,
@@ -128,30 +150,8 @@ export function Pane({
   }, [scheme]);
 
   if (failure !== "") {
-    return (
-      <pre
-        style={{
-          padding: "3rem 1rem 1rem",
-          whiteSpace: "pre-wrap",
-          color: "#ed8796",
-          margin: 0,
-          font: "inherit",
-        }}
-      >
-        {failure}
-      </pre>
-    );
+    return <pre {...stylex.props(styles.failure)}>{failure}</pre>;
   }
 
-  // The container is painted the terminal's own background, not left
-  // transparent. FitAddon sizes the canvas in whole cells, so it is always a
-  // little smaller than the column, and the chrome showing through that
-  // remainder reads as a seam down the edge of the pane rather than as the
-  // rounding it is.
-  return (
-    <div
-      ref={container}
-      style={{ width: "100%", height: "100%", background: paneThemeFor(scheme).background }}
-    />
-  );
+  return <div ref={container} {...stylex.props(styles.backdrop(paletteFor(scheme).base))} />;
 }

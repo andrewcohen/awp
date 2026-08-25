@@ -1,5 +1,7 @@
-import { type Chrome, type Meter as Reading, readMeter, resetMeter } from "@awp-kit/pane";
+import { type Meter as Reading, readMeter, resetMeter } from "@awp-kit/pane";
+import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
+import { colors, space, text } from "../tokens.stylex";
 
 // The pane's vital signs, in the accessory column.
 //
@@ -14,14 +16,49 @@ import { useEffect, useState } from "react";
 
 const SAMPLE_MS = 250;
 
+const styles = stylex.create({
+  panel: {
+    padding: `${space.titlebar} ${space.gutter} ${space.gutter}`,
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.35rem",
+    fontSize: text.small,
+    lineHeight: 1.6,
+  },
+  row: { display: "flex", justifyContent: "space-between", gap: "0.5rem" },
+  muted: { color: colors.muted },
+  // Tabular figures, so a number that changes every quarter second does not
+  // shuffle the column it sits in.
+  figure: { fontVariantNumeric: "tabular-nums" },
+  heading: { color: colors.muted, marginTop: "0.75rem" },
+  first: { color: colors.muted, marginBottom: "0.5rem" },
+  right: { float: "right" },
+  verdict: { color: colors.live },
+  dropping: { color: colors.warn },
+  buttons: { display: "flex", gap: "0.35rem", marginTop: "1rem" },
+  button: {
+    flex: 1,
+    padding: "0.25rem 0.5rem",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    color: colors.text,
+    font: "inherit",
+    cursor: "pointer",
+  },
+  secondary: { color: colors.muted },
+  done: { color: colors.live },
+});
+
 // `peak` is the whole reason this column is worth looking at after the fact: by
 // the time a hand has left the trackpad the live figure is already zero.
-const row = (label: string, value: string, muted: string, peak?: string) => (
-  <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
-    <span style={{ color: muted }}>{label}</span>
-    <span style={{ fontVariantNumeric: "tabular-nums" }}>
+const row = (label: string, value: string, peak?: string) => (
+  <div key={label} {...stylex.props(styles.row)}>
+    <span {...stylex.props(styles.muted)}>{label}</span>
+    <span {...stylex.props(styles.figure)}>
       {value}
-      {peak !== undefined && <span style={{ color: muted }}>{`  ${peak}`}</span>}
+      {peak !== undefined && <span {...stylex.props(styles.muted)}>{`  ${peak}`}</span>}
     </span>
   </div>
 );
@@ -38,7 +75,7 @@ const peakOf = (a: Rate, b: Rate): Rate => ({
   bytes: Math.max(a.bytes, b.bytes),
 });
 
-export function Meter({ chrome }: { readonly chrome: Chrome }) {
+export function Meter() {
   const [reading, setReading] = useState<Reading | undefined>();
   const [rate, setRate] = useState<Rate>(emptyRate);
   // The instantaneous rate is what a live readout should show and the worst
@@ -83,7 +120,7 @@ export function Meter({ chrome }: { readonly chrome: Chrome }) {
   }, []);
 
   if (reading === undefined) {
-    return <div style={{ padding: "3rem 1rem 1rem", color: chrome.muted }}>meter</div>;
+    return <div {...stylex.props(styles.panel, styles.muted)}>meter</div>;
   }
 
   // 16.7ms is one frame at 60Hz. Past 20 the window is dropping them, and that
@@ -91,36 +128,27 @@ export function Meter({ chrome }: { readonly chrome: Chrome }) {
   const dropping = reading.frameP50 > 20;
 
   return (
-    <div
-      style={{
-        padding: "3rem 1rem 1rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.35rem",
-        fontSize: 11,
-        lineHeight: 1.6,
-      }}
-    >
-      <div style={{ color: chrome.muted, marginBottom: "0.5rem" }}>
-        pane <span style={{ float: "right" }}>now / peak</span>
+    <div {...stylex.props(styles.panel)}>
+      <div {...stylex.props(styles.first)}>
+        pane <span {...stylex.props(styles.right)}>now / peak</span>
       </div>
-      {row("wheel /s", String(rate.events), chrome.muted, String(peak.events))}
-      {row("lines /s", String(rate.lines), chrome.muted, String(peak.lines))}
-      {row("last deltaY", reading.lastDeltaY.toFixed(1), chrome.muted)}
-      {row("delta unit", DELTA_MODE[reading.lastDeltaMode] ?? "?", chrome.muted)}
+      {row("wheel /s", String(rate.events), String(peak.events))}
+      {row("lines /s", String(rate.lines), String(peak.lines))}
+      {row("last deltaY", reading.lastDeltaY.toFixed(1))}
+      {row("delta unit", DELTA_MODE[reading.lastDeltaMode] ?? "?")}
 
-      <div style={{ color: chrome.muted, margin: "0.75rem 0 0" }}>from the session</div>
-      {row("writes /s", String(rate.writes), chrome.muted, String(peak.writes))}
-      {row("bytes /s", String(rate.bytes), chrome.muted, String(peak.bytes))}
+      <div {...stylex.props(styles.heading)}>from the session</div>
+      {row("writes /s", String(rate.writes), String(peak.writes))}
+      {row("bytes /s", String(rate.bytes), String(peak.bytes))}
 
-      <div style={{ color: chrome.muted, margin: "0.75rem 0 0" }}>frames</div>
-      {row("p50 ms", reading.frameP50.toFixed(1), chrome.muted)}
-      {row("worst ms", reading.frameMax.toFixed(1), chrome.muted)}
-      <div style={{ color: dropping ? "#ed8796" : "#a6da95" }}>
+      <div {...stylex.props(styles.heading)}>frames</div>
+      {row("p50 ms", reading.frameP50.toFixed(1))}
+      {row("worst ms", reading.frameMax.toFixed(1))}
+      <div {...stylex.props(dropping ? styles.dropping : styles.verdict)}>
         {dropping ? "dropping frames" : "60Hz"}
       </div>
 
-      <div style={{ display: "flex", gap: "0.35rem", marginTop: "1rem" }}>
+      <div {...stylex.props(styles.buttons)}>
         <button
           type="button"
           onClick={() => {
@@ -133,15 +161,7 @@ export function Meter({ chrome }: { readonly chrome: Chrome }) {
               setTimeout(() => setCopied(false), 1500);
             })();
           }}
-          style={{
-            flex: 1,
-            padding: "0.25rem 0.5rem",
-            background: "transparent",
-            border: `1px solid ${chrome.border}`,
-            color: copied ? "#a6da95" : chrome.text,
-            font: "inherit",
-            cursor: "pointer",
-          }}
+          {...stylex.props(styles.button, copied && styles.done)}
         >
           {copied ? "copied" : "copy"}
         </button>
@@ -151,15 +171,7 @@ export function Meter({ chrome }: { readonly chrome: Chrome }) {
             resetMeter();
             setPeak(emptyRate);
           }}
-          style={{
-            flex: 1,
-            padding: "0.25rem 0.5rem",
-            background: "transparent",
-            border: `1px solid ${chrome.border}`,
-            color: chrome.muted,
-            font: "inherit",
-            cursor: "pointer",
-          }}
+          {...stylex.props(styles.button, styles.secondary)}
         >
           reset
         </button>
@@ -176,7 +188,7 @@ export function Meter({ chrome }: { readonly chrome: Chrome }) {
  * reachable the live numbers have fallen back to nothing.
  */
 const copyReading = async (reading: Reading, rate: Rate, peak: Rate): Promise<void> => {
-  const text = [
+  const report = [
     "pane meter",
     `  wheel /s      ${rate.events}  (peak ${peak.events})`,
     `  lines /s      ${rate.lines}  (peak ${peak.lines})`,
@@ -190,13 +202,13 @@ const copyReading = async (reading: Reading, rate: Rate, peak: Rate): Promise<vo
   ].join("\n");
 
   try {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(report);
   } catch {
     // A webview can refuse the async clipboard depending on how the page was
     // loaded. The old path still works and needs no permission, so it is the
     // fallback rather than an error nobody can act on.
     const scratch = document.createElement("textarea");
-    scratch.value = text;
+    scratch.value = report;
     scratch.style.position = "fixed";
     scratch.style.opacity = "0";
     document.body.append(scratch);

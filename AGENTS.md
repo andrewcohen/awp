@@ -138,10 +138,49 @@ where it never ran.
   `.ts` files rather than declarations.
 - **`@vitejs/plugin-react` v6 silently ignores a `babel` option.** It was removed
   and passing one is not an error. React Compiler comes through
-  `@rolldown/plugin-babel`; StyleX will ride the same pass. The tell that it was
+  `@rolldown/plugin-babel`, and StyleX rides the same pass. The tell that it was
   not running was a bundle byte-identical to one built without it.
 - Vite owns the renderer and Electrobun copies `dist/renderer` in. Electrobun
   never compiles it.
+
+## StyleX fails quietly, twice
+
+Both of these produce markup that is structurally right and visually wrong, with
+no error anywhere. Neither is caught by a gate, so both are listed here.
+
+**One set of options, two passes.** The Babel plugin turns `stylex.create` into
+class names and hands the rules out as metadata the bundler drops; the PostCSS
+plugin re-reads the same files with its own Babel and keeps the metadata instead
+of the code. `dev` changes the class names, so the two arms disagreeing about it
+yields class names no rule matches. That is why `apps/amoeba/stylex.babel.mjs`
+exists and why `postcss.config.mjs` imports from it rather than restating.
+`include` there must likewise cover everything the bundler compiles.
+
+The PostCSS pass also needs `parserOpts` naming `typescript` and `jsx` — it wants
+metadata rather than output, so nothing needs stripping, but without a parser
+that knows the language it dies on the first `import type`.
+
+**A dev server started before `postcss.config.mjs` existed keeps serving the old
+sheet.** It does not fail; it serves a handful of rules instead of ninety, which
+looks exactly like a StyleX bug. Restart Vite after adding or moving a PostCSS
+config.
+
+**`border` and `background` shorthands are dropped in silence.** No error, no
+warning; the declaration is simply not in the output. `border: "none"` on a
+`<button>` therefore leaves the UA default, which on macOS is a 2px outset
+bevel — the tell is that every session row is suddenly a little box:
+
+```
+  border: "none"          ✗ dropped     borderStyle: "none"   ✓
+  background: colour      ✗ dropped     backgroundColor       ✓
+  flex · font · padding · margin        ✓ these do survive
+```
+
+Verify by grepping the built CSS for the property, not by reading the source:
+
+```
+  grep -oE "[;{]border:[^;}]*" apps/amoeba/dist/renderer/assets/*.css
+```
 
 ## The window is an app, not a page
 
@@ -162,11 +201,35 @@ Latte is not Macchiato with the ends swapped. Its ANSI black is subtext1 rather
 than surface1, because the mirror of Macchiato's choice is `#bcc0cc`, which
 against a near-white background is not ink. `palette.ts` says so at the table.
 
-The pane recolours through `setPaneTheme`, and that has to nudge the canvas
-afterwards: ghostty-web's `setTheme` updates state and repaints nothing, and the
-render loop only redraws dirty rows — which recolouring does not mark. Putting
-the canvas' pixel size in disagreement with the renderer's metrics is the only
-full redraw reachable from public API.
+The pane recolours through `setPaneTheme`, and **that does not currently work** —
+this paragraph used to claim it did, which is the reason it now says otherwise at
+length.
+
+`setTheme` updates the renderer's theme and palette and repaints nothing; the
+render loop only redraws rows the buffer marks dirty, and recolouring marks
+none. The nudge afterwards — putting the canvas' pixel size in disagreement with
+the renderer's metrics — reads in the source like the one full redraw reachable
+from public API, and it is not one. Measured:
+
+```
+  setPaneTheme reached        yes, theme.background = #eff1f5
+  term.renderer               present; setTheme, getCanvas both functions
+  canvas.width = 0 applied    yes — and the canvas returns to 336x588 on its own
+  corner pixel afterwards     rgb(36,39,58)   ← macchiato base, the old colour
+  the same nudge by hand      also nothing
+  a real reflow, 900 → 1150   rgb(239,241,245) ← the new colour
+```
+
+Two things this is worth keeping for. The reflow works because
+`Terminal.resize` calls `renderer.render(wasmTerm, true, …)` outright — and it
+early-returns on unchanged dimensions, so it cannot simply be called: resizing
+to `rows - 1` and back would fire `resizeEmitter` twice and reflow the real
+session. And the last reading that fits all six rows is that `term.renderer` is
+not the renderer the loop draws with, which is where task #23 starts.
+
+The general shape, again: a mechanism read out of someone else's source is a
+hypothesis. This one was written down as a finding without a pixel ever being
+sampled to check it.
 
 ## Seeing the renderer
 

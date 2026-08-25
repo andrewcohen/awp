@@ -1,6 +1,7 @@
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { styleXPlugin } from "./stylex.babel.mjs";
 
 // The renderer's build. Electrobun copies the output in; it does not compile
 // it — see electrobun.config.ts.
@@ -30,6 +31,9 @@ export default defineConfig({
     react(),
     babel({
       presets: [reactCompilerPreset()],
+      // StyleX's options live in stylex.babel.mjs, because the PostCSS pass
+      // needs the identical set — see the note there.
+      plugins: [styleXPlugin],
     }),
   ],
   server: {

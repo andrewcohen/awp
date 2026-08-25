@@ -34,7 +34,6 @@ export { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
 export { readMeter, resetMeter, type Meter } from "./meter";
 
 export {
-  chromeFor,
   latte,
   macchiato,
   paletteFor,
@@ -42,7 +41,6 @@ export {
   paneFontFeatures,
   paneFontSize,
   paneThemeFor,
-  type Chrome,
   type ColorScheme,
   type Palette,
 } from "./palette";
