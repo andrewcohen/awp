@@ -17,7 +17,8 @@
     "probe:zmx": "bun packages/server/src/probe/zmx-pty.ts",
     "probe:claims": "bun packages/server/src/probe/zmx-claims.ts",
     "doctor:supply-chain": "react-doctor",
-    "amoeba": "bun run --filter amoeba dev:all"
+    "amoeba": "bun run --filter amoeba dev:all",
+    "daemon": "bun run --filter @awp-kit/server daemon"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
