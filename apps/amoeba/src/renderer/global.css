@@ -20,8 +20,11 @@ body,
 
 /* Tells the engine which way the window is dressed, so form controls,
  * scrollbars inside columns, and the canvas' own backdrop are drawn to match.
- * `light dark` means "both, follow the system" — the app reads the same
- * preference in JS for the colours it picks itself. */
+ * `light dark` means "both, follow the system", which is the default and the
+ * only case this sheet handles. When the appearance has been chosen explicitly
+ * theme.ts sets `color-scheme` inline on this same element, which outranks the
+ * rule — otherwise the scrollbars and form controls would keep the system's
+ * appearance while everything the app paints had changed. */
 :root {
   color-scheme: light dark;
 }

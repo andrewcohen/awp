@@ -135,25 +135,15 @@ const themes: Record<ColorScheme, ITheme> = {
 
 export const paneThemeFor = (scheme: ColorScheme): ITheme => themes[scheme];
 
-// The chrome around the pane, which is not the pane.
+// The chrome around the pane is not this package's business.
 //
-// A terminal's colours are the agent's colours — whatever bytes it emits — and
-// the pane reproduces them. The chrome has no such obligation, so it is stated
-// as its own small set of roles rather than borrowed from ANSI slots that mean
-// something else. `border` is deliberately not ANSI black: on Latte that is
-// subtext1, which would draw a hard near-text rule between every column.
-export type Chrome = {
-  readonly base: string;
-  readonly text: string;
-  readonly muted: string;
-  readonly border: string;
-};
-
-// Stable per scheme, for the same reason the themes are: these become inline
-// style objects, and a new one each render is a diff React cannot skip.
-const chromes: Record<ColorScheme, Chrome> = {
-  dark: { base: "#1e2030", text: macchiato.text, muted: macchiato.brightBlack, border: "#363a4f" },
-  light: { base: "#e6e9ef", text: latte.text, muted: latte.brightBlack, border: "#ccd0da" },
-};
-
-export const chromeFor = (scheme: ColorScheme): Chrome => chromes[scheme];
+// It was, briefly: a `Chrome` type and a `chromeFor(scheme)` beside the themes.
+// The reason to remove it is the same reason the themes stay. A pane's sixteen
+// slots are answerable to the upstream table, because a program picks its own
+// colours assuming those exact values. The furniture around it answers to the
+// application, and a package that a different application is meant to embed has
+// no standing to say what that application's borders look like.
+//
+// It now lives in the renderer as StyleX variables —
+// `apps/amoeba/src/renderer/tokens.stylex.ts` — which is also what lets a
+// forced light or dark override exist at all.

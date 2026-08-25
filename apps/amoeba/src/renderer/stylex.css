@@ -1,0 +1,8 @@
+/* Where StyleX's rules land.
+ *
+ * The directive below is not CSS any browser understands — the PostCSS plugin
+ * replaces it with every rule the Babel pass extracted from the source (see
+ * postcss.config.mjs). It has to be imported before global.css: the generated
+ * sheet is the whole design system and global.css is the handful of rules that
+ * pin the window down, so the second must be able to win. */
+@stylex;

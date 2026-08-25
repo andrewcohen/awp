@@ -1,5 +1,6 @@
-import type { Chrome } from "@awp-kit/pane";
+import * as stylex from "@stylexjs/stylex";
 import { useRef, useState } from "react";
+import { colors } from "./tokens.stylex";
 
 // The grab line between two columns.
 //
@@ -11,16 +12,34 @@ import { useRef, useState } from "react";
 
 const GRAB = 9;
 
+const styles = stylex.create({
+  rule: {
+    position: "relative",
+    flex: "0 0 1px",
+    backgroundColor: colors.border,
+    cursor: "col-resize",
+    // Pointer events are captured on this element, so a gesture that starts
+    // here must not also be read as a scroll or a swipe.
+    touchAction: "none",
+  },
+  held: { backgroundColor: colors.muted },
+  grab: {
+    position: "absolute",
+    insetBlock: 0,
+    insetInlineStart: -GRAB / 2,
+    insetInlineEnd: -GRAB / 2,
+  },
+});
+
 type Props = {
   readonly value: number;
   readonly onChange: (next: number) => void;
   /** Dragging right makes the column narrower — true for a right-hand column. */
   readonly invert?: boolean;
-  readonly chrome: Chrome;
   readonly label: string;
 };
 
-export function Divider({ value, onChange, invert = false, chrome, label }: Props) {
+export function Divider({ value, onChange, invert = false, label }: Props) {
   // Where the pointer went down, and how wide the column was then. Read from
   // the origin rather than accumulated per move: summing deltas drifts once the
   // value clamps, so the column stops tracking the cursor and never catches up.
@@ -36,15 +55,7 @@ export function Divider({ value, onChange, invert = false, chrome, label }: Prop
       aria-label={label}
       aria-valuenow={Math.round(value)}
       tabIndex={0}
-      style={{
-        position: "relative",
-        flex: "0 0 1px",
-        background: active ? chrome.muted : chrome.border,
-        cursor: "col-resize",
-        // Pointer events are captured on this element, so a gesture that starts
-        // here must not also be read as a scroll or a swipe.
-        touchAction: "none",
-      }}
+      {...stylex.props(styles.rule, active && styles.held)}
       onKeyDown={(event) => {
         // role="separator" with tabIndex and no keyboard handling is a lie told
         // to assistive technology. Arrows nudge, shift coarsens.
@@ -83,7 +94,7 @@ export function Divider({ value, onChange, invert = false, chrome, label }: Prop
         setActive(false);
       }}
     >
-      <div style={{ position: "absolute", inset: 0, left: -GRAB / 2, right: -GRAB / 2 }} />
+      <div {...stylex.props(styles.grab)} />
     </div>
   );
 }

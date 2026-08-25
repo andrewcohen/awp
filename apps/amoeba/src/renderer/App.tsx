@@ -1,5 +1,5 @@
-import { chromeFor } from "@awp-kit/pane";
 import type { SessionInfo } from "@awp-kit/protocol";
+import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { Divider } from "./Divider";
 import { debugTools } from "./debug";
@@ -9,7 +9,8 @@ import { fitColumns } from "./columns";
 import { listSessions } from "./daemon";
 import { rememberSession, rememberedSession } from "./remembered";
 import { rendererFixture } from "./fixture";
-import { useColorScheme } from "./useColorScheme";
+import { themeFor, useAppearance, useColorScheme } from "./theme";
+import { colors, space, text } from "./tokens.stylex";
 import { useWindowWidth } from "./useWindowWidth";
 
 // The three-column shape amoeba is built around: sidebar, agent, accessory.
@@ -19,15 +20,46 @@ import { useWindowWidth } from "./useWindowWidth";
 // a different number the moment anything insets the window, and a scrollbar's
 // worth of overflow at the top level is precisely what is not allowed here.
 
-const column = {
-  minWidth: 0,
-  height: "100%",
-  overflow: "hidden",
-} as const;
+const styles = stylex.create({
+  window: {
+    display: "flex",
+    height: "100%",
+    backgroundColor: colors.base,
+    color: colors.text,
+    fontFamily: text.mono,
+    fontSize: text.body,
+  },
+  column: {
+    minWidth: 0,
+    height: "100%",
+    overflow: "hidden",
+  },
+  // Dynamic, because the width is state and not a design decision. StyleX
+  // compiles this to one rule with a variable in it, so a drag re-renders
+  // without minting a class per pixel.
+  fixed: (width: number) => ({ flex: `0 0 ${width}px` }),
+  agent: { flex: "1 1 auto" },
+  accessory: { display: "flex", flexDirection: "column", height: "100%" },
+  tabs: {
+    display: "flex",
+    gap: "0.25rem",
+    padding: `${space.titlebar} 0.5rem 0`,
+  },
+  tab: {
+    padding: "0.2rem 0.5rem",
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    color: colors.text,
+    font: "inherit",
+    cursor: "pointer",
+  },
+  tabOn: { backgroundColor: colors.border },
+  tool: { flex: 1, minHeight: 0, overflowY: "auto" },
+});
 
 export function App() {
+  const appearance = useAppearance();
   const scheme = useColorScheme();
-  const chrome = chromeFor(scheme);
   const width = useWindowWidth();
 
   // What was asked for, not what was granted. fitColumns squeezes a column when
@@ -81,22 +113,18 @@ export function App() {
     };
   }, []);
 
-  // Flex-shrink is zero on both sides. The arithmetic in fitColumns already
+  // The appearance theme rides the outermost element rather than <html>. The
+  // variables it sets are inherited, so everything below sees them, and putting
+  // them here keeps the override inside React's tree — where it can be reasoned
+  // about — instead of in a mutation of the document.
+  //
+  // Flex-shrink is zero on both columns. The arithmetic in fitColumns already
   // guarantees the layout fits, so letting flexbox shrink as well would mean
   // two rules deciding the same widths and the rendered result disagreeing with
   // the state that is supposed to describe it.
   return (
-    <div
-      style={{
-        display: "flex",
-        height: "100%",
-        background: chrome.base,
-        color: chrome.text,
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 13,
-      }}
-    >
-      <aside style={{ ...column, flex: `0 0 ${columns.sidebar}px` }}>
+    <div {...stylex.props(themeFor(appearance), styles.window)}>
+      <aside {...stylex.props(styles.column, styles.fixed(columns.sidebar))}>
         <Sidebar
           sessions={sessions}
           selected={selected}
@@ -104,55 +132,45 @@ export function App() {
             setSelected(session.name);
             rememberSession(session.name);
           }}
-          chrome={chrome}
           failure={failure}
         />
       </aside>
 
       <Divider
         label="sidebar width"
-        chrome={chrome}
         value={columns.sidebar}
         onChange={(sidebar) => setWant((prev) => ({ ...prev, sidebar }))}
       />
 
-      <main style={{ ...column, flex: "1 1 auto" }}>
+      <main {...stylex.props(styles.column, styles.agent)}>
         <Pane session={selected} fixture={rendererFixture} scheme={scheme} />
       </main>
 
       <Divider
         label="accessory width"
-        chrome={chrome}
         invert
         value={columns.accessory}
         onChange={(accessory) => setWant((prev) => ({ ...prev, accessory }))}
       />
 
-      <aside style={{ ...column, flex: `0 0 ${columns.accessory}px` }}>
-        <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <aside {...stylex.props(styles.column, styles.fixed(columns.accessory))}>
+        <div {...stylex.props(styles.accessory)}>
           {debugTools.length > 1 && (
-            <div style={{ display: "flex", gap: "0.25rem", padding: "2.5rem 0.5rem 0" }}>
+            <div {...stylex.props(styles.tabs)}>
               {debugTools.map((tool) => (
                 <button
                   key={tool.id}
                   type="button"
                   onClick={() => setTool(tool.id)}
-                  style={{
-                    padding: "0.2rem 0.5rem",
-                    background: tool.id === activeTool ? chrome.border : "transparent",
-                    border: "none",
-                    color: chrome.text,
-                    font: "inherit",
-                    cursor: "pointer",
-                  }}
+                  {...stylex.props(styles.tab, tool.id === activeTool && styles.tabOn)}
                 >
                   {tool.label}
                 </button>
               ))}
             </div>
           )}
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-            {(debugTools.find((t) => t.id === activeTool) ?? debugTools[0])?.render(chrome)}
+          <div {...stylex.props(styles.tool)}>
+            {(debugTools.find((t) => t.id === activeTool) ?? debugTools[0])?.render()}
           </div>
         </div>
       </aside>

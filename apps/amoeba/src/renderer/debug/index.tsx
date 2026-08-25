@@ -1,4 +1,3 @@
-import type { Chrome } from "@awp-kit/pane";
 import type { ReactNode } from "react";
 import { Meter } from "./Meter";
 
@@ -18,13 +17,13 @@ export interface DebugTool {
   readonly id: string;
   /** Short enough for a tab. */
   readonly label: string;
-  readonly render: (chrome: Chrome) => ReactNode;
+  readonly render: () => ReactNode;
 }
 
 export const debugTools: ReadonlyArray<DebugTool> = [
   {
     id: "meter",
     label: "meter",
-    render: (chrome) => <Meter chrome={chrome} />,
+    render: () => <Meter />,
   },
 ];
