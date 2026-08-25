@@ -144,16 +144,126 @@ full redraw reachable from public API.
 
 ## Seeing the renderer
 
-Gates cannot tell you the pane is right, and the Chrome extension is often not
-connected. Playwright's **WebKit** build answers this: it is the same engine
-family as Electrobun's WKWebView, so canvas text rasterises the way the real
-window does — Chromium does not, and a Chromium screenshot proves nothing about
-glyph rendering here.
+No gate can tell you the pane is right. A terminal emulator either lays the
+glyphs down correctly or it does not, and every claim in
+`patches/ghostty-web@0.4.0.patch` is a claim about pixels. Three routes were
+tried; two of them are dead ends worth not rediscovering.
 
-Point it at the Vite dev server rather than at a built app. Worth asserting in
-the same pass, because both are cheap and neither is visible in a screenshot:
-`documentElement.scrollWidth === clientWidth` (no top-level scrollbar) and that
-the root background differs between `colorScheme: "dark"` and `"light"`.
+```
+  Chrome extension    list_connected_browsers → []      not connected
+  osascript           "Not authorized to send Apple events"
+  screencapture       "could not create image from rect"  no Screen Recording
+  Playwright WebKit   works, and is the right engine ✓
+```
+
+**WebKit, not Chromium.** Electrobun renders in WKWebView. The pane draws every
+glyph with `fillText` onto a canvas, and canvas text rasterisation is the part
+that differs most between engines — a Chromium screenshot would be a picture of
+a different renderer and proves nothing about the patch. Playwright's WebKit is
+the same engine family, so it answers the actual question.
+
+**Install outside the repo.** Playwright is a verification tool, not a
+dependency of anything that ships, and its browser is ~77MB. Put it in a scratch
+directory and the repo never learns about it:
+
+```
+cd $CLAUDE_JOB_DIR/tmp
+bun add playwright
+bunx playwright install webkit      # required — see below
+```
+
+The install step is not optional, and having WebKit already downloaded is not
+the same as having the right one. Each Playwright release pins an exact browser
+build number: a cached `webkit-2287` from some other project is invisible to a
+`webkit-2336` client, and `ls ~/Library/Caches/ms-playwright` showing a webkit
+is therefore not evidence you can skip this. The failure reads `Executable
+doesn't exist at .../webkit-2336`.
+
+**Point it at the Vite dev server**, not at a built app — `http://127.0.0.1:5273/`
+with `bun run dev` already up. Building first adds a step that can fail on its
+own and tests a different artefact than the one being edited.
+
+The script does three things, and the screenshot is the last of them. Written
+out in full because a future session will not have the scratch directory this
+one used — copy it, do not reconstruct it:
+
+```js
+// $CLAUDE_JOB_DIR/tmp/shot.mjs  ·  run: SHOT_DIR=$PWD bun run shot.mjs
+import { webkit } from "playwright";
+
+const out = process.env.SHOT_DIR;
+const browser = await webkit.launch();
+
+for (const scheme of ["dark", "light"]) {
+  const page = await browser.newPage({
+    viewport: { width: 1200, height: 760 },
+    deviceScaleFactor: 2, // glyph detail; at 1x the renderer checks are unreadable
+    colorScheme: scheme, // this is what drives prefers-color-scheme
+  });
+
+  // 1. Errors first. A blank pane and a broken pane look identical.
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+
+  await page.goto("http://127.0.0.1:5273/", { waitUntil: "networkidle" });
+  // The wasm compiles, then the fixture is written, then the render loop paints.
+  // Wait for the canvas to exist rather than for a duration, then let it settle.
+  await page.waitForSelector("canvas", { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+
+  // 2. Assert what a screenshot cannot show.
+  const probe = await page.evaluate(() => {
+    const el = document.documentElement;
+    const canvas = document.querySelector("canvas");
+    return {
+      scroll: [el.scrollWidth, el.clientWidth, el.scrollHeight, el.clientHeight],
+      canvas: canvas ? [canvas.width, canvas.height] : null,
+      rootBg: getComputedStyle(document.querySelector("#root").firstElementChild).backgroundColor,
+    };
+  });
+  console.log(scheme, JSON.stringify(probe), "errors:", JSON.stringify(errors));
+
+  // 3. And only then look.
+  await page.screenshot({ path: `${out}/pane-${scheme}.png` });
+  await page.close();
+}
+await browser.close();
+```
+
+What a pass looks like, and what each field is for:
+
+```
+dark  {"scroll":[1200,1200,760,760],"canvas":[1344,1512],"rootBg":"rgb(30, 32, 48)"}  errors: []
+light {"scroll":[1200,1200,760,760],"canvas":[1344,1512],"rootBg":"rgb(230, 233, 239)"} errors: []
+        └─ scrollW===clientW, both axes         └─ present   └─ differs by scheme
+```
+
+- `errors: []` first. gdeck lost a whole debugging session to a missing binding
+  presenting as a black rectangle, and a screenshot of a black rectangle is not
+  evidence of anything.
+- `scroll` proves the no-top-level-scrollbar rule. A scrollbar is a layout that
+  has been mis-sized, and it is invisible in a screenshot of content that fits.
+- `rootBg` differing between the runs proves the system preference is actually
+  being read, rather than a palette that merely happens to be dark. A hardcoded
+  theme passes the dark screenshot.
+- `canvas` non-null separates "the emulator failed to start" from "the emulator
+  started and drew the wrong thing", which are different bugs in different
+  files.
+
+**Then read the image and say what you see, check by check.** The fixture in
+`apps/amoeba/src/renderer/fixture.ts` is built so each block fails visibly if
+one specific patch fix is not reached — descenders clipped, wide glyphs
+bleeding, stems washed out, shades hatched, box corners not meeting. A pane that
+merely "looks like a terminal" is not a pass.
+
+One result from this that is worth keeping: under Latte the `░▒▓█` ramp runs
+light-to-dark, inverted from Macchiato, because the blocks are drawn in the
+foreground colour. That is stronger evidence the patched glyph path is live than
+the dark screenshot alone — it shows the patch reading the theme rather than
+holding hexes. Prefer checks with that property.
 
 ## Working here
 
