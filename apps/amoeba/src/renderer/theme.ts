@@ -1,6 +1,7 @@
 import type { ColorScheme } from "@awp-kit/pane";
 import * as stylex from "@stylexjs/stylex";
 import { useSyncExternalStore } from "react";
+import { readStored, writeStored } from "./remembered";
 import { colors, hue } from "./tokens.stylex";
 
 // What the window looks like, and who decided.
@@ -87,16 +88,11 @@ const QUERY = "(prefers-color-scheme: dark)";
 const isAppearance = (value: unknown): value is Appearance =>
   value === "system" || value === "light" || value === "dark";
 
+// Following the system is the right default when the window cannot remember
+// being told otherwise — including when storage is refused outright.
 const load = (): Appearance => {
-  try {
-    const stored = globalThis.localStorage?.getItem(KEY);
-    return isAppearance(stored) ? stored : "system";
-  } catch {
-    // A webview can refuse storage outright, and the accessor throws rather
-    // than returning nothing. Following the system is the right thing to do
-    // when the window cannot remember being told otherwise.
-    return "system";
-  }
+  const stored = readStored(KEY);
+  return isAppearance(stored) ? stored : "system";
 };
 
 let preference = load();
@@ -128,11 +124,7 @@ export const setAppearance = (appearance: Appearance): void => {
   }
   preference = appearance;
   dress(appearance);
-  try {
-    globalThis.localStorage?.setItem(KEY, appearance);
-  } catch {
-    // Nothing to do and nothing worth saying. The window works without it.
-  }
+  writeStored(KEY, appearance);
   for (const listener of listeners) {
     listener();
   }

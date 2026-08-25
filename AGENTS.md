@@ -176,7 +176,15 @@ bevel — the tell is that every session row is suddenly a little box:
   flex · font · padding · margin        ✓ these do survive
 ```
 
-Verify by grepping the built CSS for the property, not by reading the source:
+A third rule, which at least does fail loudly: **an identifier used inside a
+`create` value is resolved by StyleX itself**, and must come from a `.stylex.ts`
+file. Interpolating an ordinary constant — `DIVIDER` from `columns.ts` — into a
+static style is a build error about theming rules, which is not what is wrong. A
+dynamic style takes the value at runtime and asks no such question, so a
+constant that belongs somewhere else can stay there.
+
+Verify the two silent ones by grepping the built CSS for the property, not by
+reading the source:
 
 ```
   grep -oE "[;{]border:[^;}]*" apps/amoeba/dist/renderer/assets/*.css

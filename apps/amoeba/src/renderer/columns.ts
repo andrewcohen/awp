@@ -22,6 +22,14 @@ export const AGENT_MIN = 320;
 /** Each divider is one pixel of layout; the grab area overhangs it. */
 export const DIVIDER = 1;
 
+/** Which of the two side columns are folded away. */
+export type Collapsed = {
+  readonly sidebar: boolean;
+  readonly accessory: boolean;
+};
+
+export const bothOpen: Collapsed = { sidebar: false, accessory: false };
+
 export type Columns = {
   readonly sidebar: number;
   readonly accessory: number;
@@ -33,9 +41,19 @@ export type Columns = {
 // time, rather than being overwritten with the result. Narrowing the window
 // squeezes a column; widening it back should return it to where its owner put
 // it, and that is only possible if the request survives the squeeze.
-export function fitColumns(container: number, want: Columns): Columns {
-  let sidebar = Math.max(want.sidebar, SIDEBAR.min);
-  let accessory = Math.max(want.accessory, ACCESSORY.min);
+//
+// A collapsed column is zero and takes no part in any of the arithmetic below.
+// Its floor is a statement about how narrow a *visible* column may be — a
+// sidebar of 40px is a list of truncated names, which is worse than no list —
+// and none of that applies to one that is not there. Its divider stays, at its
+// one pixel, because that is where the way back lives.
+export function fitColumns(
+  container: number,
+  want: Columns,
+  collapsed: Collapsed = bothOpen,
+): Columns {
+  let sidebar = collapsed.sidebar ? 0 : Math.max(want.sidebar, SIDEBAR.min);
+  let accessory = collapsed.accessory ? 0 : Math.max(want.accessory, ACCESSORY.min);
 
   // What the two of them may occupy before the agent column is starved.
   const budget = container - 2 * DIVIDER - AGENT_MIN;
@@ -43,13 +61,16 @@ export function fitColumns(container: number, want: Columns): Columns {
 
   // The accessory yields first. It is the one holding a diff or a webview,
   // which degrade gracefully; the sidebar is a list of names, which does not.
+  // Math.max(0, …) on each, so that a collapsed column — already below its
+  // floor by every arithmetic definition — is asked to give nothing rather than
+  // handed width back.
   if (over > 0) {
-    const give = Math.min(over, accessory - ACCESSORY.min);
+    const give = Math.max(0, Math.min(over, accessory - ACCESSORY.min));
     accessory -= give;
     over -= give;
   }
   if (over > 0) {
-    sidebar -= Math.min(over, sidebar - SIDEBAR.min);
+    sidebar -= Math.max(0, Math.min(over, sidebar - SIDEBAR.min));
   }
 
   // Both are at their floor and the window is still too narrow. The agent
