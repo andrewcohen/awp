@@ -2,6 +2,7 @@ import { chromeFor } from "@awp-kit/pane";
 import type { SessionInfo } from "@awp-kit/protocol";
 import { useEffect, useState } from "react";
 import { Divider } from "./Divider";
+import { Meter } from "./Meter";
 import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
 import { fitColumns } from "./columns";
@@ -105,7 +106,7 @@ export function App() {
       />
 
       <aside style={{ ...column, flex: `0 0 ${columns.accessory}px` }}>
-        <div style={{ padding: "3rem 1rem 1rem", color: chrome.muted }}>accessory</div>
+        <Meter chrome={chrome} />
       </aside>
     </div>
   );

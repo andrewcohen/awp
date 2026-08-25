@@ -1,6 +1,7 @@
 import { FitAddon, type ITheme, Terminal, init } from "ghostty-web";
 import { paneFontSize } from "./palette";
 import { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
+import { meterWheel, meterWrite, startMeter } from "./meter";
 
 // One Terminal for the life of the window, reused by every pane.
 //
@@ -73,6 +74,7 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
       fontSize: paneFontSize,
       scrollback: 10_000,
     });
+    startMeter();
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
@@ -186,6 +188,7 @@ function sendWheel(event: WheelEvent): void {
 
   const button = event.deltaY > 0 ? WHEEL_DOWN : WHEEL_UP;
   const lines = wheelLines(event, { height: cellHeight, rows: term.rows });
+  meterWheel(event.deltaY, event.deltaMode, lines);
   dataSink(wheelReport(button, column, row, lines));
 }
 
@@ -198,6 +201,7 @@ const clampCell = (value: number, max: number): number =>
 // the Terminal itself — which is what kept a stale handle alive in gdeck and
 // interleaved one session's bytes into another's cells.
 export function writePane(data: string): void {
+  meterWrite(data.length);
   term?.write(data);
 }
 
