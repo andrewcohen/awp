@@ -1,35 +1,65 @@
-import { useState } from "react";
+import { chromeFor } from "@awp-kit/pane";
+import { Pane } from "./Pane";
+import { rendererFixture } from "./fixture";
+import { useColorScheme } from "./useColorScheme";
 
-// Deliberately almost nothing. This unit answers one question — does an
-// Electrobun window render a Vite-built React app, in dev and from a build —
-// and anything else in here would make a failure ambiguous.
+// The three-column shape amoeba is built around: sidebar, agent, accessory.
 //
-// The counter is not decoration: it proves React is mounted and interactive,
-// not that a static HTML file was served. The compiler line proves the Babel
-// pass ran, because react-compiler rewrites this component and a component it
-// did not touch has no `"use memo"` marker to find.
+// Not resizable yet, and deliberately unstyled — this unit exists to answer
+// whether the emulator renders correctly, and chrome would only make a
+// rendering fault ambiguous. The columns are here anyway so the pane is sized
+// by a real layout rather than by the whole window: a terminal that is right at
+// one size and wrong at another is worth finding early.
+//
+// `height: 100%` and not `100vh`. The root is already pinned to the window in
+// global.css, and vh units in a webview measure the visual viewport — which is
+// a different number the moment anything insets the window, and a scrollbar's
+// worth of overflow at the top level is precisely what is not allowed here.
+
+const column = {
+  minWidth: 0,
+  height: "100%",
+  overflow: "hidden",
+} as const;
 
 export function App() {
-  const [clicks, setClicks] = useState(0);
+  const scheme = useColorScheme();
+  const chrome = chromeFor(scheme);
 
   return (
-    <main
+    <div
       style={{
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
         display: "flex",
-        flexDirection: "column",
-        gap: "1rem",
-        alignItems: "flex-start",
-        padding: "3rem",
+        height: "100%",
+        background: chrome.base,
+        color: chrome.text,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: 13,
       }}
     >
-      <h1 style={{ margin: 0, fontSize: "1.25rem" }}>amoeba</h1>
-      <p style={{ margin: 0, opacity: 0.7 }}>
-        an Electrobun window over a Vite-built React renderer
-      </p>
-      <button type="button" onClick={() => setClicks((n) => n + 1)}>
-        clicked {clicks} {clicks === 1 ? "time" : "times"}
-      </button>
-    </main>
+      <aside
+        style={{
+          ...column,
+          flex: "0 0 220px",
+          borderRight: `1px solid ${chrome.border}`,
+        }}
+      >
+        <div style={{ padding: "3rem 1rem 1rem", color: chrome.muted }}>sidebar</div>
+      </aside>
+
+      <main style={{ ...column, flex: "1 1 auto" }}>
+        <Pane fixture={rendererFixture} scheme={scheme} />
+      </main>
+
+      <aside
+        style={{
+          ...column,
+          flex: "0 0 280px",
+          borderLeft: `1px solid ${chrome.border}`,
+        }}
+      >
+        <div style={{ padding: "3rem 1rem 1rem", color: chrome.muted }}>accessory</div>
+      </aside>
+    </div>
   );
 }

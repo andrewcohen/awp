@@ -117,6 +117,44 @@ where it never ran.
 - Vite owns the renderer and Electrobun copies `dist/renderer` in. Electrobun
   never compiles it.
 
+## The window is an app, not a page
+
+Two rules that hold everywhere in the renderer:
+
+- **Nothing scrolls at the top level.** `html`, `body` and `#root` are pinned in
+  `global.css`. A column scrolls its own content; the document never does, and
+  overflow that reaches the window is meant to be visible as a bug rather than
+  absorbed by a scrollbar. `height: 100%`, never `100vh` — vh measures the
+  visual viewport, which is a different number as soon as anything insets the
+  window.
+- **Colour follows the system preference.** `color-scheme: light dark` for the
+  engine's own furniture, and `useColorScheme` — `useSyncExternalStore`, not
+  `useState` + `useEffect`, which reads a frame late and flashes the wrong theme
+  on launch.
+
+Latte is not Macchiato with the ends swapped. Its ANSI black is subtext1 rather
+than surface1, because the mirror of Macchiato's choice is `#bcc0cc`, which
+against a near-white background is not ink. `palette.ts` says so at the table.
+
+The pane recolours through `setPaneTheme`, and that has to nudge the canvas
+afterwards: ghostty-web's `setTheme` updates state and repaints nothing, and the
+render loop only redraws dirty rows — which recolouring does not mark. Putting
+the canvas' pixel size in disagreement with the renderer's metrics is the only
+full redraw reachable from public API.
+
+## Seeing the renderer
+
+Gates cannot tell you the pane is right, and the Chrome extension is often not
+connected. Playwright's **WebKit** build answers this: it is the same engine
+family as Electrobun's WKWebView, so canvas text rasterises the way the real
+window does — Chromium does not, and a Chromium screenshot proves nothing about
+glyph rendering here.
+
+Point it at the Vite dev server rather than at a built app. Worth asserting in
+the same pass, because both are cheap and neither is visible in a screenshot:
+`documentElement.scrollWidth === clientWidth` (no top-level scrollbar) and that
+the root background differs between `colorScheme: "dark"` and `"light"`.
+
 ## Working here
 
 - **Run each gate as its own command.** The dev-loop hook records one gate per

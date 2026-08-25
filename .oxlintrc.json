@@ -14,6 +14,12 @@
   },
   "overrides": [
     {
+      "files": ["**/main.tsx"],
+      "rules": {
+        "import/no-unassigned-import": "off"
+      }
+    },
+    {
       "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "typescript/no-non-null-assertion": "off"
