@@ -16,3 +16,10 @@
 //     gdeck's base64 transport does not carry over.
 
 export const serverVersion = 0;
+
+export * as attachment from "./attachment";
+export * as handlers from "./handlers";
+export * as multiplexer from "./multiplexer";
+export * as pty from "./pty";
+export * as sessions from "./sessions";
+export * as zmx from "./zmx";
