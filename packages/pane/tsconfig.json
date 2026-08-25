@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../.tsbuild/pane",
+    "tsBuildInfoFile": "../../.tsbuild/pane/.tsbuildinfo",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@awp-kit/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@awp-kit/protocol": "workspace:*",
+    "@effect/platform-bun": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.112"
+  }
+}
