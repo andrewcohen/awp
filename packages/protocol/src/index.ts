@@ -31,6 +31,28 @@ export const protocolVersion = 0;
 // The daemon maps between them, which is the moment a field that stopped
 // existing upstream becomes visible.
 
+/**
+ * Which workspace a session belongs to, and what it is doing there.
+ *
+ * On the wire rather than derived by the client, and that is the whole reason
+ * this exists. A name is `awp.<project>.<workspace>.<kind>`, so splitting it on
+ * dots looks like it answers the question — and it does not. Shortening rewrites
+ * the stem when a name would exceed what zmx accepts, and a dot inside a real
+ * project or workspace name comes back as an underscore. The daemon holds the
+ * labels awp wrote when it created the session, which are the unshortened truth.
+ *
+ * Absent for a session awp did not create: `zmx ls` lists every session on the
+ * machine, and someone else's is not a workspace.
+ */
+export const SessionIdentity = Schema.Struct({
+  project: Schema.String,
+  workspace: Schema.String,
+  /** `agent`, `editor`, a user action — what this session is *for*. */
+  kind: Schema.String,
+});
+
+export type SessionIdentity = (typeof SessionIdentity)["Type"];
+
 export const SessionInfo = Schema.Struct({
   name: Schema.String,
   pid: Schema.Int,
@@ -56,6 +78,8 @@ export const SessionInfo = Schema.Struct({
   cmd: Schema.String,
   /** Everything `zmx ls` printed that was not a known field. */
   labels: Schema.Record(Schema.String, Schema.String),
+  /** See {@link SessionIdentity}. Absent if this is not one of awp's. */
+  identity: Schema.UndefinedOr(SessionIdentity),
   /**
    * Why this session cannot be attached to, or absent if it can.
    *

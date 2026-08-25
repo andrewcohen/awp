@@ -85,6 +85,40 @@ reproduce the anecdote. `naming.test.ts` checks ten real shortened session names
 read off a live `zmx ls`, because a name is an address and one character of
 disagreement would leave every shortened session unfindable.
 
+## A name cannot group a workspace
+
+The sidebar lists **workspaces**; zmx lists **sessions**. A workspace has one
+session per kind — an agent, an editor, a user action — and the temptation is to
+recover the workspace by splitting `awp.<project>.<workspace>.<kind>` on dots.
+It does not work, and the reason is not obvious.
+
+`sessionName` gives the stem whatever budget the kind does not need, so one
+workspace's sessions are shortened to **different stems**:
+
+```
+  awp.thicket.effect-ts-tiered-d-f500.action_dev
+  awp.thicket.effect-ts-tiered-disco-f500.editor
+  awp.thicket.effect-ts-tiered-discou-f500.agent
+        └─ three stems, one workspace: effect-ts-tiered-discount-timemachine
+```
+
+Read one at a time those are three workspaces, and that is exactly what the
+sidebar showed. Nothing there is a bug in the shortening — a name is an address,
+and an address only has to resolve. Names also lose a dot inside a real project
+name to `sanitize`.
+
+The truth is in the labels awp writes (`awp_project`, `awp_workspace`,
+`awp_kind`), which are unshortened. Sessions predating them — most of the ones
+on this machine today — are repaired in `identities()` by asking
+`stemMatches` per known workspace, which is what that function was written for:
+only the workspace can reproduce the shortening at the length a given stem
+actually has. One labelled session recovers every sibling. A workspace where
+none is labelled stays split, which is honest rather than guessed.
+
+The wire carries `SessionIdentity` for the same reason the refusal sentence is
+on it: a client re-deriving the rule is a second implementation, and the copy
+that drifts is the one nobody tests.
+
 ## Effect v4 is a release candidate, and its names moved
 
 Most Effect material online is v3 and will mislead. **Read the installed source**

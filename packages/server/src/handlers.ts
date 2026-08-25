@@ -9,10 +9,16 @@
 // Layer, so `RpcTest` can drive them with no socket at all — which is how the
 // contract's own tests run, and how these do.
 
-import { AttachRefused, AwpRpcs, SessionNotFound, type SessionInfo } from "@awp-kit/protocol";
+import {
+  AttachRefused,
+  AwpRpcs,
+  SessionNotFound,
+  type SessionIdentity,
+  type SessionInfo,
+} from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
 import { refusalFor } from "./attachment";
-import { Multiplexer, type Session } from "./multiplexer";
+import { Multiplexer, type Session, identities } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
 import { Sessions } from "./sessions";
 
@@ -23,7 +29,11 @@ import { Sessions } from "./sessions";
  * zmx reports and the other is what a client is owed — and this is the single
  * place that would stop compiling when they do.
  */
-const toWire = (session: Session, ownSession: string | undefined): SessionInfo => ({
+const toWire = (
+  session: Session,
+  ownSession: string | undefined,
+  identity: SessionIdentity | undefined,
+): SessionInfo => ({
   name: session.name,
   pid: session.pid,
   clients: session.clients,
@@ -33,6 +43,7 @@ const toWire = (session: Session, ownSession: string | undefined): SessionInfo =
   created: session.created,
   cmd: session.cmd,
   labels: session.labels,
+  identity,
   refusal: refusalFor(session, session.name, ownSession),
 });
 
@@ -53,7 +64,11 @@ export const layer = AwpRpcs.toLayer(
             // same answer for all of them, and it comes from this process's
             // environment, which does not change while a list is being built.
             const own = currentZmxSession();
-            return all.map((session) => toWire(session, own));
+            // Resolved for the listing rather than per session: repairing an
+            // unlabelled session's workspace needs its labelled siblings, which
+            // only exist in the context of the whole list.
+            const found = identities(all);
+            return all.map((session) => toWire(session, own, found.get(session.name)));
           }),
           Effect.orDie,
         ),

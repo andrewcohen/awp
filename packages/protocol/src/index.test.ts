@@ -26,7 +26,10 @@ const example: SessionInfo = {
   exitCode: 0,
   created: new Date("2026-08-25T09:14:00.000Z"),
   cmd: "claude",
-  labels: { "awp.project": "awp", "awp.kind": "action_dev" },
+  // The real keys, underscored. A dot cannot appear in one: the reduction that
+  // makes a name safe to split turns it into an underscore.
+  labels: { awp_project: "alpha", awp_workspace: "pr-2336-dev-mlwzqyrmxslo", awp_kind: "dev" },
+  identity: { project: "alpha", workspace: "pr-2336-dev-mlwzqyrmxslo", kind: "dev" },
   refusal: undefined,
 };
 

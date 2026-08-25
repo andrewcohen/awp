@@ -20,7 +20,14 @@
 
 import { Context, type Effect } from "effect";
 import { Data } from "effect";
-import { LABEL_KIND, LABEL_PROJECT, LABEL_WORKSPACE, parseSessionName } from "./naming";
+import {
+  LABEL_KIND,
+  LABEL_PROJECT,
+  LABEL_WORKSPACE,
+  parseSessionName,
+  splitSessionName,
+  stemMatches,
+} from "./naming";
 import type { SessionIdentity } from "./naming";
 
 /**
@@ -70,6 +77,75 @@ export const identity = (session: Session): SessionIdentity | undefined => {
     return { project, workspace, kind: session.labels[LABEL_KIND] ?? "" };
   }
   return parseSessionName(session.name);
+};
+
+/**
+ * Whether this session's identity came from its labels, which is the only
+ * source that is not lossy.
+ */
+const labelled = (session: Session): boolean => {
+  const project = session.labels[LABEL_PROJECT];
+  const workspace = session.labels[LABEL_WORKSPACE];
+  return project !== undefined && project !== "" && workspace !== undefined && workspace !== "";
+};
+
+/**
+ * The identities of a whole listing, with the unlabelled ones repaired against
+ * the labelled.
+ *
+ * Needed because a name cannot group a workspace, and the reason is worth
+ * stating precisely. `sessionName` gives the stem whatever budget the kind does
+ * not need, so **one workspace's sessions can have differently shortened
+ * stems**:
+ *
+ *   awp.thicket.effect-ts-tiered-d-f500.action_dev
+ *   awp.thicket.effect-ts-tiered-disco-f500.editor
+ *   awp.thicket.effect-ts-tiered-discou-f500.agent
+ *
+ * Three names, three stems, one workspace —
+ * `thicket/effect-ts-tiered-discount-timemachine`. Read individually they are
+ * three workspaces, which is what the sidebar showed. Nothing about that is a
+ * bug in the shortening: a name is an address, and the address only has to
+ * resolve, not to be legible.
+ *
+ * So the repair is the use `stemMatches` was written for — asked per workspace
+ * rather than looked up in a map, because only the workspace can reproduce the
+ * shortening at the length a given stem actually has. One labelled session is
+ * enough to recover every one of its siblings.
+ *
+ * A workspace where *no* session carries labels keeps its shortened name and
+ * stays split. That is not repairable from here, and it is also temporary:
+ * every session awp creates is labelled. These are the ones that predate it.
+ */
+export const identities = (
+  sessions: ReadonlyArray<Session>,
+): ReadonlyMap<string, SessionIdentity | undefined> => {
+  const resolved = new Map<string, SessionIdentity | undefined>();
+  const known: Array<{ readonly project: string; readonly workspace: string }> = [];
+
+  for (const session of sessions) {
+    const found = identity(session);
+    resolved.set(session.name, found);
+    if (found !== undefined && labelled(session)) {
+      known.push({ project: found.project, workspace: found.workspace });
+    }
+  }
+
+  for (const session of sessions) {
+    if (labelled(session)) {
+      continue;
+    }
+    const split = splitSessionName(session.name);
+    if (split === undefined) {
+      continue;
+    }
+    const match = known.find((pair) => stemMatches(pair.project, pair.workspace, split.stem));
+    if (match !== undefined) {
+      resolved.set(session.name, { ...match, kind: split.kind });
+    }
+  }
+
+  return resolved;
 };
 
 /**

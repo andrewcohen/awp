@@ -9,6 +9,18 @@
  * So the top level is nailed down here rather than defended in each component.
  * If content ever exceeds the window, the intended failure is that it is
  * clipped and visible as a bug, not absorbed by a scrollbar and invisible. */
+/* Padding counted inside a declared width, everywhere.
+ *
+ * The default is that `width: 100%` plus horizontal padding is *wider* than
+ * 100%, which in a column with `overflow: hidden` means the right-hand end of
+ * every full-width row is quietly cut off — a sidebar row's kind labels read
+ * "edit" instead of "editor" and nothing anywhere reports a problem. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body,
 #root {
