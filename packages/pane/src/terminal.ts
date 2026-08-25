@@ -1,16 +1,6 @@
 import { FitAddon, type ITheme, Terminal, init } from "ghostty-web";
 import { paneFontSize } from "./palette";
-import {
-  WHEEL_DOWN,
-  WHEEL_UP,
-  applyModes,
-  encodeWheel,
-  initialModes,
-  noCarry,
-  wheelLines,
-  type Modes,
-  type WheelCarry,
-} from "./modes";
+import { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
 
 // One Terminal for the life of the window, reused by every pane.
 //
@@ -41,14 +31,6 @@ let fit: FitAddon | undefined;
 let host: HTMLDivElement | undefined;
 let currentFont = "";
 let currentTheme: ITheme | undefined;
-
-// What the attached program has asked for. Read off the output stream by
-// writePane, and consulted by the wheel handler below.
-let modes: Modes = initialModes;
-
-// Scrolling asked for but not yet delivered. See wheelLines — the remainder is
-// what makes a trackpad feel like a trackpad rather than a ratchet.
-let carry: WheelCarry = noCarry;
 
 // ghostty-web compiles its wasm before a Terminal can exist — constructing one
 // first throws "ghostty-web not initialized".
@@ -97,25 +79,34 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
     currentFont = options.fontFamily;
     currentTheme = options.theme;
 
-    // The wheel, decided here rather than by ghostty-web.
+    // The wheel, decided by asking the terminal rather than by guessing.
     //
-    // Its own handler has no idea which private modes are set — it tracks none
-    // — so whenever the alternate screen is up it sends ESC[A and ESC[B. In a
-    // shell that is a reasonable guess. In an agent TUI that has asked for
-    // mouse reporting it is wrong twice over: the scroll never arrives, and the
-    // arrows do, so the selection moves instead of the view.
+    // ghostty-web's own handler goes straight from "alternate screen" to
+    // synthesising arrow keys, which walks the program's input history instead
+    // of scrolling it — it looks like the pane typing to itself. But an
+    // alternate-screen program has no terminal scrollback to move through
+    // either; what it has is mouse reporting, and a wheel notch is a mouse
+    // event. That is how scrolling an agent works in Ghostty proper.
     //
-    // Returning true means handled; false lets ghostty-web scroll its own
-    // scrollback, which is right on the normal screen and nowhere else.
+    // Both questions are answered by the emulator, not by this file.
+    // `buffer.active.type` and `hasMouseTracking()` are what it parsed itself,
+    // where anything reading the byte stream here could only see modes set
+    // after the pane attached — and a program sets its modes when it starts,
+    // long before anyone looks at it.
     term.attachCustomWheelEventHandler((event: WheelEvent) => {
-      if (modes.mouseTracking) {
-        sendWheel(event);
+      // Normal screen: there is real scrollback, and ghostty-web moving through
+      // it is the right behaviour. Returning false lets it.
+      if (term?.buffer.active.type !== "alternate") {
+        return false;
+      }
+      // Full-screen, and it never asked about the mouse. Nothing to scroll and
+      // nothing that wants the event, so it is swallowed rather than turned
+      // into keystrokes.
+      if (term.wasmTerm?.hasMouseTracking() !== true) {
         return true;
       }
-      // Alternate screen, and the program never asked about the mouse. There is
-      // no scrollback to move through and nothing that wants the event, so it
-      // is swallowed. Sending arrows instead is the behaviour being replaced.
-      return modes.alternateScreen;
+      sendWheel(event);
+      return true;
     });
 
     // Registered once, for the terminal's whole life. The indirection through
@@ -185,44 +176,29 @@ function sendWheel(event: WheelEvent): void {
   const cellWidth = metrics?.width ?? 1;
   const cellHeight = metrics?.height ?? 1;
 
-  const scroll = wheelLines(carry, event, { height: cellHeight, rows: term.rows });
-  carry = scroll.carry;
-  if (scroll.lines === 0) {
-    // Movement too small to be a line yet. It is not lost — it is in the carry.
-    return;
-  }
-
   const canvas = term.renderer?.getCanvas();
   const bounds = canvas?.getBoundingClientRect();
-  // 1-based, as the protocol counts. A wheel outside the pane cannot happen
-  // while the event is captured here, but clamping costs nothing and a column
-  // of 0 is a coordinate no program expects.
-  const column = Math.max(1, Math.floor((event.clientX - (bounds?.left ?? 0)) / cellWidth) + 1);
-  const row = Math.max(1, Math.floor((event.clientY - (bounds?.top ?? 0)) / cellHeight) + 1);
+  // 1-based, as the protocol counts, and held inside the grid at both ends. A
+  // report outside the terminal is a coordinate no program expects, and the
+  // pane is often a fraction of a cell larger than the grid it draws.
+  const column = clampCell((event.clientX - (bounds?.left ?? 0)) / cellWidth, term.cols);
+  const row = clampCell((event.clientY - (bounds?.top ?? 0)) / cellHeight, term.rows);
 
-  const button = scroll.lines < 0 ? WHEEL_UP : WHEEL_DOWN;
-  const report = encodeWheel(modes, button, column, row);
-
-  // One message, not one per line. Each of these becomes an rpc call, and a
-  // flick that produced a dozen lines would otherwise be a dozen round trips
-  // for something the program will read in a single pass anyway.
-  dataSink(report.repeat(Math.abs(scroll.lines)));
+  const button = event.deltaY > 0 ? WHEEL_DOWN : WHEEL_UP;
+  const lines = wheelLines(event, { height: cellHeight, rows: term.rows });
+  dataSink(wheelReport(button, column, row, lines));
 }
 
-// writePane puts the program's output on screen, and reads the private modes
-// out of it on the way past.
+const clampCell = (value: number, max: number): number =>
+  Math.min(Math.max(Math.floor(value) + 1, 1), Math.max(max, 1));
+
+// writePane puts the program's output on screen.
 //
-// The pane writes through this rather than calling term.write directly, because
-// the modes have to be seen to be tracked and this is the one place every byte
-// passes through.
+// One function rather than reaching for `term` directly, so a pane never holds
+// the Terminal itself — which is what kept a stale handle alive in gdeck and
+// interleaved one session's bytes into another's cells.
 export function writePane(data: string): void {
-  modes = applyModes(modes, data);
   term?.write(data);
-}
-
-/** What the attached program has asked for. */
-export function paneModes(): Modes {
-  return modes;
 }
 
 // setPaneFont changes the face without rebuilding anything. setFontFamily and
@@ -243,13 +219,6 @@ export function setPaneFont(fontFamily: string): void {
 // output never appears above another's.
 export function resetPane(): void {
   term?.clear();
-  // The modes belong to the program that was attached, not to the terminal. A
-  // pane that kept them would treat the next session as though it were still
-  // inside the last one's full-screen application. The carry goes with them:
-  // half a line of movement towards a session the user has left is not owed to
-  // the one they have arrived at.
-  modes = initialModes;
-  carry = noCarry;
 }
 
 export function setPaneSinks(
