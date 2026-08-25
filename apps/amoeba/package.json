@@ -3,6 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev:renderer": "vite",
+    "build:renderer": "vite build",
+    "dev": "AMOEBA_DEV_SERVER=http://127.0.0.1:5273 electrobun dev",
+    "build": "vite build && electrobun build",
+    "dev:all": "vite --clearScreen false & AMOEBA_DEV_SERVER=http://127.0.0.1:5273 electrobun dev"
+  },
   "dependencies": {
     "@awp-kit/pane": "workspace:*",
     "@awp-kit/protocol": "workspace:*",
@@ -17,11 +24,12 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@rolldown/plugin-babel": "0.2.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
     "@vitejs/plugin-react": "6.1.0",
     "babel-plugin-react-compiler": "1.0.0",
-    "electrobun": "2.0.1",
+    "electrobun": "1.18.1",
     "vite": "8.2.2"
   }
 }

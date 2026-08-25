@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": ["archive", ".tsbuild"],
+  "ignorePatterns": ["archive", ".tsbuild", "**/dist", "**/build", "**/artifacts"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
@@ -9,7 +9,8 @@
   "plugins": ["typescript", "unicorn", "oxc", "import", "react", "react-perf"],
   "rules": {
     "eslint/max-classes-per-file": "off",
-    "eslint/max-lines-per-function": "off"
+    "eslint/max-lines-per-function": "off",
+    "react/react-in-jsx-scope": "off"
   },
   "overrides": [
     {
