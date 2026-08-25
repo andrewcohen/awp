@@ -117,11 +117,42 @@ const labelled = (session: Session): boolean => {
  * stays split. That is not repairable from here, and it is also temporary:
  * every session awp creates is labelled. These are the ones that predate it.
  */
+/**
+ * Workspace names a session's working directory suggests.
+ *
+ * awp puts a workspace at `~/.awp/workspaces/<project>/<workspace>`, and that
+ * path is written out in full — it is a directory rather than a session name,
+ * so nothing shortened it. A `default` workspace is the repository itself, whose
+ * directory says only the project.
+ *
+ * Candidates, not answers. Every one of them is put to `stemMatches` before it
+ * is believed, so a wrong guess produces nothing rather than a wrong name — which
+ * is what makes it safe to guess at all.
+ */
+const suggestedBy = (startDir: string): ReadonlyArray<Pair> => {
+  const parts = startDir.split("/").filter((part) => part !== "");
+  const marker = parts.lastIndexOf("workspaces");
+  const found: Pair[] = [];
+  if (marker >= 0 && parts.length > marker + 2) {
+    found.push({ project: parts[marker + 1] ?? "", workspace: parts[marker + 2] ?? "" });
+  }
+  const base = parts.at(-1);
+  if (base !== undefined) {
+    found.push({ project: base, workspace: "default" });
+  }
+  return found;
+};
+
+interface Pair {
+  readonly project: string;
+  readonly workspace: string;
+}
+
 export const identities = (
   sessions: ReadonlyArray<Session>,
 ): ReadonlyMap<string, SessionIdentity | undefined> => {
   const resolved = new Map<string, SessionIdentity | undefined>();
-  const known: Array<{ readonly project: string; readonly workspace: string }> = [];
+  const known: Pair[] = [];
 
   for (const session of sessions) {
     const found = identity(session);
@@ -139,7 +170,12 @@ export const identities = (
     if (split === undefined) {
       continue;
     }
-    const match = known.find((pair) => stemMatches(pair.project, pair.workspace, split.stem));
+    // Siblings first, then the working directory. A labelled sibling is a
+    // statement; a path is a convention, and one that only counts when it can
+    // reproduce the name actually observed.
+    const match = [...known, ...suggestedBy(session.startDir)].find((pair) =>
+      stemMatches(pair.project, pair.workspace, split.stem),
+    );
     if (match !== undefined) {
       resolved.set(session.name, { ...match, kind: split.kind });
     }

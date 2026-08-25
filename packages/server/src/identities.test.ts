@@ -11,11 +11,15 @@ import { LABEL_KIND, LABEL_PROJECT, LABEL_WORKSPACE, sessionName } from "./namin
 // until 2026-08-25. The names below are generated rather than typed out, so the
 // test cannot go on passing if the shortening changes.
 
-const session = (name: string, labels: Readonly<Record<string, string>> = {}): Session => ({
+const session = (
+  name: string,
+  labels: Readonly<Record<string, string>> = {},
+  startDir = "/tmp",
+): Session => ({
   name,
   pid: 1,
   clients: 0,
-  startDir: "/tmp",
+  startDir,
   ended: false,
   exitCode: 0,
   created: undefined,
@@ -92,5 +96,40 @@ describe("repairing a listing against its labelled sessions", () => {
     const all = [session("awp.dotfiles.default.agent"), session("awp.dotfiles.default.editor")];
     const found = identities(all);
     expect(all.map((s) => found.get(s.name)?.workspace)).toEqual(["default", "default"]);
+  });
+});
+
+describe("repairing against the working directory", () => {
+  // The last resort, and the reason it is safe: a path is put to stemMatches
+  // like any other candidate, so it is believed only when it reproduces the
+  // name that was actually observed. These four rows on this machine had no
+  // labelled session anywhere in the listing and were showing their shortened
+  // names — orchard.pr-557-lantern-sentry-head-bc47 and friends.
+  it("recovers a name from ~/.awp/workspaces/<project>/<workspace>", () => {
+    const name = sessionName("orchard", "pr-557-lantern-sentry-head-refactor", "agent");
+    const found = identities([
+      session(name, {}, "/Users/someone/.awp/workspaces/orchard/pr-557-lantern-sentry-head-refactor"),
+    ]);
+    expect(found.get(name)?.workspace).toBe("pr-557-lantern-sentry-head-refactor");
+  });
+
+  // A default workspace is the repository itself, so its directory names only
+  // the project.
+  it("reads a default workspace off the repository directory", () => {
+    const name = sessionName("dotfiles", "default", "agent");
+    const found = identities([session(name, {}, "/Users/someone/dotfiles")]);
+    expect(found.get(name)?.project).toBe("dotfiles");
+    expect(found.get(name)?.workspace).toBe("default");
+  });
+
+  // The property that makes guessing acceptable. A directory that does not
+  // reproduce the observed name contributes nothing, and the session keeps the
+  // shortened name it came with.
+  it("ignores a directory that does not reproduce the name", () => {
+    const name = sessionName("orchard", "the-real-one", "agent");
+    const found = identities([
+      session(name, {}, "/Users/someone/.awp/workspaces/orchard/something-else"),
+    ]);
+    expect(found.get(name)?.workspace).not.toBe("something-else");
   });
 });
