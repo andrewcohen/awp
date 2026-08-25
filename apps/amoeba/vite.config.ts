@@ -34,6 +34,13 @@ export default defineConfig({
   ],
   server: {
     host: "127.0.0.1",
+    watch: {
+      // Electrobun assembles an .app under build/, and copies the renderer's
+      // index.html into it. Vite watches that by default and answers with a
+      // full page reload — which is the one thing HMR exists to avoid, and
+      // which would wipe a pane's scrollback every time Electrobun rebuilds.
+      ignored: ["**/build/**", "**/artifacts/**", "**/dist/**"],
+    },
     // Fixed, and strict: the main process is told this port by env, and a Vite
     // that quietly moved to the next free one would leave the window pointed at
     // nothing, with no error to read.
