@@ -8,6 +8,7 @@ import {
   resetPane,
   setPaneSinks,
   setPaneTheme,
+  writePane,
 } from "@awp-kit/pane";
 import { useEffect, useRef, useState } from "react";
 import { type Attachment, attach, resize, write } from "./daemon";
@@ -67,7 +68,7 @@ export function Pane({
             () => {},
             () => {},
           );
-          term.write(fixture);
+          writePane(fixture);
           return;
         }
 
@@ -76,7 +77,10 @@ export function Pane({
         // twice, visibly, because the first reflow is at the wrong size and
         // whatever is running redraws for it.
         attachment = attach(session, term.cols, term.rows, {
-          onChunk: (chunk) => term.write(chunk),
+          // Through writePane, not term.write. The pane has to read the
+          // private modes out of the stream to know what the program wants from
+          // a wheel, and this is the only place every byte passes through.
+          onChunk: (chunk) => writePane(chunk),
           onRefused: (reason) => setFailure(reason),
         });
 

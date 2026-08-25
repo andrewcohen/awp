@@ -43,7 +43,7 @@ const program = Effect.gen(function* () {
   ).pipe(Effect.timeout("3 seconds"), Effect.ignore);
 
   const seen = chunks.join("");
-  const match = /awp-child-env:\[(?<value>[^\]]*)\]/.exec(seen);
+  const match = /awp-child-env:\[(?<value>[^\]]*)\]/u.exec(seen);
   const value = match?.groups?.value;
 
   console.log(`\n  parent  ZMX_SESSION=[${process.env.ZMX_SESSION ?? ""}]`);

@@ -24,9 +24,13 @@ export {
   setPaneFont,
   setPaneSinks,
   setPaneTheme,
+  paneModes,
+  writePane,
   type PaneOptions,
   type PaneTerminal,
 } from "./terminal";
+
+export { WHEEL_DOWN, WHEEL_UP, applyModes, encodeWheel, initialModes, type Modes } from "./modes";
 
 export {
   chromeFor,
