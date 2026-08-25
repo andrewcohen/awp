@@ -79,12 +79,14 @@ describe("attach", () => {
     expect(spawns[0]?.command.args).toEqual(["attach", "awp.awp.other.agent"]);
   });
 
-  test("strips ZMX_SESSION from the child", async () => {
+  test("neutralises ZMX_SESSION in the child", async () => {
     // The rule with a track record. A child that keeps the marker switches the
     // caller's own client instead of making a new one, stealing the terminal
     // awp was launched from.
     const { spawns } = await run({});
-    expect(spawns[0]?.command.env).not.toHaveProperty("ZMX_SESSION");
+    // Empty, not missing. A missing key is a request the spawner may ignore,
+    // and bun-pty's does — see zmxChildEnv.
+    expect(spawns[0]?.command.env.ZMX_SESSION).toBe("");
   });
 
   test("passes the size through, since the session will take it", async () => {

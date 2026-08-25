@@ -26,8 +26,25 @@ export const currentZmxSession = (): string | undefined => process.env.ZMX_SESSI
 export const insideZmxSession = (): boolean => currentZmxSession() !== undefined;
 
 /**
- * The environment a zmx child must be given: this one, minus the marker that
- * makes `zmx attach` hijack its caller.
+ * The environment a zmx child must be given: this one, with the marker that
+ * makes `zmx attach` hijack its caller emptied rather than removed.
+ *
+ * ── why emptied and not removed ────────────────────────────────────────────
+ * Leaving it out does not take it away. bun-pty hands the pairs to a Rust
+ * `Command`, which **inherits the parent environment** and applies what it is
+ * given on top; without an `env_clear()` there is no way to express a removal
+ * by omission. The same is true of Node's `child_process` only when `env` is
+ * absent, which is the difference that made this look correct.
+ *
+ * The first version of this function omitted the key and was believed to strip
+ * it for weeks. It did not. A child spawned through bun-pty saw the marker
+ * intact, so `zmx attach <name>` resolved ZMX_SESSION and switched the calling
+ * client instead — which is the exact hijack this exists to prevent, aimed at
+ * whatever session the daemon happens to be running in.
+ *
+ * Setting it empty is expressible through any of these APIs, and an empty
+ * ZMX_SESSION is not a session name. `probe/child-env.ts` checks what a child
+ * actually receives, because nothing short of spawning one can.
  */
 export const zmxChildEnv = (
   base: Record<string, string | undefined> = process.env,
@@ -38,6 +55,9 @@ export const zmxChildEnv = (
       env[key] = value;
     }
   }
+  // Present and empty. Absent would be a request the spawner is free to ignore,
+  // and bun-pty's does.
+  env.ZMX_SESSION = "";
   return env;
 };
 

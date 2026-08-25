@@ -12,9 +12,18 @@ import {
 // and only fidelity against a real daemon needs the refusal.
 
 describe("zmxChildEnv", () => {
-  test("drops ZMX_SESSION", () => {
+  // Present and empty, not absent — and the difference is the whole point.
+  //
+  // This test asserted absence for weeks and passed, while the guard did
+  // nothing: bun-pty hands its pairs to a Rust Command, which inherits the
+  // parent environment and applies them on top, so a key left out is a key left
+  // alone. Every `zmx attach` the daemon spawned saw the marker and switched
+  // the calling client instead. See zmxChildEnv, and probe/child-env.ts, which
+  // checks what a child actually receives rather than what this function
+  // returns — the gap between those two is where it hid.
+  test("empties ZMX_SESSION rather than omitting it", () => {
     const env = zmxChildEnv({ PATH: "/bin", ZMX_SESSION: "awp.some.session" });
-    expect(env).not.toHaveProperty("ZMX_SESSION");
+    expect(env.ZMX_SESSION).toBe("");
     expect(env.PATH).toBe("/bin");
   });
 
@@ -25,10 +34,14 @@ describe("zmxChildEnv", () => {
     expect(env).not.toHaveProperty("EMPTY");
   });
 
-  test("leaves an env with no marker alone", () => {
+  // The marker is set even when the parent had none, and that is deliberate.
+  // The daemon may be started outside a session and re-exec itself, or inherit
+  // one later; an env that always says "no session" cannot be wrong about it.
+  test("says there is no session even when the parent had none", () => {
     expect(zmxChildEnv({ PATH: "/bin", TERM: "xterm" })).toEqual({
       PATH: "/bin",
       TERM: "xterm",
+      ZMX_SESSION: "",
     });
   });
 });
