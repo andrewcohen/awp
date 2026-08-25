@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "doctor": "react-doctor --no-supply-chain",
+    "probe:zmx": "bun packages/server/src/probe/zmx-pty.ts",
     "doctor:supply-chain": "react-doctor"
   },
   "devDependencies": {
