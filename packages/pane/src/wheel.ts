@@ -20,10 +20,28 @@ export const WHEEL_DOWN = 65;
 /**
  * The most one event may deliver.
  *
- * A flick can carry a four-figure delta, and a program that redraws once per
- * report should not be handed hundreds of them in a single message.
+ * Momentum makes a single delta unrepresentative of anything a hand did: the
+ * measurement that produced this file recorded one event of 291 pixels. Left
+ * uncapped that is a dozen lines from one twitch, and a program that redraws
+ * per report cannot make it look like scrolling.
  */
-const MAX_LINES = 10;
+const MAX_LINES = 3;
+
+/**
+ * What macOS means by a pixel delta.
+ *
+ * A wheel notch reports about 120 pixels, and a notch conventionally scrolls
+ * three lines. Dividing by the cell height instead — which is what this did
+ * first — treats a pixel of finger movement as a pixel of *content*, and the
+ * numbers say what that costs: 36 events a second became 284 lines a second,
+ * six lines per event, with the program returning 150KB/s trying to keep up.
+ *
+ * A font-size constant would be wrong here. 120 is what the platform reports
+ * per notch whatever is on screen, so the ratio belongs to the input device
+ * rather than to the terminal's geometry.
+ */
+const PIXELS_PER_NOTCH = 120;
+const LINES_PER_NOTCH = 3;
 
 /**
  * How many lines one wheel event asks for.
@@ -39,16 +57,18 @@ const MAX_LINES = 10;
  */
 export const wheelLines = (
   event: { readonly deltaY: number; readonly deltaMode: number },
-  cell: { readonly height: number; readonly rows: number },
+  cell: { readonly rows: number },
 ): number => {
-  const height = cell.height > 0 ? cell.height : 1;
-  const pixels =
+  const magnitude = Math.abs(event.deltaY);
+  const lines =
+    // Already lines. A browser reporting in this unit has done the conversion,
+    // and doing it again is how three lines became a hundred.
     event.deltaMode === 1
-      ? event.deltaY * height
+      ? magnitude
       : event.deltaMode === 2
-        ? event.deltaY * height * cell.rows
-        : event.deltaY;
-  return Math.min(MAX_LINES, Math.max(1, Math.round(Math.abs(pixels) / height)));
+        ? magnitude * cell.rows
+        : (magnitude / PIXELS_PER_NOTCH) * LINES_PER_NOTCH;
+  return Math.min(MAX_LINES, Math.max(1, Math.round(lines)));
 };
 
 /**

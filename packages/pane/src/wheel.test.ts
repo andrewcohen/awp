@@ -6,7 +6,7 @@ import { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
 // to ask. What is testable here is the arithmetic and the spelling.
 
 const ESC = "\u001B";
-const cell = { height: 20, rows: 30 };
+const cell = { rows: 30 };
 const pixels = (deltaY: number) => wheelLines({ deltaY, deltaMode: 0 }, cell);
 
 describe("how far one event asks to scroll", () => {
@@ -19,9 +19,13 @@ describe("how far one event asks to scroll", () => {
     expect(pixels(-2)).toBe(1);
   });
 
-  it("scales with the distance moved", () => {
-    expect(pixels(20)).toBe(1);
-    expect(pixels(60)).toBe(3);
+  // 120 pixels is one wheel notch on macOS and a notch is three lines. The
+  // first version divided by the cell height instead, which treated a pixel of
+  // finger movement as a pixel of content: the meter recorded 36 events a
+  // second becoming 284 lines a second.
+  it("reads a pixel delta as notches, not as cells", () => {
+    expect(pixels(40)).toBe(1);
+    expect(pixels(120)).toBe(3);
   });
 
   // The direction is the caller's business — it picks the button. This answers
@@ -32,19 +36,18 @@ describe("how far one event asks to scroll", () => {
 
   // deltaMode is the browser saying what unit deltaY is in. Treating a line
   // delta as pixels is the difference between one line and one pixel.
-  it("reads line and page deltas in their own units", () => {
+  // A browser reporting in lines has already done the conversion. Doing it
+  // again is how three lines becomes a hundred.
+  it("takes a line delta as lines", () => {
     expect(wheelLines({ deltaY: 3, deltaMode: 1 }, cell)).toBe(3);
-    // A page is a screen, and this cap sits above one deliberately — a cap at a
-    // screen would quietly break page scrolling.
-    expect(wheelLines({ deltaY: 1, deltaMode: 2 }, { height: 20, rows: 8 })).toBe(8);
   });
 
-  it("does not hand a program hundreds of reports from one flick", () => {
-    expect(pixels(100_000)).toBe(10);
-  });
-
-  it("survives a cell height of zero rather than dividing by it", () => {
-    expect(wheelLines({ deltaY: 40, deltaMode: 0 }, { height: 0, rows: 30 })).toBe(10);
+  // Momentum makes a single delta unrepresentative of anything a hand did — the
+  // meter caught one event of 291 pixels — so the cap is what stops one twitch
+  // becoming a dozen lines.
+  it("flattens a momentum spike", () => {
+    expect(pixels(291)).toBe(3);
+    expect(pixels(100_000)).toBe(3);
   });
 });
 

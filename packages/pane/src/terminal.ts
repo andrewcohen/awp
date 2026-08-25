@@ -111,6 +111,51 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
       return true;
     });
 
+    // Copy and paste, done here because the window has no menu to do it.
+    //
+    // ghostty-web handles the `paste` event perfectly well, but on macOS that
+    // event only exists if something turns Cmd+V into a paste command — an
+    // application Edit menu, normally. An Electrobun window has none, so the
+    // keystroke reaches the page as an ordinary keydown and nothing else
+    // happens. The clipboard is readable directly, so it is read directly.
+    //
+    // Capture phase, ahead of ghostty-web's own keydown handler, which would
+    // otherwise send the key to the program as a control character.
+    host.addEventListener(
+      "keydown",
+      (event: KeyboardEvent) => {
+        if (!(event.metaKey || event.ctrlKey) || event.altKey) {
+          return;
+        }
+        const key = event.key.toLowerCase();
+        if (key === "v") {
+          event.preventDefault();
+          event.stopPropagation();
+          void navigator.clipboard.readText().then(
+            // Through paste() rather than write(): it wraps the text in
+            // bracketed-paste markers when the program has asked for them,
+            // which is what stops a pasted newline being run as a command.
+            (text) => term?.paste(text),
+            () => {
+              // A webview can refuse clipboard reads. Nothing useful to say to
+              // the program about it, and a thrown error here would look like
+              // the terminal breaking rather than the paste not happening.
+            },
+          );
+          return;
+        }
+        if (key === "c" && (term?.hasSelection() ?? false)) {
+          // Only with a selection. Without one, Cmd+C on macOS and Ctrl+C
+          // everywhere else must still reach the program as an interrupt —
+          // taking it away would be worse than having no copy at all.
+          event.preventDefault();
+          event.stopPropagation();
+          void navigator.clipboard.writeText(term?.getSelection() ?? "");
+        }
+      },
+      { capture: true },
+    );
+
     // Registered once, for the terminal's whole life. The indirection through
     // the sinks is what makes that safe.
     term.onData((data: string) => dataSink?.(data));
@@ -187,7 +232,7 @@ function sendWheel(event: WheelEvent): void {
   const row = clampCell((event.clientY - (bounds?.top ?? 0)) / cellHeight, term.rows);
 
   const button = event.deltaY > 0 ? WHEEL_DOWN : WHEEL_UP;
-  const lines = wheelLines(event, { height: cellHeight, rows: term.rows });
+  const lines = wheelLines(event, { rows: term.rows });
   meterWheel(event.deltaY, event.deltaMode, lines);
   dataSink(wheelReport(button, column, row, lines));
 }
