@@ -20,7 +20,7 @@
 // Nothing here attaches. Every session it creates is detached, named with this
 // process's pid, and killed on the way out.
 
-import { requireOutsideZmxSession, zmxChildEnv } from "../zmx-session.js";
+import { requireOutsideZmxSession, zmxChildEnv } from "../zmx-session";
 
 requireOutsideZmxSession();
 

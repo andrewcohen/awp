@@ -1,9 +1,9 @@
 import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node-shared";
 import { Effect, Layer } from "effect";
 import { describe, expect, test } from "vitest";
-import { Multiplexer, identity, isLive } from "./multiplexer.js";
-import { currentZmxSession } from "./zmx-session.js";
-import * as Zmx from "./zmx.js";
+import { Multiplexer, identity, isLive } from "./multiplexer";
+import { currentZmxSession } from "./zmx-session";
+import * as Zmx from "./zmx";
 
 // These run against a REAL zmx, from inside a zmx session, on purpose.
 //

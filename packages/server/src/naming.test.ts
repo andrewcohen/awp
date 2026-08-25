@@ -12,7 +12,7 @@ import {
   sessionStem,
   splitSessionName,
   stemMatches,
-} from "./naming.js";
+} from "./naming";
 
 // These prove properties rather than re-asserting what the Go implementation
 // did. The Go code is evidence that a rule was once right, not proof that it

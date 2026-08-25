@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { type Session, identity, isLive } from "./multiplexer.js";
-import { parseSessionLine, parseSessionList, requireName } from "./zmx-parse.js";
+import { type Session, identity, isLive } from "./multiplexer";
+import { parseSessionLine, parseSessionList, requireName } from "./zmx-parse";
 
 // Fixtures are real `zmx ls` output captured on 2026-08-25, not invented. The
 // awkward cases are already in it: a start_dir containing a space, a cmd

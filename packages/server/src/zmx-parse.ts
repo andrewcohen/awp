@@ -5,7 +5,7 @@
 // escaping, and several values contain spaces, equals signs, and truncation
 // markers that zmx added.
 
-import type { Session } from "./multiplexer.js";
+import type { Session } from "./multiplexer";
 
 /**
  * What `zmx ls` puts in front of the session the caller is running inside.

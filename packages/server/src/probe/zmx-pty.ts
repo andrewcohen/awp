@@ -13,7 +13,7 @@
 // 3ms, first byte 9ms, screen 11ms.
 
 import { spawn } from "bun-pty";
-import { requireOutsideZmxSession, zmxChildEnv } from "../zmx-session.js";
+import { requireOutsideZmxSession, zmxChildEnv } from "../zmx-session";
 
 requireOutsideZmxSession();
 
