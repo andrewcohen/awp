@@ -62,7 +62,7 @@ const assertNoLeak = Effect.gen(function* () {
     Effect.sync(() => chunks.push(chunk)),
   ).pipe(Effect.timeout("3 seconds"), Effect.ignore);
 
-  const match = /leak:\[(?<value>[^\]]*)\]/.exec(chunks.join(""));
+  const match = /leak:\[(?<value>[^\]]*)\]/u.exec(chunks.join(""));
   const value = match?.groups?.value;
   if (value !== "") {
     return yield* Effect.die(

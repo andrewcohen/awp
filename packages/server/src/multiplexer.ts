@@ -114,6 +114,16 @@ export class Multiplexer extends Context.Service<
     ): Effect.Effect<void, MultiplexerError>;
 
     /** A session's scrollback, as the multiplexer renders it. */
-    history(name: string): Effect.Effect<string, MultiplexerError>;
+    /**
+     * A session's scrollback.
+     *
+     * `vt` keeps the escape sequences, which is what replaying into a terminal
+     * needs — without it the text arrives stripped of every colour and cursor
+     * move, which is fine to read and wrong to render.
+     */
+    history(
+      name: string,
+      options?: { readonly vt?: boolean },
+    ): Effect.Effect<string, MultiplexerError>;
   }
 >()("@awp-kit/server/Multiplexer") {}

@@ -1,5 +1,6 @@
 import { FitAddon, type ITheme, Terminal, init } from "ghostty-web";
 import { paneFontSize } from "./palette";
+import { WHEEL_DOWN, WHEEL_UP, applyModes, encodeWheel, initialModes, type Modes } from "./modes";
 
 // One Terminal for the life of the window, reused by every pane.
 //
@@ -30,6 +31,10 @@ let fit: FitAddon | undefined;
 let host: HTMLDivElement | undefined;
 let currentFont = "";
 let currentTheme: ITheme | undefined;
+
+// What the attached program has asked for. Read off the output stream by
+// writePane, and consulted by the wheel handler below.
+let modes: Modes = initialModes;
 
 // ghostty-web compiles its wasm before a Terminal can exist — constructing one
 // first throws "ghostty-web not initialized".
@@ -77,6 +82,27 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
     term.open(host);
     currentFont = options.fontFamily;
     currentTheme = options.theme;
+
+    // The wheel, decided here rather than by ghostty-web.
+    //
+    // Its own handler has no idea which private modes are set — it tracks none
+    // — so whenever the alternate screen is up it sends ESC[A and ESC[B. In a
+    // shell that is a reasonable guess. In an agent TUI that has asked for
+    // mouse reporting it is wrong twice over: the scroll never arrives, and the
+    // arrows do, so the selection moves instead of the view.
+    //
+    // Returning true means handled; false lets ghostty-web scroll its own
+    // scrollback, which is right on the normal screen and nowhere else.
+    term.attachCustomWheelEventHandler((event: WheelEvent) => {
+      if (modes.mouseTracking) {
+        sendWheel(event);
+        return true;
+      }
+      // Alternate screen, and the program never asked about the mouse. There is
+      // no scrollback to move through and nothing that wants the event, so it
+      // is swallowed. Sending arrows instead is the behaviour being replaced.
+      return modes.alternateScreen;
+    });
 
     // Registered once, for the terminal's whole life. The indirection through
     // the sinks is what makes that safe.
@@ -130,6 +156,53 @@ export function setPaneTheme(theme: ITheme): void {
   }
 }
 
+// sendWheel reports a wheel turn to the program, in the encoding it asked for.
+//
+// One event per notch rather than per pixel: a trackpad reports fine-grained
+// deltas and a terminal program expects discrete clicks, so the distance is
+// divided by the cell height. Capped at five, because a flick can carry a
+// four-figure delta and a program that redraws per event should not be handed
+// hundreds of them at once.
+function sendWheel(event: WheelEvent): void {
+  if (!term || !dataSink) {
+    return;
+  }
+  const metrics = term.renderer?.getMetrics();
+  const cellWidth = metrics?.width ?? 1;
+  const cellHeight = metrics?.height ?? 1;
+
+  const canvas = term.renderer?.getCanvas();
+  const bounds = canvas?.getBoundingClientRect();
+  // 1-based, as the protocol counts. A wheel outside the pane cannot happen
+  // while the event is captured here, but clamping costs nothing and a column
+  // of 0 is a coordinate no program expects.
+  const column = Math.max(1, Math.floor((event.clientX - (bounds?.left ?? 0)) / cellWidth) + 1);
+  const row = Math.max(1, Math.floor((event.clientY - (bounds?.top ?? 0)) / cellHeight) + 1);
+
+  const button = event.deltaY < 0 ? WHEEL_UP : WHEEL_DOWN;
+  const notches = Math.min(Math.max(Math.round(Math.abs(event.deltaY) / cellHeight), 1), 5);
+  const report = encodeWheel(modes, button, column, row);
+  for (let sent = 0; sent < notches; sent += 1) {
+    dataSink(report);
+  }
+}
+
+// writePane puts the program's output on screen, and reads the private modes
+// out of it on the way past.
+//
+// The pane writes through this rather than calling term.write directly, because
+// the modes have to be seen to be tracked and this is the one place every byte
+// passes through.
+export function writePane(data: string): void {
+  modes = applyModes(modes, data);
+  term?.write(data);
+}
+
+/** What the attached program has asked for. */
+export function paneModes(): Modes {
+  return modes;
+}
+
 // setPaneFont changes the face without rebuilding anything. setFontFamily and
 // remeasureFont are public API precisely so this does not require a new
 // Terminal — which is the operation that corrupts state.
@@ -148,6 +221,10 @@ export function setPaneFont(fontFamily: string): void {
 // output never appears above another's.
 export function resetPane(): void {
   term?.clear();
+  // The modes belong to the program that was attached, not to the terminal. A
+  // pane that kept them would treat the next session as though it were still
+  // inside the last one's full-screen application.
+  modes = initialModes;
 }
 
 export function setPaneSinks(

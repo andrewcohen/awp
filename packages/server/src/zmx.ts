@@ -104,8 +104,12 @@ const make = Effect.gen(function* () {
         ),
       ),
 
-    history: (name: string) =>
-      named("read history of", name).pipe(Effect.andThen(run("history", ["history", name]))),
+    history: (name: string, options?: { readonly vt?: boolean }) =>
+      named("read history of", name).pipe(
+        Effect.andThen(
+          run("history", options?.vt === true ? ["history", name, "--vt"] : ["history", name]),
+        ),
+      ),
   };
 });
 
