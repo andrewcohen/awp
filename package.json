@@ -18,7 +18,9 @@
     "probe:claims": "bun packages/server/src/probe/zmx-claims.ts",
     "doctor:supply-chain": "react-doctor",
     "amoeba": "bun run --filter amoeba dev:all",
-    "daemon": "bun run --filter @awp-kit/server daemon"
+    "daemon": "bun run --filter @awp-kit/server daemon",
+    "probe:child-env": "bun packages/server/src/probe/child-env.ts",
+    "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

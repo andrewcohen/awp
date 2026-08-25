@@ -44,6 +44,32 @@ Consequences that follow:
 - Never run `zmx kill`, `zmx attach`, or anything that changes a session, against
   a session this repo did not create.
 
+## Omitting an environment variable does not remove it
+
+`zmxChildEnv()` sets `ZMX_SESSION` to the empty string. It used to leave the key
+out, a unit test asserted the returned object had no such property, and it
+passed for weeks while doing nothing at all.
+
+bun-pty hands its pairs to a Rust `Command`, which **inherits the parent
+environment** and applies what it is given on top. With no `env_clear()` there
+is no way to express a removal by omission — a key left out is a key left alone.
+So every `zmx attach` the daemon spawned saw the marker, resolved it, and
+switched the _calling_ client: the precise hijack the function exists to
+prevent, aimed at whatever session the daemon was running in.
+
+Two things follow, and the second matters more than the first.
+
+- Neutralise by **setting**, never by omitting. An absent key is a request the
+  spawner is free to ignore, and this one does.
+- **A test of the function could not have caught it.** The bug was in the
+  spawner. `probe/child-env.ts` spawns `/bin/sh` and prints what the child
+  actually received, which is the only way to know. It never invokes zmx, never
+  attaches and never names a session, so it is safe to run anywhere — run it
+  after touching anything to do with process environments or the pty layer.
+
+The general shape is worth keeping: when a guard's effect happens in someone
+else's process, assert on what that process sees, not on what you handed it.
+
 ## archive/ is evidence, not truth
 
 It is read like vendored upstream source: consulted, never called, never ported
