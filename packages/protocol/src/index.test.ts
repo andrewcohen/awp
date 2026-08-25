@@ -27,6 +27,7 @@ const example: SessionInfo = {
   created: new Date("2026-08-25T09:14:00.000Z"),
   cmd: "claude",
   labels: { "awp.project": "awp", "awp.kind": "action_dev" },
+  refusal: undefined,
 };
 
 describe("SessionInfo on the wire", () => {
@@ -42,6 +43,14 @@ describe("SessionInfo on the wire", () => {
     const wire = encode(example);
     expect((wire as { readonly created: unknown }).created).toBe("2026-08-25T09:14:00.000Z");
     expect(decode(wire).created).toBeInstanceOf(Date);
+  });
+
+  // A refusal is a sentence written for a person, and it is the entire
+  // explanation a disabled row gets. Losing it on the wire would leave the UI
+  // unable to say anything at all.
+  it("carries the reason a session cannot be attached to", () => {
+    const refused = { ...example, refusal: "this is the session awp is running in" };
+    expect(decode(encode(refused)).refusal).toBe(refused.refusal);
   });
 
   it("carries a session with no start time", () => {

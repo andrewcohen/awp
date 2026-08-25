@@ -1,5 +1,6 @@
 import {
   type ColorScheme,
+  focusPane,
   mountPaneTerminal,
   paneFontFamily,
   paneReady,
@@ -9,23 +10,22 @@ import {
   setPaneTheme,
 } from "@awp-kit/pane";
 import { useEffect, useRef, useState } from "react";
+import { type Attachment, attach, resize, write } from "./daemon";
 import { currentColorScheme } from "./useColorScheme";
 
-// A pane rendering bytes, with nothing behind it.
-//
-// This is the step that says whether the emulator is right, separately from
-// whether attaching works — the two failed together in gdeck for a while, and
-// separating them is how the cause was found. So: no daemon, no zmx, no pty. A
-// fixture of escape sequences goes in, and what comes out is either correct or
-// it is not.
+// The pane, with a session behind it.
 //
 // The terminal is borrowed rather than built. See @awp-kit/pane — building one
-// per view writes into freed wasm state.
+// per view writes into freed wasm state, which is the single cause behind four
+// different complaints in gdeck.
 
 export function Pane({
+  session,
   fixture,
   scheme,
 }: {
+  /** The session to attach to, or undefined to render `fixture` instead. */
+  readonly session: string | undefined;
   readonly fixture: string;
   readonly scheme: ColorScheme;
 }) {
@@ -43,32 +43,54 @@ export function Pane({
     // writing into a container the first has already left — the awaited gap is
     // exactly where a double-mount overlaps.
     let cancelled = false;
+    let attachment: Attachment | undefined;
+
+    setFailure("");
 
     paneReady()
       .then(() => {
         if (cancelled) {
           return;
         }
-        const { term } = mountPaneTerminal(parent, {
+        const { term, fit } = mountPaneTerminal(parent, {
           fontFamily: paneFontFamily,
           // Read live rather than from the prop, deliberately. Mounting
-          // replays the fixture and recolouring must not, so this effect does
+          // replays the session and recolouring must not, so this effect does
           // not depend on `scheme` — and an effect that ignores a prop must not
           // close over it either. The second effect below owns the scheme.
           theme: paneThemeFor(currentColorScheme()),
         });
         resetPane();
 
-        // Nothing is behind this pane, so keystrokes have nowhere to go.
-        // Setting the sinks anyway stops the terminal holding a stale handler
-        // from a previous view — onData has no unsubscribe, which is why the
-        // sinks exist at all.
+        if (session === undefined) {
+          setPaneSinks(
+            () => {},
+            () => {},
+          );
+          term.write(fixture);
+          return;
+        }
+
+        // Attach at the size the terminal already is. The alternative — attach
+        // at a default and resize once measured — reflows the real session
+        // twice, visibly, because the first reflow is at the wrong size and
+        // whatever is running redraws for it.
+        attachment = attach(session, term.cols, term.rows, {
+          onChunk: (chunk) => term.write(chunk),
+          onRefused: (reason) => setFailure(reason),
+        });
+
+        // Now the sinks have somewhere to go. Set per view rather than per
+        // terminal, because the terminal never unmounts and `onData` has no
+        // unsubscribe — a stale handler would type into a session the user has
+        // already left.
         setPaneSinks(
-          () => {},
-          () => {},
+          (data) => write(session, data),
+          (cols, rows) => resize(session, cols, rows),
         );
 
-        term.write(fixture);
+        fit.fit();
+        focusPane();
       })
       .catch((error: unknown) => {
         // Reported in the pane rather than thrown. A rendering unit whose
@@ -79,8 +101,12 @@ export function Pane({
 
     return () => {
       cancelled = true;
+      // Not merely tidy. This interrupt travels down the socket, cancels the
+      // handler, closes the pty's Scope and kills `zmx attach`. Skipping it
+      // leaves a client attached to a session sized for a window that has gone.
+      attachment?.detach();
     };
-  }, [fixture]);
+  }, [session, fixture]);
 
   // Recolour without remounting. Still behind paneReady() — the appearance can
   // change while the wasm is still compiling, and there is no renderer to talk
@@ -99,17 +125,25 @@ export function Pane({
 
   if (failure !== "") {
     return (
-      <pre style={{ padding: "1rem", whiteSpace: "pre-wrap", color: "#ed8796" }}>
-        pane failed to start: {failure}
+      <pre
+        style={{
+          padding: "3rem 1rem 1rem",
+          whiteSpace: "pre-wrap",
+          color: "#ed8796",
+          margin: 0,
+          font: "inherit",
+        }}
+      >
+        {failure}
       </pre>
     );
   }
 
   // The container is painted the terminal's own background, not left
   // transparent. FitAddon sizes the canvas in whole cells, so it is always a
-  // little smaller than the column — 26px at this width — and the chrome
-  // showing through that remainder reads as a seam down the edge of the pane
-  // rather than as the rounding it is.
+  // little smaller than the column, and the chrome showing through that
+  // remainder reads as a seam down the edge of the pane rather than as the
+  // rounding it is.
   return (
     <div
       ref={container}

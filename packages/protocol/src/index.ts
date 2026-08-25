@@ -56,6 +56,20 @@ export const SessionInfo = Schema.Struct({
   cmd: Schema.String,
   /** Everything `zmx ls` printed that was not a known field. */
   labels: Schema.Record(Schema.String, Schema.String),
+  /**
+   * Why this session cannot be attached to, or absent if it can.
+   *
+   * The daemon's judgement, on the wire, rather than a rule the client
+   * re-derives. Two reasons for that. One of them a client could not work out
+   * at all — whether this is the session awp itself is running in, which only
+   * the daemon knows. And a re-derived copy of the rest is a second
+   * implementation of a rule, and the copy that drifts is always the one nobody
+   * is testing.
+   *
+   * A sentence and not a flag, because a disabled row that will not say why is
+   * worse than no row. This string is the entire explanation the user gets.
+   */
+  refusal: Schema.UndefinedOr(Schema.String),
 });
 
 export type SessionInfo = (typeof SessionInfo)["Type"];

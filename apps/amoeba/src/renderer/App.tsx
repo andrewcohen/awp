@@ -1,8 +1,11 @@
 import { chromeFor } from "@awp-kit/pane";
-import { useState } from "react";
+import type { SessionInfo } from "@awp-kit/protocol";
+import { useEffect, useState } from "react";
 import { Divider } from "./Divider";
 import { Pane } from "./Pane";
+import { Sidebar } from "./Sidebar";
 import { fitColumns } from "./columns";
+import { listSessions } from "./daemon";
 import { rendererFixture } from "./fixture";
 import { useColorScheme } from "./useColorScheme";
 import { useWindowWidth } from "./useWindowWidth";
@@ -29,8 +32,33 @@ export function App() {
   // the window cannot hold it, and storing the squeezed result would make that
   // permanent: widening the window back would leave the column where the
   // narrowest moment put it. See columns.ts.
-  const [want, setWant] = useState({ sidebar: 220, accessory: 280 });
+  const [want, setWant] = useState({ sidebar: 260, accessory: 280 });
   const columns = fitColumns(width, want);
+
+  const [sessions, setSessions] = useState<ReadonlyArray<SessionInfo>>([]);
+  const [selected, setSelected] = useState<string | undefined>();
+  const [failure, setFailure] = useState<string | undefined>();
+
+  useEffect(() => {
+    let cancelled = false;
+    listSessions()
+      .then((listed) => {
+        if (!cancelled) {
+          setSessions(listed);
+          setFailure(undefined);
+        }
+      })
+      .catch((error: unknown) => {
+        // A daemon that is not running is the ordinary case during development,
+        // not an exception. The sidebar says so and tells you the command.
+        if (!cancelled) {
+          setFailure(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Flex-shrink is zero on both sides. The arithmetic in fitColumns already
   // guarantees the layout fits, so letting flexbox shrink as well would mean
@@ -48,7 +76,13 @@ export function App() {
       }}
     >
       <aside style={{ ...column, flex: `0 0 ${columns.sidebar}px` }}>
-        <div style={{ padding: "3rem 1rem 1rem", color: chrome.muted }}>sidebar</div>
+        <Sidebar
+          sessions={sessions}
+          selected={selected}
+          onSelect={(session) => setSelected(session.name)}
+          chrome={chrome}
+          failure={failure}
+        />
       </aside>
 
       <Divider
@@ -59,7 +93,7 @@ export function App() {
       />
 
       <main style={{ ...column, flex: "1 1 auto" }}>
-        <Pane fixture={rendererFixture} scheme={scheme} />
+        <Pane session={selected} fixture={rendererFixture} scheme={scheme} />
       </main>
 
       <Divider

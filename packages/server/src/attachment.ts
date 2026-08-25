@@ -15,7 +15,7 @@
 //        ──▶ hand back a scoped handle             ◀ the probe leaked here
 
 import { Context, Data, Effect, Layer, type Scope } from "effect";
-import { Multiplexer, type MultiplexerError, isLive } from "./multiplexer";
+import { Multiplexer, type MultiplexerError, type Session, isLive } from "./multiplexer";
 import { PtySpawner, type PtyError, type PtyHandle, type PtySize } from "./pty";
 import { currentZmxSession, zmxChildEnv } from "./zmx-session";
 
@@ -52,6 +52,46 @@ export class Attachment extends Context.Service<
   }
 >()("@awp-kit/server/Attachment") {}
 
+/**
+ * Why this session cannot be attached to, or undefined if it can.
+ *
+ * Stated once and used twice: `attach` enforces it, and the daemon puts it on
+ * the wire so a client can disable the row *and say why*. A client re-deriving
+ * these rules would be a second copy of them, and the copy that drifts is
+ * always the one nobody is testing.
+ *
+ * The sentences are written for a person, because they are the only explanation
+ * a disabled row ever gets.
+ */
+export const refusalFor = (
+  session: Session | undefined,
+  name: string,
+  ownSession: string | undefined,
+): string | undefined => {
+  // Refusing our own session is not politeness. `zmx attach` branches on
+  // ZMX_SESSION, and stripping it stops the hijack — but the daemon may be
+  // running inside a session anyway, and attaching to *that* one makes the pane
+  // and the terminal awp was launched from the same client, fighting over one
+  // size. gdeck disabled the row rather than explain it afterwards.
+  if (name === ownSession) {
+    return (
+      "this is the session awp is running in — the pane and its own terminal " +
+      "would fight over one size"
+    );
+  }
+  if (session === undefined) {
+    return "no such session";
+  }
+  // Listed is not running. zmx keeps a session listed after its command exits
+  // so the output can still be read, and attaching to one of those renders a
+  // dead program's last screen — which looks like a live pane that has stopped
+  // responding.
+  if (!isLive(session)) {
+    return `session has ended (exit ${session.exitCode}); its output is still readable through history`;
+  }
+  return undefined;
+};
+
 const make = Effect.gen(function* () {
   const mux = yield* Multiplexer;
   const spawner = yield* PtySpawner;
@@ -61,35 +101,12 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { session, size } = options;
 
-        // Refusing our own session is not politeness. `zmx attach` branches on
-        // ZMX_SESSION, and stripping it stops that — but the daemon may be
-        // running inside a session anyway, and attaching to *that* one means
-        // the pane and the terminal awp was launched from are the same client,
-        // fighting over one size. gdeck disabled the row rather than explain it
-        // afterwards.
-        if (session === currentZmxSession()) {
-          return yield* new AttachError({
-            session,
-            reason:
-              "refusing to attach to the session this process is running in — " +
-              "the pane and its own terminal would fight over one size",
-          });
-        }
-
+        // Looked up even when the name is our own, so that one function decides
+        // every refusal. The lookup costs a `zmx ls` either way.
         const existing = yield* mux.lookup(session);
-        if (existing === undefined) {
-          return yield* new AttachError({ session, reason: "no such session" });
-        }
-
-        // Listed is not running. zmx keeps a session listed after its command
-        // exits so the output can still be read, and attaching to one of those
-        // renders a dead program's last screen — which looks like a live pane
-        // that has stopped responding.
-        if (!isLive(existing)) {
-          return yield* new AttachError({
-            session,
-            reason: `session has ended (exit ${existing.exitCode}); its output is still readable through history`,
-          });
+        const refusal = refusalFor(existing, session, currentZmxSession());
+        if (refusal !== undefined) {
+          return yield* new AttachError({ session, reason: refusal });
         }
 
         const pty = yield* spawner.spawn({
