@@ -31,6 +31,8 @@ export {
 
 export { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
 
+export { readMeter, resetMeter, type Meter } from "./meter";
+
 export {
   chromeFor,
   latte,
