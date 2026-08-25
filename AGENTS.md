@@ -253,6 +253,19 @@ light {"scroll":[1200,1200,760,760],"canvas":[1344,1512],"rootBg":"rgb(230, 233,
   started and drew the wrong thing", which are different bugs in different
   files.
 
+The same harness drives gestures, and that is how the columns were checked:
+`page.mouse.down()` and a run of `mouse.move()` for a divider drag,
+`page.setViewportSize()` stepped down through the widths where `fitColumns` has
+to give something up. Read `aria-valuenow` off the separators for the resulting
+widths — a layout worth an assertion is usually one worth announcing to
+assistive technology anyway, so the accessible name is already the probe.
+
+Two things that measurement does **not** establish, in case a later session
+reads it as more than it is: a run of mouse moves is one gesture, not one reflow
+per move, because ResizeObserver coalesces; and a fixture is not a scrollback.
+The cost of reflowing ten thousand lines is a question for a live session, not
+for this harness.
+
 **Then read the image and say what you see, check by check.** The fixture in
 `apps/amoeba/src/renderer/fixture.ts` is built so each block fails visibly if
 one specific patch fix is not reached — descenders clipped, wide glyphs
