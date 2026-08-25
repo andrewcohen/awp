@@ -295,3 +295,22 @@ holding hexes. Prefer checks with that property.
   typechecker and nothing else.
 - Commit messages go through `jj describe --stdin < file`. The shell here is
   fish, and a long `-m` with apostrophes or backticks will be mangled.
+
+## Do not reach for `_tag`
+
+It is Effect's discriminant, and there is an API over it for every case worth
+having: `Result.isSuccess` / `isFailure`, `Effect.catchTag` and `catchTags`,
+`Match.tag` / `tags` / `tagsExhaustive`. These are type guards and narrowing
+combinators, so they do something `result._tag === "Failure"` does not — the
+value narrows and its payload is reachable without a cast.
+
+`no-underscore-dangle` is therefore left on, deliberately. It was briefly given
+an allowance for `_tag`, and that was the wrong fix: the rule firing was correct
+and the code was reaching past an API that already existed. If it fires again,
+the combinator is the answer.
+
+`no-redeclare` **is** off, and that one is a genuine false positive:
+`export const SessionInfo = Schema.Struct(…)` beside
+`export type SessionInfo = typeof SessionInfo["Type"]` is the schema idiom, and
+a value and a type sharing a name is legal TypeScript. `tsc` catches a real
+redeclaration; the lint rule only sees the shape.

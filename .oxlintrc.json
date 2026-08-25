@@ -10,7 +10,8 @@
   "rules": {
     "eslint/max-classes-per-file": "off",
     "eslint/max-lines-per-function": "off",
-    "react/react-in-jsx-scope": "off"
+    "react/react-in-jsx-scope": "off",
+    "eslint/no-redeclare": "off"
   },
   "overrides": [
     {
