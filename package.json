@@ -20,7 +20,8 @@
     "amoeba": "bun run --filter amoeba dev:all",
     "daemon": "bun run --filter @awp-kit/server daemon",
     "probe:child-env": "bun packages/server/src/probe/child-env.ts",
-    "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts"
+    "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts",
+    "probe:skeleton": "bun packages/server/src/probe/skeleton.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

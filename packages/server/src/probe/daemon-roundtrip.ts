@@ -9,20 +9,25 @@
 // Safe from inside a zmx session, unlike its neighbours in this directory. It
 // calls SessionList and nothing else, which is `zmx ls` — a question that costs
 // nothing and touches no session. It deliberately does not attach.
+//
+// ── this needs a daemon running ────────────────────────────────────────────
+// Start one first, in another terminal:
+//
+//     bun run daemon
+//
+// Two processes rather than one, and not only for realism. Building the daemon
+// layer inside `Effect.runPromise` and letting `Effect.scoped` close it hangs at
+// 100% CPU: there is no runtime to run the SocketServer's finalizer to
+// completion, so the scope never closes. `NodeRuntime.runMain` does handle it —
+// the real daemon exits on SIGINT in 270ms — which is why this is the shape of
+// the probe rather than a defect in the daemon.
 
-import { Effect, Layer, Result } from "effect";
+import { Effect, Result } from "effect";
 import * as client from "@awp-kit/protocol/client";
-import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node-shared";
-import { layer as daemonLayer, DAEMON_HOST, DAEMON_PORT } from "../daemon";
+import { DAEMON_HOST, DAEMON_PORT } from "../daemon";
 import { identity, isLive } from "../multiplexer";
 
 const url = `ws://${DAEMON_HOST}:${DAEMON_PORT}`;
-
-const daemon = daemonLayer.pipe(
-  Layer.provide(NodeChildProcessSpawner.layer),
-  Layer.provide(NodeFileSystem.layer),
-  Layer.provide(NodePath.layer),
-);
 
 const program = Effect.gen(function* () {
   const rpc = yield* client.make;
@@ -51,7 +56,7 @@ const program = Effect.gen(function* () {
   );
   const labelled = sessions.find((s) => Object.keys(s.labels).length > 0);
   console.log(`  labels survive:     ${JSON.stringify(labelled?.labels ?? {})}\n`);
-}).pipe(Effect.provide(client.layer(url)), Effect.provide(daemon), Effect.scoped);
+}).pipe(Effect.provide(client.layer(url)), Effect.scoped);
 
 const result = await Effect.runPromise(Effect.result(program));
 if (Result.isFailure(result)) {
