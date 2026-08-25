@@ -1,4 +1,4 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["archive", ".tsbuild"]
+  "ignorePatterns": ["archive", ".tsbuild", "**/dist", "**/build", "**/artifacts"]
 }
