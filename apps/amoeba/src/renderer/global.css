@@ -1,0 +1,40 @@
+/* The window is an application surface, not a document.
+ *
+ * A webview will happily give the whole page a scrollbar and a rubber-band
+ * overscroll, because that is correct for a website and wrong for this: the
+ * outermost element is a layout, and a layout that scrolls has simply been
+ * mis-sized. Anything that needs to scroll — a pane's scrollback, a diff, a
+ * session list — scrolls inside its own column and says so.
+ *
+ * So the top level is nailed down here rather than defended in each component.
+ * If content ever exceeds the window, the intended failure is that it is
+ * clipped and visible as a bug, not absorbed by a scrollbar and invisible. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Tells the engine which way the window is dressed, so form controls,
+ * scrollbars inside columns, and the canvas' own backdrop are drawn to match.
+ * `light dark` means "both, follow the system" — the app reads the same
+ * preference in JS for the colours it picks itself. */
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  /* The webview's default is white, and it paints before React does. Without
+   * this, launching in dark mode flashes a white window for a frame. */
+  background: Canvas;
+  color: CanvasText;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A drag on empty chrome should move the window, not select text. */
+body {
+  user-select: none;
+}

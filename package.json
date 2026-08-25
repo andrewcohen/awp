@@ -26,5 +26,8 @@
     "react-doctor": "0.9.12",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
+  },
+  "patchedDependencies": {
+    "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch"
   }
 }
