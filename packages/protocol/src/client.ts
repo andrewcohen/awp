@@ -6,7 +6,7 @@
 // derived from `AwpRpcs`, so a change to a payload breaks here at compile time
 // rather than at the first call.
 
-import { Layer } from "effect";
+import { Context, type Effect, Layer } from "effect";
 import { Socket } from "effect/unstable/socket";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { AwpRpcs } from "./index";
@@ -35,3 +35,20 @@ export const layer = (url: string = DEFAULT_DAEMON_URL) =>
 
 /** The generated client, with one method per procedure in {@link AwpRpcs}. */
 export const make = RpcClient.make(AwpRpcs);
+
+export type AwpClientShape = Effect.Success<typeof make>;
+
+/**
+ * The client as a service, so an application holds one rather than one per
+ * call.
+ *
+ * It matters more than tidiness here: building a client opens the socket, and a
+ * client per call would mean a connection per keystroke. Behind a tag it is
+ * also swappable for a fake, which is the only way a component that talks to
+ * the daemon can be tested without one.
+ */
+export class AwpClient extends Context.Service<AwpClient, AwpClientShape>()("awp/AwpClient") {}
+
+/** Everything a caller needs: the socket, the serialization and the client. */
+export const layerClient = (url: string = DEFAULT_DAEMON_URL) =>
+  Layer.effect(AwpClient)(make).pipe(Layer.provide(layer(url)));
