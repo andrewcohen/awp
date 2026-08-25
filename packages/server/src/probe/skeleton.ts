@@ -15,23 +15,28 @@
 // neighbours here: the rule those obey is about not disturbing sessions this
 // repo did not create, and the only session this one ever opens a client on is
 // the one it just made.
+//
+// ── this needs a daemon running ────────────────────────────────────────────
+// Start one first, in another terminal:
+//
+//     bun run daemon
+//
+// Two processes rather than one, and not only for realism. Building the daemon
+// layer inside `Effect.runPromise` and letting `Effect.scoped` close it hangs at
+// 100% CPU: there is no runtime to run the SocketServer's finalizer to
+// completion, so the scope never closes. `NodeRuntime.runMain` does handle it —
+// the real daemon exits on SIGINT in 270ms — which is why this is the shape of
+// the probe rather than a defect in the daemon.
 
 import * as client from "@awp-kit/protocol/client";
-import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node-shared";
-import { Effect, Layer, Result, Stream } from "effect";
-import { DAEMON_HOST, DAEMON_PORT, layer as daemonLayer } from "../daemon";
+import { Effect, Result, Stream } from "effect";
+import { DAEMON_HOST, DAEMON_PORT } from "../daemon";
 import { PtySpawner } from "../pty";
 import * as ptyBun from "../pty-bun";
 import { zmxChildEnv } from "../zmx-session";
 
 const SESSION = "awp-skeleton-probe";
 const url = `ws://${DAEMON_HOST}:${DAEMON_PORT}`;
-
-const daemon = daemonLayer.pipe(
-  Layer.provide(NodeChildProcessSpawner.layer),
-  Layer.provide(NodeFileSystem.layer),
-  Layer.provide(NodePath.layer),
-);
 
 const ms = (from: number) => `${(Date.now() - from).toString().padStart(4)}ms`;
 
@@ -138,19 +143,37 @@ const program = Effect.gen(function* () {
   console.log(`\n  attach → first byte  ${firstByteAt - attachedAt}ms`);
   console.log(`  keystroke → echo     ${echoedAt - sentAt}ms`);
   console.log(`  bytes received       ${bytes}`);
+  // Five runs on 2026-08-25: attach 43·44·45·49·53ms, echo 7·8·8·8·9ms.
+  //
+  // The echo matches gdeck's Go path, which is the number that decides whether
+  // typing feels direct — and it goes through an rpc round trip, a websocket
+  // and a JSON frame to get there, so serialization is not in the budget in any
+  // way worth optimising yet. The attach is roughly twice gdeck's, and the two
+  // are not measured the same way: gdeck timed an in-process Go attach, this
+  // times a request crossing a socket into another process which then spawns a
+  // pty. Whether that gap is the extra process or something worth fixing is a
+  // question for a profile, not a guess.
   console.log(`\n  gdeck, for comparison: 25ms attach, 8ms p50 echo\n`);
-}).pipe(
-  Effect.provide(client.layer(url)),
-  Effect.provide(daemon),
-  Effect.provide(ptyBun.layer),
-  Effect.scoped,
-);
+}).pipe(Effect.provide(client.layer(url)), Effect.provide(ptyBun.layer), Effect.scoped);
 
 const result = await Effect.runPromise(Effect.result(program));
 
 // Killed here rather than in a finalizer: the point is that it happens even if
 // the measurement threw, and that the session this created does not outlive it.
-Bun.spawnSync(["zmx", "kill", SESSION], { env: zmxChildEnv() as Record<string, string> });
+//
+// `--force`, and the outcome is reported. A plain kill left the session behind
+// on the first run — a client had only just detached and zmx declined — and a
+// cleanup that fails silently is worse than none, because the next run inherits
+// a session it did not create and can no longer tell the difference.
+const killed = Bun.spawnSync(["zmx", "kill", SESSION, "--force"], {
+  env: zmxChildEnv() as Record<string, string>,
+});
+console.log(
+  killed.exitCode === 0
+    ? `  killed ${SESSION}\n`
+    : `  COULD NOT KILL ${SESSION} — remove it by hand:\n` +
+        `    env -u ZMX_SESSION zmx kill ${SESSION} --force\n`,
+);
 
 if (Result.isFailure(result)) {
   console.error("\n  skeleton failed:", result.failure, "\n");
