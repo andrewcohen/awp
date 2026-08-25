@@ -5,9 +5,14 @@ import { Divider } from "./Divider";
 import { debugTools } from "./debug";
 import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
-import { fitColumns } from "./columns";
+import { type Collapsed, fitColumns } from "./columns";
 import { listSessions } from "./daemon";
-import { rememberSession, rememberedSession } from "./remembered";
+import {
+  rememberCollapsed,
+  rememberSession,
+  rememberedCollapsed,
+  rememberedSession,
+} from "./remembered";
 import { rendererFixture } from "./fixture";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
 import { colors, space, text } from "./tokens.stylex";
@@ -67,7 +72,19 @@ export function App() {
   // permanent: widening the window back would leave the column where the
   // narrowest moment put it. See columns.ts.
   const [want, setWant] = useState({ sidebar: 260, accessory: 280 });
-  const columns = fitColumns(width, want);
+  // Which columns are folded away, restored the same way the session is. A
+  // window that reopened both every time would undo the one choice the user
+  // makes to get them out of the way.
+  const [collapsed, setCollapsed] = useState<Collapsed>(rememberedCollapsed);
+  const columns = fitColumns(width, want, collapsed);
+
+  const fold = (which: keyof Collapsed) => () => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [which]: !prev[which] };
+      rememberCollapsed(next);
+      return next;
+    });
+  };
 
   const [sessions, setSessions] = useState<ReadonlyArray<SessionInfo>>([]);
   // Restored, not defaulted. Editing the renderer reloads the page, and a pane
@@ -140,6 +157,8 @@ export function App() {
         label="sidebar width"
         value={columns.sidebar}
         onChange={(sidebar) => setWant((prev) => ({ ...prev, sidebar }))}
+        collapsed={collapsed.sidebar}
+        onToggle={fold("sidebar")}
       />
 
       <main {...stylex.props(styles.column, styles.agent)}>
@@ -151,6 +170,8 @@ export function App() {
         invert
         value={columns.accessory}
         onChange={(accessory) => setWant((prev) => ({ ...prev, accessory }))}
+        collapsed={collapsed.accessory}
+        onToggle={fold("accessory")}
       />
 
       <aside {...stylex.props(styles.column, styles.fixed(columns.accessory))}>
