@@ -13,7 +13,8 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "doctor": "react-doctor"
+    "doctor": "react-doctor --no-supply-chain",
+    "doctor:supply-chain": "react-doctor"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
