@@ -6,20 +6,53 @@ import { PRIMARY, type Workspace, groupByWorkspace, openable } from "./workspace
 
 // The list of workspaces, and which of them can be opened.
 //
-// Workspaces, not sessions — see workspaces.ts for why that distinction is not
-// pedantry. A row that cannot be attached to says why, and the sentence comes
-// from the daemon rather than from here: only the daemon can know that one of
-// these is the session awp itself is running in, and re-deriving the rest would
-// be a second copy of a rule. The copy that drifts is always the one nobody
-// tests.
+// Two lines per row, and the rules below are the Go deck's — see
+// `archive/internal/deckui/sidebar.go`, which is around sixty percent prose
+// about exactly this strip. They are worth taking rather than rediscovering,
+// and each one is here because something was tried and read badly.
 //
-// The column is a header-less list with a footer: the list scrolls, the footer
-// does not. Anything about the window rather than about the work lives down
-// there, out of the way of the thing being scrolled through.
+//   ● pr-2340-lantern-sentry-header-allowlist
+//     thicket · agent
+//
+//   ● effect-ts-tiered-discount-timemachine
+//     thicket · agent editor action_dev
+//
+// **Two lines, always.** A row has two unrelated facts to carry — which
+// workspace, and what is in it — and on one line they compete: the kinds are
+// short and go last, so the name is what truncates, and a truncated name is the
+// one field you cannot work out from the others. Given a line to itself the
+// name gets the whole column. The cadence has to be fixed to be a cadence, so
+// the second line always says something; a name with nothing under it reads as
+// a one-line row and the rhythm is gone.
+//
+// **Colour marks structure, not content.** One dot per row carries a hue and
+// nothing else on the row does. The second line is the line there is one of per
+// row, so a colour on it is a colour repeated down the whole column — and
+// emphasis spent everywhere is emphasis nowhere.
+//
+// **A workspace called `default` is the repository's**, and the word says
+// nothing: six projects with one workspace each would render as six rows
+// reading `default`. So the project is the name and `default` goes below it,
+// which is the same trade in both directions — line two is whichever half of
+// project/workspace line one did not use.
+//
+// One rule of the Go strip is deliberately **not** taken: it drops a
+// `pr-1234-` prefix from a name because the number is on the line below. Here
+// there is no PR number on any line, so dropping it would lose the only place
+// that information appears.
+//
+// Air between rows is a margin rather than a blank row. The Go strip paid a
+// third of its height for that separation because a terminal has no smaller
+// unit than a line; this one does not have to.
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%" },
-  list: { flex: 1, minHeight: 0, overflowY: "auto", paddingTop: space.titlebar },
+  list: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: "auto",
+    padding: `${space.titlebar} 0 ${space.gutter}`,
+  },
   empty: { padding: `0.5rem ${space.gutter}`, color: colors.muted },
   failure: {
     padding: `${space.titlebar} ${space.gutter} ${space.gutter}`,
@@ -30,14 +63,23 @@ const styles = stylex.create({
   quiet: { fontSize: text.small, opacity: 0.8 },
   gap: { marginTop: "0.75rem" },
 
-  // A row is a strip whether or not the whole of it is one control, so the
-  // padding and the selected fill live here and never on the button.
+  // The band is the row, both lines of it, edge to edge — the gutter is inside
+  // the row rather than around it, so a selected workspace is a strip and not a
+  // floating rectangle.
   row: {
+    padding: `${space.row} ${space.gutter}`,
+    marginBottom: "0.3rem",
+  },
+  rowOn: { backgroundColor: colors.border },
+
+  // Line one is a button and line two is not, which is why the padding lives on
+  // the row: a button carrying it would put the band on one line of two.
+  title: {
     display: "flex",
     alignItems: "baseline",
     gap: "0.5rem",
     width: "100%",
-    padding: `${space.row} ${space.gutter}`,
+    padding: 0,
     borderStyle: "none",
     backgroundColor: "transparent",
     color: colors.text,
@@ -45,35 +87,44 @@ const styles = stylex.create({
     textAlign: "left",
     cursor: "pointer",
   },
-  rowOn: { backgroundColor: colors.border },
-  rowShut: { color: colors.muted, cursor: "default", opacity: 0.55 },
-  rowPlain: { cursor: "default" },
+  titleShut: { color: colors.muted, cursor: "default", opacity: 0.55 },
   label: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  dot: { fontSize: 9, color: colors.live },
+
+  // A fixed width, so the second line starts under the first letter of the name
+  // and not under the dot. One level of structure on this strip, one left edge
+  // for everything that is not the dot.
+  dot: { width: "0.75rem", flexShrink: 0, fontSize: 9, color: colors.live },
   dotOff: { color: colors.muted },
 
-  kinds: { display: "flex", gap: "0.25rem", flexShrink: 0 },
-  // The kind is a label on a one-session row and a control on a row with
-  // several, and it is the same size and colour either way — a thing that
-  // becomes clickable by growing a neighbour would be a strange thing to learn.
+  meta: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "0.35rem",
+    paddingInlineStart: "1.25rem",
+    fontSize: text.tiny,
+    color: colors.muted,
+    lineHeight: 1.5,
+    overflow: "hidden",
+  },
+  ident: { flexShrink: 0 },
+  // The separator, not a word. Present so the two halves of the line do not run
+  // together, muted so it is not one of them.
+  sep: { flexShrink: 0, opacity: 0.5 },
+  kinds: { display: "flex", gap: "0.3rem", overflow: "hidden" },
   kind: {
-    padding: "0 0.25rem",
+    padding: 0,
     borderStyle: "none",
-    borderRadius: "0.2rem",
     backgroundColor: "transparent",
     color: colors.muted,
     font: "inherit",
     fontSize: text.tiny,
     cursor: "inherit",
+    whiteSpace: "nowrap",
   },
-  kindOn: { backgroundColor: colors.base, color: colors.text },
+  kindOn: { color: colors.text },
   kindPick: { cursor: "pointer" },
-  reason: {
-    fontSize: text.tiny,
-    color: colors.muted,
-    padding: `0 ${space.gutter} ${space.row} 2rem`,
-    lineHeight: 1.4,
-  },
+  reason: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+
   footer: {
     display: "flex",
     alignItems: "center",
@@ -92,12 +143,13 @@ const Dot = ({ live }: { readonly live: boolean }) => (
 );
 
 /**
- * One workspace.
+ * One workspace: its name, and whatever line one did not already say.
  *
- * The whole strip is the control when there is only one session in it, because
- * then there is nothing to disambiguate and a full-width target is simply
- * better. With several, the strip is inert and each kind is its own button —
- * the alternative is a button inside a button, which is not markup.
+ * Line one is always a button and opens the workspace's primary session, so
+ * every row has a full-width target. Where a workspace has more than one
+ * session the kinds on line two are buttons too — that is the only way to
+ * reach the editor without reaching the agent first — and putting them on the
+ * second line is what keeps them out of the name's way.
  */
 function Row({
   workspace,
@@ -108,88 +160,88 @@ function Row({
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
 }) {
-  const single = workspace.sessions.length === 1 ? workspace.sessions[0] : undefined;
   const active = workspace.sessions.some((session) => session.name === selected);
   const live = workspace.sessions.some((session) => !session.ended);
-  const shut = openable(workspace) === undefined;
+  const primary = openable(workspace);
+  const several = workspace.sessions.length > 1;
 
-  // Shown when it is worth showing, which is not the same as whenever it
-  // exists. Eighteen of twenty-one rows are one agent, and eighteen rows each
-  // ending in the word "agent" is the same word repeated down a column while
-  // the names it is crowding out are the part being read. So a lone session
-  // says nothing unless it is *not* the agent — `captain`, an editor on its
-  // own — and a workspace with several always names them, because there the
-  // kind is the thing being chosen between.
-  const listed =
-    single === undefined
-      ? workspace.sessions
-      : workspace.sessions.filter((session) => session.identity?.kind !== PRIMARY);
+  // Whichever half of project/workspace the name did not use. A `default`
+  // workspace is the repository's, so the project is the name and `default`
+  // goes below; anything else names itself and the project goes below.
+  const other = workspace.foreign ? "elsewhere" : (workspace.otherIdent ?? "");
 
-  const kinds = (
-    <span {...stylex.props(styles.kinds)}>
-      {listed.map((session) => {
-        const kind = session.identity?.kind ?? "";
-        if (kind === "") {
-          return null;
-        }
-        const chip = stylex.props(
-          styles.kind,
-          session.name === selected && styles.kindOn,
-          single === undefined && session.refusal === undefined && styles.kindPick,
-        );
-        return single === undefined ? (
-          <button
-            key={session.name}
-            type="button"
-            disabled={session.refusal !== undefined}
-            title={session.refusal ?? session.cmd}
-            onClick={() => onSelect(session)}
-            {...chip}
-          >
-            {kind}
-          </button>
-        ) : (
-          <span key={session.name} {...chip}>
-            {kind}
-          </span>
-        );
-      })}
-    </span>
-  );
+  // Shown when worth showing, which is not whenever it exists. Eighteen of
+  // twenty-one rows are one agent, and eighteen lines each ending in the word
+  // "agent" is one word repeated down a column while the names it crowds out
+  // are the part being read. A lone session names itself only when it is *not*
+  // the agent — a captain, an editor on its own.
+  const listed = several
+    ? workspace.sessions
+    : workspace.sessions.filter((session) => session.identity?.kind !== PRIMARY);
 
-  // The reason belongs to the workspace when it has one session and to nothing
-  // in particular when it has several — there it is on each kind's tooltip
-  // instead, because two sessions can be unattachable for different reasons.
-  const refusal = single?.refusal;
+  // The reason takes the whole of line two when there is one. It is the most
+  // important thing the row has to say, and giving it a third line would break
+  // the cadence the two lines exist to keep.
+  const refusal = several ? undefined : workspace.sessions[0]?.refusal;
 
   return (
-    <div>
-      {single === undefined ? (
-        <div {...stylex.props(styles.row, styles.rowPlain, active && styles.rowOn)}>
-          <Dot live={live} />
-          <span title={workspace.label} {...stylex.props(styles.label)}>
-            {workspace.label}
-          </span>
-          {kinds}
-        </div>
-      ) : (
-        <button
-          type="button"
-          disabled={shut}
-          // The reason is the tooltip as well as the subtitle. A row that will
-          // not say why it is disabled is worse than no row at all.
-          title={refusal ?? single.cmd}
-          onClick={() => onSelect(single)}
-          {...stylex.props(styles.row, active && styles.rowOn, shut && styles.rowShut)}
-        >
-          <Dot live={live} />
-          <span title={workspace.label} {...stylex.props(styles.label)}>
-            {workspace.label}
-          </span>
-          {kinds}
-        </button>
-      )}
-      {refusal !== undefined && <div {...stylex.props(styles.reason)}>{refusal}</div>}
+    <div {...stylex.props(styles.row, active && styles.rowOn)}>
+      <button
+        type="button"
+        disabled={primary === undefined}
+        // The reason is the tooltip as well as line two. A row that will not
+        // say why it is disabled is worse than no row at all.
+        title={refusal ?? workspace.label}
+        onClick={() => primary !== undefined && onSelect(primary)}
+        {...stylex.props(styles.title, primary === undefined && styles.titleShut)}
+      >
+        <Dot live={live} />
+        <span {...stylex.props(styles.label)}>{workspace.name}</span>
+      </button>
+
+      <div {...stylex.props(styles.meta)}>
+        {refusal === undefined ? (
+          <>
+            {other !== "" && <span {...stylex.props(styles.ident)}>{other}</span>}
+            {other !== "" && listed.length > 0 && (
+              <span aria-hidden {...stylex.props(styles.sep)}>
+                ·
+              </span>
+            )}
+            <span {...stylex.props(styles.kinds)}>
+              {listed.map((session) => {
+                const kind = session.identity?.kind ?? "";
+                if (kind === "") {
+                  return null;
+                }
+                const chip = stylex.props(
+                  styles.kind,
+                  session.name === selected && styles.kindOn,
+                  several && session.refusal === undefined && styles.kindPick,
+                );
+                return several ? (
+                  <button
+                    key={session.name}
+                    type="button"
+                    disabled={session.refusal !== undefined}
+                    title={session.refusal ?? session.cmd}
+                    onClick={() => onSelect(session)}
+                    {...chip}
+                  >
+                    {kind}
+                  </button>
+                ) : (
+                  <span key={session.name} {...chip}>
+                    {kind}
+                  </span>
+                );
+              })}
+            </span>
+          </>
+        ) : (
+          <span {...stylex.props(styles.reason)}>{refusal}</span>
+        )}
+      </div>
     </div>
   );
 }
