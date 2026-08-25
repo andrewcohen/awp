@@ -117,3 +117,32 @@ describe("which session a workspace opens to", () => {
     expect(openable(workspace!)).toBeUndefined();
   });
 });
+
+describe("what a row calls itself", () => {
+  // `default` is the repository's own workspace and the word says nothing about
+  // it. Six projects with one workspace each would be six rows reading
+  // "default", which is a column of one repeated word where the distinguishing
+  // one should be.
+  it("names a default workspace for its project", () => {
+    const [w] = groupByWorkspace([awp("dotfiles", "default", "agent")]);
+    expect(w?.name).toBe("dotfiles");
+    expect(w?.otherIdent).toBe("default");
+  });
+
+  it("names any other workspace for itself, and puts the project below", () => {
+    const [w] = groupByWorkspace([awp("thicket", "pr-2340-lantern-sentry", "agent")]);
+    expect(w?.name).toBe("pr-2340-lantern-sentry");
+    expect(w?.otherIdent).toBe("thicket");
+  });
+
+  // The full address is still what orders the list and what the tooltip shows,
+  // so shortening the visible name cannot make two rows indistinguishable.
+  it("keeps the whole address whatever it calls itself", () => {
+    const got = groupByWorkspace([
+      awp("thicket", "default", "agent"),
+      awp("mossy", "default", "agent"),
+    ]);
+    expect(got.map((w) => w.name)).toEqual(["mossy", "thicket"]);
+    expect(got.map((w) => w.label)).toEqual(["mossy.default", "thicket.default"]);
+  });
+});

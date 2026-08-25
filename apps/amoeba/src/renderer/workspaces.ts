@@ -24,10 +24,29 @@ import type { SessionInfo } from "@awp-kit/protocol";
  */
 export const PRIMARY = "agent";
 
+/** The workspace a repository has before anyone makes another one. */
+const DEFAULT = "default";
+
 export type Workspace = {
   /** `project.workspace`, or the session name for one of someone else's. */
   readonly key: string;
+  /** The whole address, for a tooltip and for ordering. */
   readonly label: string;
+  /**
+   * What the row is called.
+   *
+   * A workspace named `default` is the repository's own, and the word says
+   * nothing about it — six projects with one workspace each would be six rows
+   * reading `default`. So a default workspace is named for its project.
+   */
+  readonly name: string;
+  /**
+   * The half of project/workspace that {@link Workspace.name} did not use, for
+   * the row's second line. Taken from the Go deck, whose rule this is: the two
+   * halves are one fact between them, and repeating either is a column of
+   * identical words where the distinguishing one should be.
+   */
+  readonly otherIdent: string | undefined;
   /** Ordered: the primary kind first, then the rest by name. */
   readonly sessions: ReadonlyArray<SessionInfo>;
   /**
@@ -70,19 +89,34 @@ export const groupByWorkspace = (
   for (const session of sessions) {
     const id = session.identity;
     if (id === undefined) {
-      foreign.push({ key: session.name, label: session.name, sessions: [session], foreign: true });
+      foreign.push({
+        key: session.name,
+        label: session.name,
+        name: session.name,
+        otherIdent: undefined,
+        sessions: [session],
+        foreign: true,
+      });
       continue;
     }
     const key = `${id.project}.${id.workspace}`;
     grouped.set(key, [...(grouped.get(key) ?? []), session]);
   }
 
-  const workspaces: Workspace[] = [...grouped].map(([key, found]) => ({
-    key,
-    label: key,
-    sessions: found.toSorted(byKind),
-    foreign: false,
-  }));
+  const workspaces: Workspace[] = [...grouped].map(([key, found]) => {
+    const id = found[0]?.identity;
+    const project = id?.project ?? "";
+    const workspace = id?.workspace ?? "";
+    const isDefault = workspace === DEFAULT;
+    return {
+      key,
+      label: key,
+      name: isDefault ? project : workspace,
+      otherIdent: isDefault ? DEFAULT : project,
+      sessions: found.toSorted(byKind),
+      foreign: false,
+    };
+  });
 
   // awp's own first, then anyone else's. Two different things in one list, and
   // the boundary is worth being able to see without reading either.
