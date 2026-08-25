@@ -110,3 +110,74 @@ export const encodeWheel = (modes: Modes, button: number, column: number, row: n
   // 255 — and code points are the wrong unit to build it out of.
   return `${ESC}[M${String.fromCharCode(button + 32, offset(column), offset(row))}`;
 };
+
+// ── turning a wheel event into lines ───────────────────────────────────────
+//
+// Not one event, one answer. A trackpad reports a stream of small pixel deltas
+// — a gentle drag is dozens of events of two or three pixels each — so
+// rounding each one on its own and taking at least a line means the lightest
+// touch scrolls at sixty lines a second. Rounding without a floor is no better:
+// every one of those events rounds to zero and the surface does nothing at all.
+//
+// So the remainder is kept. Deltas accumulate until they add up to a line, that
+// line is emitted, and what is left over stays for the next event. Gentle
+// movement scrolls slowly, a flick scrolls far, and the distance travelled
+// matches the distance moved — which is the whole of what "feels right" means
+// here.
+
+/** How much scrolling has been asked for but not yet delivered, in pixels. */
+export interface WheelCarry {
+  readonly pixels: number;
+}
+
+export const noCarry: WheelCarry = { pixels: 0 };
+
+/**
+ * The most one event may deliver, in screens.
+ *
+ * Not a guard on the carry — that is bounded by construction, since what is
+ * kept is always less than a single cell. This bounds one absurd delta: a
+ * hundred thousand pixels would otherwise become five thousand line reports in
+ * one message, and no program benefits from being told to scroll further than
+ * its own scrollback.
+ *
+ * Three screens rather than one, because a page-mode delta is a whole screen by
+ * definition and capping at a screen would quietly break it.
+ */
+const MAX_SCREENS_PER_EVENT = 3;
+
+/**
+ * The lines to scroll, and what to remember for next time.
+ *
+ * `deltaMode` is the browser saying what unit `deltaY` is in, and all three
+ * occur in practice: pixels from a trackpad, lines from some mice, pages from a
+ * few. Treating a line delta as pixels is the difference between scrolling one
+ * line and scrolling one pixel.
+ */
+export const wheelLines = (
+  carry: WheelCarry,
+  event: { readonly deltaY: number; readonly deltaMode: number },
+  cell: { readonly height: number; readonly rows: number },
+): { readonly lines: number; readonly carry: WheelCarry } => {
+  const height = cell.height > 0 ? cell.height : 1;
+  const pixels =
+    event.deltaMode === 1
+      ? event.deltaY * height
+      : event.deltaMode === 2
+        ? event.deltaY * height * cell.rows
+        : event.deltaY;
+
+  const total = carry.pixels + pixels;
+  // Truncated, not rounded: rounding would deliver a line before a line's worth
+  // of movement had happened, which reads as the surface running ahead of the
+  // hand.
+  const exact = Math.trunc(total / height);
+  const limit = Math.max(cell.rows, 1) * MAX_SCREENS_PER_EVENT;
+  const lines = Math.max(Math.min(exact, limit), -limit);
+
+  // The remainder from the *exact* figure, not the capped one. Carrying the
+  // difference would bank thousands of lines from a single flick and pay them
+  // out over the following events, so the pane would keep moving long after the
+  // hand stopped.
+  return { lines, carry: { pixels: total - exact * height } };
+};
