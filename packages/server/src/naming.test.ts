@@ -19,10 +19,12 @@ import {
 // is — so what is checked here is the behaviour the rest of the system relies
 // on, which would still have to hold if the implementation were rewritten.
 //
-// What CANNOT be proved here is anything that is a claim about zmx itself:
-// that 46 is really its limit, that `zmx ls` really marks the caller's own
-// session, that it really refuses a slash silently. Those are inherited and
-// unverified — see the probe.
+// What CANNOT be proved here is anything that is a claim about zmx itself.
+// Those went to `bun run probe:claims`, which measured them on 2026-08-25: the
+// 46-character limit holds (47 is refused, and zmx names its own max), and a
+// name containing a slash is refused *silently* — no error, no session, nothing
+// to notice. Only the arrow marking the caller's own session is still untested,
+// because observing it means running inside a session and the probe refuses to.
 
 // A corpus with the shapes that actually occur, including the pair the Go
 // comment names as the reason shortening cannot be plain truncation.
@@ -59,7 +61,9 @@ describe("sanitize", () => {
     expect(sanitize("a.b")).not.toContain(".");
   });
 
-  test("replaces a slash — zmx is claimed to refuse a name containing one", () => {
+  test("replaces a slash — zmx refuses such a name, and says nothing", () => {
+    // Measured: no error, no session, no exit code to notice. A workspace named
+    // after a branch would silently never get one.
     expect(sanitize("feature/thing")).not.toContain("/");
   });
 });
@@ -107,6 +111,96 @@ describe("sessionName", () => {
     for (const { project, workspace, kind } of everyCombination) {
       const split = splitSessionName(sessionName(project, workspace, kind));
       expect(split?.kind).toBe(sessionKind(kind));
+    }
+  });
+});
+
+describe("compatibility with sessions that already exist", () => {
+  // Every one of these was read off `zmx ls` on 2026-08-25 and every one had
+  // been shortened, so each exercises the sha256 fingerprint and the budget
+  // arithmetic together.
+  //
+  // This is the test that matters most in the file. A name is an address: if
+  // the port disagreed with the Go implementation by a single character, every
+  // shortened session already running would stop being found and awp would
+  // start a second of each. A synthetic corpus cannot catch that — only real
+  // names can, because the fingerprint has to match a hash computed by other
+  // code, months ago.
+  //
+  // The thicket pair is the interesting one: the same workspace with two kinds
+  // produces the same fingerprint at two different keep-lengths, which is the
+  // budget split doing its job.
+  const observed: ReadonlyArray<readonly [string, string, string, string]> = [
+    [
+      "typed-router",
+      "effect-ts-v4-endpoint-poc",
+      "agent",
+      "awp.typed-router.effect-ts-v4-endpo-afe7.agent",
+    ],
+    [
+      "orchard",
+      "pr-557-lantern-sentry-header-allowlist",
+      "agent",
+      "awp.orchard.pr-557-lantern-sentry-head-bc47.agent",
+    ],
+    [
+      "orchard",
+      "pr-558-lantern-lantern-identity-hasher",
+      "agent",
+      "awp.orchard.pr-558-lantern-lantern-ide-bfad.agent",
+    ],
+    [
+      "thicket",
+      "effect-ts-tiered-discount-timemachine",
+      "action_dev",
+      "awp.thicket.effect-ts-tiered-d-f500.action_dev",
+    ],
+    [
+      "thicket",
+      "effect-ts-tiered-discount-timemachine",
+      "agent",
+      "awp.thicket.effect-ts-tiered-discou-f500.agent",
+    ],
+    [
+      "thicket",
+      "pr-2320-jordan-survey-slot-cls",
+      "agent",
+      "awp.thicket.pr-2320-jordan-survey-s-a5f9.agent",
+    ],
+    [
+      "thicket",
+      "pr-2340-lantern-sentry-header-allowlist",
+      "agent",
+      "awp.thicket.pr-2340-lantern-sentry-h-6fb6.agent",
+    ],
+    [
+      "thicket",
+      "pr-2357-lantern-lantern-email-link-identity",
+      "agent",
+      "awp.thicket.pr-2357-lantern-lantern-78f6.agent",
+    ],
+    [
+      "thicket",
+      "pr-2359-lantern-lantern-identity-resolve",
+      "agent",
+      "awp.thicket.pr-2359-lantern-lantern-6071.agent",
+    ],
+    [
+      "thicket",
+      "express-2nd-pick-v2-rollback-ship",
+      "agent",
+      "awp.thicket.express-2nd-pick-v2-rol-999a.agent",
+    ],
+  ];
+
+  test.each(observed)("%s / %s / %s → %s", (project, workspace, kind, expected) => {
+    expect(sessionName(project, workspace, kind)).toBe(expected);
+  });
+
+  test("each one really was shortened, or the fingerprint is untested", () => {
+    for (const [project, workspace, kind] of observed) {
+      const stem = splitSessionName(sessionName(project, workspace, kind))?.stem;
+      expect(stem).not.toBe(sessionStem(project, workspace));
     }
   });
 });
