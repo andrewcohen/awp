@@ -1,6 +1,7 @@
 # amoeba: the client-server rewrite
 
 ## Metadata
+
 - **Spec ID**: `20260825-52cw`
 - **Feature name**: amoeba — awp as a client-server platform
 - **Owner**: Andrew Cohen
@@ -16,7 +17,7 @@ client-server architecture.
 
 ## User Problem
 
-The Go deck is a single process that *is* the thing owning agent sessions,
+The Go deck is a single process that _is_ the thing owning agent sessions,
 terminals, and the UI. That coupling is the source of most of its constraints:
 
 - A session cannot outlive the UI that opened it, so the deck cannot be closed
@@ -24,7 +25,7 @@ terminals, and the UI. That coupling is the source of most of its constraints:
 - There is exactly one frontend, and adding a second means reimplementing
   everything behind it.
 - An agent's rich output — markdown, diffs, images, artifacts — can only ever be
-  *transcribed into a terminal*. gdeck was built to test whether a webview fixes
+  _transcribed into a terminal_. gdeck was built to test whether a webview fixes
   that, and it does.
 
 Separating the client from the server makes the CLI, the desktop window, and any
@@ -48,7 +49,7 @@ later remote or web client peers rather than rewrites.
 - Packaging, self-update, code signing.
 - Any port of the Go feature surface: new-workspace flow, review, GitHub
   integration, keybinding parity, the inbox. None of it is a requirement.
-- Remote / multi-machine clients. The architecture must not *preclude* them; v1
+- Remote / multi-machine clients. The architecture must not _preclude_ them; v1
   does not build them.
 
 ## Decisions
@@ -65,7 +66,7 @@ delegate its way out of the problem. This is the largest unknown in the stack
 and is spiked first.
 
 The hijack rule comes along unchanged: `zmx attach` branches on `ZMX_SESSION`.
-From inside a session it switches the *calling* client rather than creating a
+From inside a session it switches the _calling_ client rather than creating a
 new one, which would steal the terminal the app was launched from. The child's
 environment must have that marker stripped.
 
@@ -107,21 +108,26 @@ is genuinely imported twice.
 
 Versions confirmed against the npm registry on 2026-08-25.
 
-| Layer | Choice | Version | Note |
-|---|---|---|---|
-| Runtime | Bun | — | main process, daemon, workspaces |
-| Desktop shell | electrobun | 2.0.1 | pre-1.0 ecosystem, system webview (WKWebView) |
-| Renderer build | vite | 8.2.2 | hosts the Babel pass StyleX + react-compiler share |
-| UI | react | 19.2.8 | 19 required by react-compiler and atom-react |
-| Compiler | babel-plugin-react-compiler | 1.0.0 | stable |
-| Routing | @tanstack/react-router | 1.170.x | |
-| State | @effect/atom-react | 4.0.0-beta.107 | peers `effect ^4.0.0-beta.107`, `react >=19.2.7` |
-| Styling | @stylexjs/stylex | 0.19.0 | compile-time; needs the Babel pass |
-| Primitives | @base-ui/react | 1.7.0 | already proven in gdeck's webview |
-| Diffs / trees | @pierre/diffs, @pierre/trees | 1.3.6, 1.0.0-beta.6 | diffs already proven in gdeck |
-| Terminal | ghostty-web | 0.4.0 | libghostty→wasm, canvas renderer |
-| Backend | effect | 4.0.0-rc.112 | dist-tag `rc` |
-| Backend platform | @effect/platform-bun | 4.0.0-rc.112 | |
+| Layer            | Choice                       | Version             | Note                                               |
+| ---------------- | ---------------------------- | ------------------- | -------------------------------------------------- |
+| Runtime          | Bun                          | —                   | main process, daemon, workspaces                   |
+| Desktop shell    | electrobun                   | 2.0.1               | pre-1.0 ecosystem, system webview (WKWebView)      |
+| Renderer build   | vite                         | 8.2.2               | hosts the Babel pass StyleX + react-compiler share |
+| UI               | react                        | 19.2.8              | 19 required by react-compiler and atom-react       |
+| Compiler         | babel-plugin-react-compiler  | 1.0.0               | stable                                             |
+| Routing          | @tanstack/react-router       | 1.170.x             |                                                    |
+| State            | @effect/atom-react           | 4.0.0-beta.107      | peers `effect ^4.0.0-beta.107`, `react >=19.2.7`   |
+| Styling          | @stylexjs/stylex             | 0.19.0              | compile-time; needs the Babel pass                 |
+| Primitives       | @base-ui/react               | 1.7.0               | already proven in gdeck's webview                  |
+| Diffs / trees    | @pierre/diffs, @pierre/trees | 1.3.6, 1.0.0-beta.6 | diffs already proven in gdeck                      |
+| Terminal         | ghostty-web                  | 0.4.0               | libghostty→wasm, canvas renderer                   |
+| Backend          | effect                       | 4.0.0-rc.112        | dist-tag `rc`                                      |
+| Backend platform | @effect/platform-bun         | 4.0.0-rc.112        |                                                    |
+| Lint             | oxlint                       | 1.80.0              | oxc; no formatter of its own                       |
+| Format           | oxfmt                        | 0.65.0              | oxc; pre-1.0                                       |
+| Test             | vitest                       | 4.1.11              | peers vite ^8                                      |
+| Types            | typescript                   | 7.0.2               | the native compiler                                |
+| React checks     | react-doctor                 | 0.9.12              | wired up with the rest of the React tooling        |
 
 ### Effect v4 folds RPC into core
 
@@ -151,7 +157,7 @@ state the module-level Ghostty instance keeps handing out, so building a
 Terminal per view caused four distinct bugs with one cause: a second Terminal
 writing into freed memory ("Out of bounds memory access", which React
 StrictMode's double-mount hit every time); a recycled handle receiving another
-pane's bytes, which put a live agent's output into a *static* pane's cells; and
+pane's bytes, which put a live agent's output into a _static_ pane's cells; and
 a re-allocated 10,000-line scrollback plus font re-measure on every switch,
 which is where a "slow attach" came from when Go's own timings had the whole
 attach at 25ms. The canvas lives in a host element the module owns, so mounting
@@ -247,16 +253,19 @@ stack is either already proven in gdeck or is ordinary.
 ## QA / Human Review Test Plan
 
 ### Setup
+
 - [ ] `bun`, `zmx`, `jj` on PATH; macOS.
 - [ ] At least one live zmx session that is **not** the one this work is being done in.
 
 ### Core Happy Path
+
 - [ ] Launch amoeba, attach to that session, type, see the echo.
 - [ ] Resize the window; the agent reflows and stays correct.
 - [ ] Scroll with the wheel in an alternate-screen agent; the agent scrolls, the
       pane does not type to itself.
 
 ### Edge Cases & Failure Modes
+
 - [ ] Attaching from inside a zmx session does not steal the launching terminal.
 - [ ] The row for amoeba's own launching session is disabled or clearly marked.
 - [ ] Daemon down: the client says so, and says what to do about it.
@@ -265,6 +274,7 @@ stack is either already proven in gdeck or is ordinary.
       stay inside their cells and descenders are not sliced.
 
 ### Reviewer Notes
+
 - Terminal fidelity and latency are **human-verified**, not self-certified.
   Record the numbers the pane reports alongside the observation.
 
@@ -272,14 +282,23 @@ stack is either already proven in gdeck or is ordinary.
 
 Per-unit gates, each run as its own command:
 
-- [ ] `bun install --frozen-lockfile`
-- [ ] `bunx tsc --noEmit`
-- [ ] `bun test`
-- [ ] lint (chosen in the scaffold unit)
+- [ ] `bun run fmt` — oxfmt
+- [ ] `bun run lint` — oxlint
+- [ ] `bun run typecheck` — `tsc --build`
+- [ ] `bun run test` — vitest
+
+`archive/` is excluded from every one of them. oxfmt reformatted 43 files in
+there the first time it ran, which is the one way a reference tree stops being
+a reference.
 
 The Go gates in `archive/` are not run; that tree is reference only.
 
 ## Spec Change Log
+
 - 2026-08-25: Initial draft. Stack pinned against the registry; zmx confirmed as
   session owner; Go confirmed reference-only; gdeck findings recovered from
   history rather than restated from memory.
+- 2026-08-25: Toolchain named rather than deferred — oxlint, oxfmt, vitest,
+  react-doctor. The first scaffold picked Biome unprompted and was abandoned;
+  leaving the choice open in the Validation section is what allowed that, so the
+  stack table now carries the tooling alongside the runtime dependencies.

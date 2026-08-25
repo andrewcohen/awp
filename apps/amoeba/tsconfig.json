@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../.tsbuild/amoeba",
+    "tsBuildInfoFile": "../../.tsbuild/amoeba/.tsbuildinfo",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/server" },
+    { "path": "../../packages/pane" }
+  ]
+}

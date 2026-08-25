@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../.tsbuild/protocol",
+    "tsBuildInfoFile": "../../.tsbuild/protocol/.tsbuildinfo",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}
