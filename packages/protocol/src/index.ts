@@ -492,9 +492,18 @@ export class AwpRpcs extends RpcGroup.make(
    */
   Rpc.make("ThreadStart", {
     payload: {
+      /** What the person typed, in their own words. */
       description: Schema.String,
       project: Schema.String,
-      repo: Schema.String,
+      /**
+       * A directory inside the project — a session's `startDir` will do.
+       *
+       * The daemon turns it into the repository root. The client passes what
+       * it has rather than computing a repo path itself, because `jj root`
+       * answers with a *workspace* inside a secondary workspace and the client
+       * has no way to know the difference. See `Jj.sourceRoot`.
+       */
+      from: Schema.String,
       base: Schema.optional(Schema.String),
     },
     success: ThreadStarted,

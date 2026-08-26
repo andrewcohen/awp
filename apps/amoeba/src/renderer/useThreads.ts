@@ -1,5 +1,5 @@
 import type { Thread } from "@awp-kit/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listThreads } from "./daemon";
 
 // The threads, and a way to say they changed.
@@ -25,6 +25,34 @@ export interface Threads {
   readonly reload: () => void;
 }
 
+/**
+ * Ask the daemon, and report back through the setters.
+ *
+ * Outside the component on purpose. Inside, it would be either a fresh
+ * function each render — which `exhaustive-deps` refuses as an effect
+ * dependency — or a `useCallback`, which react-doctor refuses as manual
+ * memoization in compiler-managed code. Out here it is neither: one function,
+ * one identity, no memoization to argue about.
+ */
+const load = (
+  alive: { readonly current: boolean },
+  setThreads: (found: ReadonlyArray<Thread>) => void,
+  setFailure: (reason: string | undefined) => void,
+): void => {
+  listThreads()
+    .then((found) => {
+      if (alive.current) {
+        setThreads(found);
+        setFailure(undefined);
+      }
+    })
+    .catch((error: unknown) => {
+      if (alive.current) {
+        setFailure(String(error));
+      }
+    });
+};
+
 export function useThreads(): Threads {
   const [threads, setThreads] = useState<ReadonlyArray<Thread>>([]);
   const [failure, setFailure] = useState<string | undefined>();
@@ -32,32 +60,11 @@ export function useThreads(): Threads {
 
   useEffect(() => {
     alive.current = true;
+    load(alive, setThreads, setFailure);
     return () => {
       alive.current = false;
     };
   }, []);
 
-  // The fetch itself is the reload, rather than a counter an effect watches.
-  // A counter works, but it is a dependency the effect never reads — which is
-  // both a lint error and a fair description of the problem with it.
-  const reload = useCallback(() => {
-    listThreads()
-      .then((found) => {
-        if (alive.current) {
-          setThreads(found);
-          setFailure(undefined);
-        }
-      })
-      .catch((error: unknown) => {
-        if (alive.current) {
-          setFailure(String(error));
-        }
-      });
-  }, []);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  return { threads, failure, reload };
+  return { threads, failure, reload: () => load(alive, setThreads, setFailure) };
 }
