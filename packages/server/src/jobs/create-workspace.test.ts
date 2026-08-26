@@ -1,5 +1,6 @@
 import { type Job, Jobs, erase, isTerminal, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import type { CreateWorkspace } from "@awp-kit/protocol";
+import { dirname } from "node:path";
 import { Context, Effect, Layer } from "effect";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Jj } from "../jj";
@@ -54,7 +55,8 @@ const deps = (): WorkspaceDeps => ({
   jj: {
     addWorkspace: ({ name }: { readonly name: string }) => act(`jj.add(${name})`),
     forgetWorkspace: (_repo: string, name: string) => act(`jj.forget(${name})`),
-    setBookmark: (_repo: string, name: string) => act(`jj.bookmark(${name})`),
+    setBookmark: (_repo: string, name: string, revision: string) =>
+      act(`jj.bookmark(${name}@${revision})`),
     deleteBookmark: (_repo: string, name: string) => act(`jj.unbookmark(${name})`),
   } as unknown as Jj["Service"],
 
@@ -74,6 +76,7 @@ const deps = (): WorkspaceDeps => ({
 
   files: {
     exists: (path: string) => Effect.sync(() => present.has(path)),
+    makeDirectory: (path: string) => act(`mkdir(${path})`),
     remove: (path: string) => act(`rm(${path})`),
   },
 });
@@ -120,13 +123,22 @@ const make = (over: Partial<CreateWorkspace> = {}) =>
   );
 
 describe("making a workspace", () => {
+  test("the bookmark points at the workspace's working copy, not its name", async () => {
+    // `<name>@` is jj's revset for a workspace's working-copy commit. A bare
+    // workspace name is not a revision, which the first end-to-end run of this
+    // job established in jj's own words.
+    await make();
+    expect(trace).toContain("jj.bookmark(andrew/tabular-exports@tabular-exports@)");
+  });
+
   test("the four steps run in order", async () => {
     const job = await make();
 
     expect(job.status).toBe("succeeded");
     expect(trace).toEqual([
+      "mkdir(" + dirname(workspacePath("thicket", "tabular-exports")) + ")",
       "jj.add(tabular-exports)",
-      "jj.bookmark(andrew/tabular-exports)",
+      "jj.bookmark(andrew/tabular-exports@tabular-exports@)",
       "zmx.start(awp.thicket.tabular-exports.agent)",
       "zmx.label(awp.thicket.tabular-exports.agent:tabular-exports)",
       "thread.claim(20260826-aaaa:tabular-exports)",
@@ -180,8 +192,9 @@ describe("when a step fails", () => {
     // Backwards, and only over what completed. The session never finished, so
     // there is nothing of it to kill.
     expect(trace).toEqual([
+      "mkdir(" + dirname(workspacePath("thicket", "tabular-exports")) + ")",
       "jj.add(tabular-exports)",
-      "jj.bookmark(andrew/tabular-exports)",
+      "jj.bookmark(andrew/tabular-exports@tabular-exports@)",
       "zmx.start(awp.thicket.tabular-exports.agent)!",
       "jj.unbookmark(andrew/tabular-exports)",
       "jj.forget(tabular-exports)",
@@ -193,7 +206,7 @@ describe("when a step fails", () => {
     // One attempt, deliberately. Every failure this job can have is a refusal —
     // a name taken, a directory occupied — and none of them pass on their own,
     // so a retry only delays the rollback a person is waiting for.
-    breaking.add("jj.bookmark(andrew/tabular-exports)");
+    breaking.add("jj.bookmark(andrew/tabular-exports@tabular-exports@)");
     const job = await make();
 
     expect(job.attempts).toBe(1);
@@ -236,6 +249,21 @@ describe("undoing the workspace", () => {
 
     expect(trace).toContain("jj.forget(tabular-exports)");
     expect(trace.some((line) => line.startsWith("rm("))).toBe(false);
+  });
+});
+
+describe("the parent directory", () => {
+  test("is made before jj is asked, because jj will not", async () => {
+    // Found by the first end-to-end run, not by a test: `jj workspace add`
+    // creates the workspace directory but refuses when the directory above it
+    // is missing. Every project's *first* workspace would have failed.
+    await make();
+
+    const parent = dirname(workspacePath("thicket", "tabular-exports"));
+    expect(trace.indexOf(`mkdir(${parent})`)).toBe(0);
+    expect(trace.indexOf(`mkdir(${parent})`)).toBeLessThan(
+      trace.indexOf("jj.add(tabular-exports)"),
+    );
   });
 });
 

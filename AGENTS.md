@@ -432,6 +432,33 @@ Workspaces go at `~/.awp/workspaces/<project>/<workspace>`, which is not a free
 choice — `suggestedBy` in `multiplexer.ts` recovers a session's identity from
 exactly that shape when it carries no labels.
 
+**Two things only the first end-to-end run found**, and neither was reachable
+by a test against fakes:
+
+```
+  jj workspace add  makes the workspace directory, and refuses when the
+                    directory ABOVE it is missing. Every project's first
+                    workspace would have failed.
+
+  bookmark set -r   takes a revision. A workspace NAME is not one —
+                    `<name>@` is jj's revset for its working-copy commit.
+                    jj said so itself: Revision `probe-1` doesn't exist.
+```
+
+`bun run probe:workspace` is what found them: a throwaway jj repo, a real
+workspace, a real session, checked from outside and then cleaned up. Run it
+after touching the job — the unit tests prove the _order_ of the steps and the
+order they are undone in, which is what fakes are good for, and nothing else.
+
+That probe **does not refuse to run inside a zmx session**, unlike the others,
+and the reason is worth reading before copying either pattern. The session is
+created by the daemon, which is already outside one; what the probe itself runs
+is `zmx ls` and `zmx get`, which are read-only, and one `zmx kill` that names
+the session it made. So the guard is on the property that matters — `ours()`
+rejects any name outside `awp.awp-probe.*` — which is stronger than a refusal,
+not weaker. A blanket refusal would have been easier to write and would have
+guarded the wrong thing.
+
 **Sessions are started with `zmx run -d`, never `zmx attach`.** Attaching is how
 an interactive caller makes a session, and a session takes its size from
 whoever is looking at it — a daemon attaching to create one would size a
