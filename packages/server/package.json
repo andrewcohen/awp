@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "@awp-kit/protocol": "workspace:*",
-    "@effect/platform-node-shared": "4.0.0-rc.112",
+    "@effect/platform-node-shared": "catalog:",
     "bun-pty": "0.4.10",
-    "effect": "4.0.0-rc.112"
+    "effect": "catalog:"
   }
 }
