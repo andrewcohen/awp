@@ -1,0 +1,556 @@
+import type { Effort } from "@awp-kit/protocol";
+import { Dialog } from "@base-ui/react/dialog";
+import { Select } from "@base-ui/react/select";
+import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
+import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
+import { FolderIcon } from "@phosphor-icons/react/Folder";
+import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
+import * as stylex from "@stylexjs/stylex";
+import { useState } from "react";
+import { startThread } from "./daemon";
+import { colors, text } from "./tokens.stylex";
+import type { Project } from "./workspaces";
+
+// Starting a thread: a composer, not a form.
+//
+// The shape is a chat message box, and that is the whole design decision. What
+// a person supplies here is one piece of prose — everything else on the screen
+// is a setting *about* that prose, and settings framed as form fields make the
+// prose look like one field among six. Framed as a composer, the sentence is
+// the screen and the settings are furniture around it:
+//
+//   ┌──────────────────────────────────────────────┐
+//   │  ▤ awp ▾    ⑂ trunk ▾                        │  where it lands
+//   ├──────────────────────────────────────────────┤
+//   │  ┌──────────────────────────────┐   ┌────┐   │
+//   │  │ what are you working on?     │   │ ↑  │   │  the thing you write
+//   │  └──────────────────────────────┘   └────┘   │
+//   ├──────────────────────────────────────────────┤
+//   │  opus ▾   high ▾               naming it…    │  how it runs
+//   └──────────────────────────────────────────────┘
+//
+// The two bars are not the same kind of thing and are not interchangeable.
+// The top one is about the *result* — which project, which revision — and is
+// read before typing. The bottom one is about the *agent*, and is read rarely
+// because the config already answers it. Destination above, machinery below; a
+// setting that moved between them would be in the wrong one.
+//
+// ── what this replaced ─────────────────────────────────────────────────────
+// An inline box in the sidebar with a single field. The project came from
+// whichever row was selected, so starting a thread in a project meant first
+// clicking a workspace in it — and with nothing selected the button was
+// disabled outright, which is a dead end on a freshly opened window.
+//
+// ── Base UI, and why every control here is one ─────────────────────────────
+// Dialog and Select ship no styles; what they ship is the behaviour. The
+// dialog traps focus, restores it on close, closes on Escape and makes the
+// rest of the page inert. The chips own arrow keys, typeahead, the
+// `aria-expanded`/`aria-activedescendant` wiring, and the portal that keeps a
+// popup from being clipped by whatever it opens inside.
+//
+// Appearance stays StyleX. See AGENTS.md: Base UI for behaviour, StyleX for
+// how it looks, and no third thing.
+
+/** Everything `claude --effort` accepts, in the order it reads as a scale. */
+const EFFORTS: ReadonlyArray<Effort> = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * The aliases, not the full ids.
+ *
+ * `--model` takes either, and a chip is not the place for `claude-opus-5`. A
+ * pinned full id is still reachable through the config, which is where a
+ * decision that outlives one thread belongs anyway.
+ */
+const MODELS: ReadonlyArray<string> = ["opus", "sonnet", "haiku"];
+
+/**
+ * The sentinel for "whatever the config says".
+ *
+ * Deliberately not any real value: choosing nothing has to be different from
+ * choosing the same thing the config chose, or the config could never win. It
+ * becomes `undefined` on the wire, which is what `agentWith` reads as "leave
+ * the argv alone".
+ */
+const INHERIT = "";
+
+/** jj's revset for the project's main line. See the chip's title. */
+const TRUNK = "trunk()";
+
+/** What the window knew when the modal was opened. */
+export interface NewThreadRequest {
+  /** Which project to open on — the selected row's, when there is one. */
+  readonly project: string | undefined;
+  /**
+   * The revset for the workspace being looked at, if any.
+   *
+   * Offered either way; this only decides which one the chip starts on. cmd+N
+   * starts on trunk, cmd+shift+N on this.
+   */
+  readonly workspaceBase: string | undefined;
+  /** True when opened with cmd+shift+N, which asks for the workspace base. */
+  readonly fromWorkspace: boolean;
+}
+
+const styles = stylex.create({
+  // Dimmed rather than blurred. The window behind is a terminal, and blurring
+  // legible text is a way of making it look broken.
+  backdrop: { position: "fixed", inset: 0, backgroundColor: "rgba(0, 0, 0, 0.4)" },
+
+  popup: {
+    position: "fixed",
+    // Above centre. A dialog centred exactly reads as low, because the eye
+    // takes the middle of a window to be above its middle.
+    top: "38%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    display: "flex",
+    flexDirection: "column",
+    width: "min(38rem, calc(100vw - 4rem))",
+    backgroundColor: colors.base,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.5rem",
+    color: colors.text,
+    fontFamily: text.mono,
+    fontSize: text.body,
+    boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
+    // No padding of its own. Each band pads itself, so the rules between them
+    // run the full width — a rule stopping short of the edge reads as a
+    // mistake rather than as a division.
+  },
+
+  // The accessible name. On screen the chips already say where it lands and
+  // the placeholder says what to do, so a heading would be a fourth band
+  // repeating both — but a dialog with no name is one a screen reader
+  // announces as nothing at all.
+  hidden: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    margin: -1,
+    padding: 0,
+    overflow: "hidden",
+    clipPath: "inset(50%)",
+    whiteSpace: "nowrap",
+  },
+
+  bar: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    flexShrink: 0,
+    padding: "0.45rem 0.6rem",
+  },
+  barTop: { borderBottomWidth: 1, borderBottomStyle: "solid", borderBottomColor: colors.border },
+  barBottom: { borderTopWidth: 1, borderTopStyle: "solid", borderTopColor: colors.border },
+
+  // A chip: the control reduced to its value. No box, no label, no fixed
+  // width — the row reads as a phrase about where this is going rather than as
+  // a set of inputs, and the border appears only when it is pointed at.
+  chip: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.3rem",
+    padding: "0.15rem 0.4rem",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: { default: "transparent", ":hover": colors.border },
+    borderRadius: "0.25rem",
+    color: colors.text,
+    font: "inherit",
+    fontSize: text.small,
+    cursor: "pointer",
+  },
+  chipIcon: { flexShrink: 0, color: colors.muted },
+  chipCaret: { flexShrink: 0, color: colors.muted, opacity: 0.7 },
+  // The bottom bar's pair are the quieter ones while they say nothing but
+  // their own name. Choosing a value is what makes one worth noticing.
+  chipQuiet: { color: colors.muted },
+
+  // The composer. Aligned to the bottom, so the button stays beside the last
+  // line as the box grows rather than floating beside the first.
+  composer: {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: "0.5rem",
+    padding: "0.6rem",
+  },
+  brief: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: "3.5rem",
+    maxHeight: "14rem",
+    padding: "0.25rem",
+    backgroundColor: "transparent",
+    // Borderless on purpose: the popup's own edge is the box. A border here
+    // would be a box inside a box, which is what made the first attempt read
+    // as a form.
+    borderStyle: "none",
+    outlineStyle: "none",
+    resize: "none",
+    color: colors.text,
+    font: "inherit",
+    fontSize: text.body,
+    lineHeight: 1.5,
+  },
+  send: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    width: "1.9rem",
+    height: "1.9rem",
+    padding: 0,
+    backgroundColor: colors.border,
+    borderStyle: "none",
+    borderRadius: "0.95rem",
+    color: colors.text,
+    cursor: "pointer",
+  },
+  sendShut: { opacity: 0.35, cursor: "default" },
+
+  // Takes the slack in the bottom bar, so the chips stay left whatever it says.
+  status: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    textAlign: "right",
+    color: colors.muted,
+    fontSize: text.tiny,
+  },
+  warn: { color: colors.warn },
+
+  positioner: { zIndex: 10 },
+  menu: {
+    padding: "0.2rem",
+    backgroundColor: colors.base,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.25rem",
+    color: colors.text,
+    fontFamily: text.mono,
+    fontSize: text.small,
+    boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.3)",
+  },
+  item: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    padding: "0.2rem 0.4rem",
+    borderRadius: "0.15rem",
+    cursor: "pointer",
+    // Base UI sets the attribute; what it looks like is this file's business.
+    ":is([data-highlighted])": { backgroundColor: colors.border },
+  },
+  tick: { width: "0.75rem", flexShrink: 0, color: colors.muted, fontSize: text.tiny },
+  empty: { padding: "1rem", color: colors.muted, fontSize: text.small, lineHeight: 1.5 },
+});
+
+/**
+ * A value, as a chip that opens a list.
+ *
+ * One component for all four, because four copies of the
+ * portal/positioner/popup stack is four chances for one of them to be spelled
+ * differently — and the one that differs is the one whose popup gets clipped.
+ */
+function Chip<T extends string>({
+  id,
+  label,
+  title,
+  value,
+  onChange,
+  options,
+  icon,
+  quiet,
+  disabled,
+}: {
+  readonly id: string;
+  /** What the chip reads as, which is not always the raw value. */
+  readonly label: string;
+  readonly title: string;
+  readonly value: T;
+  readonly onChange: (value: T) => void;
+  /** In the order they should be read. */
+  readonly options: ReadonlyArray<{ readonly value: T; readonly label: string }>;
+  readonly icon?: React.ReactNode | undefined;
+  readonly quiet?: boolean | undefined;
+  readonly disabled?: boolean | undefined;
+}) {
+  return (
+    <Select.Root
+      value={value}
+      // Base UI types the value as whatever it was given, so it arrives here
+      // unnarrowed. This is the only cast on the screen, and it is here rather
+      // than at four call sites: every value the popup can emit came out of
+      // `options`, so T is exactly what it is.
+      onValueChange={(next) => onChange(String(next) as T)}
+      disabled={disabled ?? false}
+    >
+      <Select.Trigger
+        id={id}
+        title={title}
+        {...stylex.props(styles.chip, quiet === true && styles.chipQuiet)}
+      >
+        {icon}
+        {/* The chip shows the label, which for a revset is not the value —
+            `trunk()` is spelled `trunk` here and the title says the rest. */}
+        <span>{label}</span>
+        <CaretDownIcon size={9} weight="bold" {...stylex.props(styles.chipCaret)} />
+      </Select.Trigger>
+
+      {/* Portalled, so nothing it opens inside can clip it. */}
+      <Select.Portal>
+        <Select.Positioner sideOffset={4} align="start" {...stylex.props(styles.positioner)}>
+          <Select.Popup {...stylex.props(styles.menu)}>
+            {options.map((option) => (
+              <Select.Item key={option.value} value={option.value} {...stylex.props(styles.item)}>
+                <Select.ItemIndicator {...stylex.props(styles.tick)}>✓</Select.ItemIndicator>
+                <Select.ItemText>{option.label}</Select.ItemText>
+              </Select.Item>
+            ))}
+          </Select.Popup>
+        </Select.Positioner>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
+/**
+ * The composer. Mounted when the dialog opens, unmounted when it closes.
+ *
+ * That is what makes `useState` initialisers the right place for the defaults:
+ * they run exactly when the modal is opened, so cmd+shift+N's base and the
+ * selected row's project are read at the moment they were meant. An effect
+ * syncing them would be a second source for the same values, and the two would
+ * disagree the first time the selection moved with the modal open.
+ */
+function Composer({
+  request,
+  projects,
+  onClose,
+  onStarted,
+}: {
+  readonly request: NewThreadRequest;
+  readonly projects: ReadonlyArray<Project>;
+  readonly onClose: () => void;
+  readonly onStarted: () => void;
+}) {
+  const first = projects[0]?.name ?? "";
+  const [project, setProject] = useState(
+    projects.some((p) => p.name === request.project) ? (request.project ?? first) : first,
+  );
+  const [typed, setTyped] = useState("");
+  // The revset itself, not a mode. `trunk()` and `<name>@` are both revsets and
+  // the daemon takes one; a mode would have to be translated at the call site,
+  // which is one more place for `<name>@` to be spelled as `<name>`.
+  const [base, setBase] = useState(
+    request.fromWorkspace && request.workspaceBase !== undefined ? request.workspaceBase : TRUNK,
+  );
+  const [model, setModel] = useState(INHERIT);
+  const [effort, setEffort] = useState<Effort | typeof INHERIT>(INHERIT);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | undefined>();
+
+  const from = projects.find((p) => p.name === project)?.from;
+  const described = typed.trim();
+  const ready = from !== undefined && described !== "" && !busy;
+
+  const submit = () => {
+    if (!ready) {
+      return;
+    }
+    setBusy(true);
+    setFailure(undefined);
+    startThread({
+      description: described,
+      project,
+      from,
+      base,
+      model: model === INHERIT ? undefined : model,
+      effort: effort === INHERIT ? undefined : effort,
+    })
+      .then(() => {
+        onStarted();
+        onClose();
+      })
+      .catch((error: unknown) => {
+        setFailure(String(error));
+        setBusy(false);
+      });
+  };
+
+  if (projects.length === 0) {
+    return (
+      <div {...stylex.props(styles.empty)}>
+        No projects yet. awp finds them from the sessions it already knows about, so there is
+        nothing to start a thread in until one exists.
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* Where it lands. Read before typing, which is why it is above. */}
+      <div {...stylex.props(styles.bar, styles.barTop)}>
+        <Chip
+          id="new-thread-project"
+          label={project}
+          title="the project the workspace is made in"
+          value={project}
+          onChange={setProject}
+          options={projects.map((p) => ({ value: p.name, label: p.name }))}
+          icon={<FolderIcon size={11} {...stylex.props(styles.chipIcon)} />}
+          disabled={busy}
+        />
+        <Chip
+          id="new-thread-base"
+          // `trunk()` is a revset and reads as machinery on a chip, so it is
+          // spelled `trunk` and the title says the rest. The workspace option
+          // is shown verbatim, because `amoeba@` *is* how a person names it.
+          label={base === TRUNK ? "trunk" : base}
+          title={
+            base === TRUNK
+              ? "trunk() — jj resolves the remote's default bookmark, then main, master, trunk"
+              : `${base} — the working copy of the workspace you are in`
+          }
+          value={base}
+          onChange={setBase}
+          options={[
+            { value: TRUNK, label: "trunk — the project's main line" },
+            ...(request.workspaceBase === undefined
+              ? []
+              : [
+                  {
+                    value: request.workspaceBase,
+                    label: `${request.workspaceBase} — the workspace you are in`,
+                  },
+                ]),
+          ]}
+          icon={<GitBranchIcon size={11} {...stylex.props(styles.chipIcon)} />}
+          disabled={busy}
+        />
+      </div>
+
+      {/* The thing you write, and the one button that acts on it. */}
+      <div {...stylex.props(styles.composer)}>
+        <textarea
+          // Focus on mount, which is the moment the modal opened. A callback
+          // ref rather than `autoFocus`, which react-doctor flags because the
+          // attribute fires on any render the element mounts in.
+          ref={(node) => node?.focus()}
+          value={typed}
+          disabled={busy}
+          rows={2}
+          placeholder="what are you working on?"
+          onChange={(event) => setTyped(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter sends and shift+enter is a newline, which is the chat
+            // convention this box is shaped like — and the same rule the pane
+            // already follows for the agent's own prompt. A brief is usually
+            // one sentence; the newline is there for when it is not.
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          {...stylex.props(styles.brief)}
+        />
+        <button
+          type="button"
+          disabled={!ready}
+          title={ready ? "start the thread (enter)" : "say what you are working on first"}
+          aria-label="start the thread"
+          onClick={submit}
+          {...stylex.props(styles.send, !ready && styles.sendShut)}
+        >
+          <ArrowUpIcon size={13} weight="bold" />
+        </button>
+      </div>
+
+      {/* How it runs. Read rarely, because the config already answers it. */}
+      <div {...stylex.props(styles.bar, styles.barBottom)}>
+        <Chip
+          id="new-thread-model"
+          label={model === INHERIT ? "model" : model}
+          title="which model the agent runs, or the one the config already names"
+          value={model}
+          onChange={setModel}
+          options={[
+            { value: INHERIT, label: "from settings" },
+            ...MODELS.map((name) => ({ value: name, label: name })),
+          ]}
+          quiet={model === INHERIT}
+          disabled={busy}
+        />
+        <Chip
+          id="new-thread-effort"
+          label={effort === INHERIT ? "effort" : effort}
+          title="how hard the agent is asked to think"
+          value={effort}
+          onChange={setEffort}
+          options={[
+            { value: INHERIT, label: "from settings" },
+            ...EFFORTS.map((level) => ({ value: level, label: level })),
+          ]}
+          quiet={effort === INHERIT}
+          disabled={busy}
+        />
+
+        <div {...stylex.props(styles.status, failure !== undefined && styles.warn)}>
+          {/* "naming it" is what the ten seconds actually are — a model turning
+              the brief into a workspace name — and saying so is what makes the
+              wait read as work rather than as a hang. */}
+          {failure ?? (busy ? "naming it…" : "")}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The dialog, mounted only while it is open.
+ *
+ * Mount-on-open rather than a `keepMounted` popup, and it is the same decision
+ * as the one in `Composer`'s doc comment seen from outside: a modal that exists
+ * while shut is a modal holding what was typed into it last time. What it gives
+ * up is an exit animation, which this window has nowhere else.
+ */
+export function NewThread({
+  request,
+  projects,
+  onClose,
+  onStarted,
+}: {
+  readonly request: NewThreadRequest | undefined;
+  readonly projects: ReadonlyArray<Project>;
+  readonly onClose: () => void;
+  readonly onStarted: () => void;
+}) {
+  if (request === undefined) {
+    return null;
+  }
+
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(next) => {
+        if (!next) {
+          onClose();
+        }
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
+        <Dialog.Popup {...stylex.props(styles.popup)}>
+          <Dialog.Title {...stylex.props(styles.hidden)}>new thread</Dialog.Title>
+          <Composer request={request} projects={projects} onClose={onClose} onStarted={onStarted} />
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

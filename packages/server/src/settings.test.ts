@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
-import { DEFAULTS, SETTINGS_FILE, Settings, layer } from "./settings";
+import {
+  type AwpSettings,
+  DEFAULTS,
+  SETTINGS_FILE,
+  Settings,
+  agentWith,
+  layer,
+  withFlag,
+} from "./settings";
 
 // What a person configured, read back.
 //
@@ -92,5 +100,78 @@ describe("settings", () => {
     // would silently change which agent launches, and that would not look like
     // a settings problem.
     expect(SETTINGS_FILE).toMatch(/\/\.config\/awp\/config\.json$/u);
+  });
+});
+
+// ── the modal's overrides ──────────────────────────────────────────────────
+//
+// The property under test is *replacement*, not appending. Every case below is
+// a configured agent that already says something the modal also says.
+
+const config = (agent: ReadonlyArray<string>): AwpSettings => ({ ...DEFAULTS, agent });
+
+describe("agentWith", () => {
+  test("chooses nothing, and the config is untouched", () => {
+    const argv = ["claude", "--permission-mode", "auto", "--model", "opus"];
+    expect(agentWith(config(argv), {})).toEqual(argv);
+    expect(agentWith(config(argv), { model: undefined, effort: undefined })).toEqual(argv);
+  });
+
+  test("replaces a model the config already chose, rather than following it", () => {
+    expect(
+      agentWith(config(["claude", "--permission-mode", "auto", "--model", "opus"]), {
+        model: "sonnet",
+      }),
+    ).toEqual(["claude", "--permission-mode", "auto", "--model", "sonnet"]);
+  });
+
+  test("replaces the joined spelling in place", () => {
+    expect(agentWith(config(["claude", "--model=opus"]), { model: "haiku" })).toEqual([
+      "claude",
+      "--model=haiku",
+    ]);
+  });
+
+  test("appends a flag the config does not have", () => {
+    expect(agentWith(config(["claude", "--model", "opus"]), { effort: "high" })).toEqual([
+      "claude",
+      "--model",
+      "opus",
+      "--effort",
+      "high",
+    ]);
+  });
+
+  test("both at once", () => {
+    expect(
+      agentWith(config(["claude", "--model", "opus", "--effort", "low"]), {
+        model: "sonnet",
+        effort: "max",
+      }),
+    ).toEqual(["claude", "--model", "sonnet", "--effort", "max"]);
+  });
+
+  // A config that names a flag and leaves its value out. Overwriting the next
+  // element would silently drop `--verbose`, which is a different command than
+  // the one anybody asked for.
+  test("inserts rather than overwriting when the flag has no value", () => {
+    expect(withFlag(["claude", "--model", "--verbose"], "--model", "opus")).toEqual([
+      "claude",
+      "--model",
+      "opus",
+      "--verbose",
+    ]);
+    expect(withFlag(["claude", "--model"], "--model", "opus")).toEqual([
+      "claude",
+      "--model",
+      "opus",
+    ]);
+  });
+
+  // Not reachable through `parse`, which always yields at least `claude`. Here
+  // because the alternative is producing an argv whose first element is a flag
+  // — a command that cannot run, from a function that cannot say so.
+  test("an empty argv gains nothing", () => {
+    expect(withFlag([], "--model", "opus")).toEqual([]);
   });
 });

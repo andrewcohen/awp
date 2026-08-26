@@ -216,3 +216,67 @@ export const groupByThread = (
         { key: "\u0000loose", title: "not in a thread", thread: undefined, workspaces: loose },
       ];
 };
+
+// ── what the new-thread modal needs to know ────────────────────────────────
+
+/**
+ * A project the window knows about, and a directory inside it.
+ *
+ * Derived from the sessions rather than from a configured list of roots, which
+ * is a real limit and is stated here rather than hidden: a project awp has
+ * never opened a session in does not appear, so the very first thread on a
+ * machine still cannot be started from this window. The config's
+ * `deck.project_roots` is what fixes that, and it is deliberately not read yet.
+ *
+ * What this does buy is the thing the inline box got wrong. There, the project
+ * came from whichever row was *selected*, so starting a thread meant first
+ * clicking a workspace in a different project than the one you wanted. A picker
+ * over everything known is a list a person can choose from, and a selected row
+ * merely decides which entry it opens on.
+ */
+export type Project = {
+  readonly name: string;
+  /**
+   * A directory inside the project. The daemon turns it into the repository
+   * root with `Jj.sourceRoot` — a client cannot, because `jj root` inside a
+   * secondary workspace answers with the workspace.
+   */
+  readonly from: string;
+};
+
+/**
+ * Every project the sessions name, each with a directory to resolve it from.
+ *
+ * A session with no `startDir` cannot answer "which repository", so it names a
+ * project and contributes nothing else; a project whose sessions *all* lack one
+ * is dropped rather than offered as an entry that cannot work.
+ */
+export const projectsOf = (sessions: ReadonlyArray<SessionInfo>): ReadonlyArray<Project> => {
+  const found = new Map<string, string>();
+  for (const session of sessions) {
+    const project = session.identity?.project;
+    const from = session.startDir;
+    if (project === undefined || project === "" || from === undefined || from === "") {
+      continue;
+    }
+    if (!found.has(project)) {
+      found.set(project, from);
+    }
+  }
+  return [...found]
+    .map(([name, from]) => ({ name, from }))
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+};
+
+/**
+ * The revset for "start from this workspace", or undefined if there is none.
+ *
+ * `<name>@` is jj's revset for a workspace's working-copy commit. A workspace
+ * *name* is not a revision and jj says so — `Revision 'probe-1' doesn't exist`
+ * — which is a mistake this codebase has already made once, at the cost of a
+ * whole end-to-end run.
+ */
+export const baseOf = (session: SessionInfo | undefined): string | undefined => {
+  const workspace = session?.identity?.workspace;
+  return workspace === undefined || workspace === "" ? undefined : `${workspace}@`;
+};

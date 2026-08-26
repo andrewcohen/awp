@@ -171,6 +171,29 @@ export class ThreadStartFailed extends Schema.TaggedError<ThreadStartFailed>()(
 ) {}
 
 /**
+ * How hard the agent is asked to think.
+ *
+ * A union rather than a string, because these five are `claude --effort`'s
+ * whole vocabulary — the CLI rejects anything else, and a typo that reached the
+ * daemon would become a session that dies on its first line rather than a
+ * message anyone can read. Absent means whatever the configured agent command
+ * already says, which is the case that must stay expressible.
+ */
+export const Effort = Schema.Literals(["low", "medium", "high", "xhigh", "max"]);
+
+export type Effort = (typeof Effort)["Type"];
+
+/**
+ * Which model the agent runs.
+ *
+ * A string and *not* a union, unlike {@link Effort}, and the asymmetry is
+ * deliberate: `--model` takes an alias (`opus`) or a full id (`claude-opus-5`),
+ * and both sets move faster than this file does. A union here would refuse a
+ * model that exists.
+ */
+export const Model = Schema.String;
+
+/**
  * What making a workspace needs to know.
  *
  * The one input a person actually supplies is `workspace` — the rest is the
@@ -505,6 +528,17 @@ export class AwpRpcs extends RpcGroup.make(
        */
       from: Schema.String,
       base: Schema.optional(Schema.String),
+      /**
+       * What the agent runs with, or absent for what the config says.
+       *
+       * These are *overrides*, not the whole command. The agent argv lives in
+       * the config — `claude --permission-mode auto --model opus` — and a
+       * chosen model has to replace the `--model` already in it rather than
+       * follow it, because two of a flag is a thing the CLI resolves by a rule
+       * nobody here should be relying on. See `agentWith` in settings.ts.
+       */
+      model: Schema.optional(Model),
+      effort: Schema.optional(Effort),
     },
     success: ThreadStarted,
     error: ThreadStartFailed,

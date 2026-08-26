@@ -23,7 +23,7 @@ import { Effect, Stream } from "effect";
 import { WorkspaceIntent } from "./intent";
 import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
-import { Settings } from "./settings";
+import { Settings, agentWith } from "./settings";
 import { demo } from "./jobs/demo";
 import { Threads } from "./threads";
 import { refusalFor } from "./attachment";
@@ -182,7 +182,7 @@ export const layer = AwpRpcs.toLayer(
        * answers, so a failed resolve leaves nothing behind — an empty thread
        * called "add tiered dis…" would be litter a person then has to tidy.
        */
-      ThreadStart: ({ description, project, from, base }) =>
+      ThreadStart: ({ description, project, from, base, model, effort }) =>
         Effect.gen(function* () {
           // A directory into the repository it belongs to. `jj root` would
           // answer with a workspace, which is the wrong thing to create a
@@ -214,7 +214,7 @@ export const layer = AwpRpcs.toLayer(
                 settings.bookmarkPrefix === undefined
                   ? undefined
                   : `${settings.bookmarkPrefix}/${resolved.name}`,
-              agent: settings.agent,
+              agent: agentWith(settings, { model, effort }),
             })
             .pipe(Effect.orDie);
 

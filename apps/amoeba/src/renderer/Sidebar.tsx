@@ -1,7 +1,5 @@
-import type { SessionInfo } from "@awp-kit/protocol";
+import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
-import { useState } from "react";
-import { startThread } from "./daemon";
 import { colors, space, text } from "./tokens.stylex";
 import {
   PRIMARY,
@@ -11,7 +9,6 @@ import {
   groupByWorkspace,
   openable,
 } from "./workspaces";
-import { useThreads } from "./useThreads";
 
 // The list of workspaces, and which of them can be opened.
 //
@@ -124,10 +121,6 @@ const styles = stylex.create({
     fontSize: text.small,
     cursor: "pointer",
   },
-  newThreadBox: { margin: `0.2rem ${space.gutter} 0.5rem` },
-  newThreadShut: { opacity: 0.4, cursor: "default" },
-  hint: { padding: "0.15rem 0.1rem", color: colors.muted, fontSize: text.tiny },
-  warn: { padding: "0.15rem 0.1rem", color: colors.warn, fontSize: text.tiny },
   newThread: {
     margin: `0.2rem ${space.gutter} 0.5rem`,
     padding: "0.15rem 0.45rem",
@@ -348,124 +341,23 @@ function Group({
   );
 }
 
-/**
- * Start a thread: type what you are doing, and everything else is worked out.
- *
- * One field, deliberately. A model turns the sentence into a workspace name, a
- * title and an instruction for the agent; the project and the repository come
- * from whichever row is selected. What a person supplies is the only thing
- * nothing else can know.
- *
- * ── it takes about ten seconds, and says so ────────────────────────────────
- * The model call happens in the daemon before the job is enqueued, because
- * four of the job's five steps need the name and a job's input is what makes
- * it retryable. So this box waits, and shows that it is waiting. What it does
- * *not* do is wait for the workspace — that is the job's, and the jobs panel
- * is where it appears.
- */
-function NewThread({
-  from,
-  project,
-  onStarted,
-}: {
-  readonly from: string | undefined;
-  readonly project: string | undefined;
-  readonly onStarted: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string | undefined>();
-
-  // Nothing to create *into*. The project and the repository are read off the
-  // selected row, so with nothing selected there is no answer — said plainly
-  // rather than offering a box that cannot work.
-  const ready = from !== undefined && project !== undefined;
-
-  const submit = () => {
-    const described = typed.trim();
-    if (described === "" || !ready || busy) {
-      return;
-    }
-    setBusy(true);
-    setFailure(undefined);
-    startThread({ description: described, project, from, base: undefined })
-      .then(() => {
-        setTyped("");
-        setBusy(false);
-        setOpen(false);
-        onStarted();
-      })
-      .catch((error: unknown) => {
-        setFailure(String(error));
-        setBusy(false);
-      });
-  };
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        disabled={!ready}
-        title={
-          ready ? `new thread in ${project}` : "select a row first — a thread starts in a project"
-        }
-        onClick={() => setOpen(true)}
-        {...stylex.props(styles.newThread, !ready && styles.newThreadShut)}
-      >
-        + thread
-      </button>
-    );
-  }
-
-  return (
-    <div {...stylex.props(styles.newThreadBox)}>
-      <input
-        // A callback ref rather than `autoFocus`, which react-doctor flags: the
-        // attribute moves focus on any render the element mounts in, where this
-        // moves it exactly when the box was opened — the moment a person
-        // pressed a button expecting to type.
-        ref={(node) => node?.focus()}
-        value={typed}
-        disabled={busy}
-        placeholder="what are you working on?"
-        onChange={(event) => setTyped(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            submit();
-          }
-          if (event.key === "Escape" && !busy) {
-            setOpen(false);
-          }
-        }}
-        {...stylex.props(styles.newThread)}
-      />
-      {busy && <div {...stylex.props(styles.hint)}>naming it…</div>}
-      {failure !== undefined && <div {...stylex.props(styles.warn)}>{failure}</div>}
-      {!busy && failure === undefined && <div {...stylex.props(styles.hint)}>in {project}</div>}
-    </div>
-  );
-}
-
 export function Sidebar({
   sessions,
+  threads,
   selected,
   onSelect,
+  onNew,
   failure,
 }: {
   readonly sessions: ReadonlyArray<SessionInfo>;
+  readonly threads: ReadonlyArray<Thread>;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  /** Open the new-thread modal. The window owns it — see App.tsx. */
+  readonly onNew: () => void;
   readonly failure: string | undefined;
 }) {
-  const { threads, reload } = useThreads();
   const groups = groupByThread(threads, groupByWorkspace(sessions));
-
-  // Where a new thread would start. The project and the repository come from
-  // whichever row is selected — there is no list of projects, so a selected
-  // session is the only thing that answers "which one". `startDir` is a real
-  // directory inside it, which the daemon turns into a repository root.
-  const here = sessions.find((session) => session.name === selected);
 
   // The two states of the column, chosen before the markup rather than inside
   // it. A daemon that is not running is the ordinary case during development,
@@ -493,9 +385,21 @@ export function Sidebar({
       {/* Outside the scrolling list, so it is always there. Inside it, and
           below the groups, it sat at y=1056 in a 760-tall window — the entry
           point to the whole feature, reachable only by scrolling past
-          everything it exists to create. */}
+          everything it exists to create.
+
+          Never disabled any more. It used to be, because the project came from
+          the selected row and nothing selected meant nothing to create into;
+          the modal picks a project instead, so the button always has an
+          answer. */}
       {failure === undefined && (
-        <NewThread from={here?.startDir} project={here?.identity?.project} onStarted={reload} />
+        <button
+          type="button"
+          title="new thread (⌘N)"
+          onClick={onNew}
+          {...stylex.props(styles.newThread)}
+        >
+          + thread
+        </button>
       )}
       <div {...stylex.props(styles.list)}>{body}</div>
     </div>
