@@ -1,5 +1,6 @@
 import { isTerminal } from "@awp-kit/jobs";
 import * as stylex from "@stylexjs/stylex";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
 import { BottomBar, TopBar } from "./Bars";
@@ -7,13 +8,15 @@ import { Divider } from "./Divider";
 import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
-import { type Collapsed, fitColumns } from "./columns";
+import { addressFrom, addressOf, pathOf, sessionAt } from "./address";
+import { type Collapsed, type Columns, fitColumns } from "./columns";
 import { projectsOf } from "./workspaces";
 import {
   rememberCollapsed,
-  rememberSession,
+  rememberPlace,
+  rememberWidths,
   rememberedCollapsed,
-  rememberedSession,
+  rememberedWidths,
 } from "./remembered";
 import { rendererFixture } from "./fixture";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
@@ -70,8 +73,23 @@ export function App() {
   // What was asked for, not what was granted. fitColumns squeezes a column when
   // the window cannot hold it, and storing the squeezed result would make that
   // permanent: widening the window back would leave the column where the
-  // narrowest moment put it. See columns.ts.
-  const [want, setWant] = useState({ sidebar: 260, accessory: 280 });
+  // narrowest moment put it — and now that the request is written down, it
+  // would do so across every future launch as well. See columns.ts.
+  //
+  // Restored, and written back on every change. A drag writes on each move —
+  // localStorage is synchronous, so this is a real cost and a small one: the
+  // gesture already re-renders three columns, and a string of nine characters
+  // is not what will be slow about that. Debouncing it would buy nothing and
+  // would introduce a window in which the stored value and the screen disagree.
+  const [want, setWant] = useState<Columns>(rememberedWidths);
+
+  const resize = (change: (prev: Columns) => Columns) => {
+    setWant((prev) => {
+      const next = change(prev);
+      rememberWidths(next);
+      return next;
+    });
+  };
   // Which columns are folded away, restored the same way the session is. A
   // window that reopened both every time would undo the one choice the user
   // makes to get them out of the way.
@@ -87,32 +105,36 @@ export function App() {
   };
 
   const { sessions, failure, reload: reloadSessions } = useSessions();
-  // Restored, not defaulted. Editing the renderer reloads the page, and a pane
-  // that forgot its session every time would mean reattaching by hand after
-  // every change.
-  const [selected, setSelected] = useState<string | undefined>(rememberedSession);
   const { jobs } = useJobs();
+
+  // Where the window is, off the router rather than out of state.
+  //
+  // `strict: false` because this component is the *root* — it is above every
+  // match, so there is no single route whose params could be typed here. What
+  // comes back is whatever the current match holds, and `addressFrom` tells the
+  // three shapes apart by which keys are present.
+  const navigate = useNavigate();
+  const address = addressFrom(useParams({ strict: false }));
+
+  // Mirrored to localStorage, for the one case a history cannot cover: the
+  // application being quit and launched again, which starts at `#/` with no
+  // entries behind it. Read once, at launch, in main.tsx.
+  //
+  // Keyed on the path and not on `address`, which is a fresh object every
+  // render and would therefore run this on every one of them.
+  const place = pathOf(address);
+  useEffect(() => {
+    rememberPlace(place);
+  }, [place]);
 
   // Threads live here rather than in the sidebar, because the sidebar is no
   // longer the only thing that changes them: cmd+N starts one from anywhere in
   // the window. Two owners of the same list is two lists.
   const { threads, reload: reloadThreads } = useThreads();
 
-  // What is open: the remembered name, but only while it names a session that
-  // is here and can be attached to.
-  //
-  // Derived rather than reconciled. The previous version wrote a corrected
-  // value back with `setSelected` when a remembered session had gone, which is
-  // a state write inside an effect — react-doctor flags it, and rightly: the
-  // corrected value is a function of the listing, so storing it is keeping a
-  // second copy of something already known.
-  //
-  // It also means nothing attaches to a name before the listing has confirmed
-  // it, which is the outcome the reconciliation existed to produce and now
-  // cannot be raced.
-  const open = sessions.find(
-    (session) => session.name === selected && session.refusal === undefined,
-  );
+  // What is open: the session the address names, if it is here and can be
+  // attached to. Derived, never written back — see `sessionAt`.
+  const open = sessionAt(address, sessions);
 
   // The modal, as a request rather than a boolean. It carries what the window
   // knew at the moment it was opened — which project was on screen, and which
@@ -209,8 +231,7 @@ export function App() {
             sessions={sessions}
             selected={open?.name}
             onSelect={(session) => {
-              setSelected(session.name);
-              rememberSession(session.name);
+              void navigate({ to: pathOf(addressOf(session)) });
             }}
             threads={threads}
             failure={failure}
@@ -227,7 +248,7 @@ export function App() {
         <Divider
           label="sidebar width"
           value={columns.sidebar}
-          onChange={(sidebar) => setWant((prev) => ({ ...prev, sidebar }))}
+          onChange={(sidebar) => resize((prev) => ({ ...prev, sidebar }))}
           collapsed={collapsed.sidebar}
           onToggle={fold("sidebar")}
         />
@@ -240,7 +261,7 @@ export function App() {
           label="accessory width"
           invert
           value={columns.accessory}
-          onChange={(accessory) => setWant((prev) => ({ ...prev, accessory }))}
+          onChange={(accessory) => resize((prev) => ({ ...prev, accessory }))}
           collapsed={collapsed.accessory}
           onToggle={fold("accessory")}
         />
