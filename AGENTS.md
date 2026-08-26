@@ -629,6 +629,44 @@ The router _is_ now used, and the reason is worth stating because the obvious
 one is wrong. The window has one screen and no navigation to speak of, so
 "needs routes" was never going to be what earned it.
 
+### Everything is reachable from the keyboard, and the keys are vim's
+
+**A mandate, not a preference.** Every control in this window has to be
+operable without a pointer, and the movement keys are `h j k l` rather than the
+arrows. This is a terminal multiplexer with furniture around it; the furniture
+answering to a different set of keys than the thing inside it is the friction
+the whole application exists to remove.
+
+What follows from it, stated once so it is not re-argued per feature:
+
+```
+  ctrl+h / ctrl+l   move between columns — sidebar · agent · accessory
+  ctrl+j / ctrl+k   move within one, down and up
+```
+
+`ctrl` and not a bare `hjkl`, because the pane is a terminal: an unmodified `j`
+belongs to whatever is running in it, and stealing it would break vim inside
+the very window whose keys are being copied from vim. The chord has to be one
+the pane does not want.
+
+Three consequences worth knowing before writing a control:
+
+- **Capture phase, on `window`.** The emulator installs its own keydown handler
+  and calls `stopPropagation` for every key it consumes, so a bubble-phase
+  listener never hears a chord while a pane has focus. Measured — see the note
+  on `cmd+N` in `App.tsx`. Capture is also the right meaning: an application
+  shortcut is decided before the terminal claims the key.
+- **`event.code`, not `event.key`.** With a non-US layout `key` is whatever the
+  physical key maps to, and a shortcut is the physical key.
+- **A control hidden on hover must still be focusable.** `opacity: 0`, never
+  `display: none` — an element outside the layout cannot be tabbed to, and
+  hover-only means the feature does not exist without a pointer. `MoveToThread`
+  is the worked example.
+
+This is also why Base UI is a dependency and not a nicety: its menus, tabs and
+dialogs ship the roving tab stop, the typeahead, the focus return and the aria
+wiring. Hand-rolling any of them starts this mandate over from nothing.
+
 ### Selection is an address, not a name
 
 What earned it is that **a session name is shortened and cannot be split back
@@ -764,6 +802,28 @@ Two rules that hold everywhere in the renderer:
   absorbed by a scrollbar. `height: 100%`, never `100vh` — vh measures the
   visual viewport, which is a different number as soon as anything insets the
   window.
+- **No horizontal scrollbar anywhere, without being asked for by name.** A
+  vertical scrollbar means there is more content than height, which is the
+  ordinary state of a list. A horizontal one means the layout is wrong: some
+  child was allowed to be wider than the column holding it, and scrolling
+  sideways to read a name is not the repair for a name that should have been
+  truncated. Set `overflowX: hidden` so the fault shows up as clipped text,
+  which is findable, rather than as a scrollbar, which reads as deliberate.
+
+  It is nearly always one of two things, and both have bitten here:
+
+  ```
+    width: 100%  on a flex child   a full-width child plus a sibling is
+                                   wider than the row — 236px of column
+                                   against 240px of content
+    no minWidth: 0                 a flex item will not shrink below its
+                                   content, so a long name pushes the row
+  ```
+
+  `flex: 1` **with** `minWidth: 0` is the pair. Either alone is the bug. The
+  wide things — a table, a diagram, a code block — scroll inside their own
+  `overflow-x: auto` box, which is a deliberate container and not the column.
+
 - **Colour follows the system preference.** `color-scheme: light dark` for the
   engine's own furniture, and `useColorScheme` — `useSyncExternalStore`, not
   `useState` + `useEffect`, which reads a frame late and flashes the wrong theme
