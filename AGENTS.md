@@ -387,6 +387,59 @@ asymmetry is the point. A job changes on its own — that is what a job is — s
 client that only asks misses everything interesting. A thread changes when a
 person changes it, in this window, so the reply to the change is the update.
 
+### Making a workspace: the first job that does anything
+
+```
+  1  workspace   jj workspace add          undo: forget it, remove it
+  2  bookmark    jj bookmark set           undo: delete it
+  3  session     zmx run -d, then labels   undo: kill it
+  4  claim       the thread takes it       undo: the thread lets it go
+```
+
+**The claim is last on purpose.** A workspace appears in the sidebar under its
+thread once claimed, so claiming first would show a half-built workspace as a
+finished one for as long as the rest took.
+
+**A step's `run` has no requirements**, and cannot: a step resumed by a
+restarted daemon has no caller whose context it could inherit. So a kind that
+needs jj, zmx and the thread store is a _function of them_, built where the
+layers exist — `Layer.unwrap` in `daemon.ts` is the one place all of them are in
+hand at once.
+
+**`enqueue` takes a `JobRef`, not a `JobKind`.** All it uses is the name, the
+schema and the title; the steps come from the registry, looked up by name. That
+matters here because a handler that had to pass a whole kind would have to build
+the services those steps close over — which it briefly did, and which was a lie
+about what the handler needs.
+
+**A step that does nothing is still a step.** The bookmark is optional and the
+_step_ is not: the runner reads `done` back from the store and resumes against
+the kind's list, so a list that varied by payload is a list a restarted daemon
+could not reproduce.
+
+**One attempt.** Every failure this job has is a refusal — a name taken, a
+directory occupied, zmx missing — and none pass on their own. Retrying only
+delays the rollback, which is the thing a person is waiting for.
+
+**`jj workspace forget` does not remove the directory** — jj says so in its own
+help — so the undo does both, or the next attempt cannot create into what the
+last one left. The directory is removed **only when it contains `.jj`**.
+Deleting a person's files because a later step failed is far worse than leaving
+a stray directory, and that guard is the only place this job could do it.
+`create-workspace.test.ts` fails when it is removed; that was checked.
+
+Workspaces go at `~/.awp/workspaces/<project>/<workspace>`, which is not a free
+choice — `suggestedBy` in `multiplexer.ts` recovers a session's identity from
+exactly that shape when it carries no labels.
+
+**Sessions are started with `zmx run -d`, never `zmx attach`.** Attaching is how
+an interactive caller makes a session, and a session takes its size from
+whoever is looking at it — a daemon attaching to create one would size a
+terminal to nothing. `Multiplexer.start` makes it and leaves it alone; a window
+attaches later if a person opens it. It also does nothing when the name already
+exists, which is both the idempotence and the guarantee that it never touches a
+session it did not create.
+
 ### `demo` is scaffolding
 
 `packages/server/src/jobs/demo.ts` and the `JobDemo` call in the contract exist

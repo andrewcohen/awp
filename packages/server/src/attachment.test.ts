@@ -27,6 +27,9 @@ const fakeMux = (sessions: ReadonlyArray<Session>) =>
   Layer.succeed(Multiplexer, {
     list: () => Effect.succeed(sessions),
     lookup: (name: string) => Effect.succeed(sessions.find((s) => s.name === name)),
+    // The fake exists to be a Multiplexer, and a Multiplexer can now start a
+    // session. Nothing under test calls it.
+    start: () => Effect.void,
     kill: () => Effect.void,
     setLabels: () => Effect.void,
     history: () => Effect.succeed(""),

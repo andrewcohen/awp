@@ -57,7 +57,7 @@ import {
   Stream,
 } from "effect";
 import { type Cleanup, type Job, type JobId, isTerminal, jobId } from "./job";
-import type { ErasedKind, JobContext, JobError, JobKind } from "./kind";
+import type { ErasedKind, JobContext, JobError, JobRef } from "./kind";
 import { JobStore, type StoreError } from "./store";
 
 /** Asked to enqueue a kind the runner was not built with. */
@@ -99,7 +99,7 @@ export class Jobs extends Context.Service<
   Jobs,
   {
     readonly enqueue: <Input, Encoded>(
-      kind: JobKind<Input, Encoded>,
+      kind: JobRef<Input, Encoded>,
       input: Input,
       options?: EnqueueOptions,
     ) => Effect.Effect<Job, UnknownKind | InputNotPortable | StoreError>;
@@ -330,7 +330,7 @@ export const make = (kinds: ReadonlyArray<ErasedKind>) =>
       );
 
     const enqueue = <Input, Encoded>(
-      kind: JobKind<Input, Encoded>,
+      kind: JobRef<Input, Encoded>,
       input: Input,
       options?: EnqueueOptions,
     ): Effect.Effect<Job, UnknownKind | InputNotPortable | StoreError> =>

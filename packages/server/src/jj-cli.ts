@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { type AddWorkspace, Jj, JjError } from "./jj";
 import { localBookmarks, parseBookmarks, parseWorkspaces } from "./jj-parse";
@@ -35,6 +35,8 @@ import { capture, said } from "./run";
 
 const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   const run = (op: string, args: ReadonlyArray<string>) =>
     capture(spawner, ChildProcess.make("jj", [...args])).pipe(
@@ -67,6 +69,12 @@ const make = Effect.gen(function* () {
   const write = (op: string, repo: string, args: ReadonlyArray<string>) =>
     required(op, "repository", repo).pipe(Effect.flatMap(() => run(op, ["-R", repo, ...args])));
 
+  const workspaceRoot = (dir: string) =>
+    required("find the workspace root", "directory", dir).pipe(
+      Effect.flatMap(() => run("find the workspace root", ["-R", dir, "root"])),
+      Effect.map((out) => out.trim()),
+    );
+
   const workspaces = (repo: string) =>
     ask("list workspaces", repo, ["workspace", "list", "-T", TEMPLATE]).pipe(
       Effect.map(parseWorkspaces),
@@ -78,11 +86,30 @@ const make = Effect.gen(function* () {
     );
 
   return {
-    root: (dir: string) =>
-      required("find the repository root", "directory", dir).pipe(
-        Effect.flatMap(() => run("find the repository root", ["-R", dir, "root"])),
-        Effect.map((out) => out.trim()),
-      ),
+    workspaceRoot,
+
+    sourceRoot: (dir: string) =>
+      Effect.gen(function* () {
+        const workspace = yield* workspaceRoot(dir);
+        const pointer = path.join(workspace, ".jj", "repo");
+
+        // A primary workspace's `.jj/repo` is a directory and it *is* the
+        // repository; only a secondary one has a file pointing elsewhere. So an
+        // unreadable pointer is the ordinary case, not a failure.
+        const contents = yield* fs.readFileString(pointer).pipe(
+          Effect.map((text: string) => text.trim()),
+          Effect.orElseSucceed(() => ""),
+        );
+        if (contents === "") {
+          return workspace;
+        }
+
+        // Relative to the `.jj` directory the file sits in, which is what jj
+        // writes — see the example on the tag.
+        const resolved = path.resolve(path.join(workspace, ".jj"), contents);
+        const repo = path.dirname(path.dirname(resolved));
+        return repo === "" ? workspace : repo;
+      }),
 
     workspaces,
 

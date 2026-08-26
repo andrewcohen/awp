@@ -128,6 +128,7 @@ const handlers = AwpRpcs.toLayer({
   ThreadArchive: () => Effect.succeed(thread),
   ThreadAttach: () => Effect.succeed(thread),
   ThreadDetach: () => Effect.succeed(thread),
+  WorkspaceCreate: () => Effect.succeed(job),
 });
 
 const client = RpcTest.makeClient(AwpRpcs).pipe(Effect.provide(handlers));

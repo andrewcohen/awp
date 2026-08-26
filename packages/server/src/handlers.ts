@@ -19,6 +19,7 @@ import {
   type SessionInfo,
 } from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
+import { createWorkspaceRef } from "./jobs/create-workspace";
 import { demo } from "./jobs/demo";
 import { Threads } from "./threads";
 import { refusalFor } from "./attachment";
@@ -161,6 +162,10 @@ export const layer = AwpRpcs.toLayer(
         known(job).pipe(Effect.flatMap(() => jobs.cancel(job).pipe(Effect.orDie))),
 
       JobDemo: (payload) => jobs.enqueue(demo, payload).pipe(Effect.orDie),
+
+      // Returns the record rather than the workspace, because the work outlives
+      // the request. Whether it succeeded is a question for JobChanges.
+      WorkspaceCreate: (payload) => jobs.enqueue(createWorkspaceRef, payload).pipe(Effect.orDie),
 
       // Threads. A store that cannot be read or written is the daemon being
       // broken — the disk is full, or the file is owned by someone else — so

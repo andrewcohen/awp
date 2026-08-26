@@ -65,11 +65,40 @@ describe("reading", () => {
     expect(found[0]?.changeId).not.toBe("");
   });
 
-  test("root turns a directory into the repository containing it", async () => {
-    const found = await on((jj) => jj.root(repo));
-    // Resolved rather than compared to `repo` directly: macOS puts the temp
+  test("workspaceRoot turns a directory into the workspace containing it", async () => {
+    const found = await on((jj) => jj.workspaceRoot(repo));
+    // Compared by suffix rather than to `repo` directly: macOS puts the temp
     // directory behind /private, and jj answers with the real path.
     expect(found.endsWith("/repo")).toBe(true);
+  });
+
+  test("sourceRoot of a primary workspace is the workspace itself", async () => {
+    // `.jj/repo` is a directory here, so there is no pointer to follow and the
+    // answer is unchanged. This is the case that makes the fallback ordinary
+    // rather than exceptional.
+    const found = await on((jj) => jj.sourceRoot(repo));
+    expect(found.endsWith("/repo")).toBe(true);
+  });
+
+  test("sourceRoot of a secondary workspace is the repository it belongs to", async () => {
+    // The reason `sourceRoot` exists and `root` was renamed. `jj root` is a
+    // shortcut for `jj workspace root`, so inside a secondary workspace it
+    // answers with that workspace — and this repository *is* a secondary
+    // workspace, which makes the wrong reading the one you get while
+    // developing here. A secondary workspace's `.jj/repo` is a file holding a
+    // path to the real repository's, and following it is the whole method.
+    const secondary = join(scratch, "elsewhere");
+    await on((jj) => jj.addWorkspace({ repo, name: "elsewhere", destination: secondary }));
+
+    const workspace = await on((jj) => jj.workspaceRoot(secondary));
+    const source = await on((jj) => jj.sourceRoot(secondary));
+
+    expect(workspace.endsWith("/elsewhere")).toBe(true);
+    expect(source.endsWith("/repo")).toBe(true);
+    expect(source).not.toBe(workspace);
+
+    await on((jj) => jj.forgetWorkspace(repo, "elsewhere"));
+    rmSync(secondary, { recursive: true, force: true });
   });
 
   test("reading does not write — the working copy is not snapshotted", async () => {
