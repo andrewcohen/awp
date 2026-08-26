@@ -13,6 +13,7 @@ import { Jobs } from "@awp-kit/jobs";
 import {
   AttachRefused,
   AwpRpcs,
+  DiffUnavailable,
   JobNotFound,
   SessionNotFound,
   ThreadStartFailed,
@@ -62,6 +63,45 @@ const toWire = (
  * trunk — so the usual answer needs no configuration and no guessing here.
  */
 const TRUNK = "trunk()";
+
+/**
+ * What a diff panel calls a stack: the working copy, and everything since the
+ * main line.
+ *
+ * `@` is named separately rather than left to `trunk()..@` to cover the case
+ * where the working copy *is* on trunk — a fresh workspace with nothing done
+ * in it yet. That is a stack of one empty commit, which is the honest answer,
+ * and it is not the same as an empty list.
+ */
+const STACK = "@ | trunk()..@";
+
+/**
+ * The fallback when the revset above will not resolve.
+ *
+ * `trunk()` is a revset alias with a definition that depends on the
+ * repository — the remote's default bookmark, then main, then master, then
+ * `root()` — and jj refuses the *whole* expression when it cannot settle on
+ * one, as it does when the name it lands on is conflicted. A panel that showed
+ * an error there would be showing an error about a repository whose diff it
+ * can read perfectly well, so the second attempt drops the part that needed a
+ * trunk and keeps the row that matters.
+ *
+ * When this fails too, the directory is not a repository, and *that* is worth
+ * reporting — which is what happens, because nothing catches the second one.
+ */
+const NO_TRUNK = "@";
+
+/** How many commits a listing hands back unless the client asks for fewer. */
+const STACK_LIMIT = 50;
+
+/**
+ * The revision that means "the files as they are on disk right now".
+ *
+ * The literal `@` and not a change id, deliberately — see `Diff` in the
+ * contract. It is also what the reply echoes, so a client can tell the live
+ * answer apart from a historical one it asked for by name.
+ */
+const WORKING_COPY = "@";
 
 /**
  * The workspace a bookmark names, if it names one of awp's.
@@ -285,6 +325,36 @@ export const layer = AwpRpcs.toLayer(
         known(job).pipe(Effect.flatMap(() => jobs.cancel(job).pipe(Effect.orDie))),
 
       JobClear: () => jobs.forgetFinished().pipe(Effect.orDie),
+
+      // ── the diff panel's two calls ──────────────────────────────────────
+
+      Revisions: ({ from, limit }) =>
+        jj.revisions({ dir: from, revset: STACK, limit: limit ?? STACK_LIMIT }).pipe(
+          // Retried with a smaller question rather than reported. See NO_TRUNK:
+          // the first refusal is about the revset, not about the repository.
+          Effect.catchTag("JjError", () => jj.revisions({ dir: from, revset: NO_TRUNK, limit: 1 })),
+          Effect.mapError((error) => new DiffUnavailable({ reason: error.reason })),
+        ),
+
+      /**
+       * The patch, and the rule about snapshotting on the way.
+       *
+       * A revision named by the client is history: it cannot change, so the
+       * read passes `--ignore-working-copy` and writes nothing. No revision
+       * means the working copy, which *does* change and changes for the reason
+       * the panel is open — so that one read is allowed to snapshot first.
+       *
+       * `@` arriving explicitly is treated as absent. It is the same request
+       * said a different way, and the alternative is a call that silently
+       * returns yesterday's answer because of which spelling was used.
+       */
+      Diff: ({ from, revision }) => {
+        const at = revision === undefined || revision === WORKING_COPY ? WORKING_COPY : revision;
+        return jj.diff({ dir: from, revision: at, snapshot: at === WORKING_COPY }).pipe(
+          Effect.map((patch) => ({ revision: at, patch })),
+          Effect.mapError((error) => new DiffUnavailable({ reason: error.reason })),
+        );
+      },
 
       // Returns the record rather than the workspace, because the work outlives
       // the request. Whether it succeeded is a question for JobChanges.

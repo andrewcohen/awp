@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node-shared";
@@ -240,5 +240,93 @@ describe("bookmarks", () => {
 
     const local = localBookmarks(await on((jj) => jj.bookmarks(repo)));
     expect(local.map((entry) => entry.name)).not.toContain(name);
+  });
+});
+
+describe("revisions and diffs", () => {
+  // Its own repository, because everything else in this file shares one and
+  // this suite cares about the exact contents of a working copy. A bookmark
+  // set by the block above would show up in a revision row here.
+  const stack = join(scratch, "stack");
+
+  beforeAll(() => {
+    execFileSync("jj", ["git", "init", stack], { stdio: "pipe" });
+    writeFileSync(join(stack, "a.txt"), "one\n");
+    execFileSync("jj", ["-R", stack, "commit", "-m", "first: a file"], { stdio: "pipe" });
+  });
+
+  test("a listing names the working copy, and it is the first row", async () => {
+    const found = await on((jj) => jj.revisions({ dir: stack, revset: "::@", limit: 10 }));
+
+    expect(found[0]?.workingCopy).toBe(true);
+    // Nothing has been done in it since the commit, so it is empty — and that
+    // is a normal state for the top of a stack rather than a missing answer.
+    expect(found[0]?.empty).toBe(true);
+    expect(found.some((entry) => entry.description.startsWith("first: a file"))).toBe(true);
+  });
+
+  test("the limit is the limit", async () => {
+    // A stack measured against a trunk nobody has fetched is hundreds of
+    // commits, and the panel asking is a column two hundred pixels wide.
+    expect(await on((jj) => jj.revisions({ dir: stack, revset: "::@", limit: 1 }))).toHaveLength(1);
+  });
+
+  test("a named revision diffs to the patch that made it", async () => {
+    const [wc] = await on((jj) => jj.revisions({ dir: stack, revset: "::@", limit: 10 }));
+    const first = (await on((jj) => jj.revisions({ dir: stack, revset: "::@", limit: 10 }))).find(
+      (entry) => entry.description.startsWith("first: a file"),
+    );
+
+    const patch = await on((jj) =>
+      jj.diff({ dir: stack, revision: first?.changeId ?? "", snapshot: false }),
+    );
+
+    // git format, because what reads it speaks git.
+    expect(patch).toContain("diff --git a/a.txt b/a.txt");
+    expect(patch).toContain("+one");
+    expect(wc?.changeId).not.toBe(first?.changeId);
+  });
+
+  test("an empty revision diffs to an empty string, which is not a failure", async () => {
+    expect(await on((jj) => jj.diff({ dir: stack, revision: "@", snapshot: false }))).toBe("");
+  });
+
+  // ── the claim the whole panel rests on ───────────────────────────────────
+  //
+  // These two run in order and share the file written by the first, because
+  // what is being proved is the difference between them. Splitting the setup
+  // out would leave two tests that each pass on their own and prove nothing
+  // together.
+
+  test("without a snapshot, a file written since the last jj command is invisible", async () => {
+    writeFileSync(join(stack, "b.txt"), "two\n");
+
+    const patch = await on((jj) => jj.diff({ dir: stack, revision: "@", snapshot: false }));
+
+    // Not a bug — it is what `--ignore-working-copy` means, and it is exactly
+    // how a diff panel watching an agent work ends up permanently empty.
+    expect(patch).toBe("");
+  });
+
+  test("with a snapshot, it is there", async () => {
+    const patch = await on((jj) => jj.diff({ dir: stack, revision: "@", snapshot: true }));
+
+    expect(patch).toContain("diff --git a/b.txt b/b.txt");
+    expect(patch).toContain("+two");
+  });
+
+  test("a directory that is not a repository fails, and says so", async () => {
+    const error = await failure((jj) => jj.diff({ dir: scratch, revision: "@", snapshot: false }));
+
+    expect(error).toBeDefined();
+    expect(String((error as { readonly reason: string }).reason)).toMatch(/repo|jj/iu);
+  });
+
+  test("an empty directory is refused before jj is asked", async () => {
+    // The same rule as everywhere else on this service: an argument computed
+    // from a record with a field missing must not become jj's guess.
+    const error = await failure((jj) => jj.diff({ dir: "", revision: "@", snapshot: false }));
+
+    expect(String((error as { readonly reason: string }).reason)).toContain("directory is empty");
   });
 });

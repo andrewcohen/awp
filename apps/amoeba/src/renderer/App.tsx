@@ -267,7 +267,11 @@ export function App() {
         />
 
         <aside {...stylex.props(styles.column, styles.fixed(columns.accessory))}>
-          <Accessory />
+          {/* The open session's directory, because the diff panel diffs the
+              workspace on screen. `startDir` and not the identity's workspace
+              name: a workspace name is not a path, and jj resolves `@` from a
+              directory. Nothing open is a state the panel says out loud. */}
+          <Accessory dir={open?.startDir} scheme={scheme} />
         </aside>
       </div>
 

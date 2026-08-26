@@ -1,8 +1,10 @@
 import { Tabs } from "@base-ui/react/tabs";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
+import { Diff } from "./Diff";
 import { Jobs } from "./Jobs";
 import { debugTools } from "./debug";
+import type { ColorScheme } from "@awp-kit/pane";
 import { colors, text } from "./tokens.stylex";
 
 // The accessory column: a set of panels, one at a time.
@@ -18,17 +20,46 @@ import { colors, text } from "./tokens.stylex";
 // Base UI ships no styles, so what it costs is exactly the markup and the
 // behaviour: the appearance is still StyleX, and still this file's business.
 //
-// Jobs comes first and the debug tools follow. Jobs is the panel someone opens
-// on purpose; the meter is the one they open when something feels wrong.
+// Jobs comes first, the diff after it, and the debug tools last. Jobs and the
+// diff are panels someone opens on purpose; the meter is the one they open
+// when something feels wrong.
+//
+// ── why the panels take an argument now ──────────────────────────────────
+//
+// Jobs and the meter are about the window: the jobs list is the daemon's, and
+// the meter is this process's. The diff is about *what is on screen* — it
+// diffs the workspace the open session belongs to — so it is the first panel
+// here that cannot be rendered from nothing. Hence a context rather than a
+// prop drilled into one entry: the next panel of this kind (a shell, a
+// webview) will want the same directory, and a second signature for the same
+// question is how the two drift.
+//
+// ── a hidden panel is unmounted, and that is a feature ──────────────────────
+//
+// Base UI's Tabs.Panel defaults to `keepMounted: false`, so only the selected
+// panel is in the tree. The diff leans on it: opening the tab remounts the
+// panel, its effects run, and the patch it shows is taken at the moment
+// someone asked to see one — which is why nothing in it polls.
+
+export interface PanelContext {
+  /** A directory in the open session's workspace, or nothing is open. */
+  readonly dir: string | undefined;
+  readonly scheme: ColorScheme;
+}
 
 interface Panel {
   readonly id: string;
   readonly label: string;
-  readonly render: () => ReactNode;
+  readonly render: (context: PanelContext) => ReactNode;
 }
 
 const panels: ReadonlyArray<Panel> = [
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
+  {
+    id: "diff",
+    label: "diff",
+    render: ({ dir, scheme }) => <Diff dir={dir} scheme={scheme} />,
+  },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
 ];
 
@@ -58,7 +89,7 @@ const styles = stylex.create({
   panel: { flex: 1, minHeight: 0, overflowY: "auto" },
 });
 
-export function Accessory() {
+export function Accessory(context: PanelContext) {
   // Controlled, rather than letting Base UI keep the value to itself. StyleX
   // resolves its styles at render — `stylex.props(a, on && b)` — so which tab
   // is selected has to be a value this component can read. Base UI still owns
@@ -86,7 +117,7 @@ export function Accessory() {
 
       {panels.map((panel) => (
         <Tabs.Panel key={panel.id} value={panel.id} {...stylex.props(styles.panel)}>
-          {panel.render()}
+          {panel.render(context)}
         </Tabs.Panel>
       ))}
     </Tabs.Root>

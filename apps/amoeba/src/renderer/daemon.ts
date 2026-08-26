@@ -1,6 +1,14 @@
 import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
-import type { Effort, SessionInfo, Thread, ThreadBase, ThreadStarted } from "@awp-kit/protocol";
+import type {
+  Effort,
+  Patch,
+  Revision,
+  SessionInfo,
+  Thread,
+  ThreadBase,
+  ThreadStarted,
+} from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
@@ -192,3 +200,26 @@ export const watchJobs = (onJob: (job: Job) => void): (() => void) => {
     runtime.runFork(Fiber.interrupt(fiber));
   };
 };
+
+// ── the diff of a workspace ────────────────────────────────────────────────
+
+/**
+ * The commits worth looking at in the workspace containing `from`.
+ *
+ * `from` is a session's `startDir`, the same handle {@link threadBases} takes.
+ * The window has a directory, never a workspace name, and `@` is resolved per
+ * workspace — so a directory is the only thing that names one of these.
+ */
+export const listRevisions = (from: string, limit?: number): Promise<ReadonlyArray<Revision>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.Revisions({ from, limit })));
+
+/**
+ * The patch for one revision, or for the working copy when none is named.
+ *
+ * **Leaving `revision` out is not the same as passing the working copy's own
+ * change id.** Only the absent form snapshots the files on disk first, so only
+ * the absent form shows what an agent has written and not yet committed. See
+ * `Diff` in the contract.
+ */
+export const readDiff = (from: string, revision?: string): Promise<Patch> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.Diff({ from, revision })));

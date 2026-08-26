@@ -1,7 +1,13 @@
 import { Effect, FileSystem, Layer, Path, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { type AddWorkspace, Jj, JjError } from "./jj";
-import { localBookmarks, parseBookmarks, parseWorkspaces } from "./jj-parse";
+import { type AddWorkspace, type DiffOf, Jj, type RevisionsIn, JjError } from "./jj";
+import {
+  REVISION_TEMPLATE,
+  localBookmarks,
+  parseBookmarks,
+  parseRevisions,
+  parseWorkspaces,
+} from "./jj-parse";
 import { capture, said } from "./run";
 
 // The jj CLI as a Jj.
@@ -85,6 +91,64 @@ const make = Effect.gen(function* () {
       Effect.map(parseBookmarks),
     );
 
+  // ── the two that name a workspace instead of a repository ────────────────
+  //
+  // Both take a directory and hand it to `-R` unchanged, which is the same
+  // thing `workspaceRoot` does above and the opposite of what every other
+  // method here does. It is deliberate: `@` is *the working copy of the
+  // workspace jj was pointed at*, so pointing these at the repository would
+  // answer about the default workspace — never the one on screen.
+  //
+  // The wrong-repo mistake `-R` exists to prevent is still prevented. The
+  // argument is required, it is checked, and it comes from a session's own
+  // start directory rather than from the daemon's cwd.
+
+  const revisions = ({ dir, revset, limit }: RevisionsIn) =>
+    Effect.gen(function* () {
+      const op = "list revisions";
+      yield* required(op, "directory", dir);
+      yield* required(op, "revset", revset);
+
+      // `--no-graph`, because the graph characters are drawing for a terminal
+      // and this answer is going through a template. `-n` because a stack
+      // measured against a trunk that has not moved in a month is hundreds of
+      // commits, and the caller is the one who knows how many it can show.
+      const out = yield* run(op, [
+        "-R",
+        dir,
+        "--ignore-working-copy",
+        "log",
+        "--no-graph",
+        "-n",
+        String(Math.max(1, Math.trunc(limit))),
+        "-r",
+        revset,
+        "-T",
+        REVISION_TEMPLATE,
+      ]);
+      return parseRevisions(out);
+    });
+
+  const diff = ({ dir, revision, snapshot }: DiffOf) =>
+    Effect.gen(function* () {
+      const op = `diff ${revision}`;
+      yield* required(op, "directory", dir);
+      yield* required(op, "revision", revision);
+
+      // The one read in this file that may leave `--ignore-working-copy` off,
+      // and the caller decides. See `DiffOf.snapshot` for why that is the
+      // correct answer rather than a hole in the rule.
+      return yield* run(op, [
+        "-R",
+        dir,
+        ...(snapshot ? [] : ["--ignore-working-copy"]),
+        "diff",
+        "--git",
+        "-r",
+        revision,
+      ]);
+    });
+
   return {
     workspaceRoot,
 
@@ -114,6 +178,10 @@ const make = Effect.gen(function* () {
     workspaces,
 
     bookmarks,
+
+    revisions,
+
+    diff,
 
     addWorkspace: ({ repo, name, destination, revision }: AddWorkspace) =>
       Effect.gen(function* () {

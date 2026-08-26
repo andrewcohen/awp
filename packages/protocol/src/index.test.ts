@@ -2,7 +2,14 @@ import { Effect, Result, Schema, Stream } from "effect";
 import { RpcTest } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 import type { Job } from "@awp-kit/jobs";
-import { AttachRefused, AwpRpcs, SessionInfo, type Thread } from "./index";
+import {
+  AttachRefused,
+  AwpRpcs,
+  type Patch,
+  type Revision,
+  SessionInfo,
+  type Thread,
+} from "./index";
 
 // A contract is only a contract if it survives the wire.
 //
@@ -114,6 +121,33 @@ const thread: Thread = {
   members: [{ project: "rowan", workspace: "discounts" }],
 };
 
+const revision: Revision = {
+  changeId: "tkzuwuvztzulwvnrxtyoyzxqkymmykxu",
+  commitId: "4b13c06af0e8617aa5be5308e71fb18b5d3925cb",
+  description: "feat: a diff view\n\nThe body, which a row does not show.\n",
+  author: "A Person",
+  authored: new Date(1_700_000_000_000),
+  empty: false,
+  workingCopy: true,
+  bookmarks: ["andrew/diff-view"],
+};
+
+// A real `jj diff --git` fragment, tabs and all. The tab is the point: the
+// revision listing uses tabs as a field separator, so a patch that carries one
+// is the thing most likely to be quietly mangled somewhere on this path.
+const patch: Patch = {
+  revision: "@",
+  patch: [
+    "diff --git a/go.mod b/go.mod",
+    "--- a/go.mod",
+    "+++ b/go.mod",
+    "@@ -1,2 +1,2 @@",
+    "-\told\tline",
+    "+\tnew\tline",
+    "",
+  ].join("\n"),
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -137,6 +171,8 @@ const handlers = AwpRpcs.toLayer({
   WorkspaceCreate: () => Effect.succeed(job),
   ThreadBases: () => Effect.succeed([{ revset: "trunk()", label: "trunk", workspace: undefined }]),
   ThreadStart: () => Effect.succeed({ thread, job }),
+  Revisions: () => Effect.succeed([revision]),
+  Diff: () => Effect.succeed(patch),
 });
 
 const client = RpcTest.makeClient(AwpRpcs).pipe(Effect.provide(handlers));
@@ -179,6 +215,30 @@ describe("the contract", () => {
           expect(listed).toEqual(job);
           expect(listed?.createdAt).toBeInstanceOf(Date);
           expect(listed?.input).toEqual({ steps: 3, nested: [1, 2] });
+        }),
+      ),
+    ));
+
+  it("carries a revision, absent dates and all", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rpc = yield* client;
+          const [listed] = yield* rpc.Revisions({ from: "/w/rowan" });
+          expect(listed).toEqual(revision);
+          expect(listed?.authored).toBeInstanceOf(Date);
+        }),
+      ),
+    ));
+
+  it("carries a patch as the text jj wrote, byte for byte", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rpc = yield* client;
+          // The whole reason the patch crosses as a string: what arrives is
+          // what jj said, not a re-rendering of something that was parsed.
+          expect(yield* rpc.Diff({ from: "/w/rowan" })).toEqual(patch);
         }),
       ),
     ));
