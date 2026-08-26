@@ -182,13 +182,26 @@ const styles = stylex.create({
   fold: {
     display: "flex",
     alignItems: "center",
-    width: "1.1rem",
+    justifyContent: "center",
+    width: "1.4rem",
+    height: "1.4rem",
     padding: 0,
     backgroundColor: "transparent",
     borderStyle: "none",
-    color: colors.muted,
+    borderRadius: "0.2rem",
+    color: {
+      default: colors.muted,
+      ":hover": colors.text,
+    },
     font: "inherit",
-    fontSize: text.tiny,
+    // Not `text.tiny`, which is what this was and which is the size of a
+    // caption. A triangle drawn at caption size is a few pixels of ink — the
+    // glyph has no counters or stems to carry it the way a letter does, so it
+    // reads as a speck rather than as small text. It is also the row's only
+    // control, and a target of 12px square is under every pointer guideline
+    // there is.
+    fontSize: text.body,
+    lineHeight: 1,
     cursor: "pointer",
   },
 

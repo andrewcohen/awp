@@ -79,6 +79,12 @@ const styles = stylex.create({
     flex: 1,
     minHeight: 0,
     overflowY: "auto",
+    // Never sideways. A horizontal scrollbar in a column of names means a name
+    // that should have been truncated was not, so scrolling to read it is the
+    // wrong repair — this makes the mistake show up as a clipped name, which is
+    // findable, rather than as a scrollbar, which reads as intentional. See the
+    // keyboard-and-layout rules in AGENTS.md.
+    overflowX: "hidden",
     padding: `${space.row} 0 0`,
   },
   empty: { padding: `0.5rem ${space.gutter}`, color: colors.muted },
@@ -217,7 +223,18 @@ const styles = stylex.create({
     display: "flex",
     alignItems: "baseline",
     gap: "0.5rem",
-    width: "100%",
+    // `flex: 1` with `minWidth: 0`, and not `width: 100%`.
+    //
+    // This was `width: 100%` from when it was the row's only child. Putting the
+    // fold menu beside it made that an overflow of exactly the menu's width:
+    // a full-width child plus a sibling is wider than the row, and the sidebar
+    // grew a horizontal scrollbar — 236px of column against 240px of content.
+    //
+    // `minWidth: 0` is the half that is easy to leave off. A flex item will not
+    // shrink below its content by default, so the name would push the row wide
+    // again the moment it was long enough.
+    flex: 1,
+    minWidth: 0,
     padding: 0,
     borderStyle: "none",
     backgroundColor: "transparent",
