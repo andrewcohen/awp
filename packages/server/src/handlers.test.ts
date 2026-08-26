@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { layer as dbLayer } from "@awp-kit/store";
-import { AwpRpcs } from "@awp-kit/protocol";
+import { AwpRpcs, type CommentSide } from "@awp-kit/protocol";
 import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
 import { RpcTest } from "effect/unstable/rpc";
@@ -17,6 +17,7 @@ import { Multiplexer, type Session } from "./multiplexer";
 import { type WorkspaceDeps, createWorkspace } from "./jobs/create-workspace";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
+import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 
 // The contract, its handlers and the services under them — everything except
@@ -178,15 +179,23 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                 : Effect.succeed({ name: "a-name", label: description, prompt: description }),
           }),
         ),
-        // Threads on a database of their own, one file per test in a temp
-        // directory. There is no memory store for threads because there is no
-        // store abstraction — a thread *is* rows, and a fake would be testing
-        // something the daemon does not run.
+        // Threads and reviews on a database of their own, one file per test in
+        // a temp directory. There is no memory store for either because there
+        // is no store abstraction — a thread *is* rows, and a fake would be
+        // testing something the daemon does not run.
+        //
+        // One database for both, and both sets of migrations on it, because
+        // that is what the daemon does: a review names a workspace by the same
+        // `(project, workspace)` pair a thread claims it by, and separating
+        // them here would hide any future statement that joins the two.
         Layer.provide(
-          threadsLayer.pipe(
+          Layer.mergeAll(threadsLayer, reviewsLayer).pipe(
             Layer.provide(
               Layer.orDie(
-                dbLayer(join(scratch, `threads-${(files += 1)}.sqlite`), threadMigrations),
+                dbLayer(join(scratch, `stores-${(files += 1)}.sqlite`), [
+                  ...threadMigrations,
+                  ...reviewMigrations,
+                ]),
               ),
             ),
           ),
@@ -663,5 +672,119 @@ describe("jobs over the contract", () => {
       // instead — that is the daemon being broken, not a negative answer.
       expect(outcome.failure).toMatchObject({ thread: "20260101-zzzz" });
     }
+  });
+});
+
+// ── review comments ────────────────────────────────────────────────────────
+
+/** A comment, named for where it points. The body is the only thing that varies. */
+const at = (path: string, line: number, body: string, side: CommentSide = "additions") => ({
+  id: `${path}:${String(line)}`,
+  project: "thicket",
+  workspace: "lantern",
+  revision: "vtknsnwv",
+  path,
+  side,
+  line,
+  body,
+  createdAt: new Date("2026-08-27T09:00:00.000Z"),
+  sentAt: undefined,
+});
+
+describe("reviewPrompt", () => {
+  it("groups by file and orders lines within one", () => {
+    // Six comments across three files is three pieces of work; interleaved it
+    // is six, and an agent given a flat list opens the same file three times.
+    const prompt = handlers.reviewPrompt([
+      at("src/router.ts", 90, "and this"),
+      at("src/app.tsx", 12, "here"),
+      at("src/router.ts", 42, "this branch never runs"),
+    ]);
+
+    expect(prompt).toBe(
+      [
+        "Review feedback — 3 comments:",
+        "",
+        "- src/app.tsx:12",
+        "  here",
+        "",
+        "- src/router.ts:42",
+        "  this branch never runs",
+        "- src/router.ts:90",
+        "  and this",
+      ].join("\n"),
+    );
+  });
+
+  it("names the side only for a removed line", () => {
+    // Almost every comment is on a line being added or kept. Saying "on the
+    // added line" against all of them is a phrase repeated down the whole
+    // prompt; saying it for the rare case is what makes it carry information.
+    const additions = handlers.reviewPrompt([at("a.ts", 1, "x")]);
+    const deletions = handlers.reviewPrompt([at("a.ts", 1, "x", "deletions")]);
+
+    expect(additions).not.toContain("line)");
+    expect(deletions).toContain("- a.ts:1 (on the removed line)");
+  });
+
+  it("counts in words a person would use", () => {
+    expect(handlers.reviewPrompt([at("a.ts", 1, "x")])).toContain("— 1 comment:");
+    expect(handlers.reviewPrompt([at("a.ts", 1, "x"), at("a.ts", 2, "y")])).toContain(
+      "— 2 comments:",
+    );
+  });
+});
+
+describe("ReviewSend", () => {
+  it("marks nothing when there is no agent to tell", async () => {
+    // The ordering that matters. The session is resolved before anything is
+    // marked, so a workspace whose agent has ended keeps its drafts — marking
+    // first would lose a review to a delivery that never happened, and it
+    // would look delivered afterwards.
+    const outcome = await run((rpc) =>
+      Effect.gen(function* () {
+        yield* rpc.ReviewAdd({
+          project: "thicket",
+          workspace: "lantern",
+          revision: "vtknsnwv",
+          path: "src/router.ts",
+          side: "additions",
+          line: 42,
+          body: "this branch never runs",
+        });
+        const failed = yield* Effect.result(
+          rpc.ReviewSend({ project: "thicket", workspace: "lantern" }),
+        );
+        const after = yield* rpc.ReviewList({ project: "thicket", workspace: "lantern" });
+        return { failed, after };
+      }),
+    );
+
+    expect(Result.isFailure(outcome.failed)).toBe(true);
+    expect(outcome.after).toHaveLength(1);
+    // Still a draft, which is the whole assertion.
+    expect(outcome.after[0]?.sentAt).toBeUndefined();
+  });
+
+  it("keeps a comment as written and always as a draft", async () => {
+    // Nothing on the contract can create a comment the agent has already been
+    // told about, which is what makes `sentAt` trustworthy as "it heard this".
+    const got = await run((rpc) =>
+      rpc.ReviewAdd({
+        project: "thicket",
+        workspace: "lantern",
+        revision: "vtknsnwv",
+        path: "src/router.ts",
+        side: "deletions",
+        line: 7,
+        body: "  trailing space is deliberate  ",
+      }),
+    );
+
+    expect(got.sentAt).toBeUndefined();
+    expect(got.side).toBe("deletions");
+    // Stored verbatim. Trimming happens where the prompt is composed, so the
+    // panel can still show what was typed.
+    expect(got.body).toBe("  trailing space is deliberate  ");
   });
 });

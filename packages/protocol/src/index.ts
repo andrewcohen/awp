@@ -306,6 +306,76 @@ export type CreateWorkspace = (typeof CreateWorkspace)["Type"];
  * predate threads and belong to none, so the picker was empty exactly when
  * someone stood in a workspace and wanted to branch off it.
  */
+/**
+ * A side of a diff line. The library's word for it, not a new one.
+ *
+ * `@pierre/diffs` calls the two halves of a unified diff `deletions` and
+ * `additions`, and a comment has to name the same thing the renderer does or
+ * the anchor cannot be drawn. Inventing "before"/"after" here would mean a
+ * translation at every boundary and one place that forgets it.
+ */
+export const CommentSide = Schema.Literals(["deletions", "additions"]);
+
+export type CommentSide = (typeof CommentSide)["Type"];
+
+/**
+ * Something a person said about one line of one revision.
+ *
+ * ── the anchor is four fields, and all four are needed ──────────────────────
+ * `revision` because the same line of the same file says different things in
+ * two commits; `path` and `line` for the obvious reason; and `side`, because a
+ * unified diff shows a changed line twice and a comment on the old one is not a
+ * comment on the new one.
+ *
+ * ── `sentAt` is the state, and there are only two ──────────────────────────
+ * Absent is a draft — editable, deletable, counted in "3 unsent". Present means
+ * the agent has been told, and when. One nullable field rather than a status
+ * word, because two states do not need a vocabulary and the interesting
+ * question is *when*.
+ *
+ * Sent comments are kept. A review is a record of what was asked for, and
+ * deleting each one as it was delivered would leave the panel looking like
+ * nobody had said anything.
+ */
+export const ReviewComment = Schema.Struct({
+  id: Schema.String,
+  project: Schema.String,
+  workspace: Schema.String,
+  /** The change id the comment was made against, or `@` for the working copy. */
+  revision: Schema.String,
+  path: Schema.String,
+  side: CommentSide,
+  /** One-based, as the diff renders it. */
+  line: Schema.Int,
+  body: Schema.String,
+  createdAt: Schema.Date,
+  /** When the agent was told, or absent while it is a draft. */
+  sentAt: Schema.UndefinedOr(Schema.Date),
+});
+
+export type ReviewComment = (typeof ReviewComment)["Type"];
+
+/**
+ * What {@link Rpc ReviewSend} hands back.
+ *
+ * The comments it marked *and* what it typed at the agent. The second is not
+ * for display — it is what makes the call testable and what a person can be
+ * shown when they ask what was actually said, which is otherwise knowable only
+ * by scrolling the agent's own terminal back.
+ */
+export const ReviewSent = Schema.Struct({
+  sent: Schema.Array(ReviewComment),
+  prompt: Schema.String,
+});
+
+export type ReviewSent = (typeof ReviewSent)["Type"];
+
+/** No session to tell. A workspace whose agent has ended, or never started. */
+export class NoAgent extends Schema.TaggedError<NoAgent>()("NoAgent", {
+  project: Schema.String,
+  workspace: Schema.String,
+}) {}
+
 export const ThreadBase = Schema.Struct({
   /** What to hand jj: `trunk()`, or a bookmark name. */
   revset: Schema.String,
@@ -524,6 +594,64 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("JobChanges", {
     success: Job,
     stream: true,
+  }),
+
+  // ── review comments ──────────────────────────────────────────────────────
+  //
+  // Batched, and that decision is the reason these exist as records at all
+  // rather than as text typed straight at an agent. An agent interrupted once
+  // per comment loses the thread it is holding; six things about one change is
+  // one prompt it can act on. Batching means a comment exists for a while with
+  // nobody having seen it, and that has to survive a reload.
+
+  Rpc.make("ReviewList", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.Array(ReviewComment),
+  }),
+
+  /**
+   * Write one down. Always a draft — nothing here can create a sent comment.
+   *
+   * The id and the timestamp are the daemon's, not the client's. Two windows
+   * would otherwise mint ids from two clocks, and the ordering the panel reads
+   * is `created_at`.
+   */
+  Rpc.make("ReviewAdd", {
+    payload: {
+      project: Schema.String,
+      workspace: Schema.String,
+      revision: Schema.String,
+      path: Schema.String,
+      side: CommentSide,
+      line: Schema.Int,
+      body: Schema.String,
+    },
+    success: ReviewComment,
+  }),
+
+  /** Delete one, sent or not. Not an error when it has already gone. */
+  Rpc.make("ReviewRemove", {
+    payload: { comment: Schema.String },
+    success: Schema.Boolean,
+  }),
+
+  /**
+   * Tell the agent everything unsent about this workspace, and mark it sent.
+   *
+   * **Which comments** is decided by the daemon, not passed in. A client
+   * sending a list of ids would have read that list a moment earlier, and a
+   * comment written in between would be marked sent without being in the
+   * prompt — or worse, sent twice. Here the read and the mark are one
+   * synchronous block over one connection.
+   *
+   * Fails with {@link NoAgent} when there is no session to type into, and
+   * marks nothing in that case: a comment that could not be delivered is still
+   * a draft.
+   */
+  Rpc.make("ReviewSend", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: ReviewSent,
+    error: NoAgent,
   }),
 
   /** What a job wrote about itself. The end of it — see `LOG_LINES`. */

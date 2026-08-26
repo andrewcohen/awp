@@ -6,6 +6,7 @@ import {
   AttachRefused,
   AwpRpcs,
   type Patch,
+  type ReviewComment,
   type Revision,
   SessionInfo,
   type Thread,
@@ -148,6 +149,19 @@ const patch: Patch = {
   ].join("\n"),
 };
 
+const comment: ReviewComment = {
+  id: "20260827-a1b2",
+  project: "thicket",
+  workspace: "lantern",
+  revision: "vtknsnwv",
+  path: "src/router.ts",
+  side: "additions",
+  line: 42,
+  body: "this branch never runs",
+  createdAt: new Date("2026-08-27T09:14:00.000Z"),
+  sentAt: undefined,
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -173,6 +187,10 @@ const handlers = AwpRpcs.toLayer({
   ThreadStart: () => Effect.succeed({ thread, job }),
   Revisions: () => Effect.succeed([revision]),
   Diff: () => Effect.succeed(patch),
+  ReviewList: () => Effect.succeed([comment]),
+  ReviewAdd: () => Effect.succeed(comment),
+  ReviewRemove: () => Effect.succeed(true),
+  ReviewSend: () => Effect.succeed({ sent: [comment], prompt: "Review feedback — 1 comment:" }),
 });
 
 const client = RpcTest.makeClient(AwpRpcs).pipe(Effect.provide(handlers));

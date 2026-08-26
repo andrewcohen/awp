@@ -15,17 +15,72 @@ import {
   AwpRpcs,
   DiffUnavailable,
   JobNotFound,
-  SessionNotFound,
-  ThreadStartFailed,
+  NoAgent,
+  type ReviewComment,
   type SessionIdentity,
   type SessionInfo,
+  SessionNotFound,
+  ThreadStartFailed,
 } from "@awp-kit/protocol";
-import { Effect, Stream } from "effect";
+import { Clock, Effect, Stream } from "effect";
 import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
+import { sessionName } from "./naming";
+import { Reviews, commentId } from "./reviews";
 import { Threads } from "./threads";
+
+/** The kind a review is delivered to. Matches PRIMARY in the renderer. */
+const AGENT = "agent";
+
+/**
+ * A batch of comments, as one thing to say to an agent.
+ *
+ * ── the shape is the whole feature ─────────────────────────────────────────
+ * This is the only place a review becomes language, and what it looks like
+ * decides whether the agent can act on it. Three rules, each of which is a
+ * mistake avoided rather than a preference:
+ *
+ * **Grouped by file, in file order.** Six comments across three files read as
+ * three pieces of work; the same six interleaved read as six. An agent given a
+ * flat list opens the same file three times.
+ *
+ * **The anchor is `path:line`, not prose.** That is the form every tool in the
+ * agent's hands already takes — it can be pasted into an editor, a grep, a jump
+ * — and a sentence like "in the third function of the sidebar" is a thing it
+ * has to resolve before it can start.
+ *
+ * **The side is named only when it is a deletion.** Almost every comment is on
+ * a line that is being added or kept, and saying "on the added line" against
+ * every one of them is a phrase repeated down the whole prompt. Saying it for
+ * the rare case is what makes it carry information.
+ *
+ * The heading says how many and stops. An agent counts as well as anyone, and a
+ * paragraph of framing before the content is a paragraph it has to read past.
+ */
+export const reviewPrompt = (comments: ReadonlyArray<ReviewComment>): string => {
+  const byPath = new Map<string, ReviewComment[]>();
+  for (const comment of comments) {
+    byPath.set(comment.path, [...(byPath.get(comment.path) ?? []), comment]);
+  }
+
+  const files = [...byPath]
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([path, found]) => {
+      const lines = found
+        .toSorted((a, b) => a.line - b.line)
+        .map((comment) => {
+          const where = `${path}:${comment.line}`;
+          const side = comment.side === "deletions" ? " (on the removed line)" : "";
+          return `- ${where}${side}\n  ${comment.body.trim()}`;
+        });
+      return lines.join("\n");
+    });
+
+  const count = comments.length === 1 ? "1 comment" : `${comments.length} comments`;
+  return `Review feedback — ${count}:\n\n${files.join("\n\n")}`;
+};
 import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
@@ -124,6 +179,7 @@ export const layer = AwpRpcs.toLayer(
     const sessions = yield* Sessions;
     const jobs = yield* Jobs;
     const threads = yield* Threads;
+    const reviews = yield* Reviews;
     const config = yield* Settings;
     const jj = yield* Jj;
 
@@ -475,6 +531,63 @@ export const layer = AwpRpcs.toLayer(
 
       ThreadDetach: ({ thread, member }) =>
         threads.detach(thread, member).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
+      // Reviews. Same treatment as threads: a store that cannot be read is the
+      // daemon being broken rather than a case a client can do anything about.
+      ReviewList: ({ project, workspace }) => reviews.list(project, workspace).pipe(Effect.orDie),
+
+      ReviewAdd: (payload) =>
+        Effect.gen(function* () {
+          // The id and the timestamp are minted here, not sent. Two windows
+          // would otherwise mint ids from two clocks, and the panel's ordering
+          // is `created_at`.
+          // `Clock`, not `new Date()`, so a test can hold the clock still —
+          // the ordering the panel reads is `createdAt`, and two comments made
+          // in the same tick have to be distinguishable by it.
+          const at = new Date(yield* Clock.currentTimeMillis);
+          return yield* reviews.add({
+            ...payload,
+            id: commentId(at, Math.random()),
+            createdAt: at,
+            // Always a draft. Nothing on this contract can create a comment the
+            // agent has already been told about, which is what makes `sentAt`
+            // trustworthy as "it heard this".
+            sentAt: undefined,
+          });
+        }).pipe(Effect.orDie),
+
+      ReviewRemove: ({ comment }) => reviews.remove(comment).pipe(Effect.orDie),
+
+      ReviewSend: ({ project, workspace }) =>
+        Effect.gen(function* () {
+          // The session is resolved *before* anything is marked. A workspace
+          // whose agent has ended has nothing to type into, and marking first
+          // would lose the drafts to a delivery that never happened — the
+          // failure this orders itself to avoid.
+          const name = sessionName(project, workspace, AGENT);
+          const found = yield* mux.lookup(name).pipe(Effect.orDie);
+          if (found === undefined || found.ended) {
+            return yield* Effect.fail(new NoAgent({ project, workspace }));
+          }
+
+          const drafts = yield* reviews.list(project, workspace).pipe(Effect.orDie);
+          const unsent = drafts.filter((comment) => comment.sentAt === undefined);
+          if (unsent.length === 0) {
+            // Nothing to say, so nothing is typed. Sending an empty review
+            // would put a prompt in front of an agent that asks it to do
+            // nothing, which it will nonetheless answer.
+            return { sent: [], prompt: "" };
+          }
+
+          const prompt = reviewPrompt(unsent);
+          yield* mux.send(name, prompt).pipe(Effect.orDie);
+
+          // Marked only after the send succeeded. The other order is the one
+          // that silently eats a review when zmx is not there.
+          const at = new Date(yield* Clock.currentTimeMillis);
+          const sent = yield* reviews.markSent(project, workspace, at).pipe(Effect.orDie);
+          return { sent, prompt };
+        }),
     };
   }),
 );
