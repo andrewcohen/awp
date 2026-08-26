@@ -26,7 +26,11 @@ const session = (
 });
 
 const awp = (project: string, workspace: string, kind: string, extra?: Partial<SessionInfo>) =>
-  session(`awp.${project}.${workspace}.${kind}`, { project, workspace, kind }, extra);
+  session(
+    `awp.${project}.${workspace}.${kind}`,
+    { project, workspace, kind, label: undefined },
+    extra,
+  );
 
 describe("grouping sessions into workspaces", () => {
   // The whole reason this module exists. Two sessions of one workspace used to
@@ -38,7 +42,7 @@ describe("grouping sessions into workspaces", () => {
       awp("rowan", "default", "editor"),
     ]);
     expect(got).toHaveLength(1);
-    expect(got[0]?.label).toBe("rowan.default");
+    expect(got[0]?.address).toBe("rowan.default");
     expect(got[0]?.sessions).toHaveLength(2);
   });
 
@@ -60,7 +64,7 @@ describe("grouping sessions into workspaces", () => {
       awp("orchard", "effect-v4-poc", "agent"),
       awp("mossy", "default", "agent"),
     ]);
-    expect(got.map((w) => w.label)).toEqual([
+    expect(got.map((w) => w.address)).toEqual([
       "mossy.default",
       "orchard.effect-v4-poc",
       "rowan.default",
@@ -75,7 +79,7 @@ describe("grouping sessions into workspaces", () => {
       session("some-other-tool", undefined),
       awp("rowan", "default", "agent"),
     ]);
-    expect(got.map((w) => [w.label, w.foreign])).toEqual([
+    expect(got.map((w) => [w.address, w.foreign])).toEqual([
       ["rowan.default", false],
       ["some-other-tool", true],
     ]);
@@ -143,7 +147,7 @@ describe("what a row calls itself", () => {
       awp("mossy", "default", "agent"),
     ]);
     expect(got.map((w) => w.name)).toEqual(["mossy", "rowan"]);
-    expect(got.map((w) => w.label)).toEqual(["mossy.default", "rowan.default"]);
+    expect(got.map((w) => w.address)).toEqual(["mossy.default", "rowan.default"]);
   });
 });
 
@@ -160,7 +164,12 @@ const thread = (over: Partial<Thread> = {}): Thread => ({
 });
 
 const inProject = (project: string, workspace: string): SessionInfo =>
-  session(`awp.${project}.${workspace}.agent`, { project, workspace, kind: "agent" });
+  session(`awp.${project}.${workspace}.agent`, {
+    project,
+    workspace,
+    kind: "agent",
+    label: undefined,
+  });
 
 describe("groupByThread", () => {
   test("a thread shows the workspaces it claimed", () => {
@@ -182,7 +191,7 @@ describe("groupByThread", () => {
 
     // One piece of work, two checkouts — the whole reason threads exist.
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.workspaces.map((w) => w.label)).toEqual([
+    expect(groups[0]?.workspaces.map((w) => w.address)).toEqual([
       "beta.discounts",
       "rowan.discounts",
     ]);
@@ -204,7 +213,7 @@ describe("groupByThread", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.at(-1)?.thread).toBeUndefined();
-    expect(groups.at(-1)?.workspaces.map((w) => w.label)).toEqual(["orchard.main"]);
+    expect(groups.at(-1)?.workspaces.map((w) => w.address)).toEqual(["orchard.main"]);
   });
 
   test("nothing is guessed into a thread by name", () => {
@@ -292,5 +301,86 @@ describe("the projects a window knows", () => {
         awp("thicket", "lantern", "agent", { startDir: "/w/thicket/lantern" }),
       ]),
     ).toEqual([{ name: "thicket", from: "/w/thicket/lantern" }]);
+  });
+});
+
+// ── the display label ──────────────────────────────────────────────────────
+//
+// A slug is what a workspace has to be — a directory, a jj workspace and half a
+// bookmark. The label is what someone typed, and until `awp_label` existed it
+// survived only as a thread's title, so a workspace no thread claimed lost it.
+
+const labelled = (project: string, workspace: string, kind: string, label: string | undefined) =>
+  session(`awp.${project}.${workspace}.${kind}`, { project, workspace, kind, label });
+
+describe("the display label", () => {
+  it("is taken from whichever session carries one", () => {
+    // Only the agent is labelled — the job writes it when it starts that
+    // session. An editor opened later beside it must not decide the workspace
+    // has no label, which is what reading only the first session would do.
+    const got = groupByWorkspace([
+      labelled("thicket", "tiered-discounts", "editor", undefined),
+      labelled("thicket", "tiered-discounts", "agent", "Tiered discounts"),
+    ]);
+    expect(got[0]?.label).toBe("Tiered discounts");
+  });
+
+  it("is absent when no session carries one", () => {
+    // Every workspace made before the label exists looks like this, which is
+    // why a row falls back to the slug rather than going blank.
+    const got = groupByWorkspace([labelled("thicket", "lantern", "agent", undefined)]);
+    expect(got[0]?.label).toBeUndefined();
+    expect(got[0]?.name).toBe("lantern");
+  });
+});
+
+describe("the order workspaces come back in", () => {
+  const at = (project: string, workspace: string, when: string | undefined) =>
+    session(
+      `awp.${project}.${workspace}.agent`,
+      { project, workspace, kind: "agent", label: undefined },
+      { created: when === undefined ? undefined : new Date(when) },
+    );
+
+  it("puts the newest workspace first", () => {
+    const got = groupByWorkspace([
+      at("thicket", "lantern", "2026-08-01T00:00:00.000Z"),
+      at("thicket", "orchard", "2026-08-20T00:00:00.000Z"),
+    ]);
+    expect(got.map((w) => w.address)).toEqual(["thicket.orchard", "thicket.lantern"]);
+  });
+
+  it("ages a workspace by its oldest session, not its newest", () => {
+    // Opening an editor beside a week-old agent should not move that workspace
+    // to the top of the strip. `since` is the minimum for exactly this.
+    const got = groupByWorkspace([
+      session(
+        "awp.thicket.lantern.agent",
+        { project: "thicket", workspace: "lantern", kind: "agent", label: undefined },
+        { created: new Date("2026-08-01T00:00:00.000Z") },
+      ),
+      session(
+        "awp.thicket.lantern.editor",
+        { project: "thicket", workspace: "lantern", kind: "editor", label: undefined },
+        { created: new Date("2026-08-25T00:00:00.000Z") },
+      ),
+      at("thicket", "orchard", "2026-08-20T00:00:00.000Z"),
+    ]);
+    expect(got.map((w) => w.address)).toEqual(["thicket.orchard", "thicket.lantern"]);
+  });
+
+  it("sorts a workspace zmx gave no time for last, and alphabetically", () => {
+    // An unknown age is not a claim to be new. The alphabetical tiebreak is
+    // what stops every such workspace sitting in Map iteration order.
+    const got = groupByWorkspace([
+      at("thicket", "orchard", undefined),
+      at("thicket", "lantern", undefined),
+      at("thicket", "harbor", "2026-08-20T00:00:00.000Z"),
+    ]);
+    expect(got.map((w) => w.address)).toEqual([
+      "thicket.harbor",
+      "thicket.lantern",
+      "thicket.orchard",
+    ]);
   });
 });

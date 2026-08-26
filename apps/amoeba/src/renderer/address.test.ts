@@ -51,24 +51,24 @@ describe("addressOf", () => {
   });
 });
 
+// The parse side is the route patterns, which only exist inside the router.
+// Splitting the path here is a second implementation of them — and a
+// deliberately dumb one, so that a change to the patterns this does not follow
+// shows up as a failure rather than as a route nothing matches.
+const params = (path: string): Record<string, string | undefined> => {
+  const parts = path.split("/").slice(1).map(decodeURIComponent);
+  if (parts[0] === "s" && parts[1] !== undefined) {
+    return { name: parts[1] };
+  }
+  if (parts[0] === "w") {
+    return { project: parts[1], workspace: parts[2], kind: parts[3] };
+  }
+  return {};
+};
+
+const roundTrip = (address: Address) => addressFrom(params(pathOf(address)));
+
 describe("pathOf and addressFrom", () => {
-  // The parse side is the route patterns, which only exist inside the router.
-  // Splitting the path here is a second implementation of them — and a
-  // deliberately dumb one, so that a change to the patterns that this does not
-  // follow shows up as a failure rather than as a route nothing matches.
-  const params = (path: string): Record<string, string | undefined> => {
-    const parts = path.split("/").slice(1).map(decodeURIComponent);
-    if (parts[0] === "s" && parts[1] !== undefined) {
-      return { name: parts[1] };
-    }
-    if (parts[0] === "w") {
-      return { project: parts[1], workspace: parts[2], kind: parts[3] };
-    }
-    return {};
-  };
-
-  const roundTrip = (address: Address) => addressFrom(params(pathOf(address)));
-
   it("survives the round trip for all three shapes", () => {
     const all: ReadonlyArray<Address> = [
       nowhere,

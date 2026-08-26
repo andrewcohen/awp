@@ -63,6 +63,20 @@ const SHORTEN_HASH_LEN = 4;
 export const LABEL_PROJECT = "awp_project";
 export const LABEL_WORKSPACE = "awp_workspace";
 export const LABEL_KIND = "awp_kind";
+/**
+ * What a person called this work, as they typed it.
+ *
+ * The fourth label and the only one that is not part of the address. A
+ * workspace name is a slug — `effect-ts-tiered-discount-timemachine` — because
+ * it is a directory, a jj workspace and half of a bookmark; what the person
+ * asked for was "tiered discount time machine", and until now that survived
+ * only as the thread's title. A workspace no thread claimed had nowhere to keep
+ * it at all.
+ *
+ * Optional everywhere. Every workspace on this machine today predates it, and a
+ * row falls back to its slug rather than going blank.
+ */
+export const LABEL_LABEL = "awp_label";
 
 /**
  * The spelling of a name segment that survives being written into a session
@@ -198,10 +212,23 @@ export const splitSessionName = (
   return { stem: trimmed.slice(0, index), kind: trimmed.slice(index + 1) };
 };
 
+/**
+ * The same shape the protocol puts on the wire, stated again here.
+ *
+ * Two declarations of one thing, and that is deliberate rather than an
+ * oversight: `naming` is where a name is made and taken apart, and it has no
+ * business importing the RPC contract to do it. The protocol's version is the
+ * schema — decoded, validated, sent — and this one is a plain interface the
+ * server passes around. They are checked against each other by the compiler at
+ * every point one becomes the other, which is why adding a field to the schema
+ * and not to this fails the build rather than drifting.
+ */
 export interface SessionIdentity {
   readonly project: string;
   readonly workspace: string;
   readonly kind: string;
+  /** What a person called this work. See {@link LABEL_LABEL}. */
+  readonly label: string | undefined;
 }
 
 /**
@@ -226,7 +253,9 @@ export const parseSessionName = (name: string): SessionIdentity | undefined => {
   const [, project, workspace, kind] = parts;
   return project === undefined || workspace === undefined || kind === undefined
     ? undefined
-    : { project, workspace, kind };
+    : // A name never carried a label and never could — see LABEL_LABEL. Said
+      // explicitly rather than left out, because the field is required.
+      { project, workspace, kind, label: undefined };
 };
 
 /**
@@ -257,8 +286,13 @@ export const identityLabels = (
   project: string,
   workspace: string,
   kind: string,
+  label?: string,
 ): Record<string, string> => ({
   [LABEL_PROJECT]: project.trim(),
   [LABEL_WORKSPACE]: workspace.trim(),
   [LABEL_KIND]: kind.trim(),
+  // Omitted when there is none, rather than written empty. This is a label read
+  // by people in `zmx ls` as well as by awp, and a column of `awp_label=` on
+  // every session is noise that says nothing.
+  ...(label !== undefined && label.trim() !== "" ? { [LABEL_LABEL]: label.trim() } : {}),
 });

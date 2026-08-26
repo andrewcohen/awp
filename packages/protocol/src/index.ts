@@ -50,6 +50,21 @@ export const SessionIdentity = Schema.Struct({
   workspace: Schema.String,
   /** `agent`, `editor`, a user action — what this session is *for*. */
   kind: Schema.String,
+  /**
+   * What a person called this work, or absent.
+   *
+   * The one field here that is not part of the address: `workspace` is a slug
+   * because it has to be a directory and half a bookmark, and this is the
+   * sentence it was made from. Absent for every session created before awp
+   * wrote it, which is most of them — a reader falls back to the slug.
+   *
+   * `Schema.UndefinedOr`, like every other absent-able field on this wire —
+   * `created`, `identity` and `refusal` are all spelled that way and all
+   * survive a round trip today, which is the evidence that settles it. The
+   * cost is that the key is required, so the two places that build an identity
+   * say `label: undefined` rather than leaving it out.
+   */
+  label: Schema.UndefinedOr(Schema.String),
 });
 
 export type SessionIdentity = (typeof SessionIdentity)["Type"];

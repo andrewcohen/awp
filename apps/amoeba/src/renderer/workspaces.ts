@@ -30,8 +30,14 @@ const DEFAULT = "default";
 export type Workspace = {
   /** `project.workspace`, or the session name for one of someone else's. */
   readonly key: string;
-  /** The whole address, for a tooltip and for ordering. */
-  readonly label: string;
+  /**
+   * The whole address — `project.workspace` — for a tooltip and for ordering.
+   *
+   * Named for what it is rather than `label`, which it used to be called and
+   * which now means the human one below. Two fields called nearly the same
+   * thing is how a tooltip ends up showing a sentence and a heading a slug.
+   */
+  readonly address: string;
   /**
    * What the row is called.
    *
@@ -41,6 +47,20 @@ export type Workspace = {
    */
   readonly name: string;
   /**
+   * What a person called this work, or absent.
+   *
+   * The slug is a slug because it has to be a directory, a jj workspace and
+   * half a bookmark: `effect-ts-tiered-discount-timemachine`. What was asked
+   * for was a sentence, and until the `awp_label` session label existed it
+   * survived only as the title of a thread — so a workspace no thread claimed
+   * had nowhere to keep it.
+   *
+   * Absent for every workspace made before that label, which today is nearly
+   * all of them. A row falls back to {@link Workspace.name} rather than going
+   * blank, and that fallback is why this could be added without a migration.
+   */
+  readonly label: string | undefined;
+  /**
    * The half of project/workspace that {@link Workspace.name} did not use, for
    * the row's second line. Taken from the Go deck, whose rule this is: the two
    * halves are one fact between them, and repeating either is a column of
@@ -49,6 +69,15 @@ export type Workspace = {
   readonly otherIdent: string | undefined;
   /** Ordered: the primary kind first, then the rest by name. */
   readonly sessions: ReadonlyArray<SessionInfo>;
+  /**
+   * When the oldest of its sessions was started, or 0 if zmx did not say.
+   *
+   * The workspace's own age, near enough. Used for ordering, and taken from the
+   * *oldest* rather than the newest deliberately: opening an editor beside an
+   * agent that has been running all week should not move that week-old
+   * workspace to the top of the strip.
+   */
+  readonly since: number;
   /**
    * True for a session awp did not create. `zmx ls` reports every session on
    * the machine, and someone else's is not a workspace — it is shown, because
@@ -91,10 +120,12 @@ export const groupByWorkspace = (
     if (id === undefined) {
       foreign.push({
         key: session.name,
-        label: session.name,
+        address: session.name,
+        label: undefined,
         name: session.name,
         otherIdent: undefined,
         sessions: [session],
+        since: startedAt([session]),
         foreign: true,
       });
       continue;
@@ -110,21 +141,54 @@ export const groupByWorkspace = (
     const isDefault = workspace === DEFAULT;
     return {
       key,
-      label: key,
+      address: key,
+      // Taken from whichever session carries one. Only the agent is labelled
+      // today — the job writes it when it starts that session — so an editor
+      // opened later beside it must not decide the workspace has no label.
+      label: found.map((session) => session.identity?.label).find((one) => one !== undefined),
       name: isDefault ? project : workspace,
       otherIdent: isDefault ? DEFAULT : project,
       sessions: found.toSorted(byKind),
+      since: startedAt(found),
       foreign: false,
     };
   });
 
   // awp's own first, then anyone else's. Two different things in one list, and
   // the boundary is worth being able to see without reading either.
-  return [
-    ...workspaces.toSorted((a, b) => a.label.localeCompare(b.label)),
-    ...foreign.toSorted((a, b) => a.label.localeCompare(b.label)),
-  ];
+  return [...workspaces.toSorted(newestFirst), ...foreign.toSorted(newestFirst)];
 };
+
+/**
+ * When a workspace's oldest session started, or 0.
+ *
+ * `created` is absent when zmx did not say, and a workspace with no answer
+ * sorts last rather than first — an unknown age is not a claim to be new.
+ */
+const startedAt = (sessions: ReadonlyArray<SessionInfo>): number => {
+  const times = sessions
+    .map((session) => session.created?.getTime())
+    .filter((time): time is number => time !== undefined);
+  return times.length === 0 ? 0 : Math.min(...times);
+};
+
+/**
+ * Newest workspace first, ties broken by address.
+ *
+ * ── this used to be alphabetical, and the reason it changed ────────────────
+ * The old order was by address, with a note saying a list that reorders itself
+ * between two polls is a list nobody can scan. That reasoning is still right;
+ * it just does not apply to *this* key. `since` is when a session was started,
+ * which never changes — so the order is as stable as the alphabetical one was,
+ * and it puts the work someone is actually doing at the top instead of
+ * whichever project begins with an early letter.
+ *
+ * The alphabetical tiebreak matters more than it looks. A workspace whose
+ * sessions predate zmx reporting `created` has `since: 0`, and without it every
+ * one of those would sit in whatever order a Map iterated.
+ */
+const newestFirst = (a: Workspace, b: Workspace): number =>
+  b.since - a.since || a.address.localeCompare(b.address);
 
 /** The session a workspace opens to, or undefined if none of them can be. */
 export const openable = (workspace: Workspace): SessionInfo | undefined =>

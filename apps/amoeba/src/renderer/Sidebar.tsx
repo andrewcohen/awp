@@ -1,5 +1,7 @@
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
+import { useEffect, useRef, useState } from "react";
+import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
 import { colors, space, text } from "./tokens.stylex";
 import {
   PRIMARY,
@@ -116,6 +118,18 @@ const styles = stylex.create({
     fontSize: text.small,
   },
   loose: { color: colors.muted },
+  headingButton: {
+    width: "100%",
+    borderStyle: "none",
+    backgroundColor: "transparent",
+    font: "inherit",
+    textAlign: "left",
+    cursor: "pointer",
+  },
+  caret: { flexShrink: 0, width: "0.7rem", fontSize: text.tiny, color: colors.muted },
+  // How much is behind the fold. A disclosure that will not say how much it is
+  // hiding is one nobody opens.
+  count: { flexShrink: 0, fontSize: text.tiny, color: colors.muted },
   plus: {
     flexShrink: 0,
     padding: "0 0.3rem",
@@ -146,19 +160,40 @@ const styles = stylex.create({
   //
   // `bottom: 0` needs the scroll container to be the ancestor, which is why it
   // is inside `list` rather than a sibling of it — and why it carries the base
-  // colour and a rule above it. Without an opaque background the rows scroll
-  // *through* the button rather than behind it, which is the one way sticky
-  // fails that looks like a paint bug.
+  // colour. Without an opaque background the rows scroll *through* the button
+  // rather than behind it, which is the one way sticky fails that looks like a
+  // paint bug.
+  //
+  // ── sticky has to *look* sticky, and that is not free ────────────────────
+  // The first version carried a rule above it always, and read as a fixed
+  // footer even though it was not one: measured at the bottom of the list it
+  // sat 8px under the last row, exactly where it belongs — and nobody could
+  // tell, because a permanent border and an opaque band are what chrome looks
+  // like. A sticky element that never changes is indistinguishable from a
+  // fixed one.
+  //
+  // So the rule appears only while it is actually stuck, which CSS cannot ask.
+  // The `stuck` style below is driven by a one-pixel sentinel *after* the
+  // footing: while that is on screen the list is scrolled to its end and the
+  // button is in the flow; the moment it leaves, the button is floating over
+  // rows and says so.
   footing: {
     position: "sticky",
     insetBlockEnd: 0,
-    marginTop: "0.5rem",
-    padding: `0.5rem ${space.gutter} 0.6rem`,
+    marginTop: "0.35rem",
+    padding: `0.35rem ${space.gutter} 0.5rem`,
     backgroundColor: colors.base,
     borderTopWidth: 1,
     borderTopStyle: "solid",
-    borderTopColor: colors.border,
+    // Transparent rather than absent, so that gaining the rule does not also
+    // move the button by a pixel.
+    borderTopColor: "transparent",
+    transitionProperty: "border-top-color",
+    transitionDuration: "120ms",
   },
+  stuck: { borderTopColor: colors.border },
+  /** One pixel after the footing. See `footing`. */
+  sentinel: { height: 1 },
   newThread: {
     width: "100%",
     padding: "0.25rem 0.45rem",
@@ -213,6 +248,10 @@ const styles = stylex.create({
     overflow: "hidden",
   },
   ident: { flexShrink: 0 },
+  // The one thing on line two allowed to truncate. A project name is short and
+  // a kind is shorter; a slug is the long one, and it is also the one whose
+  // beginning carries the information.
+  slug: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   // The separator, not a word. Present so the two halves of the line do not run
   // together, muted so it is not one of them.
   sep: { flexShrink: 0, opacity: 0.5 },
@@ -266,6 +305,28 @@ function Row({
   // goes below; anything else names itself and the project goes below.
   const other = workspace.foreign ? "elsewhere" : (workspace.otherIdent ?? "");
 
+  // ── the label takes line one, and the slug moves down ────────────────────
+  //
+  // `effect-ts-tiered-discount-timemachine` is a slug because it has to be a
+  // directory, a jj workspace and half a bookmark. What the person typed was a
+  // sentence, and line one is the line they read.
+  //
+  //   before   ● effect-ts-tiered-discount-timemachine
+  //              thicket
+  //
+  //   after    ● Tiered discount time machine
+  //              thicket · effect-ts-tiered-discount-timemachine
+  //
+  // The slug is not dropped. It is the directory someone will `cd` into and
+  // the bookmark they will push, so a strip that only showed the sentence
+  // would make the workspace unfindable from anywhere outside this window.
+  //
+  // Only when they differ. Every workspace made before `awp_label` has no
+  // label at all and falls back to the slug on line one — repeating it on line
+  // two would give nearly every row today the same word twice.
+  const shown = workspace.label ?? workspace.name;
+  const slug = shown === workspace.name ? undefined : workspace.name;
+
   // Shown when worth showing, which is not whenever it exists. Eighteen of
   // twenty-one rows are one agent, and eighteen lines each ending in the word
   // "agent" is one word repeated down a column while the names it crowds out
@@ -287,19 +348,25 @@ function Row({
         disabled={primary === undefined}
         // The reason is the tooltip as well as line two. A row that will not
         // say why it is disabled is worse than no row at all.
-        title={refusal ?? workspace.label}
+        title={refusal ?? workspace.address}
         onClick={() => primary !== undefined && onSelect(primary)}
         {...stylex.props(styles.title, primary === undefined && styles.titleShut)}
       >
         <Dot live={live} />
-        <span {...stylex.props(styles.label)}>{workspace.name}</span>
+        <span {...stylex.props(styles.label)}>{shown}</span>
       </button>
 
       <div {...stylex.props(styles.meta)}>
         {refusal === undefined ? (
           <>
             {other !== "" && <span {...stylex.props(styles.ident)}>{other}</span>}
-            {other !== "" && listed.length > 0 && (
+            {other !== "" && slug !== undefined && (
+              <span aria-hidden {...stylex.props(styles.sep)}>
+                ·
+              </span>
+            )}
+            {slug !== undefined && <span {...stylex.props(styles.slug)}>{slug}</span>}
+            {(other !== "" || slug !== undefined) && listed.length > 0 && (
               <span aria-hidden {...stylex.props(styles.sep)}>
                 ·
               </span>
@@ -354,34 +421,98 @@ function Group({
   group,
   selected,
   onSelect,
+  folded,
+  onFold,
 }: {
   readonly group: ThreadGroup;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  /** Only the loose group folds; a thread is small and is the point. */
+  readonly folded: boolean;
+  readonly onFold: (() => void) | undefined;
 }) {
+  const heading =
+    onFold === undefined ? (
+      <div {...stylex.props(styles.heading)}>
+        <span {...stylex.props(styles.threadName)}>{group.title}</span>
+      </div>
+    ) : (
+      // A button, because it does something — unlike a thread heading, which
+      // is a heading precisely because a thread has nothing to open.
+      <button
+        type="button"
+        aria-expanded={!folded}
+        onClick={onFold}
+        {...stylex.props(styles.heading, styles.headingButton)}
+      >
+        <span aria-hidden {...stylex.props(styles.caret)}>
+          {folded ? "▸" : "▾"}
+        </span>
+        <span {...stylex.props(styles.threadName, styles.loose)}>{group.title}</span>
+        <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
+      </button>
+    );
+
   return (
     <div {...stylex.props(styles.group)}>
-      <div {...stylex.props(styles.heading)}>
-        <span {...stylex.props(styles.threadName, group.thread === undefined && styles.loose)}>
-          {group.title}
-        </span>
-      </div>
-
-      {/* Said rather than left blank. A thread with nothing in it is the row
+      {heading}
+      {folded ? null : (
+        <>
+          {/* Said rather than left blank. A thread with nothing in it is the row
           waiting to be filled, and an empty space under a heading reads as a
           rendering fault. */}
-      {group.workspaces.length === 0 && (
-        <div {...stylex.props(styles.empty, styles.nested)}>nothing yet</div>
-      )}
+          {group.workspaces.length === 0 && (
+            <div {...stylex.props(styles.empty, styles.nested)}>nothing yet</div>
+          )}
 
-      {group.workspaces.map((workspace) => (
-        <div key={workspace.key} {...stylex.props(styles.nested)}>
-          <Row workspace={workspace} selected={selected} onSelect={onSelect} />
-        </div>
-      ))}
+          {group.workspaces.map((workspace) => (
+            <div key={workspace.key} {...stylex.props(styles.nested)}>
+              <Row workspace={workspace} selected={selected} onSelect={onSelect} />
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
+
+/**
+ * Whether a bottom-sticky element is currently floating rather than in flow.
+ *
+ * Answered by watching a sentinel placed *after* it: while that pixel is on
+ * screen the list is scrolled to its end and the element is exactly where it
+ * would be without `position: sticky`; the moment it leaves, the element is
+ * over content. CSS has no selector for this, and the alternative — comparing
+ * scrollTop to scrollHeight on a scroll handler — asks the same question once
+ * per frame instead of once per change.
+ *
+ * False until the observer has fired. The first paint of a short list is the
+ * common case, and a rule that flashes on during mount is worse than one that
+ * arrives a frame late.
+ */
+const useStuck = (sentinel: { readonly current: HTMLElement | null }): boolean => {
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const element = sentinel.current;
+    if (element === null) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries.at(-1);
+        if (entry !== undefined) {
+          setStuck(!entry.isIntersecting);
+        }
+      },
+      // The scroll container, not the viewport. A null root measures against
+      // the window, which this list is not the size of.
+      { root: element.parentElement },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [sentinel]);
+  return stuck;
+};
 
 export function Sidebar({
   sessions,
@@ -400,6 +531,9 @@ export function Sidebar({
   readonly failure: string | undefined;
 }) {
   const groups = groupByThread(threads, groupByWorkspace(sessions));
+  const sentinel = useRef<HTMLDivElement | null>(null);
+  const stuck = useStuck(sentinel);
+  const [looseOpen, setLooseOpen] = useState(rememberedLooseOpen);
 
   // The two states of the column, chosen before the markup rather than inside
   // it. A daemon that is not running is the ordinary case during development,
@@ -408,9 +542,27 @@ export function Sidebar({
     failure === undefined ? (
       <>
         {groups.length === 0 && <div {...stylex.props(styles.empty)}>no workspaces</div>}
-        {groups.map((group) => (
-          <Group key={group.key} group={group} selected={selected} onSelect={onSelect} />
-        ))}
+        {groups.map((group) => {
+          const isLoose = group.thread === undefined;
+          return (
+            <Group
+              key={group.key}
+              group={group}
+              selected={selected}
+              onSelect={onSelect}
+              folded={isLoose && !looseOpen}
+              onFold={
+                isLoose
+                  ? () =>
+                      setLooseOpen((open) => {
+                        rememberLooseOpen(!open);
+                        return !open;
+                      })
+                  : undefined
+              }
+            />
+          );
+        })}
       </>
     ) : (
       <div {...stylex.props(styles.failure)}>
@@ -433,16 +585,19 @@ export function Sidebar({
             selected row and nothing selected meant nothing to create into; the
             modal picks a project instead, so the button always has an answer. */}
         {failure === undefined && (
-          <div {...stylex.props(styles.footing)}>
-            <button
-              type="button"
-              title="new thread (⌘N)"
-              onClick={onNew}
-              {...stylex.props(styles.newThread)}
-            >
-              + thread
-            </button>
-          </div>
+          <>
+            <div {...stylex.props(styles.footing, stuck && styles.stuck)}>
+              <button
+                type="button"
+                title="new thread (⌘N)"
+                onClick={onNew}
+                {...stylex.props(styles.newThread)}
+              >
+                + thread
+              </button>
+            </div>
+            <div ref={sentinel} aria-hidden {...stylex.props(styles.sentinel)} />
+          </>
         )}
       </div>
     </div>

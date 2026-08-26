@@ -363,7 +363,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         // path and cannot be split back into its parts, so the labels are the
         // only unshortened truth. See `identityLabels`.
         yield* mux
-          .setLabels(name, identityLabels(input.project, workspace, AGENT))
+          .setLabels(name, identityLabels(input.project, workspace, AGENT, input.label))
           .pipe(Effect.mapError(refused("could not label the session")));
       }),
     undo: (input, context) =>
