@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/protocol" },
+    { "path": "./packages/jobs" },
     { "path": "./packages/server" },
     { "path": "./packages/pane" },
     { "path": "./apps/amoeba" },

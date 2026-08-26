@@ -1,10 +1,26 @@
 {
   "name": "awp",
   "private": true,
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
+  "workspaces": {
+    "packages": [
+      "packages/*",
+      "apps/*"
+    ],
+    "catalog": {
+      "@effect/atom-react": "4.0.0-beta.107",
+      "@effect/platform-node-shared": "4.0.0-rc.112",
+      "@types/react": "19.2.18",
+      "@types/react-dom": "19.2.5",
+      "effect": "4.0.0-rc.112",
+      "react": "19.2.8",
+      "react-dom": "19.2.8"
+    },
+    "catalogs": {
+      "peer": {
+        "react": "^19.2.8"
+      }
+    }
+  },
   "type": "module",
   "scripts": {
     "fmt": "oxfmt .",
@@ -21,7 +37,8 @@
     "daemon": "bun run --filter @awp-kit/server daemon",
     "probe:child-env": "bun packages/server/src/probe/child-env.ts",
     "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts",
-    "probe:skeleton": "bun packages/server/src/probe/skeleton.ts"
+    "probe:skeleton": "bun packages/server/src/probe/skeleton.ts",
+    "probe:jobs-store": "bun packages/jobs/src/probe/sqlite-under-bun.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

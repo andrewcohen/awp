@@ -1,5 +1,5 @@
 {
-  "name": "@awp-kit/pane",
+  "name": "@awp-kit/jobs",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -7,9 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "ghostty-web": "0.4.0"
-  },
-  "peerDependencies": {
-    "react": "catalog:peer"
+    "effect": "catalog:"
   }
 }
