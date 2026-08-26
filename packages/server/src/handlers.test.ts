@@ -1,11 +1,13 @@
+import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { AwpRpcs } from "@awp-kit/protocol";
-import { Effect, Layer, Result, Stream } from "effect";
+import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
 import { RpcTest } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
 import { Multiplexer, type Session } from "./multiplexer";
+import { demo } from "./jobs/demo";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 
@@ -48,11 +50,15 @@ type Client = RpcClient.RpcClient<
   (typeof AwpRpcs)["requests"] extends ReadonlyMap<string, infer R> ? R : never
 >;
 
-const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown>) =>
+const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fake = yield* makeFake({ chunks: ["\u001B[2J", "ready$ "] });
       const stack = handlers.layer.pipe(
+        // The memory store, not sqlite: what is under test is the seam between
+        // the contract and the runner, and a file on disk would make these
+        // tests share state with each other and with the developer's daemon.
+        Layer.provide(jobsLayer([erase(demo)]).pipe(Layer.provide(layerMemory))),
         Layer.provide(sessions.layer),
         Layer.provide(attachment.layer),
         Layer.provide(fake.layer),
@@ -104,5 +110,62 @@ describe("the daemon over its contract", () => {
     if (Result.isFailure(result)) {
       expect(result.failure).toMatchObject({ _tag: "SessionNotFound", session: LIVE });
     }
+  });
+});
+
+// ── jobs across the same seam ──────────────────────────────────────────────
+//
+// The runner's own behaviour is tested in @awp-kit/jobs against fake kinds.
+// What is only visible here is the translation: that a whole record survives
+// the contract, and that an id the daemon has never seen comes back as
+// `JobNotFound` rather than as a crash or as a null.
+
+describe("jobs over the contract", () => {
+  it("enqueues, lists and reports a record a client can render", async () => {
+    const [queued, listed] = await run((rpc) =>
+      Effect.gen(function* () {
+        const job = yield* rpc.JobDemo({
+          pace: 1,
+          failAt: undefined,
+          retryable: false,
+          undoFails: false,
+        });
+        return [job, yield* rpc.JobList()] as const;
+      }),
+    );
+
+    expect(queued.kind).toBe("demo");
+    expect(queued.title).toBe("4 steps");
+    // Three attempts, taken from the kind rather than from the payload: the
+    // number a client shows has to be the number the runner will honour.
+    expect(queued.attempts).toBe(3);
+    expect(listed.map((job) => job.id)).toContain(queued.id);
+  });
+
+  it("says so when asked about a job it has never had", async () => {
+    const outcome = await run((rpc) => Effect.result(rpc.JobLog({ job: "20260101-zzzz" })));
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    if (Result.isFailure(outcome)) {
+      // As itself, with the id in it — not as a string, and not as a defect.
+      expect(outcome.failure).toMatchObject({ job: "20260101-zzzz" });
+    }
+  });
+
+  it("streams changes for as long as a client listens", async () => {
+    const seen = await run((rpc) =>
+      Effect.gen(function* () {
+        // Subscribed before enqueuing, because the feed carries what happens
+        // next rather than what already did.
+        const changes = yield* Stream.runCollect(rpc.JobChanges().pipe(Stream.take(1))).pipe(
+          Effect.forkScoped,
+        );
+        yield* rpc.JobDemo({ pace: 1, failAt: undefined, retryable: false, undoFails: false });
+        return yield* Fiber.join(changes);
+      }),
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.kind).toBe("demo");
   });
 });

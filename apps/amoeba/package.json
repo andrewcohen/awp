@@ -11,6 +11,7 @@
     "dev:all": "vite --clearScreen false & AMOEBA_DEV_SERVER=http://127.0.0.1:5273 electrobun dev"
   },
   "dependencies": {
+    "@awp-kit/jobs": "workspace:*",
     "@awp-kit/pane": "workspace:*",
     "@awp-kit/protocol": "workspace:*",
     "@awp-kit/server": "workspace:*",

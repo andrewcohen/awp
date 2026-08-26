@@ -10,6 +10,7 @@
   },
   "include": ["src", "types"],
   "references": [
+    { "path": "../../packages/jobs" },
     { "path": "../../packages/protocol" },
     { "path": "../../packages/server" },
     { "path": "../../packages/pane" }

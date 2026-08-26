@@ -1,6 +1,5 @@
 import type { SessionInfo } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
-import { AppearanceToggle } from "./Appearance";
 import { colors, space, text } from "./tokens.stylex";
 import { PRIMARY, type Workspace, groupByWorkspace, openable } from "./workspaces";
 
@@ -51,11 +50,11 @@ const styles = stylex.create({
     flex: 1,
     minHeight: 0,
     overflowY: "auto",
-    padding: `${space.titlebar} 0 ${space.gutter}`,
+    padding: `${space.row} 0 ${space.gutter}`,
   },
   empty: { padding: `0.5rem ${space.gutter}`, color: colors.muted },
   failure: {
-    padding: `${space.titlebar} ${space.gutter} ${space.gutter}`,
+    padding: `${space.gutter}`,
     color: colors.muted,
     lineHeight: 1.6,
   },
@@ -124,16 +123,6 @@ const styles = stylex.create({
   kindOn: { color: colors.text },
   kindPick: { cursor: "pointer" },
   reason: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-
-  footer: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.25rem",
-    padding: "0.4rem 0.5rem",
-    borderTopWidth: 1,
-    borderTopStyle: "solid",
-    borderTopColor: colors.border,
-  },
 });
 
 const Dot = ({ live }: { readonly live: boolean }) => (
@@ -283,10 +272,6 @@ export function Sidebar({
   return (
     <div {...stylex.props(styles.column)}>
       <div {...stylex.props(styles.list)}>{body}</div>
-
-      <div {...stylex.props(styles.footer)}>
-        <AppearanceToggle />
-      </div>
     </div>
   );
 }

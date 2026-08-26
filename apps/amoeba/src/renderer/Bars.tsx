@@ -1,0 +1,144 @@
+import type { Job } from "@awp-kit/jobs";
+import type { SessionInfo } from "@awp-kit/protocol";
+import * as stylex from "@stylexjs/stylex";
+import { AppearanceToggle } from "./Appearance";
+import { colors, space, text } from "./tokens.stylex";
+import { tally } from "./useJobs";
+
+// The two strips the columns sit between.
+//
+// The columns used to run edge to edge, top to bottom, which meant anything the
+// window had to say about *itself* — which session is open, whether the daemon
+// is there, what the jobs are doing — had to be borrowed from a column that was
+// already spoken for. The sidebar ended up carrying the appearance toggle in a
+// footer for exactly that reason.
+//
+// Two consequences worth stating, because both replaced something:
+//
+//   - **The top bar clears the traffic lights, so no column has to.** The
+//     window is `hiddenInset`, so the controls float over the top-left of the
+//     content; every column used to start with `space.titlebar` of padding to
+//     stay out of their way, in three places, none of which knew why. Now one
+//     strip does it and `space.titlebar` is that strip's height.
+//   - **The top bar is the window's drag handle.** With the controls hidden
+//     there is no title bar to grab, and a strip of chrome with nothing
+//     interactive in it is the natural place — which is also why nothing
+//     interactive goes in it.
+//
+// Neither bar scrolls or grows. They are `flex-shrink: 0` in a column layout,
+// so the middle row is the only thing that flexes and the no-top-level-scroll
+// rule in global.css still holds when the window gets short.
+
+const styles = stylex.create({
+  bar: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    gap: "0.6rem",
+    paddingInline: "0.6rem",
+    fontSize: text.small,
+    color: colors.muted,
+    whiteSpace: "nowrap",
+  },
+  top: {
+    height: space.titlebar,
+    // Clears the traffic lights. A number rather than a token because it is a
+    // fact about macOS, not a decision this design gets to make.
+    paddingInlineStart: "5.25rem",
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
+    // The only way to move a window whose title bar is hidden.
+    WebkitAppRegion: "drag",
+  },
+  bottom: {
+    height: "1.6rem",
+    borderTopWidth: 1,
+    borderTopStyle: "solid",
+    borderTopColor: colors.border,
+  },
+  spacer: { flex: 1 },
+  strong: { color: colors.text },
+  live: { color: colors.live },
+  warn: { color: colors.warn },
+  // Truncation goes on the one field that can be arbitrarily long. Everything
+  // else in a bar is a word or a count, and a bar that ellipsises its counts to
+  // make room for a name has lost the thing it was for.
+  name: { overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 },
+});
+
+/**
+ * Which session is open, and whether there is a daemon behind it.
+ *
+ * The identity rather than the session name: a name is an address —
+ * `awp.thicket.effect-ts-tiered-discou-f500.agent` — and the shortening that
+ * makes it fit is exactly what makes it unreadable. `identity` is the
+ * unshortened truth and is on the wire for this reason.
+ */
+export function TopBar({
+  session,
+  connected,
+}: {
+  readonly session: SessionInfo | undefined;
+  readonly connected: boolean;
+}) {
+  return (
+    <header {...stylex.props(styles.bar, styles.top)}>
+      {session === undefined ? (
+        <span>no session</span>
+      ) : (
+        <>
+          <span {...stylex.props(styles.strong, styles.name)}>
+            {session.identity?.workspace ?? session.name}
+          </span>
+          {session.identity !== undefined && <span>{session.identity.project}</span>}
+          <span>{session.identity?.kind}</span>
+        </>
+      )}
+      <span {...stylex.props(styles.spacer)} />
+      <span {...stylex.props(connected ? styles.live : styles.warn)}>
+        {connected ? "daemon" : "no daemon"}
+      </span>
+    </header>
+  );
+}
+
+/**
+ * The appearance toggle, and what the jobs are doing.
+ *
+ * The jobs summary is here rather than only in the panel because the panel is
+ * in a column that folds away. A job that fails while its column is collapsed
+ * is a job nobody hears about, and the whole reason the jobs system was built
+ * was so that would stop being true.
+ *
+ * Nothing is said when there is nothing to say. A status bar that always reads
+ * `0 running · 0 failed` teaches the eye to skip it, which costs exactly the
+ * one moment it exists for.
+ */
+export function BottomBar({
+  jobs,
+  session,
+}: {
+  readonly jobs: ReadonlyArray<Job>;
+  readonly session: SessionInfo | undefined;
+}) {
+  const counted = tally(jobs);
+
+  return (
+    <footer {...stylex.props(styles.bar, styles.bottom)}>
+      <AppearanceToggle />
+      {counted.running > 0 && (
+        <span {...stylex.props(styles.strong)}>{counted.running} running</span>
+      )}
+      {counted.failed > 0 && <span {...stylex.props(styles.warn)}>{counted.failed} failed</span>}
+      {counted.dirty > 0 && (
+        // Said separately from `failed`, and never folded into it: a failed job
+        // wants a retry, and a dirty one wants a person to look at what its
+        // rollback could not undo.
+        <span {...stylex.props(styles.warn)}>{counted.dirty} needs cleaning up</span>
+      )}
+      <span {...stylex.props(styles.spacer)} />
+      <span {...stylex.props(styles.name)}>{session?.name}</span>
+    </footer>
+  );
+}

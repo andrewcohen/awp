@@ -1,5 +1,6 @@
+import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
-import type { SessionInfo } from "@awp-kit/protocol";
+import type { DemoJob, SessionInfo } from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
@@ -85,5 +86,47 @@ export const attach = (
     detach: () => {
       runtime.runFork(Fiber.interrupt(fiber));
     },
+  };
+};
+
+// ── jobs ───────────────────────────────────────────────────────────────────
+
+/** Every job the daemon has a record of, newest first. */
+export const listJobs = (): Promise<ReadonlyArray<Job>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobList()));
+
+export const jobLog = (job: string): Promise<ReadonlyArray<string>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobLog({ job })));
+
+export const retryJob = (job: string): Promise<Job> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobRetry({ job })));
+
+export const cancelJob = (job: string): Promise<void> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobCancel({ job })));
+
+/** See `DemoJob` in the contract. Goes when the first real kind arrives. */
+export const enqueueDemo = (payload: DemoJob): Promise<Job> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobDemo(payload)));
+
+/**
+ * Watch every job change until the returned function is called.
+ *
+ * The same shape as `attach`, and for the same reason: the stream's lifetime is
+ * the request's, so interrupting the fiber is what unsubscribes the daemon's
+ * end. A component that forgets to call it leaves a subscriber on the feed for
+ * as long as the window lives.
+ *
+ * Records arrive whole, so a listener that joins late or misses one is still
+ * correct — it holds the newest state of every job it has heard about.
+ */
+export const watchJobs = (onJob: (job: Job) => void): (() => void) => {
+  const fiber = runtime.runFork(
+    Effect.flatMap(AwpClient, (rpc) =>
+      Stream.runForEach(rpc.JobChanges(), (job) => Effect.sync(() => onJob(job))),
+    ).pipe(Effect.catchCause(() => Effect.void)),
+  );
+
+  return () => {
+    runtime.runFork(Fiber.interrupt(fiber));
   };
 };

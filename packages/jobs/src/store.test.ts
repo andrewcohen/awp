@@ -1,4 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
+// The store picks its driver at open time; the test reaches for Node's
+// directly, because what it needs is a file written the *wrong* way.
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
@@ -49,6 +52,7 @@ const job = (over: Partial<Job> = {}): Job => ({
   status: "queued",
   attempt: 0,
   attempts: 3,
+  steps: ["one", "two", "three"],
   done: [],
   step: undefined,
   error: undefined,
@@ -189,5 +193,38 @@ describe("sqlite, specifically", () => {
     expect(read?.status).toBe("running");
     expect(read?.done).toEqual(["one"]);
     expect(log).toEqual(["got as far as one"]);
+  });
+
+  test("a file from an older schema is rebuilt rather than left broken", async () => {
+    const path = file();
+
+    // A jobs table as an earlier version had it — one column, and the wrong
+    // one. `create table if not exists` leaves this alone, so every insert
+    // afterwards fails on the column count. That is what happened when `steps`
+    // was added to the record, and is the whole reason the file carries a
+    // version.
+    const older = new DatabaseSync(path);
+    older.exec("pragma user_version = 0");
+    older.exec("create table jobs (id text primary key)");
+    older.exec("insert into jobs values ('20250101-old')");
+    older.close();
+
+    const [written, listed] = await on(layerSqlite(path), (jobs) =>
+      Effect.gen(function* () {
+        yield* jobs.put(job());
+        return [true, yield* jobs.list()] as const;
+      }),
+    );
+
+    expect(written).toBe(true);
+    // The old row is gone with the old table, and the new one is writable.
+    expect(listed.map((entry) => entry.id)).toEqual(["20260101-aaaa"]);
+  });
+
+  test("a file at the current version keeps its rows", async () => {
+    const path = file();
+    await on(layerSqlite(path), (jobs) => jobs.put(job()));
+    const listed = await on(layerSqlite(path), (jobs) => jobs.list());
+    expect(listed).toHaveLength(1);
   });
 });

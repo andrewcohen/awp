@@ -65,6 +65,24 @@ export class UnknownKind extends Schema.TaggedError<UnknownKind>()("UnknownKind"
   kind: Schema.String,
 }) {}
 
+/**
+ * A kind whose input does not survive being stored.
+ *
+ * The store is JSON, and JSON has no `undefined`: a field written as
+ * `Schema.UndefinedOr(…)` and given `undefined` is simply *absent* when the
+ * record is read back, and `UndefinedOr` requires the key to be there. The kind
+ * then fails on its first step with "stored input does not match", three
+ * seconds after the mistake, in a message about the wrong thing. Use
+ * `Schema.optional`, which accepts both absent and undefined.
+ *
+ * Checked at enqueue by encoding, putting it through JSON, and reading it
+ * straight back — so the refusal happens where the mistake is.
+ */
+export class InputNotPortable extends Schema.TaggedError<InputNotPortable>()("InputNotPortable", {
+  kind: Schema.String,
+  reason: Schema.String,
+}) {}
+
 export interface EnqueueOptions {
   /**
    * The caller's word for "this particular piece of work".
@@ -84,7 +102,7 @@ export class Jobs extends Context.Service<
       kind: JobKind<Input, Encoded>,
       input: Input,
       options?: EnqueueOptions,
-    ) => Effect.Effect<Job, UnknownKind | StoreError>;
+    ) => Effect.Effect<Job, UnknownKind | InputNotPortable | StoreError>;
 
     /**
      * Run a finished job again, from whatever survived its compensation.
@@ -315,7 +333,7 @@ export const make = (kinds: ReadonlyArray<ErasedKind>) =>
       kind: JobKind<Input, Encoded>,
       input: Input,
       options?: EnqueueOptions,
-    ): Effect.Effect<Job, UnknownKind | StoreError> =>
+    ): Effect.Effect<Job, UnknownKind | InputNotPortable | StoreError> =>
       Effect.gen(function* () {
         const erased = registry.get(kind.name);
         if (erased === undefined) {
@@ -332,15 +350,28 @@ export const make = (kinds: ReadonlyArray<ErasedKind>) =>
         // point at which the input's own schema is in hand — the runner and
         // the store both see it as whatever JSON came back.
         const encoded = yield* Schema.encodeEffect(kind.input)(input).pipe(Effect.orDie);
+        // Through JSON here rather than at the store, so both stores hold the
+        // same thing. The memory store would otherwise keep the encoded value
+        // as it is, and every kind whose input loses something in JSON would
+        // pass its tests and fail in the daemon.
+        const stored: unknown = JSON.parse(JSON.stringify(encoded ?? null));
+        // And straight back out, because a schema that cannot make that trip
+        // should say so here rather than on the first step of every attempt.
+        yield* Schema.decodeUnknownEffect(kind.input)(stored).pipe(
+          Effect.mapError(
+            (error) => new InputNotPortable({ kind: kind.name, reason: String(error) }),
+          ),
+        );
         const job: Job = {
           id: jobId(created, Math.random()),
           kind: kind.name,
           title: kind.title(input),
           key: options?.key,
-          input: encoded,
+          input: stored,
           status: "queued",
           attempt: 0,
           attempts: erased.attempts,
+          steps: erased.steps.map((step) => step.name),
           done: [],
           step: undefined,
           error: undefined,

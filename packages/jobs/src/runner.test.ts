@@ -119,8 +119,60 @@ describe("running", () => {
     expect(trace).toEqual(["one(a)", "two(a)", "three(a)"]);
     expect(job.status).toBe("succeeded");
     expect(job.done).toEqual(["one", "two", "three"]);
+    // The kind's whole step list, written once at enqueue. It is what gives a
+    // client a denominator to show progress against.
+    expect(job.steps).toEqual(["one", "two", "three"]);
     expect(job.attempt).toBe(1);
     expect(job.title).toBe("three for a");
+  });
+
+  test("an input that cannot survive the store is refused at enqueue", async () => {
+    // `UndefinedOr` plus an unset value: JSON drops the key, and `UndefinedOr`
+    // wants it present. Without the check at enqueue this becomes a job that
+    // fails on its first step with a message about a schema, one backoff after
+    // the mistake was made.
+    const Fragile = Schema.Struct({ name: Schema.String, note: Schema.UndefinedOr(Schema.String) });
+    const fragile: JobKind<(typeof Fragile)["Type"]> = {
+      ...threeSteps,
+      name: "fragile",
+      input: Fragile,
+      title: () => "fragile",
+      steps: [],
+    };
+
+    const outcome = await run(
+      (jobs) => Effect.result(jobs.enqueue(fragile, { name: "a", note: undefined })),
+      [erase(fragile)],
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    if (Result.isFailure(outcome)) {
+      expect(outcome.failure).toMatchObject({ kind: "fragile" });
+    }
+    // And nothing was written, so the list is not carrying a job that cannot run.
+    expect(trace).toEqual([]);
+  });
+
+  test("the same field spelled `optional` is accepted", async () => {
+    const Sturdy = Schema.Struct({ name: Schema.String, note: Schema.optional(Schema.String) });
+    const sturdy: JobKind<(typeof Sturdy)["Type"]> = {
+      ...threeSteps,
+      name: "sturdy",
+      input: Sturdy,
+      title: () => "sturdy",
+      steps: [step("one")],
+    };
+
+    const job = await run(
+      (jobs) =>
+        jobs
+          .enqueue(sturdy, { name: "a", note: undefined })
+          .pipe(Effect.flatMap((queued) => settle(jobs, queued.id))),
+      [erase(sturdy)],
+    );
+
+    expect(job.status).toBe("succeeded");
+    expect(trace).toEqual(["one(a)"]);
   });
 
   test("a kind the runner was not built with is refused, not queued", async () => {
@@ -423,6 +475,7 @@ describe("recovery", () => {
           status: "running",
           attempt: 1,
           attempts: 3,
+          steps: ["one", "two", "three"],
           done: ["one", "two"],
           step: "three",
           error: undefined,
@@ -457,6 +510,7 @@ describe("recovery", () => {
           status: "queued",
           attempt: 0,
           attempts: 3,
+          steps: ["one", "two", "three"],
           done: [],
           step: undefined,
           error: undefined,
