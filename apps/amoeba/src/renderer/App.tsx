@@ -234,6 +234,7 @@ export function App() {
               void navigate({ to: pathOf(addressOf(session)) });
             }}
             threads={threads}
+            onThreadsChanged={reloadThreads}
             failure={failure}
             onNew={() =>
               setNewThread({
