@@ -1,6 +1,6 @@
-import type { SessionInfo } from "@awp-kit/protocol";
-import { describe, expect, it } from "vitest";
-import { groupByWorkspace, openable } from "./workspaces";
+import type { SessionInfo, Thread } from "@awp-kit/protocol";
+import { describe, expect, it, test } from "vitest";
+import { groupByThread, groupByWorkspace, openable } from "./workspaces";
 
 // The grouping is where the sidebar's one real decision lives, so it is tested
 // away from the markup. Every fixture below is shaped like something `zmx ls`
@@ -144,5 +144,116 @@ describe("what a row calls itself", () => {
     ]);
     expect(got.map((w) => w.name)).toEqual(["mossy", "thicket"]);
     expect(got.map((w) => w.label)).toEqual(["mossy.default", "thicket.default"]);
+  });
+});
+
+// ── threads ────────────────────────────────────────────────────────────────
+
+const thread = (over: Partial<Thread> = {}): Thread => ({
+  id: "t1",
+  title: "tiered discounts",
+  createdAt: new Date(2000),
+  archivedAt: undefined,
+  members: [],
+  ...over,
+});
+
+const inProject = (project: string, workspace: string): SessionInfo =>
+  session(`awp.${project}.${workspace}.agent`, { project, workspace, kind: "agent" });
+
+describe("groupByThread", () => {
+  test("a thread shows the workspaces it claimed", () => {
+    const workspaces = groupByWorkspace([
+      inProject("thicket", "discounts"),
+      inProject("api", "discounts"),
+    ]);
+    const groups = groupByThread(
+      [
+        thread({
+          members: [
+            { project: "thicket", workspace: "discounts" },
+            { project: "api", workspace: "discounts" },
+          ],
+        }),
+      ],
+      workspaces,
+    );
+
+    // One piece of work, two checkouts — the whole reason threads exist.
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.workspaces.map((w) => w.label)).toEqual([
+      "api.discounts",
+      "thicket.discounts",
+    ]);
+  });
+
+  test("a thread with nothing in it still shows", () => {
+    // The most important row on the strip, not the least: it is the one
+    // waiting to be filled. Dropping empty threads would make a thread made a
+    // moment ago invisible until it had a workspace.
+    const groups = groupByThread([thread()], []);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.workspaces).toEqual([]);
+  });
+
+  test("what no thread claimed goes in one group, at the end", () => {
+    const workspaces = groupByWorkspace([inProject("orchard", "main")]);
+    const groups = groupByThread([thread()], workspaces);
+
+    expect(groups).toHaveLength(2);
+    expect(groups.at(-1)?.thread).toBeUndefined();
+    expect(groups.at(-1)?.workspaces.map((w) => w.label)).toEqual(["orchard.main"]);
+  });
+
+  test("nothing is guessed into a thread by name", () => {
+    // A thread called "discounts" and a workspace called "discounts" are not
+    // related. Only a claim relates them — the same rule identities() follows
+    // for an unlabelled session: honestly unknown beats confidently wrong.
+    const workspaces = groupByWorkspace([inProject("thicket", "discounts")]);
+    const groups = groupByThread([thread({ title: "discounts", members: [] })], workspaces);
+
+    expect(groups[0]?.workspaces).toEqual([]);
+    expect(groups.at(-1)?.thread).toBeUndefined();
+  });
+
+  test("no loose group at all when everything is claimed", () => {
+    // A heading reading "not in a thread" over nothing is a heading that
+    // teaches the eye to skip the strip.
+    const workspaces = groupByWorkspace([inProject("thicket", "discounts")]);
+    const groups = groupByThread(
+      [thread({ members: [{ project: "thicket", workspace: "discounts" }] })],
+      workspaces,
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups.every((group) => group.thread !== undefined)).toBe(true);
+  });
+
+  test("an archived thread is not on the strip", () => {
+    const groups = groupByThread([thread({ archivedAt: new Date(3000) })], []);
+    expect(groups).toEqual([]);
+  });
+
+  test("a session awp did not create is never claimed", () => {
+    // A foreign session has no project or workspace to match on, and inventing
+    // one would put somebody's unrelated terminal inside a thread.
+    const workspaces = groupByWorkspace([session("someone-elses-shell", undefined)]);
+    const groups = groupByThread([thread()], workspaces);
+
+    expect(groups.at(-1)?.thread).toBeUndefined();
+    expect(groups.at(-1)?.workspaces[0]?.foreign).toBe(true);
+  });
+
+  test("newest thread first", () => {
+    const groups = groupByThread(
+      [
+        thread({ id: "old", title: "old", createdAt: new Date(1000) }),
+        thread({ id: "new", title: "new", createdAt: new Date(9000) }),
+      ],
+      [],
+    );
+
+    expect(groups.map((group) => group.key)).toEqual(["new", "old"]);
   });
 });

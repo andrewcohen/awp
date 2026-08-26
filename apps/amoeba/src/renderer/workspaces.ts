@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@awp-kit/protocol";
+import type { SessionInfo, Thread } from "@awp-kit/protocol";
 
 // The sidebar lists workspaces. zmx lists sessions. This is the difference.
 //
@@ -129,3 +129,90 @@ export const groupByWorkspace = (
 /** The session a workspace opens to, or undefined if none of them can be. */
 export const openable = (workspace: Workspace): SessionInfo | undefined =>
   workspace.sessions.find((session) => session.refusal === undefined);
+
+// ── threads ────────────────────────────────────────────────────────────────
+
+/**
+ * A thread and the workspaces it has claimed, or the group for everything it
+ * has not.
+ *
+ * The loose group is not a thread with a blank name, and the difference shows
+ * up everywhere downstream: it cannot be renamed, archived or claimed into, and
+ * a row inside it offers to *join* a thread where a row inside a real one
+ * offers to leave. `thread: undefined` is what makes that a type error rather
+ * than a runtime check.
+ */
+export type ThreadGroup = {
+  readonly key: string;
+  readonly title: string;
+  readonly thread: Thread | undefined;
+  readonly workspaces: ReadonlyArray<Workspace>;
+};
+
+/** Where a workspace sits, if any thread has claimed it. */
+const claimant = (threads: ReadonlyArray<Thread>, workspace: Workspace): Thread | undefined => {
+  const id = workspace.sessions[0]?.identity;
+  if (id === undefined || workspace.foreign) {
+    return undefined;
+  }
+  return threads.find((thread) =>
+    thread.members.some(
+      (member) => member.project === id.project && member.workspace === id.workspace,
+    ),
+  );
+};
+
+/**
+ * Workspaces, as the threads that claimed them.
+ *
+ * Every thread appears, including one that has claimed nothing — a thread made
+ * a moment ago with no workspace in it yet is the single most important row on
+ * the strip, because it is the one waiting to be filled.
+ *
+ * Archived threads are dropped. They are still on the wire, because the record
+ * that a set of workspaces were once one job is worth more after the fact than
+ * during; they are simply not what the sidebar is for.
+ *
+ * Everything unclaimed goes in one group at the end, and **nothing is guessed
+ * into a thread**. That is the same rule `identities` follows for a workspace
+ * whose sessions carry no labels: a group that is honestly unknown beats a
+ * group that is confidently wrong.
+ */
+export const groupByThread = (
+  threads: ReadonlyArray<Thread>,
+  workspaces: ReadonlyArray<Workspace>,
+): ReadonlyArray<ThreadGroup> => {
+  const live = threads.filter((thread) => thread.archivedAt === undefined);
+  const claimed = new Map<string, Workspace[]>();
+  const loose: Workspace[] = [];
+
+  for (const workspace of workspaces) {
+    const thread = claimant(live, workspace);
+    if (thread === undefined) {
+      loose.push(workspace);
+      continue;
+    }
+    claimed.set(thread.id, [...(claimed.get(thread.id) ?? []), workspace]);
+  }
+
+  const groups: ThreadGroup[] = live.map((thread) => ({
+    key: thread.id,
+    title: thread.title === "" ? "untitled" : thread.title,
+    thread,
+    workspaces: claimed.get(thread.id) ?? [],
+  }));
+
+  // Newest thread first — a thread is made when work starts, so the one at the
+  // top is the one being worked on. Workspaces inside stay in the order
+  // `groupByWorkspace` put them, which is alphabetical and does not move.
+  groups.sort(
+    (a, b) => (b.thread?.createdAt.getTime() ?? 0) - (a.thread?.createdAt.getTime() ?? 0),
+  );
+
+  return loose.length === 0
+    ? groups
+    : [
+        ...groups,
+        { key: "\u0000loose", title: "not in a thread", thread: undefined, workspaces: loose },
+      ];
+};
