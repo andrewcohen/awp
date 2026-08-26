@@ -1,6 +1,6 @@
 import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
-import type { DemoJob, SessionInfo } from "@awp-kit/protocol";
+import type { DemoJob, SessionInfo, Thread } from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
@@ -107,6 +107,18 @@ export const cancelJob = (job: string): Promise<void> =>
 /** See `DemoJob` in the contract. Goes when the first real kind arrives. */
 export const enqueueDemo = (payload: DemoJob): Promise<Job> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobDemo(payload)));
+
+// ── threads and workspaces ─────────────────────────────────────────────────
+//
+// No watcher beside these, unlike jobs, and the asymmetry is the point. A job
+// changes on its own; a thread changes when a person changes it, in this
+// window, so the reply to the change *is* the update.
+
+export const listThreads = (): Promise<ReadonlyArray<Thread>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadList()));
+
+export const createThread = (title: string): Promise<Thread> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadCreate({ title })));
 
 /**
  * Watch every job change until the returned function is called.

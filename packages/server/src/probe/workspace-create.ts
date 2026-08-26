@@ -183,6 +183,14 @@ const program = Effect.gen(function* () {
   // ── the log, which is what a person reads when it goes wrong ─────────────
   const log = yield* rpc.JobLog({ job: queued.id });
   process.stdout.write(`\nwhat the job said:\n${log.map((line) => `  ${line}`).join("\n")}\n`);
+
+  // The thread goes too. There is no delete — only archive — and archived
+  // threads are filtered out of the sidebar, which is the property being used
+  // here. Without this every run of the probe leaves a thread called "a probe"
+  // on the strip, which is exactly what four runs did.
+  yield* rpc.ThreadArchive({ thread: thread.id, archived: true });
+  process.stdout.write("\n");
+  say("thread archived", true, thread.id);
 });
 
 const cleanup = (): void => {

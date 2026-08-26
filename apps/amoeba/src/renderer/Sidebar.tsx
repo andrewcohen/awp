@@ -1,7 +1,17 @@
 import type { SessionInfo } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
+import { useState } from "react";
+import { createThread } from "./daemon";
 import { colors, space, text } from "./tokens.stylex";
-import { PRIMARY, type Workspace, groupByWorkspace, openable } from "./workspaces";
+import {
+  PRIMARY,
+  type ThreadGroup,
+  type Workspace,
+  groupByThread,
+  groupByWorkspace,
+  openable,
+} from "./workspaces";
+import { useThreads } from "./useThreads";
 
 // The list of workspaces, and which of them can be opened.
 //
@@ -35,6 +45,20 @@ import { PRIMARY, type Workspace, groupByWorkspace, openable } from "./workspace
 // which is the same trade in both directions — line two is whichever half of
 // project/workspace line one did not use.
 //
+// ── threads sit above all of this ──────────────────────────────────────────
+// The strip is a list of threads, each holding its workspaces, and one group at
+// the end for everything no thread has claimed. The nesting is one level and
+// stays one level: a workspace row already carries two lines, and a third level
+// of indent would spend the name's column on structure.
+//
+// A thread heading is a heading, not a row — it does not open anything, because
+// a thread has nothing to open. What it has is a `+`, which is the only way to
+// make a workspace from this window.
+//
+// The loose group is not a thread with a blank name. It has no `+` and no
+// title to edit, and `ThreadGroup.thread === undefined` is what makes that a
+// type error rather than something to remember.
+
 // One rule of the Go strip is deliberately **not** taken: it drops a
 // `pr-1234-` prefix from a name because the number is on the line below. Here
 // there is no PR number on any line, so dropping it would lose the only place
@@ -68,6 +92,50 @@ const styles = stylex.create({
   row: {
     padding: `${space.row} ${space.gutter}`,
     marginBottom: "0.3rem",
+  },
+  // The one level of indent. Enough that the eye finds the thread's left edge,
+  // not so much that the name loses its column.
+  nested: { paddingInlineStart: "1.5rem" },
+
+  group: { marginBottom: "0.5rem" },
+  heading: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "0.4rem",
+    padding: `0.15rem ${space.gutter}`,
+  },
+  threadName: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    color: colors.text,
+    fontSize: text.small,
+  },
+  loose: { color: colors.muted },
+  plus: {
+    flexShrink: 0,
+    padding: "0 0.3rem",
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    color: colors.muted,
+    font: "inherit",
+    fontSize: text.small,
+    cursor: "pointer",
+  },
+  newThread: {
+    margin: `0.2rem ${space.gutter} 0.5rem`,
+    padding: "0.15rem 0.45rem",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.2rem",
+    color: colors.muted,
+    font: "inherit",
+    fontSize: text.tiny,
+    cursor: "pointer",
   },
   rowOn: { backgroundColor: colors.border },
 
@@ -235,6 +303,106 @@ function Row({
   );
 }
 
+/**
+ * One thread and the workspaces it claimed, or the group for what none did.
+ *
+ * The heading is a heading and not a row: a thread has nothing to open, so
+ * making it look pressable would be a lie about what a click does. The nesting
+ * is one level and stays one level — a workspace row already carries two lines,
+ * and a third level of indent spends the name's column on structure.
+ */
+function Group({
+  group,
+  selected,
+  onSelect,
+}: {
+  readonly group: ThreadGroup;
+  readonly selected: string | undefined;
+  readonly onSelect: (session: SessionInfo) => void;
+}) {
+  return (
+    <div {...stylex.props(styles.group)}>
+      <div {...stylex.props(styles.heading)}>
+        <span {...stylex.props(styles.threadName, group.thread === undefined && styles.loose)}>
+          {group.title}
+        </span>
+      </div>
+
+      {/* Said rather than left blank. A thread with nothing in it is the row
+          waiting to be filled, and an empty space under a heading reads as a
+          rendering fault. */}
+      {group.workspaces.length === 0 && (
+        <div {...stylex.props(styles.empty, styles.nested)}>nothing yet</div>
+      )}
+
+      {group.workspaces.map((workspace) => (
+        <div key={workspace.key} {...stylex.props(styles.nested)}>
+          <Row workspace={workspace} selected={selected} onSelect={onSelect} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Start a thread.
+ *
+ * A title and nothing else, because that is all a thread is until something
+ * claims a workspace for it. What fills it is the create-workspace job, which
+ * is the other half of this and does not exist in the window yet.
+ */
+function NewThread({ onMade }: { readonly onMade: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+
+  const submit = () => {
+    const named = title.trim();
+    if (named === "") {
+      return;
+    }
+    createThread(named)
+      .then(() => {
+        setTitle("");
+        setOpen(false);
+        onMade();
+      })
+      // Dropped on purpose: the only way this fails is the daemon being absent,
+      // which the column already says in a full sentence.
+      .catch(() => {});
+  };
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} {...stylex.props(styles.newThread)}>
+        + thread
+      </button>
+    );
+  }
+
+  return (
+    <input
+      // A callback ref rather than `autoFocus`, which react-doctor flags: the
+      // attribute moves focus on any render the element happens to mount in,
+      // where this moves it exactly when the box is opened — which is the
+      // moment a person pressed a button expecting to type.
+      ref={(node) => node?.focus()}
+      value={title}
+      placeholder="what are you working on?"
+      onChange={(event) => setTitle(event.target.value)}
+      onBlur={() => setOpen(false)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          submit();
+        }
+        if (event.key === "Escape") {
+          setOpen(false);
+        }
+      }}
+      {...stylex.props(styles.newThread)}
+    />
+  );
+}
+
 export function Sidebar({
   sessions,
   selected,
@@ -246,7 +414,8 @@ export function Sidebar({
   readonly onSelect: (session: SessionInfo) => void;
   readonly failure: string | undefined;
 }) {
-  const workspaces = groupByWorkspace(sessions);
+  const { threads, reload } = useThreads();
+  const groups = groupByThread(threads, groupByWorkspace(sessions));
 
   // The two states of the column, chosen before the markup rather than inside
   // it. A daemon that is not running is the ordinary case during development,
@@ -254,10 +423,11 @@ export function Sidebar({
   const body =
     failure === undefined ? (
       <>
-        {workspaces.length === 0 && <div {...stylex.props(styles.empty)}>no workspaces</div>}
-        {workspaces.map((workspace) => (
-          <Row key={workspace.key} workspace={workspace} selected={selected} onSelect={onSelect} />
+        {groups.length === 0 && <div {...stylex.props(styles.empty)}>no workspaces</div>}
+        {groups.map((group) => (
+          <Group key={group.key} group={group} selected={selected} onSelect={onSelect} />
         ))}
+        <NewThread onMade={reload} />
       </>
     ) : (
       <div {...stylex.props(styles.failure)}>
