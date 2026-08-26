@@ -5,10 +5,10 @@ import type { SessionInfo, Thread } from "@awp-kit/protocol";
 // A workspace has one session per kind — an agent, an editor, whatever user
 // actions are configured — and every one of them is a separate zmx session with
 // its own name. Listing those names and labelling each with its workspace is
-// how three rows read `thicket.default` and two of them were the same place:
+// how three rows read `rowan.default` and two of them were the same place:
 //
-//   awp.thicket.default.agent   ┐
-//   awp.thicket.default.editor  ┘ →  "thicket.default", twice
+//   awp.rowan.default.agent   ┐
+//   awp.rowan.default.editor  ┘ →  "rowan.default", twice
 //
 // The identity comes off the wire rather than out of the name. Splitting a name
 // on dots looks like it answers this and does not: a name is shortened when it

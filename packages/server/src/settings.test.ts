@@ -7,10 +7,11 @@ import { DEFAULTS, SETTINGS_FILE, Settings, layer } from "./settings";
 
 // What a person configured, read back.
 //
-// The fixture in "the real file" is this machine's actual config, copied on
-// 2026-08-26. Copied rather than invented, because the point of reading an
-// existing file is that its shape is the Go implementation's rather than one
-// imagined here.
+// The fixture in "the real file" has the *shape* of a real config — the same
+// keys, the same nesting — with the values changed. Shape copied rather than
+// invented, because the point of reading an existing file is that its layout
+// is the Go implementation's rather than one imagined here; values invented,
+// because a test fixture is not the place for somebody's actual settings.
 
 const scratch = mkdtempSync(join(tmpdir(), "awp-settings-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

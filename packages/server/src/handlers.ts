@@ -15,11 +15,14 @@ import {
   AwpRpcs,
   JobNotFound,
   SessionNotFound,
+  ThreadStartFailed,
   type SessionIdentity,
   type SessionInfo,
 } from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
+import { WorkspaceIntent } from "./intent";
 import { createWorkspaceRef } from "./jobs/create-workspace";
+import { Settings } from "./settings";
 import { demo } from "./jobs/demo";
 import { Threads } from "./threads";
 import { refusalFor } from "./attachment";
@@ -58,6 +61,8 @@ export const layer = AwpRpcs.toLayer(
     const sessions = yield* Sessions;
     const jobs = yield* Jobs;
     const threads = yield* Threads;
+    const intent = yield* WorkspaceIntent;
+    const config = yield* Settings;
 
     // A job the client named and the daemon has never heard of. Its own
     // failure rather than a defect: asking about a job that was cleaned up, or
@@ -166,6 +171,46 @@ export const layer = AwpRpcs.toLayer(
       // Returns the record rather than the workspace, because the work outlives
       // the request. Whether it succeeded is a question for JobChanges.
       WorkspaceCreate: (payload) => jobs.enqueue(createWorkspaceRef, payload).pipe(Effect.orDie),
+
+      /**
+       * The one call the new-thread box makes: resolve, make the thread,
+       * enqueue the job.
+       *
+       * In this order for a reason. The thread is made *after* the model
+       * answers, so a failed resolve leaves nothing behind — an empty thread
+       * called "add tiered dis…" would be litter a person then has to tidy.
+       */
+      ThreadStart: ({ description, project, repo, base }) =>
+        Effect.gen(function* () {
+          const resolved = yield* intent
+            .resolve(description, project)
+            .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
+
+          const settings = yield* config.read();
+          const thread = yield* threads.create(resolved.label).pipe(Effect.orDie);
+
+          const job = yield* jobs
+            .enqueue(createWorkspaceRef, {
+              thread: thread.id,
+              project,
+              workspace: resolved.name,
+              label: resolved.label,
+              prompt: resolved.prompt,
+              repo,
+              // jj resolves the default bookmark of origin/upstream, falling
+              // back through main, master and trunk. So the usual answer needs
+              // no configuration and no guessing.
+              base: base ?? "trunk()",
+              bookmark:
+                settings.bookmarkPrefix === undefined
+                  ? undefined
+                  : `${settings.bookmarkPrefix}/${resolved.name}`,
+              agent: settings.agent,
+            })
+            .pipe(Effect.orDie);
+
+          return { thread, job };
+        }),
 
       // Threads. A store that cannot be read or written is the daemon being
       // broken — the disk is full, or the file is owned by someone else — so

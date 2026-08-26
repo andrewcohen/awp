@@ -31,6 +31,7 @@ const fakeMux = (sessions: ReadonlyArray<Session>) =>
     // The fake exists to be a Multiplexer, and a Multiplexer can now start a
     // session. Nothing under test calls it.
     start: () => Effect.void,
+    send: () => Effect.void,
     kill: () => Effect.void,
     setLabels: () => Effect.void,
     history: () => Effect.succeed(""),

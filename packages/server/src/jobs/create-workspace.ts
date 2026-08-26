@@ -239,6 +239,24 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       }),
   };
 
+  const brief: JobStep<CreateWorkspace> = {
+    name: "brief",
+    run: (input, context) =>
+      Effect.gen(function* () {
+        if (input.prompt === undefined || input.prompt.trim() === "") {
+          yield* context.log("nothing to tell the agent");
+          return;
+        }
+        yield* context.log("telling the agent what to do");
+        yield* mux
+          .send(agentSession(input), input.prompt)
+          .pipe(Effect.mapError(refused("could not brief the agent")));
+      }),
+    // No undo, and none is possible: there is no way to un-type something into
+    // a terminal. That is why this is **last** — nothing after it can fail and
+    // send the runner back through a step that cannot be run twice safely.
+  };
+
   const claim: JobStep<CreateWorkspace> = {
     name: "claim",
     run: (input, context) =>
@@ -256,7 +274,10 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
 
   return {
     ...createWorkspaceRef,
-    steps: [workspace, bookmark, session, claim],
+    // `brief` last, and `claim` before it. Sending text into a terminal cannot
+    // be undone or safely repeated, so it goes after everything that might
+    // fail — see the note on the step.
+    steps: [workspace, bookmark, session, claim, brief],
     /**
      * One attempt.
      *

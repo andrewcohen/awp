@@ -65,6 +65,7 @@ const deps = (): WorkspaceDeps => ({
     kill: (name: string) => act(`zmx.kill(${name})`),
     setLabels: (name: string, labels: Readonly<Record<string, string>>) =>
       act(`zmx.label(${name}:${labels["awp_workspace"] ?? ""})`),
+    send: (name: string) => act(`zmx.send(${name})`),
   } as unknown as Multiplexer["Service"],
 
   threads: {
@@ -83,9 +84,11 @@ const deps = (): WorkspaceDeps => ({
 
 const input = (over: Partial<CreateWorkspace> = {}): CreateWorkspace => ({
   thread: "20260826-aaaa",
-  project: "thicket",
+  project: "rowan",
   workspace: "tabular-exports",
-  repo: "/repos/thicket",
+  label: "Tabular exports",
+  prompt: "Add tabular exports.",
+  repo: "/repos/rowan",
   base: "main",
   bookmark: "andrew/tabular-exports",
   agent: ["claude"],
@@ -136,12 +139,13 @@ describe("making a workspace", () => {
 
     expect(job.status).toBe("succeeded");
     expect(trace).toEqual([
-      "mkdir(" + dirname(workspacePath("thicket", "tabular-exports")) + ")",
+      "mkdir(" + dirname(workspacePath("rowan", "tabular-exports")) + ")",
       "jj.add(tabular-exports)",
       "jj.bookmark(andrew/tabular-exports@tabular-exports@)",
-      "zmx.start(awp.thicket.tabular-exports.agent)",
-      "zmx.label(awp.thicket.tabular-exports.agent:tabular-exports)",
+      "zmx.start(awp.rowan.tabular-exports.agent)",
+      "zmx.label(awp.rowan.tabular-exports.agent:tabular-exports)",
       "thread.claim(20260826-aaaa:tabular-exports)",
+      "zmx.send(awp.rowan.tabular-exports.agent)",
     ]);
   });
 
@@ -150,7 +154,9 @@ describe("making a workspace", () => {
     // claiming first would present a half-built workspace as a finished one for
     // as long as the rest took.
     await make();
-    expect(trace.at(-1)).toBe("thread.claim(20260826-aaaa:tabular-exports)");
+    // Last but one now: briefing the agent comes after, because it is the step
+    // that cannot be undone.
+    expect(trace.at(-2)).toBe("thread.claim(20260826-aaaa:tabular-exports)");
   });
 
   test("the session is labelled after it is started", async () => {
@@ -159,10 +165,8 @@ describe("making a workspace", () => {
     // workspace a session belongs to. A session started and never labelled is a
     // session the sidebar cannot group.
     await make();
-    const started = trace.indexOf("zmx.start(awp.thicket.tabular-exports.agent)");
-    const labelled = trace.indexOf(
-      "zmx.label(awp.thicket.tabular-exports.agent:tabular-exports)",
-    );
+    const started = trace.indexOf("zmx.start(awp.rowan.tabular-exports.agent)");
+    const labelled = trace.indexOf("zmx.label(awp.rowan.tabular-exports.agent:tabular-exports)");
 
     expect(started).toBeGreaterThanOrEqual(0);
     expect(labelled).toBe(started + 1);
@@ -174,7 +178,7 @@ describe("making a workspace", () => {
     // optional step.
     const job = await make({ bookmark: undefined });
 
-    expect(job.steps).toEqual(["workspace", "bookmark", "session", "claim"]);
+    expect(job.steps).toEqual(["workspace", "bookmark", "session", "claim", "brief"]);
     expect(trace.some((line) => line.startsWith("jj.bookmark"))).toBe(false);
     expect(job.status).toBe("succeeded");
   });
@@ -182,8 +186,8 @@ describe("making a workspace", () => {
 
 describe("when a step fails", () => {
   test("what was done is undone, backwards", async () => {
-    breaking.add("zmx.start(awp.thicket.tabular-exports.agent)");
-    present.add(workspacePath("thicket", "tabular-exports") + "/.jj");
+    breaking.add("zmx.start(awp.rowan.tabular-exports.agent)");
+    present.add(workspacePath("rowan", "tabular-exports") + "/.jj");
 
     const job = await make();
 
@@ -192,13 +196,13 @@ describe("when a step fails", () => {
     // Backwards, and only over what completed. The session never finished, so
     // there is nothing of it to kill.
     expect(trace).toEqual([
-      "mkdir(" + dirname(workspacePath("thicket", "tabular-exports")) + ")",
+      "mkdir(" + dirname(workspacePath("rowan", "tabular-exports")) + ")",
       "jj.add(tabular-exports)",
       "jj.bookmark(andrew/tabular-exports@tabular-exports@)",
-      "zmx.start(awp.thicket.tabular-exports.agent)!",
+      "zmx.start(awp.rowan.tabular-exports.agent)!",
       "jj.unbookmark(andrew/tabular-exports)",
       "jj.forget(tabular-exports)",
-      `rm(${workspacePath("thicket", "tabular-exports")})`,
+      `rm(${workspacePath("rowan", "tabular-exports")})`,
     ]);
   });
 
@@ -215,7 +219,7 @@ describe("when a step fails", () => {
 
   test("an undo that fails leaves the job dirty and stops there", async () => {
     breaking.add("thread.claim(20260826-aaaa:tabular-exports)");
-    breaking.add("zmx.kill(awp.thicket.tabular-exports.agent)");
+    breaking.add("zmx.kill(awp.rowan.tabular-exports.agent)");
 
     const job = await make();
 
@@ -232,18 +236,18 @@ describe("undoing the workspace", () => {
     // `jj workspace forget` does not touch the directory — jj says so in its
     // own help — so the undo has to do both, or the next attempt cannot create
     // into the directory the last one left.
-    breaking.add("zmx.start(awp.thicket.tabular-exports.agent)");
-    present.add(workspacePath("thicket", "tabular-exports") + "/.jj");
+    breaking.add("zmx.start(awp.rowan.tabular-exports.agent)");
+    present.add(workspacePath("rowan", "tabular-exports") + "/.jj");
 
     await make();
-    expect(trace).toContain(`rm(${workspacePath("thicket", "tabular-exports")})`);
+    expect(trace).toContain(`rm(${workspacePath("rowan", "tabular-exports")})`);
   });
 
   test("a directory that is not a jj workspace is left alone", async () => {
     // `present` is empty, so there is no .jj inside. Deleting a person's files
     // because a later step failed is a far worse outcome than leaving a stray
     // directory behind, and this is the only place the job could do it.
-    breaking.add("zmx.start(awp.thicket.tabular-exports.agent)");
+    breaking.add("zmx.start(awp.rowan.tabular-exports.agent)");
 
     await make();
 
@@ -259,7 +263,7 @@ describe("the parent directory", () => {
     // is missing. Every project's *first* workspace would have failed.
     await make();
 
-    const parent = dirname(workspacePath("thicket", "tabular-exports"));
+    const parent = dirname(workspacePath("rowan", "tabular-exports"));
     expect(trace.indexOf(`mkdir(${parent})`)).toBe(0);
     expect(trace.indexOf(`mkdir(${parent})`)).toBeLessThan(
       trace.indexOf("jj.add(tabular-exports)"),
@@ -272,8 +276,6 @@ describe("where a workspace goes", () => {
     // `suggestedBy` in multiplexer.ts recovers a workspace's identity from
     // exactly this shape when a session carries no labels. Changing it here
     // would quietly break that.
-    expect(workspacePath("thicket", "discounts")).toMatch(
-      /\/\.awp\/workspaces\/thicket\/discounts$/u,
-    );
+    expect(workspacePath("rowan", "discounts")).toMatch(/\/\.awp\/workspaces\/rowan\/discounts$/u);
   });
 });

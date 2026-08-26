@@ -236,6 +236,20 @@ export class Multiplexer extends Context.Service<
       readonly command: ReadonlyArray<string>;
     }): Effect.Effect<void, MultiplexerError>;
 
+    /**
+     * Type text into a session, as though a person had.
+     *
+     * `zmx send`, which writes to the session's pty. What it is for is handing
+     * a new agent its instruction — the thing that turns a workspace that
+     * exists into work that has started.
+     *
+     * **Not idempotent, and cannot be.** Sending twice sends twice; there is no
+     * way to ask a terminal what it has already been told. A caller that must
+     * not repeat itself has to know it has not — which for the create job means
+     * this is the last step, so nothing after it can fail and cause a re-run.
+     */
+    send(name: string, text: string): Effect.Effect<void, MultiplexerError>;
+
     /** End a session and every client attached to it. */
     kill(name: string): Effect.Effect<void, MultiplexerError>;
 

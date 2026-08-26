@@ -34,11 +34,11 @@ describe("grouping sessions into workspaces", () => {
   // name and the kind was the part being dropped.
   it("puts a workspace's sessions on one row", () => {
     const got = groupByWorkspace([
-      awp("thicket", "default", "agent"),
-      awp("thicket", "default", "editor"),
+      awp("rowan", "default", "agent"),
+      awp("rowan", "default", "editor"),
     ]);
     expect(got).toHaveLength(1);
-    expect(got[0]?.label).toBe("thicket.default");
+    expect(got[0]?.label).toBe("rowan.default");
     expect(got[0]?.sessions).toHaveLength(2);
   });
 
@@ -46,8 +46,8 @@ describe("grouping sessions into workspaces", () => {
   // clicking the row must not open the editor.
   it("puts the agent first, whatever order they arrived in", () => {
     const got = groupByWorkspace([
-      awp("thicket", "default", "editor"),
-      awp("thicket", "default", "agent"),
+      awp("rowan", "default", "editor"),
+      awp("rowan", "default", "agent"),
     ]);
     expect(got[0]?.sessions.map((s) => s.identity?.kind)).toEqual(["agent", "editor"]);
   });
@@ -56,14 +56,14 @@ describe("grouping sessions into workspaces", () => {
   // happened to return is order that changes between two polls.
   it("orders workspaces by name, not by arrival", () => {
     const got = groupByWorkspace([
-      awp("thicket", "default", "agent"),
+      awp("rowan", "default", "agent"),
       awp("orchard", "effect-v4-poc", "agent"),
       awp("mossy", "default", "agent"),
     ]);
     expect(got.map((w) => w.label)).toEqual([
-      "orchard.effect-v4-poc",
       "mossy.default",
-      "thicket.default",
+      "orchard.effect-v4-poc",
+      "rowan.default",
     ]);
   });
 
@@ -73,10 +73,10 @@ describe("grouping sessions into workspaces", () => {
   it("keeps a session awp did not create out of the workspaces, and after them", () => {
     const got = groupByWorkspace([
       session("some-other-tool", undefined),
-      awp("thicket", "default", "agent"),
+      awp("rowan", "default", "agent"),
     ]);
     expect(got.map((w) => [w.label, w.foreign])).toEqual([
-      ["thicket.default", false],
+      ["rowan.default", false],
       ["some-other-tool", true],
     ]);
   });
@@ -86,14 +86,14 @@ describe("grouping sessions into workspaces", () => {
   // them — which is the same class of bug as the one this module fixes.
   it("does not merge the same workspace name across projects", () => {
     const got = groupByWorkspace([
-      awp("thicket", "default", "agent"),
+      awp("rowan", "default", "agent"),
       awp("mossy", "default", "agent"),
     ]);
     expect(got).toHaveLength(2);
   });
 
   it("does not mutate what it was given", () => {
-    const input = [awp("thicket", "default", "editor"), awp("thicket", "default", "agent")];
+    const input = [awp("rowan", "default", "editor"), awp("rowan", "default", "agent")];
     const before = input.map((s) => s.name);
     groupByWorkspace(input);
     expect(input.map((s) => s.name)).toEqual(before);
@@ -130,20 +130,20 @@ describe("what a row calls itself", () => {
   });
 
   it("names any other workspace for itself, and puts the project below", () => {
-    const [w] = groupByWorkspace([awp("thicket", "pr-2340-lantern-sentry", "agent")]);
-    expect(w?.name).toBe("pr-2340-lantern-sentry");
-    expect(w?.otherIdent).toBe("thicket");
+    const [w] = groupByWorkspace([awp("rowan", "pr-2340-lantern-header", "agent")]);
+    expect(w?.name).toBe("pr-2340-lantern-header");
+    expect(w?.otherIdent).toBe("rowan");
   });
 
   // The full address is still what orders the list and what the tooltip shows,
   // so shortening the visible name cannot make two rows indistinguishable.
   it("keeps the whole address whatever it calls itself", () => {
     const got = groupByWorkspace([
-      awp("thicket", "default", "agent"),
+      awp("rowan", "default", "agent"),
       awp("mossy", "default", "agent"),
     ]);
-    expect(got.map((w) => w.name)).toEqual(["mossy", "thicket"]);
-    expect(got.map((w) => w.label)).toEqual(["mossy.default", "thicket.default"]);
+    expect(got.map((w) => w.name)).toEqual(["mossy", "rowan"]);
+    expect(got.map((w) => w.label)).toEqual(["mossy.default", "rowan.default"]);
   });
 });
 
@@ -164,15 +164,15 @@ const inProject = (project: string, workspace: string): SessionInfo =>
 describe("groupByThread", () => {
   test("a thread shows the workspaces it claimed", () => {
     const workspaces = groupByWorkspace([
-      inProject("thicket", "discounts"),
-      inProject("api", "discounts"),
+      inProject("rowan", "discounts"),
+      inProject("beta", "discounts"),
     ]);
     const groups = groupByThread(
       [
         thread({
           members: [
-            { project: "thicket", workspace: "discounts" },
-            { project: "api", workspace: "discounts" },
+            { project: "rowan", workspace: "discounts" },
+            { project: "beta", workspace: "discounts" },
           ],
         }),
       ],
@@ -182,8 +182,8 @@ describe("groupByThread", () => {
     // One piece of work, two checkouts — the whole reason threads exist.
     expect(groups).toHaveLength(1);
     expect(groups[0]?.workspaces.map((w) => w.label)).toEqual([
-      "api.discounts",
-      "thicket.discounts",
+      "beta.discounts",
+      "rowan.discounts",
     ]);
   });
 
@@ -210,7 +210,7 @@ describe("groupByThread", () => {
     // A thread called "discounts" and a workspace called "discounts" are not
     // related. Only a claim relates them — the same rule identities() follows
     // for an unlabelled session: honestly unknown beats confidently wrong.
-    const workspaces = groupByWorkspace([inProject("thicket", "discounts")]);
+    const workspaces = groupByWorkspace([inProject("rowan", "discounts")]);
     const groups = groupByThread([thread({ title: "discounts", members: [] })], workspaces);
 
     expect(groups[0]?.workspaces).toEqual([]);
@@ -220,9 +220,9 @@ describe("groupByThread", () => {
   test("no loose group at all when everything is claimed", () => {
     // A heading reading "not in a thread" over nothing is a heading that
     // teaches the eye to skip the strip.
-    const workspaces = groupByWorkspace([inProject("thicket", "discounts")]);
+    const workspaces = groupByWorkspace([inProject("rowan", "discounts")]);
     const groups = groupByThread(
-      [thread({ members: [{ project: "thicket", workspace: "discounts" }] })],
+      [thread({ members: [{ project: "rowan", workspace: "discounts" }] })],
       workspaces,
     );
 
