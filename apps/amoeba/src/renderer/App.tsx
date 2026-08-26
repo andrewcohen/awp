@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@awp-kit/protocol";
+import { isTerminal } from "@awp-kit/jobs";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
@@ -9,7 +9,6 @@ import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
 import { type Collapsed, fitColumns } from "./columns";
 import { projectsOf } from "./workspaces";
-import { listSessions } from "./daemon";
 import {
   rememberCollapsed,
   rememberSession,
@@ -20,6 +19,7 @@ import { rendererFixture } from "./fixture";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
 import { colors, text } from "./tokens.stylex";
 import { useJobs } from "./useJobs";
+import { useSessions } from "./useSessions";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
 
@@ -86,12 +86,11 @@ export function App() {
     });
   };
 
-  const [sessions, setSessions] = useState<ReadonlyArray<SessionInfo>>([]);
+  const { sessions, failure, reload: reloadSessions } = useSessions();
   // Restored, not defaulted. Editing the renderer reloads the page, and a pane
   // that forgot its session every time would mean reattaching by hand after
   // every change.
   const [selected, setSelected] = useState<string | undefined>(rememberedSession);
-  const [failure, setFailure] = useState<string | undefined>();
   const { jobs } = useJobs();
 
   // Threads live here rather than in the sidebar, because the sidebar is no
@@ -99,9 +98,21 @@ export function App() {
   // the window. Two owners of the same list is two lists.
   const { threads, reload: reloadThreads } = useThreads();
 
-  // What is open, and therefore what a new thread would default to. Computed
-  // before the shortcut below, which reads it.
-  const open = sessions.find((session) => session.name === selected);
+  // What is open: the remembered name, but only while it names a session that
+  // is here and can be attached to.
+  //
+  // Derived rather than reconciled. The previous version wrote a corrected
+  // value back with `setSelected` when a remembered session had gone, which is
+  // a state write inside an effect — react-doctor flags it, and rightly: the
+  // corrected value is a function of the listing, so storing it is keeping a
+  // second copy of something already known.
+  //
+  // It also means nothing attaches to a name before the listing has confirmed
+  // it, which is the outcome the reconciliation existed to produce and now
+  // cannot be raced.
+  const open = sessions.find(
+    (session) => session.name === selected && session.refusal === undefined,
+  );
 
   // The modal, as a request rather than a boolean. It carries what the window
   // knew at the moment it was opened — which project was on screen, and which
@@ -109,41 +120,29 @@ export function App() {
   // selection that may move underneath it.
   const [newThread, setNewThread] = useState<NewThreadRequest | undefined>();
 
+  // ── why a job finishing re-reads the sessions ────────────────────────────
+  //
+  // Because a job is what makes one. Before this, the list was taken once at
+  // mount, which was right for as long as sessions only arrived from outside
+  // the window — and wrong the moment awp could create one.
+  //
+  // The failure had no tell. A thread appeared in the sidebar immediately, and
+  // its workspace did not, so it read "nothing yet" — which is precisely what a
+  // thread whose creation *failed* looks like, while the workspace, bookmark
+  // and session were all on disk.
+  //
+  // Counted rather than compared: `finished` changes exactly once per job that
+  // stops, which is exactly when there might be a new session to see. The
+  // threads are re-read at the same moment because the claim that puts a
+  // workspace under its thread is the job's second-to-last step.
+  const finished = jobs.filter((job) => isTerminal(job.status)).length;
   useEffect(() => {
-    let cancelled = false;
-    listSessions()
-      .then((listed) => {
-        if (cancelled) {
-          return;
-        }
-        setSessions(listed);
-        setFailure(undefined);
-        // A remembered session may have ended, been killed, or become
-        // unattachable since the window last ran. Attaching to it would fail
-        // with a refusal the user did not ask for, so it is dropped instead.
-        setSelected((current) => {
-          if (current === undefined) {
-            return current;
-          }
-          const still = listed.find((session) => session.name === current);
-          if (still !== undefined && still.refusal === undefined) {
-            return current;
-          }
-          rememberSession(undefined);
-          return undefined;
-        });
-      })
-      .catch((error: unknown) => {
-        // A daemon that is not running is the ordinary case during development,
-        // not an exception. The sidebar says so and tells you the command.
-        if (!cancelled) {
-          setFailure(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    reloadSessions();
+    reloadThreads();
+    // `reloadSessions` and `reloadThreads` are stable — see the note in
+    // useSessions on why `load` lives outside the component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [finished]);
 
   // cmd+N from anywhere in the window, and cmd+shift+N to start from the
   // workspace on screen rather than from the project's main line.
@@ -208,7 +207,7 @@ export function App() {
         <aside {...stylex.props(styles.column, styles.fixed(columns.sidebar))}>
           <Sidebar
             sessions={sessions}
-            selected={selected}
+            selected={open?.name}
             onSelect={(session) => {
               setSelected(session.name);
               rememberSession(session.name);
@@ -234,7 +233,7 @@ export function App() {
         />
 
         <main {...stylex.props(styles.column, styles.agent)}>
-          <Pane session={selected} fixture={rendererFixture} scheme={scheme} />
+          <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
         </main>
 
         <Divider

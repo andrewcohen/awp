@@ -122,6 +122,26 @@ export class Threads extends Context.Service<
       thread: string,
       member: ThreadMember,
     ) => Effect.Effect<Thread, ThreadStoreError | ThreadNotFound>;
+
+    /**
+     * Remove a thread, but only while it holds nothing. Answers whether it did.
+     *
+     * The only deletion there is, and the emptiness check is the whole reason
+     * it is safe to have one. A thread holding a workspace is the only record
+     * that those checkouts were one piece of work — that is what `archive` is
+     * for. A thread holding *nothing* is not a record of anything.
+     *
+     * It exists for the rollback of a create that failed. The thread is made by
+     * the handler before the job is enqueued, so the job cannot create it —
+     * but it can be the thing that takes it away, and an empty thread left in
+     * the sidebar by a failure a person already saw is litter with no way to
+     * sweep it.
+     *
+     * Idempotent both ways: a thread that is not there is already gone, and one
+     * with members is left alone rather than refused. The runner re-enters an
+     * undo, so neither may be an error.
+     */
+    readonly deleteIfEmpty: (thread: string) => Effect.Effect<boolean, ThreadStoreError>;
   }
 >()("awp/Threads") {}
 /**
@@ -180,6 +200,13 @@ export const make = Effect.gen(function* () {
   );
   const release = db.prepare(
     "delete from thread_members where thread_id = ? and project = ? and workspace = ?",
+  );
+  // One statement, so the emptiness check and the delete cannot disagree. A
+  // thread that gains a workspace between a read and a write is exactly the
+  // race this shape removes.
+  const dropEmpty = db.prepare(
+    `delete from threads
+       where id = ? and not exists (select 1 from thread_members where thread_id = ?)`,
   );
 
   /** Every thread with its members, in one pair of reads rather than N + 1. */
@@ -284,6 +311,13 @@ export const make = Effect.gen(function* () {
         `cannot attach ${member.project}/${member.workspace} to ${thread}`,
         () => void claim.run(thread, member.project, member.workspace, thread),
       ),
+
+    deleteIfEmpty: (thread: string) =>
+      ask(`cannot delete thread ${thread}`, () => {
+        const before = readThread.all(thread).length;
+        dropEmpty.run(thread, thread);
+        return before > 0 && readThread.all(thread).length === 0;
+      }),
 
     detach: (thread: string, member: ThreadMember) =>
       change(

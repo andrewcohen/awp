@@ -79,6 +79,11 @@ const deps = (): WorkspaceDeps => ({
     // created with. Its absence is what found the runner's defect hole: the
     // step threw, and the job sat at `running` forever rather than failing.
     rename: (thread: string, title: string) => act(`thread.rename(${thread}:${title})`),
+    // The `thread` step checks the thread is really there before building
+    // anything for it, and removes it on the way back out if it ended up
+    // holding nothing.
+    list: () => Effect.succeed([{ id: "20260826-aaaa" }]),
+    deleteIfEmpty: (thread: string) => act(`thread.delete(${thread})`).pipe(Effect.as(true)),
   } as unknown as Threads["Service"],
 
   files: {
@@ -258,7 +263,15 @@ describe("making a workspace", () => {
     // optional step.
     const job = await make({ bookmark: undefined });
 
-    expect(job.steps).toEqual(["name", "workspace", "bookmark", "session", "claim", "brief"]);
+    expect(job.steps).toEqual([
+      "thread",
+      "name",
+      "workspace",
+      "bookmark",
+      "session",
+      "claim",
+      "brief",
+    ]);
     expect(trace.some((line) => line.startsWith("jj.bookmark"))).toBe(false);
     expect(job.status).toBe("succeeded");
   });
@@ -275,6 +288,11 @@ describe("when a step fails", () => {
     expect(job.cleanup).toBe("clean");
     // Backwards, and only over what completed. The session never finished, so
     // there is nothing of it to kill.
+    //
+    // The thread goes **last**, which is the whole reason its step is first:
+    // compensation runs in reverse, so only from the front of the list can a
+    // step ask "does this thread still hold anything" after everything else
+    // has let go of it.
     expect(trace).toEqual([
       "mkdir(" + dirname(workspacePath("rowan", "tiered-discounts")) + ")",
       "jj.add(tiered-discounts)",
@@ -283,6 +301,7 @@ describe("when a step fails", () => {
       "jj.unbookmark(andrew/tiered-discounts)",
       "jj.forget(tiered-discounts)",
       `rm(${workspacePath("rowan", "tiered-discounts")})`,
+      "thread.delete(20260826-aaaa)",
     ]);
   });
 
