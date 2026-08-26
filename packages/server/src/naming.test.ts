@@ -35,7 +35,7 @@ const WORKSPACES = [
   "pr-2336-dev-mlwzqyrmxslo",
   "pr-2336-dev-qqtnvbdlrxzz",
   "effect-ts-tiered-discount-timemachine",
-  "pr-2357-lantern-lantern-email-link-identity",
+  "pr-2357-lantern-email-link-identity",
 ];
 const KINDS = ["agent", "captain", "action_dev", "action_verylongactionname"];
 
@@ -123,73 +123,80 @@ describe("compatibility with sessions that already exist", () => {
   // This is the test that matters most in the file. A name is an address: if
   // the port disagreed with the Go implementation by a single character, every
   // shortened session already running would stop being found and awp would
-  // start a second of each. A synthetic corpus cannot catch that — only real
-  // names can, because the fingerprint has to match a hash computed by other
-  // code, months ago.
+  // start a second of each.
   //
-  // The thicket pair is the interesting one: the same workspace with two kinds
-  // produces the same fingerprint at two different keep-lengths, which is the
-  // budget split doing its job.
+  // These were real names once, read off a live `zmx ls`, and they are not any
+  // more — see the naming rule in AGENTS.md. What that costs is worth being
+  // honest about: the expectations below were computed by the very code they
+  // check, so they no longer prove agreement with a hash some other program
+  // wrote months ago. What they still do is pin it. Any future change to the
+  // shortening breaks all ten at once, which is the property that matters,
+  // because a name is an address and one character of disagreement leaves
+  // every shortened session unfindable.
+  //
+  // The `thicket` pair is the interesting one: the same workspace with two
+  // kinds produces the same fingerprint at two different keep-lengths, which is
+  // the budget split doing its job.
   const observed: ReadonlyArray<readonly [string, string, string, string]> = [
     [
-      "typed-router",
-      "effect-ts-v4-endpoint-poc",
+      "harbor",
+      "typed-router-endpoint-proof-of-concept",
       "agent",
-      "awp.typed-router.effect-ts-v4-endpo-afe7.agent",
+      "awp.harbor.typed-router-endpoint-pr-9f6c.agent",
     ],
     [
       "orchard",
-      "pr-557-lantern-sentry-header-allowlist",
+      "pr-557-lantern-header-allowlist",
       "agent",
-      "awp.orchard.pr-557-lantern-sentry-head-bc47.agent",
+      "awp.orchard.pr-557-lantern-header-a-8f11.agent",
     ],
     [
       "orchard",
-      "pr-558-lantern-lantern-identity-hasher",
+      "pr-558-lantern-identity-hasher",
       "agent",
-      "awp.orchard.pr-558-lantern-lantern-ide-bfad.agent",
+      "awp.orchard.pr-558-lantern-identity-5992.agent",
     ],
     [
       "thicket",
-      "effect-ts-tiered-discount-timemachine",
+      "effect-tiered-discount-timemachine",
       "action_dev",
-      "awp.thicket.effect-ts-tiered-d-f500.action_dev",
+      "awp.thicket.effect-tiered-disc-f488.action_dev",
     ],
     [
       "thicket",
-      "effect-ts-tiered-discount-timemachine",
+      "effect-tiered-discount-timemachine",
       "agent",
-      "awp.thicket.effect-ts-tiered-discou-f500.agent",
+      "awp.thicket.effect-tiered-discount-f488.agent",
     ],
     [
       "thicket",
-      "pr-2320-jordan-survey-slot-cls",
+      "pr-2320-survey-slot-collapse-metrics",
       "agent",
-      "awp.thicket.pr-2320-jordan-survey-s-a5f9.agent",
+      "awp.thicket.pr-2320-survey-slot-col-84b1.agent",
     ],
     [
       "thicket",
-      "pr-2340-lantern-sentry-header-allowlist",
+      "pr-2340-lantern-header-allowlist",
       "agent",
-      "awp.thicket.pr-2340-lantern-sentry-h-6fb6.agent",
+      "awp.thicket.pr-2340-lantern-header-c1d2.agent",
     ],
     [
       "thicket",
-      "pr-2357-lantern-lantern-email-link-identity",
+      "pr-2357-lantern-email-link-identity",
       "agent",
-      "awp.thicket.pr-2357-lantern-lantern-78f6.agent",
+      "awp.thicket.pr-2357-lantern-email-l-1bba.agent",
     ],
     [
       "thicket",
-      "pr-2359-lantern-lantern-identity-resolve",
+      "pr-2359-lantern-identity-resolve",
       "agent",
-      "awp.thicket.pr-2359-lantern-lantern-6071.agent",
+      "awp.thicket.pr-2359-lantern-identit-20e3.agent",
     ],
     [
       "thicket",
-      "express-2nd-pick-v2-rollback-ship",
+      "quick-2nd-pick-v2-rollback-ship",
       "agent",
-      "awp.thicket.express-2nd-pick-v2-rol-999a.agent",
+      "awp.thicket.quick-2nd-pick-v2-rollb-15a0.agent",
     ],
   ];
 
@@ -261,7 +268,7 @@ describe("identityLabels", () => {
   });
 
   test("carries what a shortened name loses", () => {
-    const workspace = "pr-2357-lantern-lantern-email-link-identity";
+    const workspace = "pr-2357-lantern-email-link-identity";
     const name = sessionName("thicket", workspace, "agent");
     expect(parseSessionName(name)?.workspace).not.toBe(workspace);
     expect(identityLabels("thicket", workspace, "agent")[LABEL_WORKSPACE]).toBe(workspace);

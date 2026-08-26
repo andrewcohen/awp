@@ -94,11 +94,11 @@ describe("threads", () => {
       Effect.gen(function* () {
         const a = yield* threads.create("a");
         const b = yield* threads.create("b");
-        yield* threads.attach(a.id, pair("thicket", "discounts"));
+        yield* threads.attach(a.id, pair("rowan", "discounts"));
         // The second claim wins, and the first thread lets go without being
         // asked. Resolving this on read instead has no rendering: the sidebar
         // would have to draw the workspace twice.
-        yield* threads.attach(b.id, pair("thicket", "discounts"));
+        yield* threads.attach(b.id, pair("rowan", "discounts"));
         return yield* threads.list();
       }),
     );
@@ -113,21 +113,21 @@ describe("threads", () => {
     const found = await on(path, (threads) =>
       Effect.gen(function* () {
         const made = yield* threads.create("a");
-        yield* threads.attach(made.id, pair("thicket", "discounts"));
+        yield* threads.attach(made.id, pair("rowan", "discounts"));
         // A job step re-runs after a retry, so every write a step makes has to
         // be safe to make twice.
-        return yield* threads.attach(made.id, pair("thicket", "discounts"));
+        return yield* threads.attach(made.id, pair("rowan", "discounts"));
       }),
     );
 
-    expect(found.members).toEqual([pair("thicket", "discounts")]);
+    expect(found.members).toEqual([pair("rowan", "discounts")]);
   });
 
   test("detaching a workspace that is not there is not an error", async () => {
     const found = await on(file(), (threads) =>
       Effect.gen(function* () {
         const made = yield* threads.create("a");
-        return yield* threads.detach(made.id, pair("thicket", "never-attached"));
+        return yield* threads.detach(made.id, pair("rowan", "never-attached"));
       }),
     );
 
@@ -138,12 +138,12 @@ describe("threads", () => {
     const found = await on(file(), (threads) =>
       Effect.gen(function* () {
         const made = yield* threads.create("tiered discounts");
-        yield* threads.attach(made.id, pair("thicket", "discounts"));
-        return yield* threads.attach(made.id, pair("api", "discounts"));
+        yield* threads.attach(made.id, pair("rowan", "discounts"));
+        return yield* threads.attach(made.id, pair("beta", "discounts"));
       }),
     );
 
-    expect(found.members).toEqual([pair("thicket", "discounts"), pair("api", "discounts")]);
+    expect(found.members).toEqual([pair("rowan", "discounts"), pair("beta", "discounts")]);
   });
 
   test("archiving is reversible", async () => {
@@ -178,13 +178,13 @@ describe("threads", () => {
     const found = await on(file(), (threads) =>
       Effect.gen(function* () {
         const made = yield* threads.create("wrong name");
-        yield* threads.attach(made.id, pair("thicket", "discounts"));
+        yield* threads.attach(made.id, pair("rowan", "discounts"));
         return yield* threads.rename(made.id, "right name");
       }),
     );
 
     expect(found.title).toBe("right name");
-    expect(found.members).toEqual([pair("thicket", "discounts")]);
+    expect(found.members).toEqual([pair("rowan", "discounts")]);
   });
 
   test("a thread that is not there fails as ThreadNotFound", async () => {

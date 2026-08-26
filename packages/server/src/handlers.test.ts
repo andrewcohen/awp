@@ -10,6 +10,8 @@ import { RpcTest } from "effect/unstable/rpc";
 import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
+import { WorkspaceIntent } from "./intent";
+import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
 import { demo } from "./jobs/demo";
 import { makeFake } from "./pty-fake";
@@ -49,6 +51,7 @@ const fakeMux = Layer.succeed(Multiplexer, {
   // The fake exists to be a Multiplexer, and a Multiplexer can now start a
   // session. Nothing under test calls it.
   start: () => Effect.void,
+  send: () => Effect.void,
   kill: () => Effect.void,
   setLabels: () => Effect.void,
   history: () => Effect.succeed(""),
@@ -67,6 +70,18 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =
     Effect.gen(function* () {
       const fake = yield* makeFake({ chunks: ["\u001B[2J", "ready$ "] });
       const stack = handlers.layer.pipe(
+        // The two the handlers need and this suite does not exercise. Settings
+        // real, because it reads a file that is not there and answers with
+        // defaults — which is the honest behaviour and needs no fake. Intent
+        // faked, because the real one spawns claude and takes ten seconds; the
+        // model call has its own probe.
+        Layer.provide(settings.layer(join(scratch, "no-config.json"))),
+        Layer.provide(
+          Layer.succeed(WorkspaceIntent)({
+            resolve: (description: string) =>
+              Effect.succeed({ name: "a-name", label: description, prompt: description }),
+          }),
+        ),
         // Threads on a database of their own, one file per test in a temp
         // directory. There is no memory store for threads because there is no
         // store abstraction — a thread *is* rows, and a fake would be testing
@@ -200,11 +215,11 @@ describe("jobs over the contract", () => {
         const made = yield* rpc.ThreadCreate({ title: "tiered discounts" });
         yield* rpc.ThreadAttach({
           thread: made.id,
-          member: { project: "thicket", workspace: "discounts" },
+          member: { project: "rowan", workspace: "discounts" },
         });
         return yield* rpc.ThreadAttach({
           thread: made.id,
-          member: { project: "api", workspace: "discounts" },
+          member: { project: "beta", workspace: "discounts" },
         });
       }),
     );
@@ -212,8 +227,8 @@ describe("jobs over the contract", () => {
     // The whole point of a thread: one piece of work, two checkouts.
     expect(found.title).toBe("tiered discounts");
     expect(found.members).toEqual([
-      { project: "thicket", workspace: "discounts" },
-      { project: "api", workspace: "discounts" },
+      { project: "rowan", workspace: "discounts" },
+      { project: "beta", workspace: "discounts" },
     ]);
   });
 

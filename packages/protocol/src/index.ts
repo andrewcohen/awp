@@ -102,14 +102,14 @@ export type SessionInfo = (typeof SessionInfo)["Type"];
 // ── threads ────────────────────────────────────────────────────────────────
 //
 // A thread is the piece of work. A workspace is a checkout, and one piece of
-// work often needs two of them — a change to thicket's frontend and the api
+// work often needs two of them — a change to rowan's frontend and the api
 // behind it is one thread, two projects, two jj workspaces, six sessions. The
 // sidebar used to show that as two unrelated rows and leave the connection to
 // be held in someone's head.
 //
 //   thread  "tiered discounts"
-//     ├── thicket/tiered-discounts   agent · editor · action
-//     └── api/tiered-discounts       agent · editor · action
+//     ├── rowan/tiered-discounts   agent · editor · action
+//     └── beta/tiered-discounts       agent · editor · action
 //
 // **A thread holds pairs, not sessions.** Sessions come and go — a workspace
 // with nothing running is still part of the work — so what is written down is
@@ -159,6 +159,18 @@ export class ThreadNotFound extends Schema.TaggedError<ThreadNotFound>()("Thread
 }) {}
 
 /**
+ * A thread could not be started — the model was unreachable, or answered with
+ * something unusable.
+ *
+ * Its own failure rather than a defect: it happens, it is the user's to see,
+ * and the sentence is the one the model or the CLI produced.
+ */
+export class ThreadStartFailed extends Schema.TaggedError<ThreadStartFailed>()(
+  "ThreadStartFailed",
+  { reason: Schema.String },
+) {}
+
+/**
  * What making a workspace needs to know.
  *
  * The one input a person actually supplies is `workspace` — the rest is the
@@ -172,7 +184,22 @@ export const CreateWorkspace = Schema.Struct({
   /** The thread that claims it. See {@link Thread}. */
   thread: Schema.String,
   project: Schema.String,
+  /**
+   * The workspace's name: a directory, and jj's name for it.
+   *
+   * Already a usable path when it gets here. Whoever enqueued this asked a
+   * model for it and re-slugged the answer — see `WorkspaceIntent` — so the
+   * job's input fully determines what it does and a retry cannot land
+   * somewhere different.
+   */
   workspace: Schema.String,
+  /** What the sidebar shows for the thread. Also already resolved. */
+  label: Schema.String,
+  /**
+   * What to type into the new agent session once it exists, or absent for
+   * nothing. A workspace with no instruction is a workspace, not an error.
+   */
+  prompt: Schema.optional(Schema.String),
   /**
    * The repository the workspace comes from — the *source* repo, not a
    * workspace of it. `jj root` answers with a workspace and is the wrong thing
@@ -197,6 +224,11 @@ export const CreateWorkspace = Schema.Struct({
 });
 
 export type CreateWorkspace = (typeof CreateWorkspace)["Type"];
+
+/** What {@link Rpc ThreadStart} hands back: the thread, and the job building it. */
+export const ThreadStarted = Schema.Struct({ thread: Thread, job: Job });
+
+export type ThreadStarted = (typeof ThreadStarted)["Type"];
 
 // ── failures a client is expected to handle ────────────────────────────────
 //
@@ -440,5 +472,32 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("WorkspaceCreate", {
     payload: CreateWorkspace,
     success: Job,
+  }),
+
+  /**
+   * Start a thread from a sentence.
+   *
+   * The one call the new-thread box makes: it asks a model to turn what a
+   * person typed into a workspace name, a title and an instruction for the
+   * agent, makes the thread, and enqueues the job that builds the rest.
+   *
+   * The model call is why this takes ten seconds or so, and it happens here
+   * rather than inside the job because four of the job's five steps need the
+   * name. A job's input is what makes it retryable, so resolving first means a
+   * retry re-runs against the same answer instead of asking again and possibly
+   * landing somewhere else.
+   *
+   * Fails outright if the model cannot be reached. Deliberate for now — the
+   * alternative is a workspace with a name nobody chose.
+   */
+  Rpc.make("ThreadStart", {
+    payload: {
+      description: Schema.String,
+      project: Schema.String,
+      repo: Schema.String,
+      base: Schema.optional(Schema.String),
+    },
+    success: ThreadStarted,
+    error: ThreadStartFailed,
   }),
 ) {}

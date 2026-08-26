@@ -19,7 +19,7 @@ const encode = Schema.encodeSync(codec);
 const decode = Schema.decodeSync(codec);
 
 const example: SessionInfo = {
-  name: "awp.alpha.pr-2336-dev-mlwzqyrmxslo.action_dev",
+  name: "awp.rowan.pr-2336-dev-mlwzqyrmxslo.action_dev",
   pid: 51234,
   clients: 1,
   startDir: "/Users/someone/src/awp",
@@ -29,8 +29,8 @@ const example: SessionInfo = {
   cmd: "claude",
   // The real keys, underscored. A dot cannot appear in one: the reduction that
   // makes a name safe to split turns it into an underscore.
-  labels: { awp_project: "alpha", awp_workspace: "pr-2336-dev-mlwzqyrmxslo", awp_kind: "dev" },
-  identity: { project: "alpha", workspace: "pr-2336-dev-mlwzqyrmxslo", kind: "dev" },
+  labels: { awp_project: "rowan", awp_workspace: "pr-2336-dev-mlwzqyrmxslo", awp_kind: "dev" },
+  identity: { project: "rowan", workspace: "pr-2336-dev-mlwzqyrmxslo", kind: "dev" },
   refusal: undefined,
 };
 
@@ -105,7 +105,7 @@ const thread: Thread = {
   title: "tiered discounts",
   createdAt: new Date(1_700_000_000_000),
   archivedAt: undefined,
-  members: [{ project: "thicket", workspace: "discounts" }],
+  members: [{ project: "rowan", workspace: "discounts" }],
 };
 
 const handlers = AwpRpcs.toLayer({
@@ -150,7 +150,7 @@ describe("the contract", () => {
         Effect.gen(function* () {
           const rpc = yield* client;
           const chunks = yield* Stream.runCollect(
-            rpc.Attach({ session: "alpha", cols: 100, rows: 30 }),
+            rpc.Attach({ session: "rowan", cols: 100, rows: 30 }),
           );
           // Escape sequences arrive intact, byte for byte. There is no byte
           // stage anywhere on this path and nothing should have introduced one.

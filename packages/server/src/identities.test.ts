@@ -104,13 +104,17 @@ describe("repairing against the working directory", () => {
   // like any other candidate, so it is believed only when it reproduces the
   // name that was actually observed. These four rows on this machine had no
   // labelled session anywhere in the listing and were showing their shortened
-  // names — orchard.pr-557-lantern-sentry-head-bc47 and friends.
+  // names — orchard.pr-557-lantern-header-head-bc47 and friends.
   it("recovers a name from ~/.awp/workspaces/<project>/<workspace>", () => {
-    const name = sessionName("orchard", "pr-557-lantern-sentry-head-refactor", "agent");
+    const name = sessionName("orchard", "pr-557-lantern-header-head-refactor", "agent");
     const found = identities([
-      session(name, {}, "/Users/someone/.awp/workspaces/orchard/pr-557-lantern-sentry-head-refactor"),
+      session(
+        name,
+        {},
+        "/Users/someone/.awp/workspaces/orchard/pr-557-lantern-header-head-refactor",
+      ),
     ]);
-    expect(found.get(name)?.workspace).toBe("pr-557-lantern-sentry-head-refactor");
+    expect(found.get(name)?.workspace).toBe("pr-557-lantern-header-head-refactor");
   });
 
   // A default workspace is the repository itself, so its directory names only

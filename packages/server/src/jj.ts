@@ -92,9 +92,9 @@ export class Jj extends Context.Service<
      * `.jj/repo` is a *file* holding a path to the real repository's `.jj/repo`
      * rather than a directory, so this reads it and walks back up:
      *
-     *   ~/.awp/workspaces/awp/amoeba/.jj/repo
-     *     → ../../../../../go/src/github.com/andrewcohen/awp/.jj/repo
-     *       → /Users/acohen/go/src/github.com/andrewcohen/awp
+     *   ~/.awp/workspaces/alpha/work/.jj/repo
+     *     → ../../../../../src/alpha/.jj/repo
+     *       → /src/alpha
      *
      * For a primary workspace `.jj/repo` is a directory and the answer is the
      * workspace root itself, unchanged.

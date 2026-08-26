@@ -154,6 +154,19 @@ const make = Effect.gen(function* () {
         yield* runIn(op, options.cwd, ["run", options.name, "-d", ...options.command]);
       }),
 
+    send: (name: string, text: string) =>
+      named("send", name).pipe(
+        Effect.andThen(
+          Effect.suspend(() =>
+            text === ""
+              ? Effect.void
+              : // A trailing newline, because the point is to submit the line
+                // rather than leave it sitting at a prompt.
+                run("send", ["send", name, `${text}\n`]).pipe(Effect.asVoid),
+          ),
+        ),
+      ),
+
     kill: (name: string) =>
       named("kill", name).pipe(
         Effect.andThen(run("kill", ["kill", name, "--force"])),

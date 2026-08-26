@@ -20,11 +20,11 @@ import { useThreads } from "./useThreads";
 // about exactly this strip. They are worth taking rather than rediscovering,
 // and each one is here because something was tried and read badly.
 //
-//   ● pr-2340-lantern-sentry-header-allowlist
-//     thicket · agent
+//   ● pr-2340-lantern-header-header-allowlist
+//     rowan · agent
 //
 //   ● effect-ts-tiered-discount-timemachine
-//     thicket · agent editor action_dev
+//     rowan · agent editor action_dev
 //
 // **Two lines, always.** A row has two unrelated facts to carry — which
 // workspace, and what is in it — and on one line they compete: the kinds are

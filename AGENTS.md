@@ -365,8 +365,8 @@ often needs two of them.
 
 ```
   thread  "tiered discounts"
-    ├── thicket/tiered-discounts   agent · editor · action
-    └── api/tiered-discounts       agent · editor · action
+    ├── rowan/tiered-discounts   agent · editor · action
+    └── beta/tiered-discounts    agent · editor · action
 ```
 
 **A thread holds `(project, workspace)` pairs, not sessions**, and that choice
@@ -781,6 +781,66 @@ nobody can find is a debug tool nobody uses, and a 4Hz timer is not a cost worth
 hiding it for. And it shows peaks beside live figures, because by the time a
 hand leaves the trackpad the live figure is zero — a reading only anyone fast
 enough to catch is not a reading.
+
+## Never write a real name down
+
+No real project, repository, branch, customer, product or person's name goes
+into this repo — not in code, not in a test fixture, not in a comment, not in a
+commit message. `awp`, `amoeba` and `andrew` are the exceptions, because the
+repository is already public under them.
+
+This is a repo about a tool for working on _other_ repositories, so real names
+arrive constantly and by accident: a session read off `zmx ls`, a path in an
+error, a workspace in a screenshot, an example in a doc. Every one of them is a
+thing that ends up on GitHub.
+
+Invent instead. The corpus in `naming.test.ts` uses `thicket`, `orchard`,
+`harbor-works`, `typed-router` and `lantern`, which are shaped like the real
+ones — long enough to shorten, sharing prefixes where the real pair did — and
+name nothing.
+
+Two things learned doing the scrub, both worth not rediscovering:
+
+- **A rename can move an assertion.** The sidebar orders workspaces
+  alphabetically, so swapping a project name for one that sorts differently
+  silently reorders every fixture built on it. Two tests failed on exactly
+  that. Pick a replacement that sorts where the original did, or fix the
+  expectation deliberately.
+- **A rename can change a hash.** `naming.test.ts` pins ten shortened session
+  names, and a stem that changes changes its fingerprint. The expectations were
+  recomputed, and the test now says plainly what that cost: they were real
+  names once, so they proved agreement with a hash written months ago by other
+  code; recomputed, they only pin the current behaviour. That is still the
+  property worth having — a name is an address — but it is a weaker claim, and
+  the comment says so rather than pretending otherwise.
+
+When something has already been written down, rewrite the history rather than
+adding a commit on top. Check `git log --oneline -S <name> origin/main` first,
+because a name that reached the remote is a different problem.
+
+**Use `jj fix`.** Not `jj edit` on an ancestor, and not `git filter-branch`.
+Editing an old commit by hand and letting descendants rebase produced 47
+conflicts across a 140-commit branch, because every later commit that touched
+the same files collides. `jj fix` runs a tool over the file content of a whole
+revset and says so in its own docs: _"Descendants will also be updated by
+passing their versions of the same files through the same tools. This will
+never result in new conflicts."_ It rewrote 129 commits with none.
+
+```
+jj fix \
+  --config 'fix.tools.scrub.command=["python3", "<filter>.py", "$path"]' \
+  --config 'fix.tools.scrub.patterns=["glob:**/*.ts", "glob:**/*.go", …]' \
+  -s '<base>..@'
+```
+
+The filter reads a file on stdin and writes it back on stdout, so it must be
+deterministic — `jj fix` reuses one result for identical content across
+commits.
+
+It fixes **file content only**. Commit messages are separate, and the check
+that catches them is `jj log -T description` piped through the same filter;
+rewrite each with `jj describe -r <id> --stdin`. Five were missed on the first
+pass because the trees came back clean and the messages were not looked at.
 
 ## Working here
 
