@@ -328,6 +328,69 @@ export const ThreadStarted = Schema.Struct({ thread: Thread, job: Job });
 
 export type ThreadStarted = (typeof ThreadStarted)["Type"];
 
+// ── the diff of a workspace ────────────────────────────────────────────────
+//
+// What the accessory column's diff panel needs, and nothing beyond it. Two
+// calls: the commits worth looking at, and the patch for one of them.
+//
+// **The patch crosses the wire as text.** Not as parsed files and hunks, and
+// that is the decision worth defending. A diff renderer already parses unified
+// diffs — it has to, for the highlighting and the expansion — so a daemon-side
+// parse would be a second implementation of the same grammar, shipped so that
+// the first one could be handed something it then flattens back into lines.
+// The format is also not awp's to invent: `--git` is what jj emits and what
+// every renderer reads, and keeping it end to end means the thing on screen is
+// the thing jj said.
+
+/** One commit, as much of it as a picker needs to draw a row. */
+export const Revision = Schema.Struct({
+  /**
+   * The stable handle, and what {@link AwpRpcs Diff} takes back.
+   *
+   * The change id rather than the commit id, because a commit id changes every
+   * time the commit is amended and a panel holding one would be pointing at a
+   * revision that no longer exists the moment the agent edits a file. The
+   * change id is the same commit through every rewrite, which is the whole
+   * reason jj has it.
+   */
+  changeId: Schema.String,
+  commitId: Schema.String,
+  /** The whole message. A row shows the first line; a header shows the rest. */
+  description: Schema.String,
+  author: Schema.String,
+  authored: Schema.UndefinedOr(Schema.Date),
+  /** Changes nothing. The top of a working stack usually is one. */
+  empty: Schema.Boolean,
+  /**
+   * The working copy of the workspace that was asked about.
+   *
+   * On the wire rather than derived, because a client cannot derive it: `@` is
+   * resolved per workspace and the client passed a directory, not a workspace
+   * name. It is also the row that must ask for its diff *without* naming a
+   * revision — see {@link AwpRpcs Diff}.
+   */
+  workingCopy: Schema.Boolean,
+  bookmarks: Schema.Array(Schema.String),
+});
+
+export type Revision = (typeof Revision)["Type"];
+
+/** A git-format patch, and which revision was read to get it. */
+export const Patch = Schema.Struct({
+  /**
+   * What was actually diffed — `@` when the working copy was asked for.
+   *
+   * Echoed back so a client can drop a reply it no longer wants. Two of these
+   * are in flight whenever someone clicks a second commit before the first has
+   * answered, and they do not necessarily come back in order.
+   */
+  revision: Schema.String,
+  /** Empty when the revision changed nothing, which is not a failure. */
+  patch: Schema.String,
+});
+
+export type Patch = (typeof Patch)["Type"];
+
 // ── failures a client is expected to handle ────────────────────────────────
 //
 // Schema-backed so they survive the wire as themselves rather than as a string.
@@ -356,6 +419,19 @@ export class AttachRefused extends Schema.TaggedError<AttachRefused>()("AttachRe
 }) {}
 
 /** Asked about a job the daemon has no record of. */
+/**
+ * jj could not answer — the directory is not in a repository, or the revset
+ * names nothing.
+ *
+ * A declared failure rather than a defect, because every one of these is
+ * ordinary: a session started in a directory nobody put under version control
+ * is a normal thing to have open, and the panel's job is to say so rather than
+ * to go blank.
+ */
+export class DiffUnavailable extends Schema.TaggedError<DiffUnavailable>()("DiffUnavailable", {
+  reason: Schema.String,
+}) {}
+
 export class JobNotFound extends Schema.TaggedError<JobNotFound>()("JobNotFound", {
   job: Schema.String,
 }) {}
@@ -622,5 +698,49 @@ export class AwpRpcs extends RpcGroup.make(
     },
     success: ThreadStarted,
     error: ThreadStartFailed,
+  }),
+
+  /**
+   * The commits worth looking at in a workspace, newest first.
+   *
+   * The daemon decides what "worth looking at" means — the working copy and
+   * everything between it and the project's main line — for the same reason
+   * {@link ThreadBases} resolves its own revsets: the rule involves `trunk()`,
+   * which a client cannot evaluate, and a rule with two implementations has
+   * one that drifts.
+   *
+   * `limit` is the client's to set because the client is what has to draw
+   * them. A stack measured against a trunk nobody has fetched in a month is
+   * hundreds of commits, and the panel is a column two hundred pixels wide.
+   */
+  Rpc.make("Revisions", {
+    payload: {
+      /** A directory in the workspace — a session's `startDir` will do. */
+      from: Schema.String,
+      limit: Schema.optional(Schema.Int),
+    },
+    success: Schema.Array(Revision),
+    error: DiffUnavailable,
+  }),
+
+  /**
+   * One revision as a git-format patch.
+   *
+   * **Leave `revision` out to mean the working copy**, and that is not the
+   * same as passing the change id the listing gave for it. Absent is the only
+   * form that snapshots the files on disk first, so it is the only form that
+   * includes what an agent has written and not yet committed — which, for a
+   * panel watching an agent work, is the entire point. Naming a revision reads
+   * history, changes nothing, and is what every other row wants.
+   */
+  Rpc.make("Diff", {
+    payload: {
+      /** A directory in the workspace — a session's `startDir` will do. */
+      from: Schema.String,
+      /** A change id. Absent means the working copy, freshly snapshotted. */
+      revision: Schema.optional(Schema.String),
+    },
+    success: Patch,
+    error: DiffUnavailable,
   }),
 ) {}

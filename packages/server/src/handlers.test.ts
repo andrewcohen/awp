@@ -11,7 +11,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
 import { IntentError, WorkspaceIntent } from "./intent";
-import { Jj } from "./jj";
+import { type DiffOf, Jj, JjError, type RevisionsIn } from "./jj";
 import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
 import { type WorkspaceDeps, createWorkspace } from "./jobs/create-workspace";
@@ -107,6 +107,11 @@ interface Fakes {
   readonly bookmarkPrefix?: string | undefined;
   /** What `jj bookmark list` reports. Local rows only; remotes are filtered. */
   readonly bookmarks?: ReadonlyArray<string> | undefined;
+  /**
+   * Refuse any revset mentioning `trunk()`, the way jj does when it cannot
+   * settle on one. The only branch in `Revisions` a test can reach.
+   */
+  readonly noTrunk?: boolean | undefined;
 }
 
 const configFor = (fakes: Fakes): string => {
@@ -138,6 +143,29 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
               Effect.succeed(
                 (fakes.bookmarks ?? []).map((name) => ({ name, remote: undefined, target: [] })),
               ),
+            // Answers with the revset it was handed, as the description of its
+            // one row. What is under test is which revset the handler chose,
+            // and a fake that returned plausible commits would hide it.
+            revisions: ({ revset, limit }: RevisionsIn) =>
+              fakes.noTrunk === true && revset.includes("trunk()")
+                ? Effect.fail(
+                    new JjError({ op: "list revisions", reason: "Revset `trunk()` is ambiguous" }),
+                  )
+                : Effect.succeed([
+                    {
+                      changeId: "aaa",
+                      commitId: "bbb",
+                      description: `${revset} limit ${limit}`,
+                      author: "someone",
+                      authored: undefined,
+                      empty: false,
+                      workingCopy: true,
+                      bookmarks: [],
+                    },
+                  ]),
+            // Likewise: the patch it hands back is the request it was given, so
+            // a test can assert on the snapshot decision the handler made.
+            diff: (options: DiffOf) => Effect.succeed(JSON.stringify(options)),
           } as unknown as Jj["Service"]),
         ),
         Layer.provide(
@@ -188,6 +216,65 @@ const parentWith = (rpc: Client, project: string, workspace: string) =>
     yield* rpc.ThreadAttach({ thread: made.id, member: { project, workspace } });
     return made.id;
   });
+
+describe("the diff a workspace is asked for", () => {
+  it("asks for the working copy and everything since the main line", async () => {
+    const [only] = await run((rpc) => rpc.Revisions({ from: "/w/rowan" }));
+
+    // `@` is named on its own beside `trunk()..@`, so a workspace sitting on
+    // trunk with nothing done in it is a stack of one rather than nothing.
+    expect(only?.description).toBe("@ | trunk()..@ limit 50");
+  });
+
+  it("takes the client's limit, because the client is what has to draw them", async () => {
+    const [only] = await run((rpc) => rpc.Revisions({ from: "/w/rowan", limit: 5 }));
+
+    expect(only?.description).toBe("@ | trunk()..@ limit 5");
+  });
+
+  it("drops the trunk when the revset will not resolve, rather than failing", async () => {
+    const [only] = await run((rpc) => rpc.Revisions({ from: "/w/rowan" }), { noTrunk: true });
+
+    // A repository whose `trunk()` is ambiguous still has a working copy, and
+    // an error about the revset would read as an error about the repository.
+    expect(only?.description).toBe("@ limit 1");
+  });
+
+  it("snapshots the working copy when no revision was named", async () => {
+    const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan" }));
+
+    // The one read in the daemon allowed to write, and the reason the panel is
+    // not permanently empty: an agent edits files and runs no jj command, so
+    // without the snapshot there is nothing to diff. See `Diff` in jj.ts.
+    expect(JSON.parse(answer.patch)).toEqual({
+      dir: "/w/rowan",
+      revision: "@",
+      snapshot: true,
+    });
+    expect(answer.revision).toBe("@");
+  });
+
+  it("treats an explicit @ as the same request, not as a revision", async () => {
+    // Otherwise which spelling was used decides whether the answer is current,
+    // which is a difference nobody could see until it was wrong.
+    const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan", revision: "@" }));
+
+    expect(JSON.parse(answer.patch).snapshot).toBe(true);
+  });
+
+  it("reads a named revision without touching the working copy", async () => {
+    const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan", revision: "kmnpqrs" }));
+
+    // History does not move, so a snapshot there would be a write for nothing.
+    expect(JSON.parse(answer.patch)).toEqual({
+      dir: "/w/rowan",
+      revision: "kmnpqrs",
+      snapshot: false,
+    });
+    // Echoed, so a client can drop a reply for a commit it has moved off.
+    expect(answer.revision).toBe("kmnpqrs");
+  });
+});
 
 describe("the daemon over its contract", () => {
   it("reports sessions in the wire shape", async () => {
