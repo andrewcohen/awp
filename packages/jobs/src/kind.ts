@@ -87,7 +87,19 @@ export interface JobStep<in Input> {
 /** How long to wait before attempt `n + 1`. */
 export type Backoff = (attempt: number) => Duration.Input;
 
-export interface JobKind<Input, Encoded = Input> {
+/**
+ * The addressing half of a kind: what it is called, and how its input is
+ * encoded.
+ *
+ * All `enqueue` actually needs. The steps that run come from the registry the
+ * runner was built with, looked up by this name — so a caller that only wants
+ * to *start* a job does not have to construct one, which for a kind whose steps
+ * close over services would mean constructing those too.
+ *
+ * `JobKind` extends it, so passing a whole kind still works and the name and
+ * schema cannot drift between the two.
+ */
+export interface JobRef<Input, Encoded = Input> {
   /** Unique, and persisted on every job of this kind. */
   readonly name: string;
   /**
@@ -102,6 +114,9 @@ export interface JobKind<Input, Encoded = Input> {
   readonly input: Schema.Codec<Input, Encoded, never, never>;
   /** One line for a list. Computed once, when the job is enqueued. */
   readonly title: (input: Input) => string;
+}
+
+export interface JobKind<Input, Encoded = Input> extends JobRef<Input, Encoded> {
   readonly steps: ReadonlyArray<JobStep<Input>>;
   /** Total attempts allowed, including the first. Default 3. */
   readonly attempts?: number;

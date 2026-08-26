@@ -12,8 +12,13 @@ import { migrations as jobMigrations, layerSqlite } from "@awp-kit/jobs/sqlite";
 import { layer as dbLayer } from "@awp-kit/store";
 import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
-import { Layer } from "effect";
+import { Effect, FileSystem, Layer } from "effect";
+import { createWorkspace } from "./jobs/create-workspace";
 import { demo } from "./jobs/demo";
+import { Jj } from "./jj";
+import * as jjCli from "./jj-cli";
+import { Multiplexer } from "./multiplexer";
+import { Threads } from "./threads";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
@@ -81,11 +86,31 @@ export const db = Layer.orDie(dbLayer(AWP_DB, [...jobMigrations, ...threadMigrat
  * where each kind's schema is still in hand keeps the cast that would otherwise
  * be needed from existing anywhere.
  */
-export const jobs = jobsLayer([erase(demo)]).pipe(Layer.provide(Layer.orDie(layerSqlite)));
+/**
+ * The kinds the daemon knows, built where its services are.
+ *
+ * `Layer.unwrap` because a `JobStep.run` has no requirements — a step resumed
+ * by a restarted daemon has no caller whose context it could inherit — so a
+ * kind that needs jj, zmx and the thread store has to *close over* them. This
+ * is the one place all three exist at once.
+ *
+ * `demo` needs nothing and is listed beside them until it goes.
+ */
+export const jobs = Layer.unwrap(
+  Effect.gen(function* () {
+    const deps = {
+      jj: yield* Jj,
+      mux: yield* Multiplexer,
+      threads: yield* Threads,
+      files: yield* FileSystem.FileSystem,
+    };
+    return jobsLayer([erase(demo), erase(createWorkspace(deps))]);
+  }),
+).pipe(Layer.provide(Layer.orDie(layerSqlite)));
 
 export const threads = threadsLayer;
 
-/** The real services: real zmx, real ptys. */
+/** The real services: real zmx, real ptys, real jj. */
 export const services = sessions.layer.pipe(
   Layer.provide(attachment.layer),
   Layer.provide(ptyBun.layer),
@@ -107,5 +132,6 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(jobs),
   Layer.provide(threads),
   Layer.provide(db),
+  Layer.provide(jjCli.layer),
   Layer.provide(zmx.layer),
 );

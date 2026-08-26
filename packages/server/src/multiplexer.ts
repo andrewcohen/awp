@@ -216,6 +216,26 @@ export class Multiplexer extends Context.Service<
     /** One session by name, or `undefined` if there is none. */
     lookup(name: string): Effect.Effect<Session | undefined, MultiplexerError>;
 
+    /**
+     * Start a session, running `command` in `cwd`, without attaching to it.
+     *
+     * `zmx run -d`, not `zmx attach`. Attaching is what creates a session for
+     * an interactive caller, and it needs a pty and a client — a session takes
+     * its size from whoever is looking at it, so a daemon attaching to make one
+     * would size someone else's terminal to nothing. This makes the session and
+     * leaves it alone; a window attaches later if a person opens it.
+     *
+     * Does nothing if a session of that name is already there. That is the
+     * jobs contract — a step re-runs after a later one fails — and it is also
+     * the thing that keeps this from ever touching a session it did not create:
+     * an existing name is left exactly as it was.
+     */
+    start(options: {
+      readonly name: string;
+      readonly cwd: string;
+      readonly command: ReadonlyArray<string>;
+    }): Effect.Effect<void, MultiplexerError>;
+
     /** End a session and every client attached to it. */
     kill(name: string): Effect.Effect<void, MultiplexerError>;
 

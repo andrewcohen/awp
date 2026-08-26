@@ -84,6 +84,31 @@ const make = Effect.gen(function* () {
 
   const list = () => run("list", ["ls"]).pipe(Effect.map(parseSessionList));
 
+  /**
+   * Run a zmx command from a given directory.
+   *
+   * A session's `startDir` is the working directory of whatever created it, so
+   * this is how a new session ends up rooted in its workspace rather than in
+   * wherever the daemon was launched. Everything else zmx is asked here is a
+   * question about a session that already exists, and those do not care.
+   */
+  const runIn = (op: string, cwd: string, args: ReadonlyArray<string>) =>
+    capture(spawner, ChildProcess.make("zmx", [...args], { cwd, env: zmxChildEnv() })).pipe(
+      Effect.mapError(
+        (cause) =>
+          new MultiplexerError({
+            op,
+            reason: `${op}: zmx failed (is it installed and on PATH?)`,
+            cause,
+          }),
+      ),
+      Effect.flatMap((captured) =>
+        captured.exitCode === 0
+          ? Effect.succeed(captured.stdout)
+          : Effect.fail(new MultiplexerError({ op, reason: `${op}: ${said(captured)}` })),
+      ),
+    );
+
   return {
     list,
 
@@ -94,6 +119,40 @@ const make = Effect.gen(function* () {
         // enough — the list is tens of rows — and it means one parser.
         Effect.map((sessions) => sessions.find((session) => session.name === name)),
       ),
+
+    start: (options: {
+      readonly name: string;
+      readonly cwd: string;
+      readonly command: ReadonlyArray<string>;
+    }) =>
+      Effect.gen(function* () {
+        const op = `start ${options.name}`;
+        yield* named("start", options.name);
+        if (options.cwd.trim() === "") {
+          return yield* Effect.fail(
+            new MultiplexerError({ op, reason: `${op}: no working directory given` }),
+          );
+        }
+        if (options.command.length === 0) {
+          return yield* Effect.fail(
+            new MultiplexerError({ op, reason: `${op}: no command given` }),
+          );
+        }
+
+        // Asked first, and this is the guard as much as the idempotence. A
+        // session that already exists is left exactly as it is — `zmx run`
+        // against a live session would send a command into whatever is running
+        // in there, which for a name that was not ours is someone's editor.
+        const existing = yield* list();
+        if (existing.some((session) => session.name === options.name)) {
+          return;
+        }
+
+        // `-d` so zmx does not wait for the command to finish. Without it a
+        // long-lived agent process would hold this effect open for as long as
+        // the session lives.
+        yield* runIn(op, options.cwd, ["run", options.name, "-d", ...options.command]);
+      }),
 
     kill: (name: string) =>
       named("kill", name).pipe(

@@ -75,8 +75,37 @@ export interface AddWorkspace {
 export class Jj extends Context.Service<
   Jj,
   {
-    /** The repository root containing `dir`, for turning a path into a repo. */
-    readonly root: (dir: string) => Effect.Effect<string, JjError>;
+    /**
+     * The **workspace** root containing `dir`.
+     *
+     * Named for what it is, because `jj root` is a shortcut for
+     * `jj workspace root` and inside a secondary workspace it answers with
+     * that workspace's own path. This repository is a secondary workspace, so
+     * the wrong reading of this is the one you get while developing here.
+     */
+    readonly workspaceRoot: (dir: string) => Effect.Effect<string, JjError>;
+
+    /**
+     * The root of the repository a workspace belongs to.
+     *
+     * The one every method above wants as `repo`. A secondary workspace's
+     * `.jj/repo` is a *file* holding a path to the real repository's `.jj/repo`
+     * rather than a directory, so this reads it and walks back up:
+     *
+     *   ~/.awp/workspaces/awp/amoeba/.jj/repo
+     *     → ../../../../../go/src/github.com/andrewcohen/awp/.jj/repo
+     *       → /Users/acohen/go/src/github.com/andrewcohen/awp
+     *
+     * For a primary workspace `.jj/repo` is a directory and the answer is the
+     * workspace root itself, unchanged.
+     *
+     * Inherited from the Go implementation and **re-proven** 2026-08-26 against
+     * this checkout, which is a secondary workspace: `jj root` gave the
+     * workspace and the pointer gave the repository. jj's own help is better
+     * evidence than the comment was — it says `root` is a shortcut for
+     * `workspace root` outright.
+     */
+    readonly sourceRoot: (dir: string) => Effect.Effect<string, JjError>;
 
     readonly workspaces: (repo: string) => Effect.Effect<ReadonlyArray<JjWorkspace>, JjError>;
 

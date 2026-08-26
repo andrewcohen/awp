@@ -158,6 +158,46 @@ export class ThreadNotFound extends Schema.TaggedError<ThreadNotFound>()("Thread
   thread: Schema.String,
 }) {}
 
+/**
+ * What making a workspace needs to know.
+ *
+ * The one input a person actually supplies is `workspace` — the rest is the
+ * project it belongs to, the thread it is for, and where its code comes from.
+ *
+ * `agent` is on the payload rather than read from a config the daemon holds,
+ * and deliberately for now: there is no config service, and a command baked
+ * into the job is a command nobody can see. It moves the day settings exist.
+ */
+export const CreateWorkspace = Schema.Struct({
+  /** The thread that claims it. See {@link Thread}. */
+  thread: Schema.String,
+  project: Schema.String,
+  workspace: Schema.String,
+  /**
+   * The repository the workspace comes from — the *source* repo, not a
+   * workspace of it. `jj root` answers with a workspace and is the wrong thing
+   * to put here; the daemon resolves it with `Jj.sourceRoot`.
+   */
+  repo: Schema.String,
+  /**
+   * The revision the new workspace starts from. Absent means jj's default,
+   * which is the parents of whichever workspace the command ran in — not a
+   * useful answer for a daemon, so callers should pass one.
+   */
+  base: Schema.optional(Schema.String),
+  /**
+   * A bookmark to point at the new workspace, or absent for none.
+   *
+   * Optional rather than derived, because the naming convention is a person's
+   * and not awp's — `andrew/` here, something else on another machine.
+   */
+  bookmark: Schema.optional(Schema.String),
+  /** What the agent session runs. */
+  agent: Schema.Array(Schema.String),
+});
+
+export type CreateWorkspace = (typeof CreateWorkspace)["Type"];
+
 // ── failures a client is expected to handle ────────────────────────────────
 //
 // Schema-backed so they survive the wire as themselves rather than as a string.
@@ -387,5 +427,18 @@ export class AwpRpcs extends RpcGroup.make(
     payload: { thread: Schema.String, member: ThreadMember },
     success: Thread,
     error: ThreadNotFound,
+  }),
+
+  /**
+   * Make a workspace, in the background.
+   *
+   * Returns the job rather than the workspace, because the work outlives the
+   * request: a jj workspace, a bookmark, a session and a thread claim is four
+   * things that can each fail, and the answer to "did it work" is the record
+   * rather than this reply. Watch it on {@link Rpc JobChanges}.
+   */
+  Rpc.make("WorkspaceCreate", {
+    payload: CreateWorkspace,
+    success: Job,
   }),
 ) {}
