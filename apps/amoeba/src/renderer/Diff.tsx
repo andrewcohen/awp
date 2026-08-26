@@ -65,13 +65,26 @@ const styles = stylex.create({
   },
 
   // ── the revisions ────────────────────────────────────────────────────────
-  // Capped and scrollable rather than sized to its contents. A stack measured
-  // against a trunk nobody has fetched in a month is fifty rows, and fifty
-  // rows of commit subjects with the diff pushed off the bottom is a commit
-  // list, not a diff panel.
+  // A fixed 30/70 split, not a box that grows to its contents up to a cap.
+  //
+  // The cap was the first version and it read badly for a reason worth stating:
+  // the boundary between the two halves moved. Selecting a revision can change
+  // how many rows are listed, so the line the eye uses to separate "which
+  // commit" from "what changed" jumped while being looked at — and the patch
+  // below it shifted with it.
+  //
+  // The cost is real and is accepted: with three revisions, most of that 30%
+  // is empty. A boundary that stays put is worth more than the rows it wastes,
+  // and the alternative — sizing to content — is what produced the jump.
+  //
+  // Scrollable regardless. A stack measured against a trunk nobody has fetched
+  // in a month is fifty rows, and fifty rows of commit subjects with the diff
+  // pushed off the bottom is a commit list, not a diff panel.
   revisions: {
+    flexGrow: 0,
     flexShrink: 0,
-    maxHeight: "35%",
+    flexBasis: "30%",
+    minHeight: 0,
     overflowY: "auto",
     borderBottomWidth: 1,
     borderBottomStyle: "solid",
