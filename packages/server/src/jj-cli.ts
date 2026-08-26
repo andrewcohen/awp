@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Layer, Path } from "effect";
+import { Effect, FileSystem, Layer, Path, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { type AddWorkspace, Jj, JjError } from "./jj";
 import { localBookmarks, parseBookmarks, parseWorkspaces } from "./jj-parse";
@@ -130,14 +130,55 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        yield* write(op, repo, [
+        const add = () =>
+          write(op, repo, [
+            "workspace",
+            "add",
+            "--name",
+            name,
+            ...(revision === undefined ? [] : ["-r", revision]),
+            destination,
+          ]);
+
+        // ── a stale working copy is not this job's fault ──────────────────
+        //
+        // `jj workspace add` is a write, so it does not pass
+        // `--ignore-working-copy` — and it *cannot*: jj refuses the flag
+        // outright with "This command must be able to update the working
+        // copy. Hint: Don't use --ignore-working-copy." That was the first
+        // thing tried and it is a dead end, which is worth recording so it is
+        // not tried again.
+        //
+        // So the command has to be able to touch a working copy, and the one
+        // it touches is whichever workspace the *cwd* sits in — the daemon's
+        // own. When that one is stale, creating an unrelated workspace fails
+        // with a message about it:
+        //
+        //   Error: The working copy is stale (not updated since operation …)
+        //   Hint: Run `jj workspace update-stale` to update it.
+        //
+        // jj's own hint, so it is followed rather than second-guessed, and
+        // only when jj has said so. `update-stale` exits 0 and prints
+        // "Attempted recovery, but the working copy is not stale" on a healthy
+        // repository, so the recovery cannot make a different failure worse.
+        //
+        // Not reproducible synthetically: every stale state built by hand —
+        // abandoning another workspace's working-copy commit, operating from
+        // a foreign cwd, operating from a sibling workspace — was auto-updated
+        // by jj without complaint. This path is written from the real failure
+        // and its remedy, and is matched on jj's sentence for that reason.
+        const first = yield* Effect.result(add());
+        if (Result.isSuccess(first)) {
+          return;
+        }
+        if (!isStale(first.failure)) {
+          return yield* Effect.fail(first.failure);
+        }
+        yield* write(`${op} (recovering a stale working copy)`, repo, [
           "workspace",
-          "add",
-          "--name",
-          name,
-          ...(revision === undefined ? [] : ["-r", revision]),
-          destination,
+          "update-stale",
         ]);
+        yield* add();
       }),
 
     forgetWorkspace: (repo: string, name: string) =>
@@ -191,6 +232,17 @@ const make = Effect.gen(function* () {
  * codebase asked for rather than one that happens to be current.
  */
 const TEMPLATE = 'json(self) ++ "\\n"';
+
+/**
+ * Did jj refuse because a working copy needs updating?
+ *
+ * Matched on jj's sentence, which is the only signal there is — the CLI exits 1
+ * for every refusal alike. Narrow on purpose: `update-stale` is a real change
+ * to a checkout a person may be standing in, so it runs when jj has named this
+ * exact condition and never as a general retry.
+ */
+const isStale = (error: JjError): boolean =>
+  error.reason.includes("working copy is stale") || error.reason.includes("workspace update-stale");
 
 /**
  * Refuse an empty argument rather than handing jj a blank one and finding out

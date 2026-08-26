@@ -159,6 +159,17 @@ export const makeSqlite = Effect.gen(function* () {
        )`,
   );
 
+  // Over, and safe to forget. `dirty` is excluded even though its status is
+  // terminal: compensation stopped partway, something is left behind that only
+  // a person can put right, and this record is the only thing that says what.
+  const FINISHED = `status in ('succeeded', 'failed', 'cancelled')
+       and (cleanup is null or cleanup <> 'dirty')`;
+  const countFinished = db.prepare(`select id from jobs where ${FINISHED}`);
+  const dropFinishedLogs = db.prepare(
+    `delete from job_logs where job_id in (select id from jobs where ${FINISHED})`,
+  );
+  const dropFinished = db.prepare(`delete from jobs where ${FINISHED}`);
+
   const one = (rows: ReadonlyArray<Record<string, unknown>>): Job | undefined =>
     rows.length === 0 ? undefined : fromRow(rows[0] as Record<string, unknown>);
 
@@ -184,6 +195,18 @@ export const makeSqlite = Effect.gen(function* () {
       attempt(`cannot read the log of ${id}`, () =>
         readLog.all(id).map((row) => String(row["line"])),
       ),
+
+    // Logs first, then the jobs. `job_logs` has no foreign key to `jobs` — it
+    // is written far more often than anything reads it, and a constraint check
+    // per appended line is a cost paid on every line for a guarantee this is
+    // the only place that needs. So the order here is the guarantee.
+    forgetFinished: () =>
+      attempt("cannot forget finished jobs", () => {
+        const doomed = countFinished.all().length;
+        dropFinishedLogs.run();
+        dropFinished.run();
+        return doomed;
+      }),
   };
 });
 

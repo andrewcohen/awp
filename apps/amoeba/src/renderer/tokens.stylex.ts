@@ -72,9 +72,25 @@ export const text = stylex.defineVars({
   // One family for the whole window. amoeba is a terminal with furniture around
   // it, and furniture in a different typeface reads as a different application.
   mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  body: "13px",
-  small: "11px",
-  tiny: "10px",
+
+  // ── the scale, and why it moved ──────────────────────────────────────────
+  // These were 13/11/10, which came from the Go deck — where a row *is* a
+  // terminal line and the whole strip is drawn in the terminal's own font at
+  // the terminal's own size. In a window there is no such constraint and the
+  // sizes read as cramped, which is the note this scale exists to answer.
+  //
+  // Four steps rather than three. `body` and `small` were doing the work of
+  // four roles between them, so a chip and a heading were the same size as a
+  // caption; `lead` gives the thing a screen is *about* somewhere to go.
+  //
+  // **Change them here and nowhere else.** Every rule in the renderer reads
+  // these variables — a literal px anywhere is a size that will not move with
+  // the rest, and is the reason this file exists rather than a constant per
+  // component.
+  lead: "16px",
+  body: "15px",
+  small: "13px",
+  tiny: "12px",
 });
 
 export const space = stylex.defineVars({

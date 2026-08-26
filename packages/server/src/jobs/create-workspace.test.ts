@@ -5,6 +5,8 @@ import { Context, Effect, Layer } from "effect";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
+import type { WorkspaceIntent } from "../intent";
+import type { Settings } from "../settings";
 import type { Threads } from "../threads";
 import {
   type WorkspaceDeps,
@@ -73,6 +75,10 @@ const deps = (): WorkspaceDeps => ({
       act(`thread.claim(${thread}:${member.workspace})`),
     detach: (thread: string, member: { readonly workspace: string }) =>
       act(`thread.release(${thread}:${member.workspace})`),
+    // Called by the naming step, to replace the raw sentence the thread was
+    // created with. Its absence is what found the runner's defect hole: the
+    // step threw, and the job sat at `running` forever rather than failing.
+    rename: (thread: string, title: string) => act(`thread.rename(${thread}:${title})`),
   } as unknown as Threads["Service"],
 
   files: {
@@ -80,11 +86,26 @@ const deps = (): WorkspaceDeps => ({
     makeDirectory: (path: string) => act(`mkdir(${path})`),
     remove: (path: string) => act(`rm(${path})`),
   },
+
+  // The naming step calls these. Most tests here hand the job a workspace name
+  // already, so it short-circuits and neither is touched — which is both the
+  // resume path and what keeps these tests about the order of the steps.
+  intent: {
+    resolve: (description: string) =>
+      act(`intent(${description})`).pipe(
+        Effect.as({ name: "named-by-the-model", label: "Named by the model", prompt: undefined }),
+      ),
+  } as unknown as WorkspaceIntent["Service"],
+
+  settings: {
+    read: () => Effect.succeed({ agent: ["claude"], bookmarkPrefix: "andrew", problem: undefined }),
+  } as unknown as Settings["Service"],
 });
 
 const input = (over: Partial<CreateWorkspace> = {}): CreateWorkspace => ({
   thread: "20260826-aaaa",
   project: "rowan",
+  description: "add tiered discounts to checkout",
   workspace: "tiered-discounts",
   label: "Tiered discounts",
   prompt: "Add tiered discounts.",
@@ -124,6 +145,65 @@ const make = (over: Partial<CreateWorkspace> = {}) =>
       return yield* settle(jobs, queued.id);
     }),
   );
+
+describe("naming the workspace", () => {
+  // The step that made the modal stop waiting. It is also the first step
+  // anywhere to write back to its own input, so what is being checked is the
+  // mechanism as much as the step: what it learns has to reach the four steps
+  // after it, and has to be on the record rather than in a variable.
+  test("what the model answers is used by every step after it", async () => {
+    const job = await make({
+      workspace: undefined,
+      label: undefined,
+      prompt: undefined,
+      bookmark: undefined,
+    });
+
+    expect(job.status).toBe("succeeded");
+    // The model was asked, once.
+    expect(trace.filter((entry) => entry.startsWith("intent("))).toEqual([
+      "intent(add tiered discounts to checkout)",
+    ]);
+    // And every later step used the answer rather than the empty input it was
+    // enqueued with — a directory called `undefined` is what the alternative
+    // looks like.
+    expect(trace).toContain("jj.add(named-by-the-model)");
+    // Matched loosely, because `sessionName` shortens a name that would not
+    // fit a socket path — the exact string is that function's business and is
+    // pinned by its own tests.
+    expect(trace.find((entry) => entry.startsWith("zmx.start("))).toContain("named-by-the-model");
+    expect(trace).toContain("zmx.label(awp.rowan.named-by-the-model.agent:named-by-the-model)");
+    expect(trace).toContain("thread.claim(20260826-aaaa:named-by-the-model)");
+    // Composed from the configured prefix and the name it had just decided,
+    // neither of which existed at enqueue.
+    expect(trace).toContain("jj.bookmark(andrew/named-by-the-model@named-by-the-model@)");
+  });
+
+  test("the answer is written back to the record, not just passed along", async () => {
+    const job = await make({
+      workspace: undefined,
+      label: undefined,
+      prompt: undefined,
+      bookmark: undefined,
+    });
+
+    // The whole reason a step may return a patch. A job resumed by a restarted
+    // daemon has only this record; a name held anywhere else did not happen.
+    expect(job.input).toMatchObject({
+      workspace: "named-by-the-model",
+      label: "Named by the model",
+      bookmark: "andrew/named-by-the-model",
+    });
+  });
+
+  // Ten seconds and a second, different answer is what the alternative costs,
+  // and every step after the first is built on the first one's answer.
+  test("a job that already has a name does not ask for another", async () => {
+    await make();
+    expect(trace.filter((entry) => entry.startsWith("intent("))).toEqual([]);
+    expect(trace).toContain("jj.add(tiered-discounts)");
+  });
+});
 
 describe("making a workspace", () => {
   test("the bookmark points at the workspace's working copy, not its name", async () => {
@@ -178,7 +258,7 @@ describe("making a workspace", () => {
     // optional step.
     const job = await make({ bookmark: undefined });
 
-    expect(job.steps).toEqual(["workspace", "bookmark", "session", "claim", "brief"]);
+    expect(job.steps).toEqual(["name", "workspace", "bookmark", "session", "claim", "brief"]);
     expect(trace.some((line) => line.startsWith("jj.bookmark"))).toBe(false);
     expect(job.status).toBe("succeeded");
   });

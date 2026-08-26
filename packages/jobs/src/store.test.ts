@@ -66,6 +66,76 @@ const job = (over: Partial<Job> = {}): Job => ({
 
 for (const store of stores) {
   describe(store.name, () => {
+    // Clearing is the one operation that has to be *selective*, and every case
+    // below is a record it must refuse to touch. Written once and run against
+    // both stores, because the memory one filters in JS and the sqlite one in
+    // SQL — two entirely separate spellings of the same rule, which is exactly
+    // the shape that drifts.
+    test("forgetting the finished keeps everything still to come", async () => {
+      const forgotten = await on(store.layer(), (jobs) =>
+        Effect.gen(function* () {
+          for (const written of [
+            job({ id: "20260101-done", status: "succeeded" }),
+            job({ id: "20260101-fail", status: "failed", error: "nope" }),
+            job({ id: "20260101-gone", status: "cancelled" }),
+            // Still to come. The runner holds a fiber for each of these, and
+            // deleting the row would only mean the next save writes it back
+            // without its log.
+            job({ id: "20260101-wait", status: "queued" }),
+            job({ id: "20260101-live", status: "running" }),
+            // Over, but its rollback left something behind. The only outcome
+            // the package cannot put right by itself, so it is the one that
+            // most needs to still be there tomorrow.
+            job({ id: "20260101-mess", status: "failed", cleanup: "dirty" }),
+          ]) {
+            yield* jobs.put(written);
+          }
+          yield* jobs.append("20260101-done", ["a line"]);
+          yield* jobs.append("20260101-wait", ["another"]);
+
+          const gone = yield* jobs.forgetFinished();
+          return { gone, left: (yield* jobs.list()).map((entry) => entry.id) };
+        }),
+      );
+
+      expect(forgotten.gone).toBe(3);
+      expect(forgotten.left.toSorted()).toEqual([
+        "20260101-live",
+        "20260101-mess",
+        "20260101-wait",
+      ]);
+    });
+
+    // The log is a separate table in sqlite with no foreign key back to the
+    // job, so nothing deletes these for us. A row left behind here is invisible
+    // — it belongs to an id nothing lists — and would accumulate forever.
+    test("forgetting a job takes its log with it", async () => {
+      const after = await on(store.layer(), (jobs) =>
+        Effect.gen(function* () {
+          yield* jobs.put(job({ id: "20260101-done", status: "succeeded" }));
+          yield* jobs.append("20260101-done", ["one", "two"]);
+          yield* jobs.forgetFinished();
+          // Written again under the same id, which is what makes this a real
+          // question rather than a reading of nothing: if the lines survived
+          // the delete, they come back attached to a job that never wrote them.
+          yield* jobs.put(job({ id: "20260101-done", status: "queued" }));
+          return yield* jobs.log("20260101-done");
+        }),
+      );
+
+      expect(after).toEqual([]);
+    });
+
+    test("forgetting nothing is not an error", async () => {
+      const gone = await on(store.layer(), (jobs) =>
+        Effect.gen(function* () {
+          yield* jobs.put(job({ status: "running" }));
+          return yield* jobs.forgetFinished();
+        }),
+      );
+      expect(gone).toBe(0);
+    });
+
     test("a record comes back as it went in", async () => {
       const written = job({
         key: "k",

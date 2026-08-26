@@ -126,6 +126,50 @@ describe("running", () => {
     expect(job.title).toBe("three for a");
   });
 
+  // A step that throws rather than failing. Until this was handled, the defect
+  // sailed past the `Effect.result` wrapping an attempt, killed the fiber, and
+  // left the record saying `running` with nothing behind it — a job that never
+  // finished and never failed, which is worse than either.
+  //
+  // It was found by a fake missing a method, which is exactly how a real
+  // service gains one.
+  test("a step that throws fails the job instead of hanging it", async () => {
+    const throws: JobKind<Input> = {
+      name: "throws",
+      input: Input,
+      title: () => "one that throws",
+      steps: [
+        step("one"),
+        {
+          name: "two",
+          run: () =>
+            Effect.sync(() => {
+              throw new TypeError("threads.rename is not a function");
+            }),
+        },
+        step("three"),
+      ],
+      attempts: 1,
+    };
+
+    const job = await run(
+      (jobs) =>
+        jobs
+          .enqueue(throws, { name: "a" })
+          .pipe(Effect.flatMap((queued) => settle(jobs, queued.id))),
+      [erase(throws)],
+    );
+
+    expect(job.status).toBe("failed");
+    // Named, so the log says which step and what it threw rather than leaving a
+    // person to guess from a stopped progress bar.
+    expect(job.error).toContain("two");
+    expect(job.error).toContain("threads.rename is not a function");
+    // And it is a failure like any other, so the completed steps are undone.
+    expect(trace).toEqual(["one(a)", "undo:one(a)"]);
+    expect(job.done).toEqual([]);
+  });
+
   test("an input that cannot survive the store is refused at enqueue", async () => {
     // `UndefinedOr` plus an unset value: JSON drops the key, and `UndefinedOr`
     // wants it present. Without the check at enqueue this becomes a job that

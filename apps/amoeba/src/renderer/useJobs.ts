@@ -1,5 +1,5 @@
 import type { Job } from "@awp-kit/jobs";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listJobs, watchJobs } from "./daemon";
 
 // The jobs the window knows about, kept current.
@@ -18,6 +18,16 @@ export interface JobsView {
   readonly jobs: ReadonlyArray<Job>;
   /** Absent while the first listing is in flight or has succeeded. */
   readonly failure: string | undefined;
+  /**
+   * Take the listing again, **replacing** what is held rather than merging.
+   *
+   * The one operation merging cannot express. Every other change arrives on the
+   * stream as a record, and a record is something to merge in; a job that has
+   * been *deleted* arrives as nothing at all, and there is no record whose
+   * absence a merge could notice. So clearing has to re-read the whole list and
+   * throw away what is no longer in it.
+   */
+  readonly refresh: () => void;
 }
 
 const newestFirst = (a: Job, b: Job): number =>
@@ -26,9 +36,25 @@ const newestFirst = (a: Job, b: Job): number =>
 export function useJobs(): JobsView {
   const [held, setHeld] = useState<ReadonlyMap<string, Job>>(new Map());
   const [failure, setFailure] = useState<string | undefined>();
+  const alive = useRef(true);
+
+  const replace = () => {
+    listJobs()
+      .then((listed) => {
+        if (alive.current) {
+          setHeld(new Map(listed.map((job) => [job.id, job] as const)));
+        }
+      })
+      .catch(() => {
+        // Deliberately silent. The list on screen is still the last good one,
+        // and a failed refresh after a successful clear is not worth replacing
+        // it with an error.
+      });
+  };
 
   useEffect(() => {
     let live = true;
+    alive.current = true;
     const merge = (arriving: ReadonlyArray<Job>) => {
       if (!live) {
         return;
@@ -57,11 +83,12 @@ export function useJobs(): JobsView {
 
     return () => {
       live = false;
+      alive.current = false;
       stop();
     };
   }, []);
 
-  return { jobs: [...held.values()].toSorted(newestFirst), failure };
+  return { jobs: [...held.values()].toSorted(newestFirst), failure, refresh: replace };
 }
 
 /** How many jobs are in each state worth saying out loud. */

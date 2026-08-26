@@ -57,7 +57,7 @@ import {
   Stream,
 } from "effect";
 import { type Cleanup, type Job, type JobId, isTerminal, jobId } from "./job";
-import type { ErasedKind, JobContext, JobError, JobRef } from "./kind";
+import { type ErasedKind, type JobContext, type JobError, type JobRef, permanent } from "./kind";
 import { JobStore, type StoreError } from "./store";
 
 /** Asked to enqueue a kind the runner was not built with. */
@@ -120,6 +120,17 @@ export class Jobs extends Context.Service<
     readonly log: (id: JobId) => Effect.Effect<ReadonlyArray<string>, StoreError>;
 
     /**
+     * Forget every job that is over, and say how many.
+     *
+     * Not "clear the list" — a queued or running job keeps its record, because
+     * the runner still holds a fiber for it and the next save would put the row
+     * back without its log. A `dirty` one keeps its record too: that is the
+     * only outcome the package cannot put right by itself, so it is the one a
+     * person most needs to still be there tomorrow. See `JobStore`.
+     */
+    readonly forgetFinished: () => Effect.Effect<number, StoreError>;
+
+    /**
      * Every record as it changes.
      *
      * Sliding rather than unbounded: a client that stopped reading must not be
@@ -135,6 +146,27 @@ export const CONCURRENCY = 4;
 
 /** How many records the change feed holds for a slow reader. */
 const FEED = 256;
+
+/**
+ * The stored input with a step's discovery folded in.
+ *
+ * Both sides have to be plain objects for a merge to mean anything. A kind
+ * whose input is a bare string or a number is legal — the schema decides — and
+ * for one of those there is nothing to merge into, so a patch is refused by
+ * being ignored rather than by corrupting the record into `{0: 'a', ...}`.
+ *
+ * A step that returns nothing is the overwhelming majority, and that case does
+ * not even copy the object.
+ */
+const patch = (input: unknown, learned: unknown): unknown => {
+  if (learned === undefined || learned === null || !isPlain(learned) || !isPlain(input)) {
+    return input;
+  }
+  return { ...input, ...learned };
+};
+
+const isPlain = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export const make = (kinds: ReadonlyArray<ErasedKind>) =>
   Effect.gen(function* () {
@@ -185,7 +217,39 @@ export const make = (kinds: ReadonlyArray<ErasedKind>) =>
           job.done.includes(step.name)
             ? Effect.succeed(job)
             : save({ ...job, step: step.name }).pipe(
-                Effect.tap((current) => step.run(current.input, context(current))),
+                Effect.flatMap((current) =>
+                  step
+                    .run(current.input, context(current))
+                    // A step that *throws* is a step that failed, and until
+                    // this line it was a step that hung. A defect is not on the
+                    // error channel, so it sailed past the `Effect.result` that
+                    // wraps an attempt, killed the fiber, and left the record
+                    // saying `running` with no fiber behind it — a job that
+                    // never finishes and never fails, which is the worst of the
+                    // two. Found by a fake missing a method, which is exactly
+                    // how a real service gains one.
+                    //
+                    // Permanent, because a step that threw is a bug rather than
+                    // a world that was not ready, and retrying a bug spends the
+                    // attempts to reach the same place.
+                    .pipe(
+                      Effect.catchDefect((defect) =>
+                        Effect.fail(
+                          permanent(`the ${step.name} step threw: ${String(defect)}`, defect),
+                        ),
+                      ),
+                    )
+                    // What the step learned is folded into the input and saved
+                    // by the *same* write that marks the step done. A resumed
+                    // job therefore reads the answer instead of going back to
+                    // whatever produced it — see the note on `JobStep.run`.
+                    .pipe(
+                      Effect.map((learned) => ({
+                        ...current,
+                        input: patch(current.input, learned),
+                      })),
+                    ),
+                ),
                 Effect.flatMap((current) =>
                   save({ ...current, done: [...current.done, step.name], step: undefined }),
                 ),
@@ -431,6 +495,7 @@ export const make = (kinds: ReadonlyArray<ErasedKind>) =>
 
       get: (id: JobId) => store.get(id),
       list: () => store.list(),
+      forgetFinished: () => store.forgetFinished(),
       log: (id: JobId) => store.log(id),
       changes: Stream.fromPubSub(feed),
     };

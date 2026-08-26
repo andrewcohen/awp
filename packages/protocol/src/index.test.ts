@@ -122,7 +122,7 @@ const handlers = AwpRpcs.toLayer({
   JobLog: () => Effect.succeed(["a line"]),
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,
-  JobDemo: () => Effect.succeed(job),
+  JobClear: () => Effect.succeed(0),
   ThreadList: () => Effect.succeed([thread]),
   ThreadCreate: () => Effect.succeed(thread),
   ThreadRename: () => Effect.succeed(thread),
@@ -130,6 +130,7 @@ const handlers = AwpRpcs.toLayer({
   ThreadAttach: () => Effect.succeed(thread),
   ThreadDetach: () => Effect.succeed(thread),
   WorkspaceCreate: () => Effect.succeed(job),
+  ThreadBases: () => Effect.succeed([{ revset: "trunk()", label: "trunk", workspace: undefined }]),
   ThreadStart: () => Effect.succeed({ thread, job }),
 });
 

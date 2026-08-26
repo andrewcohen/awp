@@ -15,7 +15,6 @@ import { Jj } from "./jj";
 import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
 import { type WorkspaceDeps, createWorkspace } from "./jobs/create-workspace";
-import { demo } from "./jobs/demo";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
@@ -167,9 +166,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // The memory store, not sqlite: what is under test is the seam between
         // the contract and the runner, and a file on disk would make these
         // tests share state with each other and with the developer's daemon.
-        Layer.provide(
-          jobsLayer([erase(demo), erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory)),
-        ),
+        Layer.provide(jobsLayer([erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory))),
         Layer.provide(sessions.layer),
         Layer.provide(attachment.layer),
         Layer.provide(fake.layer),
@@ -243,21 +240,25 @@ describe("jobs over the contract", () => {
   it("enqueues, lists and reports a record a client can render", async () => {
     const [queued, listed] = await run((rpc) =>
       Effect.gen(function* () {
-        const job = yield* rpc.JobDemo({
-          pace: 1,
-          failAt: undefined,
-          retryable: false,
-          undoFails: false,
+        const job = yield* rpc.WorkspaceCreate({
+          thread: "20260101-aaaa",
+          project: "thicket",
+          description: "a thing to do",
+          workspace: "lantern",
+          label: "a thing",
+          repo: "/repos/thicket",
+          agent: ["sh"],
         });
         return [job, yield* rpc.JobList()] as const;
       }),
     );
 
-    expect(queued.kind).toBe("demo");
-    expect(queued.title).toBe("a demo that works");
-    // Three attempts, taken from the kind rather than from the payload: the
-    // number a client shows has to be the number the runner will honour.
-    expect(queued.attempts).toBe(3);
+    expect(queued.kind).toBe("create-workspace");
+    expect(queued.title).toContain("a thing to do");
+    // Taken from the kind rather than from the payload: the number a client
+    // shows has to be the number the runner will honour. One, because every
+    // failure this job has is a refusal and none pass on their own.
+    expect(queued.attempts).toBe(1);
     expect(listed.map((job) => job.id)).toContain(queued.id);
   });
 
@@ -279,13 +280,32 @@ describe("jobs over the contract", () => {
         const changes = yield* Stream.runCollect(rpc.JobChanges().pipe(Stream.take(1))).pipe(
           Effect.forkScoped,
         );
-        yield* rpc.JobDemo({ pace: 1, failAt: undefined, retryable: false, undoFails: false });
+        // A pause between forking and enqueuing, and it is not padding. The
+        // feed is a sliding PubSub, so a subscriber sees what is published
+        // *after* it subscribes — and `forkScoped` returns before the fiber
+        // has got as far as subscribing. Against the fake dependencies this
+        // job finishes in well under a millisecond, so without this the whole
+        // job can come and go inside that gap and the stream waits forever for
+        // a record that has already been and gone.
+        //
+        // The demo kind hid this: its steps slept, so it was still running by
+        // the time anyone was listening.
+        yield* Effect.sleep("50 millis");
+        yield* rpc.WorkspaceCreate({
+          thread: "20260101-aaaa",
+          project: "thicket",
+          description: "a thing to do",
+          workspace: "lantern",
+          label: "a thing",
+          repo: "/repos/thicket",
+          agent: ["sh"],
+        });
         return yield* Fiber.join(changes);
       }),
     );
 
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.kind).toBe("demo");
+    expect(seen[0]?.kind).toBe("create-workspace");
   });
 
   it("makes a thread and hands it back with the workspaces it claimed", async () => {
@@ -321,18 +341,23 @@ describe("jobs over the contract", () => {
       }),
     );
 
-    // The thread is titled with what the model called it, not with the raw
-    // sentence — the fake here echoes the description back as the label.
+    // Titled with what was typed. The model has not been asked yet — that is
+    // the job's first step — so this is the best title that exists, and the
+    // job renames the thread once it has a better one.
     expect(found.thread.title).toBe("add tiered discounts to checkout");
     expect(found.job.kind).toBe("create-workspace");
-    // Resolved first and stored on the job, which is what makes a retry re-run
-    // against the same answer rather than asking the model again.
-    expect(found.job.title).toContain("thicket/a-name");
+    expect(found.job.title).toContain("add tiered discounts to checkout");
+    // The name is not on the input yet, and that is the point: this call no
+    // longer waits ten seconds for one.
+    expect((found.job.input as { readonly workspace?: string }).workspace).toBeUndefined();
   });
 
-  it("makes no thread when the model cannot be reached", async () => {
-    // Ordering, asserted: resolve, *then* create. An empty thread titled with
-    // half a sentence would be litter a person has to tidy by hand.
+  it("makes no thread when nothing was typed", async () => {
+    // This used to assert an ordering — resolve, then create — because the
+    // model was called here and refused an empty sentence. Naming moved into
+    // the job, so the refusal moved too: it is now a check on the way in,
+    // which is cheaper and says something a person can act on. What has to
+    // stay true either way is that a rejected start leaves nothing behind.
     const before = await run((rpc) => rpc.ThreadList());
     const outcome = await run((rpc) =>
       Effect.result(
@@ -477,6 +502,67 @@ describe("jobs over the contract", () => {
       ),
     );
     expect(Result.isFailure(outcome)).toBe(true);
+  });
+
+  // The picker's whole content. It used to be a list of *threads*, which was
+  // wrong in a way only use showed: most workspaces on a real machine predate
+  // threads and belong to none, so the list came up empty exactly when someone
+  // was standing in a branch they wanted to continue from.
+  it("offers the main line and every local bookmark", async () => {
+    const offered = await run((rpc) => rpc.ThreadBases({ from: "/somewhere/thicket" }), {
+      bookmarkPrefix: "andrew",
+      bookmarks: ["andrew/lantern", "main", "andrew/orchard"],
+    });
+
+    expect(offered[0]).toEqual({ revset: "trunk()", label: "trunk", workspace: undefined });
+    expect(offered.slice(1).map((entry) => entry.revset)).toEqual([
+      "andrew/lantern",
+      "andrew/orchard",
+      "main",
+    ]);
+    // The workspace behind a bookmark, recovered from the prefix. It is what
+    // lets cmd+shift+N start on the branch a person is in, and what records
+    // which thread the new one followed from.
+    expect(offered.find((entry) => entry.revset === "andrew/lantern")?.workspace).toBe("lantern");
+    // Not everything prefixed is awp's, and nothing here pretends otherwise:
+    // a bookmark outside the prefix names no workspace at all.
+    expect(offered.find((entry) => entry.revset === "main")?.workspace).toBeUndefined();
+  });
+
+  it("records the thread a chosen base belongs to, and shrugs when it has none", async () => {
+    const followed = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const parent = yield* parentWith(rpc, "thicket", "lantern");
+          const started = yield* rpc.ThreadStart({
+            description: "follow on",
+            project: "thicket",
+            from: "/somewhere/thicket",
+            base: "andrew/lantern",
+          });
+          return { parent, started };
+        }),
+      { bookmarkPrefix: "andrew", bookmarks: ["andrew/lantern"] },
+    );
+
+    expect(followed.started.thread.parentId).toBe(followed.parent);
+    expect((followed.started.job.input as { readonly base: string }).base).toBe("andrew/lantern");
+
+    // The case that used to be impossible. A bookmark no thread has claimed is
+    // a perfectly good base; it simply records no lineage.
+    const loose = await run(
+      (rpc) =>
+        rpc.ThreadStart({
+          description: "off a branch nobody owns",
+          project: "thicket",
+          from: "/somewhere/thicket",
+          base: "main",
+        }),
+      { bookmarkPrefix: "andrew", bookmarks: ["main"] },
+    );
+
+    expect(loose.thread.parentId).toBeUndefined();
+    expect((loose.job.input as { readonly base: string }).base).toBe("main");
   });
 
   it("says so when asked about a thread it has never had", async () => {

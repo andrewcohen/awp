@@ -1,6 +1,6 @@
 import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
-import type { DemoJob, Effort, SessionInfo, Thread, ThreadStarted } from "@awp-kit/protocol";
+import type { Effort, SessionInfo, Thread, ThreadBase, ThreadStarted } from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
@@ -104,9 +104,15 @@ export const retryJob = (job: string): Promise<Job> =>
 export const cancelJob = (job: string): Promise<void> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobCancel({ job })));
 
-/** See `DemoJob` in the contract. Goes when the first real kind arrives. */
-export const enqueueDemo = (payload: DemoJob): Promise<Job> =>
-  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobDemo(payload)));
+/**
+ * Forget every job that is over, and answer with how many.
+ *
+ * The daemon decides which those are — see `JobClear` in the contract. This is
+ * why the reply is a count rather than nothing: a button that says it cleared
+ * the list while three rows stay put needs to be able to explain itself.
+ */
+export const clearJobs = (): Promise<number> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobClear()));
 
 // ── threads and workspaces ─────────────────────────────────────────────────
 //
@@ -118,27 +124,39 @@ export const listThreads = (): Promise<ReadonlyArray<Thread>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadList()));
 
 /**
+ * Everywhere a new workspace in this project could start from.
+ *
+ * Asked of the daemon rather than worked out here, because turning a branch
+ * name into a revset needs the bookmark prefix from its config and the local
+ * bookmark list from jj — see `ThreadBase` in the contract.
+ */
+export const threadBases = (from: string): Promise<ReadonlyArray<ThreadBase>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadBases({ from })));
+
+/**
  * Start a thread from a sentence, and get back the thread and the job.
  *
- * The slow call — a model turns what was typed into a name, a title and an
- * instruction, and that takes about ten seconds. It happens in the daemon
- * rather than here, and the job it returns is where the rest of the work shows
- * up: see `watchJobs`.
+ * **Returns as soon as the record exists.** Naming the workspace takes a model
+ * about ten seconds, and that is the job's first step now rather than something
+ * this call waits for — so the jobs panel has something to show from the moment
+ * the button is pressed. See `watchJobs`.
  */
 export const startThread = (payload: {
   readonly description: string;
   readonly project: string;
   /** A directory in the project — a session's `startDir` will do. */
   readonly from: string;
-  /**
-   * A thread to branch from, or absent for the project's main line.
-   *
-   * A thread and not a revision: the workspace's bookmark is
-   * `<prefix>/<name>` and the prefix is in the daemon's config, so the client
-   * names the work and the daemon resolves it.
-   */
+  /** A thread to branch from. The probe uses it; the window sends `base`. */
   readonly parent?: string | undefined;
-  /** An explicit revision, which wins over `parent`. Nothing here sends one. */
+  /**
+   * Where to start — a `ThreadBase.revset`, so `trunk()` or a bookmark name.
+   *
+   * The daemon works out which thread that base belongs to, if any, and records
+   * it as the new thread's parent. So branching off a workspace no thread has
+   * claimed works and simply records no lineage — the ordinary case on a
+   * machine whose workspaces predate threads, and the reason the picker used to
+   * come up empty.
+   */
   readonly base?: string | undefined;
   /**
    * Overrides for the configured agent command, or absent to leave it alone.

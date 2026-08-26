@@ -103,6 +103,10 @@ const program = Effect.gen(function* () {
   const queued = yield* rpc.WorkspaceCreate({
     thread: thread.id,
     label: thread.title,
+    // Named up front, so the naming step short-circuits and no model is
+    // called. That is the same branch a resumed job takes, and it is what
+    // keeps this probe about the four steps that touch the world.
+    description: thread.title,
     project: PROJECT,
     workspace: WORKSPACE,
     repo,

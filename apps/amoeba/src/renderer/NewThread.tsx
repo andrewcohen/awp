@@ -1,4 +1,4 @@
-import type { Effort, Thread } from "@awp-kit/protocol";
+import type { Effort, ThreadBase } from "@awp-kit/protocol";
 import { Dialog } from "@base-ui/react/dialog";
 import { Select } from "@base-ui/react/select";
 import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
@@ -6,10 +6,10 @@ import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { FolderIcon } from "@phosphor-icons/react/Folder";
 import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
 import * as stylex from "@stylexjs/stylex";
-import { useState } from "react";
-import { startThread } from "./daemon";
+import { useEffect, useState } from "react";
+import { startThread, threadBases } from "./daemon";
 import { colors, text } from "./tokens.stylex";
-import { type Project, branchable, titleOf } from "./workspaces";
+import type { Project } from "./workspaces";
 
 // Starting a thread: a composer, not a form.
 //
@@ -74,29 +74,28 @@ const MODELS: ReadonlyArray<string> = ["opus", "sonnet", "haiku"];
 const INHERIT = "";
 
 /**
- * The chip's value for "no parent" — the project's main line.
+ * The project's main line, and what the chip falls back to.
  *
- * A sentinel rather than a revset, because this screen no longer names
- * revisions at all. It names a *thread*, and the daemon turns that into a
- * revision: the workspace's bookmark is `<prefix>/<name>` and the prefix is in
- * the daemon's config, so a client composing one would be guessing at a
- * setting it cannot see. See `baseOfThread` in the server's handlers.ts.
+ * jj resolves it through the remote's default bookmark and then main, master,
+ * trunk, so the usual answer needs no configuration. It is spelled out here
+ * only as a default while the daemon's list is still arriving.
  */
-const TRUNK = "";
+const TRUNK = "trunk()";
 
 /** What the window knew when the modal was opened. */
 export interface NewThreadRequest {
   /** Which project to open on — the selected row's, when there is one. */
   readonly project: string | undefined;
   /**
-   * The thread the selected workspace belongs to, if it belongs to one.
+   * The workspace on screen, if any.
    *
-   * Offered either way; this only decides which one the chip starts on. cmd+N
-   * starts on the main line, cmd+shift+N on this.
+   * Matched against the bases the daemon reports, so cmd+shift+N can start on
+   * the branch a person is standing in. A name and not a revset: only the
+   * daemon knows the bookmark prefix that turns one into the other.
    */
-  readonly parent: string | undefined;
-  /** True when opened with cmd+shift+N, which asks to branch from the parent. */
-  readonly fromParent: boolean;
+  readonly workspace: string | undefined;
+  /** True when opened with cmd+shift+N, which asks to branch from that one. */
+  readonly fromWorkspace: boolean;
 }
 
 const styles = stylex.create({
@@ -200,7 +199,9 @@ const styles = stylex.create({
     resize: "none",
     color: colors.text,
     font: "inherit",
-    fontSize: text.body,
+    // The one thing on this screen a person is actually composing, so it is
+    // the one thing set above body size.
+    fontSize: text.lead,
     lineHeight: 1.5,
   },
   send: {
@@ -340,13 +341,11 @@ function Chip<T extends string>({
 function Composer({
   request,
   projects,
-  threads,
   onClose,
   onStarted,
 }: {
   readonly request: NewThreadRequest;
   readonly projects: ReadonlyArray<Project>;
-  readonly threads: ReadonlyArray<Thread>;
   readonly onClose: () => void;
   readonly onStarted: () => void;
 }) {
@@ -355,11 +354,9 @@ function Composer({
     projects.some((p) => p.name === request.project) ? (request.project ?? first) : first,
   );
   const [typed, setTyped] = useState("");
-  // A thread id, or TRUNK for none. The daemon turns it into a revision — see
-  // the note on TRUNK for why that resolution cannot happen here.
-  const [parent, setParent] = useState(
-    request.fromParent && request.parent !== undefined ? request.parent : TRUNK,
-  );
+  // A revset: `trunk()`, or a bookmark name the daemon offered.
+  const [base, setBase] = useState(TRUNK);
+  const [bases, setBases] = useState<ReadonlyArray<ThreadBase>>([]);
   const [model, setModel] = useState(INHERIT);
   const [effort, setEffort] = useState<Effort | typeof INHERIT>(INHERIT);
   const [busy, setBusy] = useState(false);
@@ -367,12 +364,37 @@ function Composer({
 
   const from = projects.find((p) => p.name === project)?.from;
 
-  // The chosen parent, but only while the chosen project still offers it.
-  // Changing the project can strand a parent that lives somewhere else, and
-  // derived here rather than reset in a handler: this is a fact about the two
-  // values together, so computing it is one line and cannot go stale.
-  const options = branchable(threads, project);
-  const startsFrom = options.some((entry) => entry.id === parent) ? parent : TRUNK;
+  // Fetched per project, because a bookmark belongs to a repository. An effect
+  // and not a value: this is a request, and the project it is for can change
+  // while the modal is open.
+  useEffect(() => {
+    if (from === undefined) {
+      return;
+    }
+    let live = true;
+    threadBases(from)
+      .then((found) => {
+        if (!live) {
+          return;
+        }
+        setBases(found);
+        // Preselected only for cmd+shift+N, and only once the list is here —
+        // the client cannot compose `<prefix>/<name>` itself, so the match has
+        // to wait for the daemon to say which base is that workspace's.
+        const here = found.find((entry) => entry.workspace === request.workspace);
+        if (request.fromWorkspace && here !== undefined) {
+          setBase(here.revset);
+        }
+      })
+      .catch(() => {
+        // Left as trunk. A base list that cannot be fetched is not a reason to
+        // refuse to start a thread on the project's main line.
+      });
+    return () => {
+      live = false;
+    };
+  }, [from, request.workspace, request.fromWorkspace]);
+
   const described = typed.trim();
   const ready = from !== undefined && described !== "" && !busy;
 
@@ -386,7 +408,7 @@ function Composer({
       description: described,
       project,
       from,
-      parent: startsFrom === TRUNK ? undefined : startsFrom,
+      base,
       model: model === INHERIT ? undefined : model,
       effort: effort === INHERIT ? undefined : effort,
     })
@@ -423,27 +445,26 @@ function Composer({
           icon={<FolderIcon size={11} {...stylex.props(styles.chipIcon)} />}
           disabled={busy}
         />
-        {/* What this branches from — a thread, not a revision. Only threads
-            in the chosen project are offered: a revision is only meaningful
-            inside one repository, and the daemon refuses the cross-project
-            case rather than resolving it into a revset jj cannot find. */}
+        {/* Where the work starts. Every local bookmark in the project, which
+            is what a person recognises — and what the first version got wrong
+            by offering *threads*: most workspaces on a real machine belong to
+            none, so the list was empty exactly when someone was standing in a
+            branch they wanted to continue from. */}
         <Chip
-          id="new-thread-parent"
-          label={startsFrom === TRUNK ? "trunk" : (titleOf(threads, startsFrom) ?? "trunk")}
+          id="new-thread-base"
+          label={bases.find((entry) => entry.revset === base)?.label ?? "trunk"}
           title={
-            startsFrom === TRUNK
+            base === TRUNK
               ? "trunk() — jj resolves the remote's default bookmark, then main, master, trunk"
-              : "branch from that thread's bookmark, so this work follows on from it"
+              : `branch from ${base}`
           }
-          value={startsFrom}
-          onChange={setParent}
-          options={[
-            { value: TRUNK, label: "trunk — the project's main line" },
-            ...options.map((entry) => ({
-              value: entry.id,
-              label: entry.title === "" ? "untitled" : entry.title,
-            })),
-          ]}
+          value={base}
+          onChange={setBase}
+          options={
+            bases.length === 0
+              ? [{ value: TRUNK, label: "trunk" }]
+              : bases.map((entry) => ({ value: entry.revset, label: entry.label }))
+          }
           icon={<GitBranchIcon size={11} {...stylex.props(styles.chipIcon)} />}
           disabled={busy}
         />
@@ -536,13 +557,11 @@ function Composer({
 export function NewThread({
   request,
   projects,
-  threads,
   onClose,
   onStarted,
 }: {
   readonly request: NewThreadRequest | undefined;
   readonly projects: ReadonlyArray<Project>;
-  readonly threads: ReadonlyArray<Thread>;
   readonly onClose: () => void;
   readonly onStarted: () => void;
 }) {
@@ -563,13 +582,7 @@ export function NewThread({
         <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
         <Dialog.Popup {...stylex.props(styles.popup)}>
           <Dialog.Title {...stylex.props(styles.hidden)}>new thread</Dialog.Title>
-          <Composer
-            request={request}
-            projects={projects}
-            threads={threads}
-            onClose={onClose}
-            onStarted={onStarted}
-          />
+          <Composer request={request} projects={projects} onClose={onClose} onStarted={onStarted} />
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

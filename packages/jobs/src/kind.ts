@@ -56,7 +56,15 @@ export interface JobContext {
   readonly log: (line: string) => Effect.Effect<void>;
 }
 
-export interface JobStep<in Input> {
+/**
+ * `Input` is invariant, and was contravariant until `run` could return a patch.
+ *
+ * The `in` annotation said a step only ever *consumes* its input, which stopped
+ * being true the moment a step could also describe a change to it. Removing it
+ * is the honest spelling; adding `out` as well would be the same thing said at
+ * greater length.
+ */
+export interface JobStep<Input> {
   /**
    * Stable, and stable across releases.
    *
@@ -68,7 +76,41 @@ export interface JobStep<in Input> {
    */
   readonly name: string;
 
-  readonly run: (input: Input, context: JobContext) => Effect.Effect<void, JobError>;
+  /**
+   * Do the step, and optionally record what it learned.
+   *
+   * Most steps answer `Effect.void`: they act on the world and the input
+   * already says everything they needed. A step that *discovers* something the
+   * later steps depend on returns a patch instead, and the runner merges it
+   * into the stored input before marking the step done.
+   *
+   * ── why a step can write to the input at all ──────────────────────────────
+   * A step cannot hand a value to the next one — there is nowhere to put it. A
+   * job resumed by a restarted daemon has only its record, so anything not on
+   * the record did not happen. The first real need for this was naming a
+   * workspace: a model turns a sentence into a name, it takes ten seconds, and
+   * four of the five steps need the answer.
+   *
+   * Resolving it *before* enqueuing was the first design, and it worked. What
+   * it cost was the ten seconds, spent in front of a person watching a form
+   * that would not close, for work that has a progress panel of its own. The
+   * job has to exist immediately, so the naming has to happen inside it, so the
+   * step that names has to be able to write down what it found.
+   *
+   * The patch is merged and **saved with the same write that marks the step
+   * done**, so a resumed job reads the name rather than asking the model again
+   * — which would otherwise be a second answer, and possibly a different one.
+   *
+   * Two things this is not. It is not a channel between steps: the patch goes
+   * into the input, which is durable and schema-checked, rather than into
+   * memory. And it is not an escape from `run` being safe twice — a step whose
+   * patch is already present should notice and do nothing, exactly as every
+   * other step checks the world before changing it.
+   */
+  readonly run: (
+    input: Input,
+    context: JobContext,
+  ) => Effect.Effect<void | Partial<Input>, JobError>;
 
   /**
    * Put back what `run` did, or absent if there is nothing to put back.
