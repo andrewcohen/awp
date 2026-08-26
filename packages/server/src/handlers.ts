@@ -21,6 +21,7 @@ import {
 } from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
 import { WorkspaceIntent } from "./intent";
+import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
 import { Settings } from "./settings";
 import { demo } from "./jobs/demo";
@@ -63,6 +64,7 @@ export const layer = AwpRpcs.toLayer(
     const threads = yield* Threads;
     const intent = yield* WorkspaceIntent;
     const config = yield* Settings;
+    const jj = yield* Jj;
 
     // A job the client named and the daemon has never heard of. Its own
     // failure rather than a defect: asking about a job that was cleaned up, or
@@ -180,8 +182,15 @@ export const layer = AwpRpcs.toLayer(
        * answers, so a failed resolve leaves nothing behind — an empty thread
        * called "add tiered dis…" would be litter a person then has to tidy.
        */
-      ThreadStart: ({ description, project, repo, base }) =>
+      ThreadStart: ({ description, project, from, base }) =>
         Effect.gen(function* () {
+          // A directory into the repository it belongs to. `jj root` would
+          // answer with a workspace, which is the wrong thing to create a
+          // second workspace from.
+          const repo = yield* jj
+            .sourceRoot(from)
+            .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
+
           const resolved = yield* intent
             .resolve(description, project)
             .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));

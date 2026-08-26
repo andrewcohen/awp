@@ -10,9 +10,11 @@ import { RpcTest } from "effect/unstable/rpc";
 import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
-import { WorkspaceIntent } from "./intent";
+import { IntentError, WorkspaceIntent } from "./intent";
+import { Jj } from "./jj";
 import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
+import { type WorkspaceDeps, createWorkspace } from "./jobs/create-workspace";
 import { demo } from "./jobs/demo";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
@@ -57,6 +59,34 @@ const fakeMux = Layer.succeed(Multiplexer, {
   history: () => Effect.succeed(""),
 });
 
+/**
+ * A create-workspace kind whose services do nothing.
+ *
+ * Registered so the runner recognises the kind by name — `enqueue` refuses one
+ * it has never heard of. What the steps do is not under test here; they have
+ * their own suite, against a trace.
+ */
+const inert = {
+  jj: {
+    addWorkspace: () => Effect.void,
+    forgetWorkspace: () => Effect.void,
+    setBookmark: () => Effect.void,
+    deleteBookmark: () => Effect.void,
+  },
+  mux: {
+    start: () => Effect.void,
+    kill: () => Effect.void,
+    setLabels: () => Effect.void,
+    send: () => Effect.void,
+  },
+  threads: { attach: () => Effect.void, detach: () => Effect.void },
+  files: {
+    exists: () => Effect.succeed(false),
+    makeDirectory: () => Effect.void,
+    remove: () => Effect.void,
+  },
+} as unknown as WorkspaceDeps;
+
 const scratch = mkdtempSync(join(tmpdir(), "awp-handlers-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 let files = 0;
@@ -77,9 +107,18 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =
         // model call has its own probe.
         Layer.provide(settings.layer(join(scratch, "no-config.json"))),
         Layer.provide(
+          Layer.succeed(Jj)({
+            sourceRoot: (dir: string) => Effect.succeed(`/repos/${dir.split("/").at(-1) ?? ""}`),
+          } as unknown as Jj["Service"]),
+        ),
+        Layer.provide(
           Layer.succeed(WorkspaceIntent)({
             resolve: (description: string) =>
-              Effect.succeed({ name: "a-name", label: description, prompt: description }),
+              // Refuses an empty description, the way the real one does — that
+              // is the failure the ordering test below leans on.
+              description.trim() === ""
+                ? Effect.fail(new IntentError({ reason: "nothing typed" }))
+                : Effect.succeed({ name: "a-name", label: description, prompt: description }),
           }),
         ),
         // Threads on a database of their own, one file per test in a temp
@@ -98,7 +137,9 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =
         // The memory store, not sqlite: what is under test is the seam between
         // the contract and the runner, and a file on disk would make these
         // tests share state with each other and with the developer's daemon.
-        Layer.provide(jobsLayer([erase(demo)]).pipe(Layer.provide(layerMemory))),
+        Layer.provide(
+          jobsLayer([erase(demo), erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory)),
+        ),
         Layer.provide(sessions.layer),
         Layer.provide(attachment.layer),
         Layer.provide(fake.layer),
@@ -230,6 +271,45 @@ describe("jobs over the contract", () => {
       { project: "rowan", workspace: "discounts" },
       { project: "beta", workspace: "discounts" },
     ]);
+  });
+
+  it("starts a thread from a sentence, and hands back the job building it", async () => {
+    const found = await run((rpc) =>
+      rpc.ThreadStart({
+        description: "add tiered discounts to checkout",
+        project: "thicket",
+        from: "/somewhere/thicket",
+        base: undefined,
+      }),
+    );
+
+    // The thread is titled with what the model called it, not with the raw
+    // sentence — the fake here echoes the description back as the label.
+    expect(found.thread.title).toBe("add tiered discounts to checkout");
+    expect(found.job.kind).toBe("create-workspace");
+    // Resolved first and stored on the job, which is what makes a retry re-run
+    // against the same answer rather than asking the model again.
+    expect(found.job.title).toContain("thicket/a-name");
+  });
+
+  it("makes no thread when the model cannot be reached", async () => {
+    // Ordering, asserted: resolve, *then* create. An empty thread titled with
+    // half a sentence would be litter a person has to tidy by hand.
+    const before = await run((rpc) => rpc.ThreadList());
+    const outcome = await run((rpc) =>
+      Effect.result(
+        rpc.ThreadStart({
+          description: "  ",
+          project: "thicket",
+          from: "/somewhere/thicket",
+          base: undefined,
+        }),
+      ),
+    );
+    const after = await run((rpc) => rpc.ThreadList());
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    expect(after.length).toBe(before.length);
   });
 
   it("says so when asked about a thread it has never had", async () => {

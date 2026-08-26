@@ -1,6 +1,6 @@
 import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
-import type { DemoJob, SessionInfo, Thread } from "@awp-kit/protocol";
+import type { DemoJob, SessionInfo, Thread, ThreadStarted } from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
@@ -117,8 +117,22 @@ export const enqueueDemo = (payload: DemoJob): Promise<Job> =>
 export const listThreads = (): Promise<ReadonlyArray<Thread>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadList()));
 
-export const createThread = (title: string): Promise<Thread> =>
-  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadCreate({ title })));
+/**
+ * Start a thread from a sentence, and get back the thread and the job.
+ *
+ * The slow call — a model turns what was typed into a name, a title and an
+ * instruction, and that takes about ten seconds. It happens in the daemon
+ * rather than here, and the job it returns is where the rest of the work shows
+ * up: see `watchJobs`.
+ */
+export const startThread = (payload: {
+  readonly description: string;
+  readonly project: string;
+  /** A directory in the project — a session's `startDir` will do. */
+  readonly from: string;
+  readonly base?: string | undefined;
+}): Promise<ThreadStarted> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadStart(payload)));
 
 /**
  * Watch every job change until the returned function is called.

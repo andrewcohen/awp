@@ -16,6 +16,7 @@ import { Effect, FileSystem, Layer } from "effect";
 import { createWorkspace } from "./jobs/create-workspace";
 import { demo } from "./jobs/demo";
 import { Jj } from "./jj";
+import * as intent from "./intent";
 import * as jjCli from "./jj-cli";
 import { Multiplexer } from "./multiplexer";
 import { Threads } from "./threads";
@@ -24,6 +25,7 @@ import * as attachment from "./attachment";
 import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
+import * as settings from "./settings";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 import * as zmx from "./zmx";
 
@@ -132,6 +134,8 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(jobs),
   Layer.provide(threads),
   Layer.provide(db),
+  Layer.provide(intent.layer),
+  Layer.provide(settings.layer()),
   Layer.provide(jjCli.layer),
   Layer.provide(zmx.layer),
 );
