@@ -102,6 +102,7 @@ const program = Effect.gen(function* () {
 
   const queued = yield* rpc.WorkspaceCreate({
     thread: thread.id,
+    label: thread.title,
     project: PROJECT,
     workspace: WORKSPACE,
     repo,

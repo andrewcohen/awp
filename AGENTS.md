@@ -475,6 +475,29 @@ together, and they go as soon as the first real kind lands.
 
 ## Frontend
 
+**The stack is chosen. Do not add a fourth thing to it.**
+
+```
+  Base UI          behaviour — dialogs, selects, tabs, menus
+  StyleX           appearance — every rule in the renderer
+  TanStack Router  navigation, when there is any
+  Effect Atom      renderer state that outlives a component
+```
+
+The division between the first two is the one that gets violated, so it is
+worth stating flatly: **Base UI ships no styles and StyleX writes no
+behaviour.** Reaching for a styled component library replaces both at once;
+hand-rolling a dropdown replaces the first and loses the arrow keys, the
+typeahead, the roving tab stop, the aria wiring and — the one that shows up as
+a visual bug rather than an accessibility one — the portal, without which a
+popup inside a scrolling column is clipped by it.
+
+`@tanstack/react-router` and `@effect/atom-react` are dependencies already and
+are **not yet imported anywhere**. That is deliberate: they are the answer when
+the window needs routes or shared state, and reaching for something else on the
+day it does is the mistake this list exists to prevent. It is not an invitation
+to introduce a route or an atom before there is one to have.
+
 - **electrobun is pinned to 1.18.1.** 2.x is a _bootstrap_: the npm package
   contains no runtime, importing it throws by design, and the real APIs come from
   a separate toolchain (Hutch) via `npx electrobun init`. Migrating is real work

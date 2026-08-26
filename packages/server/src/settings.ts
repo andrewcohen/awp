@@ -109,3 +109,65 @@ const isMissing = (cause: unknown): boolean =>
 
 export const layer = (path: string = SETTINGS_FILE): Layer.Layer<Settings> =>
   Layer.effect(Settings)(make(path));
+
+// ── overriding what the config says ────────────────────────────────────────
+//
+// The new-thread modal offers a model and an effort, and the agent command is
+// already in the config — `claude --permission-mode auto --model opus`. So a
+// chosen model has to *replace* the flag that is there rather than follow it.
+//
+//   configured  claude --permission-mode auto --model opus
+//   chosen      model: sonnet, effort: high
+//   result      claude --permission-mode auto --model sonnet --effort high
+//                                                      └─ replaced, not appended
+//
+// Appending would leave `--model opus --model sonnet`, which the CLI resolves
+// by some rule — probably last-wins — that nothing here should depend on and
+// no test here could pin. A person reading the resulting session's command
+// line would also have to know that rule to predict what they got.
+//
+// Both spellings are handled because both appear in real configs: `--model x`
+// is two argv elements and `--model=x` is one.
+
+/**
+ * `argv` with `flag` set to `value`, replacing whichever spelling is there.
+ *
+ * `undefined` leaves the argv exactly as configured, which is the whole point
+ * of the "from settings" option in the modal: choosing nothing has to be
+ * different from choosing a default, or the config could never win.
+ */
+export const withFlag = (
+  argv: ReadonlyArray<string>,
+  flag: string,
+  value: string | undefined,
+): ReadonlyArray<string> => {
+  if (value === undefined || value === "" || argv.length === 0) {
+    return argv;
+  }
+
+  const joined = argv.findIndex((arg) => arg.startsWith(`${flag}=`));
+  if (joined !== -1) {
+    return argv.with(joined, `${flag}=${value}`);
+  }
+
+  const separate = argv.indexOf(flag);
+  if (separate !== -1) {
+    // The element after it is the value — unless there is no element, or it is
+    // itself a flag, which is what `--verbose --model x` looks like when the
+    // config author left the value out. Inserting is right in both cases;
+    // overwriting the next flag would silently drop it.
+    const next = argv[separate + 1];
+    return next === undefined || next.startsWith("-")
+      ? [...argv.slice(0, separate + 1), value, ...argv.slice(separate + 1)]
+      : argv.with(separate + 1, value);
+  }
+
+  return [...argv, flag, value];
+};
+
+/** The configured agent command with the modal's choices applied. */
+export const agentWith = (
+  settings: AwpSettings,
+  chosen: { readonly model?: string | undefined; readonly effort?: string | undefined },
+): ReadonlyArray<string> =>
+  withFlag(withFlag(settings.agent, "--model", chosen.model), "--effort", chosen.effort);

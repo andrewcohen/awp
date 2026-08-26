@@ -1,6 +1,6 @@
 import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
-import type { DemoJob, SessionInfo, Thread, ThreadStarted } from "@awp-kit/protocol";
+import type { DemoJob, Effort, SessionInfo, Thread, ThreadStarted } from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
@@ -131,6 +131,15 @@ export const startThread = (payload: {
   /** A directory in the project — a session's `startDir` will do. */
   readonly from: string;
   readonly base?: string | undefined;
+  /**
+   * Overrides for the configured agent command, or absent to leave it alone.
+   *
+   * Absent is not the same as passing what the config already says: the daemon
+   * replaces the flag in place, so a value here wins and no value means the
+   * config does. See `agentWith` in the server's settings.ts.
+   */
+  readonly model?: string | undefined;
+  readonly effort?: Effort | undefined;
 }): Promise<ThreadStarted> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadStart(payload)));
 
