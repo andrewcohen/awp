@@ -18,6 +18,7 @@ import * as attachment from "./attachment";
 import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
+import { layer as threadsLayer } from "./threads";
 import * as zmx from "./zmx";
 
 /**
@@ -68,6 +69,24 @@ export const JOBS_DB = join(homedir(), ".awp", "jobs.sqlite");
  */
 export const jobs = jobsLayer([erase(demo)]).pipe(Layer.provide(Layer.orDie(layerSqlite(JOBS_DB))));
 
+/**
+ * Where threads are written down.
+ *
+ * Beside the jobs database and not inside it, and JSON rather than sqlite. A
+ * thread is a dozen records written when a person types a title — none of what
+ * sqlite was bought for applies, and a file that can be opened in an editor is
+ * worth more while the shape of a thread is still being argued about. See
+ * `threads.ts`.
+ */
+export const THREADS_FILE = join(homedir(), ".awp", "threads.json");
+
+/**
+ * `Layer.orDie` for the same reason the jobs store gets it: a daemon that
+ * cannot read its threads has no sidebar to draw, and starting anyway would
+ * report an empty list — which reads as having lost them.
+ */
+export const threads = Layer.orDie(threadsLayer(THREADS_FILE));
+
 /** The real services: real zmx, real ptys. */
 export const services = sessions.layer.pipe(
   Layer.provide(attachment.layer),
@@ -88,5 +107,6 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(handlers.layer),
   Layer.provide(services),
   Layer.provide(jobs),
+  Layer.provide(threads),
   Layer.provide(zmx.layer),
 );

@@ -2,7 +2,7 @@ import { Effect, Result, Schema, Stream } from "effect";
 import { RpcTest } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 import type { Job } from "@awp-kit/jobs";
-import { AttachRefused, AwpRpcs, SessionInfo } from "./index";
+import { AttachRefused, AwpRpcs, SessionInfo, type Thread } from "./index";
 
 // A contract is only a contract if it survives the wire.
 //
@@ -100,6 +100,14 @@ const job: Job = {
   endedAt: new Date(1_700_000_002_000),
 };
 
+const thread: Thread = {
+  id: "20260826-aaaa",
+  title: "tiered discounts",
+  createdAt: new Date(1_700_000_000_000),
+  archivedAt: undefined,
+  members: [{ project: "thicket", workspace: "discounts" }],
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -114,6 +122,12 @@ const handlers = AwpRpcs.toLayer({
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,
   JobDemo: () => Effect.succeed(job),
+  ThreadList: () => Effect.succeed([thread]),
+  ThreadCreate: () => Effect.succeed(thread),
+  ThreadRename: () => Effect.succeed(thread),
+  ThreadArchive: () => Effect.succeed(thread),
+  ThreadAttach: () => Effect.succeed(thread),
+  ThreadDetach: () => Effect.succeed(thread),
 });
 
 const client = RpcTest.makeClient(AwpRpcs).pipe(Effect.provide(handlers));

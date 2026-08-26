@@ -99,6 +99,65 @@ export const SessionInfo = Schema.Struct({
 
 export type SessionInfo = (typeof SessionInfo)["Type"];
 
+// ── threads ────────────────────────────────────────────────────────────────
+//
+// A thread is the piece of work. A workspace is a checkout, and one piece of
+// work often needs two of them — a change to thicket's frontend and the api
+// behind it is one thread, two projects, two jj workspaces, six sessions. The
+// sidebar used to show that as two unrelated rows and leave the connection to
+// be held in someone's head.
+//
+//   thread  "tiered discounts"
+//     ├── thicket/tiered-discounts   agent · editor · action
+//     └── api/tiered-discounts       agent · editor · action
+//
+// **A thread holds pairs, not sessions.** Sessions come and go — a workspace
+// with nothing running is still part of the work — so what is written down is
+// `(project, workspace)`, which is exactly the identity a session already
+// reports. That is also why no new label was needed: the sidebar nests a
+// session by looking up the pair its identity already carries.
+//
+// **A workspace belongs to at most one thread**, enforced on attach rather than
+// checked on read. Two threads claiming one workspace has no rendering: the
+// sidebar would have to draw it twice, and a person would have to decide which
+// of the two was lying.
+
+/** One workspace a thread has claimed. */
+export const ThreadMember = Schema.Struct({
+  project: Schema.String,
+  workspace: Schema.String,
+});
+
+export type ThreadMember = (typeof ThreadMember)["Type"];
+
+export const Thread = Schema.Struct({
+  id: Schema.String,
+  /**
+   * What the work is called, in a person's words.
+   *
+   * The one field awp does not derive from anything. A workspace is named after
+   * a branch and a session after a workspace, so every name in the system so
+   * far has been an address; this is the first one that is a description, and
+   * it is the whole reason the thread exists as a record rather than as a
+   * grouping rule.
+   */
+  title: Schema.String,
+  createdAt: Schema.Date,
+  /**
+   * Set when the work is finished. Archived rather than deleted: a thread is
+   * the only record that a set of workspaces were once one job, and that is
+   * worth more after the fact than during.
+   */
+  archivedAt: Schema.UndefinedOr(Schema.Date),
+  members: Schema.Array(ThreadMember),
+});
+
+export type Thread = (typeof Thread)["Type"];
+
+export class ThreadNotFound extends Schema.TaggedError<ThreadNotFound>()("ThreadNotFound", {
+  thread: Schema.String,
+}) {}
+
 // ── failures a client is expected to handle ────────────────────────────────
 //
 // Schema-backed so they survive the wire as themselves rather than as a string.
@@ -282,5 +341,51 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("JobDemo", {
     payload: DemoJob,
     success: Job,
+  }),
+
+  /**
+   * Every thread, newest first, archived ones included.
+   *
+   * No stream beside it, unlike jobs, and the difference is the point. A job
+   * changes on its own — that is what a job is — so a client that only asks is
+   * a client that misses everything interesting. A thread changes when a person
+   * changes it, in this window, so the reply to the change is the update.
+   */
+  Rpc.make("ThreadList", {
+    success: Schema.Array(Thread),
+  }),
+
+  Rpc.make("ThreadCreate", {
+    payload: { title: Schema.String },
+    success: Thread,
+  }),
+
+  Rpc.make("ThreadRename", {
+    payload: { thread: Schema.String, title: Schema.String },
+    success: Thread,
+    error: ThreadNotFound,
+  }),
+
+  /** Archive, or bring one back — `archived: false` undoes it. */
+  Rpc.make("ThreadArchive", {
+    payload: { thread: Schema.String, archived: Schema.Boolean },
+    success: Thread,
+    error: ThreadNotFound,
+  }),
+
+  /**
+   * Claim a workspace for this thread, releasing it from whichever thread held
+   * it before. See {@link Thread} for why the second claim simply wins.
+   */
+  Rpc.make("ThreadAttach", {
+    payload: { thread: Schema.String, member: ThreadMember },
+    success: Thread,
+    error: ThreadNotFound,
+  }),
+
+  Rpc.make("ThreadDetach", {
+    payload: { thread: Schema.String, member: ThreadMember },
+    success: Thread,
+    error: ThreadNotFound,
   }),
 ) {}

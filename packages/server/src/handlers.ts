@@ -20,6 +20,7 @@ import {
 } from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
 import { demo } from "./jobs/demo";
+import { Threads } from "./threads";
 import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
@@ -55,6 +56,7 @@ export const layer = AwpRpcs.toLayer(
     const mux = yield* Multiplexer;
     const sessions = yield* Sessions;
     const jobs = yield* Jobs;
+    const threads = yield* Threads;
 
     // A job the client named and the daemon has never heard of. Its own
     // failure rather than a defect: asking about a job that was cleaned up, or
@@ -159,6 +161,27 @@ export const layer = AwpRpcs.toLayer(
         known(job).pipe(Effect.flatMap(() => jobs.cancel(job).pipe(Effect.orDie))),
 
       JobDemo: (payload) => jobs.enqueue(demo, payload).pipe(Effect.orDie),
+
+      // Threads. A store that cannot be read or written is the daemon being
+      // broken — the disk is full, or the file is owned by someone else — so
+      // ThreadStoreError dies here rather than crossing the wire. ThreadNotFound
+      // does cross it: naming a thread that is not there is a question with a
+      // negative answer, which is a different thing entirely.
+      ThreadList: () => threads.list().pipe(Effect.orDie),
+
+      ThreadCreate: ({ title }) => threads.create(title).pipe(Effect.orDie),
+
+      ThreadRename: ({ thread, title }) =>
+        threads.rename(thread, title).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
+      ThreadArchive: ({ thread, archived }) =>
+        threads.archive(thread, archived).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
+      ThreadAttach: ({ thread, member }) =>
+        threads.attach(thread, member).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
+      ThreadDetach: ({ thread, member }) =>
+        threads.detach(thread, member).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
     };
   }),
 );
