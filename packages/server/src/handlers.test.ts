@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
+import { layer as dbLayer } from "@awp-kit/store";
 import { AwpRpcs } from "@awp-kit/protocol";
 import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
@@ -13,7 +14,7 @@ import { Multiplexer, type Session } from "./multiplexer";
 import { demo } from "./jobs/demo";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
-import { layer as threadsLayer } from "./threads";
+import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 
 // The contract, its handlers and the services under them — everything except
 // the socket.
@@ -63,10 +64,19 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =
     Effect.gen(function* () {
       const fake = yield* makeFake({ chunks: ["\u001B[2J", "ready$ "] });
       const stack = handlers.layer.pipe(
-        // A file per test, in a temp directory. There is no memory store for
-        // threads because there is no store abstraction — a thread *is* a file,
-        // and a fake would be testing something the daemon does not run.
-        Layer.provide(Layer.orDie(threadsLayer(join(scratch, `threads-${(files += 1)}.json`)))),
+        // Threads on a database of their own, one file per test in a temp
+        // directory. There is no memory store for threads because there is no
+        // store abstraction — a thread *is* rows, and a fake would be testing
+        // something the daemon does not run.
+        Layer.provide(
+          threadsLayer.pipe(
+            Layer.provide(
+              Layer.orDie(
+                dbLayer(join(scratch, `threads-${(files += 1)}.sqlite`), threadMigrations),
+              ),
+            ),
+          ),
+        ),
         // The memory store, not sqlite: what is under test is the seam between
         // the contract and the runner, and a file on disk would make these
         // tests share state with each other and with the developer's daemon.

@@ -1,36 +1,69 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { type Thread, ThreadNotFound, type ThreadMember } from "@awp-kit/protocol";
-import { Context, Data, Effect, Layer, Ref, Schema } from "effect";
+import { type Thread, type ThreadMember, ThreadNotFound } from "@awp-kit/protocol";
+import { Db, type Migration, attempt } from "@awp-kit/store";
+import { Context, Data, Effect, Layer } from "effect";
 
 // Where threads are kept, and the rules about what may be in them.
 //
-// ── a file, not a database ─────────────────────────────────────────────────
-// Jobs went to sqlite because a job has an unbounded log, is written to several
-// times a second while it runs, and must survive being killed halfway through
-// one of those writes. A thread has none of those properties: a dozen records,
-// written when a person types a title, read once at startup. What a plain file
-// buys instead is that it can be opened in an editor and understood — which,
-// while the shape of a thread is still being argued about, is the more useful
-// property.
+// ── one database, with jobs ────────────────────────────────────────────────
+// This was a JSON file for about an hour, and the argument that moved it is the
+// first real job: creating a workspace makes a jj workspace, starts sessions,
+// *and* claims the workspace for a thread. Two stores means that job can record
+// its own success and fail to record the thread, and nothing afterwards can say
+// which happened. One connection makes it one transaction.
 //
-// It is written whole and moved into place, so a crash mid-write leaves the
-// previous file rather than half of the new one. That is the one durability
-// property sqlite was giving us that is actually needed here.
+// What the file lost was being readable in an editor, which mattered while the
+// shape of a thread was still being argued about and matters less than the
+// above.
 //
-// ── a workspace belongs to one thread ──────────────────────────────────────
-// Enforced in `attach`, which removes the pair from every other thread before
-// adding it. The alternative — allowing two and resolving it on read — has no
-// rendering: the sidebar would draw the workspace under both, and a person
-// would have to work out which claim was the real one. Better to make the
-// second claim win outright and say so.
+// ── two tables, not a JSON column ──────────────────────────────────────────
+// Members are rows with a foreign key, so "a workspace belongs to at most one
+// thread" is a UNIQUE constraint the database enforces rather than a rule this
+// file remembers to apply. The alternative — a JSON array on the thread row —
+// makes that rule a loop, and a loop is a thing that can be skipped.
+//
+// Enforced on write rather than resolved on read, for a reason that is about
+// rendering: two threads claiming one workspace has no drawing. The sidebar
+// would show it twice and a person would have to decide which claim was lying.
+// The second claim wins outright and the first thread lets go.
 
-/** The file could not be read or written. */
+/** The database would not answer. */
 export class ThreadStoreError extends Data.TaggedError("ThreadStoreError")<{
-  readonly op: string;
   readonly reason: string;
   readonly cause?: unknown;
 }> {}
+
+/**
+ * The threads tables, as a list that only ever grows.
+ *
+ * Named rather than numbered, so appending one here cannot renumber the jobs
+ * migrations sharing the same table of applied names. See `@awp-kit/store`.
+ *
+ * The UNIQUE on `(project, workspace)` in `thread_members` **is** the
+ * one-thread rule. `on delete cascade` means deleting a thread takes its claims
+ * with it rather than leaving rows pointing at nothing — which is only true
+ * because the connection turns `foreign_keys` on, since sqlite does not.
+ */
+export const migrations: ReadonlyArray<Migration> = [
+  {
+    name: "threads.001-initial",
+    up: [
+      `create table threads (
+         id          text primary key,
+         title       text not null,
+         created_at  integer not null,
+         archived_at integer
+       ) strict`,
+      `create table thread_members (
+         thread_id text not null references threads (id) on delete cascade,
+         project   text not null,
+         workspace text not null,
+         seq       integer not null,
+         unique (project, workspace)
+       ) strict`,
+      `create index thread_members_thread on thread_members (thread_id, seq)`,
+    ],
+  },
+];
 
 export class Threads extends Context.Service<
   Threads,
@@ -69,25 +102,6 @@ export class Threads extends Context.Service<
     ) => Effect.Effect<Thread, ThreadStoreError | ThreadNotFound>;
   }
 >()("awp/Threads") {}
-
-/**
- * The shape of the file.
- *
- * Here for the reason the jobs database carries one, and with the opposite
- * consequence: this file is small and legible, so a shape change can be
- * migrated by reading it rather than by discarding it. A version that does not
- * match refuses to load — which is loud, and the right kind of loud, because
- * the alternative is a daemon that silently forgets every thread.
- */
-const VERSION = 1;
-
-/** The list with one thread swapped for a new version of itself. */
-const replace = (all: ReadonlyArray<Thread>, updated: Thread): ReadonlyArray<Thread> =>
-  all.map((entry) => (entry.id === updated.id ? updated : entry));
-
-const same = (a: ThreadMember, b: ThreadMember): boolean =>
-  a.project === b.project && a.workspace === b.workspace;
-
 /**
  * A thread's id: the day it was made, and four characters to tell it from the
  * others made that day.
@@ -104,151 +118,143 @@ export const threadId = (now: Date, random: number): string => {
   return `${day}-${tail}`;
 };
 
-const read = (path: string): Effect.Effect<ReadonlyArray<Thread>, ThreadStoreError> =>
-  Effect.tryPromise({
-    try: async () => {
-      const text = await readFile(path, "utf8").catch((cause: NodeJS.ErrnoException) => {
-        // A missing file is an empty list, not a failure. The first run of a
-        // daemon on a new machine is the common case, not the exceptional one.
-        if (cause.code === "ENOENT") {
-          return undefined;
-        }
-        throw cause;
-      });
-      if (text === undefined) {
-        return [];
-      }
-      const parsed: unknown = JSON.parse(text);
-      const decoded = Schema.decodeUnknownSync(
-        Schema.Struct({ version: Schema.Int, threads: Schema.Array(Schema.Unknown) }),
-      )(parsed);
-      if (decoded.version !== VERSION) {
-        throw new Error(`threads file is version ${decoded.version}, expected ${VERSION}`);
-      }
-      return decoded.threads as ReadonlyArray<Thread>;
-    },
-    catch: (cause) => new ThreadStoreError({ op: "read", reason: `cannot read ${path}`, cause }),
-  }).pipe(Effect.map((found) => found.map(revive)));
+/** The store's own error, so a caller catching it reasons about threads. */
+const ask = <A>(reason: string, run: () => A): Effect.Effect<A, ThreadStoreError> =>
+  attempt(reason, run).pipe(
+    Effect.mapError((error) => new ThreadStoreError({ reason, cause: error.cause })),
+  );
 
-/** JSON has no Date, so the two timestamps come back as strings. */
-const revive = (raw: Thread): Thread => ({
-  ...raw,
-  createdAt: new Date(raw.createdAt),
-  archivedAt: raw.archivedAt === undefined ? undefined : new Date(raw.archivedAt),
-});
+const date = (value: unknown): Date | undefined =>
+  typeof value === "number" ? new Date(value) : undefined;
 
-const write = (
-  path: string,
-  threads: ReadonlyArray<Thread>,
-): Effect.Effect<void, ThreadStoreError> =>
-  Effect.tryPromise({
-    try: async () => {
-      await mkdir(dirname(path), { recursive: true });
-      const temporary = `${path}.writing`;
-      // Written whole, then moved. `rename` is atomic within a filesystem, so a
-      // crash between these two lines leaves the file that was already there —
-      // which is the one failure mode a plain `writeFile` would get wrong.
-      await writeFile(
-        temporary,
-        `${JSON.stringify({ version: VERSION, threads }, undefined, 2)}\n`,
-      );
-      await rename(temporary, path);
-    },
-    catch: (cause) => new ThreadStoreError({ op: "write", reason: `cannot write ${path}`, cause }),
-  });
+export const make = Effect.gen(function* () {
+  const db = yield* Db;
 
-export const make = (
-  path: string,
-  now: () => Date = () => new Date(),
-  random: () => number = Math.random,
-) =>
-  Effect.gen(function* () {
-    // Read once, then held. The daemon is the only writer, so the file and this
-    // Ref cannot disagree unless someone edits it underneath us — which is a
-    // thing a person may well do, and which they will have to restart for. Said
-    // plainly rather than defended against, because watching the file to
-    // reconcile an edit is a great deal of machinery for a case that ends in a
-    // restart anyway.
-    const state = yield* Ref.make(yield* read(path));
+  const insertThread = db.prepare("insert into threads values (?, ?, ?, ?)");
+  const setTitle = db.prepare("update threads set title = ? where id = ?");
+  const setArchived = db.prepare("update threads set archived_at = ? where id = ?");
+  const readThread = db.prepare("select * from threads where id = ?");
+  const readThreads = db.prepare("select * from threads order by created_at desc, id desc");
+  const readMembers = db.prepare(
+    "select thread_id, project, workspace from thread_members order by thread_id, seq",
+  );
+  // The one-thread rule, as one statement. `on conflict do update` rather than
+  // a delete-then-insert: the UNIQUE is on the pair, so the row already there
+  // for another thread is the row this rewrites — which is both the release and
+  // the claim, and cannot half happen.
+  const claim = db.prepare(
+    `insert into thread_members values (?, ?, ?,
+       (select coalesce(max(seq), 0) + 1 from thread_members where thread_id = ?))
+     on conflict (project, workspace) do update set
+       thread_id = excluded.thread_id, seq = excluded.seq`,
+  );
+  const release = db.prepare(
+    "delete from thread_members where thread_id = ? and project = ? and workspace = ?",
+  );
 
-    const save = (next: ReadonlyArray<Thread>) =>
-      write(path, next).pipe(Effect.flatMap(() => Ref.set(state, next)));
+  /** Every thread with its members, in one pair of reads rather than N + 1. */
+  const readAll = (): ReadonlyArray<Thread> => {
+    const members = new Map<string, ThreadMember[]>();
+    for (const row of readMembers.all()) {
+      const id = String(row["thread_id"]);
+      members.set(id, [
+        ...(members.get(id) ?? []),
+        { project: String(row["project"]), workspace: String(row["workspace"]) },
+      ]);
+    }
+    return readThreads.all().map((row) => {
+      const id = String(row["id"]);
+      return {
+        id,
+        title: String(row["title"]),
+        createdAt: new Date(Number(row["created_at"])),
+        archivedAt: date(row["archived_at"]),
+        members: members.get(id) ?? [],
+      };
+    });
+  };
 
-    /** Find a thread, replace it, write the file, and hand back the new one. */
-    const change = (
-      thread: string,
-      edit: (found: Thread, all: ReadonlyArray<Thread>) => ReadonlyArray<Thread>,
-    ) =>
-      Effect.gen(function* () {
-        const all = yield* Ref.get(state);
-        const found = all.find((entry) => entry.id === thread);
-        if (found === undefined) {
-          return yield* Effect.fail(new ThreadNotFound({ thread }));
-        }
-        const next = edit(found, all);
-        yield* save(next);
-        const updated = next.find((entry) => entry.id === thread);
-        return updated ?? found;
-      });
+  const one = (thread: string): Thread | undefined =>
+    readAll().find((entry) => entry.id === thread);
 
-    return {
-      list: () =>
-        Ref.get(state).pipe(
-          Effect.map((all) =>
-            all.toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+  /**
+   * Run a write, but only for a thread that exists.
+   *
+   * The existence check and the write are not in a transaction together, and do
+   * not need to be: the daemon is the only writer, and a thread cannot be
+   * deleted at all yet. When deletion arrives this becomes the place that has
+   * to change.
+   */
+  const change = (
+    thread: string,
+    reason: string,
+    run: () => void,
+  ): Effect.Effect<Thread, ThreadStoreError | ThreadNotFound> =>
+    ask(reason, () => readThread.all(thread).length > 0).pipe(
+      Effect.flatMap((exists) =>
+        exists ? Effect.void : Effect.fail(new ThreadNotFound({ thread })),
+      ),
+      Effect.flatMap(() => ask(reason, run)),
+      Effect.flatMap(() =>
+        ask(reason, () => one(thread)).pipe(
+          Effect.flatMap((found) =>
+            found === undefined
+              ? Effect.fail(new ThreadNotFound({ thread }))
+              : Effect.succeed(found),
           ),
         ),
+      ),
+    );
 
-      create: (title: string) =>
-        Effect.gen(function* () {
-          const all = yield* Ref.get(state);
+  return {
+    list: () => ask("cannot list threads", readAll),
+
+    create: (title: string) =>
+      Effect.sync(() => threadId(new Date(), Math.random())).pipe(
+        Effect.flatMap((id) => {
           const made: Thread = {
-            id: threadId(now(), random()),
+            id,
             title: title.trim(),
-            createdAt: now(),
+            createdAt: new Date(),
             archivedAt: undefined,
             members: [],
           };
-          yield* save([...all, made]);
-          return made;
+          return ask(`cannot create thread ${id}`, () => {
+            insertThread.run(made.id, made.title, made.createdAt.getTime(), null);
+            return made;
+          });
         }),
+      ),
 
-      rename: (thread: string, title: string) =>
-        change(thread, (found, all) => replace(all, { ...found, title: title.trim() })),
+    rename: (thread: string, title: string) =>
+      change(
+        thread,
+        `cannot rename thread ${thread}`,
+        () => void setTitle.run(title.trim(), thread),
+      ),
 
-      archive: (thread: string, archived: boolean) =>
-        change(thread, (found, all) =>
-          replace(all, { ...found, archivedAt: archived ? now() : undefined }),
-        ),
+    archive: (thread: string, archived: boolean) =>
+      change(
+        thread,
+        `cannot archive thread ${thread}`,
+        () => void setArchived.run(archived ? Date.now() : null, thread),
+      ),
 
-      attach: (thread: string, member: ThreadMember) =>
-        change(thread, (_found, all) =>
-          all.map((entry) =>
-            entry.id === thread
-              ? {
-                  ...entry,
-                  members: entry.members.some((held) => same(held, member))
-                    ? entry.members
-                    : [...entry.members, member],
-                }
-              : // Every other thread lets it go — the one-thread rule, here
-                // because this is the only place both threads are in hand.
-                {
-                  ...entry,
-                  members: entry.members.filter((held) => !same(held, member)),
-                },
-          ),
-        ),
+    attach: (thread: string, member: ThreadMember) =>
+      change(
+        thread,
+        `cannot attach ${member.project}/${member.workspace} to ${thread}`,
+        () => void claim.run(thread, member.project, member.workspace, thread),
+      ),
 
-      detach: (thread: string, member: ThreadMember) =>
-        change(thread, (found, all) =>
-          replace(all, {
-            ...found,
-            members: found.members.filter((held) => !same(held, member)),
-          }),
-        ),
-    };
-  });
+    detach: (thread: string, member: ThreadMember) =>
+      change(
+        thread,
+        `cannot detach ${member.project}/${member.workspace} from ${thread}`,
+        () => void release.run(thread, member.project, member.workspace),
+      ),
+  };
+});
 
-export const layer = (path: string): Layer.Layer<Threads, ThreadStoreError> =>
-  Layer.effect(Threads)(make(path));
+/** Threads over whichever connection was provided. */
+export const layer: Layer.Layer<Threads, never, Db> = Layer.effect(Threads)(make);

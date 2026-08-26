@@ -1,14 +1,12 @@
 {
-  "name": "@awp-kit/jobs",
+  "name": "@awp-kit/store",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./sqlite": "./src/sqlite.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
-    "@awp-kit/store": "workspace:*",
     "effect": "catalog:"
   }
 }

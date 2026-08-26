@@ -1,13 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
-// The store picks its driver at open time; the test reaches for Node's
-// directly, because what it needs is a file written the *wrong* way.
+// The store picks its driver at open time; these tests reach for Node's
+// directly, because what they need is to write the database the *wrong* way.
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DbError } from "@awp-kit/store";
 import { Effect, Layer } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
 import type { Job } from "./job";
-import { layerSqlite } from "./sqlite";
+import { layerSqliteAt } from "./sqlite";
 import { JobStore, LOG_LINES, type StoreError, layerMemory } from "./store";
 
 // One suite, both stores.
@@ -26,16 +27,16 @@ const file = (): string => join(scratch, `jobs-${(files += 1)}.sqlite`);
 
 const stores: ReadonlyArray<{
   readonly name: string;
-  readonly layer: () => Layer.Layer<JobStore, StoreError>;
+  readonly layer: () => Layer.Layer<JobStore, StoreError | DbError>;
 }> = [
   { name: "memory", layer: () => layerMemory },
-  { name: "sqlite", layer: () => layerSqlite(file()) },
+  { name: "sqlite", layer: () => layerSqliteAt(file()) },
 ];
 
 type Service = { readonly [K in keyof JobStore["Service"]]: JobStore["Service"][K] };
 
 const on = <A>(
-  layer: Layer.Layer<JobStore, StoreError>,
+  layer: Layer.Layer<JobStore, StoreError | DbError>,
   program: (store: Service) => Effect.Effect<A, StoreError>,
 ): Promise<A> =>
   Effect.gen(function* () {
@@ -176,7 +177,7 @@ describe("sqlite, specifically", () => {
   test("a job written by one process is there for the next", async () => {
     const path = file();
 
-    await on(layerSqlite(path), (jobs) =>
+    await on(layerSqliteAt(path), (jobs) =>
       jobs
         .put(job({ status: "running", done: ["one"] }))
         .pipe(Effect.flatMap(() => jobs.append("20260101-aaaa", ["got as far as one"]))),
@@ -184,7 +185,7 @@ describe("sqlite, specifically", () => {
 
     // A second layer over the same file: a different connection, the way a
     // restarted daemon is. This is the whole reason the store is not a Map.
-    const [read, log] = await on(layerSqlite(path), (jobs) =>
+    const [read, log] = await on(layerSqliteAt(path), (jobs) =>
       Effect.gen(function* () {
         return [yield* jobs.get("20260101-aaaa"), yield* jobs.log("20260101-aaaa")] as const;
       }),
@@ -195,36 +196,40 @@ describe("sqlite, specifically", () => {
     expect(log).toEqual(["got as far as one"]);
   });
 
-  test("a file from an older schema is rebuilt rather than left broken", async () => {
+  test("a migration already applied is not applied again", async () => {
     const path = file();
+    await on(layerSqliteAt(path), (jobs) => jobs.put(job()));
 
-    // A jobs table as an earlier version had it — one column, and the wrong
-    // one. `create table if not exists` leaves this alone, so every insert
-    // afterwards fails on the column count. That is what happened when `steps`
-    // was added to the record, and is the whole reason the file carries a
-    // version.
-    const older = new DatabaseSync(path);
-    older.exec("pragma user_version = 0");
-    older.exec("create table jobs (id text primary key)");
-    older.exec("insert into jobs values ('20250101-old')");
-    older.close();
-
-    const [written, listed] = await on(layerSqlite(path), (jobs) =>
-      Effect.gen(function* () {
-        yield* jobs.put(job());
-        return [true, yield* jobs.list()] as const;
-      }),
-    );
-
-    expect(written).toBe(true);
-    // The old row is gone with the old table, and the new one is writable.
+    // Opening again re-runs `migrate`, which is the whole point of recording
+    // names: `create table jobs` is not `if not exists`, so a second run that
+    // did not consult the record would fail outright — which is how this was
+    // caught, by the test below failing on its first run.
+    const listed = await on(layerSqliteAt(path), (jobs) => jobs.list());
     expect(listed.map((entry) => entry.id)).toEqual(["20260101-aaaa"]);
   });
 
-  test("a file at the current version keeps its rows", async () => {
+  test("a strict table refuses a value of the wrong type", async () => {
     const path = file();
-    await on(layerSqlite(path), (jobs) => jobs.put(job()));
-    const listed = await on(layerSqlite(path), (jobs) => jobs.list());
+    await on(layerSqliteAt(path), (jobs) => jobs.put(job()));
+
+    // `strict` is why this throws instead of storing a word in an integer
+    // column and handing it back later. Reached directly, because the store's
+    // own types make it unreachable through the service — which is the point:
+    // the table is the second line of defence, not the first.
+    //
+    // A *lossless* conversion is still allowed — `kind = 7` becomes the text
+    // "7" and raises nothing. `strict` rejects what cannot be converted, which
+    // is a narrower promise than it first reads as.
+    const raw = new DatabaseSync(path);
+    const wrong = raw.prepare("update jobs set attempt = 'many' where id = ?");
+    expect(() => wrong.run("20260101-aaaa")).toThrow();
+    raw.close();
+  });
+
+  test("rows survive a close and reopen", async () => {
+    const path = file();
+    await on(layerSqliteAt(path), (jobs) => jobs.put(job()));
+    const listed = await on(layerSqliteAt(path), (jobs) => jobs.list());
     expect(listed).toHaveLength(1);
   });
 });
