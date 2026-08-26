@@ -1,6 +1,14 @@
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import { describe, expect, it, test } from "vitest";
-import { baseOf, groupByThread, groupByWorkspace, openable, projectsOf } from "./workspaces";
+import {
+  branchable,
+  groupByThread,
+  groupByWorkspace,
+  openable,
+  projectsOf,
+  threadOf,
+  titleOf,
+} from "./workspaces";
 
 // The grouping is where the sidebar's one real decision lives, so it is tested
 // away from the markup. Every fixture below is shaped like something `zmx ls`
@@ -154,6 +162,7 @@ const thread = (over: Partial<Thread> = {}): Thread => ({
   title: "tiered discounts",
   createdAt: new Date(2000),
   archivedAt: undefined,
+  parentId: undefined,
   members: [],
   ...over,
 });
@@ -294,16 +303,74 @@ describe("the projects a window knows", () => {
   });
 });
 
-describe("the base a thread starts from", () => {
-  // `<name>@` and not `<name>`. A workspace name is not a revision, and jj says
-  // so — `Revision 'probe-1' doesn't exist` — which cost a whole end-to-end run
-  // the first time. This test is here so it cannot cost a second one.
-  it("is the workspace's working-copy revset", () => {
-    expect(baseOf(awp("thicket", "lantern", "agent"))).toBe("lantern@");
+describe("the thread a workspace belongs to", () => {
+  // What cmd+shift+N branches from. A thread, deliberately: the obvious answer
+  // was `<name>@`, the workspace's working-copy commit, which carries whatever
+  // is uncommitted in it right now. Only the daemon can turn a thread into the
+  // bookmark, because the prefix is in its config.
+  const claimed = thread({
+    id: "t9",
+    members: [{ project: "thicket", workspace: "lantern" }],
   });
 
-  it("is nothing when there is no workspace to speak of", () => {
-    expect(baseOf(undefined)).toBeUndefined();
-    expect(baseOf(session("zsh", undefined))).toBeUndefined();
+  it("is the thread that claimed it", () => {
+    expect(threadOf([claimed], awp("thicket", "lantern", "agent"))).toBe("t9");
+  });
+
+  it("is nothing when no thread has claimed it", () => {
+    expect(threadOf([claimed], awp("thicket", "orchard", "agent"))).toBeUndefined();
+    expect(threadOf([claimed], session("zsh", undefined))).toBeUndefined();
+    expect(threadOf([claimed], undefined)).toBeUndefined();
+  });
+
+  // An archived thread is a record rather than a place to work, so branching
+  // from it would put new work under something already finished.
+  it("ignores an archived thread", () => {
+    const done = thread({ ...claimed, archivedAt: new Date(1) });
+    expect(threadOf([done], awp("thicket", "lantern", "agent"))).toBeUndefined();
+  });
+});
+
+describe("the threads a new one can branch from", () => {
+  const here = thread({
+    id: "t1",
+    title: "in this project",
+    members: [{ project: "thicket", workspace: "lantern" }],
+  });
+  const elsewhere = thread({
+    id: "t2",
+    title: "somewhere else",
+    members: [{ project: "orchard", workspace: "harbor" }],
+  });
+  // A thread made a moment ago. It has a title and no work behind it, so there
+  // is no bookmark to branch from — offering it would be offering a base that
+  // does not exist.
+  const fresh = thread({ id: "t3", title: "nothing in it", members: [] });
+
+  it("offers only the ones with a workspace in this project", () => {
+    expect(branchable([here, elsewhere, fresh], "thicket").map((entry) => entry.id)).toEqual([
+      "t1",
+    ]);
+    expect(branchable([here, elsewhere, fresh], "orchard").map((entry) => entry.id)).toEqual([
+      "t2",
+    ]);
+  });
+
+  // The daemon refuses a cross-project parent outright — a revision is only
+  // meaningful inside one repository. This is the same rule stated where a
+  // person can see it, so the refusal is unreachable from the window rather
+  // than merely survivable.
+  it("offers nothing in a project with no threads", () => {
+    expect(branchable([here, elsewhere, fresh], "lantern")).toEqual([]);
+  });
+
+  it("drops an archived thread", () => {
+    expect(branchable([{ ...here, archivedAt: new Date(1) }], "thicket")).toEqual([]);
+  });
+
+  it("names a thread for the chip, and says untitled rather than nothing", () => {
+    expect(titleOf([here], "t1")).toBe("in this project");
+    expect(titleOf([thread({ id: "t4", title: "" })], "t4")).toBe("untitled");
+    expect(titleOf([here], "nope")).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { layer as dbLayer } from "@awp-kit/store";
+import { Db, layer as dbLayer } from "@awp-kit/store";
 import { Effect, Layer } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
 import { Threads, layer, migrations, threadId } from "./threads";
@@ -70,6 +70,72 @@ describe("threads", () => {
     expect(all[0]?.title).toBe("tiered discounts");
     // JSON has no Date, so this is the assertion that the revival works.
     expect(all[0]?.createdAt).toBeInstanceOf(Date);
+  });
+
+  // The relationship is recorded rather than re-derived. It *could* be
+  // recovered later by asking jj which revision each workspace descends from,
+  // but that answers a question about commits — and jj's answer changes as
+  // branches are rebased and deleted, while the claim "this follows from that"
+  // does not.
+  test("a thread remembers the thread it branched from, across a restart", async () => {
+    const path = file();
+    const [parent, child] = await on(path, (threads) =>
+      Effect.gen(function* () {
+        const first = yield* threads.create("the first thing");
+        const second = yield* threads.create("the follow-on", first.id);
+        return [first, second] as const;
+      }),
+    );
+
+    expect(child.parentId).toBe(parent.id);
+    expect(parent.parentId).toBeUndefined();
+
+    const all = await on(path, (threads) => threads.list());
+    expect(all.find((entry) => entry.id === child.id)?.parentId).toBe(parent.id);
+    expect(all.find((entry) => entry.id === parent.id)?.parentId).toBeUndefined();
+  });
+
+  // The case that actually happens. Every other test here migrates a fresh
+  // file, where 001 and 002 run back to back — but the database on a machine
+  // that has already run awp has 001 recorded and 002 never seen, and
+  // `alter table add column` is a different operation from `create table`.
+  //
+  // It is also the shape sqlite is fussiest about: a REFERENCES clause may
+  // only be added when the new column defaults to NULL, which this one does.
+  // Getting that wrong would fail on a real database and on none of the
+  // others.
+  //
+  // The old schema is written with raw SQL rather than through `Threads`,
+  // because the service is only ever run against the *whole* list — pointing
+  // today's statements at yesterday's tables is a situation the daemon does
+  // not have and a test of it would be testing nothing.
+  test("a database with only the first migration takes the second", async () => {
+    const path = file();
+    const first = migrations.slice(0, 1);
+    expect(first).toHaveLength(1);
+
+    await Effect.gen(function* () {
+      const db = yield* Db;
+      db.prepare("insert into threads (id, title, created_at) values (?, ?, ?)").run(
+        "20260101-old",
+        "made before the column existed",
+        1_700_000_000_000,
+      );
+    }).pipe(Effect.provide(dbLayer(path, first)), Effect.scoped, Effect.orDie, Effect.runPromise);
+
+    // The same file, now migrated with both. 002 has to run and 001 has to be
+    // left alone — it is recorded, and re-running `create table` would throw.
+    const all = await on(path, (threads) =>
+      Effect.gen(function* () {
+        yield* threads.create("made after", "20260101-old");
+        return yield* threads.list();
+      }),
+    );
+
+    // The row that predates the column reads back with no parent, rather than
+    // failing to read at all.
+    expect(all.find((entry) => entry.id === "20260101-old")?.parentId).toBeUndefined();
+    expect(all.find((entry) => entry.title === "made after")?.parentId).toBe("20260101-old");
   });
 
   test("listing is newest first", async () => {

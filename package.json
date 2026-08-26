@@ -39,7 +39,8 @@
     "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts",
     "probe:skeleton": "bun packages/server/src/probe/skeleton.ts",
     "probe:jobs-store": "bun packages/jobs/src/probe/sqlite-under-bun.ts",
-    "probe:workspace": "bun packages/server/src/probe/workspace-create.ts"
+    "probe:workspace": "bun packages/server/src/probe/workspace-create.ts",
+    "probe:thread-parent": "bun packages/server/src/probe/thread-parent.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

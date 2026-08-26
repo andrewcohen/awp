@@ -24,6 +24,7 @@ import { WorkspaceIntent } from "./intent";
 import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
+import { localBookmarks } from "./jj-parse";
 import { demo } from "./jobs/demo";
 import { Threads } from "./threads";
 import { refusalFor } from "./attachment";
@@ -56,6 +57,14 @@ const toWire = (
   refusal: refusalFor(session, session.name, ownSession),
 });
 
+/**
+ * The project's main line.
+ *
+ * jj resolves it through the remote's default bookmark and then main, master,
+ * trunk — so the usual answer needs no configuration and no guessing here.
+ */
+const TRUNK = "trunk()";
+
 export const layer = AwpRpcs.toLayer(
   Effect.gen(function* () {
     const mux = yield* Multiplexer;
@@ -65,6 +74,83 @@ export const layer = AwpRpcs.toLayer(
     const intent = yield* WorkspaceIntent;
     const config = yield* Settings;
     const jj = yield* Jj;
+
+    /**
+     * The revision a thread's work is at, for a thread branching off it.
+     *
+     * **The bookmark, not the working copy**, and that is the whole point of
+     * this function. `<name>@` is jj's revset for a workspace's working-copy
+     * commit, which carries whatever is half-finished in it *right now* — so a
+     * thread based on it inherits someone's uncommitted edits, which is not
+     * what "branch off this work" means. The bookmark is where the work is
+     * named, and it moves when a person decides it should:
+     *
+     *   andrew/tiered-discounts   the branch, moved deliberately     ← this
+     *   tiered-discounts@         the working copy, moving constantly
+     *
+     * The fallback to the working copy is deliberate rather than a failure. A
+     * thread created with no `bookmark_prefix` configured has no bookmark at
+     * all, and refusing there would make the feature unavailable to anyone who
+     * has not set one. Starting from the working copy is worse; having nothing
+     * to start from is worse still.
+     *
+     * Only the first member is consulted. A thread can hold several workspaces
+     * and there is no rule yet for which of them a child should follow; the
+     * first is the one it was created with, which is the only one this can
+     * claim to know something about.
+     *
+     * `repo` is the repository the *new* workspace is being made in, and the
+     * parent's workspace has to live in it — a revision is only meaningful
+     * inside one repository. Refused rather than resolved across projects,
+     * which would produce a revset jj cannot find and a failure one backoff
+     * later inside the job.
+     */
+    const baseOfThread = (id: string, project: string, repo: string) =>
+      Effect.gen(function* () {
+        const found = yield* threads.list().pipe(Effect.orDie);
+        const thread = found.find((entry) => entry.id === id);
+        const member = thread?.members[0];
+        if (member === undefined) {
+          // A thread with no workspace yet has no work to branch from. Its own
+          // sentence rather than a silent fall back to trunk, which would put
+          // the new thread somewhere the person did not ask for and say
+          // nothing about it.
+          return yield* Effect.fail(
+            new ThreadStartFailed({
+              reason:
+                thread === undefined
+                  ? `no thread ${id} to start from`
+                  : `"${thread.title}" has no workspace yet, so there is nothing to start from`,
+            }),
+          );
+        }
+
+        if (member.project !== project) {
+          return yield* Effect.fail(
+            new ThreadStartFailed({
+              reason: `"${thread?.title ?? id}" is in ${member.project}, so ${project} cannot start from it`,
+            }),
+          );
+        }
+
+        const settings = yield* config.read();
+        const prefix = settings.bookmarkPrefix;
+        if (prefix === undefined) {
+          return `${member.workspace}@`;
+        }
+
+        // Asked rather than assumed. The prefix says what awp *would* have
+        // named it; only jj says whether that bookmark is there, and a
+        // revision that does not exist fails inside the job — one backoff
+        // later, in a message about the wrong thing.
+        const wanted = `${prefix}/${member.workspace}`;
+        const all = yield* jj
+          .bookmarks(repo)
+          .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
+        return localBookmarks(all).some((entry) => entry.name === wanted)
+          ? wanted
+          : `${member.workspace}@`;
+      });
 
     // A job the client named and the daemon has never heard of. Its own
     // failure rather than a defect: asking about a job that was cleaned up, or
@@ -182,7 +268,7 @@ export const layer = AwpRpcs.toLayer(
        * answers, so a failed resolve leaves nothing behind — an empty thread
        * called "add tiered dis…" would be litter a person then has to tidy.
        */
-      ThreadStart: ({ description, project, from, base, model, effort }) =>
+      ThreadStart: ({ description, project, from, parent, base, model, effort }) =>
         Effect.gen(function* () {
           // A directory into the repository it belongs to. `jj root` would
           // answer with a workspace, which is the wrong thing to create a
@@ -196,7 +282,13 @@ export const layer = AwpRpcs.toLayer(
             .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
 
           const settings = yield* config.read();
-          const thread = yield* threads.create(resolved.label).pipe(Effect.orDie);
+
+          // Where the new workspace starts. An explicit revision wins; then a
+          // parent thread, resolved to *its* bookmark; then the main line.
+          const startFrom =
+            base ?? (parent === undefined ? TRUNK : yield* baseOfThread(parent, project, repo));
+
+          const thread = yield* threads.create(resolved.label, parent).pipe(Effect.orDie);
 
           const job = yield* jobs
             .enqueue(createWorkspaceRef, {
@@ -206,10 +298,7 @@ export const layer = AwpRpcs.toLayer(
               label: resolved.label,
               prompt: resolved.prompt,
               repo,
-              // jj resolves the default bookmark of origin/upstream, falling
-              // back through main, master and trunk. So the usual answer needs
-              // no configuration and no guessing.
-              base: base ?? "trunk()",
+              base: startFrom,
               bookmark:
                 settings.bookmarkPrefix === undefined
                   ? undefined

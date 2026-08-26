@@ -387,6 +387,64 @@ asymmetry is the point. A job changes on its own — that is what a job is — s
 client that only asks misses everything interesting. A thread changes when a
 person changes it, in this window, so the reply to the change is the update.
 
+### A thread branches from a bookmark, not from a working copy
+
+`cmd+shift+N` starts a thread from the one on screen, and the obvious reading of
+that is wrong in a way worth stating.
+
+```
+  andrew/tiered-discounts   the bookmark — where the work is named,
+                            moved when a person decides it should be     ← this
+  tiered-discounts@         jj's revset for the workspace's working-copy
+                            commit, carrying whatever is half-done in it
+```
+
+`<name>@` was the first answer, and a thread based on it inherits somebody's
+uncommitted edits. That is not what "follow on from this work" means.
+
+**The client names a thread; the daemon resolves a revision.** It has to be that
+way round — the bookmark is `<prefix>/<name>` and the prefix is in the daemon's
+config, so a client composing one would be guessing at a setting it cannot see.
+`baseOfThread` in `handlers.ts` does the resolving, and it **asks jj** whether
+the bookmark is really there rather than trusting the name it just composed. A
+revision that does not exist fails inside the job, one step in, in a message
+about bookmarks.
+
+Three outcomes, and each one is deliberate:
+
+```
+  bookmark exists          andrew/lantern       the base
+  no prefix configured     lantern@             fall back, do not refuse
+  prefix set, no bookmark  lantern@             same
+  parent in another repo   refused, by name     a revset means nothing there
+  parent has no workspace  refused, by name     nothing to branch from
+```
+
+The two fallbacks are not failures. Someone with no `bookmark_prefix` has no
+bookmarks at all, and refusing there would make the feature unavailable to them.
+
+**`parentId` is recorded, not re-derived.** It could be recovered later by
+asking jj which revision a workspace descends from — but that answers a question
+about commits, and this is a claim about work: someone said "this follows from
+that" when they started it. jj's answer changes as branches are rebased and
+deleted; the claim does not.
+
+`bun run probe:thread-parent` is what proves the whole path, and it exists
+because `handlers.test.ts` structurally cannot: a fake jj accepts any string, so
+a test of the _decision_ passes on a revset the real jj would reject. The probe
+builds a parent workspace in a throwaway repo, starts a child from it, and then
+asks jj from outside whether the child really landed on the parent's tip.
+
+Its own first run earned its keep, and not in the way expected — the branching
+was right and the marker commit was empty:
+
+```
+  jj -R <repo>      describe   snapshots the DEFAULT workspace
+  jj -R <parentDir> describe   snapshots the one you meant
+```
+
+Every other check passed. Only "the parent's file came with it" caught it.
+
 ### Making a workspace: the first job that does anything
 
 ```

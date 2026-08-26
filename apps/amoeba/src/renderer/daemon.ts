@@ -130,6 +130,15 @@ export const startThread = (payload: {
   readonly project: string;
   /** A directory in the project — a session's `startDir` will do. */
   readonly from: string;
+  /**
+   * A thread to branch from, or absent for the project's main line.
+   *
+   * A thread and not a revision: the workspace's bookmark is
+   * `<prefix>/<name>` and the prefix is in the daemon's config, so the client
+   * names the work and the daemon resolves it.
+   */
+  readonly parent?: string | undefined;
+  /** An explicit revision, which wins over `parent`. Nothing here sends one. */
   readonly base?: string | undefined;
   /**
    * Overrides for the configured agent command, or absent to leave it alone.

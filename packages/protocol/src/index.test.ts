@@ -105,6 +105,7 @@ const thread: Thread = {
   title: "tiered discounts",
   createdAt: new Date(1_700_000_000_000),
   archivedAt: undefined,
+  parentId: undefined,
   members: [{ project: "rowan", workspace: "discounts" }],
 };
 

@@ -149,6 +149,20 @@ export const Thread = Schema.Struct({
    * worth more after the fact than during.
    */
   archivedAt: Schema.UndefinedOr(Schema.Date),
+  /**
+   * The thread this one branched from, if it branched from one.
+   *
+   * Recorded rather than re-derived, and that is the point of the field. The
+   * relationship *could* be recovered later by asking jj which revision each
+   * workspace descends from — but that answers a question about commits, and
+   * this is a claim about work: someone said "this follows from that" at the
+   * moment they started it. jj's answer also changes as branches are rebased,
+   * merged and deleted, and the intent does not.
+   *
+   * It decides the base revision at creation and is kept afterwards, so a
+   * thread can say where it came from once the bookmark it started on is gone.
+   */
+  parentId: Schema.UndefinedOr(Schema.String),
   members: Schema.Array(ThreadMember),
 });
 
@@ -527,6 +541,23 @@ export class AwpRpcs extends RpcGroup.make(
        * has no way to know the difference. See `Jj.sourceRoot`.
        */
       from: Schema.String,
+      /**
+       * A thread to branch from, or absent for the project's main line.
+       *
+       * A thread and not a revision, because a client cannot compute the
+       * revision: the workspace's bookmark is `<prefix>/<name>` and the prefix
+       * is in the daemon's config. So the client names the *work* and the
+       * daemon resolves it — see `baseOfThread` in handlers.ts, which prefers
+       * the bookmark and falls back to the working copy when there is none.
+       */
+      parent: Schema.optional(Schema.String),
+      /**
+       * An explicit revision, which wins over `parent` when both are given.
+       *
+       * Nothing in the window sends this yet. It stays on the payload because
+       * the probe uses it and because "start from this exact revset" is a real
+       * thing to want; it is simply not something a chip can express.
+       */
       base: Schema.optional(Schema.String),
       /**
        * What the agent runs with, or absent for what the config says.
