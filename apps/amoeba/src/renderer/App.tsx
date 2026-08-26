@@ -8,7 +8,7 @@ import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
 import { type Collapsed, fitColumns } from "./columns";
-import { baseOf, projectsOf } from "./workspaces";
+import { projectsOf, threadOf } from "./workspaces";
 import { listSessions } from "./daemon";
 import {
   rememberCollapsed,
@@ -182,14 +182,14 @@ export function App() {
         (current) =>
           current ?? {
             project: open?.identity?.project,
-            workspaceBase: baseOf(open),
-            fromWorkspace: event.shiftKey,
+            parent: threadOf(threads, open),
+            fromParent: event.shiftKey,
           },
       );
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [open]);
+  }, [open, threads]);
 
   // The appearance theme rides the outermost element rather than <html>. The
   // variables it sets are inherited, so everything below sees them, and putting
@@ -218,8 +218,8 @@ export function App() {
             onNew={() =>
               setNewThread({
                 project: open?.identity?.project,
-                workspaceBase: baseOf(open),
-                fromWorkspace: false,
+                parent: threadOf(threads, open),
+                fromParent: false,
               })
             }
           />
@@ -258,6 +258,7 @@ export function App() {
       <NewThread
         request={newThread}
         projects={projectsOf(sessions)}
+        threads={threads}
         onClose={() => setNewThread(undefined)}
         onStarted={reloadThreads}
       />

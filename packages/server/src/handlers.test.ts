@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
@@ -95,7 +95,33 @@ type Client = RpcClient.RpcClient<
   (typeof AwpRpcs)["requests"] extends ReadonlyMap<string, infer R> ? R : never
 >;
 
-const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =>
+/**
+ * What a test needs to vary to exercise the base a thread starts from.
+ *
+ * Two knobs and no more. Resolving a parent thread reads the bookmark prefix
+ * out of the config and then asks jj whether that bookmark is actually there,
+ * so those are exactly the two answers that decide the outcome — and both have
+ * a real branch in `baseOfThread` that no other test reaches.
+ */
+interface Fakes {
+  /** Written into a config file, because Settings reads one. */
+  readonly bookmarkPrefix?: string | undefined;
+  /** What `jj bookmark list` reports. Local rows only; remotes are filtered. */
+  readonly bookmarks?: ReadonlyArray<string> | undefined;
+}
+
+const configFor = (fakes: Fakes): string => {
+  const path = join(scratch, `config-${(files += 1)}.json`);
+  writeFileSync(
+    path,
+    fakes.bookmarkPrefix === undefined
+      ? "{}"
+      : JSON.stringify({ deck: { bookmark_prefix: fakes.bookmarkPrefix } }),
+  );
+  return path;
+};
+
+const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, fakes: Fakes = {}) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fake = yield* makeFake({ chunks: ["\u001B[2J", "ready$ "] });
@@ -105,10 +131,14 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =
         // defaults — which is the honest behaviour and needs no fake. Intent
         // faked, because the real one spawns claude and takes ten seconds; the
         // model call has its own probe.
-        Layer.provide(settings.layer(join(scratch, "no-config.json"))),
+        Layer.provide(settings.layer(configFor(fakes))),
         Layer.provide(
           Layer.succeed(Jj)({
             sourceRoot: (dir: string) => Effect.succeed(`/repos/${dir.split("/").at(-1) ?? ""}`),
+            bookmarks: () =>
+              Effect.succeed(
+                (fakes.bookmarks ?? []).map((name) => ({ name, remote: undefined, target: [] })),
+              ),
           } as unknown as Jj["Service"]),
         ),
         Layer.provide(
@@ -153,6 +183,14 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>) =
       ).pipe(Effect.provide(stack));
     }),
   );
+
+/** Start a thread, attach a workspace to it, and hand back its id. */
+const parentWith = (rpc: Client, project: string, workspace: string) =>
+  Effect.gen(function* () {
+    const made = yield* rpc.ThreadCreate({ title: "the first thing" });
+    yield* rpc.ThreadAttach({ thread: made.id, member: { project, workspace } });
+    return made.id;
+  });
 
 describe("the daemon over its contract", () => {
   it("reports sessions in the wire shape", async () => {
@@ -310,6 +348,135 @@ describe("jobs over the contract", () => {
 
     expect(Result.isFailure(outcome)).toBe(true);
     expect(after.length).toBe(before.length);
+  });
+
+  // ── where a thread starts from ───────────────────────────────────────────
+  //
+  // The correction that produced `baseOfThread`. The obvious answer for "start
+  // from this thread" was `<name>@` — jj's revset for that workspace's
+  // working-copy commit, which carries whatever is uncommitted in it right
+  // now. Branching off that inherits someone's half-finished edits, which is
+  // not what following on from work means. The bookmark is where the work is
+  // named, and it moves when a person decides it should.
+
+  it("branches from the parent's bookmark, not from its working copy", async () => {
+    const job = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const parent = yield* parentWith(rpc, "thicket", "lantern");
+          const started = yield* rpc.ThreadStart({
+            description: "follow on from that",
+            project: "thicket",
+            from: "/somewhere/thicket",
+            parent,
+          });
+          // Recorded, not merely used. The relationship is a claim about work
+          // that outlives the bookmark it resolved to.
+          expect(started.thread.parentId).toBe(parent);
+          return started.job;
+        }),
+      { bookmarkPrefix: "andrew", bookmarks: ["andrew/lantern"] },
+    );
+
+    expect((job.input as { readonly base: string }).base).toBe("andrew/lantern");
+  });
+
+  // Deliberate rather than a failure. Someone with no `bookmark_prefix` set
+  // has no bookmarks at all, and refusing there would make the feature
+  // unavailable to them; the working copy is worse, having nothing is worse
+  // still.
+  it("falls back to the working copy when the bookmark is not there", async () => {
+    const withoutPrefix = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const parent = yield* parentWith(rpc, "thicket", "lantern");
+          return yield* rpc.ThreadStart({
+            description: "follow on",
+            project: "thicket",
+            from: "/somewhere/thicket",
+            parent,
+          });
+        }),
+      {},
+    );
+    expect((withoutPrefix.job.input as { readonly base: string }).base).toBe("lantern@");
+
+    // A prefix is configured, but jj has never heard of that bookmark. Asked
+    // rather than assumed: the prefix says what awp *would* have named it, and
+    // only jj says whether it is there. Composing it blind would fail inside
+    // the job, one backoff later, in a message about the wrong thing.
+    const missing = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const parent = yield* parentWith(rpc, "thicket", "lantern");
+          return yield* rpc.ThreadStart({
+            description: "follow on",
+            project: "thicket",
+            from: "/somewhere/thicket",
+            parent,
+          });
+        }),
+      { bookmarkPrefix: "andrew", bookmarks: ["andrew/something-else"] },
+    );
+    expect((missing.job.input as { readonly base: string }).base).toBe("lantern@");
+  });
+
+  it("starts from trunk when no parent was named", async () => {
+    const started = await run((rpc) =>
+      rpc.ThreadStart({
+        description: "a fresh line of work",
+        project: "thicket",
+        from: "/somewhere/thicket",
+      }),
+    );
+    expect((started.job.input as { readonly base: string }).base).toBe("trunk()");
+    expect(started.thread.parentId).toBeUndefined();
+  });
+
+  // A revision is only meaningful inside one repository, so this cannot be
+  // resolved — and resolving it anyway would produce a revset jj cannot find,
+  // failing inside the job rather than here where it can be explained.
+  it("refuses a parent whose workspace is in another project", async () => {
+    const outcome = await run(
+      (rpc) =>
+        Effect.result(
+          Effect.gen(function* () {
+            const parent = yield* parentWith(rpc, "orchard", "lantern");
+            return yield* rpc.ThreadStart({
+              description: "follow on",
+              project: "thicket",
+              from: "/somewhere/thicket",
+              parent,
+            });
+          }),
+        ),
+      { bookmarkPrefix: "andrew", bookmarks: ["andrew/lantern"] },
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    if (Result.isFailure(outcome)) {
+      expect(String((outcome.failure as { readonly reason: string }).reason)).toContain("orchard");
+    }
+  });
+
+  // A thread made a moment ago has claimed nothing, so there is no work to
+  // follow on from. Said out loud rather than quietly falling back to trunk,
+  // which would put the new thread somewhere nobody asked for.
+  it("refuses a parent that has no workspace yet", async () => {
+    const outcome = await run((rpc) =>
+      Effect.result(
+        Effect.gen(function* () {
+          const made = yield* rpc.ThreadCreate({ title: "nothing in it" });
+          return yield* rpc.ThreadStart({
+            description: "follow on",
+            project: "thicket",
+            from: "/somewhere/thicket",
+            parent: made.id,
+          });
+        }),
+      ),
+    );
+    expect(Result.isFailure(outcome)).toBe(true);
   });
 
   it("says so when asked about a thread it has never had", async () => {

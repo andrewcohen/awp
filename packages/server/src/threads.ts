@@ -63,6 +63,19 @@ export const migrations: ReadonlyArray<Migration> = [
       `create index thread_members_thread on thread_members (thread_id, seq)`,
     ],
   },
+  {
+    // Appended rather than folded into 001, because 001 has run on this
+    // machine: a migration's name is fixed the moment it has run anywhere, and
+    // editing its statements makes the record a lie about what the file holds.
+    //
+    // `alter table add column` is the only shape sqlite offers, and it is the
+    // reason this cannot be `not null` — an added column takes a constant
+    // default and every existing row gets it. Null is the honest value here
+    // anyway: a thread made before this migration did not branch from
+    // anything, and saying so is different from guessing which.
+    name: "threads.002-parent",
+    up: [`alter table threads add column parent_id text references threads (id)`],
+  },
 ];
 
 export class Threads extends Context.Service<
@@ -71,7 +84,16 @@ export class Threads extends Context.Service<
     /** Every thread, newest first. Archived ones included — the caller filters. */
     readonly list: () => Effect.Effect<ReadonlyArray<Thread>, ThreadStoreError>;
 
-    readonly create: (title: string) => Effect.Effect<Thread, ThreadStoreError>;
+    /**
+     * A thread, optionally branched from another.
+     *
+     * The parent is not checked to exist. It is a claim about intent recorded
+     * at the moment it was made, and the caller has already looked the thread
+     * up to resolve a base revision from it — checking again here would be a
+     * second read answering a question already answered, and the answer that
+     * matters was true then rather than now.
+     */
+    readonly create: (title: string, parent?: string) => Effect.Effect<Thread, ThreadStoreError>;
 
     readonly rename: (
       thread: string,
@@ -127,10 +149,18 @@ const ask = <A>(reason: string, run: () => A): Effect.Effect<A, ThreadStoreError
 const date = (value: unknown): Date | undefined =>
   typeof value === "number" ? new Date(value) : undefined;
 
+const text = (value: unknown): string | undefined =>
+  typeof value === "string" && value !== "" ? value : undefined;
+
 export const make = Effect.gen(function* () {
   const db = yield* Db;
 
-  const insertThread = db.prepare("insert into threads values (?, ?, ?, ?)");
+  // Columns named rather than positional. `insert into threads values (…)`
+  // depends on the column order, and the order is now a function of which
+  // migrations have run — a third one would silently shift every value along.
+  const insertThread = db.prepare(
+    "insert into threads (id, title, created_at, archived_at, parent_id) values (?, ?, ?, ?, ?)",
+  );
   const setTitle = db.prepare("update threads set title = ? where id = ?");
   const setArchived = db.prepare("update threads set archived_at = ? where id = ?");
   const readThread = db.prepare("select * from threads where id = ?");
@@ -169,6 +199,7 @@ export const make = Effect.gen(function* () {
         title: String(row["title"]),
         createdAt: new Date(Number(row["created_at"])),
         archivedAt: date(row["archived_at"]),
+        parentId: text(row["parent_id"]),
         members: members.get(id) ?? [],
       };
     });
@@ -209,7 +240,7 @@ export const make = Effect.gen(function* () {
   return {
     list: () => ask("cannot list threads", readAll),
 
-    create: (title: string) =>
+    create: (title: string, parent?: string) =>
       Effect.sync(() => threadId(new Date(), Math.random())).pipe(
         Effect.flatMap((id) => {
           const made: Thread = {
@@ -217,10 +248,17 @@ export const make = Effect.gen(function* () {
             title: title.trim(),
             createdAt: new Date(),
             archivedAt: undefined,
+            parentId: parent,
             members: [],
           };
           return ask(`cannot create thread ${id}`, () => {
-            insertThread.run(made.id, made.title, made.createdAt.getTime(), null);
+            insertThread.run(
+              made.id,
+              made.title,
+              made.createdAt.getTime(),
+              null,
+              made.parentId ?? null,
+            );
             return made;
           });
         }),
