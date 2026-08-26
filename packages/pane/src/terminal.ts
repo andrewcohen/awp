@@ -1,4 +1,5 @@
 import { installClipboard } from "./clipboard";
+import { installKeys } from "./keys";
 import { FitAddon, type ITheme, Terminal, init } from "ghostty-web";
 import { paneFontSize } from "./palette";
 import { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
@@ -113,6 +114,7 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
     });
 
     installClipboard(host, () => term);
+    installKeys(host, (data) => dataSink?.(data));
 
     // Registered once, for the terminal's whole life. The indirection through
     // the sinks is what makes that safe.
