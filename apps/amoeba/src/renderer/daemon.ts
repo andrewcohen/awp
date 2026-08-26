@@ -7,6 +7,7 @@ import type {
   SessionInfo,
   Thread,
   ThreadBase,
+  ThreadMember,
   ThreadStarted,
 } from "@awp-kit/protocol";
 import { Effect, Fiber, Stream } from "effect";
@@ -130,6 +131,34 @@ export const clearJobs = (): Promise<number> =>
 
 export const listThreads = (): Promise<ReadonlyArray<Thread>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadList()));
+
+/**
+ * Take an existing workspace into a thread, or out of one.
+ *
+ * ── why this exists at all ─────────────────────────────────────────────────
+ * A thread is normally made by *starting* one, which creates the workspace as
+ * its first member. That covers everything from now on and nothing from
+ * before: every workspace on a machine that has been used predates threads and
+ * lands in the "not in a thread" group, with no way out of it. Twenty-three of
+ * twenty-six here.
+ *
+ * All three calls were already on the wire and reachable by nothing — the
+ * daemon has had `ThreadCreate`, `ThreadAttach` and `ThreadDetach` since
+ * threads landed. This is the window catching up, not new capability.
+ *
+ * A workspace belongs to at most one thread, and that is a UNIQUE constraint
+ * rather than a rule remembered here: `attach` is one `on conflict do update`,
+ * so the release and the claim cannot half happen and a caller never has to
+ * detach first. See `threads.ts`.
+ */
+export const createThread = (title: string): Promise<Thread> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadCreate({ title })));
+
+export const attachThread = (thread: string, member: ThreadMember): Promise<Thread> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadAttach({ thread, member })));
+
+export const detachThread = (thread: string, member: ThreadMember): Promise<Thread> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadDetach({ thread, member })));
 
 /**
  * Everywhere a new workspace in this project could start from.

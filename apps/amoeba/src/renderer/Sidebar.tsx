@@ -1,6 +1,7 @@
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
+import { MoveToThread } from "./MoveToThread";
 import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
 import { colors, space, text } from "./tokens.stylex";
 import {
@@ -226,6 +227,9 @@ const styles = stylex.create({
     cursor: "pointer",
   },
   titleShut: { color: colors.muted, cursor: "default", opacity: 0.55 },
+  // Line one is the name and the menu beside it. The name's button still takes
+  // the width it can, so most of the row is still one target.
+  titleRow: { display: "flex", alignItems: "baseline", gap: "0.25rem" },
   label: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 
   // A fixed width, so the second line starts under the first letter of the name
@@ -290,11 +294,22 @@ function Row({
   workspace,
   selected,
   onSelect,
+  threads,
+  thread,
+  onThreadsChanged,
 }: {
   readonly workspace: Workspace;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  readonly threads: ReadonlyArray<Thread>;
+  /** The thread holding this workspace, if any. */
+  readonly thread: Thread | undefined;
+  readonly onThreadsChanged: () => void;
 }) {
+  // Hover is tracked here rather than done in CSS, because the control lives in
+  // a child component and `:hover` on a parent cannot reach across one. Focus
+  // is left to CSS — see `trigger` in MoveToThread.
+  const [hovered, setHovered] = useState(false);
   const active = workspace.sessions.some((session) => session.name === selected);
   const live = workspace.sessions.some((session) => !session.ended);
   const primary = openable(workspace);
@@ -342,19 +357,32 @@ function Row({
   const refusal = several ? undefined : workspace.sessions[0]?.refusal;
 
   return (
-    <div {...stylex.props(styles.row, active && styles.rowOn)}>
-      <button
-        type="button"
-        disabled={primary === undefined}
-        // The reason is the tooltip as well as line two. A row that will not
-        // say why it is disabled is worse than no row at all.
-        title={refusal ?? workspace.address}
-        onClick={() => primary !== undefined && onSelect(primary)}
-        {...stylex.props(styles.title, primary === undefined && styles.titleShut)}
-      >
-        <Dot live={live} />
-        <span {...stylex.props(styles.label)}>{shown}</span>
-      </button>
+    <div
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      {...stylex.props(styles.row, active && styles.rowOn)}
+    >
+      <div {...stylex.props(styles.titleRow)}>
+        <button
+          type="button"
+          disabled={primary === undefined}
+          // The reason is the tooltip as well as line two. A row that will not
+          // say why it is disabled is worse than no row at all.
+          title={refusal ?? workspace.address}
+          onClick={() => primary !== undefined && onSelect(primary)}
+          {...stylex.props(styles.title, primary === undefined && styles.titleShut)}
+        >
+          <Dot live={live} />
+          <span {...stylex.props(styles.label)}>{shown}</span>
+        </button>
+        <MoveToThread
+          workspace={workspace}
+          threads={threads}
+          current={thread}
+          shown={hovered}
+          onChanged={onThreadsChanged}
+        />
+      </div>
 
       <div {...stylex.props(styles.meta)}>
         {refusal === undefined ? (
@@ -423,10 +451,14 @@ function Group({
   onSelect,
   folded,
   onFold,
+  threads,
+  onThreadsChanged,
 }: {
   readonly group: ThreadGroup;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  readonly threads: ReadonlyArray<Thread>;
+  readonly onThreadsChanged: () => void;
   /** Only the loose group folds; a thread is small and is the point. */
   readonly folded: boolean;
   readonly onFold: (() => void) | undefined;
@@ -467,7 +499,14 @@ function Group({
 
           {group.workspaces.map((workspace) => (
             <div key={workspace.key} {...stylex.props(styles.nested)}>
-              <Row workspace={workspace} selected={selected} onSelect={onSelect} />
+              <Row
+                workspace={workspace}
+                selected={selected}
+                onSelect={onSelect}
+                threads={threads}
+                thread={group.thread}
+                onThreadsChanged={onThreadsChanged}
+              />
             </div>
           ))}
         </>
@@ -520,6 +559,7 @@ export function Sidebar({
   selected,
   onSelect,
   onNew,
+  onThreadsChanged,
   failure,
 }: {
   readonly sessions: ReadonlyArray<SessionInfo>;
@@ -528,9 +568,14 @@ export function Sidebar({
   readonly onSelect: (session: SessionInfo) => void;
   /** Open the new-thread modal. The window owns it — see App.tsx. */
   readonly onNew: () => void;
+  /** A workspace changed threads, so the list App holds is out of date. */
+  readonly onThreadsChanged: () => void;
   readonly failure: string | undefined;
 }) {
   const groups = groupByThread(threads, groupByWorkspace(sessions));
+  // What the menu may offer. An archived thread is not somewhere to put work,
+  // and `groupByThread` drops them from the strip for the same reason.
+  const live = threads.filter((thread) => thread.archivedAt === undefined);
   const sentinel = useRef<HTMLDivElement | null>(null);
   const stuck = useStuck(sentinel);
   const [looseOpen, setLooseOpen] = useState(rememberedLooseOpen);
@@ -550,6 +595,8 @@ export function Sidebar({
               group={group}
               selected={selected}
               onSelect={onSelect}
+              threads={live}
+              onThreadsChanged={onThreadsChanged}
               folded={isLoose && !looseOpen}
               onFold={
                 isLoose
