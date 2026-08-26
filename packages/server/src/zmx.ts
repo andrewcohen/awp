@@ -18,6 +18,7 @@
 import { Effect, Layer } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Multiplexer, MultiplexerError } from "./multiplexer";
+import { capture, said } from "./run";
 import { parseSessionList, requireName } from "./zmx-parse";
 import { zmxChildEnv } from "./zmx-session";
 
@@ -58,7 +59,7 @@ const make = Effect.gen(function* () {
    * nothing is worth keeping.
    */
   const run = (op: string, args: ReadonlyArray<string>) =>
-    spawner.string(ChildProcess.make("zmx", [...args], { env: zmxChildEnv() })).pipe(
+    capture(spawner, ChildProcess.make("zmx", [...args], { env: zmxChildEnv() })).pipe(
       Effect.mapError(
         (cause) =>
           new MultiplexerError({
@@ -68,6 +69,16 @@ const make = Effect.gen(function* () {
             reason: `${op}: zmx failed (is it installed and on PATH?)`,
             cause,
           }),
+      ),
+      // `capture` rather than `spawner.string`, because `string` collects
+      // stdout and discards the exit code. A `zmx ls` that failed came back as
+      // an empty string, parsed to an empty list, and reached the sidebar as
+      // "no sessions" — which is exactly what having no sessions looks like.
+      // Found while building the Jj service; see run.ts.
+      Effect.flatMap((captured) =>
+        captured.exitCode === 0
+          ? Effect.succeed(captured.stdout)
+          : Effect.fail(new MultiplexerError({ op, reason: `${op}: ${said(captured)}` })),
       ),
     );
 

@@ -162,6 +162,91 @@ between "testable from inside a session" and "must run outside zmx".
 hand-rolled version this replaced had a path where cleanup ran twice and another
 where it never ran.
 
+## A command's exit code is not in its output
+
+`ChildProcessSpawner.string` collects stdout and **discards the exit code**.
+That is a fair contract for a function returning a string and the wrong one for
+every command in this repo, all of which report a refusal by writing to stderr
+and exiting non-zero.
+
+```
+  sh -c 'echo out; exit 3'   through `string`  →  succeeds with "out\n"
+                             through `capture` →  { stdout: "out\n", exitCode: 3 }
+```
+
+What it looked like: `jj workspace add` on a workspace that already exists
+prints `Error: Workspace named 'second' already exists` and exits 1, which
+arrived as a successful empty answer — so the service reported creating a
+workspace it had not. `zmx.ts` had the same hole, where a failing `zmx ls`
+parses to an empty list and reaches the sidebar as **"no sessions"**, which is
+exactly what having no sessions looks like.
+
+So everything goes through `run.ts`. Two things about it are worth keeping:
+
+- **stdout, stderr and the exit code are awaited concurrently.** Reading one
+  stream to the end first deadlocks as soon as a command writes more to the
+  unread one than its pipe buffer holds — rare enough to pass every small test
+  and then hang on a long jj error. `run.test.ts` pushes 256KiB down each.
+- **The failure carries the CLI's own sentence**, not one composed here. jj
+  names the workspace, the bookmark and what was wrong with it.
+
+It was found by a mutation check, not by a test: removing the idempotence guard
+from `addWorkspace` should have failed the test that adds a workspace twice, and
+did not. **A guard whose removal changes nothing is not doing what it claims** —
+which is the general lesson, and the reason to keep running those.
+
+## jj: name the repository, and do not snapshot to answer a question
+
+Two flags, on every command, for two different reasons.
+
+```
+  -R <repo>                jj finds a repo by walking up from cwd. The
+                           daemon's cwd is a real repository — this one.
+  --ignore-working-copy    on reads. jj snapshots the working copy before
+                           almost every command, `workspace list` included.
+```
+
+`-R` is why `repo` is a required argument on every method of `Jj` and not a
+field somewhere: there is no call that could reach the wrong repository by
+accident. It is the structural form of the zmx rule.
+
+`--ignore-working-copy` is the quieter one — without it a _question_ writes to
+the repository it is asking about. Reads take it; writes deliberately do not,
+because suppressing the snapshot on a write makes a commit out of step with the
+files beside it.
+
+**`jj workspace forget` with no argument forgets the workspace it is standing
+in.** For the daemon that is this repository. The name is refused when empty
+rather than defaulted, and that refusal has its own test.
+
+**Reads ask for `-T 'json(self)'`.** jj's human output puts the name, a change
+id, a bookmark list and a description on one line, and taking that apart breaks
+the first time a description contains a colon. Unknown keys are ignored and an
+unparseable line is skipped — jj adds fields between releases, and a daemon that
+refused to list workspaces over a new key would be worse.
+
+**A bookmark name appears more than once.** `jj bookmark list` prints a row per
+local bookmark _and_ per remote that disagrees, and `jj git init` gives the repo
+a `git` remote that a set bookmark is immediately exported to:
+
+```
+  {"name":"andrew/x","target":[...]}                  ← local
+  {"name":"andrew/x","remote":"git","target":[...]}   ← the same bookmark
+```
+
+So "does this bookmark exist" means the _local_ rows — `localBookmarks`. Asking
+the raw list finds names that only exist on a remote. The first draft of
+`jj.test.ts` got this wrong, which is why there is now a test whose entire job
+is to state it.
+
+**Everything is safe to run twice**, because the jobs runner re-enters the step
+it failed on. `addWorkspace` on a workspace that exists succeeds; `forgetWorkspace`
+on one that does not succeeds; `bookmark set` is already idempotent in jj, and
+`bookmark delete` is not, so it asks first.
+
+Forgetting a workspace **does not remove its directory**. jj says so in its own
+help, and it matters: the undo of a workspace creation has to do both.
+
 ## Jobs: resume and compensation are the same disagreement
 
 A job is a named kind with ordered steps. The design is entirely the
