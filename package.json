@@ -38,7 +38,8 @@
     "probe:child-env": "bun packages/server/src/probe/child-env.ts",
     "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts",
     "probe:skeleton": "bun packages/server/src/probe/skeleton.ts",
-    "probe:jobs-store": "bun packages/jobs/src/probe/sqlite-under-bun.ts"
+    "probe:jobs-store": "bun packages/jobs/src/probe/sqlite-under-bun.ts",
+    "probe:workspace": "bun packages/server/src/probe/workspace-create.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

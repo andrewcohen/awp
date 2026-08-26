@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type JobKind, type JobRef, type JobStep, permanent } from "@awp-kit/jobs";
 import { type CreateWorkspace, CreateWorkspace as CreateWorkspaceSchema } from "@awp-kit/protocol";
 import { Effect } from "effect";
@@ -62,6 +62,10 @@ export const createWorkspaceRef: JobRef<CreateWorkspace> = {
  */
 export interface WorkspaceFiles {
   readonly exists: (path: string) => Effect.Effect<boolean, unknown>;
+  readonly makeDirectory: (
+    path: string,
+    options?: { readonly recursive?: boolean | undefined },
+  ) => Effect.Effect<void, unknown>;
   readonly remove: (
     path: string,
     options?: { readonly recursive?: boolean | undefined },
@@ -124,6 +128,17 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     run: (input, context) =>
       Effect.gen(function* () {
         const destination = workspacePath(input.project, input.workspace);
+
+        // The parent, not the destination. `jj workspace add` creates the
+        // workspace directory itself and refuses if the directory *above* it is
+        // missing — "Cannot access <path>: No such file or directory" — which
+        // is what the first end-to-end run of this job did, on a project that
+        // had never had a workspace before. Every project's first one would
+        // have failed.
+        yield* files
+          .makeDirectory(dirname(destination), { recursive: true })
+          .pipe(Effect.mapError(refused("could not make the workspace directory")));
+
         yield* context.log(`making a jj workspace at ${destination}`);
         yield* jj
           .addWorkspace({
@@ -173,9 +188,13 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
           yield* context.log("no bookmark asked for");
           return;
         }
-        yield* context.log(`pointing ${input.bookmark} at the new workspace`);
+        // `<name>@` is jj's revset for a workspace's working-copy commit. The
+        // bare workspace name is not a revision — the first end-to-end run said
+        // so, in jj's own words: "Revision `probe-1` doesn't exist".
+        const at = `${input.workspace}@`;
+        yield* context.log(`pointing ${input.bookmark} at ${at}`);
         yield* jj
-          .setBookmark(input.repo, input.bookmark, input.workspace)
+          .setBookmark(input.repo, input.bookmark, at)
           .pipe(Effect.mapError(refused("could not set the bookmark")));
       }),
     undo: (input, context) =>
