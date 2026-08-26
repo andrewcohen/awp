@@ -16,10 +16,17 @@ import type { WorkspaceIntent } from "../intent";
 // entire reason the jobs package exists and, until now, had nothing real to
 // point at.
 //
-//   1  workspace   jj workspace add          undo: forget it, remove it
-//   2  bookmark    jj bookmark set           undo: delete it
-//   3  session     zmx run -d, then labels   undo: kill it
-//   4  claim       the thread takes it       undo: the thread lets it go
+//   1  thread      check it is there        undo: remove it, if empty
+//   2  name        ask a model for one       undo: none — nothing outside
+//   3  workspace   jj workspace add          undo: forget it, remove it
+//   4  bookmark    jj bookmark set           undo: delete it
+//   5  session     zmx run -d, then labels   undo: kill it
+//   6  claim       the thread takes it       undo: the thread lets it go
+//   7  brief       type into the agent       undo: none — impossible
+//
+// `thread` is first so that its undo is *last*: compensation runs backwards, so
+// the front of the list is the only place from which a step can ask "does this
+// thread still hold anything" after everything else has let go.
 //
 // The order is the order they depend on each other, and the claim is last on
 // purpose: a workspace appears in the sidebar under its thread once it is
@@ -163,6 +170,50 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
    * No undo. Nothing outside the record changed, and the thread's title is a
    * better description of the same work either way.
    */
+  /**
+   * The thread this job is for — checked on the way in, removed on the way out.
+   *
+   * **First, so that its undo runs last.** Compensation walks the completed
+   * steps backwards, so the step at the front is the one whose undo happens
+   * after every other has released what it held — which is exactly when it is
+   * safe to ask whether the thread still holds anything.
+   *
+   * The job does not create the thread: the handler does, before enqueuing,
+   * because the window is given the thread back the moment it asks. But the job
+   * can be the thing that takes it away, and until it was, a create that failed
+   * left an empty thread in the sidebar with no way to remove one — the failure
+   * was undone everywhere except the place a person was looking.
+   *
+   * `run` is a real check rather than a formality. A job naming a thread that
+   * is not there would build a workspace nothing can claim, and would find that
+   * out four steps later.
+   */
+  const threadStep: JobStep<CreateWorkspace> = {
+    name: "thread",
+    run: (input) =>
+      threads.list().pipe(
+        Effect.mapError(refused("could not read the threads")),
+        Effect.flatMap((all) =>
+          all.some((entry) => entry.id === input.thread)
+            ? Effect.void
+            : Effect.fail(permanent(`there is no thread ${input.thread} to build for`)),
+        ),
+      ),
+    undo: (input, context) =>
+      Effect.gen(function* () {
+        // Only while it holds nothing. A thread that ended up with a workspace
+        // — one this job did not make, or one a person attached by hand — is
+        // the record that those checkouts are one piece of work, and no
+        // rollback of this job has any business destroying it.
+        const gone = yield* threads
+          .deleteIfEmpty(input.thread)
+          .pipe(Effect.mapError(refused("could not remove the thread")));
+        yield* context.log(
+          gone ? `removed the empty thread ${input.thread}` : `left thread ${input.thread} alone`,
+        );
+      }),
+  };
+
   const nameStep: JobStep<CreateWorkspace> = {
     name: "name",
     run: (input, context) =>
@@ -368,7 +419,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     // Named `…Step` so the locals inside them can keep the words that matter —
     // `workspace` is the name of a workspace far more often than it is the name
     // of a step.
-    steps: [nameStep, workspaceStep, bookmarkStep, sessionStep, claimStep, briefStep],
+    steps: [threadStep, nameStep, workspaceStep, bookmarkStep, sessionStep, claimStep, briefStep],
     /**
      * One attempt.
      *
