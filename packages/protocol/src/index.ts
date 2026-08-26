@@ -18,6 +18,7 @@
 // this package's job: a rename upstream touches this file rather than every
 // call site in the daemon and the renderer.
 
+import { Job } from "@awp-kit/jobs";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
@@ -125,6 +126,55 @@ export class AttachRefused extends Schema.TaggedError<AttachRefused>()("AttachRe
   reason: Schema.String,
 }) {}
 
+/** Asked about a job the daemon has no record of. */
+export class JobNotFound extends Schema.TaggedError<JobNotFound>()("JobNotFound", {
+  job: Schema.String,
+}) {}
+
+// ── jobs on the wire ───────────────────────────────────────────────────────
+//
+// `Job` comes from @awp-kit/jobs rather than being restated here, which is the
+// opposite of what SessionInfo does — and for the opposite reason. SessionInfo
+// is a translation of what zmx reports, so the two are allowed to drift and the
+// mapping is where a change upstream becomes visible. A job record has no
+// upstream: awp writes it, stores it and shows it, so a second definition here
+// would only be a copy waiting to fall behind.
+//
+// It is a Schema on both sides already, because the store needed it decoded
+// from a row. Sending it is the same decode with a different transport.
+
+/**
+ * A demonstration job, and it is here to be deleted.
+ *
+ * Nothing in awp enqueues real work yet — there is no workspace to create and
+ * no CI to watch — so without this the jobs panel is an empty list that cannot
+ * be shown to be working. Every state a person needs to see is reachable from
+ * one payload: it succeeds, it retries, it exhausts its attempts and rolls
+ * back, or its rollback fails and leaves the job dirty.
+ *
+ * When the first real kind lands, this and the `demo` kind behind it go.
+ */
+export const DemoJob = Schema.Struct({
+  /** Milliseconds each step takes, so the panel has something to show. */
+  pace: Schema.Int,
+  /**
+   * Fail on this step, one-based, or never if absent. See `DEMO_STEPS`.
+   *
+   * `optional` and not `UndefinedOr`: this crosses JSON on its way into the
+   * job store, and JSON has no `undefined` — so a field spelled `UndefinedOr`
+   * and left unset comes back *absent*, which `UndefinedOr` rejects. The
+   * runner refuses such a kind at enqueue rather than letting it fail on its
+   * first step; see `InputNotPortable`.
+   */
+  failAt: Schema.optional(Schema.Int),
+  /** Whether that failure is worth retrying. */
+  retryable: Schema.Boolean,
+  /** Whether the rollback itself fails — the one outcome a person must act on. */
+  undoFails: Schema.Boolean,
+});
+
+export type DemoJob = (typeof DemoJob)["Type"];
+
 // ── the calls ──────────────────────────────────────────────────────────────
 
 export class AwpRpcs extends RpcGroup.make(
@@ -179,5 +229,58 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("Resize", {
     payload: { session: Schema.String, cols: Schema.Int, rows: Schema.Int },
     error: SessionNotFound,
+  }),
+
+  /** Every job the daemon has a record of, newest first. */
+  Rpc.make("JobList", {
+    success: Schema.Array(Job),
+  }),
+
+  /**
+   * Each record as it changes, for as long as the client is listening.
+   *
+   * A stream rather than a poll because the interesting moments are short: a
+   * step starting, an attempt failing, a rollback finishing. A list refreshed
+   * on a timer shows the state between them and nothing else, which is how a
+   * job that took two seconds looks like a job that never ran.
+   *
+   * Carries whole records, not patches. A client that joins late, or misses a
+   * message because the feed slid, is still correct — it has the newest state
+   * of every job it has heard about, which is all a list renders.
+   */
+  Rpc.make("JobChanges", {
+    success: Job,
+    stream: true,
+  }),
+
+  /** What a job wrote about itself. The end of it — see `LOG_LINES`. */
+  Rpc.make("JobLog", {
+    payload: { job: Schema.String },
+    success: Schema.Array(Schema.String),
+    error: JobNotFound,
+  }),
+
+  /**
+   * Run a finished job again.
+   *
+   * Not an error when the job is still running: it is already trying, and
+   * returning the record unchanged is a truer answer than a failure.
+   */
+  Rpc.make("JobRetry", {
+    payload: { job: Schema.String },
+    success: Job,
+    error: JobNotFound,
+  }),
+
+  /** Stop a job, undo what it did, and mark it cancelled. */
+  Rpc.make("JobCancel", {
+    payload: { job: Schema.String },
+    error: JobNotFound,
+  }),
+
+  /** See {@link DemoJob}. Goes when the first real kind arrives. */
+  Rpc.make("JobDemo", {
+    payload: DemoJob,
+    success: Job,
   }),
 ) {}

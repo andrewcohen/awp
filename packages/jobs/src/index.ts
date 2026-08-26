@@ -18,10 +18,16 @@
 // only useful because the completed steps are on the record, so a job resumes
 // where it stopped rather than starting again.
 
+// The sqlite store is deliberately **not** re-exported here, and that is a
+// structural decision rather than tidiness. The record is a Schema, so the
+// contract in @awp-kit/protocol imports it — which means the renderer imports
+// it too, and a barrel that reached `sqlite.ts` would drag `node:fs` into a
+// browser bundle. It did, and the dev server said so. It lives at
+// `@awp-kit/jobs/sqlite`, which only the daemon asks for.
+
 export const jobsVersion = 0;
 
 export * from "./job";
 export * from "./kind";
 export * from "./runner";
-export * from "./sqlite";
 export * from "./store";

@@ -34,6 +34,7 @@ const record: Job = {
   status: "running",
   attempt: 2,
   attempts: 3,
+  steps: ["one", "two", "three"],
   done: ["one", "two"],
   step: "three",
   error: undefined,

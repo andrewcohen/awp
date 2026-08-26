@@ -1,8 +1,9 @@
 import type { SessionInfo } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
+import { Accessory } from "./Accessory";
+import { BottomBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
-import { debugTools } from "./debug";
 import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
 import { type Collapsed, fitColumns } from "./columns";
@@ -15,10 +16,17 @@ import {
 } from "./remembered";
 import { rendererFixture } from "./fixture";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
-import { colors, space, text } from "./tokens.stylex";
+import { colors, text } from "./tokens.stylex";
+import { useJobs } from "./useJobs";
 import { useWindowWidth } from "./useWindowWidth";
 
-// The three-column shape amoeba is built around: sidebar, agent, accessory.
+// The window: two bars with three columns between them.
+//
+// The columns are the work — sidebar, agent, accessory. The bars are the window
+// talking about itself, and they exist because everything in that category used
+// to have to borrow space from a column that was already spoken for. See
+// Bars.tsx for what each one carries and why the top one clears the traffic
+// lights on behalf of all three columns.
 //
 // `height: 100%` and not `100vh`. The root is already pinned to the window in
 // global.css, and vh units in a webview measure the visual viewport — which is
@@ -28,12 +36,17 @@ import { useWindowWidth } from "./useWindowWidth";
 const styles = stylex.create({
   window: {
     display: "flex",
+    flexDirection: "column",
     height: "100%",
     backgroundColor: colors.base,
     color: colors.text,
     fontFamily: text.mono,
     fontSize: text.body,
   },
+  // The one row that flexes. `minHeight: 0` so it can be shorter than its
+  // content instead of pushing the bottom bar off the window — which is the
+  // usual way a flex column grows a scrollbar it was told not to have.
+  columns: { display: "flex", flex: 1, minHeight: 0 },
   column: {
     minWidth: 0,
     height: "100%",
@@ -44,22 +57,6 @@ const styles = stylex.create({
   // without minting a class per pixel.
   fixed: (width: number) => ({ flex: `0 0 ${width}px` }),
   agent: { flex: "1 1 auto" },
-  accessory: { display: "flex", flexDirection: "column", height: "100%" },
-  tabs: {
-    display: "flex",
-    gap: "0.25rem",
-    padding: `${space.titlebar} 0.5rem 0`,
-  },
-  tab: {
-    padding: "0.2rem 0.5rem",
-    backgroundColor: "transparent",
-    borderStyle: "none",
-    color: colors.text,
-    font: "inherit",
-    cursor: "pointer",
-  },
-  tabOn: { backgroundColor: colors.border },
-  tool: { flex: 1, minHeight: 0, overflowY: "auto" },
 });
 
 export function App() {
@@ -92,7 +89,7 @@ export function App() {
   // every change.
   const [selected, setSelected] = useState<string | undefined>(rememberedSession);
   const [failure, setFailure] = useState<string | undefined>();
-  const [activeTool, setTool] = useState<string>(debugTools[0]?.id ?? "");
+  const { jobs } = useJobs();
 
   useEffect(() => {
     let cancelled = false;
@@ -139,62 +136,52 @@ export function App() {
   // guarantees the layout fits, so letting flexbox shrink as well would mean
   // two rules deciding the same widths and the rendered result disagreeing with
   // the state that is supposed to describe it.
+  const open = sessions.find((session) => session.name === selected);
+
   return (
     <div {...stylex.props(themeFor(appearance), styles.window)}>
-      <aside {...stylex.props(styles.column, styles.fixed(columns.sidebar))}>
-        <Sidebar
-          sessions={sessions}
-          selected={selected}
-          onSelect={(session) => {
-            setSelected(session.name);
-            rememberSession(session.name);
-          }}
-          failure={failure}
+      <TopBar session={open} connected={failure === undefined} />
+
+      <div {...stylex.props(styles.columns)}>
+        <aside {...stylex.props(styles.column, styles.fixed(columns.sidebar))}>
+          <Sidebar
+            sessions={sessions}
+            selected={selected}
+            onSelect={(session) => {
+              setSelected(session.name);
+              rememberSession(session.name);
+            }}
+            failure={failure}
+          />
+        </aside>
+
+        <Divider
+          label="sidebar width"
+          value={columns.sidebar}
+          onChange={(sidebar) => setWant((prev) => ({ ...prev, sidebar }))}
+          collapsed={collapsed.sidebar}
+          onToggle={fold("sidebar")}
         />
-      </aside>
 
-      <Divider
-        label="sidebar width"
-        value={columns.sidebar}
-        onChange={(sidebar) => setWant((prev) => ({ ...prev, sidebar }))}
-        collapsed={collapsed.sidebar}
-        onToggle={fold("sidebar")}
-      />
+        <main {...stylex.props(styles.column, styles.agent)}>
+          <Pane session={selected} fixture={rendererFixture} scheme={scheme} />
+        </main>
 
-      <main {...stylex.props(styles.column, styles.agent)}>
-        <Pane session={selected} fixture={rendererFixture} scheme={scheme} />
-      </main>
+        <Divider
+          label="accessory width"
+          invert
+          value={columns.accessory}
+          onChange={(accessory) => setWant((prev) => ({ ...prev, accessory }))}
+          collapsed={collapsed.accessory}
+          onToggle={fold("accessory")}
+        />
 
-      <Divider
-        label="accessory width"
-        invert
-        value={columns.accessory}
-        onChange={(accessory) => setWant((prev) => ({ ...prev, accessory }))}
-        collapsed={collapsed.accessory}
-        onToggle={fold("accessory")}
-      />
+        <aside {...stylex.props(styles.column, styles.fixed(columns.accessory))}>
+          <Accessory />
+        </aside>
+      </div>
 
-      <aside {...stylex.props(styles.column, styles.fixed(columns.accessory))}>
-        <div {...stylex.props(styles.accessory)}>
-          {debugTools.length > 1 && (
-            <div {...stylex.props(styles.tabs)}>
-              {debugTools.map((tool) => (
-                <button
-                  key={tool.id}
-                  type="button"
-                  onClick={() => setTool(tool.id)}
-                  {...stylex.props(styles.tab, tool.id === activeTool && styles.tabOn)}
-                >
-                  {tool.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <div {...stylex.props(styles.tool)}>
-            {(debugTools.find((t) => t.id === activeTool) ?? debugTools[0])?.render()}
-          </div>
-        </div>
-      </aside>
+      <BottomBar jobs={jobs} session={open} />
     </div>
   );
 }

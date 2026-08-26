@@ -1,6 +1,7 @@
 import { Effect, Result, Schema, Stream } from "effect";
 import { RpcTest } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
+import type { Job } from "@awp-kit/jobs";
 import { AttachRefused, AwpRpcs, SessionInfo } from "./index";
 
 // A contract is only a contract if it survives the wire.
@@ -78,6 +79,27 @@ const output = [`${ESC}[2J`, "hello", "\r\n"];
 
 // The handlers a client would talk to, with nothing behind them. What is under
 // test is the contract, so the daemon is exactly the part to leave out.
+// A job in the most awkward state to send: a rolled-back failure, with an
+// opaque `input`, a Date that is set and a Date that is not.
+const job: Job = {
+  id: "20260101-aaaa",
+  kind: "demo",
+  title: "a demonstration",
+  key: "once",
+  input: { steps: 3, nested: [1, 2] },
+  status: "failed",
+  attempt: 3,
+  attempts: 3,
+  steps: ["one", "two", "three"],
+  done: [],
+  step: "two",
+  error: "two refused",
+  cleanup: "dirty",
+  createdAt: new Date(1_700_000_000_000),
+  startedAt: new Date(1_700_000_001_000),
+  endedAt: new Date(1_700_000_002_000),
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -86,6 +108,12 @@ const handlers = AwpRpcs.toLayer({
       : Stream.fromArray(output),
   Write: () => Effect.void,
   Resize: () => Effect.void,
+  JobList: () => Effect.succeed([job]),
+  JobChanges: () => Stream.fromArray([job]),
+  JobLog: () => Effect.succeed(["a line"]),
+  JobRetry: () => Effect.succeed(job),
+  JobCancel: () => Effect.void,
+  JobDemo: () => Effect.succeed(job),
 });
 
 const client = RpcTest.makeClient(AwpRpcs).pipe(Effect.provide(handlers));
@@ -112,6 +140,22 @@ describe("the contract", () => {
           // Escape sequences arrive intact, byte for byte. There is no byte
           // stage anywhere on this path and nothing should have introduced one.
           expect(chunks.join("")).toBe(output.join(""));
+        }),
+      ),
+    ));
+
+  it("carries a whole job record, opaque input and absent dates included", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rpc = yield* client;
+          const [listed] = yield* rpc.JobList();
+          // The fields most likely to be quietly lost by a codec: an `unknown`
+          // with structure in it, and Dates that have to come back as Dates
+          // rather than as the numbers they were sent as.
+          expect(listed).toEqual(job);
+          expect(listed?.createdAt).toBeInstanceOf(Date);
+          expect(listed?.input).toEqual({ steps: 3, nested: [1, 2] });
         }),
       ),
     ));

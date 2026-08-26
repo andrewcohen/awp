@@ -82,6 +82,20 @@ export const Job = Schema.Struct({
   attempts: Schema.Int,
 
   /**
+   * Every step this job's kind has, in order.
+   *
+   * Written at enqueue and never changed, which is what makes it useful to a
+   * client: `done.length` against `steps.length` is a progress reading, and
+   * without a denominator on the record the only place to get one would be a
+   * client that knew the kinds — a second copy of the registry, in the process
+   * least able to keep it current.
+   *
+   * It is also the record of what the job was *going* to do, which survives the
+   * kind being edited afterwards.
+   */
+  steps: Schema.Array(Schema.String),
+
+  /**
    * Steps completed and not since undone, in the order they completed.
    *
    * This is the resume point. A retry runs the first step *not* in here, so a

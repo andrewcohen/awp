@@ -12,6 +12,7 @@ is only what would otherwise be learned the expensive way.
 ```
 apps/amoeba/       electrobun main process + vite renderer
 packages/protocol/ the RPC contract
+packages/jobs/     work that outlives whoever asked for it
 packages/server/   the daemon: multiplexer, pty, attachment
 packages/pane/     the terminal, ghostty-web
 archive/           the Go implementation — reference only
@@ -160,6 +161,91 @@ between "testable from inside a session" and "must run outside zmx".
 hand-rolled version this replaced had a path where cleanup ran twice and another
 where it never ran.
 
+## Jobs: resume and compensation are the same disagreement
+
+A job is a named kind with ordered steps. The design is entirely the
+reconciliation of two things that want opposite behaviour on failure, and every
+mistake available here is a mistake about which of them applies.
+
+```
+  attempt fails, attempts remain  →  queued, sleep the backoff, run again from
+                                     the first step not in `done`. Nothing is
+                                     undone.
+  attempts exhausted, or cancel   →  walk `done` backwards, run each `undo`,
+                                     emptying `done` as each one succeeds.
+```
+
+Because the first branch re-enters the step that failed, **`run` must be safe to
+call twice** — `mkdir -p`, not `mkdir`. Because `done` is emptied by the second,
+a retry after a rollback starts from nothing rather than resuming into a world
+that no longer matches.
+
+Compensation **stops at the first `undo` that fails** and marks the job
+`cleanup: "dirty"`. It does not press on: each undo assumes the ones after it
+already ran, so once one has not, the rest are undoing a state that never
+existed. `dirty` is the only outcome the package cannot fix by itself, which is
+why it is a field rather than a log line and why the status bar says it out loud
+even when the jobs column is folded away.
+
+**Interruption is two different events.** A cancelled job and a daemon shutting
+down both arrive as an interrupted fiber, and nothing about the interrupt tells
+them apart. `cancel` records the intent in a set before it interrupts; the exit
+handler reads it. Shutdown therefore leaves the record `running` with its `done`
+list intact, and the next start finds it non-terminal and resumes. Getting this
+backwards silently undoes work that was meant to carry on, and the record looks
+tidy either way — `runner.test.ts` asserts it on the trace and on a second
+runner over the same store, because no assertion about the record could.
+
+### The store is JSON, and that changes what a schema may say
+
+A kind's input is encoded at enqueue, stored, and decoded again at every step.
+JSON has no `undefined`, so a field written `Schema.UndefinedOr(…)` and left
+unset is _absent_ when read back — and `UndefinedOr` requires the key. The kind
+then dies on its first step with "stored input does not match", one backoff
+after the mistake and in a message about the wrong thing. Use `Schema.optional`,
+which accepts both.
+
+Two things follow, and they were both added after watching it happen:
+
+- `enqueue` puts the encoded input through JSON **and reads it straight back**,
+  refusing with `InputNotPortable` if it does not survive. The refusal lands
+  where the mistake is.
+- That same JSON pass is what makes the memory store and the sqlite store hold
+  the same thing. Without it every kind that loses something in JSON passes its
+  tests and fails in the daemon.
+
+### Two stores, and one of them is two runtimes
+
+The daemon runs under Bun, which has `bun:sqlite` and not `node:sqlite`. vitest
+runs on Node, which is the other way round. So `sqlite.ts` picks its driver by a
+dynamic import at open time and uses only the intersection of the two APIs —
+positional `?` parameters, `exec`, `prepare().run()`, `prepare().all()`.
+
+vitest can only ever exercise the Node arm. `bun run probe:jobs-store` runs the
+store under Bun and asserts on what that process sees, which is the same shape
+`probe:child-env` exists for. Run it after touching `sqlite.ts`.
+
+`store.test.ts` runs one suite against both stores. It found an off-by-one in
+the sqlite log trim on its first run, which is the entire argument for writing
+it that way: the implementation that drifts is always the one written second.
+
+### There are no migrations, and the file says so
+
+The sqlite file carries `pragma user_version`. A version that does not match
+**discards the tables and makes them again**. That is a real loss and is only
+defensible while nothing in awp enqueues real work — the moment it does, this
+has to become a list of migrations keyed by the same number.
+
+It is there because the alternative was worse: adding `steps` to the record left
+`create table if not exists` looking at a table without the column, and the
+daemon was dead on arrival with an error about a column count.
+
+### `demo` is scaffolding
+
+`packages/server/src/jobs/demo.ts` and the `JobDemo` call in the contract exist
+so the jobs panel can be looked at while nothing real enqueues anything. They go
+together, and they go as soon as the first real kind lands.
+
 ## Frontend
 
 - **electrobun is pinned to 1.18.1.** 2.x is a _bootstrap_: the npm package
@@ -176,6 +262,16 @@ where it never ran.
   not running was a bundle byte-identical to one built without it.
 - Vite owns the renderer and Electrobun copies `dist/renderer` in. Electrobun
   never compiles it.
+- **A barrel export can drag `node:fs` into the browser.** The job record is a
+  Schema, so the contract imports it, so the renderer imports it — and
+  `@awp-kit/jobs`' index reaching `sqlite.ts` was enough to break the dev server
+  outright. The sqlite store lives at `@awp-kit/jobs/sqlite`, which only the
+  daemon asks for. A production build would have tree-shaken it and said
+  nothing.
+- **Base UI tabs are controlled here, deliberately.** StyleX resolves styles at
+  render — `stylex.props(a, on && b)` — so which tab is selected has to be a
+  value the component can read. Base UI still owns the arrow keys, the roving
+  tab stop and the aria wiring, which is the whole reason it is there.
 
 ## StyleX fails quietly, twice
 
@@ -409,7 +505,43 @@ foreground colour. That is stronger evidence the patched glyph path is live than
 the dark screenshot alone — it shows the patch reading the theme rather than
 holding hexes. Prefer checks with that property.
 
+## The window is two bars with three columns between them
+
+The columns used to run edge to edge, top to bottom, and everything the window
+had to say about _itself_ had to borrow space from a column already spoken for —
+the appearance toggle ended up in a sidebar footer for exactly that reason.
+
+```
+  ┌──────────────────────────────────────────────┐  header · drag region
+  │ sidebar │ agent            │ accessory       │  the only row that flexes
+  └──────────────────────────────────────────────┘  footer · appearance, jobs
+```
+
+Two consequences, both of which replaced something:
+
+- **The top bar clears the traffic lights on behalf of all three columns.** The
+  window is `hiddenInset`, so the controls float over the content; each column
+  used to carry `space.titlebar` of padding to stay clear of them, in three
+  places, none of which said why. `space.titlebar` is now that bar's height.
+- **The top bar is the drag handle** — `-webkit-app-region: drag`, which StyleX
+  does emit; check the built CSS rather than believing this. With the title bar
+  hidden there is nothing else to grab, which is also why nothing interactive
+  goes in it.
+
+Both bars are `flex-shrink: 0` in a column layout with `minHeight: 0` on the
+middle row, so a short window shrinks the columns rather than pushing the footer
+off the bottom — which is the usual way a flex column grows the scrollbar
+`global.css` says it must not have.
+
+The footer says nothing when there is nothing to say. A status bar that always
+reads `0 running · 0 failed` teaches the eye to skip it, which costs exactly the
+one moment it exists for.
+
 ## Debug tools live in the accessory column
+
+The accessory column is a set of panels behind Base UI tabs — jobs first,
+because that is the one someone opens on purpose, then the debug tools, which
+are the ones opened when something feels wrong.
 
 `apps/amoeba/src/renderer/debug/` is a collection, not a panel. The meter there
 answers what "feels laggy" means — what the pointing device emitted, how many
@@ -431,6 +563,11 @@ enough to catch is not a reading.
   ```
   bun run fmt   ·  lint  ·  typecheck  ·  test  ·  doctor
   ```
+
+- Dependency versions live in **bun workspace catalogs** in the root
+  `package.json` — `"effect": "catalog:"` in a package, the number in one place.
+  The effect family has to move together, and four packages naming their own
+  version is four chances for two runtimes in one tree.
 
 - Relative imports carry **no extension**. `moduleResolution: "bundler"` resolves
   them; `.js` names a file that does not exist, and

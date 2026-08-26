@@ -70,6 +70,20 @@ const openDb = (path: string): Effect.Effect<Db, StoreError> =>
 // claimed, and a claim the database will not enforce is a claim two concurrent
 // enqueues can break. The runner checks first; this is what makes the check
 // true rather than likely.
+/**
+ * Bump when anything in `SCHEMA` changes shape.
+ *
+ * There is no migration machinery here yet, and pretending otherwise is what
+ * actually broke: adding `steps` to the record left `create table if not
+ * exists` looking at a table without the column, so every write failed and the
+ * daemon was dead on arrival with an error about a column count. A version that
+ * does not match the file is therefore handled by **discarding the table and
+ * making it again** — which is a real loss and is only defensible while nothing
+ * in awp enqueues real work. The moment it does, this needs to become a list of
+ * migrations keyed by this same number.
+ */
+const SCHEMA_VERSION = 1;
+
 const SCHEMA = [
   `create table if not exists jobs (
      id         text primary key,
@@ -80,6 +94,7 @@ const SCHEMA = [
      status     text not null,
      attempt    integer not null,
      attempts   integer not null,
+     steps      text not null,
      done       text not null,
      step       text,
      error      text,
@@ -120,6 +135,7 @@ const toRow = (job: Job): ReadonlyArray<Value> => [
   job.status,
   job.attempt,
   job.attempts,
+  JSON.stringify(job.steps),
   JSON.stringify(job.done),
   job.step ?? null,
   job.error ?? null,
@@ -138,6 +154,7 @@ const fromRow = (row: Record<string, unknown>): Job => ({
   status: String(row["status"]) as JobStatus,
   attempt: Number(row["attempt"]),
   attempts: Number(row["attempts"]),
+  steps: JSON.parse(String(row["steps"])) as ReadonlyArray<string>,
   done: JSON.parse(String(row["done"])) as ReadonlyArray<string>,
   step: text(row["step"]),
   error: text(row["error"]),
@@ -159,20 +176,33 @@ export const makeSqlite = (path: string) =>
         // locked out by the runner writing a step transition.
         db.exec("pragma journal_mode = wal");
         db.exec("pragma foreign_keys = on");
+
+        // A brand new file reads 0, which is not the current version either —
+        // the drops are no-ops there and the effect is the same.
+        const found = db.prepare("pragma user_version").all()[0]?.["user_version"];
+        if (Number(found ?? 0) !== SCHEMA_VERSION) {
+          db.exec("drop table if exists job_logs");
+          db.exec("drop table if exists jobs");
+        }
         for (const statement of SCHEMA) {
           db.exec(statement);
         }
+        // Not a bound parameter: sqlite will not take one in a pragma. Safe
+        // because the value is a literal in this file rather than anything a
+        // caller supplies.
+        db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
       },
       catch: (cause) => new StoreError({ reason: "cannot prepare the schema", cause }),
     });
 
     // Prepared once and kept, which is the point of preparing them.
     const put = db.prepare(
-      `insert into jobs values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `insert into jobs values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
        on conflict(id) do update set
          kind=excluded.kind, title=excluded.title, key=excluded.key,
          input=excluded.input, status=excluded.status, attempt=excluded.attempt,
-         attempts=excluded.attempts, done=excluded.done, step=excluded.step,
+         attempts=excluded.attempts, steps=excluded.steps, done=excluded.done,
+         step=excluded.step,
          error=excluded.error, cleanup=excluded.cleanup,
          created_at=excluded.created_at, started_at=excluded.started_at,
          ended_at=excluded.ended_at`,

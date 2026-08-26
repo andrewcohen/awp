@@ -5,9 +5,14 @@
 // the real one — which is what keeps `handlers.test.ts` able to drive the whole
 // stack over fakes without a socket.
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { erase, layer as jobsLayer } from "@awp-kit/jobs";
+import { layerSqlite } from "@awp-kit/jobs/sqlite";
 import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Layer } from "effect";
+import { demo } from "./jobs/demo";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
@@ -40,6 +45,29 @@ export const DAEMON_PORT = 5274;
  */
 const serialization = RpcSerialization.layerNdjson;
 
+/**
+ * Where jobs are kept between runs.
+ *
+ * Outside the repository and outside any workspace, because a job belongs to
+ * the machine rather than to a checkout: the daemon that resumes it after a
+ * restart is not necessarily standing in the directory that enqueued it.
+ */
+export const JOBS_DB = join(homedir(), ".awp", "jobs.sqlite");
+
+/**
+ * The jobs runner, over every kind the daemon knows.
+ *
+ * Kinds are erased at this call rather than inside the runner: a registry of
+ * kinds with different inputs has no honest element type, and doing the erasure
+ * where each kind's schema is still in hand keeps the cast that would otherwise
+ * be needed from existing anywhere.
+ *
+ * `Layer.orDie` because a store that will not open is not a condition the
+ * daemon can serve around — a jobs system with no memory is not a jobs system,
+ * and starting anyway would make every enqueue a silent no-op.
+ */
+export const jobs = jobsLayer([erase(demo)]).pipe(Layer.provide(Layer.orDie(layerSqlite(JOBS_DB))));
+
 /** The real services: real zmx, real ptys. */
 export const services = sessions.layer.pipe(
   Layer.provide(attachment.layer),
@@ -59,5 +87,6 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(NodeSocketServer.layerWebSocket({ host: DAEMON_HOST, port: DAEMON_PORT })),
   Layer.provide(handlers.layer),
   Layer.provide(services),
+  Layer.provide(jobs),
   Layer.provide(zmx.layer),
 );

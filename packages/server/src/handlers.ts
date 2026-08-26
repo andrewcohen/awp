@@ -9,14 +9,17 @@
 // Layer, so `RpcTest` can drive them with no socket at all — which is how the
 // contract's own tests run, and how these do.
 
+import { Jobs } from "@awp-kit/jobs";
 import {
   AttachRefused,
   AwpRpcs,
+  JobNotFound,
   SessionNotFound,
   type SessionIdentity,
   type SessionInfo,
 } from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
+import { demo } from "./jobs/demo";
 import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
@@ -51,6 +54,18 @@ export const layer = AwpRpcs.toLayer(
   Effect.gen(function* () {
     const mux = yield* Multiplexer;
     const sessions = yield* Sessions;
+    const jobs = yield* Jobs;
+
+    // A job the client named and the daemon has never heard of. Its own
+    // failure rather than a defect: asking about a job that was cleaned up, or
+    // typing an id, is a question with a negative answer.
+    const known = (id: string) =>
+      jobs.get(id).pipe(
+        Effect.orDie,
+        Effect.flatMap((job) =>
+          job === undefined ? Effect.fail(new JobNotFound({ job: id })) : Effect.succeed(job),
+        ),
+      );
 
     return {
       // No declared error, so a failure here is a defect. That is the honest
@@ -118,6 +133,32 @@ export const layer = AwpRpcs.toLayer(
             PtyError: (error) => Effect.die(error),
           }),
         ),
+
+      // No declared error, for the same reason SessionList has none: a store
+      // that cannot be read is the daemon being broken, and an empty list is
+      // what "no jobs" looks like.
+      JobList: () => jobs.list().pipe(Effect.orDie),
+
+      // The stream's lifetime is the request's, so a client that goes away
+      // unsubscribes from the feed. Nothing has to notice the disconnection.
+      JobChanges: () => jobs.changes,
+
+      JobLog: ({ job }) => known(job).pipe(Effect.flatMap(() => jobs.log(job).pipe(Effect.orDie))),
+
+      // `retry` returns the record unchanged for a job that is still running,
+      // which is a truer answer than a failure — it *is* already trying.
+      JobRetry: ({ job }) =>
+        known(job).pipe(
+          Effect.flatMap(() => jobs.retry(job).pipe(Effect.orDie)),
+          Effect.flatMap((updated) =>
+            updated === undefined ? Effect.fail(new JobNotFound({ job })) : Effect.succeed(updated),
+          ),
+        ),
+
+      JobCancel: ({ job }) =>
+        known(job).pipe(Effect.flatMap(() => jobs.cancel(job).pipe(Effect.orDie))),
+
+      JobDemo: (payload) => jobs.enqueue(demo, payload).pipe(Effect.orDie),
     };
   }),
 );
