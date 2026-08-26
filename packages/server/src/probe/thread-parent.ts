@@ -170,6 +170,9 @@ const program = Effect.gen(function* () {
   const built = yield* rpc.WorkspaceCreate({
     thread: first.id,
     label: first.title,
+    // Named up front: the naming step short-circuits, so the parent costs no
+    // model call. Only the child goes through ThreadStart.
+    description: first.title,
     project: PROJECT,
     workspace: PARENT,
     repo,
@@ -220,10 +223,8 @@ const program = Effect.gen(function* () {
     started.thread.parentId ?? "(none)",
   );
 
-  const input = started.job.input as { readonly base?: unknown; readonly workspace?: unknown };
-  const base = String(input.base ?? "");
-  const child = String(input.workspace ?? "");
-  made.push({ project: PROJECT, workspace: child, thread: started.thread.id });
+  const queued = started.job.input as { readonly base?: unknown; readonly workspace?: unknown };
+  const base = String(queued.base ?? "");
 
   // The correction this probe exists for. `<name>@` is the working copy and
   // carries whatever is uncommitted; the bookmark is where the work is named.
@@ -233,7 +234,17 @@ const program = Effect.gen(function* () {
     base,
   );
 
+  // **Not on the record yet, and that is the point.** Naming moved into the
+  // job's first step so this call could return immediately, so the name only
+  // exists once the job has run. Reading it from the *enqueued* record is what
+  // this probe did first, and it produced a workspace path with nothing on the
+  // end of it — which is exactly the shape of the bug a probe is for.
+  say("no name at enqueue — the call did not wait", queued.workspace === undefined, "");
+
   const settledChild = yield* settle(started.job.id);
+  const child = String((settledChild.input as { readonly workspace?: unknown }).workspace ?? "");
+  made.push({ project: PROJECT, workspace: child, thread: started.thread.id });
+  say("the job recorded the name it was given", child !== "", child);
   say(
     "the child's job finished",
     settledChild.status === "succeeded",

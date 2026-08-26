@@ -423,6 +423,18 @@ Three outcomes, and each one is deliberate:
 The two fallbacks are not failures. Someone with no `bookmark_prefix` has no
 bookmarks at all, and refusing there would make the feature unavailable to them.
 
+**The picker offers bookmarks, not threads.** Offering threads was the first
+attempt and was wrong in a way only use showed: most workspaces on a real
+machine predate threads and belong to none, so the list came up empty exactly
+when someone stood in a branch they wanted to continue from. `ThreadBases`
+returns `trunk()` plus every _local_ bookmark — local, because a name that only
+exists on a remote cannot be branched from without fetching first, and offering
+it would be offering a failure.
+
+The daemon then recovers the parent thread _from the chosen base_, by taking the
+prefix off the bookmark and asking which thread holds that workspace. So
+branching off an unclaimed branch works and simply records no lineage.
+
 **`parentId` is recorded, not re-derived.** It could be recovered later by
 asking jj which revision a workspace descends from — but that answers a question
 about commits, and this is a claim about work: someone said "this follows from
@@ -444,6 +456,63 @@ was right and the marker commit was empty:
 ```
 
 Every other check passed. Only "the parent's file came with it" caught it.
+
+### A step may write down what it learned
+
+`JobStep.run` returns `Effect<void | Partial<Input>, JobError>`. Almost every
+step answers `Effect.void`; one that _discovers_ something the later steps
+depend on returns a patch, and the runner merges it into the stored input **with
+the same write that marks the step done**.
+
+This exists because a step cannot hand a value to the next one — there is
+nowhere to put it. A job resumed by a restarted daemon has only its record, so
+anything not on the record did not happen.
+
+The first need for it was naming a workspace:
+
+```
+  before   ThreadStart ── 10s model call ── enqueue ── job appears
+           the window waits here ↑          and the jobs panel is empty
+
+  after    ThreadStart ── enqueue ── job appears ── step "name" ── 10s
+                                     ↑ immediately, with somewhere to watch
+```
+
+Resolving before enqueue _worked_. What it cost was ten seconds spent in front
+of a person watching a form that would not close, for work that has a progress
+panel of its own.
+
+Two things this is not. It is not a channel between steps — the patch goes into
+the durable, schema-checked input, not into memory. And it is not an escape from
+`run` being safe twice: a step whose patch is already there must notice and do
+nothing, which is how a retry avoids a second, different answer from the model.
+
+`CreateWorkspace.workspace` is therefore `Schema.optional`, and every step after
+`name` goes through `named(input)` rather than `input.workspace!` — a missing
+name asserted away becomes a directory called `undefined` four steps later.
+
+**A step that throws now fails the job.** It used to hang it: a defect is not on
+the error channel, so it sailed past the `Effect.result` wrapping an attempt,
+killed the fiber, and left the record saying `running` with nothing behind it.
+Found by a fake missing a method, which is exactly how a real service gains one.
+
+### Clearing is not clearing
+
+`JobStore.forgetFinished` deletes terminal jobs and **keeps** two kinds:
+
+```
+  queued · running    the runner still holds a fiber; the next save would
+                      put the row back, minus its log
+  cleanup: dirty      compensation stopped partway. The one outcome the
+                      package cannot put right by itself, so the one a
+                      person most needs to still be there tomorrow
+```
+
+The rule lives in the daemon and the reply is a count, so the button can say
+what actually happened when rows stay put. `job_logs` has no foreign key back to
+`jobs` — a constraint check per appended line is a cost paid on every line for a
+guarantee only this one place needs — so **the delete order is the guarantee**:
+logs first, then jobs.
 
 ### Making a workspace: the first job that does anything
 
@@ -931,6 +1000,24 @@ pass because the trees came back clean and the messages were not looked at.
   ```
   bun run fmt   ·  lint  ·  typecheck  ·  test  ·  doctor
   ```
+
+- **Judge a gate by its exit code, never by grepping its output.** `tsc` colours
+  its output, so there are escape codes _between_ the words:
+
+  ```
+    what it prints   - \e[91merror\e[0m\e[90m TS2741: …
+    grep "error TS"  no match — on a run with eight errors
+  ```
+
+  A whole afternoon was reported as "typecheck: 0 errors" on a renderer whose
+  entry point could not resolve an import, because the count came from a grep
+  that never matched anything. The exit code was 2 the whole time.
+
+  ```
+  bun run typecheck > /tmp/tc.txt 2>&1; echo "exit=$?"
+  ```
+
+  Beware `cmd | tail` for the same reason: `$?` is then _tail's_ status.
 
 - Dependency versions live in **bun workspace catalogs** in the root
   `package.json` — `"effect": "catalog:"` in a package, the number in one place.

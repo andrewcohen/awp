@@ -11,7 +11,7 @@
 // disagree about a field neither of them mentioned.
 
 import { Context, Data, Effect, Layer, Ref } from "effect";
-import type { Job, JobId } from "./job";
+import { type Job, type JobId, isTerminal } from "./job";
 
 /** The store could not answer. Always a defect from the caller's side. */
 export class StoreError extends Data.TaggedError("StoreError")<{
@@ -38,6 +38,22 @@ export class JobStore extends Context.Service<
     /** Add lines to a job's log. */
     readonly append: (id: JobId, lines: ReadonlyArray<string>) => Effect.Effect<void, StoreError>;
     readonly log: (id: JobId) => Effect.Effect<ReadonlyArray<string>, StoreError>;
+
+    /**
+     * Forget every job that is over, and answer with how many.
+     *
+     * Terminal only — `succeeded`, `failed`, `cancelled`. A queued or running
+     * job is one the runner still holds a fiber for, and deleting its record
+     * would leave that fiber writing to a row nothing can read: the next save
+     * would put it straight back, minus the log. So this is not "clear the
+     * list", it is "forget what is finished", and the distinction is enforced
+     * here rather than trusted to the caller.
+     *
+     * A `dirty` cleanup survives too. That is the one outcome the package
+     * cannot fix by itself, and it is the one a person most needs to still be
+     * on screen tomorrow.
+     */
+    readonly forgetFinished: () => Effect.Effect<number, StoreError>;
   }
 >()("awp/JobStore") {}
 
@@ -105,8 +121,23 @@ export const makeMemory = Effect.gen(function* () {
       update(id, (entry) => ({ ...entry, log: keep([...entry.log, ...lines]) })),
 
     log: (id: JobId) => Ref.get(held).pipe(Effect.map((all) => all.get(id)?.log ?? [])),
+
+    forgetFinished: () =>
+      Ref.modify(held, (all) => {
+        const kept = [...all].filter(([, entry]) => !finished(entry.job));
+        return [all.size - kept.length, new Map(kept)];
+      }),
   };
 });
+
+/**
+ * Over, and safe to forget.
+ *
+ * `dirty` is excluded even though its status is terminal. Compensation stopped
+ * partway there, so something is left behind that only a person can put right —
+ * and the record naming it is the only thing that says what.
+ */
+const finished = (job: Job): boolean => isTerminal(job.status) && job.cleanup !== "dirty";
 
 /** Kept for the life of the process, and no longer. */
 export const layerMemory = Layer.effect(JobStore)(makeMemory);

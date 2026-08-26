@@ -1,12 +1,14 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type JobKind, type JobRef, type JobStep, permanent } from "@awp-kit/jobs";
+import { type JobError, type JobKind, type JobRef, type JobStep, permanent } from "@awp-kit/jobs";
 import { type CreateWorkspace, CreateWorkspace as CreateWorkspaceSchema } from "@awp-kit/protocol";
 import { Effect } from "effect";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
 import { identityLabels, sessionName } from "../naming";
+import type { Settings } from "../settings";
 import type { Threads } from "../threads";
+import type { WorkspaceIntent } from "../intent";
 
 // Making a workspace: the first job that does anything.
 //
@@ -49,7 +51,11 @@ import type { Threads } from "../threads";
 export const createWorkspaceRef: JobRef<CreateWorkspace> = {
   name: "create-workspace",
   input: CreateWorkspaceSchema,
-  title: (input) => `make ${input.project}/${input.workspace}`,
+  // The description, because that is all there is at enqueue — the name does
+  // not exist until the job's first step has run. It is also the better title:
+  // it is what the person asked for, in their words, rather than the slug a
+  // model made of it.
+  title: (input) => `${input.project} — ${input.description.trim()}`,
 };
 
 /**
@@ -77,6 +83,10 @@ export interface WorkspaceDeps {
   readonly mux: Multiplexer["Service"];
   readonly threads: Threads["Service"];
   readonly files: WorkspaceFiles;
+  /** Turns what a person typed into a name. See the `name` step. */
+  readonly intent: WorkspaceIntent["Service"];
+  /** Read per job, so editing the file takes effect without a restart. */
+  readonly settings: Settings["Service"];
 }
 
 /**
@@ -117,17 +127,89 @@ const said = (error: unknown): string =>
     ? String((error as { readonly reason: unknown }).reason)
     : String(error);
 
+/**
+ * The name the first step recorded, or a refusal saying it did not.
+ *
+ * `workspace` is optional on the schema because it does not exist until `name`
+ * has run, and every step after that one needs it. Checked rather than
+ * asserted: the alternative is `input.workspace!`, which turns a missing name
+ * into a directory called `undefined` several steps later.
+ */
+const named = (input: CreateWorkspace): Effect.Effect<string, JobError> =>
+  input.workspace === undefined || input.workspace.trim() === ""
+    ? Effect.fail(permanent("the workspace has no name — the naming step recorded none"))
+    : Effect.succeed(input.workspace);
+
 export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> => {
-  const { jj, mux, threads, files } = deps;
+  const { jj, mux, threads, files, intent, settings } = deps;
 
-  const agentSession = (input: CreateWorkspace): string =>
-    sessionName(input.project, input.workspace, AGENT);
+  const agentSession = (project: string, workspace: string): string =>
+    sessionName(project, workspace, AGENT);
 
-  const workspace: JobStep<CreateWorkspace> = {
+  /**
+   * Turn what a person typed into a workspace name, a title and a brief.
+   *
+   * **First, and inside the job rather than before it.** This is the ten
+   * seconds: a model reads the sentence and answers with a slug. It used to
+   * happen in the `ThreadStart` handler, which meant a person watched a form
+   * that would not close while work with a progress panel of its own went
+   * unrepresented. Now the job exists the instant it is asked for and this is
+   * the step it spends its first ten seconds in.
+   *
+   * What it learns goes back into the input — see `JobStep.run` — so the four
+   * steps after it read the name from the record, and a resumed job reads it
+   * too instead of asking again and getting a second, different answer.
+   *
+   * No undo. Nothing outside the record changed, and the thread's title is a
+   * better description of the same work either way.
+   */
+  const nameStep: JobStep<CreateWorkspace> = {
+    name: "name",
+    run: (input, context) =>
+      Effect.gen(function* () {
+        // Already named: a resumed job, or a retry of a later step. Doing this
+        // again would spend ten seconds to overwrite a good answer with a
+        // different one, and every step after it is built on the first.
+        if (input.workspace !== undefined && input.workspace.trim() !== "") {
+          yield* context.log(`already named ${input.workspace}`);
+          return;
+        }
+
+        yield* context.log("asking for a name");
+        const resolved = yield* intent
+          .resolve(input.description, input.project)
+          .pipe(Effect.mapError(refused("could not name the workspace")));
+
+        const config = yield* settings.read();
+        const patch = {
+          workspace: resolved.name,
+          label: resolved.label,
+          ...(resolved.prompt === undefined ? {} : { prompt: resolved.prompt }),
+          // Composed here because neither half is known earlier: the prefix is
+          // configuration and the name has only just been decided. Absent
+          // means no bookmark rather than an unprefixed one.
+          ...(config.bookmarkPrefix === undefined
+            ? {}
+            : { bookmark: `${config.bookmarkPrefix}/${resolved.name}` }),
+        };
+        yield* context.log(`named ${resolved.name}`);
+
+        // The thread was made with the raw sentence as its title, so the
+        // sidebar had something to show immediately. This is the better one.
+        // Failure here is not worth losing the job over — the title is a label,
+        // and the workspace is the work.
+        yield* threads.rename(input.thread, resolved.label).pipe(Effect.ignore);
+
+        return patch;
+      }),
+  };
+
+  const workspaceStep: JobStep<CreateWorkspace> = {
     name: "workspace",
     run: (input, context) =>
       Effect.gen(function* () {
-        const destination = workspacePath(input.project, input.workspace);
+        const workspace = yield* named(input);
+        const destination = workspacePath(input.project, workspace);
 
         // The parent, not the destination. `jj workspace add` creates the
         // workspace directory itself and refuses if the directory *above* it is
@@ -143,7 +225,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         yield* jj
           .addWorkspace({
             repo: input.repo,
-            name: input.workspace,
+            name: workspace,
             destination,
             revision: input.base,
           })
@@ -151,9 +233,10 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       }),
     undo: (input, context) =>
       Effect.gen(function* () {
-        const destination = workspacePath(input.project, input.workspace);
+        const workspace = yield* named(input);
+        const destination = workspacePath(input.project, workspace);
         yield* jj
-          .forgetWorkspace(input.repo, input.workspace)
+          .forgetWorkspace(input.repo, workspace)
           .pipe(Effect.mapError(refused("could not forget the workspace")));
 
         // Forgetting does not touch the directory — jj says so in its own help
@@ -176,7 +259,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       }),
   };
 
-  const bookmark: JobStep<CreateWorkspace> = {
+  const bookmarkStep: JobStep<CreateWorkspace> = {
     name: "bookmark",
     run: (input, context) =>
       Effect.gen(function* () {
@@ -191,7 +274,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         // `<name>@` is jj's revset for a workspace's working-copy commit. The
         // bare workspace name is not a revision — the first end-to-end run said
         // so, in jj's own words: "Revision `probe-1` doesn't exist".
-        const at = `${input.workspace}@`;
+        const at = `${yield* named(input)}@`;
         yield* context.log(`pointing ${input.bookmark} at ${at}`);
         yield* jj
           .setBookmark(input.repo, input.bookmark, at)
@@ -209,16 +292,17 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       }),
   };
 
-  const session: JobStep<CreateWorkspace> = {
+  const sessionStep: JobStep<CreateWorkspace> = {
     name: "session",
     run: (input, context) =>
       Effect.gen(function* () {
-        const name = agentSession(input);
+        const workspace = yield* named(input);
+        const name = agentSession(input.project, workspace);
         yield* context.log(`starting ${name}`);
         yield* mux
           .start({
             name,
-            cwd: workspacePath(input.project, input.workspace),
+            cwd: workspacePath(input.project, workspace),
             command: input.agent,
           })
           .pipe(Effect.mapError(refused("could not start the session")));
@@ -228,18 +312,18 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         // path and cannot be split back into its parts, so the labels are the
         // only unshortened truth. See `identityLabels`.
         yield* mux
-          .setLabels(name, identityLabels(input.project, input.workspace, AGENT))
+          .setLabels(name, identityLabels(input.project, workspace, AGENT))
           .pipe(Effect.mapError(refused("could not label the session")));
       }),
     undo: (input, context) =>
       Effect.gen(function* () {
-        const name = agentSession(input);
+        const name = agentSession(input.project, yield* named(input));
         yield* mux.kill(name).pipe(Effect.mapError(refused("could not kill the session")));
         yield* context.log(`killed ${name}`);
       }),
   };
 
-  const brief: JobStep<CreateWorkspace> = {
+  const briefStep: JobStep<CreateWorkspace> = {
     name: "brief",
     run: (input, context) =>
       Effect.gen(function* () {
@@ -249,7 +333,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         }
         yield* context.log("telling the agent what to do");
         yield* mux
-          .send(agentSession(input), input.prompt)
+          .send(agentSession(input.project, yield* named(input)), input.prompt)
           .pipe(Effect.mapError(refused("could not brief the agent")));
       }),
     // No undo, and none is possible: there is no way to un-type something into
@@ -257,19 +341,23 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     // send the runner back through a step that cannot be run twice safely.
   };
 
-  const claim: JobStep<CreateWorkspace> = {
+  const claimStep: JobStep<CreateWorkspace> = {
     name: "claim",
     run: (input, context) =>
       Effect.gen(function* () {
         yield* threads
-          .attach(input.thread, { project: input.project, workspace: input.workspace })
+          .attach(input.thread, { project: input.project, workspace: yield* named(input) })
           .pipe(Effect.mapError(refused("could not claim the workspace")));
         yield* context.log(`claimed by thread ${input.thread}`);
       }),
     undo: (input) =>
-      threads
-        .detach(input.thread, { project: input.project, workspace: input.workspace })
-        .pipe(Effect.mapError(refused("could not release the workspace")), Effect.asVoid),
+      named(input).pipe(
+        Effect.flatMap((workspace) =>
+          threads.detach(input.thread, { project: input.project, workspace }),
+        ),
+        Effect.mapError(refused("could not release the workspace")),
+        Effect.asVoid,
+      ),
   };
 
   return {
@@ -277,7 +365,10 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     // `brief` last, and `claim` before it. Sending text into a terminal cannot
     // be undone or safely repeated, so it goes after everything that might
     // fail — see the note on the step.
-    steps: [workspace, bookmark, session, claim, brief],
+    // Named `…Step` so the locals inside them can keep the words that matter —
+    // `workspace` is the name of a workspace far more often than it is the name
+    // of a step.
+    steps: [nameStep, workspaceStep, bookmarkStep, sessionStep, claimStep, briefStep],
     /**
      * One attempt.
      *

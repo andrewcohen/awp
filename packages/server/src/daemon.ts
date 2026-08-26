@@ -14,12 +14,13 @@ import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Effect, FileSystem, Layer } from "effect";
 import { createWorkspace } from "./jobs/create-workspace";
-import { demo } from "./jobs/demo";
 import { Jj } from "./jj";
 import * as intent from "./intent";
 import * as jjCli from "./jj-cli";
 import { Multiplexer } from "./multiplexer";
 import { Threads } from "./threads";
+import { WorkspaceIntent } from "./intent";
+import { Settings } from "./settings";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
@@ -96,7 +97,9 @@ export const db = Layer.orDie(dbLayer(AWP_DB, [...jobMigrations, ...threadMigrat
  * kind that needs jj, zmx and the thread store has to *close over* them. This
  * is the one place all three exist at once.
  *
- * `demo` needs nothing and is listed beside them until it goes.
+ * `intent` and `settings` joined the list when naming moved into the job: the
+ * ten seconds a model takes belongs where there is a progress panel to show it,
+ * not in front of a form that will not close.
  */
 export const jobs = Layer.unwrap(
   Effect.gen(function* () {
@@ -105,8 +108,10 @@ export const jobs = Layer.unwrap(
       mux: yield* Multiplexer,
       threads: yield* Threads,
       files: yield* FileSystem.FileSystem,
+      intent: yield* WorkspaceIntent,
+      settings: yield* Settings,
     };
-    return jobsLayer([erase(demo), erase(createWorkspace(deps))]);
+    return jobsLayer([erase(createWorkspace(deps))]);
   }),
 ).pipe(Layer.provide(Layer.orDie(layerSqlite)));
 

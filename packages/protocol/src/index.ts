@@ -222,16 +222,29 @@ export const CreateWorkspace = Schema.Struct({
   thread: Schema.String,
   project: Schema.String,
   /**
+   * What a person typed, in their own words.
+   *
+   * The one field here nothing can derive, and the seed for three that are
+   * derived from it: `workspace`, `label` and `prompt`.
+   */
+  description: Schema.String,
+  /**
    * The workspace's name: a directory, and jj's name for it.
    *
-   * Already a usable path when it gets here. Whoever enqueued this asked a
-   * model for it and re-slugged the answer — see `WorkspaceIntent` — so the
-   * job's input fully determines what it does and a retry cannot land
-   * somewhere different.
+   * **Optional on the way in, present from the first step onward.** A model
+   * turns the description into it, and that takes about ten seconds — which
+   * used to happen before the job was enqueued, in front of a person watching
+   * a form that would not close. The `name` step does it now and records the
+   * answer here, so the job exists the instant it is asked for and the waiting
+   * happens where there is a progress panel to show it.
+   *
+   * Recorded rather than recomputed, so a resumed job uses the same name
+   * instead of asking again and possibly getting a different one. See
+   * `JobStep.run` in @awp-kit/jobs for why a step may write here at all.
    */
-  workspace: Schema.String,
-  /** What the sidebar shows for the thread. Also already resolved. */
-  label: Schema.String,
+  workspace: Schema.optional(Schema.String),
+  /** What the sidebar shows for the thread. Resolved by the same step. */
+  label: Schema.optional(Schema.String),
   /**
    * What to type into the new agent session once it exists, or absent for
    * nothing. A workspace with no instruction is a workspace, not an error.
@@ -252,8 +265,10 @@ export const CreateWorkspace = Schema.Struct({
   /**
    * A bookmark to point at the new workspace, or absent for none.
    *
-   * Optional rather than derived, because the naming convention is a person's
-   * and not awp's — `andrew/` here, something else on another machine.
+   * Composed by the `name` step from the configured prefix and the name it
+   * just resolved, because neither is known before then. Absent means no
+   * bookmark at all rather than an unprefixed one: a bare workspace name in a
+   * shared repository's bookmark list is a name nobody can attribute.
    */
   bookmark: Schema.optional(Schema.String),
   /** What the agent session runs. */
@@ -261,6 +276,37 @@ export const CreateWorkspace = Schema.Struct({
 });
 
 export type CreateWorkspace = (typeof CreateWorkspace)["Type"];
+
+/**
+ * Somewhere a new workspace could start from.
+ *
+ * Composed by the daemon rather than by a client, and that is the point of the
+ * type existing at all. A base is a jj revset; the things a person recognises
+ * are branch names and the work they are looking at. Turning the second into
+ * the first needs the bookmark prefix from the daemon's config and the local
+ * bookmark list from jj, and a client has neither.
+ *
+ * This replaced a list of *threads*, which was the first attempt and was wrong
+ * in a way that only showed up in use: most workspaces on a real machine
+ * predate threads and belong to none, so the picker was empty exactly when
+ * someone stood in a workspace and wanted to branch off it.
+ */
+export const ThreadBase = Schema.Struct({
+  /** What to hand jj: `trunk()`, or a bookmark name. */
+  revset: Schema.String,
+  /** What to show. Never a revset if a person would not recognise one. */
+  label: Schema.String,
+  /**
+   * The awp workspace this base belongs to, when it belongs to one.
+   *
+   * Recovered from the naming convention — a bookmark is `<prefix>/<name>` —
+   * and used for two things: preselecting the base a person is standing in,
+   * and recording which thread the new one followed from.
+   */
+  workspace: Schema.UndefinedOr(Schema.String),
+});
+
+export type ThreadBase = (typeof ThreadBase)["Type"];
 
 /** What {@link Rpc ThreadStart} hands back: the thread, and the job building it. */
 export const ThreadStarted = Schema.Struct({ thread: Thread, job: Job });
@@ -310,38 +356,6 @@ export class JobNotFound extends Schema.TaggedError<JobNotFound>()("JobNotFound"
 //
 // It is a Schema on both sides already, because the store needed it decoded
 // from a row. Sending it is the same decode with a different transport.
-
-/**
- * A demonstration job, and it is here to be deleted.
- *
- * Nothing in awp enqueues real work yet — there is no workspace to create and
- * no CI to watch — so without this the jobs panel is an empty list that cannot
- * be shown to be working. Every state a person needs to see is reachable from
- * one payload: it succeeds, it retries, it exhausts its attempts and rolls
- * back, or its rollback fails and leaves the job dirty.
- *
- * When the first real kind lands, this and the `demo` kind behind it go.
- */
-export const DemoJob = Schema.Struct({
-  /** Milliseconds each step takes, so the panel has something to show. */
-  pace: Schema.Int,
-  /**
-   * Fail on this step, one-based, or never if absent. See `DEMO_STEPS`.
-   *
-   * `optional` and not `UndefinedOr`: this crosses JSON on its way into the
-   * job store, and JSON has no `undefined` — so a field spelled `UndefinedOr`
-   * and left unset comes back *absent*, which `UndefinedOr` rejects. The
-   * runner refuses such a kind at enqueue rather than letting it fail on its
-   * first step; see `InputNotPortable`.
-   */
-  failAt: Schema.optional(Schema.Int),
-  /** Whether that failure is worth retrying. */
-  retryable: Schema.Boolean,
-  /** Whether the rollback itself fails — the one outcome a person must act on. */
-  undoFails: Schema.Boolean,
-});
-
-export type DemoJob = (typeof DemoJob)["Type"];
 
 // ── the calls ──────────────────────────────────────────────────────────────
 
@@ -446,11 +460,16 @@ export class AwpRpcs extends RpcGroup.make(
     error: JobNotFound,
   }),
 
-  /** See {@link DemoJob}. Goes when the first real kind arrives. */
-  Rpc.make("JobDemo", {
-    payload: DemoJob,
-    success: Job,
-  }),
+  /**
+   * Forget every job that is over, and say how many.
+   *
+   * Not "clear the list". A queued or running job keeps its record — the
+   * runner still holds a fiber for it — and so does one whose compensation
+   * left something behind, which is the single outcome a person has to act on.
+   * The daemon decides that, not the client: a rule about which records may be
+   * destroyed is not one to have two copies of.
+   */
+  Rpc.make("JobClear", { success: Schema.Int }),
 
   /**
    * Every thread, newest first, archived ones included.
@@ -518,15 +537,30 @@ export class AwpRpcs extends RpcGroup.make(
    * person typed into a workspace name, a title and an instruction for the
    * agent, makes the thread, and enqueues the job that builds the rest.
    *
-   * The model call is why this takes ten seconds or so, and it happens here
-   * rather than inside the job because four of the job's five steps need the
-   * name. A job's input is what makes it retryable, so resolving first means a
-   * retry re-runs against the same answer instead of asking again and possibly
-   * landing somewhere else.
+   * **Returns as soon as the record exists**, which is the whole point. Naming
+   * the workspace takes a model about ten seconds, and that used to happen
+   * here — so a person watched a window that would not close while work with a
+   * progress panel of its own went unrepresented. It is the job's first step
+   * now, and this call does only what has to be true before a job can exist:
+   * resolve the repository, resolve the base, make the thread, enqueue.
    *
-   * Fails outright if the model cannot be reached. Deliberate for now — the
-   * alternative is a workspace with a name nobody chose.
+   * The thread comes back titled with what was typed. The job renames it once
+   * the model answers, which is a title that improves ten seconds later rather
+   * than a wait.
    */
+  /**
+   * Everywhere a new workspace in this project could start from.
+   *
+   * The project's main line, then every local bookmark. Local only: a name that
+   * exists solely on a remote is not something jj can branch from here without
+   * fetching first, and offering it would be offering a failure.
+   */
+  Rpc.make("ThreadBases", {
+    payload: { from: Schema.String },
+    success: Schema.Array(ThreadBase),
+    error: ThreadStartFailed,
+  }),
+
   Rpc.make("ThreadStart", {
     payload: {
       /** What the person typed, in their own words. */

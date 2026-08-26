@@ -1,7 +1,7 @@
-import type { Job } from "@awp-kit/jobs";
+import { type Job, isTerminal } from "@awp-kit/jobs";
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
-import { cancelJob, enqueueDemo, jobLog, retryJob } from "./daemon";
+import { cancelJob, clearJobs, jobLog, retryJob } from "./daemon";
 import { colors, text } from "./tokens.stylex";
 import { useJobs } from "./useJobs";
 
@@ -21,19 +21,21 @@ import { useJobs } from "./useJobs";
 // a panel of noise; a job that failed is the one worth opening, and its failure
 // is already on the row telling you to.
 //
-// The demo controls at the top are scaffolding, and go with the `demo` kind and
-// the `JobDemo` call. Nothing in awp enqueues real work yet, and a panel with
-// no way to put anything in it cannot be checked by eye at all.
+// The four demo buttons that used to sit at the top are gone, along with the
+// `demo` kind and the `JobDemo` call behind them. They existed so this panel
+// could be looked at while nothing real enqueued anything, and creating a
+// workspace is now real; scaffolding kept past the thing it was holding up is
+// just furniture in the way.
 //
-// Their labels say what a person would see happen, not what the runner calls
-// it. "fail dirty" is a sentence about compensation stopping partway, which is
-// meaningful to `runner.ts` and to nobody standing in front of the window.
+// What replaced them is one button that takes something *away*. A jobs list
+// only grows — every workspace ever made leaves a row — so the panel that
+// needed a way to put jobs in now needs a way to get them out.
 //
-// The row itself is deliberately **not** designed yet. Every field it could
-// show is a fixture right now — the title describes a payload, the steps are
-// called "step 1", nothing has a real duration or a real reason for failing —
-// so laying it out against this data means laying it out twice. It gets built
-// when there is a job worth looking at.
+// **Clear does not mean clear.** The daemon keeps anything queued or running,
+// and anything whose rollback left something behind; see `JobClear` in the
+// contract. That rule lives there rather than here because a rule about which
+// records may be destroyed is not one to have two copies of — and the reply is
+// a count so this button can say what actually happened when rows stay put.
 
 const styles = stylex.create({
   panel: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -58,6 +60,7 @@ const styles = stylex.create({
     fontSize: text.tiny,
     cursor: "pointer",
   },
+  kept: { alignSelf: "center", color: colors.muted, fontSize: text.tiny },
   list: { flex: 1, minHeight: 0, overflowY: "auto", padding: "0.4rem 0" },
   empty: { padding: "0.5rem 0.6rem", color: colors.muted, fontSize: text.small },
 
@@ -134,17 +137,31 @@ const progress = (job: Job): string => {
   return at === undefined ? `${job.steps.length} steps` : `${at} of ${job.steps.length}`;
 };
 
-// A click that starts a demo job. Failures are dropped on purpose: the only way
-// this can fail is the daemon being absent, which the list beside it already
-// says in a full sentence.
-const demo = (payload: Parameters<typeof enqueueDemo>[0]) => () => {
-  void enqueueDemo(payload).catch(() => {});
-};
-
 export function Jobs() {
-  const { jobs, failure } = useJobs();
+  const { jobs, failure, refresh } = useJobs();
   const [open, setOpen] = useState<string | undefined>();
   const [lines, setLines] = useState<ReadonlyArray<string>>([]);
+  const [kept, setKept] = useState<string | undefined>();
+
+  // Counted here rather than asked of the daemon, so the button can say how
+  // many before it is pressed. The daemon still decides — this is the same
+  // rule read from the records the window already holds, and if the two ever
+  // disagree the message below is what says so.
+  const clearable = jobs.filter((job) => isTerminal(job.status) && job.cleanup !== "dirty").length;
+
+  const clear = () => {
+    setKept(undefined);
+    clearJobs()
+      .then((gone) => {
+        refresh();
+        // Said only when it is surprising. Clearing four of four needs no
+        // commentary; clearing four of seven does, because the three left are
+        // the ones a person has to do something about.
+        const left = jobs.length - gone;
+        setKept(left > 0 ? `${left} still running or needing a hand` : undefined);
+      })
+      .catch((error: unknown) => setKept(String(error)));
+  };
 
   const show = (job: Job) => {
     if (open === job.id) {
@@ -163,36 +180,17 @@ export function Jobs() {
 
   return (
     <div {...stylex.props(styles.panel)}>
-      <div {...stylex.props(styles.controls)}>
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          onClick={demo({ pace: 400, retryable: false, undoFails: false })}
-        >
-          one that works
-        </button>
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          onClick={demo({ pace: 400, failAt: 3, retryable: true, undoFails: false })}
-        >
-          one that fails once, then works
-        </button>
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          onClick={demo({ pace: 400, failAt: 3, retryable: false, undoFails: false })}
-        >
-          one that gives up and undoes itself
-        </button>
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          onClick={demo({ pace: 400, failAt: 3, retryable: false, undoFails: true })}
-        >
-          one that gives up and cannot undo itself
-        </button>
-      </div>
+      {/* Nothing to clear, nothing to say. A control bar that is always there
+          offering an action that would do nothing is a bar the eye learns to
+          skip, which costs the one moment it exists for. */}
+      {clearable > 0 && (
+        <div {...stylex.props(styles.controls)}>
+          <button type="button" {...stylex.props(styles.button)} onClick={clear}>
+            clear {clearable} finished
+          </button>
+          {kept !== undefined && <span {...stylex.props(styles.kept)}>{kept}</span>}
+        </div>
+      )}
 
       <div {...stylex.props(styles.list)}>
         {failure !== undefined && <div {...stylex.props(styles.empty)}>no daemon</div>}

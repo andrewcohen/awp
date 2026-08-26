@@ -157,7 +157,10 @@ const styles = stylex.create({
   // A fixed width, so the second line starts under the first letter of the name
   // and not under the dot. One level of structure on this strip, one left edge
   // for everything that is not the dot.
-  dot: { width: "0.75rem", flexShrink: 0, fontSize: 9, color: colors.live },
+  // A bullet rather than text, so it is sized by eye against the row's name
+  // rather than from the type scale — but it still has to move when that scale
+  // does, which is why this number changed with it.
+  dot: { width: "0.85rem", flexShrink: 0, fontSize: 10, color: colors.live },
   dotOff: { color: colors.muted },
 
   meta: {

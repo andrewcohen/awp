@@ -20,12 +20,10 @@ import {
   type SessionInfo,
 } from "@awp-kit/protocol";
 import { Effect, Stream } from "effect";
-import { WorkspaceIntent } from "./intent";
 import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
-import { demo } from "./jobs/demo";
 import { Threads } from "./threads";
 import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
@@ -65,13 +63,27 @@ const toWire = (
  */
 const TRUNK = "trunk()";
 
+/**
+ * The workspace a bookmark names, if it names one of awp's.
+ *
+ * Convention, not a lookup: `create-workspace` composes a bookmark as
+ * `<prefix>/<workspace>`, so the prefix comes back off. It is a guess in
+ * exactly one direction — a person's own `andrew/some-branch` looks the
+ * same and will be reported as a workspace called `some-branch`. That is
+ * harmless: the field decides which entry is preselected and which thread
+ * gets recorded as the parent, and being wrong means neither happens.
+ */
+const workspaceOf = (bookmark: string, prefix: string | undefined): string | undefined =>
+  prefix !== undefined && bookmark.startsWith(`${prefix}/`)
+    ? bookmark.slice(prefix.length + 1)
+    : undefined;
+
 export const layer = AwpRpcs.toLayer(
   Effect.gen(function* () {
     const mux = yield* Multiplexer;
     const sessions = yield* Sessions;
     const jobs = yield* Jobs;
     const threads = yield* Threads;
-    const intent = yield* WorkspaceIntent;
     const config = yield* Settings;
     const jj = yield* Jj;
 
@@ -105,6 +117,24 @@ export const layer = AwpRpcs.toLayer(
      * which would produce a revset jj cannot find and a failure one backoff
      * later inside the job.
      */
+    /** The thread holding this workspace, if any does. */
+    const threadOwning = (workspace: string | undefined, project: string) =>
+      workspace === undefined
+        ? Effect.succeed(undefined)
+        : threads.list().pipe(
+            Effect.orDie,
+            Effect.map(
+              (all) =>
+                all.find(
+                  (thread) =>
+                    thread.archivedAt === undefined &&
+                    thread.members.some(
+                      (member) => member.project === project && member.workspace === workspace,
+                    ),
+                )?.id,
+            ),
+          );
+
     const baseOfThread = (id: string, project: string, repo: string) =>
       Effect.gen(function* () {
         const found = yield* threads.list().pipe(Effect.orDie);
@@ -254,7 +284,7 @@ export const layer = AwpRpcs.toLayer(
       JobCancel: ({ job }) =>
         known(job).pipe(Effect.flatMap(() => jobs.cancel(job).pipe(Effect.orDie))),
 
-      JobDemo: (payload) => jobs.enqueue(demo, payload).pipe(Effect.orDie),
+      JobClear: () => jobs.forgetFinished().pipe(Effect.orDie),
 
       // Returns the record rather than the workspace, because the work outlives
       // the request. Whether it succeeded is a question for JobChanges.
@@ -268,17 +298,49 @@ export const layer = AwpRpcs.toLayer(
        * answers, so a failed resolve leaves nothing behind — an empty thread
        * called "add tiered dis…" would be litter a person then has to tidy.
        */
+      ThreadBases: ({ from }) =>
+        Effect.gen(function* () {
+          const repo = yield* jj
+            .sourceRoot(from)
+            .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
+
+          const settings = yield* config.read();
+          const all = yield* jj
+            .bookmarks(repo)
+            .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
+
+          // Local only. A name that exists solely on a remote cannot be
+          // branched from without fetching first, so offering it would be
+          // offering a failure.
+          const bookmarks = localBookmarks(all).map((entry) => ({
+            revset: entry.name,
+            label: entry.name,
+            workspace: workspaceOf(entry.name, settings.bookmarkPrefix),
+          }));
+
+          return [
+            { revset: TRUNK, label: "trunk", workspace: undefined },
+            ...bookmarks.toSorted((a, b) => a.label.localeCompare(b.label)),
+          ];
+        }),
+
       ThreadStart: ({ description, project, from, parent, base, model, effort }) =>
         Effect.gen(function* () {
+          // Refused before anything else, and cheaply. Naming happens inside
+          // the job now, so this is no longer caught by the model declining an
+          // empty sentence — and a thread whose whole content is a blank line
+          // is litter a person then has to tidy.
+          if (description.trim() === "") {
+            return yield* Effect.fail(
+              new ThreadStartFailed({ reason: "say what you are working on first" }),
+            );
+          }
+
           // A directory into the repository it belongs to. `jj root` would
           // answer with a workspace, which is the wrong thing to create a
           // second workspace from.
           const repo = yield* jj
             .sourceRoot(from)
-            .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
-
-          const resolved = yield* intent
-            .resolve(description, project)
             .pipe(Effect.mapError((error) => new ThreadStartFailed({ reason: error.reason })));
 
           const settings = yield* config.read();
@@ -288,21 +350,34 @@ export const layer = AwpRpcs.toLayer(
           const startFrom =
             base ?? (parent === undefined ? TRUNK : yield* baseOfThread(parent, project, repo));
 
-          const thread = yield* threads.create(resolved.label, parent).pipe(Effect.orDie);
+          // Which thread this follows on from. Named outright when a caller
+          // said so; otherwise recovered from the base, because the window
+          // picks a *bookmark* and a bookmark names a workspace, and a
+          // workspace may belong to a thread.
+          //
+          // Recovered rather than required, so branching off a workspace that
+          // no thread has claimed still works — which is the ordinary case on
+          // a machine whose workspaces predate threads, and was the whole
+          // reason the picker used to come up empty.
+          const followsFrom =
+            parent ??
+            (startFrom === TRUNK
+              ? undefined
+              : yield* threadOwning(workspaceOf(startFrom, settings.bookmarkPrefix), project));
+
+          // Titled with what was typed, because nothing better exists yet. The
+          // job's first step asks a model for a proper one and renames it —
+          // which is a title that improves ten seconds later, rather than a
+          // window that will not close for ten seconds.
+          const thread = yield* threads.create(description.trim(), followsFrom).pipe(Effect.orDie);
 
           const job = yield* jobs
             .enqueue(createWorkspaceRef, {
               thread: thread.id,
               project,
-              workspace: resolved.name,
-              label: resolved.label,
-              prompt: resolved.prompt,
+              description,
               repo,
               base: startFrom,
-              bookmark:
-                settings.bookmarkPrefix === undefined
-                  ? undefined
-                  : `${settings.bookmarkPrefix}/${resolved.name}`,
               agent: agentWith(settings, { model, effort }),
             })
             .pipe(Effect.orDie);
