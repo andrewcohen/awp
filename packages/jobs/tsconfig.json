@@ -5,5 +5,10 @@
     "tsBuildInfoFile": "../../.tsbuild/jobs/.tsbuildinfo",
     "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../store"
+    }
+  ]
 }

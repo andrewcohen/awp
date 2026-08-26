@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Result } from "effect";
+import { layer as dbLayer } from "@awp-kit/store";
+import { Effect, Layer } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
-import { Threads, layer, threadId } from "./threads";
+import { Threads, layer, migrations, threadId } from "./threads";
 
 // What a thread is allowed to be, proved against a real file.
 //
@@ -15,7 +16,10 @@ const scratch = mkdtempSync(join(tmpdir(), "awp-threads-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 let files = 0;
-const file = (): string => join(scratch, `threads-${(files += 1)}.json`);
+const file = (): string => join(scratch, `threads-${(files += 1)}.sqlite`);
+
+/** Threads over a database of their own, migrated with only their tables. */
+const at = (path: string) => layer.pipe(Layer.provide(dbLayer(path, migrations)));
 
 type Service = { readonly [K in keyof Threads["Service"]]: Threads["Service"][K] };
 
@@ -26,7 +30,7 @@ const on = <A>(
   Effect.gen(function* () {
     const threads = yield* Threads;
     return yield* program(threads);
-  }).pipe(Effect.provide(layer(path)), Effect.scoped, Effect.orDie, Effect.runPromise);
+  }).pipe(Effect.provide(at(path)), Effect.scoped, Effect.orDie, Effect.runPromise);
 
 const pair = (project: string, workspace: string) => ({ project, workspace });
 
@@ -188,7 +192,7 @@ describe("threads", () => {
       const threads = yield* Threads;
       return yield* threads.rename("nope", "x");
     }).pipe(
-      Effect.provide(layer(file())),
+      Effect.provide(at(file())),
       Effect.scoped,
       Effect.flip,
       Effect.orDie,
@@ -196,30 +200,5 @@ describe("threads", () => {
     );
 
     expect(outcome).toMatchObject({ thread: "nope" });
-  });
-
-  test("the file is readable by a person", async () => {
-    const path = file();
-    await on(path, (threads) => threads.create("tiered discounts"));
-
-    // The reason this is a file rather than a database, asserted rather than
-    // asserted-about-in-a-comment.
-    const text = readFileSync(path, "utf8");
-    expect(text).toContain("tiered discounts");
-    expect(text.split("\n").length).toBeGreaterThan(3);
-  });
-
-  test("a file from a version we do not know refuses to load", async () => {
-    const path = file();
-    writeFileSync(path, JSON.stringify({ version: 99, threads: [] }));
-
-    const failed = await Effect.gen(function* () {
-      const threads = yield* Threads;
-      return yield* threads.list();
-    }).pipe(Effect.provide(layer(path)), Effect.scoped, Effect.result, Effect.runPromise);
-
-    // Loud, and deliberately: the alternative to refusing is a daemon that
-    // silently reports no threads, which reads as having lost all of them.
-    expect(Result.isFailure(failed)).toBe(true);
   });
 });

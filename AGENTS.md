@@ -12,6 +12,7 @@ is only what would otherwise be learned the expensive way.
 ```
 apps/amoeba/       electrobun main process + vite renderer
 packages/protocol/ the RPC contract
+packages/store/    one sqlite file, and the migrations for it
 packages/jobs/     work that outlives whoever asked for it
 packages/server/   the daemon: multiplexer, pty, attachment
 packages/pane/     the terminal, ghostty-web
@@ -214,31 +215,92 @@ Two things follow, and they were both added after watching it happen:
   the same thing. Without it every kind that loses something in JSON passes its
   tests and fails in the daemon.
 
-### Two stores, and one of them is two runtimes
+### One database, two runtimes, and named migrations
+
+Everything durable lives in `~/.awp/awp.sqlite`, opened once by
+`@awp-kit/store` and shared. Threads were a JSON file for about an hour; what
+moved them is the first real job — creating a workspace writes a job record
+**and** claims the workspace for a thread, and two stores means it can do one
+and not the other with nothing afterwards able to say which.
 
 The daemon runs under Bun, which has `bun:sqlite` and not `node:sqlite`. vitest
-runs on Node, which is the other way round. So `sqlite.ts` picks its driver by a
-dynamic import at open time and uses only the intersection of the two APIs —
-positional `?` parameters, `exec`, `prepare().run()`, `prepare().all()`.
+runs on Node, which is the other way round. So the driver is a dynamic import
+chosen at open time, and only the intersection of the two APIs is used —
+positional `?` parameters, `exec`, `prepare().run()`, `prepare().all()`. Named
+parameters are spelled differently by each and are avoided for that alone.
 
 vitest can only ever exercise the Node arm. `bun run probe:jobs-store` runs the
 store under Bun and asserts on what that process sees, which is the same shape
-`probe:child-env` exists for. Run it after touching `sqlite.ts`.
+`probe:child-env` exists for. Run it after touching `store/src/index.ts`.
 
-`store.test.ts` runs one suite against both stores. It found an off-by-one in
-the sqlite log trim on its first run, which is the entire argument for writing
-it that way: the implementation that drifts is always the one written second.
+**Migrations are named, not numbered.** A `pragma user_version` counter cannot
+survive two owners: jobs appending a migration would renumber threads'. So a
+`schema_migrations` table records applied names, each package exports its own
+list, and the daemon concatenates them. Appending to either list cannot disturb
+the other. Each migration runs inside a transaction with the row that records
+it — a name written for work that did not finish is the one state nothing
+recovers from by running again.
 
-### There are no migrations, and the file says so
+A migration's name is fixed the moment it has run anywhere; renaming one makes
+it run a second time. The DDL is deliberately `create table`, not
+`create table if not exists`, so a migrator that failed to consult the record
+fails loudly rather than quietly doing nothing.
 
-The sqlite file carries `pragma user_version`. A version that does not match
-**discards the tables and makes them again**. That is a real loss and is only
-defensible while nothing in awp enqueues real work — the moment it does, this
-has to become a list of migrations keyed by the same number.
+This replaced a version number that **discarded the tables** when it
+disagreed. That was a real loss of data, and the way it read from outside was a
+daemon starting normally with nothing in it.
 
-It is there because the alternative was worse: adding `steps` to the record left
-`create table if not exists` looking at a table without the column, and the
-daemon was dead on arrival with an error about a column count.
+The connection settings, and what each is for:
+
+```
+  journal_mode = wal      a probe can read while the runner writes
+  foreign_keys = on       off by default in sqlite — an unenforced
+                          reference is a comment
+  busy_timeout = 5000     wait for a writer instead of SQLITE_BUSY
+  synchronous = normal    safe under WAL, much faster than full
+```
+
+`journal_mode` is stored in the file and persists; the other three are per
+connection and are set on every open.
+
+**Every table is `strict`** — but read the promise narrowly. `strict` rejects
+what cannot be _losslessly_ converted, so `kind = 7` still becomes the text
+`"7"` and raises nothing; `attempt = 'many'` is what it stops. It is the second
+line of defence, not the first.
+
+`store.test.ts` runs one suite against the memory and sqlite stores together.
+It found an off-by-one in the sqlite log trim on its first run, which is the
+entire argument for writing it that way: the implementation that drifts is
+always the one written second.
+
+### Threads: the work, not the checkout
+
+A thread is a piece of work; a workspace is a checkout, and one piece of work
+often needs two of them.
+
+```
+  thread  "tiered discounts"
+    ├── thicket/tiered-discounts   agent · editor · action
+    └── api/tiered-discounts       agent · editor · action
+```
+
+**A thread holds `(project, workspace)` pairs, not sessions**, and that choice
+removed a step that looked necessary. Sessions come and go; a workspace with
+nothing running is still part of the work. A pair is also exactly what
+`identity()` already recovers, so the sidebar nests by looking the pair up —
+no `awp_thread` label, nothing new to shorten.
+
+**A workspace belongs to at most one thread**, and that is a UNIQUE constraint
+on `thread_members (project, workspace)` rather than a rule this code remembers
+to apply. `attach` is one `on conflict do update`, so the release and the claim
+cannot half happen. Resolving it on read instead has no rendering: the sidebar
+would draw the workspace twice and a person would have to decide which claim
+was lying.
+
+Threads are on the wire **without a change stream**, unlike jobs, and the
+asymmetry is the point. A job changes on its own — that is what a job is — so a
+client that only asks misses everything interesting. A thread changes when a
+person changes it, in this window, so the reply to the change is the update.
 
 ### `demo` is scaffolding
 

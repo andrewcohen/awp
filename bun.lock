@@ -47,6 +47,7 @@
       "name": "@awp-kit/jobs",
       "version": "0.0.0",
       "dependencies": {
+        "@awp-kit/store": "workspace:*",
         "effect": "catalog:",
       },
     },
@@ -74,8 +75,16 @@
       "dependencies": {
         "@awp-kit/jobs": "workspace:*",
         "@awp-kit/protocol": "workspace:*",
+        "@awp-kit/store": "workspace:*",
         "@effect/platform-node-shared": "catalog:",
         "bun-pty": "0.4.10",
+        "effect": "catalog:",
+      },
+    },
+    "packages/store": {
+      "name": "@awp-kit/store",
+      "version": "0.0.0",
+      "dependencies": {
         "effect": "catalog:",
       },
     },
@@ -113,6 +122,8 @@
     "@awp-kit/protocol": ["@awp-kit/protocol@workspace:packages/protocol"],
 
     "@awp-kit/server": ["@awp-kit/server@workspace:packages/server"],
+
+    "@awp-kit/store": ["@awp-kit/store@workspace:packages/store"],
 
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
 

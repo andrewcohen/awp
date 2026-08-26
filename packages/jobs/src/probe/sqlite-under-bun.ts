@@ -20,7 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import type { Job } from "../job";
-import { makeSqlite } from "../sqlite";
+import { layerSqliteAt } from "../sqlite";
+import { JobStore } from "../store";
 
 const scratch = mkdtempSync(join(tmpdir(), "awp-jobs-probe-"));
 const path = join(scratch, "jobs.sqlite");
@@ -45,22 +46,22 @@ const record: Job = {
 };
 
 const write = Effect.gen(function* () {
-  const store = yield* makeSqlite(path);
+  const store = yield* JobStore;
   yield* store.put(record);
   yield* store.append(record.id, ["wrote it", "under bun"]);
-}).pipe(Effect.scoped);
+}).pipe(Effect.provide(layerSqliteAt(path)), Effect.scoped, Effect.orDie);
 
 // A second connection, because the interesting claim is that the row outlives
 // the process that wrote it rather than that a Map held it.
 const read = Effect.gen(function* () {
-  const store = yield* makeSqlite(path);
+  const store = yield* JobStore;
   return {
     get: yield* store.get(record.id),
     byKey: yield* store.byKey("probe-key"),
     list: (yield* store.list()).length,
     log: yield* store.log(record.id),
   };
-}).pipe(Effect.scoped);
+}).pipe(Effect.provide(layerSqliteAt(path)), Effect.scoped, Effect.orDie);
 
 const say = (label: string, ok: boolean, detail: string): void => {
   process.stdout.write(`${ok ? "  ok  " : "FAIL  "}${label.padEnd(28)}${detail}\n`);

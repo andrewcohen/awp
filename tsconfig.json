@@ -1,11 +1,26 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/protocol" },
-    { "path": "./packages/jobs" },
-    { "path": "./packages/server" },
-    { "path": "./packages/pane" },
-    { "path": "./apps/amoeba" },
-    { "path": "./test" }
+    {
+      "path": "./packages/protocol"
+    },
+    {
+      "path": "./packages/store"
+    },
+    {
+      "path": "./packages/jobs"
+    },
+    {
+      "path": "./packages/server"
+    },
+    {
+      "path": "./packages/pane"
+    },
+    {
+      "path": "./apps/amoeba"
+    },
+    {
+      "path": "./test"
+    }
   ]
 }

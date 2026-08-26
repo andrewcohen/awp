@@ -8,7 +8,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer } from "@awp-kit/jobs";
-import { layerSqlite } from "@awp-kit/jobs/sqlite";
+import { migrations as jobMigrations, layerSqlite } from "@awp-kit/jobs/sqlite";
+import { layer as dbLayer } from "@awp-kit/store";
 import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Layer } from "effect";
@@ -18,7 +19,7 @@ import * as attachment from "./attachment";
 import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
-import { layer as threadsLayer } from "./threads";
+import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 import * as zmx from "./zmx";
 
 /**
@@ -53,7 +54,24 @@ const serialization = RpcSerialization.layerNdjson;
  * the machine rather than to a checkout: the daemon that resumes it after a
  * restart is not necessarily standing in the directory that enqueued it.
  */
-export const JOBS_DB = join(homedir(), ".awp", "jobs.sqlite");
+export const AWP_DB = join(homedir(), ".awp", "awp.sqlite");
+
+/**
+ * One connection, migrated with every package's tables.
+ *
+ * One file rather than one per package, because the first real job spans them:
+ * creating a workspace writes a job record *and* claims the workspace for a
+ * thread, and two files means it can do one and not the other with nothing
+ * afterwards able to say which. Migrations are named rather than numbered so
+ * that appending to either list cannot renumber the other's — see
+ * `@awp-kit/store`.
+ *
+ * `Layer.orDie` because a database that will not open is not a condition the
+ * daemon can serve around. A jobs system with no memory is not a jobs system,
+ * and a sidebar with no threads reads as having lost them; starting anyway
+ * would make every enqueue a silent no-op.
+ */
+export const db = Layer.orDie(dbLayer(AWP_DB, [...jobMigrations, ...threadMigrations]));
 
 /**
  * The jobs runner, over every kind the daemon knows.
@@ -62,30 +80,10 @@ export const JOBS_DB = join(homedir(), ".awp", "jobs.sqlite");
  * kinds with different inputs has no honest element type, and doing the erasure
  * where each kind's schema is still in hand keeps the cast that would otherwise
  * be needed from existing anywhere.
- *
- * `Layer.orDie` because a store that will not open is not a condition the
- * daemon can serve around — a jobs system with no memory is not a jobs system,
- * and starting anyway would make every enqueue a silent no-op.
  */
-export const jobs = jobsLayer([erase(demo)]).pipe(Layer.provide(Layer.orDie(layerSqlite(JOBS_DB))));
+export const jobs = jobsLayer([erase(demo)]).pipe(Layer.provide(Layer.orDie(layerSqlite)));
 
-/**
- * Where threads are written down.
- *
- * Beside the jobs database and not inside it, and JSON rather than sqlite. A
- * thread is a dozen records written when a person types a title — none of what
- * sqlite was bought for applies, and a file that can be opened in an editor is
- * worth more while the shape of a thread is still being argued about. See
- * `threads.ts`.
- */
-export const THREADS_FILE = join(homedir(), ".awp", "threads.json");
-
-/**
- * `Layer.orDie` for the same reason the jobs store gets it: a daemon that
- * cannot read its threads has no sidebar to draw, and starting anyway would
- * report an empty list — which reads as having lost them.
- */
-export const threads = Layer.orDie(threadsLayer(THREADS_FILE));
+export const threads = threadsLayer;
 
 /** The real services: real zmx, real ptys. */
 export const services = sessions.layer.pipe(
@@ -108,5 +106,6 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(services),
   Layer.provide(jobs),
   Layer.provide(threads),
+  Layer.provide(db),
   Layer.provide(zmx.layer),
 );

@@ -6,5 +6,15 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "references": [{ "path": "../jobs" }, { "path": "../protocol" }]
+  "references": [
+    {
+      "path": "../store"
+    },
+    {
+      "path": "../jobs"
+    },
+    {
+      "path": "../protocol"
+    }
+  ]
 }
