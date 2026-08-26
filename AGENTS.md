@@ -619,11 +619,68 @@ typeahead, the roving tab stop, the aria wiring and — the one that shows up as
 a visual bug rather than an accessibility one — the portal, without which a
 popup inside a scrolling column is clipped by it.
 
-`@tanstack/react-router` and `@effect/atom-react` are dependencies already and
-are **not yet imported anywhere**. That is deliberate: they are the answer when
-the window needs routes or shared state, and reaching for something else on the
-day it does is the mistake this list exists to prevent. It is not an invitation
-to introduce a route or an atom before there is one to have.
+`@effect/atom-react` is a dependency already and is **not yet imported
+anywhere**. That is deliberate: it is the answer when the window needs shared
+state, and reaching for something else on the day it does is the mistake this
+list exists to prevent. It is not an invitation to introduce an atom before
+there is one to have.
+
+The router _is_ now used, and the reason is worth stating because the obvious
+one is wrong. The window has one screen and no navigation to speak of, so
+"needs routes" was never going to be what earned it.
+
+### Selection is an address, not a name
+
+What earned it is that **a session name is shortened and cannot be split back
+into its parts** — the rule this file already states at length above. Selection
+used to be one string of React state holding exactly that shortened name, kept
+across reloads by hand:
+
+```
+  before   selected = "awp.thicket.effect-ts-tiered-discou-f500.agent"
+  after    /w/thicket/effect-ts-tiered-discount-timemachine/agent
+```
+
+The daemon sends the unshortened truth as `SessionIdentity` and the old
+selection threw it away, storing the shortening and then searching the listing
+for a name equal to it. A session restarted under a different shortening — a
+sibling appearing and changing the stem's budget — is a selection that silently
+stops resolving. The route holds the three fields the labels carry, so it
+cannot.
+
+Everything else follows from that and is not the argument for it: back and
+forward now work, `remembered.ts` lost its hand-rolled session key, and the
+address is one value rather than a name plus the rules for reading it.
+
+Three shapes, in `address.ts` — kept separate from `routes.ts` so that nothing
+pure imports the router, which is what stops `App → routes → App` being a cycle:
+
+```
+  /                              nothing open — the fixture
+  /w/$project/$workspace/$kind   one of ours: the unshortened truth
+  /s/$name                       someone else's: the name is all there is
+```
+
+**One route level, and no `Outlet`.** The layout does not change with the
+address — the same two bars and three columns are on screen whatever is
+selected — so a nested route rendering a different tree would model a screen
+change that does not happen, and would then have to hand the session list back
+down through it. The root renders the window and reads the address; the leaf
+routes exist to type and parse it.
+
+**Hash history**, because the renderer is served by Vite in development and by
+electrobun's own protocol in a build, and only one of those would rewrite a
+deep path back to `index.html`.
+
+**The address is derived, never written back.** `sessionAt` answers undefined
+for an address naming a session that has gone _or_ one the daemon refuses — the
+session the daemon is itself running in is in the listing and must not be
+opened. Correcting the address from the listing would be a second copy of
+something already known, and would race the first listing on launch.
+
+`localStorage` keeps one mirror of the path, read exactly once, in `main.tsx`,
+and only when the hash is empty. A reload keeps the hash on its own; what a
+history cannot survive is the application being quit and started again.
 
 - **electrobun is pinned to 1.18.1.** 2.x is a _bootstrap_: the npm package
   contains no runtime, importing it throws by design, and the real APIs come from

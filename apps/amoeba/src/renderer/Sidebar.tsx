@@ -67,11 +67,16 @@ import {
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%" },
+  // No padding at the bottom, and that is the sticky footing's doing rather
+  // than a spacing choice: a sticky child is offset from its container's
+  // *padding* box, so a gutter here would leave that much of the column below
+  // the button — with rows visibly scrolling through the gap. The footing
+  // carries the space instead, where it is opaque.
   list: {
     flex: 1,
     minHeight: 0,
     overflowY: "auto",
-    padding: `${space.row} 0 ${space.gutter}`,
+    padding: `${space.row} 0 0`,
   },
   empty: { padding: `0.5rem ${space.gutter}`, color: colors.muted },
   failure: {
@@ -121,9 +126,42 @@ const styles = stylex.create({
     fontSize: text.small,
     cursor: "pointer",
   },
+  // ── the new-thread button, and why it is sticky ─────────────────────────
+  //
+  // It has now been in three places, and the two it left are both instructive.
+  //
+  //   inside the list, after the groups   at y=1056 in a 760-tall window: the
+  //                                       entry point to the whole feature,
+  //                                       reachable only by scrolling past
+  //                                       everything it exists to create.
+  //   above the list, fixed               always there, and always the first
+  //                                       thing above a column whose point is
+  //                                       the list. It pushed the work down to
+  //                                       make room for the way to make more.
+  //
+  // Sticky is both at once: it sits at the *end* of the list, where a thing
+  // that appends belongs, and it never leaves the window. A short list shows it
+  // just under the last thread; a long one shows it pinned to the bottom edge
+  // with the rows passing behind.
+  //
+  // `bottom: 0` needs the scroll container to be the ancestor, which is why it
+  // is inside `list` rather than a sibling of it — and why it carries the base
+  // colour and a rule above it. Without an opaque background the rows scroll
+  // *through* the button rather than behind it, which is the one way sticky
+  // fails that looks like a paint bug.
+  footing: {
+    position: "sticky",
+    insetBlockEnd: 0,
+    marginTop: "0.5rem",
+    padding: `0.5rem ${space.gutter} 0.6rem`,
+    backgroundColor: colors.base,
+    borderTopWidth: 1,
+    borderTopStyle: "solid",
+    borderTopColor: colors.border,
+  },
   newThread: {
-    margin: `0.2rem ${space.gutter} 0.5rem`,
-    padding: "0.15rem 0.45rem",
+    width: "100%",
+    padding: "0.25rem 0.45rem",
     backgroundColor: "transparent",
     borderWidth: 1,
     borderStyle: "solid",
@@ -131,7 +169,8 @@ const styles = stylex.create({
     borderRadius: "0.2rem",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.tiny,
+    fontSize: text.small,
+    textAlign: "left",
     cursor: "pointer",
   },
   rowOn: { backgroundColor: colors.border },
@@ -385,26 +424,27 @@ export function Sidebar({
 
   return (
     <div {...stylex.props(styles.column)}>
-      {/* Outside the scrolling list, so it is always there. Inside it, and
-          below the groups, it sat at y=1056 in a 760-tall window — the entry
-          point to the whole feature, reachable only by scrolling past
-          everything it exists to create.
+      <div {...stylex.props(styles.list)}>
+        {body}
 
-          Never disabled any more. It used to be, because the project came from
-          the selected row and nothing selected meant nothing to create into;
-          the modal picks a project instead, so the button always has an
-          answer. */}
-      {failure === undefined && (
-        <button
-          type="button"
-          title="new thread (⌘N)"
-          onClick={onNew}
-          {...stylex.props(styles.newThread)}
-        >
-          + thread
-        </button>
-      )}
-      <div {...stylex.props(styles.list)}>{body}</div>
+        {/* Last in the list and pinned to its bottom — see `footing`.
+
+            Never disabled. It used to be, because the project came from the
+            selected row and nothing selected meant nothing to create into; the
+            modal picks a project instead, so the button always has an answer. */}
+        {failure === undefined && (
+          <div {...stylex.props(styles.footing)}>
+            <button
+              type="button"
+              title="new thread (⌘N)"
+              onClick={onNew}
+              {...stylex.props(styles.newThread)}
+            >
+              + thread
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
