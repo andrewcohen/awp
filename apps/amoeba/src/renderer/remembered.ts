@@ -43,6 +43,7 @@ export const writeStored = (key: string, value: string | undefined): void => {
 const COLLAPSED = "amoeba.collapsed";
 const WIDTHS = "amoeba.widths";
 const PLACE = "amoeba.place";
+const LOOSE = "amoeba.loose";
 
 /**
  * Stored as two letters rather than JSON.
@@ -101,6 +102,21 @@ export const rememberedWidths = (): Columns => {
 
 export const rememberWidths = (columns: Columns): void => {
   writeStored(WIDTHS, `${Math.round(columns.sidebar)},${Math.round(columns.accessory)}`);
+};
+
+/**
+ * Whether the "not in a thread" group is unfolded. Folded unless it says so.
+ *
+ * The default is the point rather than an implementation detail. On this
+ * machine that group is thirty of thirty-seven rows — every workspace made
+ * before threads existed — so an unfolded sidebar is mostly a list of work
+ * nobody grouped, with the threads someone is actually running pushed off the
+ * top. It is the *archive*, and an archive should be a heading you can open.
+ */
+export const rememberedLooseOpen = (): boolean => readStored(LOOSE) === "o";
+
+export const rememberLooseOpen = (open: boolean): void => {
+  writeStored(LOOSE, open ? "o" : "c");
 };
 
 // ── where the window was ───────────────────────────────────────────────────

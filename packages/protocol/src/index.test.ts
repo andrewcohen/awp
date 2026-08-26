@@ -30,7 +30,12 @@ const example: SessionInfo = {
   // The real keys, underscored. A dot cannot appear in one: the reduction that
   // makes a name safe to split turns it into an underscore.
   labels: { awp_project: "rowan", awp_workspace: "pr-2336-dev-mlwzqyrmxslo", awp_kind: "dev" },
-  identity: { project: "rowan", workspace: "pr-2336-dev-mlwzqyrmxslo", kind: "dev" },
+  identity: {
+    project: "rowan",
+    workspace: "pr-2336-dev-mlwzqyrmxslo",
+    kind: "dev",
+    label: undefined,
+  },
   refusal: undefined,
 };
 

@@ -22,6 +22,7 @@ import { Context, type Effect } from "effect";
 import { Data } from "effect";
 import {
   LABEL_KIND,
+  LABEL_LABEL,
   LABEL_PROJECT,
   LABEL_WORKSPACE,
   parseSessionName,
@@ -74,7 +75,16 @@ export const identity = (session: Session): SessionIdentity | undefined => {
   const project = session.labels[LABEL_PROJECT];
   const workspace = session.labels[LABEL_WORKSPACE];
   if (project !== undefined && project !== "" && workspace !== undefined && workspace !== "") {
-    return { project, workspace, kind: session.labels[LABEL_KIND] ?? "" };
+    // The label is not part of the address and is therefore not recoverable
+    // from the name — a session without one simply has none, which is what
+    // every session predating this looks like.
+    const label = session.labels[LABEL_LABEL];
+    return {
+      project,
+      workspace,
+      kind: session.labels[LABEL_KIND] ?? "",
+      label: label === undefined || label === "" ? undefined : label,
+    };
   }
   return parseSessionName(session.name);
 };
@@ -177,7 +187,10 @@ export const identities = (
       stemMatches(pair.project, pair.workspace, split.stem),
     );
     if (match !== undefined) {
-      resolved.set(session.name, { ...match, kind: split.kind });
+      // No label: this branch exists for a session whose own labels are
+      // missing, so the only thing recovered is the address. A repaired
+      // sibling's label would be that sibling's, not this one's.
+      resolved.set(session.name, { ...match, kind: split.kind, label: undefined });
     }
   }
 
