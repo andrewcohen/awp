@@ -135,7 +135,7 @@ describe("jobs over the contract", () => {
     );
 
     expect(queued.kind).toBe("demo");
-    expect(queued.title).toBe("4 steps");
+    expect(queued.title).toBe("a demo that works");
     // Three attempts, taken from the kind rather than from the payload: the
     // number a client shows has to be the number the runner will honour.
     expect(queued.attempts).toBe(3);

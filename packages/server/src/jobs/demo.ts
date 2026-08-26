@@ -74,10 +74,20 @@ const BACKOFF = "1 second" as const;
 export const demo: JobKind<DemoJob> = {
   name: "demo",
   input: DemoJobSchema,
-  title: (input) =>
-    input.failAt === undefined
-      ? `${DEMO_STEPS} steps`
-      : `${DEMO_STEPS} steps, failing at ${input.failAt}`,
+  // The same sentence the button said, so a row can be matched to the click
+  // that made it. `4 steps, failing at 3` described the payload, which meant
+  // three of the four buttons produced rows nobody could tell apart.
+  title: (input) => {
+    if (input.failAt === undefined) {
+      return "a demo that works";
+    }
+    if (input.retryable) {
+      return "a demo that fails once, then works";
+    }
+    return input.undoFails
+      ? "a demo that gives up and cannot undo itself"
+      : "a demo that gives up and undoes itself";
+  },
   steps: Array.from({ length: DEMO_STEPS }, (_, index) => step(index)),
   attempts: 3,
   backoff: () => BACKOFF,

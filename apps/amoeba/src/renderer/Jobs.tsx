@@ -24,6 +24,16 @@ import { useJobs } from "./useJobs";
 // The demo controls at the top are scaffolding, and go with the `demo` kind and
 // the `JobDemo` call. Nothing in awp enqueues real work yet, and a panel with
 // no way to put anything in it cannot be checked by eye at all.
+//
+// Their labels say what a person would see happen, not what the runner calls
+// it. "fail dirty" is a sentence about compensation stopping partway, which is
+// meaningful to `runner.ts` and to nobody standing in front of the window.
+//
+// The row itself is deliberately **not** designed yet. Every field it could
+// show is a fixture right now — the title describes a payload, the steps are
+// called "step 1", nothing has a real duration or a real reason for failing —
+// so laying it out against this data means laying it out twice. It gets built
+// when there is a job worth looking at.
 
 const styles = stylex.create({
   panel: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -157,30 +167,30 @@ export function Jobs() {
         <button
           type="button"
           {...stylex.props(styles.button)}
-          onClick={demo({ pace: 400, failAt: undefined, retryable: false, undoFails: false })}
+          onClick={demo({ pace: 400, retryable: false, undoFails: false })}
         >
-          run
+          one that works
         </button>
         <button
           type="button"
           {...stylex.props(styles.button)}
           onClick={demo({ pace: 400, failAt: 3, retryable: true, undoFails: false })}
         >
-          retry then pass
+          one that fails once, then works
         </button>
         <button
           type="button"
           {...stylex.props(styles.button)}
           onClick={demo({ pace: 400, failAt: 3, retryable: false, undoFails: false })}
         >
-          fail, roll back
+          one that gives up and undoes itself
         </button>
         <button
           type="button"
           {...stylex.props(styles.button)}
           onClick={demo({ pace: 400, failAt: 3, retryable: false, undoFails: true })}
         >
-          fail dirty
+          one that gives up and cannot undo itself
         </button>
       </div>
 
