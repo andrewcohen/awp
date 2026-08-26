@@ -133,12 +133,51 @@ const styles = stylex.create({
     cursor: "pointer",
   },
 
-  // CodeView scrolls itself, so this only has to give it a bounded height to
-  // scroll inside. `minHeight: 0` is what makes "bounded" true in a flex
-  // column — without it the box grows to its content and the whole panel
-  // scrolls instead, which throws away the virtualization.
+  // ── where the scrollbar goes, and why it is not obvious ─────────────────
+  //
+  // This said "CodeView scrolls itself" and left the overflow off. It does
+  // not, quite: it scrolls **its own root** — the element this file hands it —
+  // and it is the caller's job to make that element a scrollport. Its
+  // constructor is unambiguous once read rather than assumed:
+  //
+  //   this.root.addEventListener("scroll", this.handleScroll, …)
+  //
+  // Without `overflowY` on that root there is no scroll event, so nothing
+  // scrolls *and* the virtualizer never advances its window — one missing
+  // declaration costing both. Measured before the fix, on a ten-file patch:
+  //
+  //   Diff__panel     overflow hidden    h=727   sh=19220   ← clipped 18k px
+  //   Diff__patch     overflow visible   h=443   sh=18936
+  //   Diff__view      overflow visible   h=443   sh=18928   ← the root
+  //
+  // `patch` only has to give it a bounded height to scroll inside.
+  // `minHeight: 0` is what makes "bounded" true in a flex column — without it
+  // the box grows to its content and the clipping moves up a level rather
+  // than going away.
   patch: { flex: 1, minHeight: 0 },
-  view: { height: "100%" },
+  view: { height: "100%", overflowY: "auto" },
+
+  // ── the file header, made into a control ────────────────────────────────
+  //
+  // `CodeViewItem.collapsed` is a field on the item, not a behaviour: the
+  // library folds a file when told to and offers no header click of its own.
+  // So the toggle is ours, rendered into the header through
+  // `renderHeaderPrefix`, and the state lives here.
+  //
+  // A button rather than a bare glyph, because it is one — that buys the
+  // keyboard, the focus ring and the announcement for nothing.
+  fold: {
+    display: "flex",
+    alignItems: "center",
+    width: "1.1rem",
+    padding: 0,
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    color: colors.muted,
+    font: "inherit",
+    fontSize: text.tiny,
+    cursor: "pointer",
+  },
 
   said: { padding: "0.5rem 0.6rem", color: colors.muted, fontSize: text.small },
   warn: { color: colors.warn },
@@ -146,6 +185,9 @@ const styles = stylex.create({
 
 /** The row for the working copy, which is not addressed by change id. */
 const WORKING_COPY = "@";
+
+/** One empty list, shared. See where it is used. */
+const NO_FOLDS: ReadonlyArray<string> = [];
 
 /**
  * Shiki's themes, one per scheme.
@@ -262,12 +304,37 @@ export function Diff({
   // CodeView takes and the cache key prefix has to be stable per revision: it
   // is what lets a re-render of the same patch reuse work instead of
   // re-highlighting every file.
-  const items = useMemo<ReadonlyArray<CodeViewItem>>(() => {
+  // Which files are folded, and which revision that was true of.
+  //
+  // The revision is stored *with* the set rather than cleared when it changes.
+  // Clearing was the first version and is a state write inside an effect —
+  // which react-doctor refuses, and rightly: what a stale set means is a
+  // question that can be answered during render, and answering it in an effect
+  // means one frame drawn with the wrong folds before it is.
+  //
+  // It has to be answered at all because item ids are paths: two revisions that
+  // both touch `Sidebar.tsx` produce the same id, so a set carried across would
+  // silently fold a file in the new patch because its namesake was folded in
+  // the old one.
+  const [folds, setFolds] = useState<{
+    readonly at: string | undefined;
+    readonly ids: ReadonlyArray<string>;
+  }>({
+    at: undefined,
+    ids: [],
+  });
+  // `NO_FOLDS` and not a fresh `[]`: the memo below depends on this, and a new
+  // array every render is a memo that never hits.
+  const folded = folds.at === at ? folds.ids : NO_FOLDS;
+
+  // Parsed here rather than inside the renderer, because the item list is what
+  // CodeView takes and the cache key prefix has to be stable per revision.
+  const parsed = useMemo<ReadonlyArray<CodeViewItem>>(() => {
     if (patch === undefined || patch === "") {
       return [];
     }
-    return parsePatchFiles(patch, at ?? WORKING_COPY).flatMap((parsed) =>
-      parsed.files.map((fileDiff, index) => ({
+    return parsePatchFiles(patch, at ?? WORKING_COPY).flatMap((one) =>
+      one.files.map((fileDiff, index) => ({
         // The path and its position, because CodeView keys its items by id
         // and a patch is allowed to carry the same path twice — a file split
         // across two diff entries by a mode change is the ordinary way that
@@ -278,6 +345,38 @@ export function Diff({
       })),
     );
   }, [patch, at]);
+
+  // `collapsed` folded in separately, and `version` bumped with it.
+  //
+  // The library says so in its own type: "Make sure you bump the version when
+  // also changing the value." An item whose fields changed but whose version
+  // did not is one CodeView is entitled to treat as unchanged and reuse — the
+  // cache is keyed on it. Two states, so two versions.
+  // No `useMemo` around this, unlike `parsed` above, and the difference is
+  // real rather than an inconsistency. `parsed` wraps `parsePatchFiles`, which
+  // walks the whole patch text; this is one `map` over a list of ten. React
+  // Compiler memoizes it either way, and react-doctor refuses manual
+  // memoization in code it manages.
+  //
+  // A Set, not `folded.includes`, for the same kind of reason it usually is:
+  // one lookup per file against a list is a scan per file. Ten files is
+  // nothing, but the rule this repo lints for does not care and neither should
+  // the code.
+  const shut = new Set(folded);
+  const items: ReadonlyArray<CodeViewItem> = parsed.map((item) => {
+    const off = shut.has(item.id);
+    return { ...item, collapsed: off, version: off ? 1 : 0 };
+  });
+
+  // Functional, and it re-derives the stale check itself. For the same reason
+  // the header reads `item`: this runs from a closure CodeView is holding, so
+  // anything it reads from the render that created it may be old.
+  const toggle = (id: string) => {
+    setFolds((prev) => {
+      const ids = prev.at === at ? prev.ids : NO_FOLDS;
+      return { at, ids: ids.includes(id) ? ids.filter((one) => one !== id) : [...ids, id] };
+    });
+  };
 
   const stat = patch === undefined ? undefined : summarise(statOf(patch));
 
@@ -348,6 +447,33 @@ export function Diff({
         {items.length > 0 && (
           <CodeView
             items={items}
+            // The header is the library's; the control in front of it is ours.
+            // See `fold` — CodeView folds a file when the item says so and has
+            // no click of its own to say it.
+            //
+            // Read off `item`, never off `folded`. This closure is handed to
+            // CodeView and called back with the *current* item, so the item is
+            // the value guaranteed to be fresh; React state closed over here is
+            // whatever it was when the closure was made.
+            //
+            // Measured after the change: folding Sidebar.tsx-0 took its button
+            // from `collapse`/`▾`/expanded to `expand`/`▸`/collapsed, and a
+            // second file's header rose into view as the content shrank from
+            // 19984px to 13304px — which is also what made the first attempt to
+            // measure this read wrong. `locator.first()` re-resolves, so after
+            // the fold it was reporting a *different* file's button and looked
+            // like a stale label.
+            renderHeaderPrefix={(item) => (
+              <button
+                type="button"
+                aria-expanded={item.collapsed !== true}
+                aria-label={`${item.collapsed === true ? "expand" : "collapse"} ${item.id}`}
+                onClick={() => toggle(item.id)}
+                {...stylex.props(styles.fold)}
+              >
+                {item.collapsed === true ? "▸" : "▾"}
+              </button>
+            )}
             {...stylex.props(styles.view)}
             options={{
               // Unified, because this column is two hundred pixels wide at its

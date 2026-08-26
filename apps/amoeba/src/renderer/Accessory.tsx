@@ -20,9 +20,12 @@ import { colors, text } from "./tokens.stylex";
 // Base UI ships no styles, so what it costs is exactly the markup and the
 // behaviour: the appearance is still StyleX, and still this file's business.
 //
-// Jobs comes first, the diff after it, and the debug tools last. Jobs and the
-// diff are panels someone opens on purpose; the meter is the one they open
-// when something feels wrong.
+// The diff comes first and opens by default, jobs after it, the debug tools
+// last. All three are "opened on purpose" panels except the meter, which is
+// the one opened when something feels wrong — but only one of them is looked
+// at continuously while working, and that is the diff. Jobs is read when a job
+// is running, which is a few seconds a day and always with the jobs count in
+// the status bar already saying so.
 //
 // ── why the panels take an argument now ──────────────────────────────────
 //
@@ -54,12 +57,12 @@ interface Panel {
 }
 
 const panels: ReadonlyArray<Panel> = [
-  { id: "jobs", label: "jobs", render: () => <Jobs /> },
   {
     id: "diff",
     label: "diff",
     render: ({ dir, scheme }) => <Diff dir={dir} scheme={scheme} />,
   },
+  { id: "jobs", label: "jobs", render: () => <Jobs /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
 ];
 
