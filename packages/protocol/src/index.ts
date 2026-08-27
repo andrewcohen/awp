@@ -114,6 +114,73 @@ export const SessionInfo = Schema.Struct({
 
 export type SessionInfo = (typeof SessionInfo)["Type"];
 
+// ── what is known about a workspace ────────────────────────────────────────
+//
+// A session says a workspace exists. This says what is happening in it.
+//
+// ── the source is not on the wire, deliberately ────────────────────────────
+//
+// Today these come from `~/.awp/workspace-state.json`, written by the Go
+// implementation: Claude Code hooks shell out to `awp internal report-status`
+// on every tool call and every stop, and that writes the file. That is a
+// stopgap for half these fields — ACP replaces it with a live notification from
+// the agent itself — so the *field* is on the wire and the source is a ranked
+// list inside the daemon:
+//
+//   1  ACP session updates       when it lands
+//   2  the Go state file         today
+//   3  zmx output recency        crude, but never absent
+//
+// A client that knew which one answered would be a client that has to be
+// changed when the answer improves.
+//
+// ── every field is optional, and that is not defensiveness ─────────────────
+//
+// A workspace nobody has run an agent in has no status, a branch with no pull
+// request has no number, and a workspace made before display names existed has
+// no name but its slug. Absent is the ordinary case for most of these, so a
+// client renders what is there rather than filling a fixed shape.
+
+/** How a workspace's agent is doing. */
+export const WorkspaceStatus = Schema.Literals(["working", "waiting", "idle", "exited", "error"]);
+
+export type WorkspaceStatus = (typeof WorkspaceStatus)["Type"];
+
+export const WorkspaceFacts = Schema.Struct({
+  project: Schema.String,
+  workspace: Schema.String,
+  /**
+   * What a person called this work, as opposed to what the directory is called.
+   *
+   * The slug has to be a slug — it is a directory, a jj workspace and half a
+   * bookmark — so `effect-ts-tiered-discount-timemachine` is what the filesystem
+   * gets and "tiered discount timemachine" is what was meant.
+   */
+  displayName: Schema.UndefinedOr(Schema.String),
+  status: Schema.UndefinedOr(WorkspaceStatus),
+  /**
+   * The agent said something that has not been looked at.
+   *
+   * A boolean and not a count: what it drives is a dot, and "how many things
+   * you have not read" is not a question anybody asks of a workspace.
+   */
+  unread: Schema.Boolean,
+  /** The pull request this workspace's branch is on, if it is on one. */
+  pr: Schema.UndefinedOr(Schema.Int),
+  bookmark: Schema.UndefinedOr(Schema.String),
+  /** The last thing asked of the agent, for a row that has room to say it. */
+  prompt: Schema.UndefinedOr(Schema.String),
+  /** Where the work is in the configured dev loop — explore, implement, verify. */
+  phase: Schema.UndefinedOr(Schema.String),
+  /** What the agent is working on, in the words of the task it claimed. */
+  task: Schema.UndefinedOr(Schema.String),
+  done: Schema.UndefinedOr(Schema.Int),
+  total: Schema.UndefinedOr(Schema.Int),
+  lastActiveAt: Schema.UndefinedOr(Schema.Date),
+});
+
+export type WorkspaceFacts = (typeof WorkspaceFacts)["Type"];
+
 // ── projects ───────────────────────────────────────────────────────────────
 //
 // A project is a repository awp knows about. Until now that was not a record
@@ -836,6 +903,23 @@ export class AwpRpcs extends RpcGroup.make(
    * the running sessions imply. Merging them here is what stops the window
    * showing a repository twice under two spellings of the same root.
    */
+  /**
+   * What is known about every workspace, and again whenever it changes.
+   *
+   * A stream and not a list, which is the same split jobs and threads sit on
+   * either side of: a thread changes when a person changes it in this window,
+   * so the reply to the change is the update — but an agent goes from working
+   * to waiting on its own, and a client that only asked would miss the
+   * transition it was watching for.
+   *
+   * The whole table each time rather than a delta. It is a few kilobytes, and a
+   * delta would be machinery in service of an economy nobody can measure.
+   */
+  Rpc.make("WorkspaceFactsChanges", {
+    success: Schema.Array(WorkspaceFacts),
+    stream: true,
+  }),
+
   Rpc.make("ProjectList", {
     success: Schema.Array(Project),
   }),

@@ -29,6 +29,7 @@ import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
 import * as settings from "./settings";
 import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
+import * as workspaceState from "./workspace-state";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 import * as zmx from "./zmx";
@@ -160,6 +161,7 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(threads),
   Layer.provide(reviews),
   Layer.provide(projects),
+  Layer.provide(workspaceState.layer()),
   Layer.provide(db),
   Layer.provide(intent.layer),
   Layer.provide(settings.layer()),

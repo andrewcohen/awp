@@ -20,6 +20,7 @@ import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
+import * as workspaceState from "./workspace-state";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 
 // The contract, its handlers and the services under them — everything except
@@ -208,6 +209,15 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // tests share state with each other and with the developer's daemon.
         Layer.provide(jobsLayer([erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory))),
         Layer.provide(sessions.layer),
+        // Pointed at a file that is not there, which answers with an empty
+        // table — the honest state for a machine that has only ever run
+        // amoeba, and the one this suite is about. `workspace-state.test.ts`
+        // is where the contents matter.
+        //
+        // Before the file system below it, not after: each `Layer.provide`
+        // feeds everything already in the pipe, so a layer with requirements
+        // has to be added before the layer that satisfies them.
+        Layer.provide(workspaceState.layer(join(scratch, "no-such-state.json"))),
         // The real one, and it is never read here: WorkspaceChanges is the only
         // handler that watches anything and this suite calls no stream that
         // does. A fake would be a second implementation of a service whose

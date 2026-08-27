@@ -19,6 +19,7 @@ import type {
   ThreadBase,
   ThreadMember,
   ThreadStarted,
+  WorkspaceFacts,
 } from "@awp-kit/protocol";
 import { Effect, Fiber, Schedule, Stream } from "effect";
 import { ManagedRuntime } from "effect";
@@ -379,6 +380,23 @@ export const startThread = (payload: {
  */
 export const watchJobs = (onJob: (job: Job) => void): (() => void) =>
   subscribe((rpc) => Stream.runForEach(rpc.JobChanges(), (job) => Effect.sync(() => onJob(job))));
+
+/**
+ * Watch what is known about every workspace until the returned function is
+ * called.
+ *
+ * The whole table arrives each time, so a listener that joins late or misses a
+ * push is still correct — which is what lets this replace its state outright
+ * rather than merging, and is why nothing here has to know what changed.
+ *
+ * A stream and not a call, unlike threads: an agent goes from working to
+ * waiting on its own, and a window that only asked would miss the transition it
+ * was watching for.
+ */
+export const watchFacts = (onFacts: (facts: ReadonlyArray<WorkspaceFacts>) => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.WorkspaceFactsChanges(), (facts) => Effect.sync(() => onFacts(facts))),
+  );
 
 /**
  * Watch one workspace's files until the returned function is called.

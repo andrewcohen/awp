@@ -247,6 +247,20 @@ export class Multiplexer extends Context.Service<
       readonly name: string;
       readonly cwd: string;
       readonly command: ReadonlyArray<string>;
+      /**
+       * Extra environment for what runs in the session.
+       *
+       * Merged over the daemon's own, so a caller adds rather than replaces —
+       * and `ZMX_SESSION` is neutralised after this, because a caller must not
+       * be able to reintroduce the hijack `zmxChildEnv` exists to prevent.
+       *
+       * What it is for: `AWP_WORKSPACE` and `AWP_REPO_ROOT`. The status hooks
+       * in a person's Claude Code settings are gated on those two, so an agent
+       * started without them reports nothing at all — the machinery is
+       * installed and silent, which is exactly what the sidebar showing no
+       * status was.
+       */
+      readonly env?: Readonly<Record<string, string>> | undefined;
     }): Effect.Effect<void, MultiplexerError>;
 
     /**

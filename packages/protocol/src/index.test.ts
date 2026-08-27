@@ -9,6 +9,7 @@ import {
   type Project,
   type ReviewComment,
   type Revision,
+  type WorkspaceFacts,
   SessionInfo,
   type Thread,
 } from "./index";
@@ -170,6 +171,22 @@ const project: Project = {
   importedAt: new Date("2026-08-27T09:00:00.000Z"),
 };
 
+const facts: WorkspaceFacts = {
+  project: "thicket",
+  workspace: "lantern",
+  displayName: "the lantern rewrite",
+  status: "working",
+  unread: true,
+  pr: 412,
+  bookmark: "andrew/lantern",
+  prompt: undefined,
+  phase: "implement",
+  task: "make the lamp light",
+  done: 3,
+  total: 7,
+  lastActiveAt: new Date("2026-08-27T09:14:00.000Z"),
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -184,6 +201,7 @@ const handlers = AwpRpcs.toLayer({
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,
   JobClear: () => Effect.succeed(0),
+  WorkspaceFactsChanges: () => Stream.fromArray([[facts]]),
   ProjectList: () => Effect.succeed([project]),
   ProjectCandidates: () => Effect.succeed([]),
   ProjectImport: () => Effect.succeed(project),

@@ -35,6 +35,7 @@ import { localBookmarks } from "./jj-parse";
 import { sessionName } from "./naming";
 import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
+import { WorkspaceState } from "./workspace-state";
 import { Threads } from "./threads";
 
 /** The kind a review is delivered to. Matches PRIMARY in the renderer. */
@@ -274,6 +275,7 @@ export const layer = AwpRpcs.toLayer(
     const threads = yield* Threads;
     const reviews = yield* Reviews;
     const projects = yield* Projects;
+    const facts = yield* WorkspaceState;
     const config = yield* Settings;
     const jj = yield* Jj;
     // Taken once, here, rather than per request. A handler's return value has
@@ -642,6 +644,8 @@ export const layer = AwpRpcs.toLayer(
        * since been removed, and offering it would be offering a failure two
        * screens later.
        */
+      WorkspaceFactsChanges: () => facts.changes(),
+
       ProjectList: () =>
         Effect.gen(function* () {
           const imported = yield* projects.list().pipe(Effect.orDie);
