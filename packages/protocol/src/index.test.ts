@@ -6,6 +6,7 @@ import {
   AttachRefused,
   AwpRpcs,
   type Patch,
+  type Project,
   type ReviewComment,
   type Revision,
   SessionInfo,
@@ -163,6 +164,12 @@ const comment: ReviewComment = {
   sentAt: undefined,
 };
 
+const project: Project = {
+  name: "thicket",
+  root: "/Users/someone/code/thicket",
+  importedAt: new Date("2026-08-27T09:00:00.000Z"),
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -177,6 +184,10 @@ const handlers = AwpRpcs.toLayer({
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,
   JobClear: () => Effect.succeed(0),
+  ProjectList: () => Effect.succeed([project]),
+  ProjectCandidates: () => Effect.succeed([]),
+  ProjectImport: () => Effect.succeed(project),
+  ProjectForget: () => Effect.succeed(true),
   ThreadList: () => Effect.succeed([thread]),
   ThreadCreate: () => Effect.succeed(thread),
   ThreadRename: () => Effect.succeed(thread),

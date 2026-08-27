@@ -215,6 +215,38 @@ the repository it is asking about. Reads take it; writes deliberately do not,
 because suppressing the snapshot on a write makes a commit out of step with the
 files beside it.
 
+**`-R` does not walk up.** The rule above says jj finds a repo by walking up
+from cwd, and `-R` is how that is prevented — which also means a directory
+_inside_ a repository is not a repository as far as `-R` is concerned:
+
+```
+  jj -R ~/code/thicket/src root   Error: There is no jj repo in ".../src"
+  jj -R ~/code/thicket     root   /Users/…/code/thicket
+```
+
+Every call in this repo passes `-R`, so nothing here ever gets the walk. That
+is right for the daemon and wrong for the one place a _person_ names a
+directory: importing a project. `nearestRepo` in `projects.ts` climbs to the
+first ancestor holding `.jj` before `sourceRoot` is asked anything, and the two
+are not interchangeable — the climb is what makes a subdirectory work at all,
+and `sourceRoot` is what stops a secondary workspace being recorded as though
+it were the project it is a checkout of.
+
+It was found by a probe against a real daemon and could not have been found by
+a test: the fake `Jj` answers `/repos/<basename>` for any string, so a
+subdirectory resolves there and the whole path passes.
+
+**A project marker is `.jj`, not `.git`.** The walk that offers candidates
+looks for one thing, and the reason is the same as the reason the thread-base
+picker offers only local bookmarks: every operation awp performs on a project
+is a jj one, so a git-only repository is a row that fails on import. Counted
+on this machine, under the same roots:
+
+```
+  .jj or .git   56 candidates     most of which awp cannot act on
+  .jj only      16
+```
+
 **`jj workspace forget` with no argument forgets the workspace it is standing
 in.** For the daemon that is this repository. The name is refused when empty
 rather than defaulted, and that refusal has its own test.
@@ -246,6 +278,42 @@ on one that does not succeeds; `bookmark set` is already idempotent in jj, and
 
 Forgetting a workspace **does not remove its directory**. jj says so in its own
 help, and it matters: the undo of a workspace creation has to do both.
+
+### A project is a claim, not a consequence of a session
+
+The window used to derive its project list from the running sessions, which
+made a project exist _because_ something was running in it. That is backwards:
+the moment somebody wants to name a project is usually the moment nothing is
+running in it yet.
+
+```
+  before   projectsOf(sessions)     the picker was empty exactly when it
+                                    was opened — the first thread in any
+                                    repository could not be started at all
+  after    ProjectList              imported rows, plus what the sessions
+                                    still imply, merged in the daemon
+```
+
+**Merged in the daemon, not the window**, because only the daemon holds both
+halves and the two can name the same repository. The imported row wins: it is
+the one that survives a restart and the one `forget` applies to.
+
+**Forgetting takes nothing with it** — no workspace removed, no session killed,
+no thread touched. That is what makes it safe to offer beside a name in a
+picker. A project with sessions still running simply reappears, derived, which
+reads correctly: awp does still know about it, it is just no longer claimed.
+
+**The name is the basename, and that is the identity.** `sessionName` composes
+`awp.<project>.<workspace>.<kind>`, the sidebar groups on it and the address
+carries it, so two repositories with one basename are refused rather than
+disambiguated — there is nowhere to put the second, and inventing `widgets-2`
+would make an address nothing else in the system would ever produce.
+
+**Two routes in, and the order they are drawn in is the order they are worth.**
+A path works on any machine with no configuration; `deck.project_roots` is a
+convenience over it and is empty for most people. Leading with the found list
+would make the panel look broken for anybody importing their first project,
+which is everybody the feature exists for.
 
 ## Jobs: resume and compensation are the same disagreement
 

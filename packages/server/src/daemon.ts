@@ -28,6 +28,7 @@ import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
 import * as settings from "./settings";
+import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 import * as zmx from "./zmx";
@@ -85,7 +86,12 @@ export const AWP_DB = join(homedir(), ".awp", "awp.sqlite");
 // one cannot disturb another — which is the entire reason migrations here are
 // named rather than numbered. See @awp-kit/store.
 export const db = Layer.orDie(
-  dbLayer(AWP_DB, [...jobMigrations, ...threadMigrations, ...reviewMigrations]),
+  dbLayer(AWP_DB, [
+    ...jobMigrations,
+    ...threadMigrations,
+    ...reviewMigrations,
+    ...projectMigrations,
+  ]),
 );
 
 /**
@@ -129,6 +135,8 @@ export const threads = threadsLayer;
 
 export const reviews = reviewsLayer;
 
+export const projects = projectsLayer;
+
 /** The real services: real zmx, real ptys, real jj. */
 export const services = sessions.layer.pipe(
   Layer.provide(attachment.layer),
@@ -151,6 +159,7 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(jobs),
   Layer.provide(threads),
   Layer.provide(reviews),
+  Layer.provide(projects),
   Layer.provide(db),
   Layer.provide(intent.layer),
   Layer.provide(settings.layer()),
