@@ -417,8 +417,14 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         const workspace = yield* named(input);
         const cwd = workspacePath(input.project, workspace);
         // Read per job, like every other setting here, so editing the config
-        // file takes effect on the next workspace rather than the next daemon.
-        const { bootstrap: hooks } = yield* settings.read();
+        // takes effect on the next workspace rather than the next daemon.
+        //
+        // **From the source repository, not the new workspace.** `.awp/` is
+        // untracked, so a fresh `jj workspace add` has no copy of it — the Go
+        // implementation symlinked one in for exactly this reason. `input.repo`
+        // is the repository this workspace was made from, which is where the
+        // project's own hooks actually live.
+        const { bootstrap: hooks } = yield* settings.read(input.repo);
 
         if (hooks.length === 0) {
           // A step that does nothing is still a step — the runner reads `done`

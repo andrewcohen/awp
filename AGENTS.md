@@ -496,16 +496,36 @@ the error channel, so it sailed past the `Effect.result` wrapping an attempt,
 killed the fiber, and left the record saying `running` with nothing behind it.
 Found by a fake missing a method, which is exactly how a real service gains one.
 
-### A hook is a line, an agent is a program
-
-`bootstrap` in the config file is whatever should run in a new workspace before
-its agent is briefed — `bun install`, `cp .env.example .env`. It goes to
-`sh -c` **whole**, and that is the opposite of what `agent` does with the same
-file:
+### Two config files, and the project wins outright
 
 ```
-  agent      "claude --model opus"   split on whitespace → argv
-  bootstrap  "bun install && build"  handed to a shell, entire
+  ~/.config/awp/config.json    global — the agent, the bookmark prefix
+  <repo>/.awp/config.json      per project — how this repository is set up
+```
+
+Merged **per field, replace-if-empty** — not deep, not concatenated. That is
+what the Go implementation does and both files on this machine were written
+against it. A project that says nothing about hooks inherits the global ones; a
+project that lists one inherits none of them, which is the only way a repository
+can turn a global hook off. `[]` and an absent key mean the same thing, so "run
+nothing" is not currently expressible; the day it needs to be, `merge` is the
+line that changes.
+
+**Read from the source repository, never from the new workspace.** `.awp/` is
+untracked, so a fresh `jj workspace add` has no copy of it — the Go
+implementation symlinked one in for exactly this reason. `input.repo` is the
+repository the workspace was made _from_, and that is where a project's own
+config actually is.
+
+### A hook is a line, an agent is a program
+
+`hooks.bootstrap` is whatever should run in a new workspace before its agent is
+briefed. It goes to `sh -c` **whole**, and that is the opposite of what `agent`
+does with the same file:
+
+```
+  agent            "claude --model opus"   split on whitespace → argv
+  hooks.bootstrap  "mise trust"            handed to a shell, entire
 ```
 
 Both are right for what they name. An agent is a program awp launches; a hook
