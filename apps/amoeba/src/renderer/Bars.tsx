@@ -1,7 +1,9 @@
 import type { Job } from "@awp-kit/jobs";
 import type { SessionInfo } from "@awp-kit/protocol";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
 import { AppearanceToggle } from "./Appearance";
+import type { Collapsed } from "./columns";
 import { colors, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
 
@@ -65,6 +67,39 @@ const styles = stylex.create({
   // else in a bar is a word or a count, and a bar that ellipsises its counts to
   // make room for a name has lost the thing it was for.
   name: { overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 },
+
+  // ── the column toggles ──────────────────────────────────────────────────
+  //
+  // `no-drag`, and it has to be said: the bar around these is the window's drag
+  // handle, and a button inside a drag region is a button that moves the window
+  // instead of being pressed.
+  //
+  // This is the one exception to "nothing interactive goes in the top bar", and
+  // it is a narrow one — two 22px targets at the right end, with the whole
+  // middle of the bar still grabbable.
+  toggle: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "1.4rem",
+    height: "1.4rem",
+    padding: 0,
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    borderRadius: "0.2rem",
+    color: {
+      default: colors.muted,
+      ":hover": colors.text,
+    },
+    cursor: "pointer",
+    WebkitAppRegion: "no-drag",
+  },
+  // On when the column is showing. A toggle that dims when its panel is open
+  // reads backwards — the lit state is the state the thing is in.
+  toggleOn: { color: colors.text },
+  // The accessory's icon is the sidebar's, mirrored. One glyph, two meanings,
+  // and the mirror is what says which edge is meant.
+  mirrored: { transform: "scaleX(-1)" },
 });
 
 /**
@@ -78,9 +113,13 @@ const styles = stylex.create({
 export function TopBar({
   session,
   connected,
+  collapsed,
+  onFold,
 }: {
   readonly session: SessionInfo | undefined;
   readonly connected: boolean;
+  readonly collapsed: Collapsed;
+  readonly onFold: (which: keyof Collapsed) => void;
 }) {
   return (
     <header {...stylex.props(styles.bar, styles.top)}>
@@ -107,6 +146,39 @@ export function TopBar({
           word rather than a dot: "no daemon" is the sentence, and a red circle
           would need to be hovered before it said anything. */}
       {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
+
+      {/* ── folding a column, from the one place that is never folded ──────
+
+          These used to live on the divider between the columns: a control that
+          appeared on hover, and stayed visible once its column was folded
+          because it was then the only way back. That worked and was hard to
+          find — an affordance that is invisible until the pointer is already
+          on a one-pixel rule is one nobody discovers, and it could not be
+          pressed at all without a pointer.
+
+          The top bar is the one strip that never folds, so it is where a
+          control that folds something else belongs. Both are always here,
+          both say which state they are in, and both are reachable by tab. */}
+      <button
+        type="button"
+        aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+        aria-pressed={!collapsed.sidebar}
+        title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+        onClick={() => onFold("sidebar")}
+        {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
+      >
+        <SidebarSimpleIcon size={15} aria-hidden />
+      </button>
+      <button
+        type="button"
+        aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
+        aria-pressed={!collapsed.accessory}
+        title={collapsed.accessory ? "show the panels" : "hide the panels"}
+        onClick={() => onFold("accessory")}
+        {...stylex.props(styles.toggle, !collapsed.accessory && styles.toggleOn)}
+      >
+        <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
+      </button>
     </header>
   );
 }

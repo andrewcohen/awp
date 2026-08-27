@@ -228,7 +228,12 @@ export function App() {
   // the state that is supposed to describe it.
   return (
     <div {...stylex.props(themeFor(appearance), styles.window)}>
-      <TopBar session={open} connected={failure === undefined} />
+      <TopBar
+        session={open}
+        connected={failure === undefined}
+        collapsed={collapsed}
+        onFold={(which) => fold(which)()}
+      />
 
       <div {...stylex.props(styles.columns)}>
         <aside
@@ -260,7 +265,6 @@ export function App() {
           label="sidebar width"
           value={columns.sidebar}
           onChange={(sidebar) => resize((prev) => ({ ...prev, sidebar }))}
-          collapsed={collapsed.sidebar}
           onToggle={fold("sidebar")}
         />
 
@@ -275,7 +279,6 @@ export function App() {
           invert
           value={columns.accessory}
           onChange={(accessory) => resize((prev) => ({ ...prev, accessory }))}
-          collapsed={collapsed.accessory}
           onToggle={fold("accessory")}
         />
 
