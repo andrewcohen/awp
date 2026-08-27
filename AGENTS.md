@@ -1406,6 +1406,11 @@ all inside one frame — so the panel's first open orphaned one every time. The
 corner it appears in is not a clue about the bug; it is just where the
 accessory column was.
 
+It cannot even be nudged back into place: `OverlaySyncController.sync()`
+returns early when the rect is zero by zero, which is exactly what a detached
+element reports. So it keeps its birth rectangle and no later layout reaches
+it.
+
 `patches/electrobun@1.18.1.patch` fixes it at the source, because nothing
 outside the element can: a `_detached` flag set in `disconnectedCallback`, and
 checked twice — after the rAF, and after the request returns, where an arriving
@@ -1425,6 +1430,24 @@ does nothing; re-appending it to rescue it fires `connectedCallback` and
 creates a _second_ native view; keeping a module-level singleton and
 re-parenting it fires both. Moving a node between parents is a disconnect and a
 connect, and this element cannot survive either.
+
+**The preload is a pre-compiled string, and that is what ships.** Patching
+`dist/api/bun/preload/webviewTag.ts` alone changes nothing at all: the build
+bundles `dist/api/bun/preload/.generated/compiled.ts`, which holds the whole
+preload as one escaped JS string. The first patch here was written, committed,
+built and launched, and the running app was byte-identical to one built without
+it — the same tell as the React Compiler that was not running. Patch both, and
+check the built bundle rather than the source:
+
+```
+  grep -c "_detached" apps/amoeba/build/dev-macos-arm64/\
+      amoeba-dev.app/Contents/Resources/app/bun/index.js
+```
+
+Restarting is not enough either — `electrobun dev` rebuilds, so the app must be
+rebuilt, not relaunched. And an orphan already on screen is not cleaned up by
+any of this: there is no handle left to clean it up with, so the process has to
+go.
 
 The general shape, which has come up here before: **a cleanup that guards on a
 field set by an async step does not run during that step.** The guard reads as
