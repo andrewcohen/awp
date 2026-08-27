@@ -17,6 +17,17 @@ export interface Meter {
   readonly lastDeltaMode: number;
   /** Line reports sent to the program. */
   readonly linesSent: number;
+  /**
+   * Characters sent to the program, and how they got in.
+   *
+   * `inserted` is text that arrived without a keystroke behind it — dictation,
+   * an accessibility tool, an input method that does not compose. It is counted
+   * separately because that route is invisible from everywhere else: it
+   * produces no key event to watch, and when it is dropped nothing happens at
+   * all. A reading of 0 while someone is speaking is the whole diagnosis.
+   */
+  readonly typed: number;
+  readonly inserted: number;
   /** Writes into the emulator, and their total size. */
   readonly writes: number;
   readonly bytes: number;
@@ -29,6 +40,8 @@ let wheelEvents = 0;
 let lastDeltaY = 0;
 let lastDeltaMode = 0;
 let linesSent = 0;
+let typed = 0;
+let inserted = 0;
 let writes = 0;
 let bytes = 0;
 
@@ -69,6 +82,15 @@ export const meterWheel = (deltaY: number, deltaMode: number, lines: number): vo
   linesSent += lines;
 };
 
+/** Text on its way to the program. `viaKey` separates typing from insertion. */
+export const meterSent = (text: string, viaKey: boolean): void => {
+  if (viaKey) {
+    typed += text.length;
+  } else {
+    inserted += text.length;
+  }
+};
+
 export const meterWrite = (size: number): void => {
   writes += 1;
   bytes += size;
@@ -81,6 +103,8 @@ export const readMeter = (): Meter => {
     lastDeltaY,
     lastDeltaMode,
     linesSent,
+    typed,
+    inserted,
     writes,
     bytes,
     frameP50: sorted[Math.floor(sorted.length / 2)] ?? 0,
@@ -91,6 +115,8 @@ export const readMeter = (): Meter => {
 export const resetMeter = (): void => {
   wheelEvents = 0;
   linesSent = 0;
+  typed = 0;
+  inserted = 0;
   writes = 0;
   bytes = 0;
   frames.fill(0);

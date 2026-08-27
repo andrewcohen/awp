@@ -1,9 +1,10 @@
 import { installClipboard } from "./clipboard";
+import { installDictation } from "./dictation";
 import { installKeys } from "./keys";
 import { FitAddon, type ITheme, Terminal, init } from "ghostty-web";
 import { paneFontSize } from "./palette";
 import { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
-import { meterWheel, meterWrite, startMeter } from "./meter";
+import { meterSent, meterWheel, meterWrite, startMeter } from "./meter";
 
 // One Terminal for the life of the window, reused by every pane.
 //
@@ -115,10 +116,20 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
 
     installClipboard(host, () => term);
     installKeys(host, (data) => dataSink?.(data));
+    // Dictation, and anything else that inserts text without a keystroke. See
+    // dictation.ts: the emulator cancels those before reading them, so this has
+    // to get there first.
+    installDictation(host, (data) => dataSink?.(data));
 
     // Registered once, for the terminal's whole life. The indirection through
     // the sinks is what makes that safe.
-    term.onData((data: string) => dataSink?.(data));
+    term.onData((data: string) => {
+      // Counted here rather than in each installer, because this is the one
+      // path every keystroke takes. `installDictation` counts its own, on the
+      // other side of the split the meter exists to show.
+      meterSent(data, true);
+      dataSink?.(data);
+    });
     term.onResize(({ cols, rows }: { cols: number; rows: number }) => resizeSink?.(cols, rows));
   }
   return { term, fit };

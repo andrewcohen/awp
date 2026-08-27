@@ -1453,6 +1453,70 @@ The general shape, which has come up here before: **a cleanup that guards on a
 field set by an async step does not run during that step.** The guard reads as
 "nothing to do yet" and means "do nothing, ever".
 
+## A terminal listens for keys, and not everything that types is a keyboard
+
+Dictation into the pane did nothing. Not an error, not a dropped character —
+someone spoke and the terminal did not move, which is the same thing a broken
+microphone looks like.
+
+ghostty-web listens on the host element for `keydown`, `keypress`, `paste` and
+the three composition events. That covers a keyboard and an input method. What
+it does not cover is text _inserted_ into the document by something else —
+dictation, an assistive tool writing on someone's behalf, a snippet expander.
+All of those reach a page the same way: `beforeinput`, with the text in `data`
+and no key event at all.
+
+The host is `contenteditable`, so `open()` does this and nothing reads it
+first:
+
+```
+  A.addEventListener("beforeinput", (E) => E.preventDefault())
+```
+
+Cancelled every time. `installDictation` runs in the capture phase to get there
+ahead of it. The `preventDefault` is right, incidentally — the host must not
+accumulate real DOM text under the canvas — what was missing is reading the
+event before cancelling it.
+
+**The trap is that everything is a `beforeinput`.** Ordinary typing raises one
+too, and sending on both routes doubles every character a person types, which
+reads as a broken keyboard and is worse than the drop. Nothing on the event
+says "a key did this"; what there is, is the ordering — a key raises `keydown`
+then `beforeinput` in the same task, an insertion raises `beforeinput` alone. So
+a keystroke is remembered for two frames and an insertion inside that window is
+taken to be its echo.
+
+Two frames rather than the two tidier alternatives, both of which were tried in
+thought and are wrong: a microtask checkpoint can run _before_ the input event
+is dispatched, so the flag would already be down; and comparing `event.timeStamp`
+assumes the engine copies the key's timestamp onto the input event it derives,
+which nothing requires it to.
+
+Composition is left alone. ghostty-web sends the finished text on
+`compositionend`, so reading it here as well doubles a whole word.
+
+**Measured, and the measurement is the point**, because both failure modes are
+invisible from outside — a drop does nothing, and a double looks like hardware.
+`page.keyboard.insertText` is exactly the dictation path: `beforeinput` with no
+key event. The counts come off the meter panel, which now splits them, because
+`inserted` staying at 0 while someone is speaking is the whole diagnosis and
+there was nowhere to read it:
+
+```
+  insertText "dictated"   typed 0  inserted 8
+  type "abcde"            typed 5  inserted 8    ← not 10; no double
+  insertText "more"       typed 5  inserted 12
+
+  without installDictation
+  insertText "dictated"   typed 0  inserted 0    ← the reported symptom
+```
+
+On this host a keystroke raises no `beforeinput` at all, because ghostty-web
+cancels the keydown — so the anti-doubling guard never fires in ordinary use
+and could not be measured by typing. It was reached by dispatching a `keydown`
+and a `beforeinput` by hand, which is the only way to a case the emulator
+currently prevents and would stop preventing for any key it does not consume.
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes
