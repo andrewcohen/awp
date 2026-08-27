@@ -1,6 +1,6 @@
-import type { SessionInfo, Thread } from "@awp-kit/protocol";
+import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
 import { describe, expect, it, test } from "vitest";
-import { groupByThread, groupByWorkspace, openable } from "./workspaces";
+import { type Workspace, groupByThread, groupByWorkspace, openable } from "./workspaces";
 
 // The grouping is where the sidebar's one real decision lives, so it is tested
 // away from the markup. Every fixture below is shaped like something `zmx ls`
@@ -153,10 +153,29 @@ describe("what a row calls itself", () => {
 
 // ── threads ────────────────────────────────────────────────────────────────
 
+/**
+ * A thread, made just now unless a test says otherwise.
+ *
+ * The clock rather than a fixed stamp, because an empty thread is only shown
+ * while it is new — see `PENDING_FOR`. A fixture stamped in 1970 would age out
+ * of every test that did not mean to be about ageing, which is what happened
+ * when that rule landed.
+ */
+/**
+ * A status read off the workspace's own name, so a test can state the one it
+ * means in the fixture rather than in a second table beside it.
+ */
+const byAddress = (workspace: Workspace): WorkspaceStatus | undefined => {
+  if (workspace.address.endsWith("asking")) return "waiting";
+  if (workspace.address.endsWith("busy")) return "working";
+  if (workspace.address.endsWith("finished") || workspace.address.endsWith("quiet")) return "idle";
+  return undefined;
+};
+
 const thread = (over: Partial<Thread> = {}): Thread => ({
   id: "t1",
   title: "tiered discounts",
-  createdAt: new Date(2000),
+  createdAt: new Date(),
   archivedAt: undefined,
   parentId: undefined,
   members: [],
@@ -197,14 +216,67 @@ describe("groupByThread", () => {
     ]);
   });
 
-  test("a thread with nothing in it still shows", () => {
-    // The most important row on the strip, not the least: it is the one
-    // waiting to be filled. Dropping empty threads would make a thread made a
-    // moment ago invisible until it had a workspace.
-    const groups = groupByThread([thread()], []);
+  test("a thread with nothing in it shows while it is new, and not after", () => {
+    // Both halves of one rule, and the second half reversed an earlier one.
+    //
+    // A thread is created before the job that fills it, so for the length of
+    // that job it genuinely is the most important row on the strip. After the
+    // job has failed and rolled back it is litter — and measured on a real
+    // machine that was eighteen empty headers above one bucket of twenty-five
+    // rows, which is the shape that made the sidebar unreadable.
+    const made = new Date(1_787_000_000_000);
+    const soon = made.getTime() + 60_000;
+    const later = made.getTime() + 60 * 60_000;
 
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.workspaces).toEqual([]);
+    expect(groupByThread([thread({ createdAt: made })], [], undefined, soon)).toHaveLength(1);
+    expect(groupByThread([thread({ createdAt: made })], [], undefined, later)).toHaveLength(0);
+  });
+
+  test("a thread holding a workspace shows however old it is", () => {
+    // The window is about a thread with *nothing* in it. A thread that has
+    // claimed work is a record of that work, and ageing it out would hide the
+    // thing the sidebar exists to show.
+    const workspaces = groupByWorkspace([inProject("rowan", "discounts")]);
+    const old = thread({
+      createdAt: new Date(0),
+      members: [{ project: "rowan", workspace: "discounts" }],
+    });
+
+    expect(groupByThread([old], workspaces, undefined, Date.now())).toHaveLength(1);
+  });
+
+  test("the unclaimed group is ordered by what needs attention", () => {
+    // Only this group. A thread's own workspaces stay in the order it holds
+    // them — that is a person's arrangement of their work, and reordering it
+    // underneath them would move rows while they were looking at them.
+    const workspaces = groupByWorkspace([
+      inProject("orchard", "quiet"),
+      inProject("orchard", "busy"),
+      inProject("orchard", "asking"),
+    ]);
+    const groups = groupByThread([], workspaces, byAddress, Date.now());
+
+    expect(groups.at(-1)?.workspaces.map((w) => w.address)).toEqual([
+      "orchard.asking",
+      "orchard.busy",
+      "orchard.quiet",
+    ]);
+  });
+
+  test("a workspace nothing has reported on sorts after one that is idle", () => {
+    // Unknown is not idle. A workspace whose status nothing has ever written
+    // is a different thing from one an agent has finished in, and sorting them
+    // together would put a row that has never run above one waiting to be read.
+    const workspaces = groupByWorkspace([
+      inProject("orchard", "never"),
+      inProject("orchard", "finished"),
+    ]);
+    const groups = groupByThread([], workspaces, byAddress, Date.now());
+
+    expect(groups.at(-1)?.workspaces.map((w) => w.address)).toEqual([
+      "orchard.finished",
+      "orchard.never",
+    ]);
   });
 
   test("what no thread claimed goes in one group, at the end", () => {
@@ -258,8 +330,10 @@ describe("groupByThread", () => {
   test("newest thread first", () => {
     const groups = groupByThread(
       [
-        thread({ id: "old", title: "old", createdAt: new Date(1000) }),
-        thread({ id: "new", title: "new", createdAt: new Date(9000) }),
+        // Both recent, so the ordering is what is under test rather than the
+        // pending window above it.
+        thread({ id: "old", title: "old", createdAt: new Date(Date.now() - 60_000) }),
+        thread({ id: "new", title: "new", createdAt: new Date() }),
       ],
       [],
     );

@@ -38,6 +38,14 @@ export const hue = stylex.defineConsts({
   latteBorder: "#ccd0da",
   latteLive: "#40a02b",
   latteWarn: "#d20f39",
+  // Catppuccin peach. The accent, and the only hue in this table chosen for
+  // what it means rather than for a role it already had — see `colors.accent`.
+  latteAccent: "#fe640b",
+  // The states an agent can be in. Yellow for waiting because it is the one a
+  // person has to act on and yellow is what the eye finds first; blue for
+  // ready because it is present without being urgent.
+  latteWaiting: "#df8e1d",
+  latteReady: "#1e66f5",
 
   // Catppuccin Macchiato, mantle for the same reason. The pane's base is
   // #24273a and sits above this.
@@ -47,6 +55,9 @@ export const hue = stylex.defineConsts({
   macchiatoBorder: "#363a4f",
   macchiatoLive: "#a6da95",
   macchiatoWarn: "#ed8796",
+  macchiatoAccent: "#f5a97f",
+  macchiatoWaiting: "#eed49f",
+  macchiatoReady: "#8aadf4",
 });
 
 export const colors = stylex.defineVars({
@@ -66,6 +77,30 @@ export const colors = stylex.defineVars({
   live: { default: hue.latteLive, [dark]: hue.macchiatoLive },
   /** Something went wrong and is being said out loud. */
   warn: { default: hue.latteWarn, [dark]: hue.macchiatoWarn },
+  /**
+   * The one hue that means "this, here" — a selected row, a focused column, the
+   * button a dialog is about.
+   *
+   * There was no accent at all until this, and its absence is why the window
+   * reads flat: the only colours in it were green for alive and red for broken,
+   * so everything that was neither — which is nearly everything — was a shade of
+   * grey. `warn` was doing this job by accident wherever something needed to
+   * stand out, which spends the failure colour on things that have not failed.
+   *
+   * Catppuccin's peach in both flavours, and picked from that table rather than
+   * freely: the pane's sixteen slots are Catppuccin's exact hexes, so an accent
+   * already in the palette is one the terminal and the window share. See #21.
+   */
+  accent: { default: hue.latteAccent, [dark]: hue.macchiatoAccent },
+  /**
+   * An agent stopped to ask something.
+   *
+   * Its own token rather than `warn`, because a question is not a failure and a
+   * strip that draws them alike teaches the eye to ignore both.
+   */
+  waiting: { default: hue.latteWaiting, [dark]: hue.macchiatoWaiting },
+  /** An agent finished and has not been read. */
+  ready: { default: hue.latteReady, [dark]: hue.macchiatoReady },
 });
 
 export const text = stylex.defineVars({
