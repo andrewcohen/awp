@@ -1648,6 +1648,32 @@ walk up appending `:nth-of-type()` and stop at the shortest suffix that is
 unique. A full path from `<html>` is correct and unreadable, and it breaks the
 first time an unrelated part of the page changes.
 
+**An id nobody wrote is not an address**, and the annotator's _first real use_
+found it. Pointing at a tab reported `#base-ui-_r_0_` — unique in the document,
+perfect today, and a different string on the next build, because React's
+`useId` is a render-order counter. So an id is only preferred over a path when
+it looks like something a person chose.
+
+```
+  base-ui-_r_0_ · :r3: · radix-:r1:   minted  →  fall back to a path
+  jobs-tab · save · aria-live-log     kept    →  the best selector there is
+```
+
+`aria` was on the reject list and had to come off: people write `aria-desc-2`
+by hand all the time, and throwing that away costs the one good anchor the
+element had. **The list may only hold prefixes nobody would choose on purpose.**
+
+The patterns are shared with the injected script as **regex literals, not a
+stringified function** — a `RegExp`'s `toString` is specified to return its own
+source, so it crosses the compiler boundary as data. Stringifying the function
+would be the trap two paragraphs up, and it was written that way first.
+
+**The probe imports the module rather than rebuilding the script.** The first
+version read `annotate.ts` as text and re-did the interpolation by hand, which
+broke the moment a third `${…}` was added — and, worse, would have gone on
+passing while testing its own reconstruction. `annotate.ts` has no imports of
+its own precisely so Bun can load it directly.
+
 **A page note is not a review comment, and forcing it to be one would lie.** A
 `ReviewComment` is anchored by `revision`, `path`, `side` and two line numbers;
 a page has a URL and a selector. `NoteSend` is therefore its own call, and it is

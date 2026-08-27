@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { messageFrom, pickerSource, stopSource } from "./annotate";
+import { messageFrom, minted, pickerSource, stopSource } from "./annotate";
 
 // `host-message` is the page's channel, not this feature's, and the page is a
 // stranger. Everything here is about what happens when what arrives is not what
@@ -90,5 +90,48 @@ describe("pickerSource", () => {
     // Optional call, because disarming is reached from the panel's cleanup and
     // from a navigation, and neither can know whether anything was injected.
     expect(stopSource()).toContain("?.disarm()");
+  });
+});
+
+describe("minted", () => {
+  test("rejects the ids a framework counts out", () => {
+    // Found by the annotator's first real use, which reported `#base-ui-_r_0_`
+    // for a tab: unique in the document, and a different string on the next
+    // build, because it is a render-order counter.
+    for (const id of [
+      "base-ui-_r_0_",
+      ":r3:",
+      ":R2ab:",
+      "radix-:r1:",
+      "headlessui-menu-1",
+      "mui-4",
+    ]) {
+      expect(minted(id)).toBe(true);
+    }
+  });
+
+  test("keeps the ids a person wrote", () => {
+    // The false-positive side, and the one that costs something: an id someone
+    // chose is the best selector available, and rejecting it drops the whole
+    // note back to a positional path.
+    for (const id of [
+      "jobs-tab",
+      "save",
+      "main-content",
+      "user_profile",
+      "step2",
+      "aria-live-log",
+    ]) {
+      expect(minted(id)).toBe(false);
+    }
+  });
+
+  test("carries the patterns into the picker as literals, not as a function", () => {
+    // `toString()` on a function is the trap this file exists to avoid — the
+    // renderer is compiled and what comes out is not what was written. A regex
+    // literal is specified to stringify as itself.
+    const source = pickerSource();
+    expect(source).toContain("/_r_|:r[\\da-z]*:/iu");
+    expect(source).not.toContain("MINTED");
   });
 });
