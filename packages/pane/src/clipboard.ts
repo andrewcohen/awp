@@ -12,6 +12,27 @@ import type { Terminal } from "ghostty-web";
  *               The pane keeps one Terminal for the window's life, but it does
  *               not exist yet when this is installed.
  */
+/**
+ * How long to let the system paste before asking for the clipboard.
+ *
+ * A menu item's key equivalent is dispatched by AppKit in the same gesture, so
+ * this only has to outlast one turn of the event loop and a round trip into the
+ * web view. Long enough that a native paste is never raced; short enough that
+ * the fallback does not read as a delay.
+ */
+const WAIT_FOR_NATIVE = 120;
+
+/** Read the clipboard, and say so when the host refuses. */
+const readClipboard = (use: (text: string) => void): void => {
+  void navigator.clipboard.readText().then(use, (error: unknown) => {
+    // Said out loud. A webview can refuse a clipboard read — the document has
+    // to be focused, and some hosts prompt or refuse regardless — and an
+    // earlier version swallowed that, so the only symptom was a paste that did
+    // nothing. Guessing at symptoms like this is what the meter exists for.
+    console.warn("[pane] clipboard read refused:", error);
+  });
+};
+
 export function installClipboard(host: HTMLElement, get: () => Terminal | undefined): void {
   // **Two routes in, deliberately.** The keystroke route reads the clipboard
   // itself; the event route takes what the platform hands over. Neither is
@@ -32,12 +53,17 @@ export function installClipboard(host: HTMLElement, get: () => Terminal | undefi
     }
   };
 
+  // When the platform last delivered a paste of its own. Read by the keystroke
+  // route below to decide whether it needs to do anything at all.
+  let nativeAt = Number.NEGATIVE_INFINITY;
+
   // Route one: the platform delivered a paste. This is what a right-click
   // paste, an Edit menu, and a remote client synthesising one all produce,
   // and it needs no permission because the user's gesture carried the data.
   host.addEventListener(
     "paste",
     (event: ClipboardEvent) => {
+      nativeAt = performance.now();
       const text = event.clipboardData?.getData("text/plain") ?? "";
       if (text === "") {
         return;
@@ -50,16 +76,35 @@ export function installClipboard(host: HTMLElement, get: () => Terminal | undefi
     { capture: true },
   );
 
-  // Route two: the keystroke, read directly.
+  // Route two: the keystroke, read directly — and only when route one did not
+  // already do it.
   //
-  // On macOS the `paste` event only exists if something turns the chord into
-  // a paste command — an application Edit menu, normally. An Electrobun window
-  // has none, so the keystroke arrives as an ordinary keydown and nothing
-  // else happens.
+  // On macOS the `paste` event only exists if something turns the chord into a
+  // paste command, which is an application menu item's job. This window had no
+  // menu, so cmd+V arrived as an ordinary keydown, and this route reading the
+  // clipboard itself was the whole of paste.
   //
-  // Three chords rather than one. Cmd+V is macOS, Ctrl+Shift+V and
-  // Shift+Insert are what terminals use everywhere else, and a remote or
-  // handheld keyboard may only be able to send one of them.
+  // **That is what raised the permission prompt.** `navigator.clipboard
+  // .readText()` is gated by WebKit behind a small native "Paste" button beside
+  // the cursor. A person can click it. Dictation cannot — it puts text on the
+  // clipboard, synthesises cmd+V, and has no way through a prompt — so speaking
+  // at the terminal produced a paste menu and nothing else.
+  //
+  // The window has an Edit menu now (see the app's menu.ts), so the ordinary
+  // path is native again and this route is the fallback rather than the plan:
+  //
+  //   with a Paste item     AppKit runs `paste:` → a `paste` event with the
+  //                         text on it → route one, no permission, no prompt
+  //   without one           nothing arrives, and after a moment this asks
+  //
+  // Deferred rather than decided up front, because there is no way to ask
+  // whether the chord is claimed. `WAIT_FOR_NATIVE` is long enough for AppKit
+  // to dispatch a paste it is going to dispatch and short enough not to read as
+  // a delay. The keydown is deliberately **not** cancelled on the macOS chord:
+  // cancelling it is what would stop the native paste from ever happening.
+  //
+  // The two non-macOS chords are cancelled and read immediately, as before.
+  // Nothing turns those into a paste command, so there is nothing to wait for.
   //
   // Capture phase, ahead of ghostty-web's own keydown handler, which would
   // otherwise send the key to the program as a control character.
@@ -68,21 +113,32 @@ export function installClipboard(host: HTMLElement, get: () => Terminal | undefi
     (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
 
-      const pasteChord =
-        (key === "v" && (event.metaKey || (event.ctrlKey && event.shiftKey)) && !event.altKey) ||
+      // The macOS chord, which the system may turn into a paste of its own.
+      const nativeChord = key === "v" && event.metaKey && !event.ctrlKey && !event.altKey;
+      // The ones nothing else claims. Ctrl+Shift+V and Shift+Insert are what
+      // terminals use everywhere else, and a remote or handheld keyboard may
+      // only be able to send one of them.
+      const ownChord =
+        (key === "v" && event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey) ||
         (key === "insert" && event.shiftKey);
 
-      if (pasteChord) {
+      if (nativeChord) {
+        // Not cancelled, and that is the fix rather than an oversight:
+        // cancelling this is what stops the system pasting.
+        const at = performance.now();
+        setTimeout(() => {
+          if (nativeAt > at) {
+            return;
+          }
+          readClipboard(pasteText);
+        }, WAIT_FOR_NATIVE);
+        return;
+      }
+
+      if (ownChord) {
         event.preventDefault();
         event.stopPropagation();
-        void navigator.clipboard.readText().then(pasteText, (error: unknown) => {
-          // Said out loud. A webview can refuse a clipboard read — the
-          // document has to be focused, and some hosts refuse regardless —
-          // and the previous version swallowed that, so the only symptom was
-          // a paste that did nothing. The meter is in the accessory column
-          // precisely because guessing at symptoms like this costs a day.
-          console.warn("[pane] clipboard read refused:", error);
-        });
+        readClipboard(pasteText);
         return;
       }
 

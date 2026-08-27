@@ -1453,6 +1453,61 @@ The general shape, which has come up here before: **a cleanup that guards on a
 field set by an async step does not run during that step.** The guard reads as
 "nothing to do yet" and means "do nothing, ever".
 
+## On macOS a paste is a menu item before it is a key
+
+Dictation into the pane produced a small native paste menu beside the cursor
+and nothing else. That prompt is the whole diagnosis, and it points at
+something this window was missing entirely.
+
+cmd+V is not a key the way ctrl+j is. It is the **key equivalent of a menu
+item**, and AppKit turns it into the `paste:` action only if some menu item
+claims it. This app had no menu bar at all, so cmd+V arrived at the web view as
+an ordinary keydown and nothing pasted. `clipboard.ts` worked around that by
+reading the clipboard itself:
+
+```
+  navigator.clipboard.readText()      ← WebKit gates this behind a prompt
+```
+
+A person can click that prompt. **Dictation cannot.** Handy transcribes speech,
+puts the text on the clipboard and synthesises cmd+V; a permission prompt is a
+wall it has no way through. So the symptom was a paste menu appearing when
+somebody spoke.
+
+`apps/amoeba/src/bun/menu.ts` installs the menu, and the roles map to
+NSResponder selectors — `undo:`, `paste:`, `selectAll:` — so AppKit performs a
+real paste and WebKit raises a `paste` event carrying the text. No permission,
+no prompt, and route one in `clipboard.ts` already handled that event.
+
+Three things about it worth keeping.
+
+**It was never only the pane.** Every text field in the window had the same
+hole — the address bar, the thread composer, the diff comment box. cut, copy,
+paste, select-all and undo are supplied by the system to any focused field once
+the items exist, and none of them worked. A macOS app with no Edit menu is
+broken for text everywhere in it, not just where somebody noticed.
+
+**A menu is a set of claims on the keyboard.** No File menu and nothing on
+cmd+N: that chord opens the new-thread composer, and a menu item claiming it
+would take the key before the renderer ever saw it.
+
+**The accelerators are spelled out.** Nothing in electrobun's JS layer assigns
+a default one, and a Paste item with no key equivalent looks completely correct
+in the menu bar while fixing nothing.
+
+The keystroke route is now a fallback rather than the plan, and it defers
+instead of deciding, because there is no way to ask whether the chord is
+claimed:
+
+```
+  a Paste item exists   AppKit runs paste: → a `paste` event → route one
+  none                  nothing arrives; after 120ms, ask for the clipboard
+```
+
+The macOS chord is deliberately **not** cancelled — cancelling the keydown is
+exactly what stops the system pasting. The two non-macOS chords still are,
+because nothing turns those into a command and there is nothing to wait for.
+
 ## A terminal listens for keys, and not everything that types is a keyboard
 
 Dictation into the pane did nothing. Not an error, not a dropped character —
