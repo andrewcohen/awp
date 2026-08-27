@@ -47,6 +47,16 @@ import { colors, text } from "./tokens.stylex";
 export interface PanelContext {
   /** A directory in the open session's workspace, or nothing is open. */
   readonly dir: string | undefined;
+  /**
+   * The open session's workspace, when it is one of ours.
+   *
+   * Absent for a session awp did not make, and the diff panel is honest about
+   * what that costs: the patch still renders — a directory is all jj needs —
+   * and the comments do not, because a comment is filed against a workspace and
+   * a foreign session has no name to file it under.
+   */
+  readonly project: string | undefined;
+  readonly workspace: string | undefined;
   readonly scheme: ColorScheme;
 }
 
@@ -60,7 +70,9 @@ const panels: ReadonlyArray<Panel> = [
   {
     id: "diff",
     label: "diff",
-    render: ({ dir, scheme }) => <Diff dir={dir} scheme={scheme} />,
+    render: ({ dir, project, workspace, scheme }) => (
+      <Diff dir={dir} project={project} workspace={workspace} scheme={scheme} />
+    ),
   },
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),

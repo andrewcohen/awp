@@ -662,6 +662,27 @@ Three consequences worth knowing before writing a control:
   `display: none` — an element outside the layout cannot be tabbed to, and
   hover-only means the feature does not exist without a pointer. `MoveToThread`
   is the worked example.
+- **The terminal claims to be a text field, and must not be treated as one.**
+  These chords have to be given up inside `<input>` and `<textarea>`, because on
+  macOS ctrl+h, ctrl+j and ctrl+k are the emacs bindings there — and the pane's
+  keyboard surface is a `contenteditable` div with `role=textbox`, which is
+  correct of it and is how an input method reaches the emulator. A plain
+  `isContentEditable` test therefore reported "editing" for the whole agent
+  column and every chord did nothing:
+
+  ```
+    keydown seen      KeyL, ctrlKey true
+    defaultPrevented  false     ← the listener returned before acting
+  ```
+
+  No error, no visible failure, focus simply staying where it was. Ask _where_
+  the element is rather than what it claims to be — `navigation.ts` answers the
+  agent column by its `data-column`.
+
+`ctrl+j`/`ctrl+k` step through `[data-nav-item]`, which is opt-in. The
+alternative — every focusable element — steps through hover-revealed row
+controls and toolbar buttons, and a list nobody can predict is not navigation.
+A column that marks nothing still receives focus; it just has nothing to step.
 
 This is also why Base UI is a dependency and not a nicety: its menus, tabs and
 dialogs ship the roving tab stop, the typeahead, the focus return and the aria
@@ -744,6 +765,173 @@ history cannot survive is the application being quit and started again.
   render — `stylex.props(a, on && b)` — so which tab is selected has to be a
   value the component can read. Base UI still owns the arrow keys, the roving
   tab stop and the aria wiring, which is the whole reason it is there.
+
+## A default that reads like "on" and means "if you provided one"
+
+The diff panel felt chunky to scroll and slow to change revision, and none of it
+was the daemon: `jj diff` answers in 40ms against a real repository. Every file
+was being tokenized **on the main thread** — the same thread the terminal's
+render loop, React and the pointer handlers are on — because nothing had put a
+worker pool in the tree.
+
+Nothing says so. `@pierre/diffs` takes a prop called `disableWorkerPool` which
+defaults to `false`, and that reads like the pool is on unless it is turned off.
+What it means is in the library's own source:
+
+```
+  const poolManager = useContext(WorkerPoolContext);
+  … new CodeView(options, !disableWorkerPool ? poolManager : undefined, true)
+```
+
+No provider means no context, an absent pool, and a silent fall back to
+highlighting where you stand. The general shape: **a negative flag defaulting to
+false says nothing about whether the thing it names exists.** Grep for the
+provider, not for the flag.
+
+Three things about the fix, each of which replaced something that did not work:
+
+- **The pool is a module, not a component.** The library ships
+  `WorkerPoolContextProvider`, and it builds the pool in `useState` and
+  terminates it in an effect cleanup once the last one unmounts — while
+  `terminateWorkerPoolSingleton` clears the singleton, so the manager still held
+  in that state has no workers and no way to `initialize` again. StrictMode's
+  mount/unmount/remount rehearsal walks straight into it. `highlighting.tsx`
+  builds the pool at module scope and only _publishes_ it.
+- **It wraps the window, not the panel.** Base UI unmounts a hidden tab, so a
+  provider inside the diff panel would build and destroy the pool every time
+  someone looked at jobs instead.
+- **A worker is addressed by URL, and a bare specifier is not one.** The
+  library's worker entry is published with bare imports for a bundler to
+  resolve, so it cannot be handed to `new Worker` directly. A one-line local
+  module that imports it can — Vite follows a relative URL and emits a real
+  worker bundle.
+
+Measured after, and the first line is the one that matters because it is the
+only one that distinguishes a working pool from no pool at all:
+
+```
+  workers spawned          3     ← counted by patching `window.Worker`
+                                   before any app code ran
+  revision click → redraw  119ms
+  errors                   []
+```
+
+**Count the workers.** There is no visible difference between a pool that is
+working and no pool: the same pixels arrive, later. A screenshot cannot tell
+them apart and neither can a stopwatch on a small patch.
+
+## A render during a gesture ends the gesture
+
+The diff's line selection supported dragging the whole time. What did not
+survive was the element being dragged over.
+
+An item's `version` keys the renderer's cache, so a changed version rebuilds
+that item's DOM. The comment composer is an annotation on the item, so opening
+it changes the version — and opening it at _pointerdown_ rebuilt the rows the
+pointer was still moving across:
+
+```
+  pointerdown line 4   selection 4–4  →  composer  →  the item rebuilds
+  pointermove line 9   nothing left to track
+  pointerup            "line 4"
+```
+
+Nothing about that reads as a bug in the drag, and the one gesture that kept
+working is why it stayed hidden:
+
+```
+  drag the numbers    line 4      ← settles mid-gesture
+  click, shift-click  lines 4–9   ← two gestures, a settled render between
+  drag the +          lines 4–5   ← the rebuild caught it two lines in
+```
+
+The rule: **render at the end of a pointer gesture, not during it — but only
+where the render would change an item's identity.** A re-render is cheap. A
+re-render that changes a `version` is a rebuild, and a rebuild is what a
+gesture cannot survive. So the panel holds two selections:
+
+```
+  live       every pointermove   →  selectedLines  →  the blue band
+  selection  pointerup only      →  the annotation →  a new item version
+```
+
+Two things about the shape of this, both learned by getting it wrong first.
+
+**A flag raised in `onLineSelectionStart` is one call too late.** The library's
+wrapper calls `onSelectedLinesChange` _first_ and the bracket callback after
+it, so the composer was already open by the time the flag went up. That fix
+changed nothing at all, which is the useful half of the finding.
+
+**Passing `selectedLines` at all is what makes the selection controlled** —
+`controlledSelection = selectedLines !== undefined`, and `null` is not
+undefined. In controlled mode the renderer stops painting its own highlight and
+waits to be told, so ignoring the intermediate ranges left the drag working and
+_invisible_. It was reported as "it works but i cant see as im drgging", which
+is a sentence about a feature that was measured as passing.
+
+Both of those are the same shape as the worker pool two sections up: a default
+that reads as "on" until the source says otherwise. Read the wrapper, not the
+prop's type.
+
+**Piercing the shadow root: Playwright's locators do, `page.evaluate` does
+not.** A first attempt to check the highlight ran `document.querySelectorAll`
+inside `evaluate`, found nothing, and would have read as "no highlight" in
+every state including the working one. Walk `el.shadowRoot` explicitly:
+
+```
+  idle       marked 0
+  dragging   marked 12, numbers 4–9, bg lab(39 -11 -5)   ← the band
+  after      marked 14  (the composer's own rows join)
+```
+
+**The probe that first said dragging worked was wrong**, in the ordinary way:
+it drove three gestures on one page, and the second and third read the composer
+the first had left open. One page per gesture, or measure nothing. Playwright's
+WebKit does deliver real `pointermove` with a stable `pointerId` — that was
+checked by counting events from an init script before blaming the harness.
+
+## One boundary per column, and the message has to be copyable
+
+A single error boundary at the root is the same thing as no boundary: the whole
+window is replaced by a message and whatever was being looked at is gone with
+it. What made this worth building was the diff panel throwing on a bad
+option — the sidebar was fine, the terminal was fine, and all three went white.
+
+So the granularity is _the part a person can carry on without_: each column
+wraps its own, and the newest code — a panel — is the one that fails.
+
+```
+  sidebar     fails → the other two columns still work
+  agent       fails → the terminal is the point, but the diff can still be read
+  accessory   fails → the common one. Panels are where the new code is.
+```
+
+**The report is selectable and there is a copy button**, and that is the whole
+feature rather than a nicety. A stack trace that cannot be copied is one that
+gets retyped from a photograph or described in prose. Two details:
+
+- **`componentStack` arrives at `componentDidCatch` and nowhere else** — it is
+  not on the Error — so it is kept in state rather than looked up later. It is
+  the most useful line in the report, because it names the component that threw
+  rather than the frame the throw happened in.
+- **Check selection by selecting, not by reading the declaration.**
+  `getComputedStyle(el).userSelect` came back as the empty string under WebKit
+  while `-webkit-user-select` was `text`. Asserting on the unprefixed property
+  would have reported the feature broken when it works:
+
+  ```
+    user-select           ""       ← would have read as "not applied"
+    -webkit-user-select   "text"
+    triple-click          selects  ← the only one that answers the question
+  ```
+
+`Boundary` is a class, and has to be: `getDerivedStateFromError` and
+`componentDidCatch` have no hook equivalent. Everything it renders is a
+function component.
+
+Proved by forcing a throw and looking, which is the only way: the fallback
+appeared, named `Diff`, centred **in the 280px column rather than the window**,
+and the sidebar's four rows and the terminal's canvas were both still there.
 
 ## StyleX fails quietly, twice
 
@@ -862,6 +1050,45 @@ not the renderer the loop draws with, which is where task #23 starts.
 The general shape, again: a mechanism read out of someone else's source is a
 hypothesis. This one was written down as a finding without a pixel ever being
 sampled to check it.
+
+## A browser probe attaches to a session, and resizes it
+
+The zmx rules above are stated in terms of `zmx` commands, and there is a third
+way to reach a session that runs none of them: **drive the window**.
+
+A Playwright probe that opens `#/w/<project>/<workspace>/agent` is a client
+attaching to that session, through the daemon, with the probe's viewport as the
+size. A session takes its size from whoever is looking at it — so every probe
+reflowed a real terminal somebody was working in, to whatever the agent column
+computed to at 1400x900.
+
+```
+  guarded    zmx attach · zmx kill        refuse, or strip the marker
+  guarded    the daemon spawning zmx      zmxChildEnv()
+  NOT        a headless browser opening
+             a route that names a session ← this one, and it looks like nothing
+```
+
+Nothing about it reads as touching a session. There is no `zmx` in the script,
+no `ZMX_SESSION` to strip, and the tell arrives somewhere else entirely: a
+person's terminal reflowing while they type in it, minutes after a probe ran.
+It was reported as "something you keep doing keeps reflowing this into a very
+narrow window", which is not a sentence anything in the repo would have
+produced.
+
+So, for any probe that drives the renderer:
+
+- **Open `#/`.** The fixture needs no session and attaches to nothing. It is
+  enough for every question about layout, theme, scrollbars and the pane's own
+  rendering.
+- **When a route with a session is genuinely needed**, name a workspace this
+  repo created for the purpose — never one a person is working in. The same
+  `ours()` shape `probe:workspace` already uses: a guard on the property that
+  matters is stronger than a blanket refusal.
+- The general rule, again: **when a guard's effect happens in someone else's
+  process, assert on what that process sees.** The daemon is the process that
+  attaches, and no assertion about the probe's own environment could have said
+  so.
 
 ## Seeing the renderer
 

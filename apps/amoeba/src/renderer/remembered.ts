@@ -44,6 +44,7 @@ const COLLAPSED = "amoeba.collapsed";
 const WIDTHS = "amoeba.widths";
 const PLACE = "amoeba.place";
 const LOOSE = "amoeba.loose";
+const SPLIT = "amoeba.split";
 
 /**
  * Stored as two letters rather than JSON.
@@ -142,4 +143,90 @@ export const rememberedPlace = (): string | undefined => {
 
 export const rememberPlace = (path: string): void => {
   writeStored(PLACE, path);
+};
+
+// ── the diff panel's own boundary ──────────────────────────────────────────
+
+/**
+ * How tall the revision list is, in pixels. Zero means folded away.
+ *
+ * A number and not a fraction, because the thing being remembered is a
+ * *boundary someone put somewhere*, and a fraction moves that boundary every
+ * time the window is resized. The panel caps it at 60% of its own height, so a
+ * value stored on a tall window cannot swamp a short one.
+ *
+ * 132 is about six rows: the working copy and the top of a stack, which is what
+ * the list is for on an ordinary day. It replaced a fixed 30%, which on a short
+ * window was two rows and on a tall one was mostly empty band.
+ */
+export const DEFAULT_SPLIT = 132;
+
+export const rememberedSplit = (): number => {
+  const height = Number(readStored(SPLIT));
+  // Number("") is 0, which is a meaningful value here — folded — so the absent
+  // case has to be told apart before the number is trusted. Number(undefined)
+  // is NaN, and that is the one this leans on.
+  if (!Number.isFinite(height) || height < 0) {
+    return DEFAULT_SPLIT;
+  }
+  return Math.round(height);
+};
+
+export const rememberSplit = (height: number): void => {
+  writeStored(SPLIT, String(Math.round(height)));
+};
+
+// ── which files of a patch have been looked at ─────────────────────────────
+
+/**
+ * Marked-as-viewed files, per workspace and revision.
+ *
+ * ── why this is window state and not the daemon's ──────────────────────────
+ *
+ * Viewed-ness is a property of *a person's pass through a patch*, not of the
+ * patch. Nobody else needs to know, nothing acts on it, and it is worthless the
+ * moment the revision changes. That makes it the same kind of thing as a column
+ * width — which is the test this file applies — rather than the same kind of
+ * thing as a comment, which is addressed to somebody and lives in sqlite.
+ *
+ * It can move to the daemon the day a second person looks at the same review.
+ * Until then a migration and an RPC would be machinery for an audience of one.
+ *
+ * ── a key per patch, and paths separated by newlines ───────────────────────
+ *
+ * Not one JSON blob for everything. A patch is the unit that becomes worthless
+ * at once, so it is the unit that gets thrown away at once — and a newline
+ * split has no shape to validate, unlike a parse of whatever a previous version
+ * of this app left behind.
+ *
+ * The keys do accumulate: one per revision ever reviewed, never collected. A
+ * few hundred bytes each and localStorage holds megabytes, so the cost is
+ * theoretical — but it is a leak, and it is written down here rather than
+ * discovered later.
+ */
+const viewedKey = (project: string, workspace: string, revision: string): string =>
+  `amoeba.viewed.${project}/${workspace}/${revision}`;
+
+export const rememberedViewed = (
+  project: string,
+  workspace: string,
+  revision: string,
+): ReadonlyArray<string> => {
+  const stored = readStored(viewedKey(project, workspace, revision));
+  return stored === undefined || stored === "" ? [] : stored.split("\n");
+};
+
+export const rememberViewed = (
+  project: string,
+  workspace: string,
+  revision: string,
+  paths: ReadonlyArray<string>,
+): void => {
+  // Removed rather than stored empty, so unmarking the last file leaves nothing
+  // behind. The absent and the empty case then read the same, which is what
+  // they mean.
+  writeStored(
+    viewedKey(project, workspace, revision),
+    paths.length === 0 ? undefined : paths.join("\n"),
+  );
 };

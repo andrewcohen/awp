@@ -96,9 +96,17 @@ export function TopBar({
         </>
       )}
       <span {...stylex.props(styles.spacer)} />
-      <span {...stylex.props(connected ? styles.live : styles.warn)}>
-        {connected ? "daemon" : "no daemon"}
-      </span>
+      {/* Nothing at all while it is working.
+      
+          A green "daemon" sitting there permanently is a status light that is
+          on by definition — it teaches the eye to skip that corner, which costs
+          exactly the one moment it exists for. The same argument the footer
+          already makes about `0 running · 0 failed`.
+      
+          So the connected state is silence, and the disconnected state is a
+          word rather than a dot: "no daemon" is the sentence, and a red circle
+          would need to be hovered before it said anything. */}
+      {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
     </header>
   );
 }

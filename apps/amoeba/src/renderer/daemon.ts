@@ -1,8 +1,11 @@
 import type { Job } from "@awp-kit/jobs";
 import { AwpClient, layerClient } from "@awp-kit/protocol/client";
 import type {
+  CommentSide,
   Effort,
   Patch,
+  ReviewComment,
+  ReviewSent,
   Revision,
   SessionInfo,
   Thread,
@@ -252,3 +255,54 @@ export const listRevisions = (from: string, limit?: number): Promise<ReadonlyArr
  */
 export const readDiff = (from: string, revision?: string): Promise<Patch> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.Diff({ from, revision })));
+
+// ── comments on a diff ─────────────────────────────────────────────────────
+//
+// Four calls, and the shape of them is the batching decision made concrete: a
+// comment is *written* one at a time and *delivered* all at once. Nothing here
+// types at an agent except `sendReview`.
+
+/** Every comment about this workspace, draft and sent, oldest first. */
+export const listComments = (
+  project: string,
+  workspace: string,
+): Promise<ReadonlyArray<ReviewComment>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewList({ project, workspace })));
+
+/**
+ * Write one down. Always a draft.
+ *
+ * The id and the timestamp come back from the daemon rather than being made
+ * here — the panel's order is `createdAt`, and two windows minting ids from two
+ * clocks would interleave wrongly.
+ */
+export const addComment = (comment: {
+  readonly project: string;
+  readonly workspace: string;
+  /** A change id, or `@` for the working copy — the row the diff is showing. */
+  readonly revision: string;
+  readonly path: string;
+  readonly side: CommentSide;
+  /** The first line of the range, and the last. Equal for a single line. */
+  readonly line: number;
+  readonly endLine: number;
+  readonly body: string;
+}): Promise<ReviewComment> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewAdd(comment)));
+
+/** Delete one. Not an error when it has already gone. */
+export const removeComment = (comment: string): Promise<boolean> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewRemove({ comment })));
+
+/**
+ * Tell the agent every unsent comment about this workspace.
+ *
+ * **Which ones is the daemon's decision, not this call's.** Passing a list of
+ * ids would mean sending what was on screen a moment ago, and a comment written
+ * in between would be marked delivered without appearing in the prompt.
+ *
+ * Rejects with `NoAgent` when the workspace has no agent session to type into,
+ * and marks nothing in that case — an undeliverable comment is still a draft.
+ */
+export const sendReview = (project: string, workspace: string): Promise<ReviewSent> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewSend({ project, workspace })));
