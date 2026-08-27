@@ -215,6 +215,38 @@ export function Web({
   // Something modal is open, and this panel is drawn over the top of it.
   const covered = useOverlaysOpen();
 
+  // The panel's own rectangle has no size.
+  //
+  // `OverlaySyncController.sync()` returns early when the element measures
+  // 0x0 — the library says so in its own source — so the native view keeps
+  // whatever rectangle it last had. Collapsing the accessory column is exactly
+  // that case: the column goes to zero, the webview does not, and a page is
+  // left drawn over the rest of the window with everything under it unreachable.
+  // The reported symptom was the diff's revision list refusing to be dragged,
+  // which is a sentence about a different panel entirely.
+  //
+  // Watched here rather than plumbed down as a `collapsed` prop, because the
+  // property that matters is *the box having no size*, and folding a column is
+  // only one of the ways to get there.
+  const [flat, setFlat] = useState(false);
+
+  useEffect(() => {
+    const parent = stage.current;
+    if (parent === null) {
+      return;
+    }
+    const watch = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      setFlat(rect === undefined || rect.width === 0 || rect.height === 0);
+    });
+    watch.observe(parent);
+    return () => watch.disconnect();
+  }, []);
+
+  // Either reason to stop drawing it. They are different questions with the
+  // same answer, and the webview has only the one switch.
+  const away = covered || flat;
+
   // ── the annotator ────────────────────────────────────────────────────────
   //
   // Three states, and they are a cycle rather than a set: idle, armed, and
@@ -265,15 +297,15 @@ export function Web({
     if (element === undefined) {
       return;
     }
-    element.toggleHidden?.(covered);
+    element.toggleHidden?.(away);
     // Forced on the way back, rather than waiting to be noticed. While hidden
     // the element's rectangle is zero, and the tag's own sync loop only polls
     // every 100ms — so without this the page returns a tenth of a second after
     // the dialog goes, which reads as the panel being slow to wake up.
-    if (!covered) {
+    if (!away) {
       element.syncDimensions?.(true);
     }
-  }, [covered]);
+  }, [away]);
 
   useEffect(() => {
     const parent = stage.current;
