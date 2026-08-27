@@ -53,3 +53,53 @@ body {
 body {
   user-select: none;
 }
+
+/* Scrollbars, for the columns that are allowed one.
+ *
+ * The engine's default is the system scrollbar, which on macOS is a wide grey
+ * bar with a track behind it — furniture from a document viewer, sitting inside
+ * a column that is 240px across. These are the same mechanism, dressed down: no
+ * track, a thumb inset from the edge by a transparent border, and a colour that
+ * is a wash of the foreground rather than a colour of its own.
+ *
+ * `light-dark()` and not a media query, deliberately. The appearance can be
+ * chosen in this window as well as inherited from the system, and theme.ts says
+ * so by setting `color-scheme` inline — which is exactly what `light-dark()`
+ * reads. A `prefers-color-scheme` query would keep the system's scrollbars on a
+ * window whose every other colour had changed.
+ *
+ * `background-clip: padding-box` is what makes the transparent border work:
+ * without it the thumb paints under its own border and the inset does nothing.
+ *
+ * These are `-webkit-` prefixed and that is not a compromise here — the window
+ * is WKWebView, and the standard `scrollbar-width`/`scrollbar-color` pair
+ * cannot express the inset. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: light-dark(rgba(0, 0, 0, 0.22), rgba(255, 255, 255, 0.16));
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: light-dark(rgba(0, 0, 0, 0.38), rgba(255, 255, 255, 0.3));
+}
+
+/* A thumb that is only a few pixels tall is a thumb nobody can grab. */
+::-webkit-scrollbar-thumb:vertical {
+  min-height: 28px;
+}
+
+::-webkit-scrollbar-thumb:horizontal {
+  min-width: 28px;
+}
