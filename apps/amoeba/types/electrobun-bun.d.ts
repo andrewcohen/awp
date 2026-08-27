@@ -39,15 +39,33 @@ declare module "electrobun/bun" {
     constructor(options?: BrowserWindowOptions);
     readonly id: number;
     close(): void;
+    /** The window's real frame, read from the native side rather than cached. */
+    getFrame(): { x: number; y: number; width: number; height: number };
+    setSize(width: number, height: number): void;
+    /** The window's own web view. See the View menu in menu.ts. */
+    readonly webview: {
+      reload(): void;
+      /**
+       * Electrobun's own inspector, which docks into this window.
+       *
+       * Not Safari's. Attaching Safari's Web Inspector to this view leaves it
+       * short and it does not recover — see the View menu.
+       */
+      toggleDevTools(): void;
+      /** Fire and forget: the native call has no completion, so nothing comes back. */
+      executeJavascript(js: string): void;
+    };
   }
 
   /**
    * A menu item, narrowed to the two shapes this app builds.
    *
    * A role and an action are alternatives upstream — the library's own comment
-   * says "application menus can either have an action or a role, not both" —
-   * and everything here is a role, because the point is to hand the keyboard
-   * back to AppKit's own text editing rather than to do anything ourselves.
+   * says "application menus can either have an action or a role, not both".
+   * The Edit and Window items are roles, because the point there is to hand
+   * the keyboard back to AppKit's own text editing rather than to do anything
+   * ourselves; the View items are actions, because reloading and re-fitting
+   * the window are this app's own and AppKit has no role for either.
    */
   export type ApplicationMenuItemConfig =
     | { type: "divider" | "separator" }
@@ -66,5 +84,14 @@ declare module "electrobun/bun" {
 
   export const ApplicationMenu: {
     setApplicationMenu(menu: Array<ApplicationMenuItemConfig>): void;
+    /**
+     * Every click on an item that carries an `action`.
+     *
+     * `unknown` rather than a shape, because this crosses from the native side
+     * and the library types it as `unknown` too. The handler in menu.ts checks
+     * what it got instead of asserting — an unrecognised action inside a menu
+     * handler must do nothing, not throw somewhere nothing would report it.
+     */
+    on(name: "application-menu-clicked", handler: (event: unknown) => void): void;
   };
 }
