@@ -97,14 +97,20 @@ const panels: ReadonlyArray<Panel> = [
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
+  // Room on all four sides, and the fourth is the one that was missing.
+  //
+  // The strip used to have no bottom padding at all, so whatever the selected
+  // panel put first — the diff's revision row, the web panel's address bar —
+  // sat directly against the tabs and read as part of them. A tab strip is a
+  // control, and a control touching the thing it controls has no edge.
   list: {
     display: "flex",
     flexShrink: 0,
     gap: "0.25rem",
-    padding: "0.3rem 0.5rem 0",
+    padding: "0.45rem 0.5rem",
   },
   tab: {
-    padding: "0.2rem 0.5rem",
+    padding: "0.25rem 0.6rem",
     backgroundColor: "transparent",
     borderStyle: "none",
     borderRadius: "0.2rem",

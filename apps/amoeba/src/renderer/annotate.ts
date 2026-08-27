@@ -101,6 +101,40 @@ export const messageFrom = (detail: unknown): Message | undefined => {
 };
 
 /**
+ * Whether an id was minted by a framework rather than written by a person.
+ *
+ * React's `useId`, and every component library built on it, mints ids like
+ * `base-ui-_r_0_` or `:r3:` — unique in the document and different on the next
+ * build, because they are a render-order counter. The annotator's first real
+ * use reported `#base-ui-_r_0_` for a tab: a perfect selector today that
+ * resolves to nothing tomorrow.
+ *
+ * A prefix list alone would go stale, so the first test is the shape they all
+ * share — a React id carries `_r_` or `:r…:` — and the named libraries are the
+ * handful that do not.
+ *
+ * The patterns are shared with the picker, and **only the patterns** — the
+ * function is not stringified into it. A `toString()`d function is the trap
+ * this file warns about at the top: renderer source goes through Vite, the
+ * React Compiler and StyleX's Babel pass, and what comes back out is not what
+ * was written. A RegExp's `toString` is specified to return its own literal, so
+ * these cross that boundary as data rather than as code.
+ */
+const MINTED: ReadonlyArray<RegExp> = [
+  // React's own shape, in both spellings it has used.
+  /_r_|:r[\da-z]*:/iu,
+  // The libraries that mint their own prefix instead.
+  //
+  // `aria` was on this list and had to come off: it is a prefix people write by
+  // hand all the time — `aria-live-log`, `aria-desc-2` — and rejecting those
+  // throws away the best selector an element has for no reason. The list may
+  // only hold prefixes nobody would choose on purpose.
+  /^(?:base-ui|radix|headlessui|mui|chakra|reach|downshift)[-:]/iu,
+];
+
+export const minted = (id: string): boolean => MINTED.some((one) => one.test(id));
+
+/**
  * The picker, as source to hand the page.
  *
  * A template string rather than a function put through `toString()`, which was
@@ -137,15 +171,21 @@ export const pickerSource = (): string => `
     }
   };
 
+  // An id nobody wrote is not an address — the same patterns as \`minted\`
+  // above, carried across as regex literals rather than as a stringified
+  // function.
+  const minted = (id) => [${MINTED.map(String).join(", ")}].some((one) => one.test(id));
+
   // A selector a person could paste into devtools, and a machine could resolve.
   //
-  // An id wins outright when it is unique, because it is short, stable across a
-  // re-render and readable. Otherwise walk up appending :nth-of-type() and stop
-  // the moment the accumulated selector matches exactly one element — a full
-  // path from <html> is correct and unreadable, and the shortest unique suffix
-  // is the one that survives an unrelated part of the page changing.
+  // An id wins outright when it is unique and somebody wrote it: it is short,
+  // stable across a re-render and readable. Otherwise walk up appending
+  // :nth-of-type() and stop the moment the accumulated selector matches exactly
+  // one element — a full path from <html> is correct and unreadable, and the
+  // shortest unique suffix is the one that survives an unrelated part of the
+  // page changing.
   const selectorFor = (el) => {
-    if (el.id && document.querySelectorAll("#" + CSS.escape(el.id)).length === 1) {
+    if (el.id && !minted(el.id) && document.querySelectorAll("#" + CSS.escape(el.id)).length === 1) {
       return "#" + CSS.escape(el.id);
     }
     const parts = [];
@@ -170,7 +210,9 @@ export const pickerSource = (): string => `
   // codebase puts fourteen on a button and the label becomes the selector again.
   const labelFor = (el) => {
     const tag = el.tagName.toLowerCase();
-    const id = el.id ? "#" + el.id : "";
+    // Same test as the selector uses. A minted id is noise in a name as much as
+    // it is a lie in an address.
+    const id = el.id && !minted(el.id) ? "#" + el.id : "";
     const cls = el.classList.length > 0 ? "." + el.classList[0] : "";
     return tag + id + cls;
   };
