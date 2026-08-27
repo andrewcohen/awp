@@ -92,8 +92,20 @@ const make = Effect.gen(function* () {
    * wherever the daemon was launched. Everything else zmx is asked here is a
    * question about a session that already exists, and those do not care.
    */
-  const runIn = (op: string, cwd: string, args: ReadonlyArray<string>) =>
-    capture(spawner, ChildProcess.make("zmx", [...args], { cwd, env: zmxChildEnv() })).pipe(
+  const runIn = (
+    op: string,
+    cwd: string,
+    args: ReadonlyArray<string>,
+    extra?: Readonly<Record<string, string>>,
+  ) =>
+    capture(
+      spawner,
+      // The caller's additions go under `zmxChildEnv`, not over it. A caller
+      // able to set `ZMX_SESSION` back could reintroduce the client hijack this
+      // whole file is arranged to prevent, and the guard has to be the last
+      // word rather than a default.
+      ChildProcess.make("zmx", [...args], { cwd, env: zmxChildEnv({ ...process.env, ...extra }) }),
+    ).pipe(
       Effect.mapError(
         (cause) =>
           new MultiplexerError({
@@ -124,6 +136,7 @@ const make = Effect.gen(function* () {
       readonly name: string;
       readonly cwd: string;
       readonly command: ReadonlyArray<string>;
+      readonly env?: Readonly<Record<string, string>> | undefined;
     }) =>
       Effect.gen(function* () {
         const op = `start ${options.name}`;
@@ -151,7 +164,7 @@ const make = Effect.gen(function* () {
         // `-d` so zmx does not wait for the command to finish. Without it a
         // long-lived agent process would hold this effect open for as long as
         // the session lives.
-        yield* runIn(op, options.cwd, ["run", options.name, "-d", ...options.command]);
+        yield* runIn(op, options.cwd, ["run", options.name, "-d", ...options.command], options.env);
       }),
 
     send: (name: string, text: string) =>

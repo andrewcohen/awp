@@ -391,6 +391,29 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
             name,
             cwd: workspacePath(input.project, workspace),
             command: input.agent,
+            // What the status hooks read. A person's Claude Code settings run
+            // `awp internal report-status` on PreToolUse, Stop and
+            // AskUserQuestion, and every one of those is gated on
+            // `$AWP_WORKSPACE` or `$TMUX` — so an agent started without them
+            // reports nothing at all.
+            //
+            // **Necessary and not sufficient**, which was worth finding out
+            // before believing this fixed anything. `writeWorkspaceStatus` in
+            // the archive reads the entry and gives up when there is not one:
+            //
+            //   entry, ok := entries[name]
+            //   if !ok { return entries }      // ← writes nothing
+            //
+            // So a workspace with no row in `~/.awp/workspace-state.json` never
+            // gains one by reporting, and amoeba writes no row. These two
+            // variables make an amoeba workspace report *once something has
+            // created its row* — which is the Go implementation's job today and
+            // will be ACP's tomorrow. They cost nothing and are right either
+            // way; see the note in `workspace-state.ts` on ranked sources.
+            //
+            // The repo root and not the workspace directory: the state file is
+            // keyed by the repository.
+            env: { AWP_WORKSPACE: workspace, AWP_REPO_ROOT: input.repo },
           })
           .pipe(Effect.mapError(refused("could not start the session")));
 

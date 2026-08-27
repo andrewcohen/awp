@@ -118,6 +118,16 @@ const styles = stylex.create({
     font: "inherit",
     fontSize: text.small,
     cursor: "pointer",
+    // A tab is a control, not prose. Without this a double-click to switch
+    // tabs selects the word instead, and a drag across the strip leaves three
+    // labels highlighted — which reads as the window being in a text mode it
+    // is not.
+    //
+    // Both spellings, because WebKit is the engine this ships on and it
+    // reports the unprefixed property as the empty string while honouring the
+    // prefixed one. See the note in AGENTS.md: check selection by selecting.
+    userSelect: "none",
+    WebkitUserSelect: "none",
   },
   tabOn: {
     backgroundColor: colors.border,
