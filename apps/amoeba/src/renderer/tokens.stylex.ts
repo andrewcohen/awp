@@ -108,6 +108,14 @@ export const space = stylex.defineVars({
    * the leftmost control the window's real left edge.
    */
   lights: "1.75rem",
+  /**
+   * How far in the window controls reach, on a `hiddenInset` window.
+   *
+   * Used as padding on *both* sides of the title band, which is what makes the
+   * title centre in the window rather than in the space left over — and what
+   * stops it ever reaching the buttons in a narrow window.
+   */
+  lightsInline: "5.25rem",
   row: "0.35rem",
   gutter: "1rem",
 });
