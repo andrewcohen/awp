@@ -10,7 +10,7 @@ import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
 import { addressFrom, addressOf, pathOf, sessionAt } from "./address";
-import { type Collapsed, type Columns, fitColumns } from "./columns";
+import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
 import { projectsOf } from "./workspaces";
 import {
   rememberCollapsed,
@@ -65,6 +65,42 @@ const styles = stylex.create({
   // without minting a class per pixel.
   fixed: (width: number) => ({ flex: `0 0 ${width}px` }),
   agent: { flex: "1 1 auto" },
+
+  // ── the fold, animated, and only the fold ────────────────────────────────
+  //
+  // Applied while `folding` is set and taken off again after, rather than left
+  // on the column permanently. That is the whole of the design, and it is
+  // because the same `flex-basis` is written by two very different things:
+  //
+  //   fold      one keypress, N → 0, and the eye needs to be told which
+  //             column went where
+  //   a drag    a value per pointermove, already tracking the cursor
+  //   a resize  fitColumns squeezing a column to keep the agent readable
+  //
+  // A transition left on would make the last two lag. On a drag it is the
+  // familiar failure — the divider trails the pointer and never catches up,
+  // which is the same complaint the origin-relative arithmetic in Divider.tsx
+  // exists to avoid. On a window resize it would animate a correction that is
+  // supposed to be a fact about the window's size.
+  //
+  // Longhands, not the `transition` shorthand. StyleX drops some shorthands in
+  // silence — see AGENTS.md on `border` and `background` — and this one has no
+  // gate that would catch it: the layout is correct either way and only the
+  // movement is missing, which reads as "the animation did not land" rather
+  // than as a build problem.
+  eased: (ms: number) => ({
+    transitionProperty: "flex-basis",
+    // Out fast, in gently. The column leaves at speed and arrives settling,
+    // which is what makes a fold read as one object moving rather than as a
+    // width being assigned.
+    transitionTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
+    transitionDuration: {
+      default: `${ms}ms`,
+      // Someone who has asked their system for less motion is not asking for a
+      // faster version of it.
+      "@media (prefers-reduced-motion: reduce)": "0s",
+    },
+  }),
 });
 
 export function App() {
@@ -98,13 +134,35 @@ export function App() {
   const [collapsed, setCollapsed] = useState<Collapsed>(rememberedCollapsed);
   const columns = fitColumns(width, want, collapsed);
 
+  // True only for the length of a fold, and the reason is in `styles.eased`:
+  // the same width is written by a drag and by a window resize, and neither of
+  // those may be animated.
+  const [folding, setFolding] = useState(false);
+
   const fold = (which: keyof Collapsed) => () => {
+    setFolding(true);
     setCollapsed((prev) => {
       const next = { ...prev, [which]: !prev[which] };
       rememberCollapsed(next);
       return next;
     });
   };
+
+  // A timer rather than `transitionend`, and the difference matters: the event
+  // does not fire when there is no transition to end, which is exactly the
+  // `prefers-reduced-motion` case — so the flag would be raised and never
+  // lowered, and the next drag would be the animated one.
+  //
+  // Folding again mid-animation restarts the timer, because the effect is keyed
+  // on `folding` going false and back true. A second fold before the first has
+  // finished is one continuous movement, not two.
+  useEffect(() => {
+    if (!folding) {
+      return;
+    }
+    const timer = setTimeout(() => setFolding(false), FOLD_MS);
+    return () => clearTimeout(timer);
+  }, [folding]);
 
   // ctrl+h/l between the columns, ctrl+j/k within one. See navigation.ts.
   useColumnKeys(collapsed);
@@ -238,7 +296,11 @@ export function App() {
       <div {...stylex.props(styles.columns)}>
         <aside
           data-column="sidebar"
-          {...stylex.props(styles.column, styles.fixed(columns.sidebar))}
+          {...stylex.props(
+            styles.column,
+            styles.fixed(columns.sidebar),
+            folding && styles.eased(FOLD_MS),
+          )}
         >
           <Boundary where="the sidebar">
             <Sidebar
@@ -284,7 +346,11 @@ export function App() {
 
         <aside
           data-column="accessory"
-          {...stylex.props(styles.column, styles.fixed(columns.accessory))}
+          {...stylex.props(
+            styles.column,
+            styles.fixed(columns.accessory),
+            folding && styles.eased(FOLD_MS),
+          )}
         >
           {/* The open session's directory, because the diff panel diffs the
               workspace on screen. `startDir` and not the identity's workspace

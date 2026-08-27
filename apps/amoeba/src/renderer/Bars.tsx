@@ -123,6 +123,38 @@ export function TopBar({
 }) {
   return (
     <header {...stylex.props(styles.bar, styles.top)}>
+      {/* ── folding a column, from the one place that is never folded ──────
+
+          These used to live on the divider between the columns: a control that
+          appeared on hover, and stayed visible once its column was folded
+          because it was then the only way back. That worked and was hard to
+          find — an affordance that is invisible until the pointer is already
+          on a one-pixel rule is one nobody discovers, and it could not be
+          pressed at all without a pointer.
+
+          The top bar is the one strip that never folds, so it is where a
+          control that folds something else belongs.
+
+          **Each one sits at the edge it folds.** Both were at the right end
+          together, which put the sidebar's control as far from the sidebar as
+          the window allows and left the two of them to be told apart by a
+          mirrored glyph alone. Now the icon's mirror and its position say the
+          same thing, and neither is carrying the distinction by itself.
+
+          The left one cannot go further left than this: the window is
+          `hiddenInset`, so the traffic lights float over the first 5.25rem and
+          the bar's own start padding is what clears them. */}
+      <button
+        type="button"
+        aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+        aria-pressed={!collapsed.sidebar}
+        title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+        onClick={() => onFold("sidebar")}
+        {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
+      >
+        <SidebarSimpleIcon size={15} aria-hidden />
+      </button>
+
       {session === undefined ? (
         <span>no session</span>
       ) : (
@@ -147,28 +179,7 @@ export function TopBar({
           would need to be hovered before it said anything. */}
       {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
 
-      {/* ── folding a column, from the one place that is never folded ──────
-
-          These used to live on the divider between the columns: a control that
-          appeared on hover, and stayed visible once its column was folded
-          because it was then the only way back. That worked and was hard to
-          find — an affordance that is invisible until the pointer is already
-          on a one-pixel rule is one nobody discovers, and it could not be
-          pressed at all without a pointer.
-
-          The top bar is the one strip that never folds, so it is where a
-          control that folds something else belongs. Both are always here,
-          both say which state they are in, and both are reachable by tab. */}
-      <button
-        type="button"
-        aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
-        aria-pressed={!collapsed.sidebar}
-        title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
-        onClick={() => onFold("sidebar")}
-        {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
-      >
-        <SidebarSimpleIcon size={15} aria-hidden />
-      </button>
+      {/* The other half of the pair — see the sidebar's, at the far left. */}
       <button
         type="button"
         aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
