@@ -142,29 +142,57 @@ export function mountPaneTerminal(parent: HTMLElement, options: PaneOptions): Pa
   return pane;
 }
 
-// setPaneTheme recolours in place, so the window can follow the system's
-// light/dark preference without rebuilding the terminal.
+// setPaneTheme recolours what it can, which is less than it looks.
 //
-// Through the renderer's setter for the same reason setPaneFont is: constructing
-// a second Terminal is the one operation that corrupts wasm state.
+// ── ghostty-web 0.4.0 cannot change a theme after open(), and says so ─────
 //
-// The nudge afterwards is not superstition. `setTheme` updates the renderer's
-// theme and palette and returns — it repaints nothing. The render loop runs
-// every frame but asks the buffer which rows are dirty, and recolouring marks
-// none of them, so a swapped theme would sit invisible until the next write.
-// The only full redraw reachable from public API is the one `render` triggers
-// itself when the canvas' pixel dimensions disagree with the renderer's metrics:
-// it resizes and forces the frame. So the canvas is put into disagreement
-// deliberately. Recovery is the next animation frame.
+// The colours are compiled into the wasm terminal when it is built —
+// `buildWasmConfig` hands the emulator `fgColor`, `bgColor`, `cursorColor` and
+// the sixteen-colour palette — and the library's own option handler admits it:
+//
+//   case "theme":
+//     console.warn("theme changes after open() are not yet fully supported");
+//
+// The only thing that rebuilds that config is `reset()`, which frees the wasm
+// terminal and makes a new one. That is the scrollback gone, which for a pane
+// watching an agent work is a worse outcome than the wrong colours.
+//
+// So what this does is repaint the *renderer's* half: the ground, and any cell
+// whose colour is the default rather than one the program asked for. Measured
+// on the fixture, counting latte-base pixels after switching to light:
+//
+//   canvas.width = 0            0     the nudge this replaced
+//   clear() + render(forceAll)  263
+//
+// 263 and not the whole canvas, because the fixture paints most of its cells in
+// explicit colours and those live in the emulator. A real repaint needs the
+// patch — see task #23 — and this is the honest partial until then.
+//
+// ── why the nudge did nothing ────────────────────────────────────────────
+//
+// It set `canvas.width = 0` to put the canvas' pixel size in disagreement with
+// the renderer's metrics, on the reading that `render` resizes and forces a
+// frame when they differ. That was written down as a finding without a pixel
+// ever being sampled, and it is wrong: the canvas returns to its own size and
+// not one pixel changes. `render(buffer, forceAll)` is public and is exactly
+// what the library calls on open; `clear()` is public and fills the ground.
+//
+// **A single corner pixel is the wrong probe here**, and cost an hour: the
+// fixture draws colour ramps and blocks, so the corner is whatever it painted
+// there rather than the theme's ground. Count the canvas' most common colours
+// instead.
 export function setPaneTheme(theme: ITheme): void {
   if (!term || theme === currentTheme) {
     return;
   }
   currentTheme = theme;
   term.renderer?.setTheme(theme);
-  const canvas = term.renderer?.getCanvas();
-  if (canvas) {
-    canvas.width = 0;
+  // Cleared *then* redrawn, and both are needed. `render(…, forceAll)` redraws
+  // every line, and a line only paints the cells it has — the ground behind a
+  // blank row is nobody's cell, so it keeps the colour the last theme left.
+  term.renderer?.clear();
+  if (term.wasmTerm) {
+    term.renderer?.render(term.wasmTerm, true, term.viewportY, term);
   }
 }
 
