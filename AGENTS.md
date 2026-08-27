@@ -1067,6 +1067,77 @@ Proved by forcing a throw and looking, which is the only way: the fallback
 appeared, named `Diff`, centred **in the 280px column rather than the window**,
 and the sidebar's four rows and the terminal's canvas were both still there.
 
+## Latte's accents are not text colours
+
+The window was reported as "very gray and boring and low contrast and hard to
+see". It was not short of colour — it was full of colour nobody could see.
+Every chrome hue measured against its own base:
+
+```
+  latte                          macchiato
+    text     6.57  AA             text     10.85  AAA
+    muted    2.63  FAIL           muted     2.60  FAIL
+    live     2.75  FAIL           live     10.03  AAA
+    accent   2.45  FAIL           accent    8.33  AAA
+    waiting  2.15  FAIL           waiting  11.16  AAA
+```
+
+4.5 is the threshold for text and 3.0 for a mark, so Latte failed both on
+everything but its body text. **Catppuccin's Latte palette is tuned to be an
+accent on a light surface, not ink on one** — that is upstream working as
+intended, and taking its hexes at face value for text is the mistake.
+
+The fix is the smallest one: each Latte hue darkened **along its own hue and
+saturation** until it clears 4.6, rather than a different palette. Macchiato
+needed nothing, which is the asymmetry a dark-first palette has and nobody
+notices until they measure.
+
+This is allowed in `tokens.stylex.ts` and would not be in `palette.ts`. The
+pane's sixteen slots have to be upstream's exact hexes or a program picking
+colours against them looks wrong. The chrome answers to nothing but this app,
+and that file already said so.
+
+**Compute contrast off the rendered element, not off the source hex.** A token
+can be right and the rule applying it wrong, and only sampling
+`getComputedStyle(el).color` against the painted background tells the two
+apart. The probe does it in the page.
+
+### Two families, and the line is address versus prose
+
+One monospace for everything is the terminal habit, and it is what made the
+furniture look like output. The pane must stay monospace — a proportional font
+breaks every alignment a program draws. The line is not "chrome versus pane":
+
+```
+  mono   a slug, a bookmark, a revision, a path, a command, the pane
+  ui     a title, a label, a heading, a count, a sentence, a button
+```
+
+A slug is a thing somebody will type somewhere else, and the monospace says so.
+
+### The type floor is 14px, and it is about text
+
+Stated as a requirement — "stop using such tiny fonts in headers my eyesight
+isnt amazing nothing smaller than idk 14" — so the scale is built around it
+rather than clamped afterwards. It cost a step: 15/14/13/12/11 put four of its
+five sizes under the floor, and raising them collapses the bottom two. Four
+readable steps beat five where two are not, and a caption is then separated by
+**weight and colour** instead of by size — which is the better axis anyway,
+since size is the one that trades legibility for hierarchy.
+
+The floor is about text. A status bullet is sized against the name beside it,
+and an icon's `font-size` is its em box; both are legitimately smaller. Checked
+rather than assumed — everything in the window under 14px is one of those two,
+and a _word_ appearing in that list is a bug.
+
+### An accent is spent, not applied
+
+The first pass put the orange on every thread heading, which is a second body
+colour: with an accent on everything, nothing is left to mark the one row that
+matters. It is now on exactly two things that answer "this, here" — the
+selected row's edge and the selected tab — plus the pull request number, which
+earns it by being the only thing on the strip pointing outside the window.
+
 ## StyleX fails quietly, twice
 
 Both of these produce markup that is structurally right and visually wrong, with

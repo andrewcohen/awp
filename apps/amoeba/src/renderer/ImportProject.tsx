@@ -42,7 +42,7 @@ const styles = stylex.create({
     // than being clipped — a flex item will not shrink below its content.
     minWidth: 0,
     padding: "0.35rem 0.5rem",
-    backgroundColor: colors.base,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderStyle: "solid",
     borderColor: colors.border,
@@ -91,7 +91,6 @@ const styles = stylex.create({
     borderStyle: "none",
     borderRadius: "0.25rem",
     color: colors.text,
-    fontFamily: text.mono,
     fontSize: text.body,
     textAlign: "start",
     cursor: "pointer",
@@ -108,6 +107,9 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     color: colors.muted,
+    // A path, so monospace — it is the thing that tells two repositories of
+    // the same name apart, and it is the thing somebody will type elsewhere.
+    fontFamily: text.mono,
     fontSize: text.small,
     textAlign: "end",
   },

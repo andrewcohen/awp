@@ -47,7 +47,7 @@ const styles = stylex.create({
     overflowY: "auto",
   },
   what: { color: colors.warn, fontSize: text.body, textAlign: "center" },
-  where: { color: colors.muted, fontSize: text.tiny },
+  where: { color: colors.muted, fontSize: text.small },
   // The message itself. Selectable, wrapped, and scrolled inside its own box —
   // a stack trace is the widest text this window will ever hold, and letting it
   // set the column's width is how a horizontal scrollbar gets born.
@@ -62,7 +62,7 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.25rem",
     color: colors.text,
-    fontSize: text.tiny,
+    fontSize: text.small,
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
     overflowY: "auto",
@@ -79,7 +79,7 @@ const styles = stylex.create({
     borderRadius: "0.2rem",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.tiny,
+    fontSize: text.small,
     cursor: "pointer",
   },
 });

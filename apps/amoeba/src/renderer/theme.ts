@@ -43,6 +43,8 @@ type ChromeRole = Exclude<Extract<keyof typeof colors, string>, NotAVariable>;
 
 const latteChrome: Record<ChromeRole, string> = {
   base: hue.latteBase,
+  surface: hue.latteSurface,
+  raised: hue.latteRaised,
   text: hue.latteText,
   muted: hue.latteMuted,
   border: hue.latteBorder,
@@ -55,6 +57,8 @@ const latteChrome: Record<ChromeRole, string> = {
 
 const macchiatoChrome: Record<ChromeRole, string> = {
   base: hue.macchiatoBase,
+  surface: hue.macchiatoSurface,
+  raised: hue.macchiatoRaised,
   text: hue.macchiatoText,
   muted: hue.macchiatoMuted,
   border: hue.macchiatoBorder,

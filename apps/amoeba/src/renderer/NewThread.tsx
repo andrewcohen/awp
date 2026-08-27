@@ -115,13 +115,12 @@ const styles = stylex.create({
     display: "flex",
     flexDirection: "column",
     width: "min(38rem, calc(100vw - 4rem))",
-    backgroundColor: colors.base,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderStyle: "solid",
     borderColor: colors.border,
     borderRadius: "0.5rem",
     color: colors.text,
-    fontFamily: text.mono,
     fontSize: text.body,
     boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
     // No padding of its own. Each band pads itself, so the rules between them
@@ -231,19 +230,24 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
     textAlign: "right",
     color: colors.muted,
-    fontSize: text.tiny,
+    fontSize: text.small,
   },
   warn: { color: colors.warn },
 
   positioner: { zIndex: 10 },
   menu: {
     padding: "0.2rem",
-    backgroundColor: colors.base,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderStyle: "solid",
     borderColor: colors.border,
     borderRadius: "0.25rem",
     color: colors.text,
+    // Monospace, and it is the one menu in the window that keeps it: what this
+    // mostly lists is bookmark names, and a bookmark is an address — something
+    // a person will type at jj afterwards. The model and effort menus share the
+    // component and get it too, which is the cost of one component for four
+    // chips and is a smaller cost than four components.
     fontFamily: text.mono,
     fontSize: text.small,
     boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.3)",
@@ -258,7 +262,7 @@ const styles = stylex.create({
     // Base UI sets the attribute; what it looks like is this file's business.
     ":is([data-highlighted])": { backgroundColor: colors.border },
   },
-  tick: { width: "0.75rem", flexShrink: 0, color: colors.muted, fontSize: text.tiny },
+  tick: { width: "0.75rem", flexShrink: 0, color: colors.muted, fontSize: text.small },
   empty: {
     padding: "0.9rem 0.9rem 0",
     color: colors.muted,

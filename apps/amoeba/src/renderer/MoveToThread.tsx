@@ -62,13 +62,12 @@ const styles = stylex.create({
     maxHeight: "18rem",
     overflowY: "auto",
     padding: "0.25rem",
-    backgroundColor: colors.base,
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderStyle: "solid",
     borderColor: colors.border,
     borderRadius: "0.35rem",
     color: colors.text,
-    fontFamily: text.mono,
     fontSize: text.small,
     boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.35)",
   },
@@ -84,12 +83,12 @@ const styles = stylex.create({
   label: {
     padding: "0.3rem 0.4rem 0.15rem",
     color: colors.muted,
-    fontSize: text.tiny,
+    fontSize: text.small,
   },
   tick: { width: "0.8rem", flexShrink: 0, color: colors.live },
   name: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   rule: { height: 1, margin: "0.25rem 0", backgroundColor: colors.border },
-  failure: { padding: "0.25rem 0.4rem", color: colors.warn, fontSize: text.tiny },
+  failure: { padding: "0.25rem 0.4rem", color: colors.warn, fontSize: text.small },
 });
 
 export function MoveToThread({
