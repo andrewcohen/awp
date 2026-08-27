@@ -17,18 +17,23 @@ import {
   JobNotFound,
   NoAgent,
   type PageNote,
+  type Project,
+  ProjectImportFailed,
   type ReviewComment,
   type SessionIdentity,
   type SessionInfo,
   SessionNotFound,
   ThreadStartFailed,
 } from "@awp-kit/protocol";
-import { Clock, Effect, FileSystem, Stream } from "effect";
+import { homedir } from "node:os";
+import { basename } from "node:path";
+import { Clock, Effect, FileSystem, Option, Path, Stream } from "effect";
 import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
 import { sessionName } from "./naming";
+import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
 import { Threads } from "./threads";
 
@@ -268,6 +273,7 @@ export const layer = AwpRpcs.toLayer(
     const jobs = yield* Jobs;
     const threads = yield* Threads;
     const reviews = yield* Reviews;
+    const projects = yield* Projects;
     const config = yield* Settings;
     const jj = yield* Jj;
     // Taken once, here, rather than per request. A handler's return value has
@@ -275,6 +281,9 @@ export const layer = AwpRpcs.toLayer(
     // watcher's file system is closed over instead of being asked for inside
     // the stream.
     const files = yield* FileSystem.FileSystem;
+    // Path for the same reason, and provided back to `discover` below rather
+    // than left in its requirements: a handler's effect must name none.
+    const paths = yield* Path.Path;
 
     /**
      * The revision a thread's work is at, for a thread branching off it.
@@ -618,6 +627,149 @@ export const layer = AwpRpcs.toLayer(
       // ThreadStoreError dies here rather than crossing the wire. ThreadNotFound
       // does cross it: naming a thread that is not there is a question with a
       // negative answer, which is a different thing entirely.
+      /**
+       * The imported projects, plus the ones the running sessions imply.
+       *
+       * Merged here rather than in the window because only the daemon holds
+       * both halves, and because the two can name the same repository: an
+       * imported project someone then started work in appears in both, and the
+       * imported row is the one to keep — it is the one that survives a
+       * restart and the one `forget` applies to.
+       *
+       * A derived project is dropped when its directory will not resolve to a
+       * repository. That is not a rare edge: a session's `startDir` is where it
+       * was launched, which for an old session may be a workspace that has
+       * since been removed, and offering it would be offering a failure two
+       * screens later.
+       */
+      ProjectList: () =>
+        Effect.gen(function* () {
+          const imported = yield* projects.list().pipe(Effect.orDie);
+          const recorded = new Set(imported.map((one) => one.name));
+          const all = yield* mux.list().pipe(Effect.orDie);
+          const found = identities(all);
+
+          // One entry per project, so the jj call below happens once per
+          // project rather than once per session — a machine with thirty
+          // sessions has perhaps four projects.
+          const dirs = new Map<string, string>();
+          for (const session of all) {
+            const project = found.get(session.name)?.project;
+            const from = session.startDir;
+            if (project === undefined || from === undefined || from === "") continue;
+            if (recorded.has(project) || dirs.has(project)) continue;
+            dirs.set(project, from);
+          }
+
+          const derived: Project[] = [];
+          for (const [name, from] of dirs) {
+            const root = yield* jj.sourceRoot(from).pipe(Effect.option);
+            if (Option.isSome(root)) {
+              derived.push({ name, root: root.value, importedAt: undefined });
+            }
+          }
+
+          return [...imported, ...derived.toSorted((a, b) => a.name.localeCompare(b.name))];
+        }),
+
+      /**
+       * What is under the configured roots and not imported yet.
+       *
+       * The global config's roots, not a project's — `read()` with no
+       * repository, because this question is asked from a window that is not
+       * standing in one. That is the case the optional argument on `read` was
+       * for.
+       */
+      ProjectCandidates: () =>
+        Effect.gen(function* () {
+          const settings = yield* config.read();
+          const home = homedir();
+          const roots = settings.projectRoots.map((one) => expand(one, home));
+          const under = yield* discover(roots).pipe(
+            Effect.provideService(FileSystem.FileSystem, files),
+            Effect.provideService(Path.Path, paths),
+          );
+          const imported = yield* projects.list().pipe(Effect.orDie);
+          const already = new Set(imported.map((one) => one.name));
+          return under.filter((one) => !already.has(one.name));
+        }),
+
+      /**
+       * Resolve a path to a repository and write it down.
+       *
+       * Every refusal is a sentence about the path rather than a tag to branch
+       * on — see {@link ProjectImportFailed}. The empty check is first because
+       * an empty string is what a submitted blank field looks like, and it
+       * would otherwise walk up from the daemon's own working directory and
+       * answer with *this* repository, which is the worst available success.
+       */
+      ProjectImport: ({ path }) =>
+        Effect.gen(function* () {
+          const wanted = path.trim();
+          if (wanted === "") {
+            return yield* Effect.fail(new ProjectImportFailed({ path, reason: "no path given" }));
+          }
+          const full = expand(wanted, homedir());
+          if (!paths.isAbsolute(full)) {
+            // A relative path would resolve against the daemon's working
+            // directory, which is a real repository and is not one the person
+            // typing can see. Refused by name rather than silently answered.
+            return yield* Effect.fail(
+              new ProjectImportFailed({ path: full, reason: "give a full path" }),
+            );
+          }
+          // Up to the nearest `.jj` first, because `jj -R <dir> root` does not
+          // walk: `-R` names a repository exactly, and a person naming a
+          // directory inside their project would otherwise be told there is no
+          // repository in a directory that is plainly inside one. See
+          // `nearestRepo`.
+          const near = yield* nearestRepo(full).pipe(
+            Effect.provideService(FileSystem.FileSystem, files),
+            Effect.provideService(Path.Path, paths),
+          );
+          if (near === undefined) {
+            return yield* Effect.fail(
+              new ProjectImportFailed({
+                path: full,
+                reason: `no jj repository at ${full} or above it`,
+              }),
+            );
+          }
+          // Still through `sourceRoot`, because the nearest `.jj` may be a
+          // *secondary workspace* — one of awp's own checkouts — and importing
+          // that would record a workspace as though it were the project. Only
+          // this resolves the pointer back to the source repository.
+          const root = yield* jj.sourceRoot(near).pipe(
+            Effect.mapError(
+              (error) =>
+                new ProjectImportFailed({
+                  path: full,
+                  // jj's own sentence, which names the directory and says
+                  // whether it is missing or merely not a repository. A
+                  // message composed here would say less and could be wrong.
+                  reason: error.reason,
+                }),
+            ),
+          );
+          return yield* projects.record(basename(root), root).pipe(
+            // The store failing is a defect; a name being taken is the
+            // person's to see. Two catches rather than an `orDie` after one,
+            // because an `orDie` at the end would kill the failure the line
+            // above had just carefully constructed.
+            Effect.catchTag("ProjectStoreError", (error) => Effect.die(error)),
+            Effect.catchTag("ProjectNameTaken", (taken) =>
+              Effect.fail(
+                new ProjectImportFailed({
+                  path: full,
+                  reason: `a project called ${taken.name} is already imported, from ${taken.held}`,
+                }),
+              ),
+            ),
+          );
+        }),
+
+      ProjectForget: ({ name }) => projects.forget(name).pipe(Effect.orDie),
+
       ThreadList: () => threads.list().pipe(Effect.orDie),
 
       ThreadCreate: ({ title }) => threads.create(title).pipe(Effect.orDie),

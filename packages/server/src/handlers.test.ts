@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { layer as dbLayer } from "@awp-kit/store";
 import { AwpRpcs, type CommentSide } from "@awp-kit/protocol";
-import { NodeFileSystem } from "@effect/platform-node-shared";
+import { NodeFileSystem, NodePath } from "@effect/platform-node-shared";
 import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
 import { RpcTest } from "effect/unstable/rpc";
@@ -19,6 +19,7 @@ import { type WorkspaceDeps, createWorkspace } from "./jobs/create-workspace";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
+import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 
 // The contract, its handlers and the services under them — everything except
@@ -180,22 +181,23 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                 : Effect.succeed({ name: "a-name", label: description, prompt: description }),
           }),
         ),
-        // Threads and reviews on a database of their own, one file per test in
-        // a temp directory. There is no memory store for either because there
-        // is no store abstraction — a thread *is* rows, and a fake would be
-        // testing something the daemon does not run.
+        // Threads, reviews and projects on a database of their own, one file
+        // per test in a temp directory. There is no memory store for any of
+        // them because there is no store abstraction — a thread *is* rows, and
+        // a fake would be testing something the daemon does not run.
         //
         // One database for both, and both sets of migrations on it, because
         // that is what the daemon does: a review names a workspace by the same
         // `(project, workspace)` pair a thread claims it by, and separating
         // them here would hide any future statement that joins the two.
         Layer.provide(
-          Layer.mergeAll(threadsLayer, reviewsLayer).pipe(
+          Layer.mergeAll(threadsLayer, reviewsLayer, projectsLayer).pipe(
             Layer.provide(
               Layer.orDie(
                 dbLayer(join(scratch, `stores-${(files += 1)}.sqlite`), [
                   ...threadMigrations,
                   ...reviewMigrations,
+                  ...projectMigrations,
                 ]),
               ),
             ),
@@ -211,6 +213,10 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // does. A fake would be a second implementation of a service whose
         // whole behaviour is the operating system's.
         Layer.provide(NodeFileSystem.layer),
+        // Path, for the walk `ProjectCandidates` does. Real for the same reason
+        // the file system is: it is the operating system's answer, and a fake
+        // would be a second implementation of `join`.
+        Layer.provide(NodePath.layer),
         Layer.provide(attachment.layer),
         Layer.provide(fake.layer),
         Layer.provide(fakeMux),
@@ -962,5 +968,109 @@ describe("NoteSend", () => {
     );
 
     expect(Result.isFailure(outcome)).toBe(true);
+  });
+});
+
+describe("projects over the contract", () => {
+  /** A directory with a `.jj` in it, and one nested inside without. */
+  const repo = (name: string): { readonly root: string; readonly inside: string } => {
+    // The counter goes on the directory *above*, not in the name: the name is
+    // the project's identity, and `repo-3-thicket` would be what got imported.
+    const root = join(scratch, `repos-${(files += 1)}`, name);
+    mkdirSync(join(root, ".jj"), { recursive: true });
+    const inside = join(root, "src", "deep");
+    mkdirSync(inside, { recursive: true });
+    return { root, inside };
+  };
+
+  it("walks up from a directory inside the project", async () => {
+    const { inside } = repo("thicket");
+    const made = await run((rpc) => rpc.ProjectImport({ path: inside }));
+    // `jj -R <dir> root` does *not* walk up — `-R` names a repository exactly
+    // — so without the walk this is a refusal about a directory that is
+    // plainly inside a repository. The probe found that; this pins it.
+    expect(made.name).toBe("thicket");
+  });
+
+  it("still resolves through sourceRoot after the walk", async () => {
+    const { root } = repo("thicket");
+    const made = await run((rpc) => rpc.ProjectImport({ path: root }));
+    // The fake answers `/repos/<basename>`, so a root that came back unchanged
+    // would mean the walk had replaced the resolution rather than preceded it
+    // — and a secondary workspace would then be imported as a project.
+    expect(made.root).toMatch(/^\/repos\//u);
+  });
+
+  it("an empty path is refused before anything is walked", async () => {
+    // It would otherwise walk up from the daemon's own working directory and
+    // find *this* repository, which is the worst available success.
+    const failed = await run((rpc) => rpc.ProjectImport({ path: "   " }).pipe(Effect.flip));
+    expect(failed).toMatchObject({ reason: "no path given" });
+  });
+
+  it("a relative path is refused by name", async () => {
+    const failed = await run((rpc) =>
+      rpc.ProjectImport({ path: "code/thicket" }).pipe(Effect.flip),
+    );
+    expect(failed).toMatchObject({ reason: "give a full path" });
+  });
+
+  it("a path with no repository above it says so", async () => {
+    const nowhere = join(scratch, `bare-${(files += 1)}`);
+    mkdirSync(nowhere, { recursive: true });
+    const failed = await run((rpc) => rpc.ProjectImport({ path: nowhere }).pipe(Effect.flip));
+    expect(failed).toMatchObject({ reason: expect.stringContaining("no jj repository") });
+  });
+
+  it("the list holds imported projects and the ones sessions imply", async () => {
+    const { root } = repo("thicket");
+    const list = await run((rpc) =>
+      Effect.gen(function* () {
+        yield* rpc.ProjectImport({ path: root });
+        return yield* rpc.ProjectList();
+      }),
+    );
+    const named = list.map((one) => one.name);
+    expect(named).toContain("thicket");
+    // The fixture's sessions are `awp.awp.<workspace>.<kind>`, so the project
+    // they imply is `awp` — derived, with no import behind it.
+    expect(named).toContain("awp");
+    expect(list.find((one) => one.name === "awp")?.importedAt).toBeUndefined();
+    expect(list.find((one) => one.name === "thicket")?.importedAt).toBeInstanceOf(Date);
+  });
+
+  it("importing the same repository twice is not an error", async () => {
+    const { root, inside } = repo("thicket");
+    const twice = await run((rpc) =>
+      Effect.gen(function* () {
+        const first = yield* rpc.ProjectImport({ path: root });
+        // The same repository named from inside it — the case a person makes
+        // by clicking a row twice, and it must not be told off.
+        const again = yield* rpc.ProjectImport({ path: inside });
+        return [first, again];
+      }),
+    );
+    expect(twice[0]).toEqual(twice[1]);
+    // The collision that *is* refused — two roots sharing a basename — cannot
+    // be reached from here: the fake jj answers `/repos/<basename>`, so two
+    // roots with one basename is not a state it can produce. It is proved
+    // against the real store in projects.test.ts instead.
+  });
+
+  it("forgetting says whether there was anything to forget", async () => {
+    const { root } = repo("thicket");
+    const answers = await run((rpc) =>
+      Effect.gen(function* () {
+        yield* rpc.ProjectImport({ path: root });
+        const first = yield* rpc.ProjectForget({ name: "thicket" });
+        const again = yield* rpc.ProjectForget({ name: "thicket" });
+        return [first, again];
+      }),
+    );
+    expect(answers).toEqual([true, false]);
+  });
+
+  it("no configured roots is an empty candidate list, not a failure", async () => {
+    expect(await run((rpc) => rpc.ProjectCandidates())).toEqual([]);
   });
 });

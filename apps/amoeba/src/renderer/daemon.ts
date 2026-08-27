@@ -10,6 +10,7 @@ import type {
   Effort,
   PageNote,
   Patch,
+  Project,
   ReviewComment,
   ReviewSent,
   Revision,
@@ -246,6 +247,40 @@ export const cancelJob = (job: string): Promise<void> =>
  */
 export const clearJobs = (): Promise<number> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.JobClear()));
+
+// ── projects ───────────────────────────────────────────────────────────────
+//
+// The list is the daemon's answer and not this window's, because it is the
+// union of two things only the daemon holds: what has been imported, and what
+// the running sessions imply. It used to be derived here from the session
+// listing alone, which meant a repository nothing was running in could not be
+// picked — so the first thread in any repository could not be started at all.
+
+export const listProjects = (): Promise<ReadonlyArray<Project>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ProjectList()));
+
+/**
+ * Repositories under the configured roots that are not imported yet.
+ *
+ * Asked for when a picker opens rather than kept with the list, because it
+ * costs a walk of somebody's filesystem and the list does not.
+ */
+export const projectCandidates = (): Promise<ReadonlyArray<Project>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ProjectCandidates()));
+
+/**
+ * Import a path. Rejects with the daemon's sentence about why not.
+ *
+ * A path *inside* the project is enough — the daemon resolves the repository
+ * root, which this window cannot: `jj root` inside a secondary workspace
+ * answers with the workspace.
+ */
+export const importProject = (path: string): Promise<Project> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ProjectImport({ path })));
+
+/** Forget one. Takes no workspace, session or thread with it. */
+export const forgetProject = (name: string): Promise<boolean> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ProjectForget({ name })));
 
 // ── threads and workspaces ─────────────────────────────────────────────────
 //

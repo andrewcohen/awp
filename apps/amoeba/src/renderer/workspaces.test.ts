@@ -1,6 +1,6 @@
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import { describe, expect, it, test } from "vitest";
-import { groupByThread, groupByWorkspace, openable, projectsOf } from "./workspaces";
+import { groupByThread, groupByWorkspace, openable } from "./workspaces";
 
 // The grouping is where the sidebar's one real decision lives, so it is tested
 // away from the markup. Every fixture below is shaped like something `zmx ls`
@@ -265,42 +265,6 @@ describe("groupByThread", () => {
     );
 
     expect(groups.map((group) => group.key)).toEqual(["new", "old"]);
-  });
-});
-
-// ── what the new-thread modal reads ────────────────────────────────────────
-
-describe("the projects a window knows", () => {
-  it("names each one once, with a directory to resolve it from", () => {
-    expect(
-      projectsOf([
-        awp("thicket", "default", "agent", { startDir: "/w/thicket" }),
-        awp("thicket", "lantern", "agent", { startDir: "/w/thicket/lantern" }),
-        awp("orchard", "default", "agent", { startDir: "/w/orchard" }),
-      ]),
-    ).toEqual([
-      { name: "orchard", from: "/w/orchard" },
-      { name: "thicket", from: "/w/thicket" },
-    ]);
-  });
-
-  // A session someone else started has no identity, so it names no project.
-  // Listing it as one would offer a repository awp cannot resolve.
-  it("ignores a session awp did not create", () => {
-    expect(projectsOf([session("zsh", undefined, { startDir: "/w/elsewhere" })])).toEqual([]);
-  });
-
-  // The directory is the whole point of the entry: without one the daemon has
-  // nothing to turn into a repository root, so the project would be an option
-  // that cannot work. A sibling with a directory rescues it.
-  it("drops a project whose sessions have no directory, and keeps one a sibling saves", () => {
-    expect(projectsOf([awp("thicket", "default", "agent", { startDir: "" })])).toEqual([]);
-    expect(
-      projectsOf([
-        awp("thicket", "default", "agent", { startDir: "" }),
-        awp("thicket", "lantern", "agent", { startDir: "/w/thicket/lantern" }),
-      ]),
-    ).toEqual([{ name: "thicket", from: "/w/thicket/lantern" }]);
   });
 });
 

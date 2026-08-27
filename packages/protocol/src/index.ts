@@ -114,6 +114,64 @@ export const SessionInfo = Schema.Struct({
 
 export type SessionInfo = (typeof SessionInfo)["Type"];
 
+// ── projects ───────────────────────────────────────────────────────────────
+//
+// A project is a repository awp knows about. Until now that was not a record
+// at all — the window derived the list from whichever sessions happened to be
+// running, so a repository awp had never opened a session in could not be
+// picked, and the *first* thread on a machine could not be started from this
+// window in any repository whatsoever.
+//
+//   derived from sessions   a project exists because something is running in
+//                           it — which is backwards, since the reason to name
+//                           a project is usually that nothing is yet
+//   imported                a person said "this one", and it stays said
+//
+// Written down for the same reason a thread is: it is a claim somebody made,
+// not a fact recoverable from the machine. The Go implementation recorded it
+// by writing a `default` workspace entry into its state file; here it is a
+// table, because the alternative is that an import is forgotten by the next
+// daemon restart and the list quietly goes back to being derived.
+
+/** A repository awp has been told about. */
+export const Project = Schema.Struct({
+  /**
+   * The repository directory's basename, and the project's whole identity.
+   *
+   * A name and not a path, because a name is what everything downstream is
+   * built on: `sessionName` composes `awp.<project>.<workspace>.<kind>`, the
+   * sidebar groups on it, and the address in the URL carries it. Two
+   * repositories with the same basename are therefore a refusal rather than a
+   * disambiguation — there is nowhere to put the second one.
+   */
+  name: Schema.String,
+  /** The repository root, absolute and tilde-expanded. */
+  root: Schema.String,
+  /**
+   * When it was imported, or absent for one that was merely *found*.
+   *
+   * The distinction the window needs: a project recovered from a running
+   * session is real and usable and can still be forgotten by a restart, so
+   * offering to forget it would be offering a button that does nothing.
+   */
+  importedAt: Schema.UndefinedOr(Schema.Date),
+});
+
+export type Project = (typeof Project)["Type"];
+
+/**
+ * A path could not be imported, said in a sentence.
+ *
+ * Every reason is a thing about the path a person can look at and fix — it is
+ * not there, it is not a repository, its name is taken — so there is one error
+ * with one sentence rather than a tag per case. A tagged variant would exist to
+ * be branched on, and nothing branches on it: the window shows the sentence.
+ */
+export class ProjectImportFailed extends Schema.TaggedError<ProjectImportFailed>()(
+  "ProjectImportFailed",
+  { path: Schema.String, reason: Schema.String },
+) {}
+
 // ── threads ────────────────────────────────────────────────────────────────
 //
 // A thread is the piece of work. A workspace is a checkout, and one piece of
@@ -769,6 +827,63 @@ export class AwpRpcs extends RpcGroup.make(
    * destroyed is not one to have two copies of.
    */
   Rpc.make("JobClear", { success: Schema.Int }),
+
+  /**
+   * Every project awp knows about, imported ones first.
+   *
+   * The daemon's answer, not the client's, because it is the union of two
+   * sources a client only holds one of: the imported table, and the projects
+   * the running sessions imply. Merging them here is what stops the window
+   * showing a repository twice under two spellings of the same root.
+   */
+  Rpc.make("ProjectList", {
+    success: Schema.Array(Project),
+  }),
+
+  /**
+   * Repositories found under `deck.project_roots` that are not imported yet.
+   *
+   * Separate from {@link Rpc ProjectList} because it costs a walk of somebody's
+   * filesystem and the list does not. It is asked for when a picker opens,
+   * which is the only moment anybody wants it.
+   *
+   * Empty is the ordinary answer for a machine with no roots configured, and is
+   * not a failure — the path route below works with no config at all, and that
+   * is why it is the one that had to exist first.
+   */
+  Rpc.make("ProjectCandidates", {
+    success: Schema.Array(Project),
+  }),
+
+  /**
+   * Take a path and write down the repository it is in.
+   *
+   * A path *inside* the project is enough — the daemon walks up to the nearest
+   * `.jj` and then resolves that with `Jj.sourceRoot`. Both halves are needed
+   * and neither is the other: `jj -R <dir> root` does not walk up, so the first
+   * is what makes a subdirectory work at all; and `jj root` inside a *secondary
+   * workspace* answers with the workspace, so the second is what stops a
+   * checkout being recorded as though it were the project.
+   */
+  Rpc.make("ProjectImport", {
+    payload: { path: Schema.String },
+    success: Project,
+    error: ProjectImportFailed,
+  }),
+
+  /**
+   * Forget an imported project. Says whether there was one to forget.
+   *
+   * It takes nothing else with it — no workspace is removed, no session is
+   * killed, no thread is touched. Forgetting is a statement about this list and
+   * nothing else, which is what makes it safe to offer next to a name in a
+   * picker. A project with sessions still running simply reappears, derived,
+   * which is honest rather than a bug.
+   */
+  Rpc.make("ProjectForget", {
+    payload: { name: Schema.String },
+    success: Schema.Boolean,
+  }),
 
   /**
    * Every thread, newest first, archived ones included.

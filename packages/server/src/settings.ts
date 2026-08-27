@@ -27,11 +27,12 @@ import { Context, Effect, Layer, Schema } from "effect";
 // job already carries `input.repo`, which is the repository the workspace was
 // made *from*, and that is the honest place to look.
 //
-// ── only two keys, deliberately ────────────────────────────────────────────
-// The file also carries `actions` and `deck.project_roots`, and this reads
-// neither. A setting is read when something needs it, so that the shape it is
-// read *into* is decided by a caller that exists. Parsing the rest now would be
-// four types and no consumers.
+// ── read a key when something needs it ─────────────────────────────────────
+// The file also carries `actions`, and this reads none of it. A setting is read
+// when something needs it, so that the shape it is read *into* is decided by a
+// caller that exists. `deck.project_roots` was in that same list until project
+// import arrived and became the caller — which is the rule working, not an
+// exception to it.
 //
 // ── read every time, not held ──────────────────────────────────────────────
 // It is a few hundred bytes and it is read when a job starts, so caching it
@@ -51,7 +52,12 @@ const File = Schema.Struct({
   hooks: Schema.optional(
     Schema.Struct({ bootstrap: Schema.optional(Schema.Array(Schema.String)) }),
   ),
-  deck: Schema.optional(Schema.Struct({ bookmark_prefix: Schema.optional(Schema.String) })),
+  deck: Schema.optional(
+    Schema.Struct({
+      bookmark_prefix: Schema.optional(Schema.String),
+      project_roots: Schema.optional(Schema.Array(Schema.String)),
+    }),
+  ),
 });
 
 export interface AwpSettings {
@@ -85,6 +91,15 @@ export interface AwpSettings {
    * without being asked.
    */
   readonly bootstrap: ReadonlyArray<string>;
+  /**
+   * Directories to look under for repositories to offer as projects.
+   *
+   * Tilde-expanded where it is used rather than here, because expansion needs a
+   * home directory and this is a parser. Empty is the ordinary answer and is
+   * not a problem: importing a path works with no roots configured at all, and
+   * the walk is a convenience over it.
+   */
+  readonly projectRoots: ReadonlyArray<string>;
   /** What went wrong reading the file, if anything. See above. */
   readonly problem: string | undefined;
 }
@@ -93,6 +108,7 @@ export interface AwpSettings {
 export const DEFAULTS: AwpSettings = {
   agent: ["claude"],
   bootstrap: [],
+  projectRoots: [],
   bookmarkPrefix: undefined,
   problem: undefined,
 };
@@ -117,6 +133,9 @@ const parse = (text: string): AwpSettings => {
       .map((one) => one.trim())
       .filter((one) => one !== ""),
     bookmarkPrefix: prefix === "" ? undefined : prefix,
+    projectRoots: (decoded.deck?.project_roots ?? [])
+      .map((one) => one.trim())
+      .filter((one) => one !== ""),
     problem: undefined,
   };
 };
@@ -165,6 +184,11 @@ export const merge = (global: AwpSettings, project: AwpSettings): AwpSettings =>
   agent: project.agent === DEFAULTS.agent ? global.agent : project.agent,
   bootstrap: project.bootstrap.length === 0 ? global.bootstrap : project.bootstrap,
   bookmarkPrefix: project.bookmarkPrefix ?? global.bookmarkPrefix,
+  // Global-only in practice — a repository listing the directories to scan for
+  // *other* repositories is a strange thing to write — but merged by the same
+  // rule as everything else rather than by an exception, because an exception
+  // here would be a second rule for a reader to know about.
+  projectRoots: project.projectRoots.length === 0 ? global.projectRoots : project.projectRoots,
   // Whichever file was unreadable, said once. Two problems is a rarer case than
   // the message being lost, and the project's is the one a person can fix.
   problem: project.problem ?? global.problem,

@@ -1,16 +1,17 @@
-import type { Effort, ThreadBase } from "@awp-kit/protocol";
+import type { Effort, Project, ThreadBase } from "@awp-kit/protocol";
 import { Dialog } from "@base-ui/react/dialog";
 import { Select } from "@base-ui/react/select";
 import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { FolderIcon } from "@phosphor-icons/react/Folder";
+import { FolderPlusIcon } from "@phosphor-icons/react/FolderPlus";
 import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { startThread, threadBases } from "./daemon";
+import { ImportProject } from "./ImportProject";
 import { useOverlay } from "./overlays";
 import { colors, text } from "./tokens.stylex";
-import type { Project } from "./workspaces";
 
 // Starting a thread: a composer, not a form.
 //
@@ -258,7 +259,33 @@ const styles = stylex.create({
     ":is([data-highlighted])": { backgroundColor: colors.border },
   },
   tick: { width: "0.75rem", flexShrink: 0, color: colors.muted, fontSize: text.tiny },
-  empty: { padding: "1rem", color: colors.muted, fontSize: text.small, lineHeight: 1.5 },
+  empty: {
+    padding: "0.9rem 0.9rem 0",
+    color: colors.muted,
+    fontSize: text.small,
+    lineHeight: 1.5,
+  },
+
+  // Square, where the chips beside it are phrases. It is a verb, not a value,
+  // and giving it a chip's shape would put it in the sentence the bar reads as.
+  add: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    width: "1.4rem",
+    height: "1.4rem",
+    padding: 0,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
+    borderRadius: "0.25rem",
+    color: colors.muted,
+    cursor: "pointer",
+    ":hover": { borderColor: colors.border, color: colors.text },
+  },
+  addOn: { backgroundColor: colors.border, color: colors.text },
 });
 
 /**
@@ -344,11 +371,14 @@ function Composer({
   projects,
   onClose,
   onStarted,
+  onProjects,
 }: {
   readonly request: NewThreadRequest;
   readonly projects: ReadonlyArray<Project>;
   readonly onClose: () => void;
   readonly onStarted: () => void;
+  /** Read the project list again — an import happened. */
+  readonly onProjects: () => void;
 }) {
   const first = projects[0]?.name ?? "";
   const [project, setProject] = useState(
@@ -362,8 +392,12 @@ function Composer({
   const [effort, setEffort] = useState<Effort | typeof INHERIT>(INHERIT);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
+  const [importing, setImporting] = useState(false);
 
-  const from = projects.find((p) => p.name === project)?.from;
+  // The repository root, which is a directory *inside* the project as far as
+  // the daemon is concerned — it resolves it again with `sourceRoot` rather
+  // than trusting what a client sends. See `ThreadStart`.
+  const from = projects.find((p) => p.name === project)?.root;
 
   // Fetched per project, because a bookmark belongs to a repository. An effect
   // and not a value: this is a request, and the project it is for can change
@@ -424,11 +458,18 @@ function Composer({
   };
 
   if (projects.length === 0) {
+    // The import panel *is* the empty state, rather than a sentence explaining
+    // why the modal is useless with a way to fix it somewhere else. This was
+    // that sentence for a while, and it named no route out of the situation
+    // because there was not one: a project existed only where a session was
+    // already running, so a machine with none had no way to get its first.
     return (
-      <div {...stylex.props(styles.empty)}>
-        No projects yet. awp finds them from the sessions it already knows about, so there is
-        nothing to start a thread in until one exists.
-      </div>
+      <>
+        <div {...stylex.props(styles.empty)}>
+          No projects yet. Point awp at a repository — any directory inside it will do.
+        </div>
+        <ImportProject projects={projects} onImported={onProjects} />
+      </>
     );
   }
 
@@ -446,6 +487,19 @@ function Composer({
           icon={<FolderIcon size={11} {...stylex.props(styles.chipIcon)} />}
           disabled={busy}
         />
+        {/* Beside the project it adds to, because that is what it is about.
+            A toggle rather than a second dialog: a modal over a modal is a
+            stack to get out of, and the panel it opens is four lines tall. */}
+        <button
+          type="button"
+          {...stylex.props(styles.add, importing && styles.addOn)}
+          title={importing ? "stop importing" : "import another project"}
+          aria-pressed={importing}
+          disabled={busy}
+          onClick={() => setImporting(!importing)}
+        >
+          <FolderPlusIcon size={12} />
+        </button>
         {/* Where the work starts. Every local bookmark in the project, which
             is what a person recognises — and what the first version got wrong
             by offering *threads*: most workspaces on a real machine belong to
@@ -470,6 +524,10 @@ function Composer({
           disabled={busy}
         />
       </div>
+
+      {/* Between the bars rather than over them, so what it adds to stays on
+          screen while it is open. */}
+      {importing && <ImportProject projects={projects} onImported={onProjects} />}
 
       {/* The thing you write, and the one button that acts on it. */}
       <div {...stylex.props(styles.composer)}>
@@ -560,11 +618,13 @@ export function NewThread({
   projects,
   onClose,
   onStarted,
+  onProjects,
 }: {
   readonly request: NewThreadRequest | undefined;
   readonly projects: ReadonlyArray<Project>;
   readonly onClose: () => void;
   readonly onStarted: () => void;
+  readonly onProjects: () => void;
 }) {
   // Before the early return, because a hook cannot be called conditionally —
   // and the argument is the condition, which is what the hook is shaped for.
@@ -592,7 +652,13 @@ export function NewThread({
         <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
         <Dialog.Popup {...stylex.props(styles.popup)}>
           <Dialog.Title {...stylex.props(styles.hidden)}>new thread</Dialog.Title>
-          <Composer request={request} projects={projects} onClose={onClose} onStarted={onStarted} />
+          <Composer
+            request={request}
+            projects={projects}
+            onClose={onClose}
+            onStarted={onStarted}
+            onProjects={onProjects}
+          />
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

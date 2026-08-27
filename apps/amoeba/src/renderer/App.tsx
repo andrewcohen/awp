@@ -11,7 +11,6 @@ import { Pane } from "./Pane";
 import { Sidebar } from "./Sidebar";
 import { addressFrom, addressOf, pathOf, sessionAt } from "./address";
 import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
-import { projectsOf } from "./workspaces";
 import {
   rememberCollapsed,
   rememberPlace,
@@ -26,6 +25,7 @@ import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
 import { useConnection } from "./useConnection";
 import { useSessions } from "./useSessions";
+import { useProjects } from "./useProjects";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
 
@@ -196,6 +196,7 @@ export function App() {
   // longer the only thing that changes them: cmd+N starts one from anywhere in
   // the window. Two owners of the same list is two lists.
   const { threads, reload: reloadThreads } = useThreads();
+  const { projects, reload: reloadProjects } = useProjects();
 
   // What is open: the session the address names, if it is here and can be
   // attached to. Derived, never written back — see `sessionAt`.
@@ -379,7 +380,8 @@ export function App() {
           It renders nothing at all while shut — see NewThread.tsx. */}
       <NewThread
         request={newThread}
-        projects={projectsOf(sessions)}
+        projects={projects}
+        onProjects={reloadProjects}
         onClose={() => setNewThread(undefined)}
         onStarted={reloadThreads}
       />
