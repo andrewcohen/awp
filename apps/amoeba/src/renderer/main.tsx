@@ -3,6 +3,7 @@ import "./stylex.css";
 import "./global.css";
 import { RouterProvider } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
+import { Highlighting } from "./highlighting";
 import { rememberedPlace } from "./remembered";
 import { router } from "./routes";
 
@@ -40,6 +41,12 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    {/* Outside the router, because the syntax highlighting workers are the
+        window's and not any screen's. See highlighting.tsx: the pool is a
+        module-level singleton and this only publishes it to the tree — so a
+        remount, a route change or a hidden tab costs nothing. */}
+    <Highlighting>
+      <RouterProvider router={router} />
+    </Highlighting>
   </StrictMode>,
 );
