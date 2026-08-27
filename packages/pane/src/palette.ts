@@ -85,7 +85,8 @@ export const paneFontFeatures = '"cv01" 1, "cv04" 1';
 // see `text.mono`. Maple Mono was here first and is a fine choice; what
 // decided it was the cell fill below, where JetBrains Mono wastes 1.7% of
 // every cell at the size this runs at and Maple Mono wastes 7%.
-export const paneFontFamily = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+export const paneFontFamily =
+  '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace';
 
 // Not every size renders equally well, and it is worth knowing why before
 // changing this one.

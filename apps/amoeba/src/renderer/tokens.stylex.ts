@@ -187,8 +187,11 @@ export const text = stylex.defineVars({
   // Canvas is no good for this. `measureText` reported every family as the
   // same width including ones that certainly exist, so it was measuring its
   // own fallback. Use a real element.
-  mono: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
-  ui: "system-ui, -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif",
+  // The bundled face leads, and the tails stay. `fonts.css` covers latin and
+  // latin-ext; a glyph outside those ranges is not in the file at all, so the
+  // rest of the stack is what draws it rather than being decoration.
+  mono: "'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
+  ui: "'Inter Variable', system-ui, -apple-system, 'SF Pro Text', sans-serif",
 
   // ── the scale, and its floor ─────────────────────────────────────────────
   //
