@@ -74,8 +74,27 @@ const styles = stylex.create({
     // The only way to move a window whose title bar is hidden.
     WebkitAppRegion: "drag",
   },
-  // The band AppKit draws its buttons in. Nothing of ours goes here.
-  lights: { height: space.lights, flexShrink: 0 },
+  // The band AppKit draws its buttons in, and where the title goes.
+  //
+  // It was empty when the bar first moved under the lights, and empty is what
+  // a person notices: the session's identity was sitting in the row below,
+  // immediately right of the fold button, where it reads as a label *for* the
+  // button. It is a title, and this is where a title belongs on macOS.
+  //
+  // **Padded by the same amount on both sides**, so the title centres in the
+  // window rather than in the space left over — a title centred in the
+  // remainder sits visibly off to the right — and so it can never reach the
+  // window controls however narrow the window gets.
+  lights: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "0.45rem",
+    height: space.lights,
+    flexShrink: 0,
+    paddingInline: space.lightsInline,
+    minWidth: 0,
+  },
   // What was the top bar: one row, now running the full width of the window.
   topRow: {
     display: "flex",
@@ -83,11 +102,13 @@ const styles = stylex.create({
     flexShrink: 0,
     gap: "0.6rem",
     paddingInline: "0.6rem",
-    // Its own height, not `space.titlebar`. That token meant "tall enough to
-    // clear the traffic lights", and this row no longer clears anything — the
-    // band above it does. Two 22px buttons and a line of small text need 2rem,
-    // and keeping the old number would have spent 8px on a job that moved.
-    height: "2rem",
+    // The same height as the band above, and not `space.titlebar`. That token
+    // meant "tall enough to clear the traffic lights", which this row no longer
+    // does — the band does it. What is left here is two 22px buttons and the
+    // occasional word, so matching the band both fits and reads as deliberate:
+    // one strip of chrome in two equal halves rather than a tall one and a
+    // short one that look like an accident.
+    height: space.lights,
     minWidth: 0,
   },
   bottom: {
@@ -160,7 +181,20 @@ export function TopBar({
 }) {
   return (
     <header {...stylex.props(styles.bar, styles.top)}>
-      <div {...stylex.props(styles.lights)} />
+      <div {...stylex.props(styles.lights)}>
+        {session === undefined ? (
+          <span>no session</span>
+        ) : (
+          <>
+            <span {...stylex.props(styles.strong, styles.name)}>
+              {session.identity?.workspace ?? session.name}
+            </span>
+            {session.identity !== undefined && <span>{session.identity.project}</span>}
+            <span>{session.identity?.kind}</span>
+          </>
+        )}
+      </div>
+
       <div {...stylex.props(styles.topRow)}>
         {/* ── folding a column, from the one place that is never folded ──────
 
@@ -194,17 +228,6 @@ export function TopBar({
           <SidebarSimpleIcon size={15} aria-hidden />
         </button>
 
-        {session === undefined ? (
-          <span>no session</span>
-        ) : (
-          <>
-            <span {...stylex.props(styles.strong, styles.name)}>
-              {session.identity?.workspace ?? session.name}
-            </span>
-            {session.identity !== undefined && <span>{session.identity.project}</span>}
-            <span>{session.identity?.kind}</span>
-          </>
-        )}
         <span {...stylex.props(styles.spacer)} />
         {/* Nothing at all while it is working.
       
