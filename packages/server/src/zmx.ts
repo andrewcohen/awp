@@ -20,7 +20,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Multiplexer, MultiplexerError } from "./multiplexer";
 import { capture, said } from "./run";
 import { parseSessionList, requireName } from "./zmx-parse";
-import { zmxChildEnv } from "./zmx-session";
+import { childEnv } from "./zmx-session";
 
 /**
  * Refuse an empty name rather than handing a process manager a blank argument
@@ -59,7 +59,7 @@ const make = Effect.gen(function* () {
    * nothing is worth keeping.
    */
   const run = (op: string, args: ReadonlyArray<string>) =>
-    capture(spawner, ChildProcess.make("zmx", [...args], { env: zmxChildEnv() })).pipe(
+    capture(spawner, ChildProcess.make("zmx", [...args], { env: childEnv() })).pipe(
       Effect.mapError(
         (cause) =>
           new MultiplexerError({
@@ -100,11 +100,11 @@ const make = Effect.gen(function* () {
   ) =>
     capture(
       spawner,
-      // The caller's additions go under `zmxChildEnv`, not over it. A caller
+      // The caller's additions go under `childEnv`, not over it. A caller
       // able to set `ZMX_SESSION` back could reintroduce the client hijack this
       // whole file is arranged to prevent, and the guard has to be the last
       // word rather than a default.
-      ChildProcess.make("zmx", [...args], { cwd, env: zmxChildEnv({ ...process.env, ...extra }) }),
+      ChildProcess.make("zmx", [...args], { cwd, env: childEnv({ ...process.env, ...extra }) }),
     ).pipe(
       Effect.mapError(
         (cause) =>

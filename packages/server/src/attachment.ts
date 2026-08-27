@@ -17,7 +17,7 @@
 import { Context, Data, Effect, Layer, type Scope } from "effect";
 import { Multiplexer, type MultiplexerError, type Session, isLive } from "./multiplexer";
 import { PtySpawner, type PtyError, type PtyHandle, type PtySize } from "./pty";
-import { currentZmxSession, zmxChildEnv } from "./zmx-session";
+import { currentZmxSession, childEnv } from "./zmx-session";
 
 export class AttachError extends Data.TaggedError("AttachError")<{
   readonly session: string;
@@ -115,7 +115,7 @@ const make = Effect.gen(function* () {
           size,
           // The complete environment, minus the marker. A merge could not
           // express the removal, which is why PtyCommand takes the whole thing.
-          env: zmxChildEnv(),
+          env: childEnv(),
         });
 
         return { session, pty };

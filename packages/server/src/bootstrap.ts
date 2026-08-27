@@ -1,7 +1,7 @@
 import { Context, Data, Effect, Layer } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { capture, said } from "./run";
-import { zmxChildEnv } from "./zmx-session";
+import { childEnv } from "./zmx-session";
 
 // Whatever a person wants run in a workspace the moment it exists.
 //
@@ -25,7 +25,7 @@ import { zmxChildEnv } from "./zmx-session";
 //
 // ── the marker, again ──────────────────────────────────────────────────────
 //
-// `zmxChildEnv()`, for the reason the whole of this repo keeps restating: a
+// `childEnv()`, for the reason the whole of this repo keeps restating: a
 // hook is free to run `zmx` — plenty of people's bootstrap opens a shell or a
 // server in one — and a child that inherits `ZMX_SESSION` resolves it and
 // switches the *calling* client, which is whichever session the daemon happens
@@ -66,7 +66,7 @@ export const layer = Layer.effect(Bootstrap)(
         Effect.gen(function* () {
           const captured = yield* capture(
             spawner,
-            ChildProcess.make("sh", ["-c", command], { cwd, env: zmxChildEnv() }),
+            ChildProcess.make("sh", ["-c", command], { cwd, env: childEnv() }),
           ).pipe(
             Effect.mapError(
               (error) => new BootstrapError({ command, reason: (error as Error).message }),

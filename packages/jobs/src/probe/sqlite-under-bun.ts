@@ -6,7 +6,7 @@
 // are different code, and no amount of running the suite says anything about
 // the one the daemon takes.
 //
-// This is the shape AGENTS.md already names once, for `zmxChildEnv`: when the
+// This is the shape AGENTS.md already names once, for `childEnv`: when the
 // thing being checked happens in a different process, assert on what that
 // process sees. Run it after touching `sqlite.ts`.
 //

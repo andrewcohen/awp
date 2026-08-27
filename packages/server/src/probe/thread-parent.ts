@@ -71,7 +71,7 @@ const zmx = (args: ReadonlyArray<string>): string => {
       encoding: "utf8",
       stdio: "pipe",
       // Neutralised by setting, never by omitting — an absent key is a request
-      // the spawner is free to ignore, and this one does. See `zmxChildEnv`.
+      // the spawner is free to ignore, and this one does. See `childEnv`.
       env: { ...process.env, ZMX_SESSION: "" },
     });
   } catch {

@@ -20,11 +20,11 @@
 // Nothing here attaches. Every session it creates is detached, named with this
 // process's pid, and killed on the way out.
 
-import { requireOutsideZmxSession, zmxChildEnv } from "../zmx-session";
+import { requireOutsideZmxSession, childEnv } from "../zmx-session";
 
 requireOutsideZmxSession();
 
-const env = zmxChildEnv();
+const env = childEnv();
 const created: string[] = [];
 
 const zmx = (...args: string[]): { code: number; out: string } => {

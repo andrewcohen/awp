@@ -79,7 +79,7 @@ const zmx = (args: ReadonlyArray<string>): string => {
       stdio: "pipe",
       // The marker is neutralised by *setting* it, never by omitting it — an
       // absent key is a request the spawner is free to ignore, and this one
-      // does. See `zmxChildEnv`.
+      // does. See `childEnv`.
       env: { ...process.env, ZMX_SESSION: "" },
     });
   } catch {

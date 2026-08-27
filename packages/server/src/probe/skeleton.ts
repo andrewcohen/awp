@@ -33,7 +33,7 @@ import { Effect, Result, Stream } from "effect";
 import { DAEMON_HOST, DAEMON_PORT } from "../daemon";
 import { PtySpawner } from "../pty";
 import * as ptyBun from "../pty-bun";
-import { zmxChildEnv } from "../zmx-session";
+import { childEnv } from "../zmx-session";
 
 const SESSION = "awp-skeleton-probe";
 const url = `ws://${DAEMON_HOST}:${DAEMON_PORT}`;
@@ -43,7 +43,7 @@ const ms = (from: number) => `${(Date.now() - from).toString().padStart(4)}ms`;
 /**
  * Refuse to go near zmx until a child is proven not to inherit the marker.
  *
- * Not belt and braces — the belt already failed once. `zmxChildEnv` returning
+ * Not belt and braces — the belt already failed once. `childEnv` returning
  * the right object says nothing about what the spawner delivers, and when it
  * did not deliver it, this probe attached to the user's session instead of its
  * own. Checking the child's actual environment is the only thing that would
@@ -55,7 +55,7 @@ const assertNoLeak = Effect.gen(function* () {
     command: "/bin/sh",
     args: ["-c", `printf 'leak:[%s]' "$ZMX_SESSION"`],
     size: { cols: 80, rows: 24 },
-    env: zmxChildEnv(),
+    env: childEnv(),
   });
   const chunks: Array<string> = [];
   yield* Stream.runForEach(Stream.take(pty.output, 4), (chunk) =>
@@ -166,7 +166,7 @@ const result = await Effect.runPromise(Effect.result(program));
 // cleanup that fails silently is worse than none, because the next run inherits
 // a session it did not create and can no longer tell the difference.
 const killed = Bun.spawnSync(["zmx", "kill", SESSION, "--force"], {
-  env: zmxChildEnv() as Record<string, string>,
+  env: childEnv() as Record<string, string>,
 });
 console.log(
   killed.exitCode === 0
