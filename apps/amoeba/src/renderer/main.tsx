@@ -1,5 +1,9 @@
 import { StrictMode } from "react";
 import "./stylex.css";
+// Before global.css and before anything StyleX emits, so a face is declared by
+// the time the first rule asks for it. See fonts.css for why these are shipped
+// rather than named.
+import "./fonts.css";
 import "./global.css";
 import { RouterProvider } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";

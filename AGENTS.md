@@ -1130,6 +1130,28 @@ New York is at `/System/Library/Fonts/NewYork.ttf` and the family name does not
 resolve in the web view, so every rule naming it fell through to Georgia while
 reading as applied.
 
+**Ship the face, do not name it.** The only way a font is certainly the one on
+screen is to bundle it. `apps/amoeba/src/renderer/fonts.css` declares the faces
+by hand from `@fontsource-variable/*` rather than importing those packages'
+`index.css`, which declares every subset published — 1.9MB for Inter alone
+against 189KB for the four latin files actually wanted. `unicode-range` is what
+makes latin-ext free until a character in it appears, and that was measured:
+only the two latin subsets are ever requested.
+
+The bundled family names carry `Variable` — `Inter Variable`, not `Inter` —
+which is what Fontsource declares and is also what makes the check meaningful:
+neither name is installed on any machine here, so a probe finding them proves
+the bundle rather than the system happening to have the face.
+
+**Check the build as well as dev.** Vite emits the woff2 into
+`dist/renderer/assets` and the built app loads them over `views://`, which is a
+different loader from the dev server. What matters is that the emitted CSS
+references them relatively:
+
+```
+  url(./inter-latin-wght-normal-Dx4kXJAl.woff2)     ← relative, so views:// resolves it
+```
+
 **Measure by rendering, and use a real element.** `getComputedStyle().fontFamily`
 echoes the declaration back whether or not anything in it exists, and canvas
 `measureText` reported every family as the same width — including ones that
