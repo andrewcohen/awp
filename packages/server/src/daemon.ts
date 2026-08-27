@@ -13,6 +13,7 @@ import { layer as dbLayer } from "@awp-kit/store";
 import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Effect, FileSystem, Layer } from "effect";
+import { Bootstrap, layer as bootstrapLayer } from "./bootstrap";
 import { createWorkspace } from "./jobs/create-workspace";
 import { Jj } from "./jj";
 import * as intent from "./intent";
@@ -105,7 +106,9 @@ export const db = Layer.orDie(
  *
  * `intent` and `settings` joined the list when naming moved into the job: the
  * ten seconds a model takes belongs where there is a progress panel to show it,
- * not in front of a form that will not close.
+ * not in front of a form that will not close. `run` joined it for the bootstrap
+ * hooks, which are the same argument again — minutes of `bun install` in front
+ * of a progress panel rather than in front of nothing.
  */
 export const jobs = Layer.unwrap(
   Effect.gen(function* () {
@@ -116,6 +119,7 @@ export const jobs = Layer.unwrap(
       files: yield* FileSystem.FileSystem,
       intent: yield* WorkspaceIntent,
       settings: yield* Settings,
+      run: yield* Bootstrap,
     };
     return jobsLayer([erase(createWorkspace(deps))]);
   }),
@@ -151,5 +155,6 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(intent.layer),
   Layer.provide(settings.layer()),
   Layer.provide(jjCli.layer),
+  Layer.provide(bootstrapLayer),
   Layer.provide(zmx.layer),
 );

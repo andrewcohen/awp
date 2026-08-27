@@ -496,6 +496,52 @@ the error channel, so it sailed past the `Effect.result` wrapping an attempt,
 killed the fiber, and left the record saying `running` with nothing behind it.
 Found by a fake missing a method, which is exactly how a real service gains one.
 
+### A hook is a line, an agent is a program
+
+`bootstrap` in the config file is whatever should run in a new workspace before
+its agent is briefed — `bun install`, `cp .env.example .env`. It goes to
+`sh -c` **whole**, and that is the opposite of what `agent` does with the same
+file:
+
+```
+  agent      "claude --model opus"   split on whitespace → argv
+  bootstrap  "bun install && build"  handed to a shell, entire
+```
+
+Both are right for what they name. An agent is a program awp launches; a hook
+is a line a person writes, and `&&`, a glob and a quoted path are its ordinary
+furniture. Splitting one on whitespace produces nonsense.
+
+**`zmxChildEnv()`, again.** A hook is free to run zmx — plenty of people's
+bootstrap starts a server or opens a shell — and a child that inherits
+`ZMX_SESSION` resolves it and switches the _calling_ client, which is whatever
+session the daemon is running in. `bootstrap.test.ts` asserts on what the child
+**prints**, not on what was handed to it, which is the only way to know:
+
+```
+  marker=[] set=yes
+            └─ present and empty. Absent would print `set=` — and absence is a
+               request a spawner is free to ignore, which is the bug that shipped
+```
+
+**The step sits after `session` and before `brief`**, and neither neighbour is
+arbitrary. After the session, because `bun install` on a cold cache takes
+minutes and there should be something on screen while it does. Before the
+brief, because briefing an agent into a workspace with no dependencies asks it
+to discover and fix that itself, which is the thing hooks exist to stop.
+
+**A failing hook fails the job**, and the compensation takes the workspace back
+to nothing. Logging it and carrying on was the alternative and is worse: it
+produces a workspace that reports success and does not work, and the person
+finds out from the agent some minutes later, in a message about something else.
+Later hooks do not run once one has failed — each may depend on the one before
+it.
+
+**No undo, and it needs none:** everything a hook wrote is inside the workspace
+directory, which the `workspace` step's undo removes. A hook that reached
+outside it is beyond what this job can reason about, and an undo that pretended
+otherwise would be worse than saying so.
+
 ### Clearing is not clearing
 
 `JobStore.forgetFinished` deletes terminal jobs and **keeps** two kinds:

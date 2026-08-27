@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
 import { identityLabels, sessionName } from "../naming";
+import type { Bootstrap } from "../bootstrap";
 import type { Settings } from "../settings";
 import type { Threads } from "../threads";
 import { type WorkspaceIntent, nameFrom } from "../intent";
@@ -21,8 +22,16 @@ import { type WorkspaceIntent, nameFrom } from "../intent";
 //   3  workspace   jj workspace add          undo: forget it, remove it
 //   4  bookmark    jj bookmark set           undo: delete it
 //   5  session     zmx run -d, then labels   undo: kill it
-//   6  claim       the thread takes it       undo: the thread lets it go
-//   7  brief       type into the agent       undo: none — impossible
+//   6  bootstrap   the configured hooks      undo: none — the directory goes
+//   7  claim       the thread takes it       undo: the thread lets it go
+//   8  brief       type into the agent       undo: none — impossible
+//
+// `bootstrap` sits after `session` rather than straight after `workspace`, and
+// the reason is what a person sees: a hook can take minutes — `bun install` on
+// a cold cache — and with the session already made there is something to watch
+// while it does. It stays before `brief`, because briefing an agent into a
+// workspace whose dependencies are not installed yet is asking it to discover
+// and fix that itself, which is the whole thing hooks exist to stop.
 //
 // `thread` is first so that its undo is *last*: compensation runs backwards, so
 // the front of the list is the only place from which a step can ask "does this
@@ -94,6 +103,8 @@ export interface WorkspaceDeps {
   readonly intent: WorkspaceIntent["Service"];
   /** Read per job, so editing the file takes effect without a restart. */
   readonly settings: Settings["Service"];
+  /** Runs the configured bootstrap hooks. See the `bootstrap` step. */
+  readonly run: Bootstrap["Service"];
 }
 
 /**
@@ -148,7 +159,7 @@ const named = (input: CreateWorkspace): Effect.Effect<string, JobError> =>
     : Effect.succeed(input.workspace);
 
 export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> => {
-  const { jj, mux, threads, files, intent, settings } = deps;
+  const { jj, mux, threads, files, intent, settings, run } = deps;
 
   const agentSession = (project: string, workspace: string): string =>
     sessionName(project, workspace, AGENT);
@@ -399,6 +410,43 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       }),
   };
 
+  const bootstrapStep: JobStep<CreateWorkspace> = {
+    name: "bootstrap",
+    run: (input, context) =>
+      Effect.gen(function* () {
+        const workspace = yield* named(input);
+        const cwd = workspacePath(input.project, workspace);
+        // Read per job, like every other setting here, so editing the config
+        // file takes effect on the next workspace rather than the next daemon.
+        const { bootstrap: hooks } = yield* settings.read();
+
+        if (hooks.length === 0) {
+          // A step that does nothing is still a step — the runner reads `done`
+          // back from the store and resumes against the kind's list, so a list
+          // that varied by configuration is a list a restarted daemon could not
+          // reproduce. Silent, too: "no hooks configured" in every job's log is
+          // a line that teaches the eye to skip the log.
+          return;
+        }
+
+        for (const command of hooks) {
+          yield* context.log(`$ ${command}`);
+          const output = yield* run
+            .run({ command, cwd })
+            .pipe(Effect.mapError(refused("a bootstrap hook failed")));
+          const tail = output.trim().split("\n").slice(-3).join("\n").trim();
+          if (tail !== "") {
+            yield* context.log(tail);
+          }
+        }
+      }),
+    // No undo, and it needs none: everything a hook wrote is inside the
+    // workspace directory, which the `workspace` step's undo removes. A hook
+    // that reached outside it — writing to a shared cache, starting something
+    // — is beyond what this job can reason about, and inventing an undo that
+    // pretended otherwise would be worse than saying so here.
+  };
+
   const briefStep: JobStep<CreateWorkspace> = {
     name: "brief",
     run: (input, context) =>
@@ -444,7 +492,16 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     // Named `…Step` so the locals inside them can keep the words that matter —
     // `workspace` is the name of a workspace far more often than it is the name
     // of a step.
-    steps: [threadStep, nameStep, workspaceStep, bookmarkStep, sessionStep, claimStep, briefStep],
+    steps: [
+      threadStep,
+      nameStep,
+      workspaceStep,
+      bookmarkStep,
+      sessionStep,
+      bootstrapStep,
+      claimStep,
+      briefStep,
+    ],
     /**
      * One attempt.
      *
