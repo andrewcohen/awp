@@ -167,15 +167,51 @@ const make = Effect.gen(function* () {
         yield* runIn(op, options.cwd, ["run", options.name, "-d", ...options.command], options.env);
       }),
 
+    // ── two writes, and both halves of that are measured ────────────────────
+    //
+    // The point is to *submit* the text rather than leave it sitting at a
+    // prompt, and a trailing byte on the same write does not do it. This was
+    // `${text}\n` in one write for months, and what it produced was a prompt
+    // typed into the agent's box that somebody then had to press Enter on —
+    // which is the whole of what the button was for.
+    //
+    // Two things were wrong with it, and only one of them is about the byte.
+    //
+    // **`\n` is not Enter.** A shell reads its input in canonical mode, where
+    // the line discipline ends a line on LF, so the old code worked everywhere
+    // it was tested by hand. An agent's TUI runs in *raw* mode: no translation
+    // happens, and what a terminal actually sends for the Return key is CR.
+    // An LF arriving there is a newline in the text.
+    //
+    // **A trailing byte is inside the burst.** A TUI reads whole chunks and
+    // treats a multi-byte one as pasted text — that is the feature that stops
+    // a pasted snippet running line by line — so even a CR on the end of the
+    // prompt is part of the paste rather than a keypress. Measured against a
+    // raw-mode reader in a real session:
+    //
+    //   one write, text + LF    chunk 6:  68 65 6c 6c 6f 0a
+    //   one write, text + CR    chunk 6:  68 65 6c 6c 6f 0d   ← still one chunk
+    //   two writes              chunk 5:  68 65 6c 6c 6f
+    //                           chunk 1:  0d                  ← its own chunk
+    //
+    // **No delay between them.** Each `zmx send` is its own process doing its
+    // own write, so the CR lands in a chunk of its own even back to back —
+    // checked at zero gap and at 30ms, and both split. A sleep here would be
+    // superstition with a cost.
+    //
+    // Still not idempotent, and still cannot be: sending twice sends twice.
     send: (name: string, text: string) =>
       named("send", name).pipe(
         Effect.andThen(
           Effect.suspend(() =>
             text === ""
               ? Effect.void
-              : // A trailing newline, because the point is to submit the line
-                // rather than leave it sitting at a prompt.
-                run("send", ["send", name, `${text}\n`]).pipe(Effect.asVoid),
+              : run("send", ["send", name, text]).pipe(
+                  // The Return key, as a keypress rather than as a character on
+                  // the end of a paste.
+                  Effect.andThen(run("send", ["send", name, "\r"])),
+                  Effect.asVoid,
+                ),
           ),
         ),
       ),
