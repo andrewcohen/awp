@@ -33,6 +33,7 @@ const run = <A>(body: Effect.Effect<A, unknown, Reviews>) =>
 const draft = (over: {
   readonly id?: string;
   readonly line?: number;
+  readonly endLine?: number;
   readonly body?: string;
   readonly workspace?: string;
   readonly side?: "additions" | "deletions";
@@ -45,6 +46,10 @@ const draft = (over: {
   path: "src/router.ts",
   side: over.side ?? ("additions" as const),
   line: over.line ?? 42,
+  // Defaults to the same line, which is what a one-line comment is. A range is
+  // asked for explicitly, so a test that does not mention it is a test about
+  // something else.
+  endLine: over.endLine ?? over.line ?? 42,
   body: over.body ?? "this branch never runs",
   createdAt: over.createdAt ?? new Date("2026-08-27T09:00:00.000Z"),
   sentAt: undefined,
@@ -67,6 +72,25 @@ describe("the review store", () => {
       }),
     );
     expect(got).toStrictEqual(written);
+  });
+
+  it("keeps a range, and reads a one-line comment back as a range of one", async () => {
+    // The second half is the one that matters. `end_line` was added by a
+    // migration with a sentinel default, because sqlite needs a value for a
+    // column it is adding and no default can name another column — so every
+    // comment written before ranges existed reads back as -1 unless `toComment`
+    // resolves it. A comment about line 42 is a comment about lines 42 to 42.
+    const [block, single] = await run(
+      Effect.gen(function* () {
+        const reviews = yield* Reviews;
+        yield* reviews.add(draft({ id: "a", line: 12, endLine: 18 }));
+        yield* reviews.add(draft({ id: "b", line: 40 }));
+        return yield* reviews.list("thicket", "lantern");
+      }),
+    );
+
+    expect([block?.line, block?.endLine]).toStrictEqual([12, 18]);
+    expect([single?.line, single?.endLine]).toStrictEqual([40, 40]);
   });
 
   it("keeps workspaces apart", async () => {

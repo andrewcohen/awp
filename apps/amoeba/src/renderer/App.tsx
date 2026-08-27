@@ -3,6 +3,7 @@ import * as stylex from "@stylexjs/stylex";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
+import { Boundary } from "./Boundary";
 import { BottomBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
 import { NewThread, type NewThreadRequest } from "./NewThread";
@@ -21,6 +22,7 @@ import {
 import { rendererFixture } from "./fixture";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
 import { colors, text } from "./tokens.stylex";
+import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
 import { useSessions } from "./useSessions";
 import { useThreads } from "./useThreads";
@@ -103,6 +105,9 @@ export function App() {
       return next;
     });
   };
+
+  // ctrl+h/l between the columns, ctrl+j/k within one. See navigation.ts.
+  useColumnKeys(collapsed);
 
   const { sessions, failure, reload: reloadSessions } = useSessions();
   const { jobs } = useJobs();
@@ -226,24 +231,29 @@ export function App() {
       <TopBar session={open} connected={failure === undefined} />
 
       <div {...stylex.props(styles.columns)}>
-        <aside {...stylex.props(styles.column, styles.fixed(columns.sidebar))}>
-          <Sidebar
-            sessions={sessions}
-            selected={open?.name}
-            onSelect={(session) => {
-              void navigate({ to: pathOf(addressOf(session)) });
-            }}
-            threads={threads}
-            onThreadsChanged={reloadThreads}
-            failure={failure}
-            onNew={() =>
-              setNewThread({
-                project: open?.identity?.project,
-                workspace: open?.identity?.workspace,
-                fromWorkspace: false,
-              })
-            }
-          />
+        <aside
+          data-column="sidebar"
+          {...stylex.props(styles.column, styles.fixed(columns.sidebar))}
+        >
+          <Boundary where="the sidebar">
+            <Sidebar
+              sessions={sessions}
+              selected={open?.name}
+              onSelect={(session) => {
+                void navigate({ to: pathOf(addressOf(session)) });
+              }}
+              threads={threads}
+              onThreadsChanged={reloadThreads}
+              failure={failure}
+              onNew={() =>
+                setNewThread({
+                  project: open?.identity?.project,
+                  workspace: open?.identity?.workspace,
+                  fromWorkspace: false,
+                })
+              }
+            />
+          </Boundary>
         </aside>
 
         <Divider
@@ -254,8 +264,10 @@ export function App() {
           onToggle={fold("sidebar")}
         />
 
-        <main {...stylex.props(styles.column, styles.agent)}>
-          <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
+        <main data-column="agent" {...stylex.props(styles.column, styles.agent)}>
+          <Boundary where="the terminal">
+            <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
+          </Boundary>
         </main>
 
         <Divider
@@ -267,12 +279,26 @@ export function App() {
           onToggle={fold("accessory")}
         />
 
-        <aside {...stylex.props(styles.column, styles.fixed(columns.accessory))}>
+        <aside
+          data-column="accessory"
+          {...stylex.props(styles.column, styles.fixed(columns.accessory))}
+        >
           {/* The open session's directory, because the diff panel diffs the
               workspace on screen. `startDir` and not the identity's workspace
               name: a workspace name is not a path, and jj resolves `@` from a
               directory. Nothing open is a state the panel says out loud. */}
-          <Accessory dir={open?.startDir} scheme={scheme} />
+          {/* One boundary per column, so a panel that throws does not take the
+              terminal with it. The accessory column is where this earns its
+              keep: it holds the newest code, and a bad option handed to the
+              diff renderer used to white out the whole window. */}
+          <Boundary where="the accessory panel">
+            <Accessory
+              dir={open?.startDir}
+              project={open?.identity?.project}
+              workspace={open?.identity?.workspace}
+              scheme={scheme}
+            />
+          </Boundary>
         </aside>
       </div>
 

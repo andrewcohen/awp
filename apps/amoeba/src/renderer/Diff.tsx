@@ -1,18 +1,30 @@
-import type { Revision } from "@awp-kit/protocol";
+import type { CommentSide, ReviewComment, Revision } from "@awp-kit/protocol";
+import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
+import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
+import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
+import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/ArrowsOutLineVertical";
+import { CaretUpIcon } from "@phosphor-icons/react/CaretUp";
 import { CodeView, type CodeViewItem } from "@pierre/diffs/react";
+import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import * as stylex from "@stylexjs/stylex";
 import { parsePatchFiles } from "@pierre/diffs";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listRevisions, readDiff } from "./daemon";
-import { statOf, subjectOf, summarise } from "./patch";
+import { THEME } from "./highlighting";
+import { statOf, subjectOf } from "./patch";
+import {
+  DEFAULT_SPLIT,
+  rememberSplit,
+  rememberViewed,
+  rememberedSplit,
+  rememberedViewed,
+} from "./remembered";
+import { useReview } from "./review";
 import type { ColorScheme } from "@awp-kit/pane";
 import { colors, text } from "./tokens.stylex";
 
-// What the workspace on screen has changed.
-//
-// The accessory column has always been described as the place for "a diff or a
-// webview" — see the note in columns.ts about which column yields first when
-// the window is too narrow. This is the diff.
+// What the workspace on screen has changed, and what a person has to say about
+// it.
 //
 // ── two questions, not one ─────────────────────────────────────────────────
 //
@@ -35,25 +47,124 @@ import { colors, text } from "./tokens.stylex";
 // for `undefined` and every other row asks by change id. See `Diff` in the
 // contract, and `DiffOf.snapshot` in the daemon's jj service.
 //
+// ── two questions means two requests ───────────────────────────────────────
+//
+// They used to go out together, and clicking a revision therefore re-fetched
+// the list of revisions it was clicked in. That list is a property of the
+// *workspace*: picking a different row out of it cannot change it. Measured at
+// 40ms a call against a real repository — small, and paid on every click for an
+// answer already on screen. Now `askRevisions` follows the directory and
+// `askPatch` follows the pair, which is what each one is actually about.
+//
+// The rest of what "clicking a revision is slow" was is not here at all: it was
+// every file being tokenized on the main thread, because nothing had put a
+// worker pool in the tree. See highlighting.tsx.
+//
 // ── nothing polls ──────────────────────────────────────────────────────────
 //
 // A timer here would snapshot someone's working copy every few seconds, which
-// writes an operation to the repository they are standing in — for a panel
-// that may be sitting behind another tab. Three things ask instead, and each
-// of them is a moment when the answer plausibly changed:
-//
-//   opening the tab      Base UI unmounts a hidden panel, so showing it again
-//                        remounts this and the effects below run afresh
-//   the window regaining focus   you went to an editor, you came back
-//   the refresh button   you did something the window could not see
+// writes an operation to the repository they are standing in — for a panel that
+// may be sitting behind another tab. Three things ask instead, and each is a
+// moment when the answer plausibly changed: opening the tab (Base UI unmounts a
+// hidden panel, so showing it remounts this), the window regaining focus, and
+// the refresh button.
 //
 // ── @pierre/diffs, and which of its components ─────────────────────────────
 //
 // `CodeView` rather than `PatchDiff`, and not as a preference: `PatchDiff`
 // throws outright on a patch containing more than one file — `getSingularPatch`
 // is exactly what its name says. A commit touches several files roughly always.
-// CodeView takes a list of parsed diffs, virtualizes them and owns its own
-// scrolling, which is also what a column this narrow needs.
+
+/** The row for the working copy, which is not addressed by change id. */
+const WORKING_COPY = "@";
+
+/** One empty list, shared. See where it is used. */
+const NO_FOLDS: ReadonlyArray<string> = [];
+
+/**
+ * A revision nothing is ever at.
+ *
+ * `undefined` cannot serve as "not yet decided" in this panel, because it
+ * already means the working copy — see the fold state below.
+ */
+const NEVER = "";
+
+/** How short the revision list is allowed to be dragged before it folds away. */
+const MIN_SPLIT = 44;
+
+/**
+ * Injected into the renderer's shadow root, because that is where the gutter is.
+ *
+ * StyleX cannot reach it — a shadow root is exactly what a stylesheet does not
+ * cross, which is the property that makes the diff renderer's own styling safe
+ * to live beside this app's. `unsafeCSS` is the library's own door through it,
+ * and this is the only thing put through: a cursor, so the one part of a line
+ * that can be grabbed says so.
+ */
+const GUTTER_CSS = `[data-column-number] { cursor: pointer; }`;
+
+/**
+ * What a line annotation carries: an existing comment, or the box to write one.
+ *
+ * One type for both, because both are drawn by `renderAnnotation` and the
+ * library gives an item exactly one annotation renderer. A separate mechanism
+ * for the composer would mean a second thing that has to know how to position
+ * itself against a diff line, which is the whole problem the annotation slot
+ * already solves.
+ */
+type Note =
+  | { readonly kind: "comment"; readonly comment: ReviewComment }
+  // The draft carries its own span rather than the renderer reading it back off
+  // the selection. This closure is handed to the library and called later, so
+  // `selection` inside it is whatever it was when the closure was made — and
+  // TypeScript says as much, refusing to narrow it out of `null`. Putting the
+  // answer on the annotation makes the value travel with the thing it describes.
+  | { readonly kind: "draft"; readonly line: number; readonly endLine: number };
+
+/**
+ * A number that changes when the item does.
+ *
+ * `CodeViewItem.version` is what the library's cache is keyed on — its own type
+ * says "make sure you bump the version when also changing the value" — and the
+ * item now varies in more than one way: folded or not, and which comments are
+ * anchored in it. A counter cannot express that, because the value has to be
+ * derivable from the item during render rather than remembered between renders.
+ *
+ * FNV-1a over a string naming the state. Collisions are possible in principle
+ * and cost a redraw that did not happen; the alternative, a version that fails
+ * to change, costs a comment that does not appear.
+ */
+/**
+ * A selection, as the side and the two line numbers a comment is filed under.
+ *
+ * The one subtlety, and it is the reason this is a function rather than three
+ * property reads: **a range whose ends are on different sides is not a range.**
+ * A unified diff numbers each side separately, so a drag from a removed line to
+ * an added one reports `start` counted in the old file and `end` counted in the
+ * new one. Storing that as 12–40 would be a span over two different files.
+ *
+ * The end wins, because the end is where the pointer finished and where the
+ * composer appears. A crossing selection therefore comments on one line, which
+ * is honest, rather than on a block that does not exist.
+ */
+const spanOf = (
+  range: SelectedLineRange,
+): { readonly side: CommentSide; readonly line: number; readonly endLine: number } => {
+  const side = range.endSide ?? range.side ?? "additions";
+  const crossed = (range.side ?? side) !== side;
+  const first = crossed ? range.end : Math.min(range.start, range.end);
+  const last = crossed ? range.end : Math.max(range.start, range.end);
+  return { side, line: first, endLine: last };
+};
+
+const versionOf = (state: string): number => {
+  let hash = 2166136261;
+  for (let index = 0; index < state.length; index += 1) {
+    hash ^= state.codePointAt(index) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
 
 const styles = stylex.create({
   panel: {
@@ -65,31 +176,32 @@ const styles = stylex.create({
   },
 
   // ── the revisions ────────────────────────────────────────────────────────
-  // A fixed 30/70 split, not a box that grows to its contents up to a cap.
   //
-  // The cap was the first version and it read badly for a reason worth stating:
-  // the boundary between the two halves moved. Selecting a revision can change
-  // how many rows are listed, so the line the eye uses to separate "which
-  // commit" from "what changed" jumped while being looked at — and the patch
-  // below it shifted with it.
+  // A height in pixels, dragged and remembered, rather than the fixed 30% this
+  // replaced — and the reason the fixed split existed is still true and still
+  // honoured. What it was fixing was a boundary that *moved on its own*:
+  // sizing the list to its contents meant selecting a revision could change how
+  // many rows were listed, so the line the eye uses to separate "which commit"
+  // from "what changed" jumped while being looked at.
   //
-  // The cost is real and is accepted: with three revisions, most of that 30%
-  // is empty. A boundary that stays put is worth more than the rows it wastes,
-  // and the alternative — sizing to content — is what produced the jump.
+  // A dragged boundary moves only when someone moves it, which is the opposite
+  // property. What 30% cost was the case it could not express: three revisions
+  // and most of the band empty, or fifty and a diff peering out from under
+  // them.
   //
-  // Scrollable regardless. A stack measured against a trunk nobody has fetched
-  // in a month is fifty rows, and fifty rows of commit subjects with the diff
-  // pushed off the bottom is a commit list, not a diff panel.
-  revisions: {
+  // `maxHeight` and not `flexShrink`, because the point is a boundary that
+  // stays put. Shrinking would let a short window quietly renegotiate it and
+  // then leave it there. A cap is a rule about the window, not about the drag.
+  revisions: (height: number) => ({
     flexGrow: 0,
     flexShrink: 0,
-    flexBasis: "30%",
+    flexBasis: `${height}px`,
+    maxHeight: "60%",
     minHeight: 0,
     overflowY: "auto",
-    borderBottomWidth: 1,
-    borderBottomStyle: "solid",
-    borderBottomColor: colors.border,
-  },
+    overflowX: "hidden",
+  }),
+  shut: { display: "none" },
   revision: {
     display: "flex",
     alignItems: "baseline",
@@ -122,18 +234,85 @@ const styles = stylex.create({
   },
   mark: { flexShrink: 0, color: colors.live },
 
+  // ── the boundary between the two ─────────────────────────────────────────
+  //
+  // The same shape as the column dividers — a thin rule with a hit area over
+  // it — turned ninety degrees. Not the same component: `Divider` places its
+  // handle against the titlebar and speaks in the vocabulary of a column that
+  // folds a whole side of the window away. What is shared is the idea, which is
+  // cheaper to restate in twenty lines than to generalise into a prop.
+  //
+  // The caret is *inside* the bar and always visible, unlike a column's, for
+  // the reason a folded column's control is: once the list is folded there is
+  // nothing else left on screen to press.
+  splitter: {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+    gap: "0.3rem",
+    flexShrink: 0,
+    height: "0.9rem",
+    padding: "0 0.35rem",
+    backgroundColor: colors.base,
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
+    cursor: "row-resize",
+    // The gesture is captured here, so it must not also read as a page scroll.
+    touchAction: "none",
+  },
+  held: { borderBottomColor: colors.muted },
+  // A button drawn over a `row-resize` bar has to say what *it* does, and it
+  // must not start a drag — hence its own cursor and its own pointerdown stop.
+  peg: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "1.1rem",
+    height: "1.1rem",
+    padding: 0,
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    borderRadius: "0.2rem",
+    color: {
+      default: colors.muted,
+      ":hover": colors.text,
+    },
+    cursor: "pointer",
+  },
+
   // ── the header over the patch ────────────────────────────────────────────
   head: {
     display: "flex",
-    alignItems: "baseline",
+    alignItems: "center",
     gap: "0.4rem",
     flexShrink: 0,
     padding: "0.3rem 0.6rem",
     color: colors.muted,
     fontSize: text.tiny,
   },
-  stat: { flex: 1, minWidth: 0 },
+  // `overflow: hidden` and not just `minWidth: 0`. A flex item will not shrink
+  // below its content, so `flex: 1` alone lets "17 files +1348 −171" push the
+  // send button off its own row — which is what it did, with the numbers ending
+  // up underneath the button. The stat is the part that can be clipped: the
+  // button is a control and the count is a detail.
+  stat: {
+    display: "flex",
+    gap: "0.35rem",
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    whiteSpace: "nowrap",
+  },
+  statPart: { flexShrink: 0 },
+  // Green and red, from the two signal colours the palette already has rather
+  // than two new ones. `live` and `warn` mean "went well" and "wants your
+  // attention" everywhere else in this window, which is close enough to
+  // added/removed that a third pair would be three names for two colours.
+  added: { color: colors.live },
+  removed: { color: colors.warn },
   button: {
+    flexShrink: 0,
     padding: "0.1rem 0.4rem",
     backgroundColor: "transparent",
     borderWidth: 1,
@@ -145,6 +324,22 @@ const styles = stylex.create({
     fontSize: text.tiny,
     cursor: "pointer",
   },
+  // A button whose whole content is a glyph. Two arrows meeting, and two
+  // parting: the pair says fold and unfold without a word, and the words were
+  // costing more room in this bar than they were worth. `title` and
+  // `aria-label` keep the sentence for anyone who wants it.
+  icon: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "1.5rem",
+    height: "1.35rem",
+    padding: 0,
+  },
+  // The one button here that does something outward-facing. It is the only
+  // control in the panel that another process finds out about.
+  send: { borderColor: colors.live, color: colors.live },
+  busy: { opacity: 0.5, cursor: "default" },
 
   // ── where the scrollbar goes, and why it is not obvious ─────────────────
   //
@@ -177,8 +372,14 @@ const styles = stylex.create({
   // So the toggle is ours, rendered into the header through
   // `renderHeaderPrefix`, and the state lives here.
   //
-  // A button rather than a bare glyph, because it is one — that buys the
-  // keyboard, the focus ring and the announcement for nothing.
+  // An icon, not a text glyph, and that is the fix for a complaint made twice.
+  // `fontSize` was raised once and the caret stayed tiny, which is the tell
+  // that font size was never what governed it: `▸` is drawn by whatever font
+  // the library's own header CSS resolves inside its shadow root, and a
+  // triangle in a text font has no stems or counters to carry it at small
+  // sizes — it is a few pixels of ink whatever the em box says. An SVG with an
+  // explicit pixel size is not a glyph and cannot be re-sized by inheriting
+  // anything.
   fold: {
     display: "flex",
     alignItems: "center",
@@ -193,45 +394,97 @@ const styles = stylex.create({
       default: colors.muted,
       ":hover": colors.text,
     },
-    font: "inherit",
-    // Not `text.tiny`, which is what this was and which is the size of a
-    // caption. A triangle drawn at caption size is a few pixels of ink — the
-    // glyph has no counters or stems to carry it the way a letter does, so it
-    // reads as a speck rather than as small text. It is also the row's only
-    // control, and a target of 12px square is under every pointer guideline
-    // there is.
-    fontSize: text.body,
-    lineHeight: 1,
     cursor: "pointer",
   },
+
+  // ── the viewed mark ─────────────────────────────────────────────────────
+  //
+  // A real `<input type="checkbox">` with a `<label>` around it, not a styled
+  // button pretending. It is a checkbox in every way that matters — it is
+  // tabbable, space toggles it, a screen reader calls it one, and the state is
+  // announced — and every bit of that would have to be rebuilt by hand for a
+  // div. The same argument Base UI is a dependency for.
+  //
+  // The label is the hit area, and it is bigger than the box inside it: a
+  // 13px checkbox is a 13px target, and this one sits at the end of a header
+  // row that is otherwise all text. The word "viewed" beside it was doing the
+  // same job less well — it made the target wide and told a reader what a
+  // checkbox already says. `aria-label` keeps the sentence where it is needed.
+  viewed: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "1.75rem",
+    height: "1.75rem",
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  // Scaled rather than rebuilt. `transform` and not `width`, because a native
+  // checkbox draws its tick at its own size and a widened one is a rectangle
+  // with a small tick in it — the same reason the caret became an icon.
+  box: {
+    margin: 0,
+    transform: "scale(1.5)",
+    accentColor: colors.live,
+    cursor: "pointer",
+  },
+
+  // ── a comment, and the box that writes one ──────────────────────────────
+  note: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.25rem",
+    margin: "0.15rem 0.4rem",
+    padding: "0.35rem 0.5rem",
+    backgroundColor: colors.base,
+    borderLeftWidth: 2,
+    borderLeftStyle: "solid",
+    borderLeftColor: colors.border,
+    borderRadius: "0.2rem",
+    color: colors.text,
+    fontSize: text.small,
+  },
+  draft: { borderLeftColor: colors.live },
+  noteRow: { display: "flex", alignItems: "baseline", gap: "0.4rem" },
+  noteBody: { flex: 1, minWidth: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+  noteWhen: { flexShrink: 0, color: colors.muted, fontSize: text.tiny },
+  noteWhere: {
+    flexShrink: 0,
+    color: colors.muted,
+    fontSize: text.tiny,
+    fontVariantNumeric: "tabular-nums",
+  },
+  write: {
+    width: "100%",
+    minHeight: "3.5rem",
+    padding: "0.3rem",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.2rem",
+    color: colors.text,
+    font: "inherit",
+    fontSize: text.small,
+    resize: "vertical",
+  },
+  hint: { color: colors.muted, fontSize: text.tiny },
 
   said: { padding: "0.5rem 0.6rem", color: colors.muted, fontSize: text.small },
   warn: { color: colors.warn },
 });
 
-/** The row for the working copy, which is not addressed by change id. */
-const WORKING_COPY = "@";
-
-/** One empty list, shared. See where it is used. */
-const NO_FOLDS: ReadonlyArray<string> = [];
-
-/**
- * Shiki's themes, one per scheme.
- *
- * Named rather than derived from the window's own palette. The colours in
- * `tokens.stylex` are six roles — text, muted, border and three signals —
- * which is the vocabulary a list of rows needs and nothing like the thirty a
- * syntax theme assigns. Building one out of six would be inventing the other
- * twenty-four.
- */
-const THEME = { light: "github-light", dark: "github-dark" } as const;
-
 export function Diff({
   dir,
+  project,
+  workspace,
   scheme,
 }: {
   /** A directory in the workspace — a session's `startDir`. */
   readonly dir: string | undefined;
+  /** The workspace's identity, or absent for a session that is not one of ours. */
+  readonly project: string | undefined;
+  readonly workspace: string | undefined;
   readonly scheme: ColorScheme;
 }) {
   const [revisions, setRevisions] = useState<ReadonlyArray<Revision>>([]);
@@ -256,33 +509,27 @@ export function Diff({
     setFailure(undefined);
   }
 
-  // Which request the answers on screen belong to.
-  //
-  // A ref rather than a flag closed over by each effect, because asking is no
-  // longer only something an effect does — the refresh button and the focus
-  // listener call the same function, and a reply that arrives after a newer
-  // request has gone out must lose in every one of those cases alike. One
-  // counter, compared on the way in, covers all three.
+  // Which patch request the answer on screen belongs to. A ref rather than a
+  // flag closed over by each effect, because asking is not only something an
+  // effect does — the refresh button and the focus listener call the same
+  // function, and a reply that arrives after a newer request has gone out must
+  // lose in every one of those cases alike.
   const newest = useRef(0);
 
-  const ask = useCallback((where: string, revision: string | undefined) => {
-    newest.current += 1;
-    const mine = newest.current;
-
+  const askRevisions = useCallback((where: string) => {
     listRevisions(where)
-      .then((found) => {
-        if (mine === newest.current) {
-          setRevisions(found);
-        }
-      })
+      .then(setRevisions)
       .catch(() => {
         // Silent, deliberately. The diff below has its own failure and it is
         // the one worth showing; two messages about the same unreachable
         // daemon is one more than says anything.
-        if (mine === newest.current) {
-          setRevisions([]);
-        }
+        setRevisions([]);
       });
+  }, []);
+
+  const askPatch = useCallback((where: string, revision: string | undefined) => {
+    newest.current += 1;
+    const mine = newest.current;
 
     readDiff(where, revision)
       .then((answer) => {
@@ -309,28 +556,54 @@ export function Diff({
 
   useEffect(() => {
     if (dir !== undefined) {
-      ask(dir, at);
+      askRevisions(dir);
     }
-  }, [dir, at, ask]);
+  }, [dir, askRevisions]);
+
+  useEffect(() => {
+    if (dir !== undefined) {
+      askPatch(dir, at);
+    }
+  }, [dir, at, askPatch]);
 
   // Coming back to the window is the one moment worth asking on that costs
   // nothing to detect. Everything else that would change this answer happens
   // somewhere else — an agent writing files, a commit in a terminal — and the
   // window finds out about all of it the same way: someone looks at it again.
+  //
+  // Both questions, here, unlike the effects above. Coming back is the one
+  // moment when the *list* can have changed too, because a commit made in a
+  // terminal is exactly what someone was away doing.
   useEffect(() => {
     if (dir === undefined) {
       return;
     }
-    const again = () => ask(dir, at);
+    const again = () => {
+      askRevisions(dir);
+      askPatch(dir, at);
+    };
     window.addEventListener("focus", again);
     return () => window.removeEventListener("focus", again);
-  }, [dir, at, ask]);
+  }, [dir, at, askRevisions, askPatch]);
 
-  // Parsed here rather than inside the renderer, because the item list is what
-  // CodeView takes and the cache key prefix has to be stable per revision: it
-  // is what lets a re-render of the same patch reuse work instead of
-  // re-highlighting every file.
-  // Which files are folded, and which revision that was true of.
+  const review = useReview(project, workspace);
+
+  // ── the boundary between the list and the patch ─────────────────────────
+  const [split, setSplit] = useState(rememberedSplit);
+  const [dragging, setDragging] = useState(false);
+  const panel = useRef<HTMLDivElement>(null);
+  const folded = split === 0;
+
+  const resize = (height: number) => {
+    // Dragged past the floor is a fold, not a two-pixel list. The floor is
+    // where the gesture already wanted to go — nobody drags a list to nothing
+    // and means "leave one row".
+    const next = height < MIN_SPLIT ? 0 : Math.round(height);
+    setSplit(next);
+    rememberSplit(next);
+  };
+
+  // ── which files are folded, and which revision that was true of ──────────
   //
   // The revision is stored *with* the set rather than cleared when it changes.
   // Clearing was the first version and is a state write inside an effect —
@@ -345,17 +618,145 @@ export function Diff({
   const [folds, setFolds] = useState<{
     readonly at: string | undefined;
     readonly ids: ReadonlyArray<string>;
-  }>({
-    at: undefined,
-    ids: [],
-  });
-  // `NO_FOLDS` and not a fresh `[]`: the memo below depends on this, and a new
-  // array every render is a memo that never hits.
-  const folded = folds.at === at ? folds.ids : NO_FOLDS;
+    // `NEVER` and not `undefined`, and the difference is the whole bug it
+    // fixed. `undefined` is not "no revision yet" here — it is the *working
+    // copy*, which is the revision the panel opens on. So a freshly mounted
+    // panel compared `folds.at === at` as `undefined === undefined`, decided
+    // its empty fold list was current, and threw away the seed taken from the
+    // viewed marks. What that looked like: tick a file viewed, reload, and the
+    // tick came back while the file sat open with every line showing.
+    //
+    // The empty string is a value no change id and no working copy ever has.
+  }>({ at: NEVER, ids: [] });
+
+  // ── which files have been looked at ─────────────────────────────────────
+  //
+  // Held with the patch it belongs to, exactly as the folds are, and for the
+  // same reason: item ids are paths, so a set carried across revisions would
+  // mark a file viewed in the new patch because its namesake was viewed in the
+  // old one. `for` is the pair the marks were read for; when it disagrees with
+  // what is on screen, the answer is re-read rather than corrected in an
+  // effect.
+  const [viewed, setViewed] = useState<{
+    readonly for: string;
+    readonly paths: ReadonlyArray<string>;
+  }>({ for: "", paths: [] });
+
+  const marksFor =
+    project === undefined || workspace === undefined
+      ? undefined
+      : `${project}/${workspace}/${at ?? WORKING_COPY}`;
+
+  if (marksFor !== undefined && viewed.for !== marksFor) {
+    setViewed({
+      for: marksFor,
+      paths: rememberedViewed(project ?? "", workspace ?? "", at ?? WORKING_COPY),
+    });
+  }
+
+  const seen = new Set(viewed.for === marksFor ? viewed.paths : []);
+
+  const markViewed = (path: string, yes: boolean) => {
+    if (project === undefined || workspace === undefined || marksFor === undefined) {
+      return;
+    }
+    const paths = yes
+      ? [...new Set([...viewed.paths, path])]
+      : viewed.paths.filter((one) => one !== path);
+    setViewed({ for: marksFor, paths });
+    rememberViewed(project, workspace, at ?? WORKING_COPY, paths);
+
+    // Marking a file viewed folds it, and unmarking opens it again. That is
+    // what the mark is *for*: the reason to say "I have looked at this" is to
+    // get it out of the way, and a checkbox that ticks and leaves eight hundred
+    // lines on screen has not done the thing it was pressed for.
+    setFolds((prev) => {
+      const ids = prev.at === at ? prev.ids : shutIds;
+      const mine = parsed.filter((one) => one.fileDiff.name === path).map((one) => one.id);
+      return {
+        at,
+        ids: yes ? [...new Set([...ids, ...mine])] : ids.filter((one) => !mine.includes(one)),
+      };
+    });
+  };
+
+  // Where a comment is being written, and what is in the box. One at a time,
+  // because the selection it is anchored to is one at a time.
+  const [selection, setSelection] = useState<CodeViewLineSelection | null>(null);
+  const [writing, setWriting] = useState("");
+
+  // The live one, which is a different thing from the settled one and exists
+  // for a reason that is not obvious: **passing `selectedLines` at all is what
+  // makes the selection controlled.** The React wrapper reads
+  // `controlledSelection = selectedLines !== undefined`, and in controlled mode
+  // the renderer stops painting its own highlight — it proposes a range and
+  // waits to be told what the answer is.
+  //
+  // So the first fix left the drag working and invisible. This one is fed every
+  // intermediate range, and the composer still opens only on the settled one:
+  //
+  //   live       every pointermove   →  selectedLines  →  the blue band
+  //   selection  pointerup only      →  the annotation →  a new item version
+  //
+  // Which is the whole trick. A re-render is cheap; a re-render that changes an
+  // item's `version` rebuilds its DOM, and that is what a gesture cannot
+  // survive.
+  const [live, setLive] = useState<CodeViewLineSelection | null>(null);
+
+  // ── the composer waits for the gesture to finish ─────────────────────────
+  //
+  // A drag down the number column selected exactly one line, every time, and
+  // the fault is here rather than in the library. The composer is an annotation
+  // on the item; an item that gains one gets a new `version`; a new version
+  // rebuilds that item's DOM. So the gesture destroyed the thing it was
+  // tracking, one move in:
+  //
+  //   pointerdown line 4   selection 4–4  →  composer  →  the item rebuilds
+  //   pointermove line 9   nothing left to track
+  //   pointerup            "line 4"
+  //
+  // None of which reads as a bug in the drag. Shift-click worked throughout,
+  // because its two halves are separate gestures with a settled render between
+  // them — which is exactly what made this look like the library lacking
+  // multi-line support rather than us tearing it down.
+  //
+  //   drag the numbers    line 4      ← before
+  //   click, shift-click  lines 4–9
+  //   drag the +          lines 4–5   ← the rebuild caught it two lines in
+  //
+  // So the selection held here is the *settled* one, taken from
+  // `onLineSelectionEnd` and from nowhere else. `onSelectedLinesChange` cannot
+  // be the source: it fires at pointerdown, before the gesture has said what it
+  // is, and a flag raised in `onLineSelectionStart` is raised one call too late
+  // — the library's wrapper calls `onSelectedLinesChange` *first* and the
+  // bracket callback after it. That was the first fix and it changed nothing,
+  // which is the useful part of the finding.
+  //
+  // The drag renders, then — it has to, or there is no band to see — but only
+  // through `live` below, which changes no item's version.
 
   // Parsed here rather than inside the renderer, because the item list is what
-  // CodeView takes and the cache key prefix has to be stable per revision.
-  const parsed = useMemo<ReadonlyArray<CodeViewItem>>(() => {
+  // CodeView takes and the cache key prefix has to be stable per revision: it
+  // is what lets a re-render of the same patch reuse work instead of
+  // re-highlighting every file.
+  //
+  // No `useMemo`, and it used to have one. The viewed marks are read during
+  // render — they are derived from the workspace and revision on screen, the
+  // same shape the folds use — and a state write during render is something
+  // React Compiler cannot see past, so it could no longer prove the memo held
+  // and said so:
+  //
+  //   react(preserve-manual-memoization): Existing memoization could not be
+  //   preserved
+  //
+  // That is the compiler doing its job. It memoizes this on its own, which is
+  // what `_c(n)` in the served module is, and react-doctor was already asking
+  // for the manual one to go. Two tools agreeing is enough.
+  const parsed = ((): ReadonlyArray<{
+    readonly id: string;
+    readonly type: "diff";
+    readonly fileDiff: ReturnType<typeof parsePatchFiles>[number]["files"][number];
+  }> => {
     if (patch === undefined || patch === "") {
       return [];
     }
@@ -370,28 +771,89 @@ export function Diff({
         fileDiff,
       })),
     );
-  }, [patch, at]);
+  })();
 
-  // `collapsed` folded in separately, and `version` bumped with it.
+  const revision = at ?? WORKING_COPY;
+  const here = review.comments.filter((one) => one.revision === revision);
+
+  // `collapsed`, the annotations and `version` folded in together.
   //
-  // The library says so in its own type: "Make sure you bump the version when
-  // also changing the value." An item whose fields changed but whose version
-  // did not is one CodeView is entitled to treat as unchanged and reuse — the
-  // cache is keyed on it. Two states, so two versions.
-  // No `useMemo` around this, unlike `parsed` above, and the difference is
-  // real rather than an inconsistency. `parsed` wraps `parsePatchFiles`, which
-  // walks the whole patch text; this is one `map` over a list of ten. React
-  // Compiler memoizes it either way, and react-doctor refuses manual
-  // memoization in code it manages.
+  // No `useMemo` around this, unlike `parsed` above, and the difference is real
+  // rather than an inconsistency. `parsed` wraps `parsePatchFiles`, which walks
+  // the whole patch text; this is one `map` over a list of ten. React Compiler
+  // memoizes it either way, and react-doctor refuses manual memoization in code
+  // it manages.
   //
-  // A Set, not `folded.includes`, for the same kind of reason it usually is:
-  // one lookup per file against a list is a scan per file. Ten files is
-  // nothing, but the rule this repo lints for does not care and neither should
-  // the code.
-  const shut = new Set(folded);
-  const items: ReadonlyArray<CodeViewItem> = parsed.map((item) => {
+  // A Set, not `shutIds.includes`, for the usual reason: one lookup per file
+  // against a list is a scan per file.
+  // `NO_FOLDS` and not a fresh `[]`: a new array every render is a memo that
+  // never hits.
+  //
+  // ── a fresh patch starts folded where it was already viewed ─────────────
+  //
+  // The marks survive a reload and the folds do not — folds are this visit,
+  // marks are the review. Left alone that produced the one state nobody wants:
+  // a file ticked "viewed" sitting open with eight hundred lines under it,
+  // which is exactly what ticking it was meant to get rid of.
+  //
+  // So the fold list is *seeded* from the marks rather than being a second
+  // record of them. Once anything is folded or unfolded by hand this render's
+  // list takes over, which is what makes unfolding a viewed file possible at
+  // all — a rule that forced viewed files shut would have no way back.
+  const shutIds =
+    folds.at === at
+      ? folds.ids
+      : parsed.filter((one) => seen.has(one.fileDiff.name)).map((one) => one.id);
+
+  const shut = new Set(shutIds);
+  const items: ReadonlyArray<CodeViewItem<Note>> = parsed.map((item) => {
     const off = shut.has(item.id);
-    return { ...item, collapsed: off, version: off ? 1 : 0 };
+    // Annotated, not inferred. Without it the array's element type is fixed by
+    // the first `map` — a comment — and pushing the composer onto it is an
+    // error about a string literal rather than about what is going on.
+    const annotations: Array<DiffLineAnnotation<Note>> = here
+      .filter((one) => one.path === item.fileDiff.name)
+      .map((comment) => ({
+        side: comment.side,
+        // Drawn under the LAST line of the range, not the first. An annotation
+        // is a block inserted into the flow, so anchoring it at the start would
+        // push the rest of what the comment is about below it — the reader
+        // would have the remark and then have to scroll to reach what it names.
+        lineNumber: comment.endLine,
+        metadata: { kind: "comment" as const, comment },
+      }));
+
+    // The composer is an annotation like any other, anchored at the end of the
+    // selection. `endSide` first because a selection dragged upward reports its
+    // two ends in the order they were touched, not in line order.
+    if (selection?.id === item.id) {
+      const span = spanOf(selection.range);
+      annotations.push({
+        side: span.side,
+        lineNumber: span.endLine,
+        metadata: { kind: "draft" as const, line: span.line, endLine: span.endLine },
+      });
+    }
+
+    return {
+      ...item,
+      collapsed: off,
+      annotations,
+      version: versionOf(
+        // The viewed mark is in here as well as the fold, even though marking
+        // viewed also folds. The cache is keyed on this number, so anything the
+        // header draws has to be in the string — and relying on the fold to
+        // carry it would make the checkbox go stale the day the two stop moving
+        // together, in a way that looks like a lost click rather than a cache.
+        `${off ? "shut" : "open"}|${seen.has(item.fileDiff.name) ? "seen" : "new"}|${annotations
+          .map((one) =>
+            one.metadata.kind === "draft"
+              ? `draft:${one.side}:${one.metadata.line}-${one.metadata.endLine}`
+              : `${one.metadata.comment.id}:${one.metadata.comment.sentAt === undefined ? "d" : "s"}`,
+          )
+          .join(",")}`,
+      ),
+    };
   });
 
   // Functional, and it re-derives the stale check itself. For the same reason
@@ -399,33 +861,59 @@ export function Diff({
   // anything it reads from the render that created it may be old.
   const toggle = (id: string) => {
     setFolds((prev) => {
-      const ids = prev.at === at ? prev.ids : NO_FOLDS;
+      // `shutIds` and not `NO_FOLDS`, so the first fold of a visit does not
+      // silently unfold everything the marks had folded.
+      const ids = prev.at === at ? prev.ids : shutIds;
       return { at, ids: ids.includes(id) ? ids.filter((one) => one !== id) : [...ids, id] };
     });
   };
 
-  const stat = patch === undefined ? undefined : summarise(statOf(patch));
+  /** Fold every file, or none. The bar's two buttons. */
+  const foldAll = (shutThem: boolean) => {
+    setFolds({ at, ids: shutThem ? parsed.map((one) => one.id) : NO_FOLDS });
+  };
+
+  const save = () => {
+    const body = writing.trim();
+    if (selection === null || body === "") {
+      return;
+    }
+    const file = parsed.find((one) => one.id === selection.id);
+    if (file === undefined) {
+      return;
+    }
+    review.add({ revision, path: file.fileDiff.name, ...spanOf(selection.range), body });
+    setWriting("");
+    setSelection(null);
+    setLive(null);
+  };
+
+  const stat = patch === undefined ? undefined : statOf(patch);
 
   if (dir === undefined) {
     return <div {...stylex.props(styles.said)}>no workspace open</div>;
   }
 
   return (
-    <div {...stylex.props(styles.panel)}>
-      <div {...stylex.props(styles.revisions)}>
-        {revisions.map((revision) => {
+    <div ref={panel} {...stylex.props(styles.panel)}>
+      <div {...stylex.props(styles.revisions(split), folded && styles.shut)}>
+        {revisions.map((one) => {
           // The working copy addresses itself as absent — see the note at the
           // top of this file. Every other row is its change id.
-          const value = revision.workingCopy ? undefined : revision.changeId;
+          const value = one.workingCopy ? undefined : one.changeId;
           const selected = value === at;
           return (
             <button
-              key={revision.changeId}
+              key={one.changeId}
               type="button"
+              // What ctrl+j and ctrl+k step through in this column — see
+              // navigation.ts. The revision list is the one thing here that is
+              // a list; the panel's buttons are a toolbar.
+              data-nav-item
               {...stylex.props(styles.revision, selected && styles.on)}
               onClick={() => setAt(value)}
             >
-              {revision.workingCopy ? (
+              {one.workingCopy ? (
                 <>
                   <span aria-hidden {...stylex.props(styles.mark)}>
                     ●
@@ -434,8 +922,8 @@ export function Diff({
                 </>
               ) : (
                 <>
-                  <span {...stylex.props(styles.id)}>{revision.changeId.slice(0, 8)}</span>
-                  <span {...stylex.props(styles.subject)}>{subjectOf(revision.description)}</span>
+                  <span {...stylex.props(styles.id)}>{one.changeId.slice(0, 8)}</span>
+                  <span {...stylex.props(styles.subject)}>{subjectOf(one.description)}</span>
                 </>
               )}
             </button>
@@ -443,12 +931,115 @@ export function Diff({
         })}
       </div>
 
+      {/* The boundary. A separator with a value, because a layout worth an
+          assertion is worth announcing — and the accessible name is then also
+          what a probe reads to check the drag did what it looked like. */}
+      <div
+        role="separator"
+        aria-label="revision list height"
+        aria-orientation="horizontal"
+        aria-valuenow={split}
+        {...stylex.props(styles.splitter, dragging && styles.held)}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+        }}
+        onPointerMove={(event) => {
+          if (!dragging) {
+            return;
+          }
+          const top = panel.current?.getBoundingClientRect().top ?? 0;
+          resize(event.clientY - top);
+        }}
+        onPointerUp={(event) => {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          setDragging(false);
+        }}
+      >
+        <button
+          type="button"
+          aria-expanded={!folded}
+          aria-label={folded ? "show the revision list" : "hide the revision list"}
+          {...stylex.props(styles.peg)}
+          // Otherwise the press starts a drag as well as a click, and the
+          // fold happens with the boundary already moved out from under it.
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => resize(folded ? DEFAULT_SPLIT : 0)}
+        >
+          {folded ? <CaretDownIcon size={12} /> : <CaretUpIcon size={12} />}
+        </button>
+      </div>
+
       <div {...stylex.props(styles.head)}>
-        <span {...stylex.props(styles.stat)}>{stat ?? ""}</span>
-        <button type="button" {...stylex.props(styles.button)} onClick={() => ask(dir, at)}>
+        <span {...stylex.props(styles.stat)}>
+          {stat !== undefined && stat.files > 0 && (
+            <>
+              <span {...stylex.props(styles.statPart)}>
+                {stat.files === 1 ? "1 file" : `${stat.files} files`}
+              </span>
+              <span {...stylex.props(styles.statPart, styles.added)}>+{stat.added}</span>
+              {/* A real minus sign, U+2212. A hyphen beside a `+` at this size
+                  is a dash of a different weight and reads as a typo. */}
+              <span {...stylex.props(styles.statPart, styles.removed)}>−{stat.removed}</span>
+            </>
+          )}
+        </span>
+
+        {review.unsent > 0 && (
+          <button
+            type="button"
+            disabled={review.sending}
+            {...stylex.props(styles.button, styles.send, review.sending && styles.busy)}
+            onClick={review.send}
+          >
+            {review.sending
+              ? "sending…"
+              : `send ${review.unsent} ${review.unsent === 1 ? "comment" : "comments"}`}
+          </button>
+        )}
+
+        {/* Fold and unfold everything. Two buttons rather than one that
+            toggles, because a single control has to decide what "the opposite
+            of a patch with four of ten files folded" is — and either answer is
+            wrong half the time. Two buttons each state what they do. */}
+        {items.length > 1 && (
+          <>
+            <button
+              type="button"
+              aria-label="collapse every file"
+              title="fold all"
+              {...stylex.props(styles.button, styles.icon)}
+              onClick={() => foldAll(true)}
+            >
+              <ArrowsInLineVerticalIcon size={13} weight="bold" />
+            </button>
+            <button
+              type="button"
+              aria-label="expand every file"
+              title="unfold all"
+              {...stylex.props(styles.button, styles.icon)}
+              onClick={() => foldAll(false)}
+            >
+              <ArrowsOutLineVerticalIcon size={13} weight="bold" />
+            </button>
+          </>
+        )}
+
+        <button
+          type="button"
+          {...stylex.props(styles.button)}
+          onClick={() => {
+            askRevisions(dir);
+            askPatch(dir, at);
+          }}
+        >
           refresh
         </button>
       </div>
+
+      {review.failure !== undefined && (
+        <div {...stylex.props(styles.said, styles.warn)}>{review.failure}</div>
+      )}
 
       {failure !== undefined && <div {...stylex.props(styles.said, styles.warn)}>{failure}</div>}
 
@@ -471,24 +1062,40 @@ export function Diff({
 
       <div {...stylex.props(styles.patch)}>
         {items.length > 0 && (
-          <CodeView
+          <CodeView<Note>
             items={items}
+            selectedLines={live}
+            // Every range the gesture passes through, including the ones it is
+            // only passing through. This is what draws the band, and it
+            // deliberately does not touch `selection` — see above.
+            //
+            // It also arrives from somewhere that is not a gesture: CodeView
+            // clears the selection itself when the item holding it stops
+            // existing. A composer left open over a file no longer in the patch
+            // would save a comment onto a line nobody can see, so that case
+            // settles immediately.
+            onSelectedLinesChange={(next) => {
+              setLive(next);
+              if (next === null) {
+                setSelection(null);
+                setWriting("");
+              }
+            }}
             // The header is the library's; the control in front of it is ours.
             // See `fold` — CodeView folds a file when the item says so and has
             // no click of its own to say it.
             //
-            // Read off `item`, never off `folded`. This closure is handed to
-            // CodeView and called back with the *current* item, so the item is
-            // the value guaranteed to be fresh; React state closed over here is
-            // whatever it was when the closure was made.
+            // Read off `item`, never off state closed over here. This closure is
+            // handed to CodeView and called back with the *current* item, so the
+            // item is the value guaranteed to be fresh.
             //
             // Measured after the change: folding Sidebar.tsx-0 took its button
-            // from `collapse`/`▾`/expanded to `expand`/`▸`/collapsed, and a
-            // second file's header rose into view as the content shrank from
-            // 19984px to 13304px — which is also what made the first attempt to
-            // measure this read wrong. `locator.first()` re-resolves, so after
-            // the fold it was reporting a *different* file's button and looked
-            // like a stale label.
+            // from `collapse`/expanded to `expand`/collapsed, and a second
+            // file's header rose into view as the content shrank from 19984px
+            // to 13304px — which is also what made the first attempt to measure
+            // this read wrong. `locator.first()` re-resolves, so after the fold
+            // it was reporting a *different* file's button and looked like a
+            // stale label.
             renderHeaderPrefix={(item) => (
               <button
                 type="button"
@@ -497,9 +1104,118 @@ export function Diff({
                 onClick={() => toggle(item.id)}
                 {...stylex.props(styles.fold)}
               >
-                {item.collapsed === true ? "▸" : "▾"}
+                {item.collapsed === true ? (
+                  <CaretRightIcon size={14} />
+                ) : (
+                  <CaretDownIcon size={14} />
+                )}
               </button>
             )}
+            // The right-hand end of the file header, past the +/- counts.
+            // `renderHeaderMetadata` rather than a second prefix, because the
+            // fold caret is already the prefix and these two controls belong at
+            // opposite ends: one says "show me less of this", the other says
+            // "I am done with this".
+            renderHeaderMetadata={(item) => {
+              const path = item.type === "diff" ? item.fileDiff.name : item.id;
+              const on = seen.has(path);
+              return (
+                <label {...stylex.props(styles.viewed)} title="viewed">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    aria-label="viewed"
+                    {...stylex.props(styles.box)}
+                    onChange={(event) => markViewed(path, event.target.checked)}
+                  />
+                </label>
+              );
+            }}
+            renderAnnotation={(annotation) => {
+              // Lifted out before it is asked about. `annotation` is itself a
+              // union of the file and diff shapes, so `annotation.metadata.kind`
+              // is not a reference TypeScript will narrow through — the local is.
+              const note = annotation.metadata;
+              return note.kind === "draft" ? (
+                <div {...stylex.props(styles.note, styles.draft)}>
+                  <textarea
+                    // The one place in this panel where focus has to be moved
+                    // rather than offered. The selection was made with a
+                    // pointer or with the keyboard, and either way the next
+                    // thing anybody wants is to type — an autofocus that has to
+                    // be reached for is a box that looks ready and is not.
+                    autoFocus
+                    value={writing}
+                    placeholder="what about this line?"
+                    aria-label="comment on the selected line"
+                    {...stylex.props(styles.write)}
+                    onChange={(event) => setWriting(event.target.value)}
+                    onKeyDown={(event) => {
+                      // Escape abandons, cmd/ctrl+enter keeps. A bare enter is
+                      // a newline, because a comment about code is a comment
+                      // that quotes code.
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        setSelection(null);
+                        setLive(null);
+                        setWriting("");
+                      }
+                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault();
+                        save();
+                      }
+                    }}
+                  />
+                  <div {...stylex.props(styles.noteRow)}>
+                    <span {...stylex.props(styles.hint, styles.noteBody)}>
+                      {/* Which lines, said out loud. The selection is
+                          highlighted in the gutter, but a composer that has
+                          scrolled a few lines away from a six-line block leaves
+                          nothing on screen saying what is being commented on. */}
+                      {note.endLine > note.line
+                        ? `lines ${note.line}–${note.endLine} · ⌘↵ save · esc discard`
+                        : `line ${note.line} · ⌘↵ save · esc discard`}
+                    </span>
+                    <button type="button" {...stylex.props(styles.button)} onClick={save}>
+                      save
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  {...stylex.props(styles.note, note.comment.sentAt === undefined && styles.draft)}
+                >
+                  {/* The meta on its own row, above the words. Sharing a row
+                      with the body is what squeezed a comment into a column
+                      four characters wide in this column's narrow case: the
+                      range, the state and the delete button are all
+                      `flex-shrink: 0`, so everything they need comes out of the
+                      one item that can give — the text. */}
+                  <div {...stylex.props(styles.noteRow)}>
+                    {note.comment.endLine > note.comment.line && (
+                      // Only for a block. A single-line comment sits under the
+                      // line it is about and saying so is a label that repeats
+                      // what the position already says.
+                      <span {...stylex.props(styles.noteWhere)}>
+                        {note.comment.line}–{note.comment.endLine}
+                      </span>
+                    )}
+                    <span {...stylex.props(styles.noteWhen, styles.noteBody)}>
+                      {note.comment.sentAt === undefined ? "draft" : "sent"}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="delete this comment"
+                      {...stylex.props(styles.button)}
+                      onClick={() => review.remove(note.comment.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div {...stylex.props(styles.noteBody)}>{note.comment.body}</div>
+                </div>
+              );
+            }}
             {...stylex.props(styles.view)}
             options={{
               // Unified, because this column is two hundred pixels wide at its
@@ -509,12 +1225,87 @@ export function Diff({
               // in a narrow column is a diff nobody reads the right-hand half
               // of.
               overflow: "wrap",
+              // The same object the worker pool was built with — see
+              // highlighting.tsx. Disagreeing here makes the pool re-resolve
+              // the theme and re-broadcast it to every worker before it can
+              // answer the first request.
               theme: THEME,
               // The scheme the window resolved, not "system". The appearance
               // toggle is the window's own and the media query knows nothing
               // about it — see theme.ts.
               themeType: scheme,
               stickyHeaders: true,
+              // What makes a line clickable at all. Without it there is no
+              // selection, and with no selection there is nowhere to anchor a
+              // comment. It is also what gives a *drag* meaning, which is the
+              // whole of multi-line support — the library reports a range and
+              // `spanOf` decides what that range means.
+              enableLineSelection: true,
+              // ── the gutter is the handle, and it has to look like one ────
+              //
+              // A drag can only *start* on the line number. That is the
+              // library's decision and it is the right one — dragging over the
+              // code is how text gets selected and copied, and stealing it
+              // would break copying a snippet out of a diff. GitHub draws the
+              // same line. `startLineSelectionFromPointerDown` passes
+              // `requireNumberColumn: true` and takes no option to change it.
+              //
+              // What that leaves is a discoverability problem, and it is a real
+              // one: the natural gesture is to drag across the code, and doing
+              // that produced *nothing at all* — no selection, no cursor
+              // change, no hint that the numbers to the left were the grip.
+              //
+              // Measured, each gesture on its own page so nothing inherited the
+              // last selection:
+              //
+              //   drag the line numbers    lines 4–9   ✓
+              //   click, then shift-click  lines 4–9   ✓
+              //   drag over the code       nothing     ← what a person does
+              //
+              // So the number column is lit on hover and given a pointer
+              // cursor. Both are about the same sentence: this part is grabbable
+              // and the part beside it is text.
+              lineHoverHighlight: "number",
+              unsafeCSS: GUTTER_CSS,
+              // The hover control: a `+` beside the line under the pointer.
+              // Off by default, and without it the only way to start a comment
+              // is to already know that a line number is clickable — which is a
+              // feature nobody finds.
+              enableGutterUtility: true,
+              // The library hands back the range under the pointer — one line
+              // when nothing is dragged, the whole run when something is. So
+              // the `+` and a drag are the same gesture and reach the composer
+              // by one path rather than two.
+              //
+              // In `options` and not as a prop, unlike the render callbacks
+              // beside it. The React wrapper lifts the `render*` names to props
+              // and leaves the `on*Click` ones here; the second argument is the
+              // context, which is where the item being clicked is named.
+              //
+              // **`renderGutterUtility` cannot be used with this**, and the
+              // library says so by throwing: "Use only one gutter utility API."
+              // A custom node was the first attempt and is the worse half of
+              // the choice — its callback is handed `getHoveredLine()`, which
+              // is one line, while this one is handed the whole `range`. So
+              // pressing `+` after dragging over six lines comments on six
+              // lines here, and on one line there. A nicer-looking button is
+              // not worth the feature.
+              onGutterUtilityClick: (range, context) => {
+                setSelection({ id: context.item.id, range });
+                setLive({ id: context.item.id, range });
+                setWriting("");
+              },
+              // The end of the gesture, and the only place a selection is
+              // taken from. Both ways of starting one arrive here — the library
+              // brackets its `selecting` and `gutterSelecting` sessions alike —
+              // so there is one rule and not one per gesture. A plain click is
+              // a gesture too: press and release, with no move in between.
+              onLineSelectionEnd: (range, context) => {
+                const settled = range === null ? null : { id: context.item.id, range };
+                setSelection(settled);
+                setLive(settled);
+                setWriting("");
+              },
             }}
           />
         )}

@@ -678,7 +678,13 @@ describe("jobs over the contract", () => {
 // ── review comments ────────────────────────────────────────────────────────
 
 /** A comment, named for where it points. The body is the only thing that varies. */
-const at = (path: string, line: number, body: string, side: CommentSide = "additions") => ({
+const at = (
+  path: string,
+  line: number,
+  body: string,
+  side: CommentSide = "additions",
+  endLine: number = line,
+) => ({
   id: `${path}:${String(line)}`,
   project: "thicket",
   workspace: "lantern",
@@ -687,6 +693,7 @@ const at = (path: string, line: number, body: string, side: CommentSide = "addit
   side,
   line,
   body,
+  endLine,
   createdAt: new Date("2026-08-27T09:00:00.000Z"),
   sentAt: undefined,
 });
@@ -703,7 +710,7 @@ describe("reviewPrompt", () => {
 
     expect(prompt).toBe(
       [
-        "Review feedback — 3 comments:",
+        "Review feedback — 3 comments on vtknsnwv:",
         "",
         "- src/app.tsx:12",
         "  here",
@@ -714,6 +721,50 @@ describe("reviewPrompt", () => {
         "  and this",
       ].join("\n"),
     );
+  });
+
+  it("writes a range as path:first-last, and one line as path:line", () => {
+    // The spelling an editor, a stack trace and a GitHub link all use, so it
+    // needs no explaining to whatever reads the prompt. The single-line form is
+    // asserted in the same test because the interesting property is that the
+    // two are told apart at all — a range renderer that always wrote `12-12`
+    // would pass a test that only looked at blocks.
+    const prompt = handlers.reviewPrompt([
+      at("a.ts", 12, "the whole condition", "additions", 18),
+      at("a.ts", 40, "just this one"),
+    ]);
+
+    expect(prompt).toContain("- a.ts:12-18");
+    expect(prompt).toContain("- a.ts:40\n");
+    expect(prompt).not.toContain("40-40");
+  });
+
+  it("orders a range by where it starts", () => {
+    // Two comments whose ranges overlap are ordered by their first line, which
+    // is the order they appear on screen. Ordering by the last would put a
+    // comment about lines 10-90 after one about 20-21.
+    const prompt = handlers.reviewPrompt([
+      at("a.ts", 20, "inner", "additions", 21),
+      at("a.ts", 10, "outer", "additions", 90),
+    ]);
+
+    expect(prompt.indexOf("outer")).toBeLessThan(prompt.indexOf("inner"));
+  });
+
+  it("says which revision the comments are against", () => {
+    // Without it `Diff.tsx:71` is an instruction to look at the working copy,
+    // which is what an agent will do — and a comment made against a commit
+    // three back names a line that has since moved. The failure is silent: the
+    // agent edits the wrong line, or says the comment makes no sense.
+    // `@` is spelled out rather than passed through: it means something to jj
+    // and nothing to a reader who is not standing in this repository.
+    const working = handlers.reviewPrompt([{ ...at("a.ts", 1, "x"), revision: "@" }]);
+    expect(working).toContain("on the working copy");
+    expect(working).not.toContain("@");
+
+    // A change id is a name, and goes through as one.
+    const commit = handlers.reviewPrompt([at("a.ts", 1, "x")]);
+    expect(commit).toContain("on vtknsnwv");
   });
 
   it("names the side only for a removed line", () => {
@@ -728,9 +779,9 @@ describe("reviewPrompt", () => {
   });
 
   it("counts in words a person would use", () => {
-    expect(handlers.reviewPrompt([at("a.ts", 1, "x")])).toContain("— 1 comment:");
+    expect(handlers.reviewPrompt([at("a.ts", 1, "x")])).toContain("— 1 comment on");
     expect(handlers.reviewPrompt([at("a.ts", 1, "x"), at("a.ts", 2, "y")])).toContain(
-      "— 2 comments:",
+      "— 2 comments on",
     );
   });
 });
@@ -750,6 +801,7 @@ describe("ReviewSend", () => {
           path: "src/router.ts",
           side: "additions",
           line: 42,
+          endLine: 42,
           body: "this branch never runs",
         });
         const failed = yield* Effect.result(
@@ -777,12 +829,18 @@ describe("ReviewSend", () => {
         path: "src/router.ts",
         side: "deletions",
         line: 7,
+        endLine: 9,
         body: "  trailing space is deliberate  ",
       }),
     );
 
     expect(got.sentAt).toBeUndefined();
     expect(got.side).toBe("deletions");
+    // The range survives the round trip. Asserted here rather than in its own
+    // test because this is the only place a comment goes out over the wire and
+    // comes back, which is where a field silently dropped from the schema would
+    // show up.
+    expect([got.line, got.endLine]).toStrictEqual([7, 9]);
     // Stored verbatim. Trimming happens where the prompt is composed, so the
     // panel can still show what was typed.
     expect(got.body).toBe("  trailing space is deliberate  ");

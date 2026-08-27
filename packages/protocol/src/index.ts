@@ -321,9 +321,10 @@ export type CommentSide = (typeof CommentSide)["Type"];
 /**
  * Something a person said about one line of one revision.
  *
- * ── the anchor is four fields, and all four are needed ──────────────────────
+ * ── the anchor is five fields, and all five are needed ─────────────────────
  * `revision` because the same line of the same file says different things in
- * two commits; `path` and `line` for the obvious reason; and `side`, because a
+ * two commits; `path` for the obvious reason; `line` and `endLine` because a
+ * remark is usually about a block rather than a line; and `side`, because a
  * unified diff shows a changed line twice and a comment on the old one is not a
  * comment on the new one.
  *
@@ -345,8 +346,23 @@ export const ReviewComment = Schema.Struct({
   revision: Schema.String,
   path: Schema.String,
   side: CommentSide,
-  /** One-based, as the diff renders it. */
+  /** One-based, as the diff renders it. The first line of the range. */
   line: Schema.Int,
+  /**
+   * The last line of the range, on the same side. Equal to `line` for one line.
+   *
+   * A range and not a line, because a remark is often about a block — three
+   * lines of a condition, a whole added function — and a comment pinned to the
+   * first of them makes the reader work out where it stops.
+   *
+   * **Both numbers are read on `side`.** A selection dragged across the
+   * boundary of a unified diff has its two ends numbered on different sides,
+   * and those numbers cannot be compared: line 12 of the deletions is not
+   * before or after line 40 of the additions. The client collapses that case to
+   * the end alone rather than storing a span that means nothing — see
+   * `spanOf` in Diff.tsx.
+   */
+  endLine: Schema.Int,
   body: Schema.String,
   createdAt: Schema.Date,
   /** When the agent was told, or absent while it is a draft. */
@@ -624,6 +640,7 @@ export class AwpRpcs extends RpcGroup.make(
       path: Schema.String,
       side: CommentSide,
       line: Schema.Int,
+      endLine: Schema.Int,
       body: Schema.String,
     },
     success: ReviewComment,

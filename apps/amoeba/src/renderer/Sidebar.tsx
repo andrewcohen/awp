@@ -383,6 +383,11 @@ function Row({
         <button
           type="button"
           disabled={primary === undefined}
+          // What ctrl+j and ctrl+k step through in this column. The row's
+          // title, and not the chips or the hover controls beside it — a list
+          // that moved through those is a list nobody can predict. See
+          // navigation.ts.
+          data-nav-item
           // The reason is the tooltip as well as line two. A row that will not
           // say why it is disabled is worse than no row at all.
           title={refusal ?? workspace.address}

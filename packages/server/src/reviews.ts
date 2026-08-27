@@ -77,6 +77,20 @@ export const migrations: ReadonlyArray<Migration> = [
          on review_comments (project, workspace, created_at)`,
     ],
   },
+  {
+    // Appended rather than folded into the migration above, because that one
+    // has run — on this machine, at least — and a name is fixed the moment it
+    // has. Renaming or editing an applied migration makes it run a second time
+    // against a schema it already changed.
+    //
+    // `not null default` is what makes this safe to run over rows that exist:
+    // sqlite needs a value for the column it is adding, and the honest one for
+    // a comment written before ranges existed is the line it was already on.
+    // -1 stands for "same as `line`" and is resolved on the way out, because a
+    // default cannot name another column.
+    name: "reviews.002-range",
+    up: [`alter table review_comments add column end_line integer not null default -1`],
+  },
 ];
 
 export class Reviews extends Context.Service<
@@ -149,6 +163,10 @@ const toComment = (row: Record<string, unknown>): ReviewComment => ({
   path: String(row["path"]),
   side: row["side"] === "deletions" ? "deletions" : "additions",
   line: Number(row["line"]),
+  // The sentinel the migration writes, resolved here — see `reviews.002-range`.
+  // A comment made before ranges existed is a comment about one line, and this
+  // is the only place that has to know the two spellings of that.
+  endLine: Number(row["end_line"]) < 0 ? Number(row["line"]) : Number(row["end_line"]),
   body: String(row["body"]),
   createdAt: new Date(Number(row["created_at"])),
   sentAt: date(row["sent_at"]),
@@ -162,8 +180,8 @@ export const make = Effect.gen(function* () {
   // `alter table` would silently shift every value along.
   const insert = db.prepare(
     `insert into review_comments
-       (id, project, workspace, revision, path, side, line, body, created_at, sent_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project, workspace, revision, path, side, line, end_line, body, created_at, sent_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const readAll = db.prepare(
     `select * from review_comments
@@ -196,6 +214,7 @@ export const make = Effect.gen(function* () {
           comment.path,
           comment.side,
           comment.line,
+          comment.endLine,
           comment.body,
           comment.createdAt.getTime(),
           comment.sentAt?.getTime() ?? null,

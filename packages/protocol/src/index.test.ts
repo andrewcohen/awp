@@ -157,6 +157,7 @@ const comment: ReviewComment = {
   path: "src/router.ts",
   side: "additions",
   line: 42,
+  endLine: 42,
   body: "this branch never runs",
   createdAt: new Date("2026-08-27T09:14:00.000Z"),
   sentAt: undefined,

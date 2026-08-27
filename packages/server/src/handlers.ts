@@ -71,15 +71,44 @@ export const reviewPrompt = (comments: ReadonlyArray<ReviewComment>): string => 
       const lines = found
         .toSorted((a, b) => a.line - b.line)
         .map((comment) => {
-          const where = `${path}:${comment.line}`;
-          const side = comment.side === "deletions" ? " (on the removed line)" : "";
+          // `path:12` for a line and `path:12-18` for a block. The same
+          // spelling an editor, a stack trace and a GitHub link all use, so it
+          // is a string an agent can act on without being told what it is.
+          const where =
+            comment.endLine > comment.line
+              ? `${path}:${comment.line}-${comment.endLine}`
+              : `${path}:${comment.line}`;
+          const side =
+            comment.side === "deletions"
+              ? comment.endLine > comment.line
+                ? " (on the removed lines)"
+                : " (on the removed line)"
+              : "";
           return `- ${where}${side}\n  ${comment.body.trim()}`;
         });
       return lines.join("\n");
     });
 
   const count = comments.length === 1 ? "1 comment" : `${comments.length} comments`;
-  return `Review feedback — ${count}:\n\n${files.join("\n\n")}`;
+
+  // Which revision, said once at the top rather than on every line.
+  //
+  // Without it `Diff.tsx:71` is an instruction to look at the working copy,
+  // which is what an agent will do — and if the comment was made against a
+  // commit three back, the line it names has moved or does not exist. The
+  // agent then either edits the wrong line or reports that the comment makes
+  // no sense, and neither failure says what actually happened.
+  //
+  // `@` is spelled out rather than passed through. It is jj's revset for a
+  // workspace's working-copy commit and it is meaningful to jj, but a prompt is
+  // read by something that may not be standing in this repository at all.
+  const where = [...new Set(comments.map((one) => one.revision))].toSorted();
+  const against =
+    where.length === 1 && where[0] === WORKING_COPY
+      ? "on the working copy"
+      : `on ${where.map((one) => (one === WORKING_COPY ? "the working copy" : one)).join(", ")}`;
+
+  return `Review feedback — ${count} ${against}:\n\n${files.join("\n\n")}`;
 };
 import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
