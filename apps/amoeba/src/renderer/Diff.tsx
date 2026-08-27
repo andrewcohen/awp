@@ -101,7 +101,27 @@ const MIN_SPLIT = 44;
  * and this is the only thing put through: a cursor, so the one part of a line
  * that can be grabbed says so.
  */
-const GUTTER_CSS = `[data-column-number] { cursor: pointer; }`;
+const GUTTER_CSS = `
+[data-column-number] { cursor: pointer; }
+
+/* The same scrollbars as the rest of the window — see global.css, which cannot
+   reach in here. A shadow root is exactly what a stylesheet does not cross, so
+   the diff's own scrollport would otherwise be the one place in the window
+   still wearing the system's. Kept as a copy rather than imported, because the
+   only way in is a string. */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: light-dark(rgba(0, 0, 0, 0.22), rgba(255, 255, 255, 0.16));
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: light-dark(rgba(0, 0, 0, 0.38), rgba(255, 255, 255, 0.3));
+}
+::-webkit-scrollbar-thumb:vertical { min-height: 28px; }
+`;
 
 /**
  * What a line annotation carries: an existing comment, or the box to write one.
