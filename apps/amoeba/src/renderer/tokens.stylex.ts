@@ -145,24 +145,50 @@ export const colors = stylex.defineVars({
 });
 
 export const text = stylex.defineVars({
-  // ── two families, and the division is what the window is ─────────────────
-  //
-  // One monospace for everything was the terminal habit, and it is what made
-  // the furniture look like output. The pane must stay monospace — it is a
-  // terminal, and a proportional font would break every alignment a program
-  // draws. Everything *around* it is an application, and an application's
-  // labels, headings and prose belong in the system's own face.
-  //
-  // The line between them is not "chrome vs pane". It is **address vs prose**:
+  // ── two families, and the line is address versus prose ──────────────────
   //
   //   mono   a slug, a bookmark, a revision, a path, a command, the pane
   //   ui     a title, a label, a heading, a count, a sentence, a button
   //
-  // A slug is a thing someone will type somewhere else, and the monospace is
-  // what says so — the same reason a URL is monospace in a browser's devtools
-  // and not in its bookmarks bar.
-  mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  ui: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif",
+  // Not "chrome versus pane". A slug is something somebody will type somewhere
+  // else and the monospace is what says so — the same reason a URL is
+  // monospace in a browser's devtools and not in its bookmarks bar.
+  //
+  // ── how these two were chosen, since two others were not ─────────────────
+  //
+  // Every proportional face installed on this machine is monospace; the only
+  // real candidates are the system's own. Rendered side by side at the sizes
+  // this window uses, SF Pro is the tightest and the most legible small, and
+  // the width matters — the sidebar's caption line lives in a 260px column,
+  // and JetBrains Mono spends about a third more of it on the same words.
+  //
+  //   system-ui / -apple-system / 'SF Pro Text'   the same face, all resolve
+  //   'Helvetica Neue'                            resolves, wider, older
+  //   Inter                                       NOT INSTALLED — would need
+  //                                               bundling to have any effect
+  //   'New York'                                  NEVER RESOLVES, see below
+  //
+  // **A font stack that misses fails in silence**, which is the same shape as
+  // the React Compiler that was not running and the worker pool that had no
+  // workers. `/System/Library/Fonts/NewYork.ttf` is on the disk and the family
+  // name does not resolve in the web view, so every rule naming it fell
+  // through to Georgia while reading as applied.
+  //
+  // Measured by rendering a string in each family and comparing widths against
+  // a family nobody has — do this rather than trusting
+  // `getComputedStyle().fontFamily`, which echoes the declaration back whether
+  // or not anything in it exists:
+  //
+  //   'NoSuchFaceAnywhere'   371.05    the control
+  //   'New York'             371.05    ← identical: never found
+  //   Georgia                398.81
+  //   'JetBrains Mono'       528.00
+  //
+  // Canvas is no good for this. `measureText` reported every family as the
+  // same width including ones that certainly exist, so it was measuring its
+  // own fallback. Use a real element.
+  mono: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+  ui: "system-ui, -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif",
 
   // ── the scale, and its floor ─────────────────────────────────────────────
   //

@@ -81,20 +81,39 @@ export const paletteFor = (scheme: ColorScheme): Palette => (scheme === "dark" ?
 // unreachable through canvas was simply wrong.
 export const paneFontFeatures = '"cv01" 1, "cv04" 1';
 
-export const paneFontFamily = '"Maple Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+// The pane's face, and the same one the chrome uses for anything monospace —
+// see `text.mono`. Maple Mono was here first and is a fine choice; what
+// decided it was the cell fill below, where JetBrains Mono wastes 1.7% of
+// every cell at the size this runs at and Maple Mono wastes 7%.
+export const paneFontFamily = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
 // Not every size renders equally well, and it is worth knowing why before
 // changing this one.
 //
-// ghostty-web sizes a cell as Math.ceil(measureText("M").width), once, so every
-// cell is the same width and the only question is how much of it the glyph
-// fills. Maple Mono advances 0.618 × size, which at 15px is 9.27 in a 10px cell
-// — 7% of every cell is padding, and that is what read as loose columns and box
-// rules that stop touching. Sizes differ a lot here: 18px advances 11.13 into
-// 12, so 7% again, where 16px is 9.89 into 10 and only 1%.
+// ghostty-web sizes a cell as `Math.ceil(measureText("M").width)`, once, so
+// every cell is the same width and the only question is how much of it the
+// glyph fills. Padding shows up as loose columns and box rules that stop
+// touching, which is exactly what a terminal must not do.
 //
-// 18 is what was asked for and 7% looseness is legible, so this stays 18. If it
-// reads loose, the neighbours are the thing to try: 16 and 19 are both ~1%.
+// Re-measured when the face changed from Maple Mono to JetBrains Mono, because
+// the old numbers were a property of the old font and would have read as a
+// property of the size:
+//
+//   size  advance  cell  padding
+//     15     9.00     9     0.0%
+//     16     9.61    10     3.9%
+//     17    10.20    11     7.2%
+//     18    10.81    11     1.7%   ← this one
+//     19    11.41    12     4.9%
+//     20    12.00    12     0.0%
+//
+// 18 was already what was asked for, and it happens to be one of the good
+// ones: 1.7%, against the 7% Maple Mono had at the same size. If it ever reads
+// loose, 15 and 20 are exact.
+//
+// Measured with a real element rather than a canvas — canvas reported every
+// family as the same width, including ones that certainly exist, so it was
+// measuring its own fallback. See the note on `text.ui` in tokens.stylex.ts.
 export const paneFontSize = 18;
 
 // The pane's theme, in ghostty-web's shape. Bright variants that Catppuccin does

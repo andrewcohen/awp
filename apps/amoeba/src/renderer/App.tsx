@@ -51,9 +51,9 @@ const styles = stylex.create({
     backgroundColor: colors.base,
     color: colors.text,
     // The window's default face, inherited by everything that does not ask
-    // for otherwise — which after this is most of it. What still asks is the
-    // pane, and the fields that hold an address: a slug, a bookmark, a
-    // revision, a path. See the note on `text.mono`.
+    // for otherwise — which is most of it. What still asks is the pane, and
+    // the fields that hold an address: a slug, a bookmark, a revision, a path.
+    // See the note on `text.mono`.
     fontFamily: text.ui,
     fontSize: text.body,
   },

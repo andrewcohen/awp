@@ -1105,8 +1105,7 @@ apart. The probe does it in the page.
 ### Two families, and the line is address versus prose
 
 One monospace for everything is the terminal habit, and it is what made the
-furniture look like output. The pane must stay monospace — a proportional font
-breaks every alignment a program draws. The line is not "chrome versus pane":
+furniture look like output. The line is not "chrome versus pane":
 
 ```
   mono   a slug, a bookmark, a revision, a path, a command, the pane
@@ -1114,6 +1113,46 @@ breaks every alignment a program draws. The line is not "chrome versus pane":
 ```
 
 A slug is a thing somebody will type somewhere else, and the monospace says so.
+
+**A font stack that misses fails in silence** — the same shape as the React
+Compiler that was not running and the worker pool that had no workers. Three
+candidates were tried before the two that shipped, and only measurement told
+them apart:
+
+```
+  system-ui / -apple-system / 'SF Pro Text'   the same face, resolves
+  'Helvetica Neue'                            resolves
+  Inter                                       NOT INSTALLED
+  'New York'                                  NEVER RESOLVES
+```
+
+New York is at `/System/Library/Fonts/NewYork.ttf` and the family name does not
+resolve in the web view, so every rule naming it fell through to Georgia while
+reading as applied.
+
+**Measure by rendering, and use a real element.** `getComputedStyle().fontFamily`
+echoes the declaration back whether or not anything in it exists, and canvas
+`measureText` reported every family as the same width — including ones that
+certainly exist — so it was measuring its own fallback. Render a string in the
+candidate and in a family nobody has, and compare:
+
+```
+  'NoSuchFaceAnywhere'   371.05    the control
+  'New York'             371.05    ← identical: never found
+  Georgia                398.81
+  'JetBrains Mono'       528.00
+```
+
+**Width is a real criterion, not a nicety.** The sidebar's caption line lives in
+a 260px column, and a monospace spends about a third more of it on the same
+words. That is what settled prose on SF Pro rather than on any of the eleven
+monospaces installed on this machine.
+
+**Changing the pane's face invalidates its size.** ghostty-web sizes a cell as
+`ceil(measureText("M").width)`, so the padding left in each cell is a property
+of the _font_, and `paneFontSize`'s note was written about Maple Mono. It was
+re-measured rather than carried over — JetBrains Mono wastes 1.7% at 18px where
+Maple Mono wasted 7%.
 
 ### The type floor is 14px, and it is about text
 
