@@ -89,7 +89,7 @@ describe("attach", () => {
     // awp was launched from.
     const { spawns } = await run({});
     // Empty, not missing. A missing key is a request the spawner may ignore,
-    // and bun-pty's does — see zmxChildEnv.
+    // and bun-pty's does — see childEnv.
     expect(spawns[0]?.command.env.ZMX_SESSION).toBe("");
   });
 

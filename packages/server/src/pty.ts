@@ -38,7 +38,7 @@ export interface PtyCommand {
   /**
    * The child's environment, complete. Not merged with this process's — a
    * caller spawning zmx has to be able to *remove* a variable, and a merge
-   * cannot express that. See zmxChildEnv.
+   * cannot express that. See childEnv.
    */
   readonly env: Readonly<Record<string, string>>;
   readonly term?: string;

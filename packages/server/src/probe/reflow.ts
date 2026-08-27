@@ -26,7 +26,7 @@ import { Effect, Result, Stream } from "effect";
 import { DAEMON_HOST, DAEMON_PORT } from "../daemon";
 import { PtySpawner } from "../pty";
 import * as ptyBun from "../pty-bun";
-import { zmxChildEnv } from "../zmx-session";
+import { childEnv } from "../zmx-session";
 
 const SESSION = "awp-reflow-probe";
 const url = `ws://${DAEMON_HOST}:${DAEMON_PORT}`;
@@ -38,7 +38,7 @@ const assertNoLeak = Effect.gen(function* () {
     command: "/bin/sh",
     args: ["-c", `printf 'leak:[%s]' "$ZMX_SESSION"`],
     size: { cols: 80, rows: 24 },
-    env: zmxChildEnv(),
+    env: childEnv(),
   });
   const chunks: Array<string> = [];
   yield* Stream.runForEach(Stream.take(pty.output, 4), (chunk) =>
@@ -143,7 +143,7 @@ const program = Effect.gen(function* () {
   // `zmx run <name> -d <command>` is the detached create. `zmx attach` also
   // creates, and is the one thing this file must never do from inside a session.
   const made = Bun.spawnSync(["zmx", "run", SESSION, "-d", "sh"], {
-    env: zmxChildEnv() as Record<string, string>,
+    env: childEnv() as Record<string, string>,
   });
   if (made.exitCode !== 0) {
     return yield* Effect.die(new Error(`could not create ${SESSION}: ${made.stderr.toString()}`));
@@ -168,7 +168,7 @@ const result = await Effect.runPromise(Effect.result(program));
 // none, because the next run inherits a session it did not create and can no
 // longer tell the difference.
 const killed = Bun.spawnSync(["zmx", "kill", SESSION, "--force"], {
-  env: zmxChildEnv() as Record<string, string>,
+  env: childEnv() as Record<string, string>,
 });
 console.log(
   killed.exitCode === 0

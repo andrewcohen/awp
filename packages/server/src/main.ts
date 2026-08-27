@@ -8,7 +8,7 @@
 //
 // This may run from inside a zmx session, unlike the probes. The distinction is
 // the one in AGENTS.md: spawning zmx as a child means stripping ZMX_SESSION,
-// which zmxChildEnv does, and Attachment separately refuses to attach to the
+// which childEnv does, and Attachment separately refuses to attach to the
 // session this process is running in. Neither of those needs the daemon itself
 // to stay out.
 

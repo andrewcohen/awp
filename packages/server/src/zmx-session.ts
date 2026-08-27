@@ -26,8 +26,51 @@ export const currentZmxSession = (): string | undefined => process.env.ZMX_SESSI
 export const insideZmxSession = (): boolean => currentZmxSession() !== undefined;
 
 /**
- * The environment a zmx child must be given: this one, with the marker that
- * makes `zmx attach` hijack its caller emptied rather than removed.
+ * Markers that describe the session *this* process is running inside.
+ *
+ * Cleared as a family rather than named one by one, and that is the whole
+ * lesson of the bug that added them: transcript saving was off in every agent
+ * amoeba started, because `CLAUDE_CODE_CHILD_SESSION` reached it from whatever
+ * launched the daemon. Nobody had heard of that variable. A list of the five
+ * known today would be a list that is wrong the next time one is added, and
+ * the failure would look like this one — silent, and about something else.
+ *
+ * What was actually being inherited, measured on the running daemon:
+ *
+ *   CLAUDE_CODE_CHILD_SESSION      transcript saving off
+ *   CLAUDE_CODE_SESSION_ID         the parent's session
+ *   CLAUDE_CODE_MESSAGING_SOCKET   the parent's IPC
+ *   CLAUDE_CODE_MESSAGING_TOKEN
+ *   CLAUDECODE · CLAUDE_PID · CLAUDE_JOB_DIR
+ *
+ * The transcript is the symptom that got noticed. A fresh agent holding
+ * another session's messaging socket is the one that would have been harder to
+ * explain.
+ *
+ * Deliberately *not* everything beginning with `CLAUDE`. `CLAUDE_EFFORT` and
+ * anything else a person put in their own shell profile is theirs and is meant
+ * to be inherited; what goes is what a running session wrote about itself.
+ */
+const describesTheParentSession = (key: string): boolean =>
+  key.startsWith("CLAUDE_CODE_") ||
+  key === "CLAUDECODE" ||
+  key === "CLAUDE_PID" ||
+  key === "CLAUDE_JOB_DIR";
+
+/**
+ * The environment a child we spawn must be given: this one, with every marker
+ * that describes a session we are *inside* emptied rather than removed.
+ *
+ * ── two markers, one rule ──────────────────────────────────────────────────
+ *
+ *   ZMX_SESSION      makes `zmx attach` hijack its caller
+ *   CLAUDE_CODE_*    makes a fresh agent believe it is a continuation of the
+ *                    session that started the daemon
+ *
+ * Both are a parent describing itself, and neither is true of the child. This
+ * was `childEnv` and handled only the first, which is why the second went
+ * unnoticed for as long as it did — the seam was right and its name said it
+ * was about one thing.
  *
  * ── why emptied and not removed ────────────────────────────────────────────
  * Leaving it out does not take it away. bun-pty hands the pairs to a Rust
@@ -42,22 +85,31 @@ export const insideZmxSession = (): boolean => currentZmxSession() !== undefined
  * client instead — which is the exact hijack this exists to prevent, aimed at
  * whatever session the daemon happens to be running in.
  *
- * Setting it empty is expressible through any of these APIs, and an empty
- * ZMX_SESSION is not a session name. `probe/child-env.ts` checks what a child
- * actually receives, because nothing short of spawning one can.
+ * Setting it empty is expressible through any of these APIs, and empty is what
+ * a marker is tested for: an empty ZMX_SESSION is not a session name, and an
+ * empty `CLAUDE_CODE_CHILD_SESSION` is falsy.
+ *
+ * **A test of this function cannot catch a failure of it**, because the failure
+ * is in the spawner. `probe/child-env.ts` spawns a shell and prints what the
+ * child actually received, which is the only way to know.
  */
-export const zmxChildEnv = (
+export const childEnv = (
   base: Record<string, string | undefined> = process.env,
 ): Record<string, string> => {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
-    if (key !== "ZMX_SESSION" && value !== undefined) {
+    if (key !== "ZMX_SESSION" && !describesTheParentSession(key) && value !== undefined) {
       env[key] = value;
     }
   }
-  // Present and empty. Absent would be a request the spawner is free to ignore,
-  // and bun-pty's does.
+  // Present and empty, all of them. Absent would be a request the spawner is
+  // free to ignore, and bun-pty's does.
   env.ZMX_SESSION = "";
+  for (const key of Object.keys(base)) {
+    if (describesTheParentSession(key)) {
+      env[key] = "";
+    }
+  }
   return env;
 };
 

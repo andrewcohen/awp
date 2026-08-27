@@ -13,12 +13,12 @@
 // 3ms, first byte 9ms, screen 11ms.
 
 import { spawn } from "bun-pty";
-import { requireOutsideZmxSession, zmxChildEnv } from "../zmx-session";
+import { requireOutsideZmxSession, childEnv } from "../zmx-session";
 
 requireOutsideZmxSession();
 
 const NAME = `awp-pty-probe-${process.pid}`;
-const env = zmxChildEnv();
+const env = childEnv();
 
 const t0 = performance.now();
 const at = () => `+${(performance.now() - t0).toFixed(1)}ms`;

@@ -252,7 +252,7 @@ export class Multiplexer extends Context.Service<
        *
        * Merged over the daemon's own, so a caller adds rather than replaces —
        * and `ZMX_SESSION` is neutralised after this, because a caller must not
-       * be able to reintroduce the hijack `zmxChildEnv` exists to prevent.
+       * be able to reintroduce the hijack `childEnv` exists to prevent.
        *
        * What it is for: `AWP_WORKSPACE` and `AWP_REPO_ROOT`. The status hooks
        * in a person's Claude Code settings are gated on those two, so an agent
