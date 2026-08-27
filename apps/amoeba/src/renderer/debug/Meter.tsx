@@ -137,6 +137,17 @@ export function Meter() {
       {row("last deltaY", reading.lastDeltaY.toFixed(1))}
       {row("delta unit", DELTA_MODE[reading.lastDeltaMode] ?? "?")}
 
+      {/* ── what the pane sent, and how it got in ──────────────────────────
+          Split because the two routes fail differently and neither says so.
+          Typed text has a key event behind it that anything can watch; inserted
+          text — dictation, an assistive tool, a snippet expander — arrives as a
+          `beforeinput` and nothing else, and when it is dropped absolutely
+          nothing happens. `inserted` staying at 0 while someone is speaking is
+          the whole diagnosis, and there is nowhere else to read it. */}
+      <div {...stylex.props(styles.heading)}>sent to the program</div>
+      {row("typed", String(reading.typed))}
+      {row("inserted", String(reading.inserted))}
+
       <div {...stylex.props(styles.heading)}>from the session</div>
       {row("writes /s", String(rate.writes), String(peak.writes))}
       {row("bytes /s", String(rate.bytes), String(peak.bytes))}
@@ -197,6 +208,7 @@ const copyReading = async (reading: Reading, rate: Rate, peak: Rate): Promise<vo
     `  bytes /s      ${rate.bytes}  (peak ${peak.bytes})`,
     `  frame p50     ${reading.frameP50.toFixed(1)}ms`,
     `  frame worst   ${reading.frameMax.toFixed(1)}ms`,
+    `  sent          ${reading.typed} typed, ${reading.inserted} inserted`,
     `  totals        ${reading.wheelEvents} events, ${reading.linesSent} lines, ` +
       `${reading.writes} writes, ${reading.bytes} bytes`,
   ].join("\n");
