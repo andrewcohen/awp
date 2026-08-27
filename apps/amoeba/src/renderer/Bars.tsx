@@ -63,54 +63,58 @@ const styles = stylex.create({
   //
   // The band is empty on purpose. It is the drag handle, and a strip of chrome
   // with nothing interactive in it is exactly what a drag handle should be.
+  // ── one row, and the title is centred on the window ─────────────────────
+  //
+  // This was two bands stacked: a 28px strip under the traffic lights holding
+  // the title, and a 28px row below it holding the fold controls. That was
+  // 57px of chrome to say one word, and the title was centred in the *upper
+  // half* rather than in the bar — which is what "center it vertically" was
+  // about, and the two-band split is the only reason it could not be.
+  //
+  //   before  ┌──────────────┐        after  ┌───────────────┐
+  //           │  no session  │ 28            │ ▣ no session ▣│ 44
+  //           │ ▣          ▣ │ 28            └───────────────┘
+  //           └──────────────┘ 57
+  //
+  // **The left control still cannot reach the window's edge.** The window is
+  // `hiddenInset`, so AppKit floats the traffic lights over the first 78px and
+  // this bar's start padding is what clears them — six pixels of daylight at
+  // 84px. That constraint is why the two bands existed; what changed is the
+  // answer to it. Giving the control the real edge cost a whole row of chrome
+  // and put the title off centre, and the edge was worth neither.
   top: {
-    flexDirection: "column",
-    alignItems: "stretch",
-    paddingInline: 0,
-    gap: 0,
+    position: "relative",
+    alignItems: "center",
+    height: space.titlebar,
+    paddingInlineStart: space.lightsInline,
+    paddingInlineEnd: "0.6rem",
     borderBottomWidth: 1,
     borderBottomStyle: "solid",
     borderBottomColor: colors.border,
     // The only way to move a window whose title bar is hidden.
     WebkitAppRegion: "drag",
   },
-  // The band AppKit draws its buttons in, and where the title goes.
+  // The title, centred on the **window** rather than on the space left over.
   //
-  // It was empty when the bar first moved under the lights, and empty is what
-  // a person notices: the session's identity was sitting in the row below,
-  // immediately right of the fold button, where it reads as a label *for* the
-  // button. It is a title, and this is where a title belongs on macOS.
+  // Absolutely positioned for exactly that: the bar's start padding clears the
+  // traffic lights and its end padding does not, so a title laid out in the
+  // flow would sit visibly right of centre. This is the one element here whose
+  // position is about the window rather than about its siblings.
   //
-  // **Padded by the same amount on both sides**, so the title centres in the
-  // window rather than in the space left over — a title centred in the
-  // remainder sits visibly off to the right — and so it can never reach the
-  // window controls however narrow the window gets.
-  lights: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "0.45rem",
-    height: space.lights,
-    flexShrink: 0,
-    paddingInline: space.lightsInline,
-    minWidth: 0,
+  // `pointer-events: none` so it does not interrupt the drag region it sits
+  // in — there is nothing to click, and a word that stops a window being
+  // dragged is a word in the way.
+  title: {
+    position: "absolute",
+    insetInlineStart: "50%",
+    transform: "translateX(-50%)",
+    maxWidth: `calc(100% - 2 * ${space.lightsInline})`,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    pointerEvents: "none",
   },
-  // What was the top bar: one row, now running the full width of the window.
-  topRow: {
-    display: "flex",
-    alignItems: "center",
-    flexShrink: 0,
-    gap: "0.6rem",
-    paddingInline: "0.6rem",
-    // The same height as the band above, and not `space.titlebar`. That token
-    // meant "tall enough to clear the traffic lights", which this row no longer
-    // does — the band does it. What is left here is two 22px buttons and the
-    // occasional word, so matching the band both fits and reads as deliberate:
-    // one strip of chrome in two equal halves rather than a tall one and a
-    // short one that look like an accident.
-    height: space.lights,
-    minWidth: 0,
-  },
+
   bottom: {
     height: "1.6rem",
     borderTopWidth: 1,
@@ -180,12 +184,16 @@ const styles = stylex.create({
  * in a sentence.
  *
  *   before   effect-ts-tiered-discount-timemachine · thicket · agent
- *   after    tiered discount timemachine            thicket · agent
+ *   after    tiered discount timemachine
  *
- * The slug does not move down here the way it does on a sidebar row. A row is
- * a list entry and the slug is how you find the directory; a title bar is one
- * line about one thing, and adding the address back would make it the same
- * three slugs with a sentence in front.
+ * And only that. The project and the kind went with the slug, because a title
+ * bar has one job and three fields is not one: both are already on the sidebar
+ * row that is selected, so repeating them here makes the address the subject
+ * of a line that is supposed to be about the work.
+ *
+ * The slug does not move down the way it does on a sidebar row. A row is a
+ * list entry and the slug is how you find the directory; a title bar is one
+ * line about one thing.
  */
 export function TopBar({
   session,
@@ -203,25 +211,23 @@ export function TopBar({
 }) {
   return (
     <header {...stylex.props(styles.bar, styles.top)}>
-      <div {...stylex.props(styles.lights)}>
-        {session === undefined ? (
-          <span>no session</span>
-        ) : (
-          <>
-            <span {...stylex.props(styles.strong, styles.name)}>
-              {facts?.displayName ??
-                session.identity?.label ??
-                session.identity?.workspace ??
-                session.name}
-            </span>
-            {session.identity !== undefined && <span>{session.identity.project}</span>}
-            <span>{session.identity?.kind}</span>
-          </>
-        )}
-      </div>
+      {/* Just the name.
+      
+        It was `displayName · project · kind`, which is three fields where a
+        title bar has one job. The project and the kind are both already on the
+        sidebar row that is selected — a title bar says what the window is
+        about, and repeating the address under it makes the address the
+        subject. */}
+      <span {...stylex.props(styles.strong, styles.title)}>
+        {session === undefined
+          ? "no session"
+          : (facts?.displayName ??
+            session.identity?.label ??
+            session.identity?.workspace ??
+            session.name)}
+      </span>
 
-      <div {...stylex.props(styles.topRow)}>
-        {/* ── folding a column, from the one place that is never folded ──────
+      {/* ── folding a column, from the one place that is never folded ──────
 
           These used to live on the divider between the columns: a control that
           appeared on hover, and stayed visible once its column was folded
@@ -242,19 +248,19 @@ export function TopBar({
           The left one cannot go further left than this: the window is
           `hiddenInset`, so the traffic lights float over the first 5.25rem and
           the bar's own start padding is what clears them. */}
-        <button
-          type="button"
-          aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
-          aria-pressed={!collapsed.sidebar}
-          title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
-          onClick={() => onFold("sidebar")}
-          {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
-        >
-          <SidebarSimpleIcon size={15} aria-hidden />
-        </button>
+      <button
+        type="button"
+        aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+        aria-pressed={!collapsed.sidebar}
+        title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+        onClick={() => onFold("sidebar")}
+        {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
+      >
+        <SidebarSimpleIcon size={15} aria-hidden />
+      </button>
 
-        <span {...stylex.props(styles.spacer)} />
-        {/* Nothing at all while it is working.
+      <span {...stylex.props(styles.spacer)} />
+      {/* Nothing at all while it is working.
       
           A green "daemon" sitting there permanently is a status light that is
           on by definition — it teaches the eye to skip that corner, which costs
@@ -264,20 +270,19 @@ export function TopBar({
           So the connected state is silence, and the disconnected state is a
           word rather than a dot: "no daemon" is the sentence, and a red circle
           would need to be hovered before it said anything. */}
-        {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
+      {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
 
-        {/* The other half of the pair — see the sidebar's, at the far left. */}
-        <button
-          type="button"
-          aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
-          aria-pressed={!collapsed.accessory}
-          title={collapsed.accessory ? "show the panels" : "hide the panels"}
-          onClick={() => onFold("accessory")}
-          {...stylex.props(styles.toggle, !collapsed.accessory && styles.toggleOn)}
-        >
-          <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
-        </button>
-      </div>
+      {/* The other half of the pair — see the sidebar's, at the far left. */}
+      <button
+        type="button"
+        aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
+        aria-pressed={!collapsed.accessory}
+        title={collapsed.accessory ? "show the panels" : "hide the panels"}
+        onClick={() => onFold("accessory")}
+        {...stylex.props(styles.toggle, !collapsed.accessory && styles.toggleOn)}
+      >
+        <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
+      </button>
     </header>
   );
 }
