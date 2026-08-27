@@ -16,6 +16,7 @@ import {
   DiffUnavailable,
   JobNotFound,
   NoAgent,
+  type PageNote,
   type ReviewComment,
   type SessionIdentity,
   type SessionInfo,
@@ -109,6 +110,52 @@ export const reviewPrompt = (comments: ReadonlyArray<ReviewComment>): string => 
       : `on ${where.map((one) => (one === WORKING_COPY ? "the working copy" : one)).join(", ")}`;
 
   return `Review feedback — ${count} ${against}:\n\n${files.join("\n\n")}`;
+};
+
+/**
+ * How long an element's own text may be before it is cut.
+ *
+ * Enough to recognise a heading, a button or a paragraph's opening; short
+ * enough that pointing at `<body>` does not paste the page into a terminal.
+ * The truncation is marked, because a sentence that stops mid-word with no
+ * ellipsis reads as the element being broken rather than the quote being long.
+ */
+const TEXT_CAP = 240;
+
+/** `text`, fit to {@link TEXT_CAP}, with the cut said out loud. */
+export const capped = (text: string): string => {
+  const one = text.trim().replaceAll(/\s+/gu, " ");
+  return one.length <= TEXT_CAP ? one : `${one.slice(0, TEXT_CAP - 1)}…`;
+};
+
+/**
+ * One page note, as something to say to an agent.
+ *
+ * Four lines, in the order they answer the questions an agent actually asks:
+ * what page, which element, what it said, and what is wrong with it. The
+ * selector is on its own line and unquoted prose is kept away from it, because
+ * it is the one field meant to be pasted into a tool rather than read.
+ *
+ * The remark goes **last**. Everything above it is address; a person opening
+ * with "the padding is wrong" and then reading three lines of provenance has
+ * to hold the complaint while parsing the location. An agent reads top to
+ * bottom too, and the last line is the one it acts on.
+ *
+ * `text` is omitted entirely when empty rather than printed as `""`. An icon
+ * button has no text and a line saying so is a line about nothing.
+ */
+export const notePrompt = (note: PageNote): string => {
+  const said = capped(note.text);
+  const lines = [
+    "— a note about an element on a page",
+    `page: ${note.url}`,
+    `element: ${note.label}`,
+    `selector: ${note.selector}`,
+    ...(said === "" ? [] : [`text: ${said}`]),
+    "",
+    note.body.trim(),
+  ];
+  return lines.join("\n");
 };
 import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
@@ -631,6 +678,23 @@ export const layer = AwpRpcs.toLayer(
           const at = new Date(yield* Clock.currentTimeMillis);
           const sent = yield* reviews.markSent(project, workspace, at).pipe(Effect.orDie);
           return { sent, prompt };
+        }),
+
+      NoteSend: ({ project, workspace, note }) =>
+        Effect.gen(function* () {
+          // Same order as ReviewSend, for a weaker version of the same reason:
+          // nothing here is marked, so a failed send loses only the composer's
+          // contents — but it loses those to a person who is still looking at
+          // the element, and "it went nowhere" has to be sayable.
+          const name = sessionName(project, workspace, AGENT);
+          const found = yield* mux.lookup(name).pipe(Effect.orDie);
+          if (found === undefined || found.ended) {
+            return yield* Effect.fail(new NoAgent({ project, workspace }));
+          }
+
+          const prompt = notePrompt(note);
+          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          return prompt;
         }),
     };
   }),

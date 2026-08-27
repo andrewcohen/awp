@@ -386,6 +386,39 @@ export const ReviewSent = Schema.Struct({
 
 export type ReviewSent = (typeof ReviewSent)["Type"];
 
+/**
+ * A remark about one element of one page.
+ *
+ * ── it is not a {@link ReviewComment}, and forcing it to be one would lie ──
+ * A review comment is anchored by `revision`, `path`, `side` and two line
+ * numbers, and a page has none of those. What it has instead is a URL and a
+ * selector, which name a thing in a document somebody else is serving — an
+ * anchor that can stop resolving between one press of reload and the next.
+ * Storing that in the same table would make five columns meaningless for half
+ * the rows, and `path:12` — the form the whole review prompt is built on —
+ * would have nothing to put in it.
+ *
+ * ── `label` and `text` are both here, and they answer different questions ──
+ * `selector` is for a machine and is often unreadable; `label` is the short
+ * name a person recognises (`button.primary`); `text` is what the element said,
+ * capped, which is what makes the note findable when the selector has rotted.
+ * An agent handed only a selector has to fetch the page to know what was meant.
+ */
+export const PageNote = Schema.Struct({
+  /** Where the page was. Sent as loaded, not as typed. */
+  url: Schema.String,
+  /** A CSS selector for the element, best-effort — see `annotate.ts`. */
+  selector: Schema.String,
+  /** A short readable name for the element: tag, id and one class. */
+  label: Schema.String,
+  /** What the element said, trimmed and capped. May be empty. */
+  text: Schema.String,
+  /** What the person said about it. */
+  body: Schema.String,
+});
+
+export type PageNote = (typeof PageNote)["Type"];
+
 /** No session to tell. A workspace whose agent has ended, or never started. */
 export class NoAgent extends Schema.TaggedError<NoAgent>()("NoAgent", {
   project: Schema.String,
@@ -668,6 +701,26 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("ReviewSend", {
     payload: { project: Schema.String, workspace: Schema.String },
     success: ReviewSent,
+    error: NoAgent,
+  }),
+
+  /**
+   * Tell the agent about one element of one page, now.
+   *
+   * **Not batched, and that asymmetry is deliberate.** A review comment is
+   * written while reading a diff — six of them arrive in a minute, and
+   * interrupting the agent once per comment loses whatever it was holding. A
+   * page note is a whole gesture on its own: arm the picker, point at a thing,
+   * say what is wrong with it, press send. There is no second one on the way,
+   * so a draft that waits for a batch is a draft nobody remembers to deliver.
+   *
+   * The reply is the prompt that was typed, for the same reason
+   * {@link ReviewSent} carries one: it is what makes the call testable, and
+   * what a person can be shown when they ask what was actually said.
+   */
+  Rpc.make("NoteSend", {
+    payload: { project: Schema.String, workspace: Schema.String, note: PageNote },
+    success: Schema.String,
     error: NoAgent,
   }),
 

@@ -3,6 +3,7 @@ import { AwpClient, layerClient } from "@awp-kit/protocol/client";
 import type {
   CommentSide,
   Effort,
+  PageNote,
   Patch,
   ReviewComment,
   ReviewSent,
@@ -329,3 +330,19 @@ export const removeComment = (comment: string): Promise<boolean> =>
  */
 export const sendReview = (project: string, workspace: string): Promise<ReviewSent> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewSend({ project, workspace })));
+
+/**
+ * Tell the agent about one element of one page, now.
+ *
+ * Unbatched, unlike `sendReview`, and there is nothing to mark afterwards: a
+ * page note has no draft state to be in. See `NoteSend` in the contract for
+ * why the two are shaped differently.
+ *
+ * Rejects with `NoAgent` when the workspace has no agent to type into. Resolves
+ * with the prompt that was typed, which is what the panel shows when someone
+ * asks what was actually said.
+ */
+export const sendNote = (project: string, workspace: string, note: PageNote): Promise<string> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.NoteSend({ project, workspace, note })),
+  );

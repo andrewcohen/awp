@@ -852,3 +852,95 @@ describe("ReviewSend", () => {
     expect(got.body).toBe("  trailing space is deliberate  ");
   });
 });
+
+describe("notePrompt", () => {
+  const note = {
+    url: "https://example.test/pricing",
+    selector: "main > section:nth-of-type(2) > button",
+    label: "button.cta",
+    text: "Start free trial",
+    body: "  this wraps onto two lines under 400px  ",
+  };
+
+  it("says where, which, what it said, and then what is wrong", () => {
+    // The order is the whole shape. Everything above the remark is address; a
+    // reader given the complaint first has to hold it while parsing the
+    // location, and an agent reads top to bottom the same way.
+    expect(handlers.notePrompt(note)).toBe(
+      [
+        "— a note about an element on a page",
+        "page: https://example.test/pricing",
+        "element: button.cta",
+        "selector: main > section:nth-of-type(2) > button",
+        "text: Start free trial",
+        "",
+        "this wraps onto two lines under 400px",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves the text line out when the element had none", () => {
+    // An icon button says nothing, and a line reading `text:` with nothing
+    // after it is a line about nothing.
+    const quiet = handlers.notePrompt({ ...note, text: "   " });
+    expect(quiet).not.toContain("text:");
+    expect(quiet).toContain("selector: ");
+  });
+
+  it("caps what the page said, and marks the cut", () => {
+    // The page is a stranger and this is the only field it authored. Pointing
+    // at <body> must not paste a whole document into somebody's terminal.
+    const long = handlers.notePrompt({ ...note, text: "word ".repeat(500) });
+    const line = long.split("\n").find((one) => one.startsWith("text: "));
+    expect(line?.length).toBe("text: ".length + 240);
+    expect(line?.endsWith("…")).toBe(true);
+  });
+
+  it("collapses the whitespace a document is full of", () => {
+    // innerText off a real page arrives with newlines and runs of spaces in
+    // it. Left alone they break the one-line-per-field shape above.
+    expect(handlers.notePrompt({ ...note, text: "Start\n\n   free   trial" })).toContain(
+      "text: Start free trial",
+    );
+  });
+});
+
+describe("NoteSend", () => {
+  const note = {
+    url: "https://example.test/pricing",
+    selector: "#save",
+    label: "button#save",
+    text: "Save",
+    body: "this is unreachable at 400px",
+  };
+
+  it("types the note at the workspace's agent and answers with what it said", async () => {
+    // The reply is the prompt, for the same reason ReviewSent carries one: it
+    // is the only way to know what an agent was actually told without scrolling
+    // its terminal back.
+    const prompt = await run((rpc) => rpc.NoteSend({ project: "awp", workspace: "other", note }));
+
+    expect(prompt).toBe(handlers.notePrompt(note));
+    expect(prompt).toContain("selector: #save");
+  });
+
+  it("refuses when the workspace's agent has ended", async () => {
+    // An ended session is in the listing and is not somewhere to type. Nothing
+    // is marked either way — a page note has no draft state — so what this
+    // protects is the composer: the remark stays on screen, in front of someone
+    // still looking at the element it is about.
+    const outcome = await run((rpc) =>
+      Effect.result(rpc.NoteSend({ project: "awp", workspace: "finished", note })),
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+  });
+
+  it("refuses when there is no session at all", async () => {
+    const outcome = await run((rpc) =>
+      Effect.result(rpc.NoteSend({ project: "thicket", workspace: "lantern", note })),
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+  });
+});
