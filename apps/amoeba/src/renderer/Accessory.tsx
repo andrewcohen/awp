@@ -3,6 +3,7 @@ import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
 import { Diff } from "./Diff";
 import { Jobs } from "./Jobs";
+import { Web } from "./Web";
 import { debugTools } from "./debug";
 import type { ColorScheme } from "@awp-kit/pane";
 import { colors, text } from "./tokens.stylex";
@@ -75,6 +76,9 @@ const panels: ReadonlyArray<Panel> = [
     ),
   },
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
+  // Takes no context, for now. A default address per workspace is the obvious
+  // next thing and is deliberately not guessed at — see `rememberedPage`.
+  { id: "web", label: "web", render: () => <Web /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
 ];
 
