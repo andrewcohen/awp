@@ -22,14 +22,8 @@ const rendererUrl = (): string => {
 const url = rendererUrl();
 console.log(`[amoeba] renderer: ${url}`);
 
-// Before the window, so the menu bar is in place the first time anything is
-// focused. See menu.ts: on macOS cut, copy, paste, select-all and undo are all
-// menu items before they are keys, and a window with no menu has none of them —
-// which is what the pane's clipboard permission prompt was really about.
-installMenu();
-
 // Kept rather than discarded: closing it, moving it, or opening a second one
-// all need the handle.
+// all need the handle — and so does the menu below.
 export const mainWindow = new BrowserWindow({
   title: "amoeba",
   url,
@@ -38,3 +32,50 @@ export const mainWindow = new BrowserWindow({
   // window with no way to close it is a bad first impression.
   titleBarStyle: "hiddenInset",
 });
+
+// After the window, because two of its items act on one: Reload, and the
+// Fit-to-Window repair for the Web Inspector leaving the view short. The Edit
+// items still have to exist before anything is focused, which they do — this
+// runs in the same tick as the window's creation.
+installMenu(mainWindow);
+
+// ── a watch on the window's geometry, while the Web Inspector bug is open ──
+//
+// Nothing here can reproduce that bug: Safari attaching its inspector is not
+// something this process is told about, and every measurement taken from a
+// clean launch says the window and the view agree. So instead of asking for a
+// reading at the moment it happens, this writes one continuously — and only
+// when it *changes*, so the log is a list of the transitions rather than a
+// tick every two seconds.
+//
+// Both numbers, because they answer different halves and only their
+// disagreement is diagnostic:
+//
+//   window   what AppKit says the frame is
+//   view     what the page says its viewport is
+//
+// The view has to volunteer its own: `executeJavascript` has no completion, so
+// there is no asking it. **And its console does not reach this log** — that was
+// the first attempt and it printed nothing, which is worth knowing before
+// reaching for `console.log` as a channel out of the renderer again. What does
+// work is a request, watched from outside. `AMOEBA_GEOMETRY_LOG` names where.
+//
+// Remove this with the bug. It is a probe that happens to live in the app
+// because the app is the only thing that can see both numbers.
+let lastSeen = "";
+setInterval(() => {
+  const { width, height } = mainWindow.getFrame();
+  const now = `${width}x${height}`;
+  if (now === lastSeen) {
+    return;
+  }
+  lastSeen = now;
+  console.log(`[amoeba] window is now ${now}`);
+  const to = process.env.AMOEBA_GEOMETRY_LOG;
+  if (to === undefined || to === "") {
+    return;
+  }
+  mainWindow.webview.executeJavascript(
+    `fetch('${to}?view=' + innerWidth + 'x' + innerHeight + '&root=' + Math.round(document.getElementById('root')?.getBoundingClientRect().height ?? -1) + '&window=${now}').catch(function () {})`,
+  );
+}, 1000);
