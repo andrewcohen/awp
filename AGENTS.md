@@ -1372,6 +1372,64 @@ panel says which of the two paths it is on the moment it is opened: outside
 Electrobun `customElements.get` answers undefined and it says so in words,
 because an empty box is also what a page that failed to load looks like.
 
+## An orphaned webview cannot be closed by anything
+
+The first real bug the web panel produced, and it is worth stating in full
+because nothing about it is recoverable at runtime: a webview stuck in the
+top-right corner of the window, over everything, unmovable, that survives every
+tab switch and every reload and goes only when the process does.
+
+The lifecycle has two awaits in it, and `disconnectedCallback` guards on a
+field that neither has set yet:
+
+```
+  connectedCallback()      requestAnimationFrame(() => this.initWebview())
+                                        ↑ one frame
+  initWebview()            await request("webviewTagInit")
+                                        ↑ a round trip to the native side
+                           this.webviewId = id          ← only set here
+
+  disconnectedCallback()   if (this.webviewId !== null) send remove
+                                        ↑ null for the whole window above
+```
+
+An element removed inside that window has already run its
+`disconnectedCallback` — with nothing to remove. The native webview then
+arrives and attaches itself to a **detached** element, which is not in the
+document, so no further `disconnectedCallback` will ever fire for it. There is
+no reference left that anything can reach: not `toggleHidden`, not the sync
+loop, not a re-render. It floats at the rectangle it was born with for the life
+of the process.
+
+**StrictMode walks into this on every mount** — create, clean up, create again,
+all inside one frame — so the panel's first open orphaned one every time. The
+corner it appears in is not a clue about the bug; it is just where the
+accessory column was.
+
+`patches/electrobun@1.18.1.patch` fixes it at the source, because nothing
+outside the element can: a `_detached` flag set in `disconnectedCallback`, and
+checked twice — after the rAF, and after the request returns, where an arriving
+id is now removed rather than adopted.
+
+Two things this is not.
+
+**It is not an argument for Electron.** Electron's `<webview>` is discouraged
+in its own docs, and the replacement — `WebContentsView` — is also a native
+view positioned over the page by hand, with the same "does not stack" property
+and the same detach-during-init shape. The bug is a missing guard, not an
+architecture.
+
+**It is not fixable from the consuming side.** Every repair available to a
+React component makes it worse: removing the element fires the callback that
+does nothing; re-appending it to rescue it fires `connectedCallback` and
+creates a _second_ native view; keeping a module-level singleton and
+re-parenting it fires both. Moving a node between parents is a disconnect and a
+connect, and this element cannot survive either.
+
+The general shape, which has come up here before: **a cleanup that guards on a
+field set by an async step does not run during that step.** The guard reads as
+"nothing to do yet" and means "do nothing, ever".
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes
