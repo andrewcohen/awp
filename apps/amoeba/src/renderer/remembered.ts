@@ -45,6 +45,7 @@ const WIDTHS = "amoeba.widths";
 const PLACE = "amoeba.place";
 const LOOSE = "amoeba.loose";
 const SPLIT = "amoeba.split";
+const PAGE = "amoeba.page";
 
 /**
  * Stored as two letters rather than JSON.
@@ -174,6 +175,24 @@ export const rememberedSplit = (): number => {
 
 export const rememberSplit = (height: number): void => {
   writeStored(SPLIT, String(Math.round(height)));
+};
+
+/**
+ * The address the web panel was last showing.
+ *
+ * One per window rather than one per workspace, and that is a judgement rather
+ * than an oversight: the page in that panel is usually a dev server or a set of
+ * docs, which follows the person around the window and not the checkout. If it
+ * turns out to follow the workspace, `rememberedViewed` below is the shape to
+ * copy.
+ */
+export const rememberedPage = (): string | undefined => {
+  const stored = readStored(PAGE);
+  return stored === undefined || stored === "" ? undefined : stored;
+};
+
+export const rememberPage = (url: string | undefined): void => {
+  writeStored(PAGE, url === undefined || url === "" ? undefined : url);
 };
 
 // ── which files of a patch have been looked at ─────────────────────────────
