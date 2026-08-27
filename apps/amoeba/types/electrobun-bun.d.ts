@@ -40,4 +40,31 @@ declare module "electrobun/bun" {
     readonly id: number;
     close(): void;
   }
+
+  /**
+   * A menu item, narrowed to the two shapes this app builds.
+   *
+   * A role and an action are alternatives upstream — the library's own comment
+   * says "application menus can either have an action or a role, not both" —
+   * and everything here is a role, because the point is to hand the keyboard
+   * back to AppKit's own text editing rather than to do anything ourselves.
+   */
+  export type ApplicationMenuItemConfig =
+    | { type: "divider" | "separator" }
+    | {
+        type?: "normal";
+        label?: string;
+        role?: string;
+        action?: string;
+        accelerator?: string;
+        enabled?: boolean;
+        checked?: boolean;
+        hidden?: boolean;
+        tooltip?: string;
+        submenu?: Array<ApplicationMenuItemConfig>;
+      };
+
+  export const ApplicationMenu: {
+    setApplicationMenu(menu: Array<ApplicationMenuItemConfig>): void;
+  };
 }

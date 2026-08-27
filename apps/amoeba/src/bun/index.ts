@@ -11,6 +11,7 @@
 // Electrobun's own `views://` scheme.
 
 import { BrowserWindow } from "electrobun/bun";
+import { installMenu } from "./menu";
 
 /** Where the renderer lives, which differs between dev and a built app. */
 const rendererUrl = (): string => {
@@ -21,8 +22,14 @@ const rendererUrl = (): string => {
 const url = rendererUrl();
 console.log(`[amoeba] renderer: ${url}`);
 
+// Before the window, so the menu bar is in place the first time anything is
+// focused. See menu.ts: on macOS cut, copy, paste, select-all and undo are all
+// menu items before they are keys, and a window with no menu has none of them —
+// which is what the pane's clipboard permission prompt was really about.
+installMenu();
+
 // Kept rather than discarded: closing it, moving it, or opening a second one
-// all need the handle, and the main process is about to grow menus that do.
+// all need the handle.
 export const mainWindow = new BrowserWindow({
   title: "amoeba",
   url,
