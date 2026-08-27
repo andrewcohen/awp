@@ -1303,6 +1303,75 @@ hiding it for. And it shows peaks beside live figures, because by the time a
 hand leaves the trackpad the live figure is zero — a reading only anyone fast
 enough to catch is not a reading.
 
+## A native webview does not stack
+
+The web panel is a real WKWebView, drawn by another process over the top of the
+renderer at a rectangle it is told to occupy. An `<iframe>` was the shorter
+answer and the wrong one — most of what a person wants beside an agent sends
+`X-Frame-Options` or a `frame-ancestors` policy and renders as a blank
+rectangle with a console error nobody sees.
+
+What that costs is the thing every React instinct gets wrong: **it is not in
+the stacking context, so nothing rendered here can be in front of it.** There
+is no `z-index` that wins, because the layers are in different processes.
+
+```
+  ┌──────────────────┐  the page          ← another process, always on top
+  │ ┌──────────────┐ │
+  │ │ the dialog   │ │  the renderer      ← under it, whatever it says
+  │ └──────────────┘ │
+  └──────────────────┘
+```
+
+Nothing about it reads as a stacking problem from the dialog's side. The
+backdrop dims, focus moves in, Escape closes it — every part works except the
+one that shows it to a person.
+
+The tag offers two repairs and they are not interchangeable:
+
+```
+  toggleHidden(true)   the whole webview stops being drawn
+  addMaskSelector(s)   holes cut where `s` matches, recomputed every 10ms
+```
+
+A mask suits something small overlapping a corner. A modal is not that — it
+makes the rest of the window inert, so there is nothing left for the page
+underneath to be useful for, and the mask would end up the size of the panel.
+So `overlays.ts` holds a **count** of open modals and the panel hides on it.
+
+Three things about that count, each of which was a way to get it wrong:
+
+- **A count, not a flag.** A select inside a dialog portals out of it, so two
+  are open at once and the inner one closes first. A boolean lets that clear
+  the outer one's claim.
+- **Releasing is guarded against running twice.** StrictMode rehearses mount
+  and unmount. A count that goes negative never reaches zero again for the
+  overlay still open, and the page stays hidden for the life of the window.
+- **The dialog announces itself; nothing detects it.** The panel cannot see a
+  portal outside its own subtree. A row's `⋯` menu is deliberately _not_
+  registered — it is in another column, and blanking the browser for it would
+  read as a bug in the browser.
+
+Unhiding forces a resync. While hidden the element's rectangle is zero and the
+tag's own loop polls at 100ms, so the page otherwise returns a tenth of a
+second late, which reads as the panel being slow to wake up.
+
+**Verified by stubbing the tag, because the native half cannot be driven.**
+Playwright has no Electrobun, so `customElements.define("electrobun-webview",
+…)` runs in an init script before any app code and the calls are counted:
+
+```
+  on mount   no calls                              ← nothing spurious
+  cmd+N      toggleHidden true
+  escape     toggleHidden false, syncDimensions true
+```
+
+That proves the renderer half — that the panel learns a modal opened and says
+so. Whether the native side then stops drawing is still unwatched, and the
+panel says which of the two paths it is on the moment it is opened: outside
+Electrobun `customElements.get` answers undefined and it says so in words,
+because an empty box is also what a page that failed to load looks like.
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes
