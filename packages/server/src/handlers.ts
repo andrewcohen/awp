@@ -141,15 +141,26 @@ export const capped = (text: string): string => {
  * to hold the complaint while parsing the location. An agent reads top to
  * bottom too, and the last line is the one it acts on.
  *
- * `text` is omitted entirely when empty rather than printed as `""`. An icon
- * button has no text and a line saying so is a line about nothing.
+ * Every field but the first four is dropped when empty rather than printed as
+ * `""`. An icon button has no text, a page that is not React has no components,
+ * and a line saying so is a line about nothing.
+ *
+ * **`source` goes above `selector`, and that ordering is the useful part.**
+ * When the page is one this repo built, StyleX has already written down the
+ * file and the line — so the agent is handed somewhere to open rather than a
+ * selector it would have to search the codebase for. The selector stays, for
+ * the pages where it is all there is.
  */
 export const notePrompt = (note: PageNote): string => {
   const said = capped(note.text);
+  const react = capped(note.react ?? "");
+  const source = capped(note.source ?? "");
   const lines = [
     "— a note about an element on a page",
     `page: ${note.url}`,
     `element: ${note.label}`,
+    ...(source === "" ? [] : [`styles: ${source}`]),
+    ...(react === "" ? [] : [`components: ${react}`]),
     `selector: ${note.selector}`,
     ...(said === "" ? [] : [`text: ${said}`]),
     "",

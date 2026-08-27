@@ -44,6 +44,20 @@ export interface Picked {
   readonly label: string;
   /** What the element said. Possibly empty; an icon button has no text. */
   readonly text: string;
+  /**
+   * The React components the element sits inside, outermost first, when the
+   * page is a React app in development. Empty otherwise — see `reactPath` in
+   * the picker for what "otherwise" covers.
+   */
+  readonly react: string;
+  /**
+   * `file:line` for the styles on the element or its nearest styled ancestor.
+   *
+   * StyleX writes `data-style-src` in development, and it is the most useful
+   * field here by a distance: it names the file and the line to open. It is
+   * only ever present for a page this repo built.
+   */
+  readonly source: string;
 }
 
 /** How much of an element's text the page is asked to send. */
@@ -96,6 +110,8 @@ export const messageFrom = (detail: unknown): Message | undefined => {
       selector,
       label: str(one["label"]) ?? selector,
       text: (str(one["text"]) ?? "").slice(0, TEXT_CAP),
+      react: (str(one["react"]) ?? "").slice(0, TEXT_CAP),
+      source: (str(one["source"]) ?? "").slice(0, TEXT_CAP),
     },
   };
 };
@@ -217,6 +233,62 @@ export const pickerSource = (): string => `
     return tag + id + cls;
   };
 
+  // ── who rendered this ────────────────────────────────────────────────
+  //
+  // React hangs its internal fiber off the DOM node under a key it randomises
+  // per build — \`__reactFiber$abc123\` — so the key is found rather than named.
+  // From a fiber, \`return\` walks up the tree it was rendered from, which is not
+  // the DOM tree: it passes through components that render no element of their
+  // own, which is exactly what makes the answer worth having.
+  //
+  // Three things this cannot do, all of them silent:
+  //
+  //   a production build   names are minified. \`Accessory\` reads as \`t\`, and
+  //                        that is worse than nothing, so short names are dropped
+  //   preact, vue, svelte  no fiber, no answer. Absent, not wrong
+  //   react before 16      no fiber key at all
+  //
+  // Host elements are skipped — the tag is already in \`label\` — and so is
+  // anything whose name ends in Context or Provider. A component library nests
+  // several of those around every control, and with a chain this short they
+  // crowd out the app's own component entirely:
+  //
+  //   CompositeRootContext > CompositeList > CompositeListContext > TabsTab
+  //   Accessory > CompositeList > TabsTab                          ← wanted
+  //
+  // The chain is cut at four, because above that is the same handful of
+  // providers on every page and they identify nothing.
+  const reactPath = (el) => {
+    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+    if (!key) { return ""; }
+    const names = [];
+    for (let fiber = el[key]; fiber && names.length < 4; fiber = fiber.return) {
+      const type = fiber.elementType || fiber.type;
+      if (!type || typeof type === "string") { continue; }
+      const name = type.displayName || type.name ||
+        type.render?.displayName || type.render?.name ||
+        type.type?.displayName || type.type?.name;
+      // A single character is a minified build telling us nothing.
+      if (
+        typeof name === "string" &&
+        name.length > 1 &&
+        names[0] !== name &&
+        !/(?:Context|Provider)$/.test(name)
+      ) {
+        names.unshift(name);
+      }
+    }
+    return names.join(" > ");
+  };
+
+  // StyleX writes the file and line it compiled a rule from, in development.
+  // Read off the nearest ancestor that has one, because the element pointed at
+  // is often an icon inside the styled thing rather than the styled thing.
+  const styleSource = (el) => {
+    const found = el.closest?.("[data-style-src]");
+    return found?.getAttribute("data-style-src") ?? "";
+  };
+
   const box = document.createElement("div");
   box.setAttribute("data-awp-annotate", "");
   // pointer-events:none is what keeps it out of elementFromPoint — without it
@@ -265,6 +337,8 @@ export const pickerSource = (): string => `
       selector: selectorFor(el),
       label: labelFor(el),
       text: (el.innerText || el.textContent || "").trim().replace(/\\s+/g, " ").slice(0, ${TEXT_CAP}),
+      react: reactPath(el),
+      source: styleSource(el),
     });
   };
 
