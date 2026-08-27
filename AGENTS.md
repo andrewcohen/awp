@@ -1572,6 +1572,89 @@ and could not be measured by typing. It was reached by dispatching a `keydown`
 and a `beforeinput` by hand, which is the only way to a case the emulator
 currently prevents and would stop preventing for any key it does not consume.
 
+## Pointing at something in a page you do not own
+
+The web panel's annotator — point at an element, say what is wrong with it,
+send it to the agent — is the first feature that has to reach _into_ the
+webview rather than position it. The whole design is the shape of the two wires
+that exist, and there are only two.
+
+```
+  this window  ──  element.executeJavascript(js)   ──►  the page
+  this window  ◄──  window.__electrobunSendToHost  ──   the page
+                     arriving as a "host-message" event on the tag
+```
+
+**`executeJavascript` returns nothing.** It is `send`, not `request`, and the
+native call under it is `evaluateJavaScriptWithNoCompletion`. So the picker
+cannot be asked a question — it has to volunteer. That is why it is a script
+that installs listeners and reports, rather than a function that is called.
+
+**`__electrobunSendToHost` is on every page, and that is not this repo's
+doing.** Every `BrowserView` — including the child a tag creates for an
+arbitrary site — is given Electrobun's full preload, which defines it. Worth
+knowing before designing around a page that "might not have it": it does.
+
+**`host-message` is the page's channel, not this feature's.** Any script on any
+site can put any object down it, and the native side `JSON.parse`s it before it
+arrives. So every message carries a marker and `messageFrom` guards on it before
+anything else. A cast there would put a stranger's object into a prompt typed at
+an agent. Removing the guard fails a test that exists to say so.
+
+**A stringified function is not the function you wrote.** The first shape was a
+real function put through `toString()`, which is a trap in this repo
+specifically: renderer files go through Vite, the React Compiler and StyleX's
+Babel pass, and what comes out has minified names, hoisted constants and
+references to a module scope the page has never heard of. A template literal is
+the same string wherever it is read.
+
+Three properties the injected script has to have, each a way to get it wrong:
+
+```
+  idempotent      it parks itself on window[KEY]; a second injection re-arms
+                  the first rather than adding a second set of listeners
+  removable       a highlight left painted over somebody's page is
+                  indistinguishable from the site being broken
+  non-destructive one absolutely-positioned div, and the clicks it consumes
+                  are cancelled — picking "delete" must not delete
+```
+
+**`settle` and `disarm` are different, and collapsing them loses the feature.**
+Clicking takes the listeners off but leaves the highlight: somebody is about to
+type a sentence about that element and has to be able to see which one it was.
+Only dismissing the note takes the paint off.
+
+**Re-inject on `dom-ready`, not `did-navigate`.** The second says a navigation
+was committed, which is before there is a `document.body` to append to. And
+only while armed — putting a highlight back on a page somebody turned the
+picker off for reads as the site doing it.
+
+**The overlay is `pointer-events: none`, or nothing is ever hovered but the
+overlay** — `elementFromPoint` would return it, over itself, forever.
+
+Measured in a real WebKit page, because none of it is reachable from a fake:
+
+```
+  hover a 120x40 button   the highlight is 124x44 — the border, drawn outside
+  click a link            navigated false, and a note sent instead
+  click after Escape      navigated true — the page works again
+  inject twice, click     1 message, not 2
+  four picks              #title · #four · em · section:nth-of-type(2) > button:nth-of-type(1)
+                          every one resolving to exactly 1 element
+```
+
+`em` rather than `main > div > span > em` is the selector rule doing its job:
+walk up appending `:nth-of-type()` and stop at the shortest suffix that is
+unique. A full path from `<html>` is correct and unreadable, and it breaks the
+first time an unrelated part of the page changes.
+
+**A page note is not a review comment, and forcing it to be one would lie.** A
+`ReviewComment` is anchored by `revision`, `path`, `side` and two line numbers;
+a page has a URL and a selector. `NoteSend` is therefore its own call, and it is
+**unbatched** where `ReviewSend` is batched — a review is six remarks written
+while reading a diff, and a page note is one whole gesture with no second one on
+the way. A draft that waits for a batch is a draft nobody remembers to deliver.
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes

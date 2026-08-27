@@ -82,9 +82,15 @@ const panels: ReadonlyArray<Panel> = [
       <Diff dir={dir} project={project} workspace={workspace} scheme={scheme} />
     ),
   },
-  // Takes no context, for now. A default address per workspace is the obvious
-  // next thing and is deliberately not guessed at — see `rememberedPage`.
-  { id: "web", label: "web", render: () => <Web /> },
+  // The pair, and nothing else. The page itself is not per-workspace — a
+  // default address per workspace is the obvious next thing and is deliberately
+  // not guessed at, see `rememberedPage` — but a *note* about the page is typed
+  // at an agent, and an agent belongs to a workspace.
+  {
+    id: "web",
+    label: "web",
+    render: ({ project, workspace }) => <Web project={project} workspace={workspace} />,
+  },
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
 ];

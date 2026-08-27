@@ -193,6 +193,7 @@ const handlers = AwpRpcs.toLayer({
   ReviewAdd: () => Effect.succeed(comment),
   ReviewRemove: () => Effect.succeed(true),
   ReviewSend: () => Effect.succeed({ sent: [comment], prompt: "Review feedback — 1 comment:" }),
+  NoteSend: () => Effect.succeed("— a note about an element on a page"),
 });
 
 const client = RpcTest.makeClient(AwpRpcs).pipe(Effect.provide(handlers));
