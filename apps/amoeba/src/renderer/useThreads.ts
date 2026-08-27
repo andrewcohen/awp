@@ -1,6 +1,6 @@
 import type { Thread } from "@awp-kit/protocol";
 import { useEffect, useRef, useState } from "react";
-import { listThreads } from "./daemon";
+import { listThreads, onReconnect } from "./daemon";
 
 // The threads, and a way to say they changed.
 //
@@ -61,8 +61,13 @@ export function useThreads(): Threads {
   useEffect(() => {
     alive.current = true;
     load(alive, setThreads, setFailure);
+    // And again whenever the daemon comes back. A list is an answer, not a
+    // feed: nothing arrives to say what changed while it was away, so a window
+    // that survived a restart would go on showing the state from before it.
+    const stop = onReconnect(() => load(alive, setThreads, setFailure));
     return () => {
       alive.current = false;
+      stop();
     };
   }, []);
 
