@@ -22,6 +22,17 @@ export const AGENT_MIN = 320;
 /** Each divider is one pixel of layout; the grab area overhangs it. */
 export const DIVIDER = 1;
 
+// How long a column takes to fold or unfold.
+//
+// A number here rather than in the stylesheet because two things need it and
+// they must agree: the CSS transition, and the timer that takes the transition
+// back off again afterwards. See `folding` in App.tsx for why it is taken off.
+//
+// 180ms is long enough to be read as one thing moving and short enough that a
+// keyboard user folding a column does not wait on it. Ignored entirely under
+// `prefers-reduced-motion`.
+export const FOLD_MS = 180;
+
 /** Which of the two side columns are folded away. */
 export type Collapsed = {
   readonly sidebar: boolean;
