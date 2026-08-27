@@ -15,6 +15,19 @@ const picked = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe("messageFrom", () => {
+  test("carries what the page could work out about the component", () => {
+    // Both are absent on most pages and neither is the anchor, so they default
+    // to empty rather than making the note unreadable.
+    const message = messageFrom(
+      picked({ react: "Accessory > Tabs.Tab", source: "amoeba:src/renderer/Accessory.tsx:137" }),
+    );
+    expect(message?.kind).toBe("picked");
+    if (message?.kind === "picked") {
+      expect(message.picked.react).toBe("Accessory > Tabs.Tab");
+      expect(message.picked.source).toBe("amoeba:src/renderer/Accessory.tsx:137");
+    }
+  });
+
   test("reads a message the picker sent", () => {
     const message = messageFrom(picked());
     expect(message).toEqual({
@@ -24,6 +37,8 @@ describe("messageFrom", () => {
         selector: "main > button:nth-of-type(2)",
         label: "button.primary",
         text: "Save changes",
+        react: "",
+        source: "",
       },
     });
   });
@@ -60,7 +75,7 @@ describe("messageFrom", () => {
     const message = messageFrom({ from: "awp-annotate", selector: "#save" });
     expect(message).toEqual({
       kind: "picked",
-      picked: { url: "", selector: "#save", label: "#save", text: "" },
+      picked: { url: "", selector: "#save", label: "#save", text: "", react: "", source: "" },
     });
   });
 

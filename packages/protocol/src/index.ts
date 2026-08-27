@@ -413,6 +413,16 @@ export const PageNote = Schema.Struct({
   label: Schema.String,
   /** What the element said, trimmed and capped. May be empty. */
   text: Schema.String,
+  /**
+   * The React components it sits inside, outermost first. Empty when the page
+   * is not a React app, or is a production build whose names are minified.
+   *
+   * Optional in the schema and not on the wire from older clients — a note is
+   * still a note without it.
+   */
+  react: Schema.optional(Schema.String),
+  /** `file:line` from StyleX's `data-style-src`, when the page carries one. */
+  source: Schema.optional(Schema.String),
   /** What the person said about it. */
   body: Schema.String,
 });

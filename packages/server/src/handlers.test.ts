@@ -862,6 +862,26 @@ describe("notePrompt", () => {
     body: "  this wraps onto two lines under 400px  ",
   };
 
+  it("puts the file above the selector when the page said which file", () => {
+    // The useful ordering. StyleX has already written down the file and line,
+    // so the agent gets somewhere to open rather than a selector it would have
+    // to go looking for. The selector stays for pages that have nothing else.
+    const rich = handlers.notePrompt({
+      ...note,
+      react: "Accessory > Tabs.Tab",
+      source: "amoeba:src/renderer/Accessory.tsx:137",
+    });
+
+    expect(rich.indexOf("styles: ")).toBeLessThan(rich.indexOf("selector: "));
+    expect(rich).toContain("components: Accessory > Tabs.Tab");
+  });
+
+  it("leaves both out for a page that is neither React nor ours", () => {
+    const plain = handlers.notePrompt(note);
+    expect(plain).not.toContain("styles:");
+    expect(plain).not.toContain("components:");
+  });
+
   it("says where, which, what it said, and then what is wrong", () => {
     // The order is the whole shape. Everything above the remark is address; a
     // reader given the complaint first has to hold it while parsing the
