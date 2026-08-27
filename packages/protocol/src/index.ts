@@ -888,4 +888,35 @@ export class AwpRpcs extends RpcGroup.make(
     success: Patch,
     error: DiffUnavailable,
   }),
+
+  /**
+   * A tick each time the files in a workspace change.
+   *
+   * Not the patch. The daemon says *that something happened*, and the client
+   * asks for what it wants — which is not always the working copy: the panel
+   * may be showing a commit, and a commit does not change because a file was
+   * written. Pushing a patch would mean the daemon deciding which revision the
+   * client is looking at, which is the client's business and would be a second
+   * copy of that decision.
+   *
+   * `at` is the daemon's clock, and exists so that two ticks in a row are two
+   * values. A stream of identical messages is one a client cannot tell apart
+   * from a stalled one.
+   *
+   * ── what is deliberately not watched ─────────────────────────────────────
+   *
+   * `.jj` and `.git`. Asking for the working copy snapshots it, which writes
+   * to `.jj` — so watching it means every answer causes the next question, for
+   * ever. That is not a tuning problem; it is a loop, and the ignore list is
+   * what makes this feature possible at all.
+   */
+  Rpc.make("WorkspaceChanges", {
+    payload: {
+      /** A directory in the workspace — a session's `startDir` will do. */
+      from: Schema.String,
+    },
+    success: Schema.Struct({ at: Schema.Number }),
+    stream: true,
+    error: DiffUnavailable,
+  }),
 ) {}

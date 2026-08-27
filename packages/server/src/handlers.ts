@@ -22,7 +22,7 @@ import {
   SessionNotFound,
   ThreadStartFailed,
 } from "@awp-kit/protocol";
-import { Clock, Effect, Stream } from "effect";
+import { Clock, Effect, FileSystem, Stream } from "effect";
 import { Jj } from "./jj";
 import { createWorkspaceRef } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
@@ -114,6 +114,7 @@ import { refusalFor } from "./attachment";
 import { Multiplexer, type Session, identities } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
 import { Sessions } from "./sessions";
+import { changesUnder } from "./watch";
 
 /**
  * The daemon's `Session` as the client is promised it.
@@ -211,6 +212,11 @@ export const layer = AwpRpcs.toLayer(
     const reviews = yield* Reviews;
     const config = yield* Settings;
     const jj = yield* Jj;
+    // Taken once, here, rather than per request. A handler's return value has
+    // to name no requirements — the rpc layer is what settles them — so the
+    // watcher's file system is closed over instead of being asked for inside
+    // the stream.
+    const files = yield* FileSystem.FileSystem;
 
     /**
      * The revision a thread's work is at, for a thread branching off it.
@@ -440,6 +446,15 @@ export const layer = AwpRpcs.toLayer(
           Effect.mapError((error) => new DiffUnavailable({ reason: error.reason })),
         );
       },
+
+      /**
+       * A tick per burst of writes under the workspace.
+       *
+       * The client asks for the patch it wants when one arrives — see the
+       * contract, and `watch.ts` for why `.jj` is not watched.
+       */
+      WorkspaceChanges: ({ from }) =>
+        changesUnder(from).pipe(Stream.provideService(FileSystem.FileSystem, files)),
 
       // Returns the record rather than the workspace, because the work outlives
       // the request. Whether it succeeded is a question for JobChanges.
