@@ -1363,6 +1363,30 @@ pass because the trees came back clean and the messages were not looked at.
 
   Beware `cmd | tail` for the same reason: `$?` is then _tail's_ status.
 
+- **The renderer may not import a node builtin, and the lint says so.**
+  `import/no-nodejs-modules` is on for `apps/amoeba/src/renderer/**` and
+  `packages/pane/src/**`. This is the barrel hazard above given a gate: the job
+  record is a Schema, so the contract imports it, so the renderer does — and
+  `@awp-kit/jobs`' index reaching `sqlite.ts` broke the dev server outright,
+  while a production build would have tree-shaken it and said nothing.
+
+  The tsconfig project references remain the import graph between packages —
+  `pane` importing from `server` is a compile error. What the lint adds is the
+  case references cannot see: a legal import whose _transitive_ reach is a
+  builtin the browser has never heard of.
+
+  Checked by breaking it deliberately, because a guard whose removal changes
+  nothing is not doing what it claims:
+
+  ```
+    import { readFileSync } from "node:fs";   in review.ts
+    → error import(no-nodejs-modules): Do not import Node.js builtin module
+  ```
+
+  `import/no-cycle` is on repo-wide for the same reason `address.ts` is kept
+  out of `routes.ts`: `App → routes → App` was a real risk and the reason that
+  file exists.
+
 - Dependency versions live in **bun workspace catalogs** in the root
   `package.json` — `"effect": "catalog:"` in a package, the number in one place.
   The effect family has to move together, and four packages naming their own

@@ -11,7 +11,8 @@
     "eslint/max-classes-per-file": "off",
     "eslint/max-lines-per-function": "off",
     "react/react-in-jsx-scope": "off",
-    "eslint/no-redeclare": "off"
+    "eslint/no-redeclare": "off",
+    "import/no-cycle": "error"
   },
   "overrides": [
     {
@@ -24,6 +25,12 @@
       "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "typescript/no-non-null-assertion": "off"
+      }
+    },
+    {
+      "files": ["apps/amoeba/src/renderer/**", "packages/pane/src/**"],
+      "rules": {
+        "import/no-nodejs-modules": "error"
       }
     }
   ]
