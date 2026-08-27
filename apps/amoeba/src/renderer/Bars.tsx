@@ -21,7 +21,10 @@ import { tally } from "./useJobs";
 //     window is `hiddenInset`, so the controls float over the top-left of the
 //     content; every column used to start with `space.titlebar` of padding to
 //     stay out of their way, in three places, none of which knew why. Now one
-//     strip does it and `space.titlebar` is that strip's height.
+//     strip does it — and it clears them by going *under* them rather than
+//     starting to their right, which is what lets the leftmost control have
+//     the window's real left edge. See `top` below for the six pixels that
+//     forced the change.
 //   - **The top bar is the window's drag handle.** With the controls hidden
 //     there is no title bar to grab, and a strip of chrome with nothing
 //     interactive in it is the natural place — which is also why nothing
@@ -42,16 +45,50 @@ const styles = stylex.create({
     color: colors.muted,
     whiteSpace: "nowrap",
   },
+  // The top bar goes *under* the traffic lights rather than beside them.
+  //
+  // It used to start 5.25rem in, to clear them sideways. That worked and put
+  // our leftmost control six pixels from the OS's rightmost one, so the eye
+  // grouped it with close/minimise/zoom — a fourth traffic light that folds a
+  // column. Measured, because "it looks cramped" is not a number:
+  //
+  //   traffic lights end   78px
+  //   our toggle starts    84px      ← six pixels of daylight
+  //
+  // There is no fixing that in the same row. The accessory's toggle can sit at
+  // its column's outer edge because that edge is the window's right side and
+  // nothing is there; the mirror of that for the sidebar is the window's left
+  // side, which AppKit owns. So the bar takes the whole width and starts below
+  // the band instead, and the leftmost control gets the real edge it was after.
+  //
+  // The band is empty on purpose. It is the drag handle, and a strip of chrome
+  // with nothing interactive in it is exactly what a drag handle should be.
   top: {
-    height: space.titlebar,
-    // Clears the traffic lights. A number rather than a token because it is a
-    // fact about macOS, not a decision this design gets to make.
-    paddingInlineStart: "5.25rem",
+    flexDirection: "column",
+    alignItems: "stretch",
+    paddingInline: 0,
+    gap: 0,
     borderBottomWidth: 1,
     borderBottomStyle: "solid",
     borderBottomColor: colors.border,
     // The only way to move a window whose title bar is hidden.
     WebkitAppRegion: "drag",
+  },
+  // The band AppKit draws its buttons in. Nothing of ours goes here.
+  lights: { height: space.lights, flexShrink: 0 },
+  // What was the top bar: one row, now running the full width of the window.
+  topRow: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    gap: "0.6rem",
+    paddingInline: "0.6rem",
+    // Its own height, not `space.titlebar`. That token meant "tall enough to
+    // clear the traffic lights", and this row no longer clears anything — the
+    // band above it does. Two 22px buttons and a line of small text need 2rem,
+    // and keeping the old number would have spent 8px on a job that moved.
+    height: "2rem",
+    minWidth: 0,
   },
   bottom: {
     height: "1.6rem",
@@ -123,7 +160,9 @@ export function TopBar({
 }) {
   return (
     <header {...stylex.props(styles.bar, styles.top)}>
-      {/* ── folding a column, from the one place that is never folded ──────
+      <div {...stylex.props(styles.lights)} />
+      <div {...stylex.props(styles.topRow)}>
+        {/* ── folding a column, from the one place that is never folded ──────
 
           These used to live on the divider between the columns: a control that
           appeared on hover, and stayed visible once its column was folded
@@ -144,30 +183,30 @@ export function TopBar({
           The left one cannot go further left than this: the window is
           `hiddenInset`, so the traffic lights float over the first 5.25rem and
           the bar's own start padding is what clears them. */}
-      <button
-        type="button"
-        aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
-        aria-pressed={!collapsed.sidebar}
-        title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
-        onClick={() => onFold("sidebar")}
-        {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
-      >
-        <SidebarSimpleIcon size={15} aria-hidden />
-      </button>
+        <button
+          type="button"
+          aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+          aria-pressed={!collapsed.sidebar}
+          title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
+          onClick={() => onFold("sidebar")}
+          {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
+        >
+          <SidebarSimpleIcon size={15} aria-hidden />
+        </button>
 
-      {session === undefined ? (
-        <span>no session</span>
-      ) : (
-        <>
-          <span {...stylex.props(styles.strong, styles.name)}>
-            {session.identity?.workspace ?? session.name}
-          </span>
-          {session.identity !== undefined && <span>{session.identity.project}</span>}
-          <span>{session.identity?.kind}</span>
-        </>
-      )}
-      <span {...stylex.props(styles.spacer)} />
-      {/* Nothing at all while it is working.
+        {session === undefined ? (
+          <span>no session</span>
+        ) : (
+          <>
+            <span {...stylex.props(styles.strong, styles.name)}>
+              {session.identity?.workspace ?? session.name}
+            </span>
+            {session.identity !== undefined && <span>{session.identity.project}</span>}
+            <span>{session.identity?.kind}</span>
+          </>
+        )}
+        <span {...stylex.props(styles.spacer)} />
+        {/* Nothing at all while it is working.
       
           A green "daemon" sitting there permanently is a status light that is
           on by definition — it teaches the eye to skip that corner, which costs
@@ -177,19 +216,20 @@ export function TopBar({
           So the connected state is silence, and the disconnected state is a
           word rather than a dot: "no daemon" is the sentence, and a red circle
           would need to be hovered before it said anything. */}
-      {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
+        {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
 
-      {/* The other half of the pair — see the sidebar's, at the far left. */}
-      <button
-        type="button"
-        aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
-        aria-pressed={!collapsed.accessory}
-        title={collapsed.accessory ? "show the panels" : "hide the panels"}
-        onClick={() => onFold("accessory")}
-        {...stylex.props(styles.toggle, !collapsed.accessory && styles.toggleOn)}
-      >
-        <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
-      </button>
+        {/* The other half of the pair — see the sidebar's, at the far left. */}
+        <button
+          type="button"
+          aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
+          aria-pressed={!collapsed.accessory}
+          title={collapsed.accessory ? "show the panels" : "hide the panels"}
+          onClick={() => onFold("accessory")}
+          {...stylex.props(styles.toggle, !collapsed.accessory && styles.toggleOn)}
+        >
+          <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
+        </button>
+      </div>
     </header>
   );
 }
