@@ -4,10 +4,28 @@ import { Context, Effect, Layer, Schema } from "effect";
 
 // What the person using awp has configured.
 //
-// `~/.config/awp/config.json`, which the Go implementation wrote and which is
-// already on this machine. Read rather than replaced: a rewrite that ignored an
-// existing config would silently change the agent someone launches and the
-// bookmarks they get, and neither would look like a settings problem.
+// Read rather than replaced: these files were written by the Go implementation
+// and are already on this machine, so a rewrite that ignored one would silently
+// change the agent someone launches and the bookmarks they get, and neither
+// would look like a settings problem.
+//
+// ── two files, and the project one wins ────────────────────────────────────
+//
+//   ~/.config/awp/config.json    global — the agent, the bookmark prefix
+//   <repo>/.awp/config.json      per project — how *this* repository is set up
+//
+// Merged per field, and the rule is replace-if-empty rather than a deep merge,
+// because that is what the Go implementation does and both files are already
+// written against it. A project that says nothing about hooks inherits the
+// global ones; a project that lists one inherits none of them. Concatenating
+// instead would be defensible and would silently change what every existing
+// config means.
+//
+// **Read from the source repository, not from the workspace.** `.awp/` is not
+// tracked, so a fresh `jj workspace add` has no copy of it — the Go
+// implementation symlinked one in for exactly this reason. The create-workspace
+// job already carries `input.repo`, which is the repository the workspace was
+// made *from*, and that is the honest place to look.
 //
 // ── only two keys, deliberately ────────────────────────────────────────────
 // The file also carries `actions` and `deck.project_roots`, and this reads
@@ -27,10 +45,12 @@ import { Context, Effect, Layer, Schema } from "effect";
 // is a field rather than a log line because the only useful place for it is in
 // front of the person who made the typo.
 
-/** The file, as much of it as is read. Unknown keys are ignored. */
+/** Either file, as much of it as is read. Unknown keys are ignored. */
 const File = Schema.Struct({
   agent: Schema.optional(Schema.String),
-  bootstrap: Schema.optional(Schema.Array(Schema.String)),
+  hooks: Schema.optional(
+    Schema.Struct({ bootstrap: Schema.optional(Schema.Array(Schema.String)) }),
+  ),
   deck: Schema.optional(Schema.Struct({ bookmark_prefix: Schema.optional(Schema.String) })),
 });
 
@@ -55,9 +75,10 @@ export interface AwpSettings {
   /**
    * What to run in a new workspace, in order, before its agent is briefed.
    *
-   * Whole shell lines rather than argv, unlike {@link agent} — a hook is a line
-   * somebody writes in a config file and `bun install && bun run build` is its
-   * ordinary shape. See `bootstrap.ts` for the rest of that argument.
+   * `hooks.bootstrap` in either file, the project's winning outright when it
+   * lists any. Whole shell lines rather than argv, unlike {@link agent} — a
+   * hook is a line somebody writes in a config file and `mise trust && bun
+   * install` is its ordinary shape. See `bootstrap.ts` for the rest of that.
    *
    * Empty by default, and empty is a real answer: most repositories need
    * nothing, and inventing a default here would run somebody's package manager
@@ -80,7 +101,7 @@ export const SETTINGS_FILE = join(homedir(), ".config", "awp", "config.json");
 
 export class Settings extends Context.Service<
   Settings,
-  { readonly read: () => Effect.Effect<AwpSettings> }
+  { readonly read: (repo?: string) => Effect.Effect<AwpSettings> }
 >()("awp/Settings") {}
 
 const parse = (text: string): AwpSettings => {
@@ -92,38 +113,80 @@ const parse = (text: string): AwpSettings => {
     // Blank lines dropped. A config file people edit by hand accumulates them,
     // and `sh -c ""` succeeds silently — so keeping them would put a step in
     // the log that says nothing and did nothing.
-    bootstrap: (decoded.bootstrap ?? []).map((one) => one.trim()).filter((one) => one !== ""),
+    bootstrap: (decoded.hooks?.bootstrap ?? [])
+      .map((one) => one.trim())
+      .filter((one) => one !== ""),
     bookmarkPrefix: prefix === "" ? undefined : prefix,
     problem: undefined,
   };
 };
-
-export const make = (path: string = SETTINGS_FILE) =>
-  Effect.succeed({
-    // `Effect.promise`, so this has no error channel at all — the decision
-    // about a missing or malformed file is made here rather than pushed into
-    // one for every caller to handle identically. See the note at the top.
-    read: () =>
-      Effect.promise(async (): Promise<AwpSettings> => {
-        try {
-          const { readFile } = await import("node:fs/promises");
-          return parse(await readFile(path, "utf8"));
-        } catch (cause) {
-          return {
-            ...DEFAULTS,
-            // A missing file is not worth a sentence — it is what a machine
-            // that has never run awp looks like. Anything else is.
-            problem: isMissing(cause) ? undefined : `${path}: ${String(cause)}`,
-          };
-        }
-      }),
-  });
 
 const isMissing = (cause: unknown): boolean =>
   typeof cause === "object" &&
   cause !== null &&
   "code" in cause &&
   (cause as { readonly code?: unknown }).code === "ENOENT";
+
+/** `<repo>/.awp/config.json` — where a project says how it is set up. */
+export const projectConfigPath = (repo: string): string => join(repo, ".awp", "config.json");
+
+/**
+ * One file, or the defaults and a sentence about why not.
+ *
+ * `Effect.promise`, so this has no error channel at all — the decision about a
+ * missing or malformed file is made here rather than pushed into one for every
+ * caller to handle identically. See the note at the top.
+ */
+const readFileAt = (path: string): Effect.Effect<AwpSettings> =>
+  Effect.promise(async (): Promise<AwpSettings> => {
+    try {
+      const { readFile } = await import("node:fs/promises");
+      return parse(await readFile(path, "utf8"));
+    } catch (cause) {
+      return {
+        ...DEFAULTS,
+        // A missing file is not worth a sentence — it is what a machine that
+        // has never run awp looks like, and a project with nothing to say.
+        // Anything else is.
+        problem: isMissing(cause) ? undefined : `${path}: ${String(cause)}`,
+      };
+    }
+  });
+
+/**
+ * Project over global, per field, replace-if-empty.
+ *
+ * Not a deep merge and not a concatenation, because the Go implementation does
+ * exactly this and both files on this machine were written against it. A
+ * project that lists any hooks gets *only* its own — inheriting the global ones
+ * as well would mean a repository could never turn one off.
+ */
+export const merge = (global: AwpSettings, project: AwpSettings): AwpSettings => ({
+  agent: project.agent === DEFAULTS.agent ? global.agent : project.agent,
+  bootstrap: project.bootstrap.length === 0 ? global.bootstrap : project.bootstrap,
+  bookmarkPrefix: project.bookmarkPrefix ?? global.bookmarkPrefix,
+  // Whichever file was unreadable, said once. Two problems is a rarer case than
+  // the message being lost, and the project's is the one a person can fix.
+  problem: project.problem ?? global.problem,
+});
+
+export const make = (path: string = SETTINGS_FILE) =>
+  Effect.succeed({
+    /**
+     * @param repo  the repository whose `.awp/config.json` applies, when there
+     *              is one. Absent gives the global file alone — which is right
+     *              for a caller that is not standing in a project, and is why
+     *              this is optional rather than required.
+     */
+    read: (repo?: string) =>
+      Effect.gen(function* () {
+        const global = yield* readFileAt(path);
+        if (repo === undefined) {
+          return global;
+        }
+        return merge(global, yield* readFileAt(projectConfigPath(repo)));
+      }),
+  });
 
 export const layer = (path: string = SETTINGS_FILE): Layer.Layer<Settings> =>
   Layer.effect(Settings)(make(path));

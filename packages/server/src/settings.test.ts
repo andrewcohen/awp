@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -10,6 +10,7 @@ import {
   Settings,
   agentWith,
   layer,
+  projectConfigPath,
   withFlag,
 } from "./settings";
 
@@ -31,13 +32,26 @@ const withFile = (contents: string): string => {
   return path;
 };
 
-const read = (path: string) =>
+const read = (path: string, repo?: string) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const settings = yield* Settings;
-      return yield* settings.read();
+      return yield* settings.read(repo);
     }).pipe(Effect.provide(layer(path))),
   );
+
+/** A repository root with a `.awp/config.json` in it, or without one. */
+let repos = 0;
+const withProject = (contents?: string): string => {
+  const repo = join(scratch, `repo-${(repos += 1)}`);
+  if (contents !== undefined) {
+    mkdirSync(join(repo, ".awp"), { recursive: true });
+    writeFileSync(join(repo, ".awp", "config.json"), contents);
+  } else {
+    mkdirSync(repo, { recursive: true });
+  }
+  return repo;
+};
 
 describe("settings", () => {
   test("the real file, as it is on this machine", async () => {
@@ -173,5 +187,75 @@ describe("agentWith", () => {
   // — a command that cannot run, from a function that cannot say so.
   test("an empty argv gains nothing", () => {
     expect(withFlag([], "--model", "opus")).toEqual([]);
+  });
+});
+
+describe("two files, and the project wins", () => {
+  const global = () =>
+    withFile(`{
+      "agent": "claude --model opus",
+      "hooks": { "bootstrap": ["echo global"] },
+      "deck": { "bookmark_prefix": "andrew" }
+    }`);
+
+  test("a project that says nothing inherits everything", async () => {
+    const found = await read(global(), withProject());
+
+    expect(found.bootstrap).toEqual(["echo global"]);
+    expect(found.bookmarkPrefix).toBe("andrew");
+    expect(found.agent).toEqual(["claude", "--model", "opus"]);
+  });
+
+  test("a project that lists hooks gets its own and none of the global ones", async () => {
+    // Replace, not concatenate. Both are defensible and the Go implementation
+    // replaces, so both files on this machine were written expecting it —
+    // concatenating would silently change what every existing config means, and
+    // would leave a repository no way to turn a global hook off.
+    const found = await read(
+      global(),
+      withProject(`{ "hooks": { "bootstrap": ["mise trust", "bun install"] } }`),
+    );
+
+    expect(found.bootstrap).toEqual(["mise trust", "bun install"]);
+  });
+
+  test("an empty list in the project is silence, not a refusal", async () => {
+    // `[]` and an absent key are the same thing here, which is what
+    // replace-if-empty means. Saying "run nothing" is not expressible, and the
+    // day it needs to be, this is the line that changes.
+    const found = await read(global(), withProject(`{ "hooks": { "bootstrap": [] } }`));
+
+    expect(found.bootstrap).toEqual(["echo global"]);
+  });
+
+  test("no repo at all reads the global file alone", async () => {
+    // A caller that is not standing in a project — which is why `repo` is
+    // optional rather than required.
+    const found = await read(global());
+
+    expect(found.bootstrap).toEqual(["echo global"]);
+  });
+
+  test("a project overrides the prefix and the agent too", async () => {
+    const found = await read(
+      global(),
+      withProject(`{ "agent": "codex", "deck": { "bookmark_prefix": "wip" } }`),
+    );
+
+    expect(found.agent).toEqual(["codex"]);
+    expect(found.bookmarkPrefix).toBe("wip");
+  });
+
+  test("a malformed project file is the global settings, and says so", async () => {
+    // The project's problem rather than the global's, because it is the one a
+    // person standing in the repository can fix.
+    const found = await read(global(), withProject("{ not json"));
+
+    expect(found.bootstrap).toEqual(["echo global"]);
+    expect(found.problem).toContain(".awp/config.json");
+  });
+
+  test("the project file lives where the Go implementation put it", () => {
+    expect(projectConfigPath("/repos/thicket")).toBe("/repos/thicket/.awp/config.json");
   });
 });
