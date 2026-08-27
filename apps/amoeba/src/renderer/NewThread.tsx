@@ -8,6 +8,7 @@ import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { startThread, threadBases } from "./daemon";
+import { useOverlay } from "./overlays";
 import { colors, text } from "./tokens.stylex";
 import type { Project } from "./workspaces";
 
@@ -565,6 +566,15 @@ export function NewThread({
   readonly onClose: () => void;
   readonly onStarted: () => void;
 }) {
+  // Before the early return, because a hook cannot be called conditionally —
+  // and the argument is the condition, which is what the hook is shaped for.
+  //
+  // Announced by the dialog rather than counted by whatever draws over it: the
+  // web panel cannot see a portal that renders outside its subtree, and even a
+  // full-window `pointer-events` probe would be guessing at what a modal is.
+  // The component that knows it opened a modal is this one.
+  useOverlay(request !== undefined);
+
   if (request === undefined) {
     return null;
   }
