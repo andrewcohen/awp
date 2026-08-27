@@ -1021,35 +1021,62 @@ Latte is not Macchiato with the ends swapped. Its ANSI black is subtext1 rather
 than surface1, because the mirror of Macchiato's choice is `#bcc0cc`, which
 against a near-white background is not ink. `palette.ts` says so at the table.
 
-The pane recolours through `setPaneTheme`, and **that does not currently work** —
-this paragraph used to claim it did, which is the reason it now says otherwise at
-length.
-
-`setTheme` updates the renderer's theme and palette and repaints nothing; the
-render loop only redraws rows the buffer marks dirty, and recolouring marks
-none. The nudge afterwards — putting the canvas' pixel size in disagreement with
-the renderer's metrics — reads in the source like the one full redraw reachable
-from public API, and it is not one. Measured:
+The pane recolours through `setPaneTheme`, and **it can only ever half work in
+ghostty-web 0.4.0** — the library says so itself, in the option handler nobody
+had read:
 
 ```
-  setPaneTheme reached        yes, theme.background = #eff1f5
-  term.renderer               present; setTheme, getCanvas both functions
-  canvas.width = 0 applied    yes — and the canvas returns to 336x588 on its own
-  corner pixel afterwards     rgb(36,39,58)   ← macchiato base, the old colour
-  the same nudge by hand      also nothing
-  a real reflow, 900 → 1150   rgb(239,241,245) ← the new colour
+  case "theme":
+    console.warn("ghostty-web: theme changes after open() are not yet fully supported");
 ```
 
-Two things this is worth keeping for. The reflow works because
-`Terminal.resize` calls `renderer.render(wasmTerm, true, …)` outright — and it
-early-returns on unchanged dimensions, so it cannot simply be called: resizing
-to `rows - 1` and back would fire `resizeEmitter` twice and reflow the real
-session. And the last reading that fits all six rows is that `term.renderer` is
-not the renderer the loop draws with, which is where task #23 starts.
+The colours are compiled into the wasm terminal when it is built.
+`buildWasmConfig` hands the emulator `fgColor`, `bgColor`, `cursorColor` and the
+sixteen-colour palette, and the only thing that rebuilds that config is
+`reset()` — which frees the wasm terminal and makes a new one, taking the
+scrollback with it. For a pane watching an agent work that is a worse outcome
+than the wrong colours.
 
-The general shape, again: a mechanism read out of someone else's source is a
-hypothesis. This one was written down as a finding without a pixel ever being
-sampled to check it.
+So `setPaneTheme` repaints the _renderer's_ half: the ground, and any cell whose
+colour is the default rather than one the program asked for. `clear()` fills the
+ground and `render(buffer, forceAll)` redraws every line — both public, and
+`render(…, true)` is exactly what the library calls on open. Counted on the
+fixture, latte-base pixels after switching to light:
+
+```
+  canvas.width = 0            0     ← the nudge this replaced
+  clear() + render(forceAll)  263
+```
+
+Three things worth keeping.
+
+**The nudge never did anything.** Setting `canvas.width = 0` to put the canvas'
+pixel size in disagreement with the renderer's metrics reads in the source like
+the one full redraw reachable from public API. It is not one, the canvas returns
+to its own size, and not one pixel changes. That was written into this file as a
+finding without a pixel ever being sampled — the general shape being that a
+mechanism read out of someone else's source is a hypothesis.
+
+**A single corner pixel is the wrong probe, and it cost an hour twice.** The
+fixture draws colour ramps and blocks, so the corner is whatever the fixture
+painted there rather than the theme's ground — it reads "unchanged" for a swap
+that worked and for one that did nothing, alike. Count the canvas' most common
+colours instead:
+
+```
+  dark   [["36,39,58", 11052], …]
+  light  [["36,39,58", 10793], ["239,241,245", 263], …]
+                                └─ the ground that did recolour
+```
+
+**A reflow does repaint**, because `Terminal.resize` calls
+`renderer.render(wasmTerm, true, …)` outright — but it early-returns on
+unchanged dimensions, so it cannot be used as a repaint: resizing to `rows - 1`
+and back fires `resizeEmitter` twice and reflows the real session.
+
+What is left of task #23 is the patch. `patches/ghostty-web@0.4.0.patch` already
+exists, and a `setTheme` that rebuilds the wasm config while keeping the buffer
+is where it goes.
 
 ## A browser probe attaches to a session, and resizes it
 
