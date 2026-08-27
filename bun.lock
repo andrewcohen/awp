@@ -91,6 +91,7 @@
   },
   "patchedDependencies": {
     "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch",
+    "electrobun@1.18.1": "patches/electrobun@1.18.1.patch",
   },
   "catalog": {
     "@effect/atom-react": "4.0.0-beta.107",

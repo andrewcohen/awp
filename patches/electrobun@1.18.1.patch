@@ -1,0 +1,59 @@
+diff --git a/dist/api/bun/preload/webviewTag.ts b/dist/api/bun/preload/webviewTag.ts
+index 15f664ebc5f1ea77917ab1426f3fc50275cd28f8..f23840916e9ae883832cea6a2e1f8be691c6608a 100644
+--- a/dist/api/bun/preload/webviewTag.ts
++++ b/dist/api/bun/preload/webviewTag.ts
+@@ -35,6 +35,20 @@ export class ElectrobunWebviewTag extends HTMLElement {
+ 	sandboxed = false;
+ 	private _eventListeners: Record<string, Array<(event: CustomEvent) => void>> =
+ 		{};
++	// Set the moment the element leaves the document, and never cleared.
++	//
++	// initWebview() is two awaits away from connectedCallback — a rAF, then a
++	// round trip to the native side — and an element removed inside that window
++	// has already had its disconnectedCallback run, with webviewId still null,
++	// so nothing was torn down. The native webview then arrives, attaches to a
++	// detached element, and can never be reached again: it is not in the
++	// document, so no further disconnectedCallback will ever fire for it. It
++	// floats over the window at the rectangle it was born with, unmovable and
++	// unclosable, for the life of the process.
++	//
++	// React StrictMode walks into this every single mount: create, clean up,
++	// create again, all inside one frame.
++	private _detached = false;
+ 
+ 	static get observedAttributes() {
+ 		return ["src", "html"];
+@@ -45,7 +59,10 @@ export class ElectrobunWebviewTag extends HTMLElement {
+ 	}
+ 
+ 	connectedCallback() {
+-		requestAnimationFrame(() => this.initWebview());
++		requestAnimationFrame(() => {
++			if (this._detached || !this.isConnected) return;
++			this.initWebview();
++		});
+ 	}
+ 
+ 	attributeChangedCallback(
+@@ -61,6 +78,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
+ 	}
+ 
+ 	disconnectedCallback() {
++		this._detached = true;
+ 		if (this.webviewId !== null) {
+ 			send("webviewTagRemove", { id: this.webviewId });
+ 			delete webviewRegistry[this.webviewId];
+@@ -121,6 +139,13 @@ export class ElectrobunWebviewTag extends HTMLElement {
+ 				passthrough,
+ 			})) as number;
+ 
++			// Gone while the native side was answering. Remove what it just made,
++			// rather than adopting it onto an element nothing can reach.
++			if (this._detached || !this.isConnected) {
++				send("webviewTagRemove", { id: webviewId });
++				return;
++			}
++
+ 			this.webviewId = webviewId;
+ 			this.id = `electrobun-webview-${webviewId}`;
+ 			webviewRegistry[webviewId] = this;
