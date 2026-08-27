@@ -21,12 +21,19 @@ import { colors, text } from "./tokens.stylex";
 // Base UI ships no styles, so what it costs is exactly the markup and the
 // behaviour: the appearance is still StyleX, and still this file's business.
 //
-// The diff comes first and opens by default, jobs after it, the debug tools
-// last. All three are "opened on purpose" panels except the meter, which is
-// the one opened when something feels wrong — but only one of them is looked
-// at continuously while working, and that is the diff. Jobs is read when a job
-// is running, which is a few seconds a day and always with the jobs count in
-// the status bar already saying so.
+// Ordered by how often a person turns to them, left to right, and the debug
+// tools last because they are the ones opened when something feels wrong
+// rather than on purpose.
+//
+//   diff   looked at continuously while working, and opens by default
+//   web    reached for while reading a diff — docs, an issue, a dashboard
+//   jobs   read when a job is running, which is a few seconds a day, and
+//          always with the count in the status bar already saying so
+//
+// Jobs was second and is now third. Nothing about the panel changed; what
+// changed is that there is now something between it and the diff that gets
+// opened far more often, and a tab strip that does not put those together
+// makes the common move the longer one.
 //
 // ── why the panels take an argument now ──────────────────────────────────
 //
@@ -75,10 +82,10 @@ const panels: ReadonlyArray<Panel> = [
       <Diff dir={dir} project={project} workspace={workspace} scheme={scheme} />
     ),
   },
-  { id: "jobs", label: "jobs", render: () => <Jobs /> },
   // Takes no context, for now. A default address per workspace is the obvious
   // next thing and is deliberately not guessed at — see `rememberedPage`.
   { id: "web", label: "web", render: () => <Web /> },
+  { id: "jobs", label: "jobs", render: () => <Jobs /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
 ];
 
