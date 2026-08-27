@@ -1,5 +1,5 @@
 import type { Job } from "@awp-kit/jobs";
-import type { SessionInfo } from "@awp-kit/protocol";
+import type { SessionInfo, WorkspaceFacts } from "@awp-kit/protocol";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
 import { AppearanceToggle } from "./Appearance";
@@ -118,7 +118,10 @@ const styles = stylex.create({
     borderTopColor: colors.border,
   },
   spacer: { flex: 1 },
-  strong: { color: colors.text },
+  // The window's subject. The only thing in the chrome at `title` weight, on
+  // the principle that a screen has one subject and everything else is about
+  // it — a second strong thing makes neither one strong.
+  strong: { color: colors.text, fontSize: text.title, fontWeight: text.medium },
   live: { color: colors.live },
   warn: { color: colors.warn },
   // Truncation goes on the one field that can be arbitrarily long. Everything
@@ -167,14 +170,33 @@ const styles = stylex.create({
  * `awp.thicket.effect-ts-tiered-discou-f500.agent` — and the shortening that
  * makes it fit is exactly what makes it unreadable. `identity` is the
  * unshortened truth and is on the wire for this reason.
+ *
+ * ── and the display name rather than the slug ──────────────────────────────
+ *
+ * The unshortened truth was still three slugs — `effect-ts-tiered-discount-
+ * timemachine · thicket · agent` — which is an address written out in full
+ * rather than a title. The title bar of a window says what the window is
+ * about, and what this window is about is a piece of work somebody described
+ * in a sentence.
+ *
+ *   before   effect-ts-tiered-discount-timemachine · thicket · agent
+ *   after    tiered discount timemachine            thicket · agent
+ *
+ * The slug does not move down here the way it does on a sidebar row. A row is
+ * a list entry and the slug is how you find the directory; a title bar is one
+ * line about one thing, and adding the address back would make it the same
+ * three slugs with a sentence in front.
  */
 export function TopBar({
   session,
+  facts,
   connected,
   collapsed,
   onFold,
 }: {
   readonly session: SessionInfo | undefined;
+  /** What is known about the open session's workspace, if anything is. */
+  readonly facts: WorkspaceFacts | undefined;
   readonly connected: boolean;
   readonly collapsed: Collapsed;
   readonly onFold: (which: keyof Collapsed) => void;
@@ -187,7 +209,10 @@ export function TopBar({
         ) : (
           <>
             <span {...stylex.props(styles.strong, styles.name)}>
-              {session.identity?.workspace ?? session.name}
+              {facts?.displayName ??
+                session.identity?.label ??
+                session.identity?.workspace ??
+                session.name}
             </span>
             {session.identity !== undefined && <span>{session.identity.project}</span>}
             <span>{session.identity?.kind}</span>

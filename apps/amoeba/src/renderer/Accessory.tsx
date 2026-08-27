@@ -110,14 +110,21 @@ const styles = stylex.create({
     padding: "0.45rem 0.5rem",
   },
   tab: {
-    padding: "0.25rem 0.6rem",
+    padding: "0.2rem 0.55rem",
     backgroundColor: "transparent",
     borderStyle: "none",
-    borderRadius: "0.2rem",
+    borderRadius: "0.25rem",
     color: colors.muted,
     font: "inherit",
     fontSize: text.small,
+    fontWeight: text.medium,
     cursor: "pointer",
+    // A tab that does nothing on hover reads as a label. The window is full of
+    // words; the ones that respond to a pointer have to say so before it
+    // arrives, not after it clicks.
+    transitionProperty: "background-color, color",
+    transitionDuration: "100ms",
+    ":hover": { color: colors.text },
     // A tab is a control, not prose. Without this a double-click to switch
     // tabs selects the word instead, and a drag across the strip leaves three
     // labels highlighted — which reads as the window being in a text mode it
@@ -129,9 +136,13 @@ const styles = stylex.create({
     userSelect: "none",
     WebkitUserSelect: "none",
   },
+  // The selected tab: a fill it can be read on, and the accent as the *text*
+  // rather than as the fill. One of the two places in the window the accent is
+  // spent — the other is the selected sidebar row's edge — and both answer the
+  // same question, which is "this, here".
   tabOn: {
-    backgroundColor: colors.border,
-    color: colors.text,
+    backgroundColor: colors.raised,
+    color: colors.accent,
   },
   // The panel scrolls, not the column and certainly not the window.
   panel: { flex: 1, minHeight: 0, overflowY: "auto" },

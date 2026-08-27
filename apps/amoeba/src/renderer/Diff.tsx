@@ -220,7 +220,7 @@ const styles = stylex.create({
     borderStyle: "none",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.tiny,
+    fontSize: text.small,
     textAlign: "start",
     cursor: "pointer",
   },
@@ -294,7 +294,7 @@ const styles = stylex.create({
     flexShrink: 0,
     padding: "0.3rem 0.6rem",
     color: colors.muted,
-    fontSize: text.tiny,
+    fontSize: text.small,
   },
   // `overflow: hidden` and not just `minWidth: 0`. A flex item will not shrink
   // below its content, so `flex: 1` alone lets "17 files +1348 −171" push the
@@ -326,7 +326,7 @@ const styles = stylex.create({
     borderRadius: "0.2rem",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.tiny,
+    fontSize: text.small,
     cursor: "pointer",
   },
   // A button whose whole content is a glyph. Two arrows meeting, and two
@@ -452,11 +452,11 @@ const styles = stylex.create({
   draft: { borderLeftColor: colors.live },
   noteRow: { display: "flex", alignItems: "baseline", gap: "0.4rem" },
   noteBody: { flex: 1, minWidth: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
-  noteWhen: { flexShrink: 0, color: colors.muted, fontSize: text.tiny },
+  noteWhen: { flexShrink: 0, color: colors.muted, fontSize: text.small },
   noteWhere: {
     flexShrink: 0,
     color: colors.muted,
-    fontSize: text.tiny,
+    fontSize: text.small,
     fontVariantNumeric: "tabular-nums",
   },
   write: {
@@ -473,7 +473,7 @@ const styles = stylex.create({
     fontSize: text.small,
     resize: "vertical",
   },
-  hint: { color: colors.muted, fontSize: text.tiny },
+  hint: { color: colors.muted, fontSize: text.small },
 
   said: { padding: "0.5rem 0.6rem", color: colors.muted, fontSize: text.small },
   warn: { color: colors.warn },

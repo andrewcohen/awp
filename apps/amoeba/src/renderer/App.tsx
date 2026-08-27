@@ -25,7 +25,7 @@ import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
 import { useConnection } from "./useConnection";
 import { useSessions } from "./useSessions";
-import { useFacts } from "./useFacts";
+import { factsKey, useFacts } from "./useFacts";
 import { useProjects } from "./useProjects";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
@@ -50,7 +50,11 @@ const styles = stylex.create({
     height: "100%",
     backgroundColor: colors.base,
     color: colors.text,
-    fontFamily: text.mono,
+    // The window's default face, inherited by everything that does not ask
+    // for otherwise — which after this is most of it. What still asks is the
+    // pane, and the fields that hold an address: a slug, a bookmark, a
+    // revision, a path. See the note on `text.mono`.
+    fontFamily: text.ui,
     fontSize: text.body,
   },
   // The one row that flexes. `minHeight: 0` so it can be shorter than its
@@ -293,6 +297,11 @@ export function App() {
     <div {...stylex.props(themeFor(appearance), styles.window)}>
       <TopBar
         session={open}
+        facts={
+          open?.identity === undefined
+            ? undefined
+            : facts.get(factsKey(open.identity.project, open.identity.workspace))
+        }
         connected={connected}
         collapsed={collapsed}
         onFold={(which) => fold(which)()}

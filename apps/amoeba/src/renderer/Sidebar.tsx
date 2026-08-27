@@ -128,6 +128,19 @@ const styles = stylex.create({
     gap: "0.4rem",
     padding: `0.15rem ${space.gutter}`,
   },
+  // A section header, and dressed as one by weight and spacing — not by
+  // colour.
+  //
+  // It was the accent for a while, and that was the accent being spent rather
+  // than used: an orange on every heading down the strip is a second body
+  // colour, and then nothing is left to mark the one row that matters. The
+  // accent is now on exactly two things, both of which answer "this, here" —
+  // the selected row's edge and the selected tab.
+  //
+  // Not `text-transform: uppercase`, because a thread title is a person's own
+  // sentence and shouting it back at them is a different thing from labelling
+  // a section. The weight and the spacing do the structural work; the words
+  // stay as they were typed.
   threadName: {
     flex: 1,
     minWidth: 0,
@@ -136,8 +149,10 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
     color: colors.text,
     fontSize: text.small,
+    fontWeight: text.strong,
+    letterSpacing: "0.03em",
   },
-  loose: { color: colors.muted },
+  loose: { color: colors.muted, fontWeight: text.medium, letterSpacing: "normal" },
   headingButton: {
     width: "100%",
     borderStyle: "none",
@@ -146,10 +161,10 @@ const styles = stylex.create({
     textAlign: "left",
     cursor: "pointer",
   },
-  caret: { flexShrink: 0, width: "0.7rem", fontSize: text.tiny, color: colors.muted },
+  caret: { flexShrink: 0, width: "0.7rem", fontSize: text.small, color: colors.muted },
   // How much is behind the fold. A disclosure that will not say how much it is
   // hiding is one nobody opens.
-  count: { flexShrink: 0, fontSize: text.tiny, color: colors.muted },
+  count: { flexShrink: 0, fontSize: text.small, color: colors.muted },
   plus: {
     flexShrink: 0,
     padding: "0 0.3rem",
@@ -228,7 +243,21 @@ const styles = stylex.create({
     textAlign: "left",
     cursor: "pointer",
   },
-  rowOn: { backgroundColor: colors.border },
+  // The selected row: a fill *and* an edge, and the edge is the accent.
+  //
+  // A fill alone was the whole mark, in the same value as every rule in the
+  // window — so "selected" and "there is a divider here" were the same colour,
+  // and the row a person is looking at was the least distinguished thing on
+  // the strip. The bar is the mark; the fill is what makes it read as a row
+  // rather than as a line beside one.
+  //
+  // Inset with a box shadow rather than a border, so gaining it does not move
+  // the row's contents by a pixel — which a real border would, on the one row
+  // whose position a person is tracking.
+  rowOn: {
+    backgroundColor: colors.raised,
+    boxShadow: `inset 2px 0 0 ${colors.accent}`,
+  },
 
   // Line one is a button and line two is not, which is why the padding lives on
   // the row: a button carrying it would put the band on one line of two.
@@ -253,6 +282,11 @@ const styles = stylex.create({
     backgroundColor: "transparent",
     color: colors.text,
     font: "inherit",
+    fontSize: text.lead,
+    // The one weight change that does most of the work. A name and the caption
+    // under it were the same size and the same weight, so the only thing
+    // separating them was a colour that was itself failing contrast.
+    fontWeight: text.medium,
     textAlign: "left",
     cursor: "pointer",
   },
@@ -295,7 +329,7 @@ const styles = stylex.create({
     alignItems: "baseline",
     gap: "0.35rem",
     paddingInlineStart: "1.25rem",
-    fontSize: text.tiny,
+    fontSize: text.small,
     color: colors.muted,
     lineHeight: 1.5,
     overflow: "hidden",
@@ -303,7 +337,12 @@ const styles = stylex.create({
   ident: { flexShrink: 0 },
   // The pull request number, in the accent. It is the one thing on line two
   // that points somewhere outside this window, and the hue is what says so.
-  pr: { flexShrink: 0, color: colors.accent },
+  // The pull request number keeps the accent, and it is the exception that
+  // shows the rule: it is the one thing on the strip that points somewhere
+  // outside this window, which is a different kind of fact from everything
+  // beside it. One use, on a handful of rows, is an accent. On every heading
+  // it was a palette.
+  pr: { flexShrink: 0, color: colors.accent, fontFamily: text.mono },
   // Where the work is in the configured dev loop. Never truncated — `impl…`
   // says nothing that `implement` does not, and the whole word is nine
   // characters.
@@ -311,7 +350,15 @@ const styles = stylex.create({
   // The one thing on line two allowed to truncate. A project name is short and
   // a kind is shorter; a slug is the long one, and it is also the one whose
   // beginning carries the information.
-  slug: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  // Monospace, because it is an address — a directory to `cd` into and half a
+  // bookmark to push. The name above it is prose and is not.
+  slug: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontFamily: text.mono,
+  },
   // The separator, not a word. Present so the two halves of the line do not run
   // together, muted so it is not one of them.
   sep: { flexShrink: 0, opacity: 0.5 },
@@ -322,7 +369,7 @@ const styles = stylex.create({
     backgroundColor: "transparent",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.tiny,
+    fontSize: text.small,
     cursor: "inherit",
     whiteSpace: "nowrap",
   },
