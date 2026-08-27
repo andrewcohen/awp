@@ -5,7 +5,7 @@ import { Context, Effect, Layer } from "effect";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
-import type { WorkspaceIntent } from "../intent";
+import { IntentError, type WorkspaceIntent } from "../intent";
 import type { Settings } from "../settings";
 import type { Threads } from "../threads";
 import {
@@ -96,8 +96,14 @@ const deps = (): WorkspaceDeps => ({
   // already, so it short-circuits and neither is touched — which is both the
   // resume path and what keeps these tests about the order of the steps.
   intent: {
+    // Fails with a real `IntentError` rather than the plain object `act`
+    // raises, because the step catches it *by tag*. A fake that failed with
+    // something else would prove the fallback works against an error the real
+    // service cannot produce — and would go on passing if the tag were
+    // renamed.
     resolve: (description: string) =>
       act(`intent(${description})`).pipe(
+        Effect.mapError(() => new IntentError({ reason: "claude is not there" })),
         Effect.as({ name: "named-by-the-model", label: "Named by the model", prompt: undefined }),
       ),
   } as unknown as WorkspaceIntent["Service"],
@@ -199,6 +205,39 @@ describe("naming the workspace", () => {
       label: "Named by the model",
       bookmark: "andrew/named-by-the-model",
     });
+  });
+
+  // ── the model being unreachable is not a reason to lose the work ──────
+  //
+  // A subprocess, twelve seconds and a network, any of which can be missing.
+  // What was asked for is a workspace, and refusing the whole job because the
+  // caption could not be composed loses the work over the label on it.
+  test("a workspace is still made when the model cannot be reached", async () => {
+    breaking.add("intent(add tiered discounts to checkout)");
+
+    const job = await make({
+      workspace: undefined,
+      label: undefined,
+      prompt: undefined,
+      bookmark: undefined,
+    });
+
+    expect(job.status).toBe("succeeded");
+    // Named from the words the person typed — four of them, made into a path
+    // segment. Not a second namer: what the model adds is reading the
+    // sentence, and this does not pretend to.
+    expect(job.input).toMatchObject({
+      workspace: "add-tiered-discounts-to",
+      label: "add tiered discounts to checkout",
+      bookmark: "andrew/add-tiered-discounts-to",
+    });
+    // And the later steps built on it, which is the part that would break if
+    // the patch were merged anywhere other than the stored input.
+    expect(trace).toContain("jj.add(add-tiered-discounts-to)");
+    expect(trace).toContain("thread.claim(20260826-aaaa:add-tiered-discounts-to)");
+    // Nothing was rolled back. A job that failed here would have unwound the
+    // thread it was building for.
+    expect(trace.filter((entry) => entry.startsWith("thread.delete("))).toEqual([]);
   });
 
   // Ten seconds and a second, different answer is what the alternative costs,

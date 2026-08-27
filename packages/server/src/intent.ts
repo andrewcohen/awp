@@ -49,6 +49,55 @@ export const Intent = Schema.Struct({
 
 export type Intent = (typeof Intent)["Type"];
 
+/**
+ * A name made here, for when the model cannot be reached.
+ *
+ * ── why there is a fallback at all ─────────────────────────────────────────
+ *
+ * The naming call is a subprocess that runs `claude`, takes about twelve
+ * seconds, and needs a network. Every one of those can be missing — on a
+ * train, behind a captive portal, while the vendor is having a bad afternoon —
+ * and what a person asked for was a workspace, not a name. Refusing the whole
+ * job because the *label* could not be composed loses the work over the
+ * caption on it.
+ *
+ * ── what it is not ────────────────────────────────────────────────────────
+ *
+ * Not a second namer competing with the model. It takes the words a person
+ * already typed and makes them into a directory name, which is the mechanical
+ * part of the job; what the model adds is reading the sentence, and nothing
+ * here pretends to.
+ *
+ *   "add tiered discounts to checkout"  →  add-tiered-discounts
+ *   "fix the 500 on /api/orders"        →  fix-the-500-on-api
+ *   "   "                               →  workspace
+ *
+ * Four words, because a workspace name is a path segment and part of a session
+ * name, and the shortening that makes a long one fit is what makes it
+ * unreadable. The label keeps the whole sentence — a label has room.
+ *
+ * Deterministic, and that matters more than it looks: the job step is safe to
+ * run twice, so a retry after a failed later step must produce the same name
+ * rather than a second workspace beside the first.
+ */
+export const nameFrom = (description: string): Intent => {
+  const words = description
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((word) => word !== "")
+    .slice(0, 4);
+
+  const label = description.trim();
+  return {
+    // A sentence of nothing but punctuation leaves no words, and a workspace
+    // has to be called something. `workspace` rather than a random string,
+    // because the second time it happens the collision is the useful signal.
+    name: words.length === 0 ? "workspace" : words.join("-"),
+    label: label === "" ? "workspace" : label,
+    prompt: description,
+  };
+};
+
 export class WorkspaceIntent extends Context.Service<
   WorkspaceIntent,
   {

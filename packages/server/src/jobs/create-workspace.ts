@@ -8,7 +8,7 @@ import type { Multiplexer } from "../multiplexer";
 import { identityLabels, sessionName } from "../naming";
 import type { Settings } from "../settings";
 import type { Threads } from "../threads";
-import type { WorkspaceIntent } from "../intent";
+import { type WorkspaceIntent, nameFrom } from "../intent";
 
 // Making a workspace: the first job that does anything.
 //
@@ -227,9 +227,34 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         }
 
         yield* context.log("asking for a name");
-        const resolved = yield* intent
-          .resolve(input.description, input.project)
-          .pipe(Effect.mapError(refused("could not name the workspace")));
+        // ── the model is asked, and is allowed to be unreachable ─────────
+        //
+        // The naming call runs `claude`, takes about twelve seconds and needs
+        // a network, and every one of those can be missing. What a person
+        // asked for was a workspace, and refusing the whole job because the
+        // *caption* could not be composed loses the work over the label on it.
+        //
+        // This job has one attempt, deliberately — every other failure it has
+        // is a refusal that will not pass on its own. A failure here is the
+        // one that might, and it is also the one nothing is lost by working
+        // around, so it does not consume the attempt either way.
+        //
+        // The fallback is not a second namer. It makes the words a person
+        // already typed into a directory name; what the model adds is reading
+        // the sentence, and `nameFrom` does not pretend to.
+        const resolved = yield* intent.resolve(input.description, input.project).pipe(
+          Effect.catchTag("IntentError", (error) =>
+            Effect.gen(function* () {
+              const made = nameFrom(input.description);
+              // Said out loud, at the moment it happens, in the panel already
+              // open. A name that quietly differs from the one a person would
+              // have got is a name they have to work out the provenance of.
+              yield* context.log(`could not reach the model (${error.reason})`);
+              yield* context.log(`naming it ${made.name} from the description instead`);
+              return made;
+            }),
+          ),
+        );
 
         const config = yield* settings.read();
         const patch = {
