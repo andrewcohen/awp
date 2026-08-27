@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test } from "vitest";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
 import { IntentError, type WorkspaceIntent } from "../intent";
+import type { Bootstrap } from "../bootstrap";
 import type { Settings } from "../settings";
 import type { Threads } from "../threads";
 import {
@@ -34,11 +35,14 @@ let trace: Array<string> = [];
 let breaking: Set<string> = new Set();
 /** Paths `exists` should answer yes for. */
 let present: Set<string> = new Set();
+/** What the config file says to run in a new workspace. */
+let hooks: ReadonlyArray<string> = [];
 
 beforeEach(() => {
   trace = [];
   breaking = new Set();
   present = new Set();
+  hooks = [];
 });
 
 const act = (what: string): Effect.Effect<void, { readonly reason: string }> =>
@@ -109,8 +113,22 @@ const deps = (): WorkspaceDeps => ({
   } as unknown as WorkspaceIntent["Service"],
 
   settings: {
-    read: () => Effect.succeed({ agent: ["claude"], bookmarkPrefix: "andrew", problem: undefined }),
+    read: () =>
+      Effect.succeed({
+        agent: ["claude"],
+        bootstrap: hooks,
+        bookmarkPrefix: "andrew",
+        problem: undefined,
+      }),
   } as unknown as Settings["Service"],
+
+  // The hook runner. Traced by command rather than by step name, because what
+  // this fake exists to show is that the *configured lines* ran, in order, in
+  // the workspace — a step-shaped trace entry would pass whatever it ran.
+  run: {
+    run: ({ command, cwd }: { readonly command: string; readonly cwd: string }) =>
+      act(`hook(${command}@${cwd.split("/").slice(-2).join("/")})`).pipe(Effect.as("")),
+  } as unknown as Bootstrap["Service"],
 });
 
 const input = (over: Partial<CreateWorkspace> = {}): CreateWorkspace => ({
@@ -308,6 +326,7 @@ describe("making a workspace", () => {
       "workspace",
       "bookmark",
       "session",
+      "bootstrap",
       "claim",
       "brief",
     ]);
@@ -415,5 +434,70 @@ describe("where a workspace goes", () => {
     // exactly this shape when a session carries no labels. Changing it here
     // would quietly break that.
     expect(workspacePath("rowan", "discounts")).toMatch(/\/\.awp\/workspaces\/rowan\/discounts$/u);
+  });
+});
+
+describe("bootstrap hooks", () => {
+  test("run in order, in the workspace, after the session and before the brief", async () => {
+    // The placement is the decision worth pinning. After the session, so there
+    // is something on screen while `bun install` takes its minutes; before the
+    // brief, because briefing an agent into a workspace with no dependencies
+    // installed asks it to discover and fix that itself — which is the whole
+    // thing hooks exist to stop.
+    hooks = ["bun install", "cp .env.example .env"];
+
+    await make();
+
+    const at = (what: string) => trace.indexOf(what);
+    expect(at("zmx.start(awp.rowan.tiered-discounts.agent)")).toBeLessThan(
+      at("hook(bun install@rowan/tiered-discounts)"),
+    );
+    expect(at("hook(bun install@rowan/tiered-discounts)")).toBeLessThan(
+      at("hook(cp .env.example .env@rowan/tiered-discounts)"),
+    );
+    expect(at("hook(cp .env.example .env@rowan/tiered-discounts)")).toBeLessThan(
+      at("zmx.send(awp.rowan.tiered-discounts.agent)"),
+    );
+  });
+
+  test("none configured runs nothing at all", async () => {
+    // And the step still exists — see the step-list test above. A list that
+    // varied by configuration is a list a restarted daemon could not reproduce.
+    await make();
+
+    expect(trace.filter((one) => one.startsWith("hook("))).toEqual([]);
+  });
+
+  test("a hook that fails takes the whole workspace back", async () => {
+    // The alternative was logging it and carrying on, which produces a
+    // workspace that reports success and does not work — and the person finds
+    // out from the agent, several minutes later, in a message about something
+    // else. A refusal here rolls back to nothing, which is a state somebody can
+    // act on.
+    hooks = ["bun install"];
+    breaking.add("hook(bun install@rowan/tiered-discounts)");
+
+    const job = await make();
+
+    expect(job.status).toBe("failed");
+    // Undone backwards, and the session it had already started is killed.
+    expect(trace).toContain("zmx.kill(awp.rowan.tiered-discounts.agent)");
+    expect(trace).toContain("jj.forget(tiered-discounts)");
+    // The claim never happened, so there is nothing to release — the hook runs
+    // before it, which is what stops a half-built workspace reaching the
+    // sidebar at all.
+    expect(trace).not.toContain("thread.claim(20260826-aaaa:tiered-discounts)");
+  });
+
+  test("a later hook does not run once one has failed", async () => {
+    // Each hook may depend on the one before it — install, then build — so
+    // carrying on past a failure runs a command against a state its author
+    // never considered.
+    hooks = ["first", "second"];
+    breaking.add("hook(first@rowan/tiered-discounts)");
+
+    await make();
+
+    expect(trace).not.toContain("hook(second@rowan/tiered-discounts)");
   });
 });

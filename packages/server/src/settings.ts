@@ -30,6 +30,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 /** The file, as much of it as is read. Unknown keys are ignored. */
 const File = Schema.Struct({
   agent: Schema.optional(Schema.String),
+  bootstrap: Schema.optional(Schema.Array(Schema.String)),
   deck: Schema.optional(Schema.Struct({ bookmark_prefix: Schema.optional(Schema.String) })),
 });
 
@@ -51,6 +52,18 @@ export interface AwpSettings {
    * and silently creating one is worse than creating none.
    */
   readonly bookmarkPrefix: string | undefined;
+  /**
+   * What to run in a new workspace, in order, before its agent is briefed.
+   *
+   * Whole shell lines rather than argv, unlike {@link agent} — a hook is a line
+   * somebody writes in a config file and `bun install && bun run build` is its
+   * ordinary shape. See `bootstrap.ts` for the rest of that argument.
+   *
+   * Empty by default, and empty is a real answer: most repositories need
+   * nothing, and inventing a default here would run somebody's package manager
+   * without being asked.
+   */
+  readonly bootstrap: ReadonlyArray<string>;
   /** What went wrong reading the file, if anything. See above. */
   readonly problem: string | undefined;
 }
@@ -58,6 +71,7 @@ export interface AwpSettings {
 /** With no config at all. The agent is what awp has always launched. */
 export const DEFAULTS: AwpSettings = {
   agent: ["claude"],
+  bootstrap: [],
   bookmarkPrefix: undefined,
   problem: undefined,
 };
@@ -75,6 +89,10 @@ const parse = (text: string): AwpSettings => {
   const prefix = (decoded.deck?.bookmark_prefix ?? "").trim();
   return {
     agent: agent === "" ? DEFAULTS.agent : agent.split(/\s+/u),
+    // Blank lines dropped. A config file people edit by hand accumulates them,
+    // and `sh -c ""` succeeds silently — so keeping them would put a step in
+    // the log that says nothing and did nothing.
+    bootstrap: (decoded.bootstrap ?? []).map((one) => one.trim()).filter((one) => one !== ""),
     bookmarkPrefix: prefix === "" ? undefined : prefix,
     problem: undefined,
   };
