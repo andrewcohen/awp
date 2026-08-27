@@ -1,4 +1,4 @@
-import type { SessionInfo, Thread } from "@awp-kit/protocol";
+import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
 
 // The sidebar lists workspaces. zmx lists sessions. This is the difference.
 //
@@ -227,26 +227,75 @@ const claimant = (threads: ReadonlyArray<Thread>, workspace: Workspace): Thread 
 };
 
 /**
- * Workspaces, as the threads that claimed them.
+ * How long a thread with no workspace in it is still worth a row.
  *
- * Every thread appears, including one that has claimed nothing — a thread made
- * a moment ago with no workspace in it yet is the single most important row on
- * the strip, because it is the one waiting to be filled.
+ * A thread is created before the job that fills it, so for the length of that
+ * job it is genuinely the most important row on the strip — the one waiting to
+ * be filled. After the job has failed and rolled back, it is litter.
+ *
+ * A window rather than a lookup into the job records, and the trade is
+ * deliberate: the job knows exactly, but a sidebar that had to join threads to
+ * jobs to decide what to draw would be a second place the two systems meet, and
+ * this one is self-healing. Generous, because a create job that is installing
+ * dependencies takes minutes.
+ */
+const PENDING_FOR = 10 * 60 * 1000;
+
+/** Ordered as attention is spent: what needs you, then what is running. */
+const STATE_ORDER: Record<WorkspaceStatus, number> = {
+  error: 0,
+  waiting: 1,
+  working: 2,
+  idle: 3,
+  exited: 4,
+};
+
+/**
+ * Where a workspace sits in the order, unknown last.
+ *
+ * Unknown is not "idle". A workspace whose status nothing has ever reported is
+ * a different thing from one an agent has finished in, and sorting them
+ * together would put a row that has never run above one that is waiting to be
+ * read.
+ */
+const stateRank = (status: WorkspaceStatus | undefined): number =>
+  status === undefined ? 5 : STATE_ORDER[status];
+
+/**
+ * Workspaces, as the threads that claimed them.
  *
  * Archived threads are dropped. They are still on the wire, because the record
  * that a set of workspaces were once one job is worth more after the fact than
  * during; they are simply not what the sidebar is for.
  *
+ * **A thread that has claimed nothing is dropped too, unless it is new.** That
+ * reversed an earlier rule, and the measurement is why: twenty-one threads on
+ * this machine, three holding a workspace, so eighteen headers with nothing
+ * under them sat above one bucket holding twenty-five rows. The old rule was
+ * right about a thread being filled *right now* and wrong about every thread
+ * left behind by a job that failed last week. See {@link PENDING_FOR}.
+ *
  * Everything unclaimed goes in one group at the end, and **nothing is guessed
  * into a thread**. That is the same rule `identities` follows for a workspace
  * whose sessions carry no labels: a group that is honestly unknown beats a
  * group that is confidently wrong.
+ *
+ * @param status  what each workspace's agent is doing, keyed `project/workspace`.
+ *                Only the unclaimed group is sorted by it — inside a thread the
+ *                order is the thread's own, which is a person's arrangement of
+ *                their work and not something to reorder underneath them.
  */
 export const groupByThread = (
   threads: ReadonlyArray<Thread>,
   workspaces: ReadonlyArray<Workspace>,
+  status: (workspace: Workspace) => WorkspaceStatus | undefined = () => undefined,
+  now: number = Date.now(),
 ): ReadonlyArray<ThreadGroup> => {
-  const live = threads.filter((thread) => thread.archivedAt === undefined);
+  const live = threads.filter(
+    (thread) =>
+      thread.archivedAt === undefined &&
+      (thread.members.length > 0 || now - thread.createdAt.getTime() < PENDING_FOR),
+  );
   const claimed = new Map<string, Workspace[]>();
   const loose: Workspace[] = [];
 
@@ -273,10 +322,18 @@ export const groupByThread = (
     (a, b) => (b.thread?.createdAt.getTime() ?? 0) - (a.thread?.createdAt.getTime() ?? 0),
   );
 
-  return loose.length === 0
+  // Sorted by what needs attention, and only here. A thread's own workspaces
+  // stay in the order it holds them; this bucket is not an arrangement anybody
+  // made, so there is nothing to preserve and every reason to put the row that
+  // is waiting for a person at the top of it.
+  const sorted = loose.toSorted(
+    (a, b) => stateRank(status(a)) - stateRank(status(b)) || newestFirst(a, b),
+  );
+
+  return sorted.length === 0
     ? groups
     : [
         ...groups,
-        { key: "\u0000loose", title: "not in a thread", thread: undefined, workspaces: loose },
+        { key: "\u0000loose", title: "not in a thread", thread: undefined, workspaces: sorted },
       ];
 };

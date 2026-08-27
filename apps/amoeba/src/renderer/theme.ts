@@ -48,6 +48,9 @@ const latteChrome: Record<ChromeRole, string> = {
   border: hue.latteBorder,
   live: hue.latteLive,
   warn: hue.latteWarn,
+  accent: hue.latteAccent,
+  waiting: hue.latteWaiting,
+  ready: hue.latteReady,
 };
 
 const macchiatoChrome: Record<ChromeRole, string> = {
@@ -57,6 +60,9 @@ const macchiatoChrome: Record<ChromeRole, string> = {
   border: hue.macchiatoBorder,
   live: hue.macchiatoLive,
   warn: hue.macchiatoWarn,
+  accent: hue.macchiatoAccent,
+  waiting: hue.macchiatoWaiting,
+  ready: hue.macchiatoReady,
 };
 
 /**

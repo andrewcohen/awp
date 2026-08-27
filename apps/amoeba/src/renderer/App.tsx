@@ -25,6 +25,7 @@ import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
 import { useConnection } from "./useConnection";
 import { useSessions } from "./useSessions";
+import { useFacts } from "./useFacts";
 import { useProjects } from "./useProjects";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
@@ -197,6 +198,7 @@ export function App() {
   // the window. Two owners of the same list is two lists.
   const { threads, reload: reloadThreads } = useThreads();
   const { projects, reload: reloadProjects } = useProjects();
+  const facts = useFacts();
 
   // What is open: the session the address names, if it is here and can be
   // attached to. Derived, never written back — see `sessionAt`.
@@ -308,6 +310,7 @@ export function App() {
           <Boundary where="the sidebar">
             <Sidebar
               sessions={sessions}
+              facts={facts}
               selected={open?.name}
               onSelect={(session) => {
                 void navigate({ to: pathOf(addressOf(session)) });

@@ -1,7 +1,8 @@
-import type { SessionInfo, Thread } from "@awp-kit/protocol";
+import type { SessionInfo, Thread, WorkspaceFacts, WorkspaceStatus } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
 import { MoveToThread } from "./MoveToThread";
+import { type Facts, factsKey } from "./useFacts";
 import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
 import { colors, space, text } from "./tokens.stylex";
 import {
@@ -12,6 +13,18 @@ import {
   groupByWorkspace,
   openable,
 } from "./workspaces";
+
+/**
+ * What is known about a workspace, if anything is.
+ *
+ * A workspace with no session carrying an identity has no key to look up —
+ * which is every session someone else started, and is why this can answer
+ * undefined rather than taking the two halves as arguments.
+ */
+const factsFor = (facts: Facts, workspace: Workspace): WorkspaceFacts | undefined => {
+  const id = workspace.sessions[0]?.identity;
+  return id === undefined ? undefined : facts.get(factsKey(id.project, id.workspace));
+};
 
 // The list of workspaces, and which of them can be opened.
 //
@@ -255,8 +268,27 @@ const styles = stylex.create({
   // A bullet rather than text, so it is sized by eye against the row's name
   // rather than from the type scale — but it still has to move when that scale
   // does, which is why this number changed with it.
-  dot: { width: "0.85rem", flexShrink: 0, fontSize: 10, color: colors.live },
-  dotOff: { color: colors.muted },
+  dot: { width: "0.85rem", flexShrink: 0, fontSize: 10, color: colors.muted },
+  // One per state, and named for the state rather than the colour so a theme
+  // can move them. `exited` deliberately has none: a session that ended is what
+  // the muted default already says, and giving it a hue would put a colour on
+  // the strip for the one thing nobody needs to look at.
+  dotWorking: { color: colors.live },
+  dotWaiting: { color: colors.waiting },
+  dotError: { color: colors.warn },
+  dotIdle: { color: colors.muted },
+  // A workspace nothing has reported on, with an unread mark. There is a state
+  // to draw and no hue for it, so the unread colour is the whole signal — which
+  // is the only case it may be, and the reason this is not applied over a known
+  // status. The first version did apply it over one, and the measurement said
+  // so before a screenshot could have:
+  //
+  //   "working, unread"   rgb(138, 173, 244)   ← the ready blue, not the green
+  //
+  // Two facts on one mark only works if they use different channels. Colouring
+  // by unread spends the channel the state was using and leaves a strip where
+  // every row that needs attention is the same colour whatever it needs.
+  dotUnknownUnread: { color: colors.ready },
 
   meta: {
     display: "flex",
@@ -269,6 +301,13 @@ const styles = stylex.create({
     overflow: "hidden",
   },
   ident: { flexShrink: 0 },
+  // The pull request number, in the accent. It is the one thing on line two
+  // that points somewhere outside this window, and the hue is what says so.
+  pr: { flexShrink: 0, color: colors.accent },
+  // Where the work is in the configured dev loop. Never truncated — `impl…`
+  // says nothing that `implement` does not, and the whole word is nine
+  // characters.
+  phase: { flexShrink: 0, whiteSpace: "nowrap" },
   // The one thing on line two allowed to truncate. A project name is short and
   // a kind is shorter; a slug is the long one, and it is also the one whose
   // beginning carries the information.
@@ -292,11 +331,59 @@ const styles = stylex.create({
   reason: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 });
 
-const Dot = ({ live }: { readonly live: boolean }) => (
-  <span aria-hidden {...stylex.props(styles.dot, !live && styles.dotOff)}>
-    ●
-  </span>
-);
+/**
+ * The glyph for a state, and the state's own name for a screen reader.
+ *
+ * Two facts on one mark: the *hue* is the state, and the *shape* is whether it
+ * has been read. That pairing is deliberate — a colour alone excludes anyone
+ * who cannot see the difference between the amber and the green, and a shape
+ * alone would need five of them, which is a legend nobody has.
+ *
+ *   ● working · idle · exited      seen
+ *   ◉ waiting · error, unread      not seen, and drawn as a ring so it is
+ *                                  distinguishable without the hue
+ */
+const GLYPH = { seen: "●", unseen: "◉" } as const;
+
+const DOT: Record<WorkspaceStatus, { readonly style: stylex.StyleXStyles; readonly say: string }> =
+  {
+    working: { style: styles.dotWorking, say: "working" },
+    waiting: { style: styles.dotWaiting, say: "waiting for you" },
+    error: { style: styles.dotError, say: "error" },
+    idle: { style: styles.dotIdle, say: "idle" },
+    exited: { style: styles.dotIdle, say: "exited" },
+  };
+
+const Dot = ({
+  live,
+  status,
+  unread,
+}: {
+  /** A session is running, which is all this knew before facts existed. */
+  readonly live: boolean;
+  readonly status: WorkspaceStatus | undefined;
+  readonly unread: boolean;
+}) => {
+  // The fallback is not "idle". A workspace nothing has ever reported on is a
+  // different thing from one an agent has finished in, and drawing them alike
+  // would claim knowledge this does not have — so an unknown state keeps the
+  // one fact that is certain, which is whether anything is running.
+  const known = status === undefined ? undefined : DOT[status];
+  const style = known?.style ?? (live ? styles.dotWorking : styles.dotIdle);
+  const say = known?.say ?? (live ? "running" : "not running");
+
+  return (
+    <span
+      // The name, not the glyph. A screen reader reading "●" says "black
+      // circle", which is a description of the ink rather than of the row.
+      role="img"
+      aria-label={unread ? `${say}, unread` : say}
+      {...stylex.props(styles.dot, style, known === undefined && unread && styles.dotUnknownUnread)}
+    >
+      {unread ? GLYPH.unseen : GLYPH.seen}
+    </span>
+  );
+};
 
 /**
  * One workspace: its name, and whatever line one did not already say.
@@ -309,6 +396,7 @@ const Dot = ({ live }: { readonly live: boolean }) => (
  */
 function Row({
   workspace,
+  facts,
   selected,
   onSelect,
   threads,
@@ -316,6 +404,8 @@ function Row({
   onThreadsChanged,
 }: {
   readonly workspace: Workspace;
+  /** What is known about this workspace, or nothing has reported on it. */
+  readonly facts: WorkspaceFacts | undefined;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
   readonly threads: ReadonlyArray<Thread>;
@@ -356,7 +446,19 @@ function Row({
   // Only when they differ. Every workspace made before `awp_label` has no
   // label at all and falls back to the slug on line one — repeating it on line
   // two would give nearly every row today the same word twice.
-  const shown = workspace.label ?? workspace.name;
+  // Three sources, in the order they were meant.
+  //
+  //   facts.displayName   the Go implementation's, and nineteen workspaces on
+  //                       this machine have one
+  //   workspace.label     `awp_label`, which amoeba writes for what it makes
+  //   workspace.name      the slug, which every workspace has
+  //
+  // The Go one first and not last, which is the opposite of the obvious
+  // ranking. amoeba's own label is the better long-term home — it travels with
+  // the session and needs no second file — but a workspace with both got them
+  // from the same sentence, and a workspace with only one of them is the
+  // ordinary case either way. First is where the data actually is.
+  const shown = facts?.displayName ?? workspace.label ?? workspace.name;
   const slug = shown === workspace.name ? undefined : workspace.name;
 
   // Shown when worth showing, which is not whenever it exists. Eighteen of
@@ -394,7 +496,7 @@ function Row({
           onClick={() => primary !== undefined && onSelect(primary)}
           {...stylex.props(styles.title, primary === undefined && styles.titleShut)}
         >
-          <Dot live={live} />
+          <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
           <span {...stylex.props(styles.label)}>{shown}</span>
         </button>
         <MoveToThread
@@ -416,6 +518,33 @@ function Row({
               </span>
             )}
             {slug !== undefined && <span {...stylex.props(styles.slug)}>{slug}</span>}
+            {/* Fixed-width and first among the details, in that order for the
+                reason the two-line layout exists at all: a number and a phase
+                cannot truncate usefully, so they take their space and the slug
+                above takes what is left. */}
+            {facts?.pr !== undefined && (
+              <span {...stylex.props(styles.pr)} title={`pull request #${facts.pr}`}>
+                {`#${facts.pr}`}
+              </span>
+            )}
+            {facts?.phase !== undefined && (
+              <span
+                {...stylex.props(styles.phase)}
+                // Counted where there is a count. `3/7` beside `implement` is
+                // the difference between knowing the work is underway and
+                // knowing how far — and it is one of the few facts on this
+                // strip that changes while somebody watches it.
+                title={
+                  facts.done !== undefined && facts.total !== undefined
+                    ? `${facts.phase} · ${facts.done} of ${facts.total}`
+                    : facts.phase
+                }
+              >
+                {facts.done !== undefined && facts.total !== undefined
+                  ? `${facts.phase} ${facts.done}/${facts.total}`
+                  : facts.phase}
+              </span>
+            )}
             {(other !== "" || slug !== undefined) && listed.length > 0 && (
               <span aria-hidden {...stylex.props(styles.sep)}>
                 ·
@@ -469,6 +598,7 @@ function Row({
  */
 function Group({
   group,
+  facts,
   selected,
   onSelect,
   folded,
@@ -477,6 +607,7 @@ function Group({
   onThreadsChanged,
 }: {
   readonly group: ThreadGroup;
+  readonly facts: Facts;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
   readonly threads: ReadonlyArray<Thread>;
@@ -523,6 +654,7 @@ function Group({
             <div key={workspace.key} {...stylex.props(styles.nested)}>
               <Row
                 workspace={workspace}
+                facts={factsFor(facts, workspace)}
                 selected={selected}
                 onSelect={onSelect}
                 threads={threads}
@@ -577,6 +709,7 @@ const useStuck = (sentinel: { readonly current: HTMLElement | null }): boolean =
 
 export function Sidebar({
   sessions,
+  facts,
   threads,
   selected,
   onSelect,
@@ -585,6 +718,8 @@ export function Sidebar({
   failure,
 }: {
   readonly sessions: ReadonlyArray<SessionInfo>;
+  /** What each workspace's agent is doing. See useFacts. */
+  readonly facts: Facts;
   readonly threads: ReadonlyArray<Thread>;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
@@ -594,7 +729,11 @@ export function Sidebar({
   readonly onThreadsChanged: () => void;
   readonly failure: string | undefined;
 }) {
-  const groups = groupByThread(threads, groupByWorkspace(sessions));
+  const groups = groupByThread(
+    threads,
+    groupByWorkspace(sessions),
+    (workspace) => factsFor(facts, workspace)?.status,
+  );
   // What the menu may offer. An archived thread is not somewhere to put work,
   // and `groupByThread` drops them from the strip for the same reason.
   const live = threads.filter((thread) => thread.archivedAt === undefined);
@@ -615,6 +754,7 @@ export function Sidebar({
             <Group
               key={group.key}
               group={group}
+              facts={facts}
               selected={selected}
               onSelect={onSelect}
               threads={live}
