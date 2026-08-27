@@ -11,7 +11,7 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
-import { statOf, subjectOf } from "./patch";
+import { contentOf, statOf, subjectOf, versionOf } from "./patch";
 import {
   DEFAULT_SPLIT,
   rememberSplit,
@@ -149,19 +149,6 @@ type Note =
   | { readonly kind: "draft"; readonly line: number; readonly endLine: number };
 
 /**
- * A number that changes when the item does.
- *
- * `CodeViewItem.version` is what the library's cache is keyed on — its own type
- * says "make sure you bump the version when also changing the value" — and the
- * item now varies in more than one way: folded or not, and which comments are
- * anchored in it. A counter cannot express that, because the value has to be
- * derivable from the item during render rather than remembered between renders.
- *
- * FNV-1a over a string naming the state. Collisions are possible in principle
- * and cost a redraw that did not happen; the alternative, a version that fails
- * to change, costs a comment that does not appear.
- */
-/**
  * A selection, as the side and the two line numbers a comment is filed under.
  *
  * The one subtlety, and it is the reason this is a function rather than three
@@ -182,15 +169,6 @@ const spanOf = (
   const first = crossed ? range.end : Math.min(range.start, range.end);
   const last = crossed ? range.end : Math.max(range.start, range.end);
   return { side, line: first, endLine: last };
-};
-
-const versionOf = (state: string): number => {
-  let hash = 2166136261;
-  for (let index = 0; index < state.length; index += 1) {
-    hash ^= state.codePointAt(index) ?? 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
 };
 
 const styles = stylex.create({
@@ -815,21 +793,58 @@ export function Diff({
   const parsed = ((): ReadonlyArray<{
     readonly id: string;
     readonly type: "diff";
+    readonly content: number;
     readonly fileDiff: ReturnType<typeof parsePatchFiles>[number]["files"][number];
   }> => {
     if (patch === undefined || patch === "") {
       return [];
     }
     return parsePatchFiles(patch, at ?? WORKING_COPY).flatMap((one) =>
-      one.files.map((fileDiff, index) => ({
-        // The path and its position, because CodeView keys its items by id
-        // and a patch is allowed to carry the same path twice — a file split
-        // across two diff entries by a mode change is the ordinary way that
-        // happens. The path alone would silently drop the second.
-        id: `${fileDiff.name}-${index}`,
-        type: "diff" as const,
-        fileDiff,
-      })),
+      one.files.map((fileDiff, index) => {
+        // ── the cache key has to move when the file does ────────────────────
+        //
+        // The renderer decides whether two diffs are the same thing by their
+        // `cacheKey` — `areDiffTargetsEqual` is `a === b || a.cacheKey ===
+        // b.cacheKey` — and `parsePatchFiles` builds that key from position
+        // alone: `<prefix>-<patch index>-<file index>`. The prefix here was the
+        // revision, which is correct for a *committed* revision, because that
+        // is immutable, and wrong for the working copy, which is not.
+        //
+        // So a file that changed on disk came back under the key it already
+        // had. The worker's cached token stream for the previous content was
+        // handed to `processDiffResult` alongside hunks parsed from the new
+        // one, and the line arrays were then indexed past their ends:
+        //
+        //   deletionLines[deletionLine.lineIndex]   undefined
+        //   additionLines[additionLine.lineIndex]   undefined
+        //   → "deletionLine and additionLine are null, something is wrong"
+        //
+        // which is thrown, not logged, so the panel went out through its
+        // boundary. It needed a *second* patch to happen at all, which is why
+        // it never appeared on opening the tab and why it only started once the
+        // daemon began pushing patches on its own instead of waiting for a
+        // refresh button.
+        //
+        // Keyed per file rather than per patch on purpose: a change to one file
+        // leaves the other nine keys alone, so their highlighting is still
+        // reused. A hash of the whole patch would be correct and would
+        // re-tokenize every file on every keystroke an agent makes.
+        fileDiff.cacheKey = `${at ?? WORKING_COPY}|${index}|${contentOf(fileDiff)}`;
+
+        return {
+          // The path and its position, because CodeView keys its items by id
+          // and a patch is allowed to carry the same path twice — a file split
+          // across two diff entries by a mode change is the ordinary way that
+          // happens. The path alone would silently drop the second.
+          id: `${fileDiff.name}-${index}`,
+          type: "diff" as const,
+          // The file's content, because neither the id nor the cache key above
+          // reaches the item's DOM cache — `version` is what does. Without it a
+          // changed file keeps the rows it already drew.
+          content: contentOf(fileDiff),
+          fileDiff,
+        };
+      }),
     );
   })();
 
@@ -905,7 +920,7 @@ export function Diff({
         // header draws has to be in the string — and relying on the fold to
         // carry it would make the checkbox go stale the day the two stop moving
         // together, in a way that looks like a lost click rather than a cache.
-        `${off ? "shut" : "open"}|${seen.has(item.fileDiff.name) ? "seen" : "new"}|${annotations
+        `${item.content}|${off ? "shut" : "open"}|${seen.has(item.fileDiff.name) ? "seen" : "new"}|${annotations
           .map((one) =>
             one.metadata.kind === "draft"
               ? `draft:${one.side}:${one.metadata.line}-${one.metadata.endLine}`

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { statOf, subjectOf, summarise } from "./patch";
+import { type FileContent, contentOf, statOf, subjectOf, summarise } from "./patch";
 
 // Counting a patch without parsing one.
 //
@@ -83,5 +83,67 @@ describe("a commit's subject", () => {
   test("a commit with no message says so in jj's words", () => {
     expect(subjectOf("")).toBe("(no description set)");
     expect(subjectOf("\n\n")).toBe("(no description set)");
+  });
+});
+
+// ── the version a file is rendered under ──────────────────────────────────
+//
+// The bug these are written against threw inside the diff renderer and took the
+// panel out through its boundary:
+//
+//   DiffHunksRenderer.processDiffResult: deletionLine and additionLine are
+//   null, something is wrong
+//
+// The cause was on this side. The renderer caches per item, keyed on the item's
+// id and version; the id is the path, which is deliberately unchanged when the
+// file changes; and the version carried the fold, the viewed mark and the
+// annotations but nothing about the content. So a changed file reused an AST
+// highlighted for the old content and was indexed with new hunks.
+
+const file = (over: Partial<FileContent> = {}): FileContent => ({
+  type: "modified",
+  isPartial: true,
+  hunks: [{}],
+  unifiedLineCount: 3,
+  splitLineCount: 3,
+  deletionLines: ["one", "two"],
+  additionLines: ["one", "three"],
+  ...over,
+});
+
+describe("the version a file is rendered under", () => {
+  test("moves when a line changes", () => {
+    // The whole point. Everything else about the item can stand still — same
+    // path, same fold, same comments — and this still has to differ, or the
+    // renderer keeps the AST it highlighted last time.
+    expect(contentOf(file())).not.toBe(contentOf(file({ additionLines: ["one", "four"] })));
+  });
+
+  test("moves when a line is added or removed", () => {
+    expect(contentOf(file())).not.toBe(contentOf(file({ additionLines: ["one", "three", "x"] })));
+    expect(contentOf(file())).not.toBe(contentOf(file({ deletionLines: ["one"] })));
+  });
+
+  test("moves when the shape changes but the lines do not", () => {
+    // Hydrating collapsed context reshapes the hunks. The counts are in the
+    // hash for this case alone, and it is the one the lines cannot catch.
+    expect(contentOf(file())).not.toBe(contentOf(file({ hunks: [{}, {}] })));
+    expect(contentOf(file())).not.toBe(contentOf(file({ isPartial: false })));
+    expect(contentOf(file())).not.toBe(contentOf(file({ unifiedLineCount: 4 })));
+  });
+
+  test("does not move for the same file", () => {
+    // The other half, and it is what the cache is for: a re-render of an
+    // unchanged file must not re-highlight it. A version that changed every
+    // time would hide the bug above and cost every file on every keystroke.
+    expect(contentOf(file())).toBe(contentOf(file()));
+  });
+
+  test("does not confuse a line boundary with content", () => {
+    // Joined with a newline rather than concatenated, so two files that differ
+    // only in where the lines are cut apart do not hash alike.
+    expect(contentOf(file({ additionLines: ["ab", "c"] }))).not.toBe(
+      contentOf(file({ additionLines: ["a", "bc"] })),
+    );
   });
 });

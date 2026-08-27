@@ -78,3 +78,70 @@ export const subjectOf = (description: string): string => {
   const first = description.split("\n")[0]?.trim() ?? "";
   return first === "" ? "(no description set)" : first;
 };
+
+/**
+ * A number that changes when the thing it names does.
+ *
+ * FNV-1a. Collisions are possible in principle and cost a redraw that did not
+ * happen; the alternative — a version that fails to change — costs a stale
+ * cache, and in the diff renderer that is not a cosmetic loss but a throw. See
+ * `contentOf`.
+ */
+export const versionOf = (state: string): number => {
+  let hash = 2166136261;
+  for (let index = 0; index < state.length; index += 1) {
+    hash ^= state.codePointAt(index) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+/** The parts of a parsed file that make it a different file to render. */
+export interface FileContent {
+  readonly type: string;
+  readonly isPartial: boolean;
+  readonly hunks: ReadonlyArray<unknown>;
+  readonly unifiedLineCount: number;
+  readonly splitLineCount: number;
+  readonly deletionLines: ReadonlyArray<string>;
+  readonly additionLines: ReadonlyArray<string>;
+}
+
+/**
+ * A file's content, as a number to fold into a render version.
+ *
+ * ── why a renderer needs this and an id will not do ────────────────────────
+ *
+ * The diff renderer caches per item, keyed on the item's id and its `version`,
+ * and its own type says to bump the version whenever the value changes. The id
+ * is the path and its position, so it is deliberately the *same* id when the
+ * same file changes on disk — that is what makes the cache worth having.
+ *
+ * So the content has to be in the version, and it was not: only the fold, the
+ * viewed mark and the annotations were. A file that changed while none of those
+ * did kept its version, the renderer reused the AST highlighted for the
+ * previous content, and indexed it with hunks parsed from the new one:
+ *
+ *   deletionLines[deletionLine.lineIndex]   undefined
+ *   additionLines[additionLine.lineIndex]   undefined
+ *   → "deletionLine and additionLine are null, something is wrong"   thrown
+ *
+ * It read as intermittent because it needs the content to change with the fold
+ * state standing still, which is exactly what an agent writing to a file does
+ * now that the daemon pushes a new patch instead of waiting for a button.
+ *
+ * The lines are the content. The four counts beside them catch a reshape that
+ * leaves the lines alone, which is what hydrating collapsed context does.
+ */
+export const contentOf = (file: FileContent): number =>
+  versionOf(
+    [
+      file.type,
+      file.isPartial ? "part" : "full",
+      file.hunks.length,
+      file.unifiedLineCount,
+      file.splitLineCount,
+      file.deletionLines.join("\n"),
+      file.additionLines.join("\n"),
+    ].join("|"),
+  );
