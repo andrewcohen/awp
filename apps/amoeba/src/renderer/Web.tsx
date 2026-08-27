@@ -4,6 +4,7 @@ import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
 import { addressFor } from "./browse";
+import { useOverlaysOpen } from "./overlays";
 import { rememberPage, rememberedPage } from "./remembered";
 import { colors, text } from "./tokens.stylex";
 
@@ -42,13 +43,10 @@ import { colors, text } from "./tokens.stylex";
 // would additionally need the tag declared in `JSX.IntrinsicElements` to say
 // anything TypeScript could check.
 //
-// ── what is known to be unfinished ────────────────────────────────────────
-//
-// A native webview floats above the renderer, so it will also float above a
-// dialog opened over it — `cmd+N` with this tab selected puts the new-thread
-// box behind the page. The tag has `maskSelectors` and `toggleHidden` for
-// exactly this and neither is wired up yet, because the fix wants the dialog
-// to say when it is open and that is a change in a different file.
+// The same fact is why this panel watches `useOverlaysOpen`: a native webview
+// is drawn over the renderer by another process, so it is in front of every
+// dialog whatever any `z-index` says, and the only thing that puts a modal in
+// front of it is not drawing it. See overlays.ts for the rest of that.
 
 /** What the preload defines, narrowed to the parts this panel uses. */
 interface WebviewTag extends HTMLElement {
@@ -56,6 +54,8 @@ interface WebviewTag extends HTMLElement {
   reload(): void;
   goBack(): void;
   goForward(): void;
+  toggleHidden?(value?: boolean): void;
+  syncDimensions?(force?: boolean): void;
   on?(event: string, listener: (event: CustomEvent) => void): void;
   off?(event: string, listener: (event: CustomEvent) => void): void;
 }
@@ -134,6 +134,24 @@ export function Web() {
   const [typed, setTyped] = useState(rememberedPage() ?? "");
   const [here, setHere] = useState(rememberedPage());
   const [can] = useState(available);
+
+  // Something modal is open, and this panel is drawn over the top of it.
+  const covered = useOverlaysOpen();
+
+  useEffect(() => {
+    const element = view.current;
+    if (element === undefined) {
+      return;
+    }
+    element.toggleHidden?.(covered);
+    // Forced on the way back, rather than waiting to be noticed. While hidden
+    // the element's rectangle is zero, and the tag's own sync loop only polls
+    // every 100ms — so without this the page returns a tenth of a second after
+    // the dialog goes, which reads as the panel being slow to wake up.
+    if (!covered) {
+      element.syncDimensions?.(true);
+    }
+  }, [covered]);
 
   useEffect(() => {
     const parent = stage.current;
