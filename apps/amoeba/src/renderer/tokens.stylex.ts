@@ -97,6 +97,17 @@ export const space = stylex.defineVars({
   // The window has no title bar of its own, so the traffic lights sit over the
   // top-left of the content. Every column's first row clears them.
   titlebar: "2.5rem",
+  /**
+   * The band macOS draws its window controls in, on a `hiddenInset` window.
+   *
+   * A fact about the platform rather than a decision — the close, minimise and
+   * zoom buttons are placed by AppKit and nothing here can move them. It is a
+   * height and not the inline offset it replaced: the bar used to start 5.25rem
+   * in to get out of their way sideways, which left our own control six pixels
+   * from theirs and reading as a fourth one. Going *under* them instead gives
+   * the leftmost control the window's real left edge.
+   */
+  lights: "1.75rem",
   row: "0.35rem",
   gutter: "1rem",
 });
