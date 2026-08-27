@@ -1,5 +1,10 @@
 import type { Job } from "@awp-kit/jobs";
-import { AwpClient, layerClient } from "@awp-kit/protocol/client";
+import {
+  AwpClient,
+  type AwpClientShape,
+  layerClient,
+  layerConnection,
+} from "@awp-kit/protocol/client";
 import type {
   CommentSide,
   Effort,
@@ -14,7 +19,7 @@ import type {
   ThreadMember,
   ThreadStarted,
 } from "@awp-kit/protocol";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Fiber, Schedule, Stream } from "effect";
 import { ManagedRuntime } from "effect";
 
 // The renderer's one connection to the daemon.
@@ -28,7 +33,121 @@ import { ManagedRuntime } from "effect";
 // and interruption, which is what makes the pty get killed when a pane closes.
 // Widening this file is how those two worlds start leaking into each other.
 
-const runtime = ManagedRuntime.make(layerClient());
+// ── is the daemon there ────────────────────────────────────────────────────
+//
+// A real signal, rather than the proxy this used to be: whether the last
+// session listing happened to fail. That answers "did a request work", which
+// gets read as "is the daemon there" — the same thing only until a call
+// succeeds against a connection that dies a second later.
+//
+// Two listeners want it and they want different halves. The bar says "no
+// daemon" while it is down; `useSessions` and `useThreads` have to *re-ask*
+// when it comes back, because a list is an answer and not a feed — nothing
+// will arrive to tell them what changed while they were not listening.
+
+let live = false;
+const watchers = new Set<(connected: boolean) => void>();
+
+const announce = (connected: boolean): void => {
+  if (live === connected) {
+    return;
+  }
+  live = connected;
+  // Iterated directly. A Set tolerates a delete during iteration, which is the
+  // case that actually happens here — a watcher unsubscribing itself from
+  // inside its own callback.
+  for (const watcher of watchers) {
+    watcher(connected);
+  }
+};
+
+/**
+ * Hear about the connection until the returned function is called.
+ *
+ * The current state is delivered immediately, so a component mounting while the
+ * daemon is down does not have to wait for it to come back to find out.
+ */
+export const watchConnection = (onChange: (connected: boolean) => void): (() => void) => {
+  watchers.add(onChange);
+  onChange(live);
+  return () => {
+    watchers.delete(onChange);
+  };
+};
+
+/**
+ * Run `again` each time the daemon comes back, but not for the state it is in
+ * now.
+ *
+ * The distinction is the whole of it. `watchConnection` reports the current
+ * value the moment it is called, which is what a status bar wants and is
+ * exactly wrong for a reload: a component that has just asked would ask a
+ * second time for the same answer. What a list wants is the *transition*.
+ */
+export const onReconnect = (again: () => void): (() => void) => {
+  let first = true;
+  return watchConnection((connected) => {
+    if (first) {
+      first = false;
+      return;
+    }
+    if (connected) {
+      again();
+    }
+  });
+};
+
+const runtime = ManagedRuntime.make(
+  layerClient(
+    undefined,
+    layerConnection({ opened: () => announce(true), lost: () => announce(false) }),
+  ),
+);
+
+// How long to wait before subscribing again after the connection took a feed
+// out.
+//
+// The same shape as the socket's own policy and deliberately not the same
+// object: this backs off a *resubscribe*, which is cheap and wants to be quick
+// once the socket is up, where the socket's backs off connecting to a daemon
+// that may not be running at all. Capped, so a window left open overnight
+// against a daemon that is not coming back is not asking every half second
+// until morning.
+const RESUBSCRIBE = Schedule.min([Schedule.exponential(500, 1.5), Schedule.spaced(5000)]);
+
+/**
+ * Run a feed for as long as the caller wants it, across reconnections.
+ *
+ * ── why every feed needs this and not just the socket ──────────────────────
+ *
+ * `layerClient` reconnects the socket, and that is necessary and not
+ * sufficient: an rpc stream is a *request*, so its fiber dies with the
+ * connection it was made on. Without a retry here the socket comes back and the
+ * window goes on showing whatever it last heard — the failure the reconnect was
+ * added to fix, moved one layer up and made harder to see, because now the
+ * status bar says the daemon is fine.
+ *
+ * `run` is handed the client and returns the whole effect rather than only a
+ * stream, so a caller can answer its own failures before the retry sees them.
+ * That is how a refusal stops the loop: `attach` catches `AttachRefused` into a
+ * sentence for a person, and what reaches the retry is only what is worth
+ * trying again.
+ *
+ * Interruption is how unsubscribing works and is not retried — it arrives as a
+ * cause rather than a failure, so it passes through untouched.
+ */
+const subscribe = <E>(run: (rpc: AwpClientShape) => Effect.Effect<void, E>): (() => void) => {
+  const fiber = runtime.runFork(
+    Effect.flatMap(AwpClient, run).pipe(
+      Effect.retry(RESUBSCRIBE),
+      Effect.catchCause(() => Effect.void),
+    ),
+  );
+
+  return () => {
+    runtime.runFork(Fiber.interrupt(fiber));
+  };
+};
 
 /** Every session the multiplexer knows about. */
 export const listSessions = (): Promise<ReadonlyArray<SessionInfo>> =>
@@ -79,27 +198,28 @@ export const attach = (
     readonly onRefused: (reason: string) => void;
   },
 ): Attachment => {
-  const fiber = runtime.runFork(
-    Effect.flatMap(AwpClient, (rpc) =>
-      Stream.runForEach(rpc.Attach({ session, cols, rows }), (chunk) =>
-        Effect.sync(() => handlers.onChunk(chunk)),
-      ),
+  // Reattaches when the daemon comes back, and what arrives then is a redraw
+  // rather than the scrollback a second time: `zmx attach` paints the session's
+  // current screen, which is what reattaching in a multiplexer has always done.
+  // The size goes with it, so the session is sized to this window again on the
+  // way back in.
+  const detach = subscribe((rpc) =>
+    Stream.runForEach(rpc.Attach({ session, cols, rows }), (chunk) =>
+      Effect.sync(() => handlers.onChunk(chunk)),
     ).pipe(
       // A refusal is a sentence written for a person — the session ended, or it
       // is the daemon's own — and the pane shows it instead of going blank.
+      //
+      // Caught *inside*, so the retry never sees it. "The session ended" is an
+      // answer rather than an outage, and asking again every half second would
+      // replace a sentence somebody can read with a loop.
       Effect.catchTag("AttachRefused", (error) =>
         Effect.sync(() => handlers.onRefused(error.reason)),
       ),
-      // Interruption is how detach works, so it is not a failure to report.
-      Effect.catchCause(() => Effect.void),
     ),
   );
 
-  return {
-    detach: () => {
-      runtime.runFork(Fiber.interrupt(fiber));
-    },
-  };
+  return { detach };
 };
 
 // ── jobs ───────────────────────────────────────────────────────────────────
@@ -222,17 +342,8 @@ export const startThread = (payload: {
  * Records arrive whole, so a listener that joins late or misses one is still
  * correct — it holds the newest state of every job it has heard about.
  */
-export const watchJobs = (onJob: (job: Job) => void): (() => void) => {
-  const fiber = runtime.runFork(
-    Effect.flatMap(AwpClient, (rpc) =>
-      Stream.runForEach(rpc.JobChanges(), (job) => Effect.sync(() => onJob(job))),
-    ).pipe(Effect.catchCause(() => Effect.void)),
-  );
-
-  return () => {
-    runtime.runFork(Fiber.interrupt(fiber));
-  };
-};
+export const watchJobs = (onJob: (job: Job) => void): (() => void) =>
+  subscribe((rpc) => Stream.runForEach(rpc.JobChanges(), (job) => Effect.sync(() => onJob(job))));
 
 /**
  * Watch one workspace's files until the returned function is called.
@@ -245,17 +356,10 @@ export const watchJobs = (onJob: (job: Job) => void): (() => void) => {
  * which does not change because a file was written, so what to re-read is the
  * caller's decision. See `WorkspaceChanges` in the contract.
  */
-export const watchWorkspace = (from: string, onChange: () => void): (() => void) => {
-  const fiber = runtime.runFork(
-    Effect.flatMap(AwpClient, (rpc) =>
-      Stream.runForEach(rpc.WorkspaceChanges({ from }), () => Effect.sync(() => onChange())),
-    ).pipe(Effect.catchCause(() => Effect.void)),
+export const watchWorkspace = (from: string, onChange: () => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.WorkspaceChanges({ from }), () => Effect.sync(() => onChange())),
   );
-
-  return () => {
-    runtime.runFork(Fiber.interrupt(fiber));
-  };
-};
 
 // ── the diff of a workspace ────────────────────────────────────────────────
 

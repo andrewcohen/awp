@@ -1,6 +1,6 @@
 import type { SessionInfo } from "@awp-kit/protocol";
 import { useEffect, useRef, useState } from "react";
-import { listSessions } from "./daemon";
+import { listSessions, onReconnect } from "./daemon";
 
 // Every session the multiplexer knows about, and a way to ask again.
 //
@@ -76,8 +76,13 @@ export function useSessions(): SessionsView {
   useEffect(() => {
     alive.current = true;
     load(alive, setSessions, setFailure);
+    // And again whenever the daemon comes back. A list is an answer, not a
+    // feed: nothing arrives to say what changed while it was away, so a window
+    // that survived a restart would go on showing the state from before it.
+    const stop = onReconnect(() => load(alive, setSessions, setFailure));
     return () => {
       alive.current = false;
+      stop();
     };
   }, []);
 

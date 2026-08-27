@@ -24,6 +24,7 @@ import { themeFor, useAppearance, useColorScheme } from "./theme";
 import { colors, text } from "./tokens.stylex";
 import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
+import { useConnection } from "./useConnection";
 import { useSessions } from "./useSessions";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
@@ -168,6 +169,7 @@ export function App() {
   useColumnKeys(collapsed);
 
   const { sessions, failure, reload: reloadSessions } = useSessions();
+  const connected = useConnection();
   const { jobs } = useJobs();
 
   // Where the window is, off the router rather than out of state.
@@ -288,7 +290,7 @@ export function App() {
     <div {...stylex.props(themeFor(appearance), styles.window)}>
       <TopBar
         session={open}
-        connected={failure === undefined}
+        connected={connected}
         collapsed={collapsed}
         onFold={(which) => fold(which)()}
       />
