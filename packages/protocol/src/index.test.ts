@@ -188,6 +188,7 @@ const handlers = AwpRpcs.toLayer({
   ThreadStart: () => Effect.succeed({ thread, job }),
   Revisions: () => Effect.succeed([revision]),
   Diff: () => Effect.succeed(patch),
+  WorkspaceChanges: () => Stream.fromArray([{ at: 1_787_000_000_000 }]),
   ReviewList: () => Effect.succeed([comment]),
   ReviewAdd: () => Effect.succeed(comment),
   ReviewRemove: () => Effect.succeed(true),

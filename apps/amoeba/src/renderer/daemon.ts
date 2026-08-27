@@ -233,6 +233,29 @@ export const watchJobs = (onJob: (job: Job) => void): (() => void) => {
   };
 };
 
+/**
+ * Watch one workspace's files until the returned function is called.
+ *
+ * The same shape as {@link watchJobs}, and for the same reason — the stream's
+ * lifetime is the request's, so interrupting the fiber is what unsubscribes
+ * the daemon's end.
+ *
+ * What arrives is a tick, not a patch. The panel may be showing a commit,
+ * which does not change because a file was written, so what to re-read is the
+ * caller's decision. See `WorkspaceChanges` in the contract.
+ */
+export const watchWorkspace = (from: string, onChange: () => void): (() => void) => {
+  const fiber = runtime.runFork(
+    Effect.flatMap(AwpClient, (rpc) =>
+      Stream.runForEach(rpc.WorkspaceChanges({ from }), () => Effect.sync(() => onChange())),
+    ).pipe(Effect.catchCause(() => Effect.void)),
+  );
+
+  return () => {
+    runtime.runFork(Fiber.interrupt(fiber));
+  };
+};
+
 // ── the diff of a workspace ────────────────────────────────────────────────
 
 /**

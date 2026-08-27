@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { layer as dbLayer } from "@awp-kit/store";
 import { AwpRpcs, type CommentSide } from "@awp-kit/protocol";
+import { NodeFileSystem } from "@effect/platform-node-shared";
 import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
 import { RpcTest } from "effect/unstable/rpc";
@@ -205,6 +206,11 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // tests share state with each other and with the developer's daemon.
         Layer.provide(jobsLayer([erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory))),
         Layer.provide(sessions.layer),
+        // The real one, and it is never read here: WorkspaceChanges is the only
+        // handler that watches anything and this suite calls no stream that
+        // does. A fake would be a second implementation of a service whose
+        // whole behaviour is the operating system's.
+        Layer.provide(NodeFileSystem.layer),
         Layer.provide(attachment.layer),
         Layer.provide(fake.layer),
         Layer.provide(fakeMux),

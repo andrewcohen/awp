@@ -9,7 +9,7 @@ import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } fro
 import * as stylex from "@stylexjs/stylex";
 import { parsePatchFiles } from "@pierre/diffs";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listRevisions, readDiff } from "./daemon";
+import { listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
 import { statOf, subjectOf } from "./patch";
 import {
@@ -60,14 +60,21 @@ import { colors, text } from "./tokens.stylex";
 // every file being tokenized on the main thread, because nothing had put a
 // worker pool in the tree. See highlighting.tsx.
 //
-// ── nothing polls ──────────────────────────────────────────────────────────
+// ── nothing polls, and nothing has to be pressed ──────────────────────────
 //
 // A timer here would snapshot someone's working copy every few seconds, which
 // writes an operation to the repository they are standing in — for a panel that
-// may be sitting behind another tab. Three things ask instead, and each is a
-// moment when the answer plausibly changed: opening the tab (Base UI unmounts a
-// hidden panel, so showing it remounts this), the window regaining focus, and
-// the refresh button.
+// may be sitting behind another tab. So the daemon watches the files instead
+// and says when they change, and this asks then.
+//
+// Three moments, and each is one where the answer plausibly differs: a tick
+// from the watcher, opening the tab (Base UI unmounts a hidden panel, so
+// showing it remounts this), and the window regaining focus — which covers the
+// stretch when the daemon was not running to watch anything.
+//
+// There used to be a refresh button. A control whose whole meaning is "what is
+// on screen may be a lie" is an admission rather than a feature, and it was the
+// one thing in this panel a person had to remember to do.
 //
 // ── @pierre/diffs, and which of its components ─────────────────────────────
 //
@@ -531,10 +538,23 @@ export function Diff({
 
   // Which patch request the answer on screen belongs to. A ref rather than a
   // flag closed over by each effect, because asking is not only something an
-  // effect does — the refresh button and the focus listener call the same
-  // function, and a reply that arrives after a newer request has gone out must
-  // lose in every one of those cases alike.
+  // effect does — the watcher and the focus listener call the same function,
+  // and a reply that arrives after a newer request has gone out must lose in
+  // every one of those cases alike.
   const newest = useRef(0);
+
+  // The revision on screen, readable from a callback that outlives the render
+  // that made it. The watcher below is opened once per directory and must keep
+  // asking about whatever row is selected *now*, not the row that was selected
+  // when the subscription was made.
+  //
+  // Written from an effect rather than during render. A ref assignment in the
+  // render body is a write React cannot see, and the compiler says so; here it
+  // would also be a write that a discarded render could leave behind.
+  const latest = useRef<string | undefined>(at);
+  useEffect(() => {
+    latest.current = at;
+  }, [at]);
 
   const askRevisions = useCallback((where: string) => {
     listRevisions(where)
@@ -586,14 +606,34 @@ export function Diff({
     }
   }, [dir, at, askPatch]);
 
-  // Coming back to the window is the one moment worth asking on that costs
-  // nothing to detect. Everything else that would change this answer happens
-  // somewhere else — an agent writing files, a commit in a terminal — and the
-  // window finds out about all of it the same way: someone looks at it again.
+  // ── the daemon says when, so nobody has to ask ──────────────────────────
   //
-  // Both questions, here, unlike the effects above. Coming back is the one
-  // moment when the *list* can have changed too, because a commit made in a
-  // terminal is exactly what someone was away doing.
+  // A tick per burst of writes under the workspace. Both questions are asked on
+  // one, and not only the patch: a commit made in the terminal beside this
+  // panel changes the *list*, and the files it touched are what says so.
+  //
+  // This is what the refresh button used to be for. It is gone — a control
+  // whose whole meaning is "the thing on screen may be a lie" is an admission
+  // rather than a feature, and it was the one thing here a person had to
+  // remember to do.
+  //
+  // The subscription follows `dir` and not `at`, so changing revision does not
+  // tear down a watch and open another. `askPatch` is read through a ref for
+  // the same reason — see `again`.
+  useEffect(() => {
+    if (dir === undefined) {
+      return;
+    }
+    return watchWorkspace(dir, () => {
+      askRevisions(dir);
+      askPatch(dir, latest.current);
+    });
+  }, [dir, askRevisions, askPatch]);
+
+  // Coming back to the window is still worth asking on, and costs nothing to
+  // detect. The watcher covers what happens *here*; this covers what happened
+  // while the daemon was not running, or in a repository operation that touched
+  // no file this window is watching.
   useEffect(() => {
     if (dir === undefined) {
       return;
@@ -1044,17 +1084,6 @@ export function Diff({
             </button>
           </>
         )}
-
-        <button
-          type="button"
-          {...stylex.props(styles.button)}
-          onClick={() => {
-            askRevisions(dir);
-            askPatch(dir, at);
-          }}
-        >
-          refresh
-        </button>
       </div>
 
       {review.failure !== undefined && (
