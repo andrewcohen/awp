@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
 import { Boundary } from "./Boundary";
-import { BottomBar, TopBar } from "./Bars";
+import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
 import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Pane } from "./Pane";
@@ -91,6 +91,9 @@ const styles = stylex.create({
   // without minting a class per pixel.
   fixed: (width: number) => ({ flex: `0 0 ${width}px` }),
   agent: { flex: "1 1 auto" },
+  // A header and then the thing itself. The pane observes its own box, so it
+  // simply gets a shorter one — nothing has to tell it the header is there.
+  stacked: { display: "flex", flexDirection: "column" },
 
   // ── the fold, animated, and only the fold ────────────────────────────────
   //
@@ -323,6 +326,19 @@ export function App() {
       <div {...stylex.props(styles.columns)}>
         <aside
           data-column="sidebar"
+          // ── a folded column is not merely narrow ──────────────────────────
+          //
+          // It stays mounted so the fold can be animated, which leaves every
+          // control in it focusable, in the accessibility tree, and reachable
+          // by ctrl+j/k — at zero width, off the edge of the window. The
+          // accessory column made that visible rather than theoretical: folded,
+          // the page offered both "show the panels" and "hide the panels", and
+          // one of them was 16 pixels past the right edge.
+          //
+          // `inert` is the whole repair: it takes the subtree out of focus, out
+          // of hit testing and out of the accessibility tree without removing
+          // it from the layout the animation is driving.
+          inert={collapsed.sidebar}
           {...stylex.props(
             styles.column,
             styles.underStrip,
@@ -361,8 +377,25 @@ export function App() {
 
         <main
           data-column="agent"
-          {...stylex.props(styles.column, styles.agent, collapsed.sidebar && styles.underStrip)}
+          {...stylex.props(
+            styles.column,
+            styles.agent,
+            styles.stacked,
+            collapsed.sidebar && styles.underStrip,
+          )}
         >
+          <AgentBar
+            jobs={jobs}
+            session={open}
+            facts={
+              open?.identity === undefined
+                ? undefined
+                : facts.get(factsKey(open.identity.project, open.identity.workspace))
+            }
+            connected={connected}
+            collapsed={collapsed}
+            onFold={(which) => fold(which)()}
+          />
           <Boundary where="the terminal">
             <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
           </Boundary>
@@ -378,6 +411,8 @@ export function App() {
 
         <aside
           data-column="accessory"
+          // See the sidebar's. Folded, its tab strip is still a tab strip.
+          inert={collapsed.accessory}
           {...stylex.props(
             styles.column,
             styles.fixed(columns.accessory),
@@ -394,6 +429,7 @@ export function App() {
               diff renderer used to white out the whole window. */}
           <Boundary where="the accessory panel">
             <Accessory
+              onFold={fold("accessory")}
               dir={open?.startDir}
               project={open?.identity?.project}
               workspace={open?.identity?.workspace}
@@ -402,17 +438,6 @@ export function App() {
           </Boundary>
         </aside>
       </div>
-
-      <BottomBar
-        jobs={jobs}
-        session={open}
-        facts={
-          open?.identity === undefined
-            ? undefined
-            : facts.get(factsKey(open.identity.project, open.identity.workspace))
-        }
-        connected={connected}
-      />
 
       {/* Outside the columns, because it is the window's and not a column's.
           It renders nothing at all while shut — see NewThread.tsx. */}

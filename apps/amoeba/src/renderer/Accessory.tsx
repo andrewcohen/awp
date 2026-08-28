@@ -1,4 +1,5 @@
 import { Tabs } from "@base-ui/react/tabs";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
 import { Diff } from "./Diff";
@@ -6,7 +7,7 @@ import { Jobs } from "./Jobs";
 import { Web } from "./Web";
 import { debugTools } from "./debug";
 import type { ColorScheme } from "@awp-kit/pane";
-import { colors, text } from "./tokens.stylex";
+import { colors, space, text } from "./tokens.stylex";
 
 // The accessory column: a set of panels, one at a time.
 //
@@ -103,12 +104,40 @@ const styles = stylex.create({
   // panel put first — the diff's revision row, the web panel's address bar —
   // sat directly against the tabs and read as part of them. A tab strip is a
   // control, and a control touching the thing it controls has no edge.
+  // Sized to `space.titlebar` rather than to its own padding, so it lines up
+  // with the corner strip and the agent's header. The three are one band of
+  // chrome drawn in three pieces; a pixel of disagreement between them reads
+  // as a rendering fault rather than as three columns.
   list: {
     display: "flex",
+    alignItems: "center",
     flexShrink: 0,
     gap: "0.25rem",
-    padding: "0.45rem 0.5rem",
+    height: space.titlebar,
+    paddingInline: "0.5rem",
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
   },
+  spacer: { flex: 1 },
+  // Sized and coloured like a tab rather than like a button, because it sits
+  // in a row of tabs and anything else there reads as a different kind of
+  // thing arriving from somewhere else.
+  fold: {
+    display: "flex",
+    alignItems: "center",
+    padding: "0.2rem 0.35rem",
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    borderRadius: "0.25rem",
+    color: colors.muted,
+    cursor: "pointer",
+    transitionProperty: "color",
+    transitionDuration: "100ms",
+    ":hover": { color: colors.text },
+  },
+  /** The sidebar's glyph, turned round to point at the edge it acts on. */
+  mirrored: { transform: "scaleX(-1)" },
   tab: {
     padding: "0.2rem 0.55rem",
     backgroundColor: "transparent",
@@ -148,7 +177,7 @@ const styles = stylex.create({
   panel: { flex: 1, minHeight: 0, overflowY: "auto" },
 });
 
-export function Accessory(context: PanelContext) {
+export function Accessory({ onFold, ...context }: PanelContext & { readonly onFold: () => void }) {
   // Controlled, rather than letting Base UI keep the value to itself. StyleX
   // resolves its styles at render — `stylex.props(a, on && b)` — so which tab
   // is selected has to be a value this component can read. Base UI still owns
@@ -172,6 +201,37 @@ export function Accessory(context: PanelContext) {
             {panel.label}
           </Tabs.Tab>
         ))}
+
+        <span {...stylex.props(styles.spacer)} />
+
+        {/* ── the control that folds this column, on this column ─────────────
+        
+            It used to be in a window-wide top bar, at the window's right edge,
+            which was the right edge of *this* column only by coincidence. Now
+            the strip is the column's own, so the control acts on the thing it
+            is drawn in.
+        
+            Folded, it goes with the column — which is the hole every
+            self-hosted control has. `AgentBar` renders the other half: the
+            same button, in the same place on screen, once the panels are no
+            longer occupying it. One control at the boundary, drawn on
+            whichever side of it still exists.
+        
+            Deliberately outside `Tabs.List`'s tab set: it is not a tab and
+            must not join the roving tab stop, or the arrow keys would step
+            onto it and Base UI would try to select a panel that is not there.
+            `data-nav-item` is what puts it in ctrl+j/k's reach instead. */}
+        <button
+          type="button"
+          data-nav-item
+          aria-label="hide the panels"
+          title="hide the panels"
+          aria-pressed
+          onClick={onFold}
+          {...stylex.props(styles.fold)}
+        >
+          <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
+        </button>
       </Tabs.List>
 
       {panels.map((panel) => (

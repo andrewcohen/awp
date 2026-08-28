@@ -151,6 +151,18 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
   },
 
+  // The agent column's header. Same height as the corner strip and the panels'
+  // tab strip, so the three line up across the window — they are one band of
+  // chrome drawn in three pieces, and a pixel of disagreement reads as a
+  // rendering fault rather than as three columns.
+  agentBar: {
+    height: space.titlebar,
+    flexShrink: 0,
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
+  },
+
   bottom: {
     height: "1.6rem",
     borderTopWidth: 1,
@@ -275,66 +287,68 @@ export function TopBar({
         <SidebarSimpleIcon size={15} aria-hidden />
       </button>
 
-      {/* Beside the sidebar's rather than at the far right.
-
-          Each control used to sit at the edge it folds, which was the better
-          arrangement and needed a strip that reached both edges. The window's
-          right edge now belongs to the panels themselves, so the two are a
-          pair here instead — told apart by the mirrored glyph, which is what
-          it was always for. */}
-      <button
-        type="button"
-        aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
-        aria-pressed={!collapsed.accessory}
-        title={collapsed.accessory ? "show the panels" : "hide the panels"}
-        onClick={() => onFold("accessory")}
-        {...stylex.props(styles.toggle, !collapsed.accessory && styles.toggleOn)}
-      >
-        <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
-      </button>
+      {/* The window's own setting, in the one strip that is never folded away.
+      
+          It was in the footer until there was no footer. Neither of the other
+          two headers would do: the agent's is about the session and the
+          panels' is about the panels, and an appearance control is about
+          neither. This strip is the window talking about itself, which is
+          exactly what it is. */}
+      <AppearanceToggle />
     </header>
   );
 }
 
 /**
- * The appearance toggle, and what the jobs are doing.
+ * The agent column's own header: what is open, and what the window is doing.
  *
- * The jobs summary is here rather than only in the panel because the panel is
- * in a column that folds away. A job that fails while its column is collapsed
- * is a job nobody hears about, and the whole reason the jobs system was built
- * was so that would stop being true.
+ * ── why the footer went away ──────────────────────────────────────────────
  *
- * Nothing is said when there is nothing to say. A status bar that always reads
+ * A window with a bar top and bottom spends two strips on chrome and gives the
+ * columns what is left. Once the top bar became a corner, the footer was the
+ * only full-width strip still doing that — for a name, a toggle and two
+ * counts. So each column carries its own header instead, and this is the
+ * middle one's.
+ *
+ * ── and why the counts are here rather than anywhere else ─────────────────
+ *
+ * **This column cannot be folded.** `Collapsed` has a `sidebar` and an
+ * `accessory` and no third field, which makes the agent's header the one strip
+ * in the window that is always on screen and always full width — the property
+ * the footer had, and the reason it held the job summary at all:
+ *
+ *   a job that fails while its column is collapsed is a job nobody hears
+ *   about, and the whole reason the jobs system exists is so that stops
+ *   being true
+ *
+ * The same argument puts "no daemon" here.
+ *
+ * Nothing is said when there is nothing to say. A strip that always reads
  * `0 running · 0 failed` teaches the eye to skip it, which costs exactly the
  * one moment it exists for.
  */
-export function BottomBar({
+export function AgentBar({
   jobs,
   session,
   facts,
   connected,
+  collapsed,
+  onFold,
 }: {
   readonly jobs: ReadonlyArray<Job>;
   readonly session: SessionInfo | undefined;
   /** What is known about the open session's workspace, if anything is. */
   readonly facts: WorkspaceFacts | undefined;
   readonly connected: boolean;
+  readonly collapsed: Collapsed;
+  readonly onFold: (which: keyof Collapsed) => void;
 }) {
   const counted = tally(jobs);
 
   return (
-    <footer {...stylex.props(styles.bar, styles.bottom)}>
-      <AppearanceToggle />
-      {/* What is open, in the words a person used for it.
-      
-          It was the centred title of a full-width top bar until that bar became
-          a corner. This is the better home anyway: a title bar says what the
-          window is about, and this one changes when a row is clicked — which
-          makes it status, and the status bar is where the rest of the status
-          already is.
-      
-          Just the name. It was `displayName · project · kind` once, which is
-          three fields where a title has one job; the project and the kind are
+    <header {...stylex.props(styles.bar, styles.agentBar)}>
+      {/* Just the name. It was `displayName · project · kind` once, which is
+          three fields where a title has one job — the project and the kind are
           both already on the selected sidebar row. */}
       <span {...stylex.props(styles.strong, styles.title)}>
         {session === undefined
@@ -344,6 +358,9 @@ export function BottomBar({
             session.identity?.workspace ??
             session.name)}
       </span>
+
+      <span {...stylex.props(styles.spacer)} />
+
       {counted.running > 0 && (
         <span {...stylex.props(styles.strong)}>{counted.running} running</span>
       )}
@@ -354,19 +371,38 @@ export function BottomBar({
         // rollback could not undo.
         <span {...stylex.props(styles.warn)}>{counted.dirty} needs cleaning up</span>
       )}
-      <span {...stylex.props(styles.spacer)} />
+
       {/* Nothing at all while it is working.
       
           A green "daemon" sitting there permanently is a status light that is
           on by definition — it teaches the eye to skip that corner, which costs
-          exactly the one moment it exists for. The same argument this bar
-          already makes about `0 running · 0 failed`.
-      
-          So the connected state is silence, and the disconnected state is a
-          word rather than a dot: "no daemon" is the sentence, and a red circle
-          would need to be hovered before it said anything. */}
+          exactly the one moment it exists for. So the connected state is
+          silence, and the disconnected state is a word rather than a dot. */}
       {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
-      <span {...stylex.props(styles.name)}>{session?.name}</span>
-    </footer>
+
+      {/* ── the way back, and only the way back ─────────────────────────────
+      
+          The control that folds the panels lives *on* the panels — at the end
+          of their own tab strip, which is the edge it acts on. That leaves one
+          hole, and it is the hole every self-hosted control has: folded away,
+          it takes itself with it.
+      
+          So the pair is one control rendered at the boundary between the two
+          columns. Open, it is the panels' last tab-strip item. Closed, it is
+          this header's last item — the same place on screen, because the
+          panels are no longer occupying it. */}
+      {collapsed.accessory && (
+        <button
+          type="button"
+          aria-label="show the panels"
+          title="show the panels"
+          aria-pressed={false}
+          onClick={() => onFold("accessory")}
+          {...stylex.props(styles.toggle)}
+        >
+          <SidebarSimpleIcon size={15} aria-hidden {...stylex.props(styles.mirrored)} />
+        </button>
+      )}
+    </header>
   );
 }
