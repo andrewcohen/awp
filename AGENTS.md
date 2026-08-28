@@ -2787,6 +2787,131 @@ second. `enqueue` answers the second with the first job, which leaves the thread
 the handler had just made as litter — so the handler compares the thread on the
 returned job's record with the one it created, and removes its own if it lost.
 
+## A steer is not a reply, and two turns overlap
+
+Reported as "when you steer the message gets out of order", and every part of
+the diagnosis is a fact about a real adapter that no fake produces.
+`bun run probe:steer` sends a long prompt and interrupts it twelve seconds in:
+
+```
+  0s    turn started            the first turn
+  2.7s  agent "…"
+  12s   turn started            ← the steer. The first turn is still working
+  20.7s turn ended              the FIRST one, while the second still runs
+  23s   agent "heron"
+  23.1s turn ended
+
+  user chunks echoed back   0
+```
+
+Three things follow, and the panel had all three wrong.
+
+**`running` is a count, not a flag.** The first `ended` arrives while the
+steer's own turn is still working, so a boolean cleared there says the agent
+has finished while it is still answering — the worst of the three states to be
+wrong about. The same shape as the modal overlay count, and for the same
+reason: two of a thing can be open at once and the inner one closes first.
+
+**Nothing echoes a steer back.** Zero `user_message_chunk` on a live turn, so
+the window's own copy is the only record of what a person typed until
+`session/load` replays it. It cannot be dropped in favour of the wire.
+
+**A steer is answered after the turn it interrupted** — when it is sent as a
+prompt at all, which is the next section. So it is queued rather than said. Appending it to the end put it above the rest of a reply that was
+still arriving, and two turns in the transcript read as though the agent had
+answered a question before it was asked:
+
+```
+  agent  I'll look at
+  you    no, not that file        ← typed here
+  agent  src/foo.ts               ← the SAME sentence, below the interruption
+```
+
+So `mine` in `conversation.ts` is its own function rather than a `fold` over a
+synthesized update, and that is as much of the fix as the queueing is: the
+local copy is not something the daemon said, and dressing it up as an update is
+what let it be placed by arrival order in a list arrival order does not
+describe. A queued message floats at the tail, everything the agent is still
+producing is inserted **above** it, and a turn ending un-queues it.
+
+### Steering is a request of its own, and a capability
+
+All of the above is what a _second `session/prompt`_ does, and that was the
+daemon asking the wrong question. The adapter has
+
+```
+  _session/steering    "injected into the in-flight turn rather than queued
+                       as a separate session/prompt", at a priority that
+                       pre-empts the current generation
+```
+
+advertised in the initialize reply as `_meta.steering.supported` — so it is
+read rather than assumed, and an agent without it still works, one turn later.
+The same probe run, before and after:
+
+```
+  session/prompt        started → started → ended → ended     two turns
+  _session/steering     started → ended                       one, with the
+                                                              steer inside it
+```
+
+**`idleBehavior: "promptRequired"` is the whole reason this is one call and not
+two.** A steer sent when no turn is running would otherwise make the _adapter_
+start one, detached — this process would emit no `turn started` and no `turn
+ended`, and the window would watch a reply arrive with nothing saying a turn
+was under way. With the opt-in the adapter refuses by name instead
+(`{outcome: "promptRequired", reason: "noRunningTurn"}`) and the ordinary
+prompt path runs and owns the lifecycle.
+
+It also means **no "is a turn running" state is kept on this side**, which is
+not a saving but a correctness argument: the adapter's own comment says its
+check and its push "stay in one synchronous section so the turn cannot settle
+in the gap between deciding to inject and enqueueing". Anything this process
+believed about that could be stale by the time the request arrived.
+
+So `ChatSend` answers `steer` or `prompt`, and the window marks a message as
+waiting only for a `prompt` sent while the agent was working. The first version
+set that from its own `running` count at send time and showed a `queued` label
+for a few milliseconds on every ordinary steer.
+
+### A question belongs on the call it is about
+
+The adapter emits the tool call **before** it asks — `ensureToolCallEmitted` in
+its own source — and the permission request carries that call's id. Drawn as
+its own row the question was a second copy of the command already on screen
+directly above it, with the buttons belonging to neither:
+
+```
+  before   …  ran  rm notes.txt          after   …  ran  rm notes.txt
+           rm notes.txt                          Deny  Allow Once  Always Allow
+           Deny  Allow Once  Always Allow
+```
+
+The standalone row is still there for a question about a call this window was
+never told about — refusing to draw it would leave an agent waiting on
+somebody who cannot see what it asked.
+
+### A subagent is a tool call, and `_meta` says which
+
+There is **no subagent update kind in ACP** — no nesting, no separate stream,
+and a subagent's own messages never arrive. Worth writing down so nobody goes
+looking. What arrives is one tool call that sits at `in_progress` for minutes,
+and the facts ride in `_meta.claudeCode.toolResponse` on its progress beats:
+
+```
+  subagentType         which kind was spawned    →  `spawned  a code-reviewer`
+  elapsedTimeSeconds   how long                  →  `2m14s`, past ten seconds
+  subagentRetry        attempt · max_retries ·   →  `attempt 2 of 5,
+                       retry_delay_ms                retrying in 30s`
+```
+
+The retry counters are the least obvious and the ones worth having: the
+adapter's own comment says it forwards them "so clients can show why a spawn
+looks stalled". They are the SDK's fields in the SDK's spelling, so they are
+read as `max_retries` first and camelCase second rather than assumed. A
+subagent behind a rate limit and a subagent doing slow work are otherwise the
+same picture, and only one of them is worth waiting for.
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes

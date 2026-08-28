@@ -1482,6 +1482,48 @@ export const ChatUpdate = Schema.Struct({
 
   /** permission: what a person may answer. */
   options: Schema.optional(Schema.Array(ChatPermissionOption)),
+  /**
+   * permission: the tool call this is asking about.
+   *
+   * The adapter emits the tool call *before* it asks — `ensureToolCallEmitted`
+   * in its own source, and it is why the id is worth carrying: without it the
+   * question is a second row saying the same command as the row above it,
+   * which is what the panel drew. With it the buttons sit on the call they
+   * are about.
+   */
+  about: Schema.optional(Schema.String),
+
+  // ── tool: a delegated call ──────────────────────────────────────────────
+  //
+  // A subagent is not a kind of update. Measured in the adapter's own source
+  // 2026-09-08: there is no `subagent` anywhere in ACP, no nesting and no
+  // second stream — an agent that spawns one produces an ordinary `tool_call`
+  // that sits at `in_progress` for minutes. What the subagent is rides in
+  // `_meta.claudeCode.toolResponse` on the progress updates, and was being
+  // thrown away.
+  //
+  // So there is no tree to draw here, only a call to label honestly.
+
+  /** Which kind of subagent a `Task` call spawned. */
+  subagent: Schema.optional(Schema.String),
+  /** How long the call has been running, in seconds, as the adapter reports it. */
+  elapsed: Schema.optional(Schema.Number),
+  /**
+   * Why a spawn looks stalled.
+   *
+   * The adapter forwards the SDK's retry counters verbatim and says why in its
+   * own comment: "when the subagent is waiting out an API rate-limit retry …
+   * so clients can show why a spawn looks stalled". A subagent behind a rate
+   * limit and a subagent doing slow work are the same picture without this,
+   * and only one of them is worth waiting for.
+   */
+  retry: Schema.optional(
+    Schema.Struct({
+      attempt: Schema.Number,
+      of: Schema.optional(Schema.Number),
+      inMs: Schema.optional(Schema.Number),
+    }),
+  ),
 
   /**
    * turn: `started` or `ended`, and why it ended.
@@ -1531,6 +1573,20 @@ export type ChatUpdate = (typeof ChatUpdate)["Type"];
  * answers the question generically, and a fifth option appearing upstream
  * would be a fifth thing to add here rather than a row that simply shows up.
  */
+/**
+ * How a message reached the agent.
+ *
+ * Worth a value on the wire rather than being inferred, because the two are a
+ * different thing to a person watching: a steer is being read *now*, inside
+ * the turn already running, and a prompt is a turn of its own. The window
+ * cannot tell them apart on its own — whether a steer is possible depends on
+ * whether a turn was in flight at the moment the adapter looked, which is a
+ * question only the adapter can answer without a race.
+ */
+export const ChatDelivery = Schema.Literals(["steer", "prompt"]);
+
+export type ChatDelivery = (typeof ChatDelivery)["Type"];
+
 export const ChatConfigOption = Schema.Struct({
   /** `mode`, `model`, `effort`, `fast` — the adapter's own ids. */
   id: Schema.String,
@@ -1662,6 +1718,7 @@ export class AwpRpcs extends RpcGroup.make(
    */
   Rpc.make("ChatSend", {
     payload: { project: Schema.String, workspace: Schema.String, text: Schema.String },
+    success: ChatDelivery,
     error: ChatUnavailable,
   }),
 

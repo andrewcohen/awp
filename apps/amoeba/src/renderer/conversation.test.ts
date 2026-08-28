@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { ChatUpdate } from "@awp-kit/protocol";
-import { type Conversation, fold, nothing } from "./conversation";
+import {
+  type Conversation,
+  fold,
+  mine,
+  nothing,
+  stalled,
+  took,
+  verb,
+  waiting,
+} from "./conversation";
 
 // What the panel does with what the daemon sends, and nothing else. The shapes
 // are the ones a real turn produced — see chat.test.ts in the daemon, which
@@ -105,6 +114,54 @@ describe("fold", () => {
     });
   });
 
+  it("puts a question on the call it is about", () => {
+    // Seen in a real window: the command was drawn twice, once on the tool row
+    // and once as the question directly beneath it, with the buttons belonging
+    // to neither. The adapter emits the tool call before it asks, so the row
+    // to hang it on is always there.
+    const items = (
+      [
+        { kind: "tool", id: "t1", title: "rm notes.txt", toolKind: "execute" },
+        {
+          kind: "permission",
+          id: "permission-4",
+          about: "t1",
+          title: "rm notes.txt",
+          options: [{ id: "allow", name: "Yes", kind: "allow_once" }],
+        },
+      ] satisfies ReadonlyArray<ChatUpdate>
+    ).reduce((all, update) => fold(all, update), nothing as Conversation);
+
+    expect(items.items).toHaveLength(1);
+    expect(items.items[0]).toMatchObject({ kind: "ran", ask: { key: "permission-4" } });
+  });
+
+  it("keeps the question while the call it is about goes on changing", () => {
+    // The status moves the moment a person allows it, and a merge that forgot
+    // the question would take the buttons away mid-press.
+    const items = (
+      [
+        { kind: "tool", id: "t1", title: "rm notes.txt" },
+        { kind: "permission", id: "p1", about: "t1", title: "rm notes.txt", options: [] },
+        { kind: "tool", id: "t1", status: "in_progress" },
+      ] satisfies ReadonlyArray<ChatUpdate>
+    ).reduce((all, update) => fold(all, update), nothing as Conversation);
+    expect(items.items[0]).toMatchObject({ status: "in_progress", ask: { key: "p1" } });
+  });
+
+  it("still draws a question about a call it was never told about", () => {
+    // Refusing would leave the agent waiting on somebody who cannot see what
+    // it asked.
+    const items = fold(nothing, {
+      kind: "permission",
+      id: "p1",
+      about: "never-seen",
+      title: "rm notes.txt",
+      options: [],
+    });
+    expect(items.items[0]).toMatchObject({ kind: "asked", key: "p1" });
+  });
+
   it("ignores an update with nothing to key on", () => {
     // The id is the join. Without one there is nothing to merge into, and
     // appending would draw a tool call that can never be completed.
@@ -118,7 +175,7 @@ describe("a turn", () => {
     // Drawn as a row it would leave a permanent "working…" line in the
     // history the moment the turn finished.
     const started = fold(nothing, { kind: "turn", status: "started" });
-    expect(started.running).toBe(true);
+    expect(started.running).toBe(1);
     expect(started.items).toEqual([]);
   });
 
@@ -126,7 +183,7 @@ describe("a turn", () => {
     // `end_turn` is what every normal reply ends with. A line saying so after
     // each one is a line the eye learns to skip.
     const ended = fold(
-      { ...nothing, running: true },
+      { ...nothing, running: 1 },
       { kind: "turn", status: "ended", stopReason: "end_turn" },
     );
     expect(ended).toEqual(nothing);
@@ -134,17 +191,173 @@ describe("a turn", () => {
 
   it("keeps a reason that is not an ordinary ending", () => {
     const ended = fold(
-      { ...nothing, running: true },
+      { ...nothing, running: 1 },
       { kind: "turn", status: "ended", stopReason: "refusal" },
     );
-    expect(ended).toMatchObject({ running: false, stopped: "refusal" });
+    expect(ended).toMatchObject({ running: 0, stopped: "refusal" });
   });
 
   it("clears the last reason when the next turn starts", () => {
     // Otherwise the sentence explaining why the previous reply stopped sits
     // under the new one, describing something that is no longer happening.
     const again = fold({ ...nothing, stopped: "refusal" }, { kind: "turn", status: "started" });
-    expect(again).toMatchObject({ running: true, stopped: undefined });
+    expect(again).toMatchObject({ running: 1, stopped: undefined });
+  });
+
+  it("counts turns rather than flagging one, because two overlap", () => {
+    // Measured, `bun run probe:steer`: a message sent twelve seconds into a
+    // turn starts a second one, and the FIRST turn's end arrives first. A flag
+    // cleared there says the agent has finished while it is still answering.
+    const both = [
+      { kind: "turn", status: "started" },
+      { kind: "turn", status: "started" },
+      { kind: "turn", status: "ended", stopReason: "end_turn" },
+    ].reduce((state, update) => fold(state, update as never), nothing);
+    expect(both.running).toBe(1);
+    expect(fold(both, { kind: "turn", status: "ended", stopReason: "end_turn" }).running).toBe(0);
+  });
+
+  it("holds a reason back while another turn is still working", () => {
+    // A sentence about a turn that stopped, drawn under one that has not,
+    // describes something that is not what the agent is doing now.
+    const one = fold(
+      { ...nothing, running: 2 },
+      {
+        kind: "turn",
+        status: "ended",
+        stopReason: "refusal",
+      },
+    );
+    expect(one).toMatchObject({ running: 1, stopped: undefined });
+  });
+});
+
+describe("a steer", () => {
+  // The reported bug: "when you steer the message gets out of order". What was
+  // happening is in the note at the top of conversation.ts — the local copy of
+  // a mid-turn message was appended to the end, and the rest of a reply that
+  // was still arriving landed below it.
+
+  it("waits only when the daemon says it started a turn of its own", () => {
+    // Whether a mid-turn message waits is the adapter's answer, not this
+    // side's guess: `_session/steering` injects it into the running turn when
+    // it can, and `ChatSend` reports `steer` when it did. Setting `queued`
+    // optimistically here made it appear and then take itself back on every
+    // ordinary steer.
+    const sent = mine({ ...nothing, running: 1 }, "no, not that file", "mine-1");
+    expect(sent.items[0]).toMatchObject({ role: "user", queued: false });
+    expect(waiting(sent, "mine-1").items[0]).toMatchObject({ queued: true });
+  });
+
+  it("names the message rather than its place in the list", () => {
+    // The reply arrives while the list is still growing, so a position would
+    // name a different message by the time it lands.
+    const two = mine(mine(nothing, "first", "mine-1"), "second", "mine-2");
+    const after = fold(waiting(two, "mine-2"), said("agent", "…"));
+    expect(after.items.map((item) => (item.kind === "said" ? item.queued : false))).toEqual([
+      false,
+      false,
+      true,
+    ]);
+    // And the agent's reply went above the one that is waiting.
+    expect(after.items.map((item) => (item.kind === "said" ? item.text : ""))).toEqual([
+      "first",
+      "…",
+      "second",
+    ]);
+  });
+
+  it("does nothing for a key it does not hold", () => {
+    expect(waiting(mine(nothing, "hello", "mine-1"), "mine-9").items[0]).toMatchObject({
+      queued: false,
+    });
+  });
+
+  it("lets the interrupted reply carry on above it", () => {
+    // The whole of the fix. Two turns in, the old order read as though the
+    // agent had answered a question before it was asked.
+    const after = fold(
+      waiting(
+        mine(
+          fold({ ...nothing, running: 1 }, said("agent", "I will look at ")),
+          "no, not that one",
+          "mine-1",
+        ),
+        "mine-1",
+      ),
+      said("agent", "src/foo.ts"),
+    );
+    expect(
+      after.items.map((item) => (item.kind === "said" ? `${item.role}: ${item.text}` : item.kind)),
+    ).toEqual(["agent: I will look at src/foo.ts", "user: no, not that one"]);
+  });
+
+  it("stops waiting when a turn ends, and the answer comes after it", () => {
+    const queued = waiting(
+      mine({ ...nothing, running: 1 }, "say heron instead", "mine-1"),
+      "mine-1",
+    );
+    const ended = fold(queued, { kind: "turn", status: "ended", stopReason: "end_turn" });
+    expect(ended.items[0]).toMatchObject({ queued: false });
+    const answered = fold(ended, said("agent", "heron"));
+    expect(answered.items.map((item) => (item.kind === "said" ? item.role : item.kind))).toEqual([
+      "user",
+      "agent",
+    ]);
+  });
+
+  it("keeps a tool call and a question above it too", () => {
+    // Everything the agent produces belongs to the turn the steer interrupted,
+    // not to the steer — so a tool call starting mid-steer goes above it.
+    const queued = waiting(mine({ ...nothing, running: 1 }, "wait", "mine-1"), "mine-1");
+    const after = [
+      { kind: "tool", id: "t1", title: "Terminal" },
+      { kind: "permission", id: "p1", title: "rm notes.txt" },
+    ].reduce((state, update) => fold(state, update as never), queued);
+    expect(after.items.map((item) => item.kind)).toEqual(["ran", "asked", "said"]);
+  });
+});
+
+describe("a delegated call", () => {
+  // There is no subagent update kind in ACP — measured in the adapter's own
+  // source — so a spawn is one tool call that takes a while, and all this can
+  // do is label it honestly.
+
+  it("says it spawned something, and what", () => {
+    const after = fold(nothing, {
+      kind: "tool",
+      id: "t1",
+      title: "Task",
+      toolKind: "other",
+      subagent: "code-reviewer",
+    });
+    expect(verb(after.items[0] as never)).toBe("spawned");
+    expect(after.items[0]).toMatchObject({ subagent: "code-reviewer" });
+  });
+
+  it("keeps the retry counters an update stopped mentioning", () => {
+    // They arrive on the progress beats, so a later beat that says nothing
+    // about a retry must not blank a sentence somebody is reading.
+    const after = [
+      {
+        kind: "tool",
+        id: "t1",
+        subagent: "code-reviewer",
+        retry: { attempt: 2, of: 5, inMs: 30_000 },
+      },
+      { kind: "tool", id: "t1", status: "in_progress" },
+    ].reduce((state, update) => fold(state, update as never), nothing);
+    expect(stalled(after.items[0] as never)).toBe("attempt 2 of 5, retrying in 30s");
+  });
+
+  it("says nothing about a call that is not retrying", () => {
+    const after = fold(nothing, { kind: "tool", id: "t1", title: "cat notes.txt" });
+    expect(stalled(after.items[0] as never)).toBeUndefined();
+  });
+
+  it("reads a long spawn in minutes", () => {
+    expect(took(9)).toBe("9s");
+    expect(took(134)).toBe("2m14s");
   });
 });
 

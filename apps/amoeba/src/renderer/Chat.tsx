@@ -9,8 +9,12 @@ import {
   type Ran,
   type Said,
   fold,
+  mine,
   nothing,
+  stalled,
+  took,
   verb,
+  waiting,
 } from "./conversation";
 import { Markdown } from "./Markdown";
 import { chatAnswer, chatConfig, chatSend, chatSet, watchChat } from "./daemon";
@@ -48,6 +52,8 @@ export const Chat = ({
   const [draft, setDraft] = useState("");
   const [config, setConfig] = useState<ReadonlyArray<ChatConfigOption>>([]);
   const bottom = useRef<HTMLDivElement>(null);
+  /** How many messages this window has sent, so each can be named. */
+  const sent = useRef(0);
 
   useEffect(
     () =>
@@ -108,17 +114,41 @@ export const Chat = ({
       return;
     }
     setDraft("");
-    // Shown immediately rather than waiting for the daemon to echo it back.
-    // A message that appears only once the agent has acknowledged it reads as
-    // a send button that did nothing.
-    setHeld((current) => fold(current, { kind: "message", role: "user", text: words }));
-    void chatSend(project, workspace, words);
-  }, [draft, project, workspace]);
+    // A name for the message, given here because only the sender can give one.
+    // The reply that says how it was delivered arrives while the list is still
+    // growing, so a position in the list would name a different message by
+    // then.
+    sent.current += 1;
+    const key = `mine-${String(sent.current)}`;
+    const working = held.running > 0;
+    // Shown immediately rather than waiting for the daemon to echo it back. A
+    // message that appears only once the agent has acknowledged it reads as a
+    // send button that did nothing — and there is nothing to wait for anyway:
+    // measured, the adapter never echoes a live user message back, so this
+    // copy is the only record of it until the session is opened again.
+    //
+    // `mine` and not `fold`, because it is not something the daemon said. See
+    // the note there: dressing it up as an update is what put a steer above
+    // the rest of a reply that was still arriving.
+    setHeld((current) => mine(current, words, key));
+    void chatSend(project, workspace, words)
+      .then((how) => {
+        // Only a message that started a turn of its own while the agent was
+        // already working has to wait for it. A steer is being read now, and
+        // saying it is queued would be the opposite of the truth.
+        if (how === "prompt" && working) {
+          setHeld((current) => waiting(current, key));
+        }
+      })
+      .catch(() => {
+        // The stream is where a conversation that cannot be had says so.
+      });
+  }, [draft, held.running, project, workspace]);
 
   return (
     <div {...stylex.props(styles.chat)} data-column-part="chat">
       <div {...stylex.props(styles.scroll)}>
-        {items.length === 0 && !held.running ? (
+        {items.length === 0 && held.running === 0 ? (
           <p {...stylex.props(styles.nothing)}>nothing said yet</p>
         ) : (
           items.map((item) => (
@@ -132,7 +162,7 @@ export const Chat = ({
 
             On the wire rather than inferred from silence, because silence is
             also what an agent that answered with nothing looks like. */}
-        {held.running && <p {...stylex.props(styles.working)}>working…</p>}
+        {held.running > 0 && <p {...stylex.props(styles.working)}>working…</p>}
         {held.stopped !== undefined && (
           <p {...stylex.props(styles.stopped)}>the turn ended: {held.stopped}</p>
         )}
@@ -250,6 +280,15 @@ const FULL_ENOUGH = 0.5;
 /** Past this, it is worth them minding. */
 const NEARLY_FULL = 0.85;
 
+/**
+ * Past this, how long a tool call has taken is worth saying, in seconds.
+ *
+ * The same rule as the context figure and the status bar: an elapsed time on
+ * every row is furniture, and what a person is looking for is the one call
+ * that has been going for minutes.
+ */
+const WORTH_SAYING = 10;
+
 const Row = ({
   item,
   project,
@@ -263,7 +302,7 @@ const Row = ({
     return <Message item={item} />;
   }
   if (item.kind === "ran") {
-    return <Tool item={item} />;
+    return <Tool item={item} project={project} workspace={workspace} />;
   }
   return <Permission item={item} project={project} workspace={workspace} />;
 };
@@ -272,6 +311,19 @@ const Message = ({ item }: { readonly item: Said }) => (
   <div {...stylex.props(styles.item, styles.said, item.role === "thought" && styles.thought)}>
     <span {...stylex.props(styles.who, item.role === "user" && styles.mine)}>
       {item.role === "user" ? "you" : item.role === "thought" ? "thinking" : "agent"}
+      {/* ── a steer says that it is waiting ───────────────────────────────
+          Measured: a message sent mid-turn is answered only once the turn it
+          interrupted has ended. Drawn as an ordinary message it reads as a
+          question the agent ignored — and then, when the answer does come,
+          as an answer to the wrong thing. */}
+      {item.queued && (
+        <span
+          {...stylex.props(styles.queued)}
+          title="sent — the agent is finishing what it was doing and will answer this next"
+        >
+          queued
+        </span>
+      )}
     </span>
     {/* ── markdown for what the agent wrote, and not for what you wrote ────
 
@@ -291,7 +343,15 @@ const Message = ({ item }: { readonly item: Said }) => (
   </div>
 );
 
-const Tool = ({ item }: { readonly item: Ran }) => {
+const Tool = ({
+  item,
+  project,
+  workspace,
+}: {
+  readonly item: Ran;
+  readonly project: string;
+  readonly workspace: string;
+}) => {
   // Shut by default, and open once for anything that went wrong.
   //
   // Output is usually long and usually uninteresting — the row already says
@@ -313,8 +373,27 @@ const Tool = ({ item }: { readonly item: Ran }) => {
           {...stylex.props(styles.command)}
         >
           <span {...stylex.props(styles.verb)}>{verb(item)}</span>
-          <span {...stylex.props(styles.what)}>{item.title}</span>
+          {/* ── a delegated call, labelled ────────────────────────────────
+              A spawn used to read as `ran  Task`, which says neither that
+              work was handed off nor to what. There is no subagent update
+              kind in ACP — a subagent's own messages never arrive — so this
+              is one tool call named honestly rather than a tree. */}
+          <span {...stylex.props(styles.what)}>
+            {item.subagent === undefined ? item.title : `a ${item.subagent}`}
+          </span>
+          {item.elapsed !== undefined && item.elapsed >= WORTH_SAYING && (
+            <span {...stylex.props(styles.verb)}>{took(item.elapsed)}</span>
+          )}
         </button>
+        {/* Why a spawn is sitting still. A subagent waiting out a rate limit
+            and a subagent doing slow work are the same picture without this,
+            and only one of them is worth waiting for. */}
+        {stalled(item) !== undefined && <p {...stylex.props(styles.retry)}>{stalled(item)}</p>}
+        {/* The question about this call, on this call. See the note on `ask`:
+            a separate row was a second copy of the command already above it. */}
+        {item.ask !== undefined && (
+          <Answering item={item.ask} project={project} workspace={workspace} />
+        )}
         {open &&
           item.output !== "" && (
             // Plain text, and that is a known gap rather than a choice: a tool
@@ -329,7 +408,31 @@ const Tool = ({ item }: { readonly item: Ran }) => {
   );
 };
 
+/**
+ * A question with nothing on screen to attach it to.
+ *
+ * The ordinary case is `Answering` inside the tool row — the adapter emits the
+ * tool call before it asks. This is what is left: a question about a call this
+ * window was never told about, which is still a question and still has an
+ * agent waiting on it.
+ */
 const Permission = ({
+  item,
+  project,
+  workspace,
+}: {
+  readonly item: Asked;
+  readonly project: string;
+  readonly workspace: string;
+}) => (
+  <div {...stylex.props(styles.item, styles.asked)}>
+    <p {...stylex.props(styles.question)}>{item.title}</p>
+    <Answering item={item} project={project} workspace={workspace} />
+  </div>
+);
+
+/** What a person may answer, and what they answered. */
+const Answering = ({
   item,
   project,
   workspace,
@@ -344,8 +447,7 @@ const Permission = ({
   const [answered, setAnswered] = useState<string | undefined>(undefined);
 
   return (
-    <div {...stylex.props(styles.item, styles.asked)}>
-      <p {...stylex.props(styles.question)}>{item.title}</p>
+    <>
       {answered === undefined ? (
         <div {...stylex.props(styles.options)}>
           {item.options.map((option) => (
@@ -370,7 +472,7 @@ const Permission = ({
       ) : (
         <p {...stylex.props(styles.answered)}>{answered}</p>
       )}
-    </div>
+    </>
   );
 };
 
@@ -430,6 +532,14 @@ const styles = stylex.create({
     color: colors.muted,
   },
   mine: { color: colors.accent },
+  /** Quiet, and beside the name rather than under it — it qualifies "you". */
+  queued: {
+    marginInlineStart: "0.4rem",
+    fontFamily: text.ui,
+    fontSize: text.small,
+    fontWeight: text.regular,
+    color: colors.muted,
+  },
   words: {
     fontFamily: text.ui,
     fontSize: text.body,
@@ -479,6 +589,13 @@ const styles = stylex.create({
     overflowWrap: "anywhere",
   },
   failed: { color: colors.warn },
+  /** A sentence about a stall, not a state — see the note on the row. */
+  retry: {
+    marginTop: "0.15rem",
+    fontFamily: text.ui,
+    fontSize: text.small,
+    color: colors.waiting,
+  },
   answered: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
   working: {
     fontFamily: text.ui,

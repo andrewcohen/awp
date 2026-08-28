@@ -221,7 +221,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         Layer.provide(
           Layer.succeed(Chat)({
             open: () => Effect.succeed(Stream.empty),
-            send: () => Effect.void,
+            send: () => Effect.succeed("prompt" as const),
             answer: () => Effect.void,
             config: () => Effect.succeed([]),
             set: () => Effect.succeed([]),

@@ -44,10 +44,21 @@
 // mean nobody in this window is ever asked.
 
 import { Db, type Migration, attempt } from "@awp-kit/store";
-import { Context, Data, Effect, Layer, Queue, RcMap, Ref, type Scope, Stream } from "effect";
+import {
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Queue,
+  RcMap,
+  Ref,
+  Result,
+  type Scope,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { realpathSync } from "node:fs";
-import type { ChatConfigOption, ChatUpdate } from "@awp-kit/protocol";
+import type { ChatConfigOption, ChatDelivery, ChatUpdate } from "@awp-kit/protocol";
 import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
 import { workspacePath } from "./jobs/create-workspace";
 import { childEnv } from "./zmx-session";
@@ -118,8 +129,17 @@ interface Conversation {
   readonly sessionId: string;
   /** The history so far, then everything that happens next. */
   readonly updates: Effect.Effect<Stream.Stream<ChatUpdate>, never, Scope.Scope>;
-  /** Say something. Returns as soon as the turn has started, not when it ends. */
-  readonly send: (text: string) => Effect.Effect<void, ChatError>;
+  /**
+   * Say something. Returns as soon as it has been delivered, not when the
+   * agent has finished — and says which way it went, because the two are a
+   * different thing to a person watching:
+   *
+   *   steer    injected into the turn already running. Being handled now
+   *   prompt   a turn of its own, which is what a message sent to an idle
+   *            agent is, and what a steer becomes on an agent that cannot
+   *            be steered
+   */
+  readonly send: (text: string) => Effect.Effect<ChatDelivery, ChatError>;
   /** Answer a permission request by the id the update carried. */
   readonly answer: (request: string, option: string) => Effect.Effect<void, ChatError>;
   /** What this session is running as, and what it could be running as instead. */
@@ -137,6 +157,47 @@ const textOf = (content: unknown): string | undefined => {
   return block?.["type"] === "text" && typeof block["text"] === "string"
     ? block["text"]
     : undefined;
+};
+
+/**
+ * What a delegated call is, out of the adapter's own `_meta`.
+ *
+ * A `Task` call is an ordinary tool call — there is no subagent update kind in
+ * ACP, which is worth knowing so nobody goes looking for one. The facts ride
+ * in `_meta.claudeCode.toolResponse` on the progress updates, and the retry
+ * counters are the SDK's, forwarded verbatim, so they are read in their own
+ * spelling first and camelCase second rather than assumed.
+ */
+const numberOf = (raw: unknown): number | undefined => (typeof raw === "number" ? raw : undefined);
+
+const delegatedTo = (update: Record<string, unknown>): Record<string, unknown> => {
+  const meta = update["_meta"] as Record<string, unknown> | undefined;
+  const claude = meta?.["claudeCode"] as Record<string, unknown> | undefined;
+  const response = claude?.["toolResponse"] as Record<string, unknown> | undefined;
+  if (response === undefined) {
+    return {};
+  }
+  const retry = response["subagentRetry"] as Record<string, unknown> | undefined;
+  const tried = numberOf(retry?.["attempt"]);
+  const of = numberOf(retry?.["max_retries"] ?? retry?.["maxRetries"]);
+  const inMs = numberOf(retry?.["retry_delay_ms"] ?? retry?.["retryDelayMs"]);
+  return {
+    ...(typeof response["subagentType"] === "string" ? { subagent: response["subagentType"] } : {}),
+    ...(numberOf(response["elapsedTimeSeconds"]) === undefined
+      ? {}
+      : { elapsed: response["elapsedTimeSeconds"] }),
+    // The attempt is the only field worth a row on its own: a retry with no
+    // attempt number is a sentence that cannot be written.
+    ...(tried === undefined
+      ? {}
+      : {
+          retry: {
+            attempt: tried,
+            ...(of === undefined ? {} : { of }),
+            ...(inMs === undefined ? {} : { inMs }),
+          },
+        }),
+  };
 };
 
 /**
@@ -185,6 +246,7 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
       ...(typeof update["kind"] === "string" ? { toolKind: update["kind"] } : {}),
       ...(typeof update["status"] === "string" ? { status: update["status"] } : {}),
       ...(output === undefined ? {} : { output }),
+      ...delegatedTo(update),
     } as ChatUpdate;
   }
 
@@ -242,6 +304,9 @@ export const permissionOf = (params: Record<string, unknown>, id: string): ChatU
     kind: "permission",
     id,
     title: typeof call?.["title"] === "string" ? call["title"] : "a tool wants to run",
+    // Which call is being asked about. The adapter emits the tool call first,
+    // so this nearly always resolves to a row the window is already drawing.
+    ...(typeof call?.["toolCallId"] === "string" ? { about: call["toolCallId"] } : {}),
     options: options.map((raw) => {
       const option = raw as Record<string, unknown>;
       return {
@@ -404,10 +469,26 @@ export const conversation = (
     );
     yield* Effect.forkScoped(Effect.ignore(reader));
 
-    yield* request("initialize", {
+    const hello = yield* request("initialize", {
       protocolVersion: 1,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
     });
+
+    // ── steering is a capability, so it is read rather than assumed ────────
+    //
+    // A message typed while the agent is working is not a second question. The
+    // adapter has a request for it — `_session/steering`, which "injects the
+    // message into the in-flight turn rather than queuing it as a separate
+    // session/prompt", at a priority that pre-empts the current generation —
+    // and it advertises it in the initialize reply rather than in a version
+    // number. Absent, sending is the ordinary prompt and nothing is lost but
+    // the immediacy.
+    const steering =
+      (
+        (hello["_meta"] as Record<string, unknown> | undefined)?.["steering"] as
+          | Record<string, unknown>
+          | undefined
+      )?.["supported"] === true;
 
     // The session for this directory: the one the daemon named, if it is
     // still there, and a new one otherwise.
@@ -542,6 +623,32 @@ export const conversation = (
       // with nothing — both are an empty space.
       send: (text: string) =>
         Effect.gen(function* () {
+          // Steer first, when the agent can be steered.
+          //
+          // **`idleBehavior: "promptRequired"`, and it is the whole reason this
+          // is one call rather than two.** Without it, a steer sent when no
+          // turn is running makes the *adapter* start one, detached — so this
+          // process would emit no `turn started`, no `turn ended`, and the
+          // window would watch a reply arrive with nothing saying a turn was
+          // under way. With it the adapter refuses instead, by name, and the
+          // ordinary path below runs and owns the lifecycle.
+          //
+          // It also means there is no "is a turn running" state kept here. The
+          // adapter decides, and its own comment says the check and the push
+          // "stay in one synchronous section so the turn cannot settle in the
+          // gap" — which is a race this side could not have avoided.
+          if (steering) {
+            const steered = yield* Effect.result(
+              request("_session/steering", {
+                ...promptOf(text),
+                _meta: { steering: { idleBehavior: "promptRequired" } },
+              }),
+            );
+            if (Result.isSuccess(steered) && steered.success["outcome"] === "injected") {
+              return "steer" as const;
+            }
+          }
+
           yield* emit({ kind: "turn", status: "started" });
           yield* Effect.forkIn(
             request("session/prompt", promptOf(text)).pipe(
@@ -555,6 +662,7 @@ export const conversation = (
             ),
             mine,
           );
+          return "prompt" as const;
         }),
 
       answer: (requestId: string, option: string) =>
@@ -649,12 +757,12 @@ export class Chat extends Context.Service<
       workspace: string,
     ) => Effect.Effect<Stream.Stream<ChatUpdate>, ChatError, Scope.Scope>;
 
-    /** Say something to it. */
+    /** Say something to it, and say how it got there. */
     readonly send: (
       project: string,
       workspace: string,
       text: string,
-    ) => Effect.Effect<void, ChatError>;
+    ) => Effect.Effect<ChatDelivery, ChatError>;
 
     /** Answer one of its permission requests. */
     readonly answer: (

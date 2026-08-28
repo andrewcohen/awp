@@ -45,6 +45,7 @@
     "probe:ask": "bun packages/server/src/probe/daemon-ask.ts",
     "probe:acp": "bun packages/server/src/probe/acp.ts",
     "probe:chat": "bun packages/server/src/probe/chat.ts",
+    "probe:steer": "bun packages/server/src/probe/steer.ts",
     "probe:shell": "bun run --filter amoeba probe:shell"
   },
   "devDependencies": {

@@ -11,7 +11,11 @@ rather than the summary when what you learn changes the shape of the work.
 
 Regenerated wholesale. Do not hand-edit a single entry expecting it to survive — change the task, then write this out again. `bun run fmt` reflows this file, so the sequence is regenerate, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-47 open, 71 finished, as of 2026-08-28.
+46 open, 74 finished, as of 2026-09-08.
+
+Hand-edited rather than regenerated, for #115, #118, #121 and the two #91
+bullets they closed: the list they are regenerated from lives in a session that
+has ended. The next regeneration will overwrite this.
 
 In progress: #91.
 
@@ -419,13 +423,12 @@ So a restart costs the turn in flight, not the thread; there is nothing to daemo
 
 ## Left
 
-- **no turn boundary on the wire.** `stopReason` is dropped, so the panel
-  cannot say "the agent is thinking" or draw the end of a turn. That is
-  also what #42 wants — the sidebar's real state, asked rather than guessed.
 - **the session id is not recorded** against the workspace. Asking
   `session/list` per open is correct and cheap today; it is a linear scan of
   a directory with 146 entries on this machine and nobody has measured it.
-- **markdown** — #102. A model answers in it, and the panel draws it as text.
+- **markdown in a code fence.** The panel renders markdown, and `pre span` is
+  0 in a real window: a fenced block has no highlighting. #102 is where the
+  shiki the diff panel already loads gets reused for it.
 - **fork, for a session somebody is sitting in.** `load` would make the ACP
   side a second writer on a transcript an interactive `claude` is still
   appending to. Offering "open this in the chat" on a running terminal
@@ -907,40 +910,6 @@ What to work out when this is picked up:
 
 Base UI ships a Toast, which is the answer to whether to hand-roll one.
 
-## 115. The chat says what it is running as, and how full it is
-
-Asked for by name: "the config controls for model and effort and mode too please. also would be great to show context usage %".
-
-A chat session has three settings a person needs to see and change without leaving the panel, and one number they need to watch:
-
-    model    `session/new` takes it in `_meta.claudeCode.options`. Changing it
-             mid-session is untested — it may need a new session, which is a
-             different gesture and should say so.
-    effort   the same place. Not currently passed at all by the chat.
-    mode     `session/set_mode`, and this one matters most. The chat sets
-             `default` (Manual) at open; the other five are auto, acceptEdits,
-             plan, dontAsk and bypassPermissions. A person needs to see which
-             one they are in, because it decides whether they are asked before
-             a tool runs.
-
-**The context number is already arriving and is being thrown away.** `updateOf`
-in chat.ts drops `usage_update` as an update "nobody reads" — measured six of
-them in a single turn. That is exactly where the percentage is. The fix is to
-stop dropping it, put the figures on `ChatUpdate`, and show them; nothing new
-has to be asked for.
-
-Two things to get right when it lands:
-
-- **A number that is always on screen is furniture.** The window's rule
-  about the status bar applies: say nothing until it is worth saying.
-  Somewhere past half, and louder near the end.
-- **Where the controls go.** A row under the composer is the obvious place
-  and competes with the send. The agent bar already holds the face toggle
-  and is where "how this session runs" belongs — but it is per-window
-  chrome and these are per-session facts. Decide once.
-
-Blocked on nothing. #91 is what made it possible.
-
 ## 116. Rename a thread from the header or the sidebar
 
 A thread's title is written once, by a model, from the sentence somebody typed into the new-thread modal. It is frequently almost right and there is no way to fix it.
@@ -1019,37 +988,6 @@ Depends on nothing in flight. Related: #44 (comment on a diff and send it),
 #55 (annotate an element and send it), #102 (patches inside tool output — a
 quoted diff line would want the same renderer).
 
-## 118. A subagent is a tool call with a name, and the chat should say so
-
-An agent that spawns subagents currently reads, in the chat, as a single tool call that sits at `in_progress` for minutes and then produces a wall of text. Nothing says work was delegated, how many ways, or which one is stuck.
-
-**The information is already arriving.** Measured in the adapter's own source, 2026-08-28: a Task call is an ordinary `tool_call` / `tool_call_update`, and the subagent facts ride in its `_meta`:
-
-    _meta.claudeCode.toolResponse.subagentType    which kind was spawned
-    _meta.claudeCode.toolResponse.subagentRetry   attempt, max_retries,
-                                                  retry_delay_ms
-    _meta.claudeCode.toolResponse.elapsedTimeSeconds
-
-`updateOf` in chat.ts reads `title`, `kind`, `status` and the output and throws the rest away, so nothing new has to be asked for — this is a matter of keeping three more fields.
-
-The retry counters are the ones worth having and are the least obvious. The adapter's own comment says why they are forwarded verbatim: _"when the subagent is waiting out an API rate-limit retry … so clients can show why a spawn looks stalled."_ A subagent stuck behind a rate limit and a subagent doing slow work are the same picture today, and only one of them is worth waiting for.
-
-**There is no subagent update kind in ACP**, and it is worth writing that down so nobody goes looking: no `subagent` anywhere in the schema, no nesting, no separate stream. A subagent's own messages do not arrive. What arrives is one tool call that takes a while. So this task is about labelling that call honestly, not about drawing a tree.
-
-What to decide:
-
-- **How a delegated call reads.** `ran  Task` is what it says now. `spawned
-a code-reviewer · 2m14s` is the shape wanted, and the elapsed figure is
-  already on the wire.
-- **Whether a retrying subagent is a state or a sentence.** The tool row has
-  a status already; `attempt 2 of 5, retrying in 30s` is a sentence and
-  probably belongs on the row rather than in a new state.
-- **What the sidebar does with it.** #42 wants a row to say what the agent is
-  doing. "Delegating" is a different answer from "working" and may be worth
-  the distinction — or may be a distinction only this panel cares about.
-
-Related: #42 (sidebar status), #115 (which landed the config strip and is where the daemon's update parsing now lives).
-
 ## 119. Own the agent's terminals, so a long command is watchable and killable
 
 A command the agent runs for two minutes is, in the chat, a row that says `…` and then eventually says something. It cannot be watched while it runs and cannot be stopped.
@@ -1094,6 +1032,44 @@ Do not start this before the permission path has been exercised by hand: this
 moves execution into the daemon, and the daemon is the process holding a
 person's repositories.
 
-Related: #91 (the chat), #115 (config strip), #118 (subagents), #63 (running a
+Related: #91 (the chat), #115 (config strip), #63 (running a
 workspace's services — a different long-running-process problem with some of
 the same answers).
+
+## 120. Electron's 317MB runtime must not land in every workspace
+
+The same shape as #112, which removed a 306MB ACP adapter from every checkout — and this one is bigger and was two lines from being shipped.
+
+**What is true today.** Electron installs, its binary does not. Bun refuses to run a package's postinstall unless it is named in `trustedDependencies`, and electron's postinstall is what downloads the runtime. So `bun run dev` builds the main process and then has nothing to launch, which reads as the app simply not appearing rather than as a missing step.
+
+    node_modules/.bun/electron@44.0.0/…/electron/   install.js, cli.js, index.js
+                                          /dist     absent until install.js runs
+                                                    317MB extracted, 128MB cached zip
+
+Adding `trustedDependencies: ["electron"]` fixes the launch and creates the real problem: the create-workspace job's bootstrap hook runs `bun install` in every workspace it makes, and the field is repo-wide, so **every workspace would extract its own 317MB**. It was added, measured, and taken back out for exactly that reason.
+
+**Electron v44's installer has no skip flag.** Checked rather than assumed — the whole set of switches it honours is:
+
+    electron_config_cache · force_no_cache · ELECTRON_INSTALL_ARCH
+    ELECTRON_INSTALL_PLATFORM · ELECTRON_OVERRIDE_DIST_PATH
+    electron_use_remote_checksums · npm_config_{arch,platform}
+
+No `ELECTRON_SKIP_BINARY_DOWNLOAD`. So the per-install opt-out that older versions had is not available, and `trustedDependencies` is all-or-nothing.
+
+**The shape that fits, and it is the user's own:** a workspace is web-only, and only the main line runs the native shell. That is already how this repo says to look at a branch — the second-instance section in AGENTS.md points at Vite and a browser tab, because a tab answers the layout, the theme, the panels, the pane's own rendering and every call over the socket. What a tab cannot answer is the native webview, the menu, and the window's own chrome, and those are exactly the things somebody opens the main line for.
+
+So:
+
+- **Leave `trustedDependencies` out**, which is where it is now. Nothing
+  downloads a runtime as a side effect of making a workspace.
+- **One command on the main line**, run once per machine, that resolves
+  electron's package directory and runs its `install.js`.
+  `ELECTRON_OVERRIDE_DIST_PATH` is the other half worth looking at: one
+  extracted copy pointed at from everywhere beats one per checkout even on
+  the main line.
+- **`dev` should refuse with that sentence** when the binary is missing.
+  The current failure is electron-not-found, three lines into a build, and
+  it took a measurement to work out what it meant.
+
+Related: #112 (the same 306MB lesson, one package earlier), #40 (the bootstrap
+hook that runs `bun install`), #103 (what a workspace starts on its own).

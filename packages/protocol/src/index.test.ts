@@ -313,7 +313,7 @@ const handlers = AwpRpcs.toLayer({
   AgentSend: () => Effect.void,
   ChatOpen: () =>
     Stream.fromArray([{ kind: "message" as const, role: "agent" as const, text: "hello" }]),
-  ChatSend: () => Effect.void,
+  ChatSend: () => Effect.succeed("prompt" as const),
   ChatAnswer: () => Effect.void,
   ChatConfig: () => Effect.succeed([]),
   ChatSet: () => Effect.succeed([]),

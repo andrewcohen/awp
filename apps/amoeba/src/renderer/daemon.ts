@@ -8,6 +8,7 @@ import {
 import type {
   AgentTask,
   ChatConfigOption,
+  ChatDelivery,
   ChatUpdate,
   CommentSide,
   Effort,
@@ -674,11 +675,16 @@ export const watchChat = (
 /**
  * Say something to the agent working in a workspace.
  *
- * Resolves when the turn has started, not when it ends — the answer arrives
- * down {@link watchChat}. A promise that settled at the end of a turn would be
- * one a send button had to wait on for minutes.
+ * Resolves when it has been delivered, not when the agent has finished — the
+ * answer arrives down {@link watchChat}. A promise that settled at the end of
+ * a turn would be one a send button had to wait on for minutes.
+ *
+ * What it resolves *to* is how the message got there: `steer` when it was
+ * injected into a turn already running, `prompt` when it started one. The
+ * window cannot work that out for itself, and it is the difference between a
+ * message being read now and a message waiting its turn.
  */
-export const chatSend = (project: string, workspace: string, text: string): Promise<void> =>
+export const chatSend = (project: string, workspace: string, text: string): Promise<ChatDelivery> =>
   runtime.runPromise(
     Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text })),
   );

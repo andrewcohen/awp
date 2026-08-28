@@ -144,6 +144,74 @@ describe("updateOf", () => {
     expect(updateOf({ update: { sessionUpdate: "tool_call", status: "pending" } })).toBeUndefined();
   });
 
+  // ── a delegated call ─────────────────────────────────────────────────────
+  //
+  // The shape is the adapter's own, read out of its source rather than
+  // guessed: a `tool_progress` beat is a `tool_call_update` carrying
+  // `_meta.claudeCode.toolResponse`, and the retry counters inside it are the
+  // SDK's, forwarded verbatim in the SDK's spelling.
+
+  it("keeps what a Task call spawned, and how long it has been at it", () => {
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "toolu_01",
+          status: "in_progress",
+          _meta: {
+            claudeCode: {
+              toolName: "Task",
+              toolResponse: { subagentType: "code-reviewer", elapsedTimeSeconds: 134 },
+            },
+          },
+        },
+      }),
+    ).toMatchObject({ subagent: "code-reviewer", elapsed: 134 });
+  });
+
+  it("keeps the retry counters, which are why a spawn looks stalled", () => {
+    // snake_case, because they are the SDK's own fields and the adapter passes
+    // them through untouched. Reading only camelCase finds nothing and says
+    // nothing, which is exactly the picture this is meant to replace.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "toolu_01",
+          _meta: {
+            claudeCode: {
+              toolResponse: {
+                subagentType: "code-reviewer",
+                subagentRetry: { attempt: 2, max_retries: 5, retry_delay_ms: 30_000 },
+              },
+            },
+          },
+        },
+      })?.retry,
+    ).toEqual({ attempt: 2, of: 5, inMs: 30_000 });
+  });
+
+  it("says nothing about a retry with no attempt to name", () => {
+    // A retry with no attempt number is a sentence that cannot be written.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "toolu_01",
+          _meta: { claudeCode: { toolResponse: { subagentRetry: {} } } },
+        },
+      })?.retry,
+    ).toBeUndefined();
+  });
+
+  it("adds nothing to an ordinary tool call", () => {
+    const update = updateOf({
+      update: { sessionUpdate: "tool_call", toolCallId: "toolu_01", title: "cat notes.txt" },
+    });
+    expect(update?.subagent).toBeUndefined();
+    expect(update?.elapsed).toBeUndefined();
+  });
+
   it("says nothing about an update it has never seen", () => {
     expect(updateOf({ update: { sessionUpdate: "some_future_thing" } })).toBeUndefined();
     expect(updateOf({})).toBeUndefined();
@@ -173,6 +241,20 @@ describe("permissionOf", () => {
       "allow_once",
       "allow_always",
     ]);
+  });
+
+  it("names the call it is asking about", () => {
+    // The adapter emits the tool call before it asks — `ensureToolCallEmitted`
+    // in its own source — so this id resolves to a row the window is already
+    // drawing, and the buttons go on that row instead of on a second one
+    // repeating the same command.
+    expect(
+      permissionOf(
+        { toolCall: { toolCallId: "toolu_01", title: "rm /tmp/notes.txt" }, options: [] },
+        "permission-4",
+      ).about,
+    ).toBe("toolu_01");
+    expect(permissionOf({ toolCall: { title: "rm" } }, "permission-4").about).toBeUndefined();
   });
 
   it("still says something when the request names no tool", () => {
