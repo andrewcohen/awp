@@ -552,14 +552,54 @@ export const layer = AwpRpcs.toLayer(
           // Local only. A name that exists solely on a remote cannot be
           // branched from without fetching first, so offering it would be
           // offering a failure.
-          const bookmarks = localBookmarks(all).map((entry) => ({
-            revset: entry.name,
-            label: entry.name,
-            workspace: workspaceOf(entry.name, settings.bookmarkPrefix),
-          }));
+          // ── what trunk() is actually called ────────────────────────────
+          //
+          // The row used to be labelled "trunk", which names the *method* and
+          // not the place: `trunk()` is jj's alias for the remote's default
+          // bookmark, then main, then master. A person branching from it wants
+          // to read the name they would say out loud.
+          //
+          // Resolved by asking where trunk() points and looking that commit up
+          // in the bookmark list already in hand — no second call. Measured on
+          // this machine, where the two are not the same commit:
+          //
+          //   trunk()                 9f239c56
+          //   main   remote origin →  9f239c56    ← the match, and the label
+          //   main   local        →  158b02fe    behind by a fetch
+          //
+          // A local match is preferred when there is one, because a local name
+          // is what a person types. Remote is spelled the way jj spells it.
+          const trunkAt = yield* jj
+            .revisions({ dir: repo, revset: TRUNK, limit: 1 })
+            .pipe(Effect.orElseSucceed(() => []));
+          const at = trunkAt[0]?.commitId;
+          const pointing =
+            at === undefined || at === "" ? [] : all.filter((entry) => entry.target === at);
+          const named = pointing.find((entry) => entry.remote === undefined) ?? pointing[0];
+          // A repository with no bookmark at its main line still has a main
+          // line, so the row stays and is named for what it is. An empty label
+          // would be worse than a generic one.
+          const trunkLabel =
+            named === undefined
+              ? "main line"
+              : named.remote === undefined
+                ? named.name
+                : `${named.name}@${named.remote}`;
+
+          const bookmarks = localBookmarks(all)
+            // The local bookmark trunk() resolved to would otherwise appear
+            // twice under one name, once with the robust revset and once with
+            // its own. The trunk row is the one to keep: it survives the
+            // bookmark being moved or renamed.
+            .filter((entry) => entry.name !== trunkLabel)
+            .map((entry) => ({
+              revset: entry.name,
+              label: entry.name,
+              workspace: workspaceOf(entry.name, settings.bookmarkPrefix),
+            }));
 
           return [
-            { revset: TRUNK, label: "trunk", workspace: undefined },
+            { revset: TRUNK, label: trunkLabel, workspace: undefined },
             ...bookmarks.toSorted((a, b) => a.label.localeCompare(b.label)),
           ];
         }),
