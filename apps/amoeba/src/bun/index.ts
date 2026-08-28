@@ -58,6 +58,28 @@ export const mainWindow = new BrowserWindow({
   // because this very flag leaves a real title bar behind it. `Bars.tsx` now
   // wears electrobun's class as well, so the region works on its own merits.
   titleBarStyle: "hiddenInset",
+  // ── putting the lights on the same line as the bar's own control ────────
+  //
+  // AppKit places them for a standard 28pt title bar, so their centre is about
+  // 14pt down. This window's top bar is `space.titlebar` — 2.5rem, 40px — and
+  // centres its content at 20px, so the sidebar's fold button sat six pixels
+  // below the lights and the row read as two rows.
+  //
+  // The button's position is ours and the lights' is not, so the lights move.
+  // `trafficLightOffset` is a delta from where AppKit would put them; zero is
+  // the default.
+  //
+  //   40px bar, centre at 20      the button
+  //   28pt bar, centre at ~14     the lights, by default
+  //   ────────────────────────
+  //   6                           this
+  //
+  // **The sign is unverified.** It goes straight to the native side with no
+  // documentation on either end, and AppKit's window coordinates are flipped —
+  // so if they move up rather than down, negate it. That is the whole
+  // adjustment, and it is why the number is derived and named rather than
+  // buried in the call.
+  trafficLightOffset: { x: 0, y: 6 },
 });
 
 // After the window, because two of its items act on one: Reload, and the
