@@ -299,15 +299,19 @@ const styles = stylex.create({
   // gesture for the same pixels, and it had to stop the pointerdown to do it.
   // It is now in the head row below, where the rest of the panel's controls
   // are, and this bar does one thing.
+  // Once the caret left, what was still here was a 14px band of `colors.base`
+  // with a rule under it — a *bar*, sitting between the list and the head row,
+  // holding nothing. That is what read as "weird padding": an empty stripe
+  // above the head that looked like the head's own top margin.
+  //
+  // So it is a rule with a hit area now, and nothing else. Transparent, so it
+  // adds no band; 0.45rem, which is the ordinary size of a grab strip and is
+  // what the column dividers use.
   splitter: {
     position: "relative",
-    display: "flex",
-    alignItems: "center",
-    gap: "0.3rem",
     flexShrink: 0,
-    height: "0.9rem",
-    padding: "0 0.35rem",
-    backgroundColor: colors.base,
+    height: "0.45rem",
+    backgroundColor: "transparent",
     borderBottomWidth: 1,
     borderBottomStyle: "solid",
     borderBottomColor: colors.border,
@@ -351,8 +355,21 @@ const styles = stylex.create({
     // it is carrying buttons or a sentence. Without it the panel shifted every
     // time a patch went from "no changes" to a stat, which reads as the layout
     // twitching rather than as content arriving.
-    minHeight: "1.9rem",
-    padding: "0.15rem 0.35rem 0.15rem 0.2rem",
+    minHeight: "1.75rem",
+    // Symmetric, and no vertical padding at all — the floor above sets the
+    // height and `alignItems: center` places the content in it. The asymmetric
+    // version this replaced pulled the caret four pixels closer to the left
+    // edge than the buttons were to the right, which is small enough to read
+    // as the whole row being off rather than as one control being wrong.
+    paddingBlock: 0,
+    paddingInline: "0.35rem",
+    // **An edge on both sides.** Without this the row was bounded above, by
+    // the splitter's rule, and open below — so the only line near it was the
+    // one over it, and the content read as sitting low in a box that had no
+    // bottom. It is a band between two things and now looks like one.
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
     color: colors.muted,
     fontSize: text.small,
   },
