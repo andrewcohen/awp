@@ -12,7 +12,7 @@ rather than the summary when what you learn changes the shape of the work.
 Regenerated wholesale. Do not hand-edit a single entry expecting it to
 survive — change the task, then write this out again.
 
-45 open, 71 finished, as of 2026-08-28.
+47 open, 71 finished, as of 2026-08-28.
 
 In progress: #91.
 
@@ -43,15 +43,13 @@ A tldraw canvas in the accessory column, one per thread, that an agent can read.
 Read first, write later — the user's own sequencing, and the right one: reading is a projection, writing is a parser.
 
 Shape:
-
 - the snapshot is a thread's, not a workspace's — every workspace in the thread shares one canvas
 - sqlite is the truth (one store rule), the daemon writes derived files
 - the derived files are what the agent actually reads
 
 The hard part is NOT the canvas. It is that a tldraw snapshot is shape records with coordinates, which is not something an agent can act on. Two projections, both derived from the same snapshot:
-
-1. PNG — a multimodal agent reads the picture directly. Export happens in the RENDERER (tldraw needs a DOM), bytes go to the daemon.
-2. a text outline — text shapes, and arrows as "A -> B" relations. Cheap, greppable, diffable.
+  1. PNG — a multimodal agent reads the picture directly. Export happens in the RENDERER (tldraw needs a DOM), bytes go to the daemon.
+  2. a text outline — text shapes, and arrows as "A -> B" relations. Cheap, greppable, diffable.
 
 Open questions recorded in the conversation: where the file lives, and how the agent is told the path.
 
@@ -186,7 +184,7 @@ Depends on `deck.project_roots`-era config reading; see also the zmx log viewer 
     log_dir   ~/.local/state/zmx/logs
               awp_probe_1.log, acptest.log, …
 
-That is zmx's own record of what happened to a session — starts, attaches, exits — which is a different thing from `Multiplexer.history`, which is the _scrollback_ the program wrote. When a session dies for no visible reason, the scrollback is empty and the log is the only place the reason is.
+That is zmx's own record of what happened to a session — starts, attaches, exits — which is a different thing from `Multiplexer.history`, which is the *scrollback* the program wrote. When a session dies for no visible reason, the scrollback is empty and the log is the only place the reason is.
 
 So: a panel in the accessory column that reads the log for the selected session. Needs
 
@@ -208,9 +206,9 @@ Three things this needs, and the third is the one that bites:
 - **The path, not the contents.** `DataTransfer.files` gives a `File` with no path — the browser deliberately hides it. Electrobun's preload may expose one (`webkitRelativePath` is not it); if not, this needs a small addition on the native side, which is exactly what `apps/amoeba/src/bun` is for. Worth checking `event.dataTransfer.items` for a `text/uri-list` entry first, which carries a `file://` URL that resolves to a real path with no native help at all.
 - **Quote it.** A dropped path routinely has spaces — `~/Desktop/Screenshot 2026-08-27 at 16.04.11.png` — and typing that unquoted into a shell is two arguments. Shell-quote before sending, the same way a terminal that supports this does.
 
-**A macOS screenshot may not be a file yet.** Dragged from the floating thumbnail that appears in the corner after cmd+shift+4, it is a _promised_ file: the drag carries a promise the receiver has to accept before anything exists on disk, and there is no path to read. Dragged from Finder or the desktop after it has saved, it is an ordinary file and the routes above work.
+**A macOS screenshot may not be a file yet.** Dragged from the floating thumbnail that appears in the corner after cmd+shift+4, it is a *promised* file: the drag carries a promise the receiver has to accept before anything exists on disk, and there is no path to read. Dragged from Finder or the desktop after it has saved, it is an ordinary file and the routes above work.
 
-That is worth knowing before the feature is called broken. Two honest options: handle only real files and say nothing when there is no path — which quietly fails exactly the gesture somebody most wants — or accept the promise, write the bytes somewhere, and type _that_ path. The second means the window is now creating files on a person's disk, which needs a decided location and a decided lifetime, so it is a bigger question than it looks. Find out which kind of drag arrives before designing for either.
+That is worth knowing before the feature is called broken. Two honest options: handle only real files and say nothing when there is no path — which quietly fails exactly the gesture somebody most wants — or accept the promise, write the bytes somewhere, and type *that* path. The second means the window is now creating files on a person's disk, which needs a decided location and a decided lifetime, so it is a bigger question than it looks. Find out which kind of drag arrives before designing for either.
 
 Delivered through `Terminal.paste`, not `write`: paste wraps the text in bracketed-paste markers when the program has turned them on, which is what stops a path with a newline in it being run. Same reason `clipboard.ts` uses it. (Claude Code does enable bracketed paste — measured, `ESC[?2004h` is in the first line it writes.)
 
@@ -241,7 +239,7 @@ The two are complementary: Web Inspector for what the page is doing, React DevTo
 
 ## 74. The window collapses when Safari's Web Inspector docks
 
-Opening the Web Inspector against the app makes the whole window shrink and go very short. Devtools-only, so it blocks nothing that ships — but it blocks _inspecting_, which is the tool for everything else, so it is worth understanding rather than working around by leaving the inspector undocked.
+Opening the Web Inspector against the app makes the whole window shrink and go very short. Devtools-only, so it blocks nothing that ships — but it blocks *inspecting*, which is the tool for everything else, so it is worth understanding rather than working around by leaving the inspector undocked.
 
 Candidates, in the order worth checking:
 
@@ -255,7 +253,7 @@ Measure with the probe rather than by eye: `page.evaluate` the computed heights 
 
 ## 75. Give every button a hover tip
 
-Reported against the diff panel and generalised: all buttons. Audited across the renderer, seventeen have no `title`, and five of those have no `aria-label` either — so they are unexplained to a pointer _and_ unnamed to a screen reader:
+Reported against the diff panel and generalised: all buttons. Audited across the renderer, seventeen have no `title`, and five of those have no `aria-label` either — so they are unexplained to a pointer *and* unnamed to a screen reader:
 
     Boundary  2      Jobs      4      Meter    2
     Diff      6      Sidebar   1      Web      1
@@ -266,7 +264,7 @@ Several are icon-only, which is the case where a tip is not a nicety: an icon wi
 Rules for what a tip says, so they are worth having:
 
 - **Name the effect, not the widget.** "hide the panels", not "toggle". The existing ones in `Bars.tsx` and `Sidebar.tsx` already do this and are the model.
-- **State-dependent where the control is.** A toggle's tip says what pressing it will do _now_ — "show the sidebar" versus "hide the sidebar" — which is the only way one glyph can carry two meanings.
+- **State-dependent where the control is.** A toggle's tip says what pressing it will do *now* — "show the sidebar" versus "hide the sidebar" — which is the only way one glyph can carry two meanings.
 - **Say the cost where there is one.** A destructive or outward-facing action's tip is the place to say so, in the way `MoveToThread`'s forget tip says "nothing else is removed".
 - **A keyboard shortcut belongs in it**, where one exists — `new thread (⌘N)` is already the pattern.
 
@@ -294,12 +292,11 @@ Was raised alongside "the modal a little small btw" — that one was fixed by wi
 
 A tab in the accessory column showing this window's own components in isolation: the sidebar row in each of its states, the buttons, the tab strip, the dialog, the error fallback, the tokens themselves.
 
-Why it fits here better than a real Storybook: the whole argument of `tokens.stylex.ts` is that a colour is only meaningful against the ground it is painted on, and this window paints two grounds (light and dark) and a third the pane draws for itself. A style guide rendered _in_ the window sees the real ones. A separate Storybook process would need the theme rebuilt beside it, which is a second copy of the thing being documented.
+Why it fits here better than a real Storybook: the whole argument of `tokens.stylex.ts` is that a colour is only meaningful against the ground it is painted on, and this window paints two grounds (light and dark) and a third the pane draws for itself. A style guide rendered *in* the window sees the real ones. A separate Storybook process would need the theme rebuilt beside it, which is a second copy of the thing being documented.
 
 It also gives the contrast measurements a home. `bun run` has no gate for them and the probe that found "our white theme is soo white" lives in a scratch directory — a panel that lists each token against its ground with the computed ratio would put that on screen instead, and would have shown the failure without anyone thinking to look.
 
 Notes before starting:
-
 - A hidden Base UI tab unmounts, so anything expensive must not live in the panel's own tree (the worker pool learned this).
 - Every state worth showing needs a fixture, and `fixture.ts` is already the model for that — it is built so each block fails visibly when a specific renderer fix is missing, which is the property to copy.
 - The pane cannot be shown here: one Terminal per window, and a second writes into freed memory (see the note at the top of `terminal.ts`).
@@ -307,15 +304,14 @@ Notes before starting:
 
 ## 85. A second button on a task: start it in its own thread
 
-The tasks panel's row has one button, Send, which briefs the agent already open in this thread. The second thing a person wants is the opposite: leave this thread alone and start a _new_ one for the task — the task's subject becomes the thread name and its description becomes the prompt, so it is the new-thread flow with both fields already filled in.
+The tasks panel's row has one button, Send, which briefs the agent already open in this thread. The second thing a person wants is the opposite: leave this thread alone and start a *new* one for the task — the task's subject becomes the thread name and its description becomes the prompt, so it is the new-thread flow with both fields already filled in.
 
 That makes the panel a queue rather than a list: read the pending work, and either hand one to the agent in front of you or fan one out beside it.
 
 Open questions, none of them decided:
-
-- the new thread's base. Probably the current thread's bookmark, since a task read out of this workspace usually follows on from it — which is what `baseOfThread` already resolves.
-- what happens to the task afterwards. A task started in another thread is no longer pending, but nothing here writes to the task store, and it should stay that way until there is a reason.
-- the label. "Send" and a fan-out glyph beside it, or two named buttons; the row is narrow and the second control is the rarer one.
+  - the new thread's base. Probably the current thread's bookmark, since a task read out of this workspace usually follows on from it — which is what `baseOfThread` already resolves.
+  - what happens to the task afterwards. A task started in another thread is no longer pending, but nothing here writes to the task store, and it should stay that way until there is a reason.
+  - the label. "Send" and a fan-out glyph beside it, or two named buttons; the row is narrow and the second control is the rarer one.
 
 ## 87. A show-completed section on the tasks panel
 
@@ -351,18 +347,18 @@ So: a filter field at the top of the panel, matching fuzzily over the subject an
 
 Shape questions, none settled:
 
-- the field's place. The panel's head already holds the count; a filter could
-  replace it while typing, or sit under it as its own row.
-- the algorithm. Subsequence matching with a score is the usual answer and
-  needs no dependency; `browse.ts` may already hold something close enough to
-  reuse rather than a second implementation.
-- highlighting the matched characters, which is what makes a fuzzy match
-  legible rather than mysterious. Without it a low-scoring hit reads as a bug.
-- whether a filtered row should open its description automatically when the
-  match was found there. Probably yes, or the row is a title that does not
-  contain what was typed.
-- the keyboard. Focus should reach the field first when the panel opens, and
-  ctrl+j/k should step the filtered rows — see the navigation mandate.
+  - the field's place. The panel's head already holds the count; a filter could
+    replace it while typing, or sit under it as its own row.
+  - the algorithm. Subsequence matching with a score is the usual answer and
+    needs no dependency; `browse.ts` may already hold something close enough to
+    reuse rather than a second implementation.
+  - highlighting the matched characters, which is what makes a fuzzy match
+    legible rather than mysterious. Without it a low-scoring hit reads as a bug.
+  - whether a filtered row should open its description automatically when the
+    match was found there. Probably yes, or the row is a title that does not
+    contain what was typed.
+  - the keyboard. Focus should reach the field first when the panel opens, and
+    ctrl+j/k should step the filtered rows — see the navigation mandate.
 
 Related: [[a show-completed section on the tasks panel]] (#87), which makes the list long enough that this stops being optional, and #58's command palette, which is the same matching problem in a different frame — worth one implementation rather than two.
 
@@ -370,7 +366,7 @@ Related: [[a show-completed section on the tasks panel]] (#87), which makes the 
 
 Split out of #70, which is now only about showing bookmarks on a revision row.
 
-Hovering a revision that is _ahead_ of where its bookmark currently sits reveals a control on the right; pressing it moves the bookmark to that revision. `Jj.setBookmark` already exists and its doc says "Create a bookmark, or move an existing one. Already idempotent in jj." So the operation is there; what is missing is an RPC and the decision about when to offer it.
+Hovering a revision that is *ahead* of where its bookmark currently sits reveals a control on the right; pressing it moves the bookmark to that revision. `Jj.setBookmark` already exists and its doc says "Create a bookmark, or move an existing one. Already idempotent in jj." So the operation is there; what is missing is an RPC and the decision about when to offer it.
 
 **"Ahead" needs care.** The obvious rule is "above the bookmark's row in the list", and the list is newest-first over `@ | trunk()..@`, so for a linear stack that is right. It is a claim about list position and not about ancestry, and it is wrong the moment the stack forks. Either ask jj (`jj log -r '<bookmark>::<rev>'` is non-empty when one descends from the other) or state the limit in the tooltip. Do not silently offer a move that would rewrite history sideways.
 
@@ -378,7 +374,7 @@ Refuse rather than guess when a row carries no bookmark and the workspace has no
 
 Which bookmark gets tugged is its own question. A workspace usually has exactly one, `<prefix>/<workspace>`, which is what `baseOfThread` already composes — so the control can name it rather than offering a picker. Two bookmarks in one stack is the case that needs a decision.
 
-Related to #41, the automatic version: nothing currently moves `andrew/<name>` forward as commits land, so a bookmark sits at the _first_ commit of its branch — measured at 51 commits behind on this workspace. A manual tug is the smaller answer and may be the better one: moving a bookmark is a decision, and a button says "now" without having to pick a policy.
+Related to #41, the automatic version: nothing currently moves `andrew/<name>` forward as commits land, so a bookmark sits at the *first* commit of its branch — measured at 51 commits behind on this workspace. A manual tug is the smaller answer and may be the better one: moving a bookmark is a decision, and a button says "now" without having to pick a policy.
 
 One thing already established while doing #70, which matters here: a remote bookmark appears in a commit's `json(bookmarks)` when it disagrees with local. Measured — `andrew/awp-kit-amoeba@git` sitting one commit behind shows up on its own commit, carrying `remote: "git"`. The revision list now filters those out, so anything this reads is local; a tug must not offer to move a name that only exists on a remote.
 
@@ -420,23 +416,23 @@ So a restart costs the turn in flight, not the thread; there is nothing to daemo
 
 ## Left
 
-- **no turn boundary on the wire.** `stopReason` is dropped, so the panel
-  cannot say "the agent is thinking" or draw the end of a turn. That is
-  also what #42 wants — the sidebar's real state, asked rather than guessed.
-- **the session id is not recorded** against the workspace. Asking
-  `session/list` per open is correct and cheap today; it is a linear scan of
-  a directory with 146 entries on this machine and nobody has measured it.
-- **markdown** — #102. A model answers in it, and the panel draws it as text.
-- **fork, for a session somebody is sitting in.** `load` would make the ACP
-  side a second writer on a transcript an interactive `claude` is still
-  appending to. Offering "open this in the chat" on a running terminal
-  session is the feature people want and it is a `fork` underneath.
-- **the adapter is a per-machine install** at `~/.awp/tools`, with a sentence
-  naming the command when it is missing. Nothing installs it for anybody.
+  - **no turn boundary on the wire.** `stopReason` is dropped, so the panel
+    cannot say "the agent is thinking" or draw the end of a turn. That is
+    also what #42 wants — the sidebar's real state, asked rather than guessed.
+  - **the session id is not recorded** against the workspace. Asking
+    `session/list` per open is correct and cheap today; it is a linear scan of
+    a directory with 146 entries on this machine and nobody has measured it.
+  - **markdown** — #102. A model answers in it, and the panel draws it as text.
+  - **fork, for a session somebody is sitting in.** `load` would make the ACP
+    side a second writer on a transcript an interactive `claude` is still
+    appending to. Offering "open this in the chat" on a running terminal
+    session is the feature people want and it is a `fork` underneath.
+  - **the adapter is a per-machine install** at `~/.awp/tools`, with a sentence
+    naming the command when it is missing. Nothing installs it for anybody.
 
 ## 92. Add a task from the tasks panel
 
-The panel shows the agent's list and can hand one back. What it cannot do is put something _on_ it — so noticing a thing that needs doing while reading a diff means typing it at the agent in prose and hoping it lands as a task rather than as work started immediately.
+The panel shows the agent's list and can hand one back. What it cannot do is put something *on* it — so noticing a thing that needs doing while reading a diff means typing it at the agent in prose and hoping it lands as a task rather than as work started immediately.
 
 The design question is the whole task, because the panel is deliberately read-only and this is the first thing that wants to write. Two routes, and they are not close:
 
@@ -483,7 +479,7 @@ Two things to decide early, because both are hard to change later:
 
 **Transport.** stdio per agent is the simple answer and means the daemon spawns a server per session. A single HTTP/SSE server on a known port, with the workspace as an argument, is one process but needs the binding above to be real rather than conventional.
 
-Related: [[run the agent under ACP, not only in a terminal]] (#91) — that is the same gap approached from the other side. ACP gives amoeba a channel _to_ the agent's conversation; MCP gives the agent a channel _to_ amoeba. They are complementary rather than alternatives, and doing both is what makes the window and the agent one system rather than two looking at each other.
+Related: [[run the agent under ACP, not only in a terminal]] (#91) — that is the same gap approached from the other side. ACP gives amoeba a channel *to* the agent's conversation; MCP gives the agent a channel *to* amoeba. They are complementary rather than alternatives, and doing both is what makes the window and the agent one system rather than two looking at each other.
 
 ## Tasks are the first thing the MCP server should offer
 
@@ -494,7 +490,7 @@ feature that made it so.
 
 So task management is the first set of actions on the awp MCP server, and the
 point of putting it there rather than leaving it in Claude Code's own store is
-scope. Today a task list belongs to a _session_, found by its transcript
+scope. Today a task list belongs to a *session*, found by its transcript
 directory — see `agent-tasks.ts` — which means a task cannot outlive the
 session that wrote it and cannot be seen from anywhere else.
 
@@ -543,30 +539,30 @@ The existing comment on `send` says two writes produce two chunks and "a sleep h
 
 That last one is the useful negative: if the failure were the TUI mistaking the CR for the tail of a paste, telling it explicitly where the paste ends would have fixed it. It did not, so **the paste-window theory is wrong** and the cause is somewhere else.
 
-**A warning about measuring this.** The first harness reported 4 of 8 stuck, in a perfect STUCK/submitted alternation — and that number is an artefact, not a rate. It cleared the input box only after a failure, so every trial after a success began in a different state from every trial after a failure. Any future attempt has to clear before _every_ trial and wait for the previous answer to finish, or it will measure its own asymmetry.
+**A warning about measuring this.** The first harness reported 4 of 8 stuck, in a perfect STUCK/submitted alternation — and that number is an artefact, not a rate. It cleared the input box only after a failure, so every trial after a success began in a different state from every trial after a failure. Any future attempt has to clear before *every* trial and wait for the previous answer to finish, or it will measure its own asymmetry.
 
 Still unexplained, and the next things to try:
 
-- whether the agent being _busy_ is the variable. Sending while a response
-  is streaming is the obvious candidate now that the paste window is out,
-  and it fits "sometimes" exactly: a review is sent at the agent that is
-  still working.
-- what the box actually contains when it sticks. Reading the raw screen
-  with `zmx history --vt` at the moment of failure would say whether the CR
-  arrived and was swallowed, or never arrived at all — those are different
-  bugs and nothing measured so far separates them.
-- whether a longer gap helps at all. Cheap to test now that there is a
-  harness that does not lie: 0, 50, 150ms, twenty trials each.
+  - whether the agent being *busy* is the variable. Sending while a response
+    is streaming is the obvious candidate now that the paste window is out,
+    and it fits "sometimes" exactly: a review is sent at the agent that is
+    still working.
+  - what the box actually contains when it sticks. Reading the raw screen
+    with `zmx history --vt` at the moment of failure would say whether the CR
+    arrived and was swallowed, or never arrived at all — those are different
+    bugs and nothing measured so far separates them.
+  - whether a longer gap helps at all. Cheap to test now that there is a
+    harness that does not lie: 0, 50, 150ms, twenty trials each.
 
 ## 96. The diff panel should remember what has been viewed
 
-Reviewing fifteen files means losing your place fifteen times. The panel already knows which files are folded and which revision that was true of; what it does not know is which ones have been _read_, so coming back to a patch after an agent has pushed a change means starting from the top with no way to tell what is new.
+Reviewing fifteen files means losing your place fifteen times. The panel already knows which files are folded and which revision that was true of; what it does not know is which ones have been *read*, so coming back to a patch after an agent has pushed a change means starting from the top with no way to tell what is new.
 
 The mark itself: a per-file "viewed" state, shown on the file header, with a way to clear it. GitHub's checkbox is the shape everybody already knows, and the useful half is not the tick — it is that a viewed file auto-folds, so the list collapses down to what is left.
 
 Two decisions with real consequences:
 
-**What invalidates it.** A file marked viewed and then _changed by the agent_ is not viewed any more, and this is the whole value of the feature — it is what turns a diff panel into a review queue that drains. So the mark has to be keyed by content, not by path: the blob id from the patch's `index` line, or a hash of the file's hunks. Keyed by path alone it goes stale silently, which is worse than not having it, because it hides exactly the change a person needed to see.
+**What invalidates it.** A file marked viewed and then *changed by the agent* is not viewed any more, and this is the whole value of the feature — it is what turns a diff panel into a review queue that drains. So the mark has to be keyed by content, not by path: the blob id from the patch's `index` line, or a hash of the file's hunks. Keyed by path alone it goes stale silently, which is worse than not having it, because it hides exactly the change a person needed to see.
 
 **Where it lives.** The fold state is already remembered per revision in the renderer (`remembered.ts`), and this could ride along — but a review survives a restart and a fold does not need to, and it is a claim about work rather than a UI preference. The threads store is where a durable one would go, alongside `ReviewComment`, which is already keyed by revision, path and side.
 
@@ -585,23 +581,23 @@ So a button in the diff head row, in one of two states:
 
 **Open goes to the web panel, not to a browser.** The panel exists precisely so a thing being read against a diff stays beside it, and handing the URL to the system browser throws away the window this was built for. That needs the PR's URL rather than its number, which `facts` does not currently carry — either add it beside `pr`, or compose it from the remote, which is a guess about a forge and should not be made in the renderer.
 
-**Create is a prompt, not a call.** Deliberately: opening a pull request means a title and a description written from the change, which is exactly what the agent is for and exactly what a hardcoded `gh pr create --fill` gets wrong. Same wire as a review or a task — `TaskSend` and `NoteSend` are the worked shapes — and it should ask for _next_ rather than _now_, for the reason in `taskPrompt`.
+**Create is a prompt, not a call.** Deliberately: opening a pull request means a title and a description written from the change, which is exactly what the agent is for and exactly what a hardcoded `gh pr create --fill` gets wrong. Same wire as a review or a task — `TaskSend` and `NoteSend` are the worked shapes — and it should ask for *next* rather than *now*, for the reason in `taskPrompt`.
 
 Open questions:
 
-- what the prompt says. "open a pull request for this work" is the whole of
-  it, and the agent already has the diff and the bookmark; over-specifying
-  it is how a prompt stops working when the repo's conventions differ.
-- whether the button should wait. `facts` is pushed, so the number arriving
-  is the confirmation — the button can go from "create PR" to "open PR #N"
-  on its own with nothing to poll. That is the nicest version and needs
-  nothing but for the facts watcher to notice.
-- a workspace with no bookmark and nothing pushed. The refusal should name
-  what is missing rather than sending a prompt that cannot succeed.
-- #41 (keep a thread's bookmark at its tip) and #90 (tug a bookmark) both
-  matter here: a PR opened against a bookmark sitting at the first commit of
-  a branch is a PR with one commit in it, which is the state this workspace
-  was measured in at 51 commits behind.
+  - what the prompt says. "open a pull request for this work" is the whole of
+    it, and the agent already has the diff and the bookmark; over-specifying
+    it is how a prompt stops working when the repo's conventions differ.
+  - whether the button should wait. `facts` is pushed, so the number arriving
+    is the confirmation — the button can go from "create PR" to "open PR #N"
+    on its own with nothing to poll. That is the nicest version and needs
+    nothing but for the facts watcher to notice.
+  - a workspace with no bookmark and nothing pushed. The refusal should name
+    what is missing rather than sending a prompt that cannot succeed.
+  - #41 (keep a thread's bookmark at its tip) and #90 (tug a bookmark) both
+    matter here: a PR opened against a bookmark sitting at the first commit of
+    a branch is a PR with one commit in it, which is the state this workspace
+    was measured in at 51 commits behind.
 
 Related: the head row is now wanted by [[a side-by-side toggle on the diff panel]] (#95), [[the diff panel should remember what has been viewed]] (#96) and [[a pop-out file tree beside the patch]] (#97). This is the fourth, and it is the widest of them — a button with words in it rather than an icon. The row needs designing once, for all four.
 
@@ -609,7 +605,7 @@ Related: the head row is now wanted by [[a side-by-side toggle on the diff panel
 
 Reported: "we have too many heavy borders generally, like too many dividing lines instead of just using space", and then the sharper version — "it has borders and then spacing outside the borders, which is weird".
 
-The second sentence is the diagnosis and it generalises. A rule _and_ a gap are two separators doing one job, and the eye reads the pair as a mistake even when it cannot say which half is wrong. The diff head row had exactly that shape twice in one afternoon and is now fixed by being filled instead of ruled — one step off the window's base says "band" on all four sides at once, and it keeps saying it while the patch scrolls underneath, which is the job the rule was there for.
+The second sentence is the diagnosis and it generalises. A rule *and* a gap are two separators doing one job, and the eye reads the pair as a mistake even when it cannot say which half is wrong. The diff head row had exactly that shape twice in one afternoon and is now fixed by being filled instead of ruled — one step off the window's base says "band" on all four sides at once, and it keeps saying it while the patch scrolls underneath, which is the job the rule was there for.
 
 Counted across the renderer: **29 border declarations**, and they are two different things that want different answers.
 
@@ -632,24 +628,24 @@ window's `colors.base`, which is exactly the third level that was added to
 the palette for this. The rule to apply, stated once so it is not re-argued
 per component:
 
-- a band gets a fill, not a rule. Panel heads, tab strips, toolbars, the
-  top and bottom bars.
-- a rule is for a boundary something _scrolls under_ where a fill will not
-  do — and after the fill there is usually nothing left in that category.
-- never a rule with a gap outside it. If there is room around the line, the
-  room was already the separator.
+  - a band gets a fill, not a rule. Panel heads, tab strips, toolbars, the
+    top and bottom bars.
+  - a rule is for a boundary something *scrolls under* where a fill will not
+    do — and after the fill there is usually nothing left in that category.
+  - never a rule with a gap outside it. If there is room around the line, the
+    room was already the separator.
 
 The control outlines are a second, smaller question and probably a different answer: a window with fifteen outlined buttons reads as busy for the same reason. Worth looking at whether the quiet ones (fold all, unfold all, the carets) need an outline at rest or only on hover — the tab strip already works that way and does not look unfinished.
 
 Two cautions:
 
-- **StyleX drops the `border` and `background` shorthands in silence** — see
-  AGENTS.md. Every removal has to use the longhands, and the built CSS is
-  what proves it, not the source.
-- **contrast.** A fill one step off the base is a mark, not text, so the
-  threshold is 3.0 rather than 4.5 — but Latte's surfaces were already the
-  thing that failed once and were retuned by measurement. Any new pairing
-  gets computed off the rendered element, not off the source hex.
+  - **StyleX drops the `border` and `background` shorthands in silence** — see
+    AGENTS.md. Every removal has to use the longhands, and the built CSS is
+    what proves it, not the source.
+  - **contrast.** A fill one step off the base is a mark, not text, so the
+    threshold is 3.0 rather than 4.5 — but Latte's surfaces were already the
+    thing that failed once and were retuned by measurement. Any new pairing
+    gets computed off the rendered element, not off the source hex.
 
 ## 100. A ship-it button, held down, with a countdown
 
@@ -659,24 +655,24 @@ A button at the bottom of the diff pane that ships the work. Two halves: what sh
 
 Asked for with smoke, particles, maybe WebGL — "whatever, whatever, fun". So the launch is allowed to be a real animation rather than a spinner. Things worth knowing before picking a technique:
 
-- the window already has a canvas renderer in it (the pane) and a worker pool
-  for highlighting, so a second canvas is not a new kind of thing. WebGL is
-  available; a 2D canvas with a few hundred particles is far less code and at
-  this size probably indistinguishable.
-- it must not fight the pane for frames. The meter in the debug panel exists
-  to answer "is something dropping frames", so measure with it rather than
-  guessing — a launch that stutters the terminal beside it is worse than no
-  launch.
-- `prefers-reduced-motion` shortens or stills the animation but does **not**
-  skip the hold: the delay is the safety and the motion is only what says so.
+  - the window already has a canvas renderer in it (the pane) and a worker pool
+    for highlighting, so a second canvas is not a new kind of thing. WebGL is
+    available; a 2D canvas with a few hundred particles is far less code and at
+    this size probably indistinguishable.
+  - it must not fight the pane for frames. The meter in the debug panel exists
+    to answer "is something dropping frames", so measure with it rather than
+    guessing — a launch that stutters the terminal beside it is worse than no
+    launch.
+  - `prefers-reduced-motion` shortens or stills the animation but does **not**
+    skip the hold: the delay is the safety and the motion is only what says so.
 
 Notes on the gesture:
 
-- `pointerdown` → `pointerup` / `pointercancel` / leave, with pointer
-  capture, cancelling on all three. A countdown still running after the
-  pointer left the button is a launch nobody asked for.
-- the keyboard needs an equivalent, per the mandate. Space held is the
-  natural one, and it has to arm and cancel the same way.
+  - `pointerdown` → `pointerup` / `pointercancel` / leave, with pointer
+    capture, cancelling on all three. A countdown still running after the
+    pointer left the button is a launch nobody asked for.
+  - the keyboard needs an equivalent, per the mandate. Space held is the
+    natural one, and it has to arm and cancel the same way.
 
 **What shipping means is per project**, and is deliberately left open until the button exists — it may turn out to be a prompt to the agent like everything else here, which would be the smallest answer and the most consistent one. Some repositories ship by opening a pull request, some by pushing straight to the main line, some by pushing a bookmark and letting CI take it, so whatever it becomes belongs in `.awp/config.json` beside `hooks.bootstrap` and `actions`, merged per the replace-if-empty rule already in `merge`:
 
@@ -689,7 +685,7 @@ A `command` form is worth having for the same reason `hooks.bootstrap` has one: 
 
 Unconfigured should probably be "open a PR" rather than a refusal — it is the reversible one, and a button that lands on main by default is a button nobody presses twice.
 
-Related: [[an open-or-create PR button in the diff head]] (#98) and [[keep a thread's bookmark at its tip]] (#41) — shipping a bookmark that sits at the first commit of a branch ships one commit, which was measured at 51 behind on this workspace. Worth deciding whether ship-it simply _is_ #98's button after a hold, rather than a second control.
+Related: [[an open-or-create PR button in the diff head]] (#98) and [[keep a thread's bookmark at its tip]] (#41) — shipping a bookmark that sits at the first commit of a branch ships one commit, which was measured at 51 behind on this workspace. Worth deciding whether ship-it simply *is* #98's button after a hold, rather than a second control.
 
 ## 102. Render markdown in the chat, mermaid and diffs included
 
@@ -699,22 +695,22 @@ Once the agent's conversation is addressable rather than only drawn in a termina
 
 **Mermaid.** ```mermaid blocks render as diagrams. Worth knowing before choosing how: mermaid is large — the full bundle is several hundred KB and pulls in its own parser per diagram type — so it wants a dynamic import at the point a block appears rather than a top-level one, the same shape the highlighting worker uses. It also renders to SVG asynchronously and can throw on a malformed graph, which an agent will produce: a failed diagram must fall back to showing the source text, not to an empty box or a boundary.
 
-**Everything else is the ordinary list**, and the ordinary list is where the work actually is: headings, lists, tables, links, inline and fenced code. Fenced code that is _not_ diff or mermaid should go through the same shiki highlighter the diff panel already loads, so there is one highlighter and one theme rather than two.
+**Everything else is the ordinary list**, and the ordinary list is where the work actually is: headings, lists, tables, links, inline and fenced code. Fenced code that is *not* diff or mermaid should go through the same shiki highlighter the diff panel already loads, so there is one highlighter and one theme rather than two.
 
 Three things to settle:
 
-- **which markdown parser.** Nothing here has one yet. Whatever it is has
-  to be safe against a message containing raw HTML — an agent quoting a
-  page will produce some — so either a parser that does not emit HTML, or a
-  sanitiser, decided rather than assumed.
-- **streaming.** ACP delivers a message as it is written, so the renderer
-  has to cope with a half-finished fence. The naive answer re-parses the
-  whole message on every chunk, which for a long message with three diagrams
-  in it is a lot of work per token. `shiki-stream` ships inside
-  `@pierre/diffs` and is worth reading before inventing something.
-- **where it lives.** Probably its own package — `@awp-kit/markdown` — since
-  the pane, the diff panel and a future chat all have a claim on it, and the
-  tsconfig project references are the import graph.
+  - **which markdown parser.** Nothing here has one yet. Whatever it is has
+    to be safe against a message containing raw HTML — an agent quoting a
+    page will produce some — so either a parser that does not emit HTML, or a
+    sanitiser, decided rather than assumed.
+  - **streaming.** ACP delivers a message as it is written, so the renderer
+    has to cope with a half-finished fence. The naive answer re-parses the
+    whole message on every chunk, which for a long message with three diagrams
+    in it is a lot of work per token. `shiki-stream` ships inside
+    `@pierre/diffs` and is worth reading before inventing something.
+  - **where it lives.** Probably its own package — `@awp-kit/markdown` — since
+    the pane, the diff panel and a future chat all have a claim on it, and the
+    tsconfig project references are the import graph.
 
 Related: [[run the agent under ACP, not only in a terminal]] (#91), which is the thing that makes this worth having at all. Nothing to render until there is a conversation to render.
 
@@ -845,7 +841,7 @@ Related to the pending task about the diff panel remembering what has been viewe
 
 Reported: created a thread, the thread appeared, and its workspace never did — the sidebar read "nothing yet" under the heading, forever.
 
-That is exactly the failure `App.tsx` already has a fix for, and its own comment says why it is so hard to see: "nothing yet" is precisely what a thread whose creation _failed_ looks like, while the workspace, bookmark and session are all on disk. They were, in this case — checked in the store and on disk afterwards.
+That is exactly the failure `App.tsx` already has a fix for, and its own comment says why it is so hard to see: "nothing yet" is precisely what a thread whose creation *failed* looks like, while the workspace, bookmark and session are all on disk. They were, in this case — checked in the store and on disk afterwards.
 
 The existing fix re-reads the sessions and the threads when the count of terminal jobs changes:
 
@@ -862,11 +858,11 @@ Measured, and it did not reproduce the way expected. From a browser against an i
 
 So the resubscribe recovers from never-having-connected. What that run did NOT test is the case that actually happened — a window connected to a live daemon, that daemon dying, and a job completing in its replacement. That is the next measurement, and it needs the daemon to be up before the page loads.
 
-Worth considering regardless: keying on a _count of terminal jobs_ makes the refresh depend on the window having witnessed the transition. A window that reconnects after the job finished sees the job already terminal, so the count is whatever it is and never changes again. That is a real hole independent of whether it is this one.
+Worth considering regardless: keying on a *count of terminal jobs* makes the refresh depend on the window having witnessed the transition. A window that reconnects after the job finished sees the job already terminal, so the count is whatever it is and never changes again. That is a real hole independent of whether it is this one.
 
 ## 113. Dragging a divider near the top moves the window
 
-Grabbing the accessory column's divider at the top of the window moves the _window_ instead of resizing the column.
+Grabbing the accessory column's divider at the top of the window moves the *window* instead of resizing the column.
 
 The cause is almost certainly the drag region rather than the divider. The top bar wears `electrobun-webkit-app-region-drag`, and Electrobun's preload decides by walking up the DOM:
 
@@ -894,17 +890,17 @@ The jobs panel is not the answer to this and never was. It answers "what is runn
 
 What to work out when this is picked up:
 
-- **What earns one.** A thing a person did that changed something they can no
-  longer see: a thread archived, a project imported or forgotten, a review
-  started, comments sent. Not a job step — that has a panel.
-- **What it says.** The noun and its name — "archived tiered discounts" — and
-  an undo where one exists. Archive is the obvious first: it is the only
-  gesture in the window that removes rows.
-- **Where it goes.** Above the footer, right, over the accessory column; it
-  must not cover the native webview's rectangle, which does not stack (see
-  CLAUDE.md) — or if it does, the same overlay count the modals use.
-- **How it leaves.** Animated, per the window's mandate: nothing pops.
-  Reduced motion means none.
+  - **What earns one.** A thing a person did that changed something they can no
+    longer see: a thread archived, a project imported or forgotten, a review
+    started, comments sent. Not a job step — that has a panel.
+  - **What it says.** The noun and its name — "archived tiered discounts" — and
+    an undo where one exists. Archive is the obvious first: it is the only
+    gesture in the window that removes rows.
+  - **Where it goes.** Above the footer, right, over the accessory column; it
+    must not cover the native webview's rectangle, which does not stack (see
+    CLAUDE.md) — or if it does, the same overlay count the modals use.
+  - **How it leaves.** Animated, per the window's mandate: nothing pops.
+    Reduced motion means none.
 
 Base UI ships a Toast, which is the answer to whether to hand-roll one.
 
@@ -932,13 +928,13 @@ has to be asked for.
 
 Two things to get right when it lands:
 
-- **A number that is always on screen is furniture.** The window's rule
-  about the status bar applies: say nothing until it is worth saying.
-  Somewhere past half, and louder near the end.
-- **Where the controls go.** A row under the composer is the obvious place
-  and competes with the send. The agent bar already holds the face toggle
-  and is where "how this session runs" belongs — but it is per-window
-  chrome and these are per-session facts. Decide once.
+  - **A number that is always on screen is furniture.** The window's rule
+    about the status bar applies: say nothing until it is worth saying.
+    Somewhere past half, and louder near the end.
+  - **Where the controls go.** A row under the composer is the obvious place
+    and competes with the send. The agent bar already holds the face toggle
+    and is where "how this session runs" belongs — but it is per-window
+    chrome and these are per-session facts. Decide once.
 
 Blocked on nothing. #91 is what made it possible.
 
@@ -959,15 +955,15 @@ change. Check before building.
 
 Three things to decide when it is picked up:
 
-- **Edit in place, or a dialog.** In place is the better gesture and is more
-  work: the header is a flex row that truncates, and a text input in it has
-  to not resize the bar. The sidebar row is narrow enough that in-place
-  editing would be typing into a 200px box.
-- **What a workspace shows.** A row's caption falls back through display
-  name, the model's label, then the slug. Renaming a _thread_ must not look
-  like it renamed the workspace, and the sidebar draws both.
-- **Escape and blur.** Escape reverts, Return commits, and clicking away
-  should commit rather than discard — the opposite reads as losing work.
+  - **Edit in place, or a dialog.** In place is the better gesture and is more
+    work: the header is a flex row that truncates, and a text input in it has
+    to not resize the bar. The sidebar row is narrow enough that in-place
+    editing would be typing into a 200px box.
+  - **What a workspace shows.** A row's caption falls back through display
+    name, the model's label, then the slug. Renaming a *thread* must not look
+    like it renamed the workspace, and the sidebar draws both.
+  - **Escape and blur.** Escape reverts, Return commits, and clicking away
+    should commit rather than discard — the opposite reads as losing work.
 
 The keyboard mandate applies: the control has to be reachable without a
 pointer, so the sidebar's ⋯ menu is the one that has to work, and right-click
@@ -988,34 +984,113 @@ A conversation with an agent goes wrong in a specific place — one claim in a p
     the diff       drag across line numbers → a comment on that range
     the web panel  point at an element → a note carrying its selector
 
-Both anchor to something addressable and both send a _record_, not typed text.
+Both anchor to something addressable and both send a *record*, not typed text.
 
 What that means here:
 
-- **A selection is the anchor.** Hovering a message shows the affordance;
-  selecting text inside it makes the quote. A whole-message reply is the
-  degenerate case of selecting all of it, so build the selection one.
-- **What crosses the wire.** The quoted text and enough to find it again:
-  which item, and the offsets within it. A message is chunks appended in
-  `conversation.ts`, so an offset is stable only once the turn has ended —
-  quoting a message still streaming needs deciding.
-- **A tool call is quotable too**, and is the more useful half: pointing at
-  the command it ran, or at one line of its output, is exactly the "no, not
-  that" a person wants to say.
-- **It goes in the composer, not straight out.** The diff batches comments
-  because six remarks are one prompt; here the reply is the next turn, so
-  the quote should land in the box with the cursor after it and let somebody
-  type. That also makes it undoable by deleting it.
+  - **A selection is the anchor.** Hovering a message shows the affordance;
+    selecting text inside it makes the quote. A whole-message reply is the
+    degenerate case of selecting all of it, so build the selection one.
+  - **What crosses the wire.** The quoted text and enough to find it again:
+    which item, and the offsets within it. A message is chunks appended in
+    `conversation.ts`, so an offset is stable only once the turn has ended —
+    quoting a message still streaming needs deciding.
+  - **A tool call is quotable too**, and is the more useful half: pointing at
+    the command it ran, or at one line of its output, is exactly the "no, not
+    that" a person wants to say.
+  - **It goes in the composer, not straight out.** The diff batches comments
+    because six remarks are one prompt; here the reply is the next turn, so
+    the quote should land in the box with the cursor after it and let somebody
+    type. That also makes it undoable by deleting it.
 
 Two things to check before starting, both learned nearby:
 
-- **A render during a gesture ends the gesture.** The diff's line selection
-  was broken for exactly this reason — opening the composer at pointerdown
-  rebuilt the rows the pointer was still moving across. Settle on pointerup.
-- **Markdown output is React elements, not text**, so a selection inside an
-  agent message spans nodes the panel did not create by hand. Read the
-  Selection API rather than assuming a single text node.
+  - **A render during a gesture ends the gesture.** The diff's line selection
+    was broken for exactly this reason — opening the composer at pointerdown
+    rebuilt the rows the pointer was still moving across. Settle on pointerup.
+  - **Markdown output is React elements, not text**, so a selection inside an
+    agent message spans nodes the panel did not create by hand. Read the
+    Selection API rather than assuming a single text node.
 
 Depends on nothing in flight. Related: #44 (comment on a diff and send it),
 #55 (annotate an element and send it), #102 (patches inside tool output — a
 quoted diff line would want the same renderer).
+
+## 118. A subagent is a tool call with a name, and the chat should say so
+
+An agent that spawns subagents currently reads, in the chat, as a single tool call that sits at `in_progress` for minutes and then produces a wall of text. Nothing says work was delegated, how many ways, or which one is stuck.
+
+**The information is already arriving.** Measured in the adapter's own source, 2026-08-28: a Task call is an ordinary `tool_call` / `tool_call_update`, and the subagent facts ride in its `_meta`:
+
+    _meta.claudeCode.toolResponse.subagentType    which kind was spawned
+    _meta.claudeCode.toolResponse.subagentRetry   attempt, max_retries,
+                                                  retry_delay_ms
+    _meta.claudeCode.toolResponse.elapsedTimeSeconds
+
+`updateOf` in chat.ts reads `title`, `kind`, `status` and the output and throws the rest away, so nothing new has to be asked for — this is a matter of keeping three more fields.
+
+The retry counters are the ones worth having and are the least obvious. The adapter's own comment says why they are forwarded verbatim: *"when the subagent is waiting out an API rate-limit retry … so clients can show why a spawn looks stalled."* A subagent stuck behind a rate limit and a subagent doing slow work are the same picture today, and only one of them is worth waiting for.
+
+**There is no subagent update kind in ACP**, and it is worth writing that down so nobody goes looking: no `subagent` anywhere in the schema, no nesting, no separate stream. A subagent's own messages do not arrive. What arrives is one tool call that takes a while. So this task is about labelling that call honestly, not about drawing a tree.
+
+What to decide:
+
+  - **How a delegated call reads.** `ran  Task` is what it says now. `spawned
+    a code-reviewer · 2m14s` is the shape wanted, and the elapsed figure is
+    already on the wire.
+  - **Whether a retrying subagent is a state or a sentence.** The tool row has
+    a status already; `attempt 2 of 5, retrying in 30s` is a sentence and
+    probably belongs on the row rather than in a new state.
+  - **What the sidebar does with it.** #42 wants a row to say what the agent is
+    doing. "Delegating" is a different answer from "working" and may be worth
+    the distinction — or may be a distinction only this panel cares about.
+
+Related: #42 (sidebar status), #115 (which landed the config strip and is where the daemon's update parsing now lives).
+
+## 119. Own the agent's terminals, so a long command is watchable and killable
+
+A command the agent runs for two minutes is, in the chat, a row that says `…` and then eventually says something. It cannot be watched while it runs and cannot be stopped.
+
+**ACP hands this to the client, and this window is unusually well placed to take it.** Five methods, all client-side:
+
+    terminal/create          the agent asks THIS process to run a command
+    terminal/output          what it has written so far
+    terminal/wait_for_exit   how it ended
+    terminal/kill            stop it
+    terminal/release         let it go
+
+And a tool call's content can be `{ type: "terminal", terminalId }` — a live handle rather than a string of output, so the row in the chat *is* the running command rather than a record of one that finished.
+
+**It only happens if we ask for it.** The client declares capabilities at `initialize`, and chat.ts currently declares `fs` only:
+
+    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } }
+
+With no `terminal`, the agent runs the command itself and we see the output when it is done. That is today's behaviour and it is a choice made by omission, which is exactly the shape this repo has been caught by before — see the note in AGENTS.md about a default that reads as "on".
+
+**The reason to take it is that the machinery exists.** `PtySpawner`, `Sessions` and the pane are already here, and `Scope` in `spawn`'s return type already means "the process gets killed". A terminal the agent asked for is a pty with a different caller.
+
+What has to be decided, and none of it is obvious:
+
+  - **Where it is drawn.** Inline in the chat row is the honest place — the
+    command is part of the turn — but a pane inside a scrolling transcript is
+    a layout problem, and the accessory column already holds panes.
+  - **What killing it means to the agent.** `terminal/kill` ends the command;
+    the agent then reads the output and decides what to do. A person killing a
+    command mid-turn is a thing the agent has to be told about, and the only
+    channel is the tool result.
+  - **Permission.** Today a destructive command is refused through
+    `session/request_permission`, which the chat already draws. Owning the
+    terminal means the command arrives here to be *run*, so the refusal has to
+    happen before we spawn anything rather than after.
+  - **Scope and leaks.** A terminal is created by one call and released by
+    another, and an agent that dies between them leaves a process. The
+    conversation's own Scope is the natural owner, the same way the adapter
+    process is.
+
+Do not start this before the permission path has been exercised by hand: this
+moves execution into the daemon, and the daemon is the process holding a
+person's repositories.
+
+Related: #91 (the chat), #115 (config strip), #118 (subagents), #63 (running a
+workspace's services — a different long-running-process problem with some of
+the same answers).
