@@ -134,6 +134,31 @@ describe("revisions", () => {
     expect(found[1]?.bookmarks).toEqual([]);
   });
 
+  test("a remote bookmark on the row is not the row's bookmark", () => {
+    // A commit's `json(bookmarks)` is not only its local bookmarks, which is
+    // easy to believe because most of the time it looks like it is. A remote
+    // row appears exactly when the remote disagrees with local, on the commit
+    // the *remote* points at, wearing the same name — read off this repository
+    // where a bookmark had been exported and then moved:
+    //
+    //   local  andrew/lantern             → 7919e0e4
+    //   git    andrew/lantern  remote:git → 8dc8f7ff   ← one commit behind
+    //
+    // Without the filter, that older commit claims the bookmark and two rows
+    // in one list show the same name.
+    const line = [
+      JSON.stringify({ change_id: "abc", commit_id: "8dc8f7ff", description: "" }),
+      "false",
+      "false",
+      JSON.stringify([
+        { name: "andrew/lantern", remote: "git", target: ["8dc8f7ff"] },
+        { name: "andrew/kept", target: ["8dc8f7ff"] },
+      ]),
+    ].join("\t");
+
+    expect(parseRevisions(`${line}\n`)[0]?.bookmarks).toEqual(["andrew/kept"]);
+  });
+
   test("a timestamp comes back as a Date", () => {
     const found = parseRevisions(REVISIONS);
 

@@ -238,6 +238,27 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
   },
   mark: { flexShrink: 0, color: colors.live },
+  // ── a bookmark on a revision row ─────────────────────────────────────────
+  //
+  // The accent, and monospace, because a bookmark is an address: it is the
+  // string somebody types at jj, and the family is what says so. One of the
+  // few places the accent is spent — see the note in AGENTS.md — and it earns
+  // it the same way the pull request number does, by pointing at something
+  // outside this panel.
+  //
+  // `flexShrink: 0` against the subject's `flex: 1`, so a long commit message
+  // is what gets truncated. The bookmark is the shorter and the more findable
+  // of the two, and half a bookmark is not an address.
+  bookmark: {
+    flexShrink: 0,
+    maxWidth: "12rem",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    color: colors.accent,
+    fontFamily: text.mono,
+    fontSize: text.small,
+  },
 
   // ── the boundary between the two ─────────────────────────────────────────
   //
@@ -1001,6 +1022,20 @@ export function Diff({
                   <span {...stylex.props(styles.subject)}>{subjectOf(one.description)}</span>
                 </>
               )}
+
+              {/* Local bookmarks only, which the daemon has already filtered —
+                  a commit's own `json(bookmarks)` carries a *remote* row
+                  whenever the remote disagrees, wearing the same name on a
+                  different commit. See `BookmarkRefJson.remote`.
+
+                  Drawn after the subject rather than before the id, so the
+                  rows still line up on the change id when most of them carry
+                  no bookmark at all — which is the ordinary case. */}
+              {one.bookmarks.map((name) => (
+                <span key={name} title={name} {...stylex.props(styles.bookmark)}>
+                  {name}
+                </span>
+              ))}
             </button>
           );
         })}

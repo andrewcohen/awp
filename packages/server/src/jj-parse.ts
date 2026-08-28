@@ -118,6 +118,22 @@ interface RevisionJson {
 
 interface BookmarkRefJson {
   readonly name?: unknown;
+  /**
+   * Set when this row is a *remote* bookmark rather than the local one.
+   *
+   * A commit's `json(bookmarks)` is not only its local bookmarks, which is easy
+   * to believe because most of the time it looks like it is. A remote row
+   * appears exactly when the remote disagrees with local — and then it appears
+   * on the commit the *remote* points at, wearing the same name:
+   *
+   *   local  andrew/lantern            → 7919e0e4
+   *   git    andrew/lantern  remote:git → 8dc8f7ff   ← one commit behind
+   *
+   * Read off this repository, where a bookmark had been exported and then
+   * moved. Without the filter below, that older commit's row would claim the
+   * bookmark and two rows in one list would show the same name.
+   */
+  readonly remote?: unknown;
 }
 
 /** The template every revision listing asks for. See the note above. */
@@ -172,10 +188,14 @@ export const parseRevisions = (output: string): ReadonlyArray<JjRevision> => {
       // as undefined, and "not stated" has to mean false rather than truthy.
       empty: parsed(empty ?? "") === true,
       workingCopy: parsed(workingCopy ?? "") === true,
+      // Local only — see `BookmarkRefJson.remote`, and `localBookmarks` above
+      // for the same rule applied to `jj bookmark list`. A name that exists
+      // only on a remote is not where the work is.
       bookmarks: Array.isArray(refs)
-        ? refs.flatMap((ref) => {
-            const name = text((ref as BookmarkRefJson).name);
-            return name === undefined ? [] : [name];
+        ? refs.flatMap((raw) => {
+            const ref = raw as BookmarkRefJson;
+            const name = text(ref.name);
+            return name === undefined || ref.remote !== undefined ? [] : [name];
           })
         : [],
     });
