@@ -96,8 +96,31 @@ const NO_FOLDS: ReadonlyArray<string> = [];
  */
 const NEVER = "";
 
-/** How short the revision list is allowed to be dragged before it folds away. */
+/** How short the revision list is allowed to be dragged before it collapses. */
 const MIN_SPLIT = 44;
+
+/**
+ * The collapsed height, when the list's own rows cannot be measured.
+ *
+ * Collapsing used to mean `display: none`, and what that lost is the answer to
+ * "which revision am I looking at" — the one thing the list is for when it is
+ * not being browsed. So it collapses to a single row instead, and that row is
+ * scrolled to the selected one.
+ *
+ * Measured from the first row rather than computed from the tokens, because
+ * the height is the line box plus padding and both move with the type scale.
+ * This number is only ever used before there is a row to measure.
+ */
+const ROW_FALLBACK = 24;
+
+/**
+ * What the working copy's row is called in the DOM.
+ *
+ * It addresses itself as `undefined` everywhere else in this panel — see the
+ * note at the top — and an empty attribute value cannot be selected for, so
+ * the one place that needs to find it by name gives it one.
+ */
+const WORKING_COPY_ROW = "working-copy";
 
 /**
  * Injected into the renderer's shadow root, because that is where the gutter is.
@@ -206,7 +229,10 @@ const styles = stylex.create({
     overflowY: "auto",
     overflowX: "hidden",
   }),
-  shut: { display: "none" },
+  // No `display: none` any more. A collapsed list is one row tall and still
+  // shows which revision is selected; hiding it outright answered the question
+  // it exists to answer with nothing.
+  shutOverflow: { overflowY: "hidden" },
   revision: {
     display: "flex",
     alignItems: "baseline",
@@ -268,9 +294,11 @@ const styles = stylex.create({
   // folds a whole side of the window away. What is shared is the idea, which is
   // cheaper to restate in twenty lines than to generalise into a prop.
   //
-  // The caret is *inside* the bar and always visible, unlike a column's, for
-  // the reason a folded column's control is: once the list is folded there is
-  // nothing else left on screen to press.
+  // The caret used to live *inside* this bar, and it was in the wrong place:
+  // a button drawn over a `row-resize` strip has to fight the strip's own
+  // gesture for the same pixels, and it had to stop the pointerdown to do it.
+  // It is now in the head row below, where the rest of the panel's controls
+  // are, and this bar does one thing.
   splitter: {
     position: "relative",
     display: "flex",
@@ -288,14 +316,20 @@ const styles = stylex.create({
     touchAction: "none",
   },
   held: { borderBottomColor: colors.muted },
-  // A button drawn over a `row-resize` bar has to say what *it* does, and it
-  // must not start a drag — hence its own cursor and its own pointerdown stop.
+  // Sized to match the icon buttons at the other end of the head row, so the
+  // two ends of the row read as one set of controls rather than as a caret
+  // that happens to be nearby.
   peg: {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    width: "1.1rem",
-    height: "1.1rem",
+    flexShrink: 0,
+    // The same box as `icon` at the other end of the row. Without the match
+    // the row has a 1.1rem control at one end and a 1.35rem one at the other,
+    // and `alignItems: center` then centres two different heights — which is
+    // the misalignment, and it is invisible until the two are compared.
+    width: "1.5rem",
+    height: "1.35rem",
     padding: 0,
     backgroundColor: "transparent",
     borderStyle: "none",
@@ -313,9 +347,22 @@ const styles = stylex.create({
     alignItems: "center",
     gap: "0.4rem",
     flexShrink: 0,
-    padding: "0.3rem 0.6rem",
+    // A floor rather than only padding, so the row is the same height whether
+    // it is carrying buttons or a sentence. Without it the panel shifted every
+    // time a patch went from "no changes" to a stat, which reads as the layout
+    // twitching rather than as content arriving.
+    minHeight: "1.9rem",
+    padding: "0.15rem 0.35rem 0.15rem 0.2rem",
     color: colors.muted,
     fontSize: text.small,
+  },
+  /** What the head says when there is no stat to show. */
+  headSaid: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
   // `overflow: hidden` and not just `minWidth: 0`. A flex item will not shrink
   // below its content, so `flex: 1` alone lets "17 files +1348 −171" push the
@@ -651,16 +698,68 @@ export function Diff({
   const [split, setSplit] = useState(rememberedSplit);
   const [dragging, setDragging] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+
+  /**
+   * One row, measured off the list itself.
+   *
+   * The height is a line box plus padding and both move with the type scale, so
+   * a constant here is a number that is right until somebody edits a token.
+   * `ROW_FALLBACK` covers the render before there is a row to measure.
+   */
+  const [rowHeight, setRowHeight] = useState(ROW_FALLBACK);
+  useEffect(() => {
+    // The list is the dependency and it is read, not merely listed: no rows
+    // means nothing to measure, and the fallback stands.
+    if (revisions.length === 0) {
+      return;
+    }
+    const first = list.current?.firstElementChild;
+    if (first === null || first === undefined) {
+      return;
+    }
+    const measured = Math.round(first.getBoundingClientRect().height);
+    if (measured > 0) {
+      setRowHeight(measured);
+    }
+  }, [revisions]);
+
+  // **Zero still means collapsed.** Storing the measured row height instead
+  // was the first shape and it is worse in a way that only shows up later:
+  // `folded` would then be a comparison against a number that moves with the
+  // type scale, so a row one pixel taller than the threshold reads as open
+  // while looking shut — and the remembered value from an older build would
+  // decide it. The stored value keeps meaning "collapsed"; what changed is
+  // only what collapsed *looks* like.
   const folded = split === 0;
 
   const resize = (height: number) => {
-    // Dragged past the floor is a fold, not a two-pixel list. The floor is
-    // where the gesture already wanted to go — nobody drags a list to nothing
-    // and means "leave one row".
+    // Dragged past the floor is a collapse, not a two-pixel list. The floor is
+    // where the gesture already wanted to go.
     const next = height < MIN_SPLIT ? 0 : Math.round(height);
     setSplit(next);
     rememberSplit(next);
   };
+
+  // Put the selected revision under the one row that is left.
+  //
+  // `block: "nearest"` and not `"center"`: with a taller list open this must
+  // do nothing at all, and centring would yank a list somebody is reading. It
+  // fires on the collapse and on a change of selection, which are the only two
+  // moments the visible row can be the wrong one.
+  //
+  // The row is found by its address rather than held in a ref, and that is not
+  // a style choice: a ref is not a dependency React can watch, so the effect
+  // would have had to list `at` without reading it — which the lint calls an
+  // extra dependency and is right to.
+  useEffect(() => {
+    if (!folded) {
+      return;
+    }
+    list.current
+      ?.querySelector<HTMLElement>(`[data-revision="${at ?? WORKING_COPY_ROW}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [folded, at]);
 
   // ── which files are folded, and which revision that was true of ──────────
   //
@@ -992,7 +1091,18 @@ export function Diff({
 
   return (
     <div ref={panel} {...stylex.props(styles.panel)}>
-      <div {...stylex.props(styles.revisions(split), folded && styles.shut)}>
+      {/* Collapsed is one row tall, not gone. `display: none` was what this
+          replaced, and what it lost is the answer to "which revision am I
+          looking at" — the one thing the list is still for when nobody is
+          browsing it. The row left showing is the selected one; see the effect
+          that scrolls to it. */}
+      <div
+        ref={list}
+        {...stylex.props(
+          styles.revisions(folded ? rowHeight : split),
+          folded && styles.shutOverflow,
+        )}
+      >
         {revisions.map((one) => {
           // The working copy addresses itself as absent — see the note at the
           // top of this file. Every other row is its change id.
@@ -1002,6 +1112,11 @@ export function Diff({
             <button
               key={one.changeId}
               type="button"
+              // Its address in the list, so the collapse can scroll to it —
+              // see the effect above. The working copy addresses itself as
+              // absent everywhere else in this panel, and an empty attribute
+              // is not selectable, so it gets a name here and only here.
+              data-revision={value ?? WORKING_COPY_ROW}
               // What ctrl+j and ctrl+k step through in this column — see
               // navigation.ts. The revision list is the one thing here that is
               // a list; the panel's buttons are a toolbar.
@@ -1065,35 +1180,53 @@ export function Diff({
           event.currentTarget.releasePointerCapture(event.pointerId);
           setDragging(false);
         }}
-      >
+      />
+
+      {/* ── one row that always says something ────────────────────────────
+
+          The stat, the state sentences and the list's collapse control were
+          three separate things in three places, and two of them were only
+          sometimes on screen. "reading the diff…" and "no changes" were rows
+          of their own that appeared and disappeared, which moved everything
+          under them; the caret lived inside the drag bar, where it had to
+          fight the bar's own gesture for the same pixels.
+
+          So: one row, always present, always the same height. It carries the
+          stat when there is one and the sentence when there is not — they are
+          the same slot because they answer the same question, which is what
+          this patch is. The controls on the right are for acting on a patch,
+          so they are absent when there is no patch to act on. */}
+      <div {...stylex.props(styles.head)}>
         <button
           type="button"
           aria-expanded={!folded}
-          aria-label={folded ? "show the revision list" : "hide the revision list"}
+          aria-label={folded ? "show the revision list" : "collapse the revision list"}
+          title={folded ? "show the revision list" : "collapse to the selected revision"}
           {...stylex.props(styles.peg)}
-          // Otherwise the press starts a drag as well as a click, and the
-          // fold happens with the boundary already moved out from under it.
-          onPointerDown={(event) => event.stopPropagation()}
           onClick={() => resize(folded ? DEFAULT_SPLIT : 0)}
         >
           {folded ? <CaretDownIcon size={12} /> : <CaretUpIcon size={12} />}
         </button>
-      </div>
 
-      <div {...stylex.props(styles.head)}>
-        <span {...stylex.props(styles.stat)}>
-          {stat !== undefined && stat.files > 0 && (
-            <>
-              <span {...stylex.props(styles.statPart)}>
-                {stat.files === 1 ? "1 file" : `${stat.files} files`}
-              </span>
-              <span {...stylex.props(styles.statPart, styles.added)}>+{stat.added}</span>
-              {/* A real minus sign, U+2212. A hyphen beside a `+` at this size
-                  is a dash of a different weight and reads as a typo. */}
-              <span {...stylex.props(styles.statPart, styles.removed)}>−{stat.removed}</span>
-            </>
-          )}
-        </span>
+        {stat !== undefined && stat.files > 0 ? (
+          <span {...stylex.props(styles.stat)}>
+            <span {...stylex.props(styles.statPart)}>
+              {stat.files === 1 ? "1 file" : `${stat.files} files`}
+            </span>
+            <span {...stylex.props(styles.statPart, styles.added)}>+{stat.added}</span>
+            {/* A real minus sign, U+2212. A hyphen beside a `+` at this size
+                is a dash of a different weight and reads as a typo. */}
+            <span {...stylex.props(styles.statPart, styles.removed)}>−{stat.removed}</span>
+          </span>
+        ) : (
+          // Every one of these looks like a blank panel, and they are not the
+          // same state — which is why each is said out loud rather than left
+          // to the absence of a patch. The top of a jj stack is empty most of
+          // the day, so "no changes" is the ordinary reading, not a fault.
+          <span {...stylex.props(styles.headSaid, failure !== undefined && styles.warn)}>
+            {failure ?? (patch === undefined ? "reading the diff…" : "no changes")}
+          </span>
+        )}
 
         {review.unsent > 0 && (
           <button
@@ -1139,25 +1272,6 @@ export function Diff({
       {review.failure !== undefined && (
         <div {...stylex.props(styles.said, styles.warn)}>{review.failure}</div>
       )}
-
-      {failure !== undefined && <div {...stylex.props(styles.said, styles.warn)}>{failure}</div>}
-
-      {failure === undefined &&
-        patch === undefined && (
-          // The first answer has not arrived. Said out loud for the same reason
-          // "no changes" is: a blank panel is what every one of these states
-          // looks like, and they are not the same state.
-          <div {...stylex.props(styles.said)}>reading the diff…</div>
-        )}
-
-      {failure === undefined &&
-        patch !== undefined &&
-        items.length === 0 && (
-          // A revision that changed nothing. Said in words rather than left
-          // blank, because an empty panel is what a panel that failed to load
-          // also looks like — and the top of a jj stack is empty most of the day.
-          <div {...stylex.props(styles.said)}>no changes</div>
-        )}
 
       <div {...stylex.props(styles.patch)}>
         {items.length > 0 && (
