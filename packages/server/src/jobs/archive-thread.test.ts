@@ -28,6 +28,8 @@ const LANTERN = workspacePath("rowan", "lantern");
 let members: Array<{ readonly project: string; readonly workspace: string }> = [];
 /** Which projects have been imported, and so have a repository path. */
 let roots: Array<{ readonly name: string; readonly root: string }> = [];
+/** What `jj sourceRoot` answers per directory. Empty means the checkout is gone. */
+let sourceRoots: Map<string, string> = new Map();
 /** What `zmx ls` reports. */
 let sessions: Array<{ readonly name: string; readonly workspace: string }> = [];
 beforeEach(() => {
@@ -35,6 +37,7 @@ beforeEach(() => {
   present = new Set([`${LANTERN}/.jj`]);
   members = [{ project: "rowan", workspace: "lantern" }];
   roots = [{ name: "rowan", root: "/repos/rowan" }];
+  sourceRoots = new Map([[LANTERN, "/repos/rowan"]]);
   sessions = [
     { name: "awp.rowan.lantern.agent", workspace: "lantern" },
     { name: "awp.rowan.lantern.editor", workspace: "lantern" },
@@ -52,6 +55,14 @@ const act = (what: string): Effect.Effect<void, { readonly reason: string }> =>
 const deps = (): ArchiveDeps => ({
   jj: {
     forgetWorkspace: (_repo: string, name: string) => act(`jj.forget(${name})`),
+    // The plan step's first question. A directory that is not a checkout
+    // fails, which is what the fallback exists for.
+    sourceRoot: (dir: string) => {
+      const root = sourceRoots.get(dir);
+      return root === undefined
+        ? Effect.fail({ reason: `no jj repo in ${dir}` })
+        : Effect.succeed(root);
+    },
     deleteBookmark: (_repo: string, name: string) => act(`jj.unbookmark(${name})`),
   } as unknown as Jj["Service"],
 
@@ -101,6 +112,7 @@ const deps = (): ArchiveDeps => ({
 
 const input = (over: Partial<ArchiveThreadInput> = {}): ArchiveThreadInput => ({
   thread: "20260828-aaaa",
+  title: "the lantern rewrite",
   deleteBookmarks: false,
   ...over,
 });
@@ -197,15 +209,26 @@ describe("archiving a thread", () => {
     expect(trace).toContain("jj.unbookmark(andrew/lantern)");
   });
 
-  // A project awp does not know about has no repository path, and `jj -R`
-  // takes a path. Skipped and said out loud, because reclaiming nothing is
-  // better than removing a directory whose repository could not be named.
-  test("skips a workspace whose project has not been imported", async () => {
+  // Neither source can name the repository: the checkout is gone, so
+  // `sourceRoot` fails, and the project was never imported. Skipped and said
+  // out loud, because reclaiming nothing is better than acting on a
+  // repository that could not be named.
+  test("leaves a workspace alone when nothing can name its repository", async () => {
     roots = [];
+    sourceRoots = new Map();
     const job = await archive();
 
     expect(job.status).toBe("succeeded");
     expect(trace).toEqual(["thread.archive(20260828-aaaa:true)"]);
+  });
+
+  // The fallback, for a resumed job whose earlier attempt already removed the
+  // directory — jj still holds the workspace registration that needs
+  // forgetting, and only the imported row can say where.
+  test("falls back to the imported project when the checkout has gone", async () => {
+    sourceRoots = new Map();
+    await archive();
+    expect(trace).toContain("jj.forget(lantern)");
   });
 
   // A thread with nothing in it is only a flag. The steps still run — the list
@@ -223,6 +246,42 @@ describe("archiving a thread", () => {
   // the thread held when the button was pressed.
   test("writes what it is reclaiming onto the record", async () => {
     const job = await archive();
+    expect(job.input).toMatchObject({
+      plan: [{ project: "rowan", workspace: "lantern", repo: "/repos/rowan" }],
+    });
+  });
+
+  // The job's row in the panel names the thread, not its id. A row reading
+  // `archive 20260828-wjrq` names something only this system can resolve, in
+  // the one place a person looks to find out what is happening.
+  test("titles itself with the thread's name", async () => {
+    const job = await archive();
+    expect(job.title).toBe("archive the lantern rewrite");
+  });
+
+  // A thread can be untitled, and `archive ` is not a caption.
+  test("falls back to the id when the thread has no name", async () => {
+    const job = await archive({ title: "  " });
+    expect(job.title).toBe("archive 20260828-aaaa");
+  });
+
+  // The bug the first version shipped with: the repository was looked up in
+  // `projects`, which is empty on a machine where nobody has pressed import —
+  // and every workspace on this one predates that button. The thread was
+  // archived and its checkout, directory and session all stayed.
+  //
+  //   skipping awp/test1234 — awp is not an imported project
+  //   nothing to reclaim — the thread holds no workspaces
+  //   archived
+  //
+  // The checkout answers for itself now. This fake reports no imported
+  // projects at all, which is the real machine's state.
+  test("reclaims a workspace whose project has never been imported", async () => {
+    roots = [];
+    const job = await archive();
+
+    expect(job.status).toBe("succeeded");
+    expect(trace).toContain("jj.forget(lantern)");
     expect(job.input).toMatchObject({
       plan: [{ project: "rowan", workspace: "lantern", repo: "/repos/rowan" }],
     });

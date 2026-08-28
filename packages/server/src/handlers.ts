@@ -1434,10 +1434,16 @@ export const layer = AwpRpcs.toLayer(
           // Refused here rather than inside the job, so a thread that is not
           // there is a reply the button can show instead of a job record that
           // exists only to fail.
-          if (!all.some((one) => one.id === payload.thread)) {
+          const thread = all.find((one) => one.id === payload.thread);
+          if (thread === undefined) {
             return yield* Effect.fail(new ThreadNotFound({ thread: payload.thread }));
           }
-          const job = yield* jobs.enqueue(archiveThreadRef, payload).pipe(Effect.orDie);
+          // The title is added here rather than sent by the client: the daemon
+          // has just looked the thread up, and a client-supplied caption is a
+          // second copy of something already in hand.
+          const job = yield* jobs
+            .enqueue(archiveThreadRef, { ...payload, title: thread.title })
+            .pipe(Effect.orDie);
           return { job: job.id };
         }),
 
