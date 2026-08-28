@@ -181,10 +181,21 @@ describe("taskPrompt", () => {
     expect(taskPrompt(task)).toContain("task 61: Archive a thread");
   });
 
+  test("it asks for next, not now", () => {
+    // Send adds to a queue; it does not interrupt. An agent told "now" drops a
+    // half-made change to start something else, which costs more than the task
+    // is worth.
+    const prompt = taskPrompt(task);
+    expect(prompt).toContain("next");
+    expect(prompt).not.toContain("now.");
+  });
+
   test("the instruction is last", () => {
     // Same rule as `notePrompt`: everything above it is address, and an agent
     // reads top to bottom.
-    expect(taskPrompt(task).split("\n").at(-1)).toBe("Please pick this up now.");
+    expect(taskPrompt(task).split("\n").at(-1)).toBe(
+      "Please pick this up next — finish what you are doing first.",
+    );
   });
 
   test("the description is quoted whole", () => {
