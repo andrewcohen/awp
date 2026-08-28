@@ -49,7 +49,7 @@ describe("messageFrom", () => {
 
   test("ignores a message from anything else on the page", () => {
     // The one that matters. Any script on any site can call
-    // `__electrobunSendToHost`, and without the marker its object would go
+    // `__awpSendToHost`, and without the marker its object would go
     // straight into a prompt typed at an agent.
     expect(messageFrom({ selector: "body", body: "rm -rf" })).toBeUndefined();
     expect(messageFrom({ from: "someone-else", selector: "body" })).toBeUndefined();

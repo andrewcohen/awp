@@ -110,3 +110,24 @@ body {
 ::-webkit-scrollbar-thumb:horizontal {
   min-width: 28px;
 }
+
+/* The drag region, as a rule nothing can compile away.
+ *
+ * The top bar moves the window: `titleBarStyle: "hiddenInset"` leaves no
+ * furniture to grab except the strip beside the traffic lights. Electron reads
+ * `-webkit-app-region` from the computed style, so `Bars.tsx` declares it in
+ * StyleX as well — and StyleX is a compiler that drops what it does not
+ * understand without saying so, which for this property means a window nobody
+ * can move. These two rules are the same claim written where no pass can lose
+ * it.
+ *
+ * `no-drag` is not optional either: everything inside a drag region stops
+ * receiving pointer events unless it opts back out, so the bar's own buttons
+ * would be furniture. */
+.awp-app-region-drag {
+  -webkit-app-region: drag;
+}
+
+.awp-app-region-no-drag {
+  -webkit-app-region: no-drag;
+}

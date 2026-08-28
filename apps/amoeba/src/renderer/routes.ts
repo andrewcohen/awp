@@ -46,10 +46,11 @@ import { App } from "./App";
 // exist to *type and parse* it. That is the whole job, and it is enough of one.
 //
 // ── hash history ───────────────────────────────────────────────────────────
-// A webview loads the renderer from a dev server in development and from
-// electrobun's own protocol in a build, and only one of those would rewrite a
-// deep path back to index.html. A hash needs no server to agree with it, and
-// still pushes real entries onto the session history, so back and forward work.
+// The window loads the renderer from a dev server in development and from the
+// app's own `app://` scheme in a build, and only one of those is a server that
+// would rewrite a deep path back to index.html. A hash needs nothing to agree
+// with it, and still pushes real entries onto the session history, so back and
+// forward work.
 
 const rootRoute = createRootRoute({ component: App });
 

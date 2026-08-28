@@ -46,29 +46,24 @@ const STRIP_FLOOR = "9.5rem";
 
 // ── how a window with no title bar is actually moved ──────────────────────
 //
-// `-webkit-app-region: drag` is emitted by StyleX and does nothing. Electrobun
-// does not read CSS for it; its preload matches on the DOM, and on two things
-// only:
+// Electron reads `-webkit-app-region` off the computed style, which electrobun
+// did not: its preload matched an inline style attribute or its own class name,
+// and StyleX produces neither — a class of its own plus a rule in a stylesheet.
+// So under electrobun this property had never moved the window; the bar worked
+// because `hiddenInset` leaves a real title bar behind the strip and AppKit was
+// doing the work, which hid the fault for exactly as long as that bar existed.
 //
-//   target.closest('[style*="app-region"][style*="drag"]')   an INLINE style
-//   target.closest(".electrobun-webkit-app-region-drag")     its own class
-//
-// StyleX produces neither — it produces a class of its own and a rule in a
-// stylesheet. So the property has never moved this window. It moved because
-// `hiddenInset` leaves a real title bar behind the strip, and AppKit was doing
-// the work; the note in AGENTS.md claiming otherwise was checking that the CSS
-// was emitted, which it is, rather than that anything reads it.
-//
-// That mattered the moment the title bar went away. With `titleBarStyle:
-// "hidden"` there is no native region left, so without the class below the
-// window cannot be moved at all.
-//
-// The CSS property is kept as well as the class. It costs nothing, it is the
-// standard spelling, and it is what a different host would read.
-const DRAG = "electrobun-webkit-app-region-drag";
-const NO_DRAG = "electrobun-webkit-app-region-no-drag";
+// Under Electron the declaration is read, so `WebkitAppRegion` below is live on
+// its own merits. The classes are kept, pointed at rules in `global.css`, and
+// they are not belt and braces: **StyleX drops declarations it does not
+// understand in silence** — that is already recorded for `border` and
+// `background` — and a window nobody can move is exactly the shape of failure
+// that produces. A plain class carrying the property in a hand-written sheet
+// cannot be dropped by a compiler that never sees it.
+const DRAG = "awp-app-region-drag";
+const NO_DRAG = "awp-app-region-no-drag";
 
-/** `stylex.props`, with one of electrobun's drag classes appended. */
+/** `stylex.props`, with one of the drag-region classes appended. */
 const withRegion = (
   region: string,
   props: {

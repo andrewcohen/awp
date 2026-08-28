@@ -2,12 +2,14 @@ import { ArrowClockwiseIcon } from "@phosphor-icons/react/ArrowClockwise";
 import { CaretLeftIcon } from "@phosphor-icons/react/CaretLeft";
 import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
 import { CrosshairSimpleIcon } from "@phosphor-icons/react/CrosshairSimple";
+import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { XIcon } from "@phosphor-icons/react/X";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
 import { type Picked, messageFrom, pickerSource, stopSource } from "./annotate";
 import { addressFor } from "./browse";
 import { sendNote } from "./daemon";
+import { type HostWebview, createWebview, hostWebviewAvailable } from "./host";
 import { useOverlaysOpen } from "./overlays";
 import { rememberPage, rememberedPages } from "./remembered";
 import { colors, text } from "./tokens.stylex";
@@ -23,53 +25,36 @@ import { colors, text } from "./tokens.stylex";
 // error nobody sees. A panel that works for localhost and nothing else is a
 // panel that gets opened twice.
 //
-// Electrobun's `<electrobun-webview>` is a real WKWebView, positioned over the
-// renderer by the native side. Nothing has to be imported for it: the tag is
-// defined by the preload script that runs in every Electrobun webview.
+// So it is a real browser view — a `WebContentsView` the main process creates
+// and positions over the renderer at the rectangle this panel's box occupies.
+// `host.ts` is the near half of that; `src/electron/webviews.ts` is the far one.
 //
 // Three consequences follow, and each one shapes something below.
 //
 // **It is not a DOM element that clips and stacks.** It floats above the page
 // at the rectangle it is told to occupy, so it cannot be hidden by an ancestor
 // with `overflow: hidden` or covered by a dialog. What saves this is that Base
-// UI unmounts a hidden tab panel: switching tabs runs `disconnectedCallback`,
-// which tears the native webview down. The cost is that the page is reloaded
-// when the tab comes back, which is why the address is remembered.
+// UI unmounts a hidden tab panel: switching tabs runs this effect's cleanup,
+// which tears the native view down. The cost is that the page is reloaded when
+// the tab comes back, which is why the address is remembered.
 //
-// **It does not exist outside Electrobun.** In a plain browser — `bun run dev`
-// opened in Safari, and every Playwright probe — `customElements.get` answers
-// undefined and there is nothing to render. That case says so in words rather
-// than showing an empty box, because an empty box is also what a page that
-// failed to load looks like.
+// **It does not exist outside the app window.** In a plain browser — the dev
+// server opened in a tab, and every Playwright probe — there is no bridge and
+// nothing to render. That case says so in words rather than showing an empty
+// box, because an empty box is also what a page that failed to load looks like.
 //
 // **It is driven by methods, not by props.** So it is created imperatively and
 // held in a ref, the same shape the pane uses, rather than through JSX — which
-// would additionally need the tag declared in `JSX.IntrinsicElements` to say
-// anything TypeScript could check.
+// would model as an element something that is not one.
 //
 // The same fact is why this panel watches `useOverlaysOpen`: a native webview
 // is drawn over the renderer by another process, so it is in front of every
 // dialog whatever any `z-index` says, and the only thing that puts a modal in
 // front of it is not drawing it. See overlays.ts for the rest of that.
 
-/** What the preload defines, narrowed to the parts this panel uses. */
-interface WebviewTag extends HTMLElement {
-  loadURL(url: string): void;
-  reload(): void;
-  goBack(): void;
-  goForward(): void;
-  toggleHidden?(value?: boolean): void;
-  syncDimensions?(force?: boolean): void;
-  executeJavascript?(js: string): void;
-  on?(event: string, listener: (event: CustomEvent) => void): void;
-  off?(event: string, listener: (event: CustomEvent) => void): void;
-}
-
-const TAG = "electrobun-webview";
-
-/** Whether a native webview can be made at all. */
-const available = (): boolean =>
-  typeof customElements !== "undefined" && customElements.get(TAG) !== undefined;
+// Whether a native webview can be made at all. False in a plain browser — see
+// host.ts, which owns both halves of that answer.
+const available = hostWebviewAvailable;
 
 const styles = stylex.create({
   panel: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -161,6 +146,21 @@ const styles = stylex.create({
     fontSize: text.small,
     resize: "vertical",
   },
+  // What went wrong with the page, between the bar and the stage. It takes
+  // height rather than floating: a native view is drawn over everything this
+  // window renders, so there is no floating to be done.
+  trouble: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    gap: "0.4rem",
+    padding: "0.3rem 0.5rem",
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
+    color: colors.warn,
+    fontSize: text.small,
+  },
   row: { display: "flex", alignItems: "center", gap: "0.4rem" },
   hint: { flex: 1, minWidth: 0, color: colors.muted, fontSize: text.small },
   send: {
@@ -207,7 +207,7 @@ export function Web({
   readonly thread: string | undefined;
 }) {
   const stage = useRef<HTMLDivElement>(null);
-  const view = useRef<WebviewTag | undefined>(undefined);
+  const view = useRef<HostWebview | undefined>(undefined);
 
   // ── a page per thread, not per window ────────────────────────────────────
   //
@@ -283,6 +283,11 @@ export function Web({
   const [remark, setRemark] = useState("");
   const [sending, setSending] = useState(false);
   const [said, setSaid] = useState<string | undefined>(undefined);
+  // What went wrong with the page itself, which is a different subject from
+  // `said` — that one is about a note being delivered to an agent. A page that
+  // refused to load and a note that failed to send are two unrelated sentences,
+  // and one state holding both would show the wrong one at the wrong moment.
+  const [trouble, setTrouble] = useState<string | undefined>(undefined);
   const canSend = project !== undefined && workspace !== undefined;
 
   // The same fact as `armed`, readable from a listener installed once.
@@ -299,12 +304,12 @@ export function Web({
   const arm = () => {
     setSaid(undefined);
     setArmed(true);
-    view.current?.executeJavascript?.(pickerSource());
+    view.current?.executeJavascript(pickerSource());
   };
 
   const disarm = () => {
     setArmed(false);
-    view.current?.executeJavascript?.(stopSource());
+    view.current?.executeJavascript(stopSource());
   };
 
   // Drop the note and take the highlight off the page with it. Used by the
@@ -314,7 +319,7 @@ export function Web({
     setPicked(undefined);
     setRemark("");
     setArmed(false);
-    view.current?.executeJavascript?.(stopSource());
+    view.current?.executeJavascript(stopSource());
   };
 
   useEffect(() => {
@@ -322,13 +327,13 @@ export function Web({
     if (element === undefined) {
       return;
     }
-    element.toggleHidden?.(away);
+    element.toggleHidden(away);
     // Forced on the way back, rather than waiting to be noticed. While hidden
     // the element's rectangle is zero, and the tag's own sync loop only polls
     // every 100ms — so without this the page returns a tenth of a second after
     // the dialog goes, which reads as the panel being slow to wake up.
     if (!away) {
-      element.syncDimensions?.(true);
+      element.syncDimensions(true);
     }
   }, [away]);
 
@@ -338,39 +343,44 @@ export function Web({
       return;
     }
 
-    const element = document.createElement(TAG) as WebviewTag;
-    element.style.width = "100%";
-    element.style.height = "100%";
-    if (here !== undefined) {
-      element.setAttribute("src", here);
-    }
-    parent.append(element);
+    // Built here rather than declared in JSX: a native view is driven by
+    // methods and has no props, and its rectangle is this box's.
+    const element = createWebview(parent, { url: here });
     view.current = element;
 
     // The address bar follows the page, not the other way round. A link
     // followed inside the webview is a navigation this side never asked for,
     // and an address bar that kept saying where the page started would be
     // lying about where it is.
-    // Guarded, because this is someone else's custom element and the whole
-    // panel is inside one error boundary. A missing method here would take the
-    // accessory column out, and losing the address bar is a smaller loss than
-    // losing the column.
-    const navigated = (event: CustomEvent) => {
-      const url = (event.detail as { readonly url?: string } | undefined)?.url;
+    const navigated = (detail: unknown) => {
+      const url = (detail as { readonly url?: string } | undefined)?.url;
       if (typeof url === "string" && url !== "") {
         setHere(url);
         setTyped(url);
         rememberPage(thread, url);
+        // A page arrived, so whatever the last one could not do is over.
+        setTrouble(undefined);
       }
     };
-    element.on?.("did-navigate", navigated);
+    element.on("did-navigate", navigated);
+
+    // The page did not load, and a native view says nothing about it — it just
+    // draws whatever it has, which for a refused connection is a blank
+    // rectangle over the column. The words are the whole feature.
+    const failed = (detail: unknown) => {
+      const one = detail as { readonly description?: string; readonly url?: string } | undefined;
+      const why = one?.description ?? "the page did not load";
+      const at = one?.url ?? "";
+      setTrouble(at === "" ? why : `${why} — ${at}`);
+    };
+    element.on("did-fail-load", failed);
 
     // What the picker says back. The only wire from that process to this one.
-    const heard = (event: CustomEvent) => {
-      const message = messageFrom(event.detail);
+    const heard = (detail: unknown) => {
+      const message = messageFrom(detail);
       if (message === undefined) {
-        // Not ours. `host-message` is the page's channel and any script on any
-        // site can put anything down it.
+        // Not ours. This is the page's channel and any script on any site can
+        // put anything down it.
         return;
       }
       if (message.kind === "cancelled") {
@@ -382,7 +392,7 @@ export function Web({
       setRemark("");
       setSaid(undefined);
     };
-    element.on?.("host-message", heard);
+    element.on("host-message", heard);
 
     // A navigation is a new document, and the picker was in the old one.
     //
@@ -392,30 +402,30 @@ export function Web({
     // turned off would put a highlight back on a page they are trying to read.
     const ready = () => {
       if (armedRef.current) {
-        element.executeJavascript?.(pickerSource());
+        element.executeJavascript(pickerSource());
       }
     };
-    element.on?.("dom-ready", ready);
+    element.on("dom-ready", ready);
 
     return () => {
-      // The listener is taken off as well as the element being removed. It is
-      // redundant — the element and its registry entry both go — and it is
-      // written anyway, because a subscription whose cleanup is implied by
-      // someone else's teardown is one that becomes a leak the day their
-      // teardown changes.
-      element.off?.("did-navigate", navigated);
-      element.off?.("host-message", heard);
-      element.off?.("dom-ready", ready);
-      // Removing it is what tears the native webview down — see
-      // `disconnectedCallback`. Leaving it attached would leave a webview
-      // floating over the window with nothing rendering it.
-      element.remove();
+      // The listeners come off as well as the view going down. It is redundant
+      // — `destroy` clears them — and it is written anyway, because a
+      // subscription whose cleanup is implied by someone else's teardown is one
+      // that becomes a leak the day their teardown changes.
+      element.off("did-navigate", navigated);
+      element.off("did-fail-load", failed);
+      element.off("host-message", heard);
+      element.off("dom-ready", ready);
+      // This is what tears the native view down. Nothing else does, and a view
+      // nothing holds is a page floating over the window for the life of the
+      // process — see the orphan note in host.ts.
+      element.destroy();
       view.current = undefined;
     };
     // Deliberately once. `here` is read at creation to restore the last page,
-    // and afterwards navigation goes through `loadURL` — rebuilding the
-    // element on every address change would throw away the history the back
-    // button exists to walk.
+    // and afterwards navigation goes through `loadURL` — rebuilding the view on
+    // every address change would throw away the history the back button exists
+    // to walk.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -452,6 +462,9 @@ export function Web({
     setHere(url);
     setTyped(url);
     rememberPage(thread, url);
+    // Cleared on the way out rather than on the way in: a stale complaint
+    // sitting over a page that is loading reads as the new address failing too.
+    setTrouble(undefined);
     view.current?.loadURL(url);
   };
 
@@ -527,6 +540,26 @@ export function Web({
           <CrosshairSimpleIcon size={13} weight="bold" aria-hidden />
         </button>
       </div>
+
+      {trouble === undefined ? undefined : (
+        <div {...stylex.props(styles.trouble)} role="status">
+          <WarningCircleIcon size={13} weight="bold" aria-hidden />
+          {/* `flex: 1` with `minWidth: 0`. A URL is long and must clip, not
+              push the dismiss button off the end of the row. */}
+          <span title={trouble} {...stylex.props(styles.label)}>
+            {trouble}
+          </span>
+          <button
+            type="button"
+            aria-label="dismiss"
+            title="dismiss"
+            {...stylex.props(styles.button)}
+            onClick={() => setTrouble(undefined)}
+          >
+            <XIcon size={12} weight="bold" aria-hidden />
+          </button>
+        </div>
+      )}
 
       {picked === undefined ? undefined : (
         <div {...stylex.props(styles.note)}>

@@ -3,12 +3,9 @@
   "compilerOptions": {
     "outDir": "../../.tsbuild/amoeba",
     "tsBuildInfoFile": "../../.tsbuild/amoeba/.tsbuildinfo",
-    "rootDir": ".",
-    "paths": {
-      "electrobun/bun": ["./types/electrobun-bun.d.ts"]
-    }
+    "rootDir": "."
   },
-  "include": ["src", "types"],
+  "include": ["src", "types", "scripts"],
   "references": [
     { "path": "../../packages/jobs" },
     { "path": "../../packages/protocol" },

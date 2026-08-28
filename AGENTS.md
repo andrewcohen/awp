@@ -10,7 +10,7 @@ is only what would otherwise be learned the expensive way.
 ## Layout
 
 ```
-apps/amoeba/       electrobun main process + vite renderer
+apps/amoeba/       electron main process + vite renderer
 packages/protocol/ the RPC contract
 packages/store/    one sqlite file, and the migrations for it
 packages/jobs/     work that outlives whoever asked for it
@@ -931,8 +931,8 @@ down through it. The root renders the window and reads the address; the leaf
 routes exist to type and parse it.
 
 **Hash history**, because the renderer is served by Vite in development and by
-electrobun's own protocol in a build, and only one of those would rewrite a
-deep path back to `index.html`.
+the app's own `app://` scheme in a build, and only one of those is a server that
+would rewrite a deep path back to `index.html`.
 
 **The address is derived, never written back.** `sessionAt` answers undefined
 for an address naming a session that has gone _or_ one the daemon refuses — the
@@ -944,20 +944,23 @@ something already known, and would race the first listing on launch.
 and only when the hash is empty. A reload keeps the hash on its own; what a
 history cannot survive is the application being quit and started again.
 
-- **electrobun is pinned to 1.18.1.** 2.x is a _bootstrap_: the npm package
-  contains no runtime, importing it throws by design, and the real APIs come from
-  a separate toolchain (Hutch) via `npx electrobun init`. Migrating is real work
-  and is not on the path to anything.
-- Electrobun publishes raw TypeScript as its entry, so `tsc` typechecks the
-  library's own source and fails against a newer `@types/bun`. `apps/amoeba/types`
-  stubs the surface actually used; `skipLibCheck` cannot help, because these are
-  `.ts` files rather than declarations.
+- **The shell is Electron, and its three bundles are not Vite's.** `main`,
+  `preload-host` and `preload-guest` come out of `scripts/build-electron.ts`
+  through `Bun.build`, because what they need is two module formats and no Babel
+  — the whole reason Vite is here is StyleX and the React compiler, and none of
+  that applies to a hundred lines of glue. The preloads are **CommonJS**, and
+  that is not a style: an ESM preload requires `sandbox: false`, and the guest
+  one runs inside an arbitrary website.
+- **`.cjs`, because the app is `"type": "module"`.** Bun writes `.js` whatever
+  the format asked for, so the build renames — a CommonJS preload under a `.js`
+  name inside a module package fails at its first `require`, in a process with
+  nowhere to print it.
 - **`@vitejs/plugin-react` v6 silently ignores a `babel` option.** It was removed
   and passing one is not an error. React Compiler comes through
   `@rolldown/plugin-babel`, and StyleX rides the same pass. The tell that it was
   not running was a bundle byte-identical to one built without it.
-- Vite owns the renderer and Electrobun copies `dist/renderer` in. Electrobun
-  never compiles it.
+- Vite owns the renderer and the shell only serves it. Nothing compiles it
+  twice.
 - **A barrel export can drag `node:fs` into the browser.** The job record is a
   Schema, so the contract imports it, so the renderer imports it — and
   `@awp-kit/jobs`' index reaching `sqlite.ts` was enough to break the dev server
@@ -1525,14 +1528,48 @@ tried; two of them are dead ends worth not rediscovering.
   Chrome extension    list_connected_browsers → []      not connected
   osascript           "Not authorized to send Apple events"
   screencapture       "could not create image from rect"  no Screen Recording
-  Playwright WebKit   works, and is the right engine ✓
+  Playwright WebKit   worked, and was the right engine — until the port ✓
+  bun run probe:shell Electron itself, which is the same binary ✓✓
 ```
 
-**WebKit, not Chromium.** Electrobun renders in WKWebView. The pane draws every
-glyph with `fillText` onto a canvas, and canvas text rasterisation is the part
-that differs most between engines — a Chromium screenshot would be a picture of
-a different renderer and proves nothing about the patch. Playwright's WebKit is
-the same engine family, so it answers the actual question.
+**The engine argument inverted with the port, and it is worth reading before
+copying either harness.** The old rule was _WebKit, not Chromium_: electrobun
+rendered in WKWebView, the pane draws every glyph with `fillText` onto a canvas,
+and canvas text rasterisation is what differs most between engines — so a
+Chromium screenshot was a picture of a different renderer and proved nothing
+about `patches/ghostty-web@0.4.0.patch`.
+
+The window is Chromium now. So the engine that can be driven is the engine that
+ships, and the strongest harness is no longer a similar browser but **the
+application binary**: `apps/amoeba/src/electron/probe.ts` loads the built
+renderer over the same `app://` scheme, through the same preloads, and answers
+four things a picture cannot before taking one.
+
+```
+  errors      a blank window and a broken window look identical
+  scroll      scrollWidth === clientWidth, both axes
+  canvas      present, so "did not start" and "drew the wrong thing" differ
+  bridge      the native webview end to end — made, told to run a script, and
+              the script's answer arriving back. Three processes, no test
+```
+
+Measured after the port, one process per appearance:
+
+```
+dark  {"scroll":[1200,1200,760,760],"canvas":[638,713],"rootBg":"rgb(30, 32, 48)",
+       "bridge":true,"drag":["drag"]}  webview: {"from":"awp-annotate",…}  errors: []
+light {…,"rootBg":"rgb(220, 224, 232)",…}                                  errors: []
+```
+
+**One appearance per process.** Both in one run was the first shape: the second
+window answered `ERR_FAILED (-2)` on a URL the first had just loaded, and with a
+retry in front of it the load never settled. The script takes the scheme as an
+argument and is run twice — the same rule as one page per gesture.
+
+Playwright is still the answer for **driving** a gesture, because the Electron
+probe has no mouse. Use `chromium`, not `webkit`, for the same reason the rule
+above inverted: the shipping engine is now the one Playwright can drive
+identically.
 
 **Install outside the repo.** Playwright is a verification tool, not a
 dependency of anything that ships, and its browser is ~77MB. Put it in a scratch
@@ -1541,15 +1578,15 @@ directory and the repo never learns about it:
 ```
 cd $CLAUDE_JOB_DIR/tmp
 bun add playwright
-bunx playwright install webkit      # required — see below
+bunx playwright install chromium    # required — see below
 ```
 
 The install step is not optional, and having WebKit already downloaded is not
 the same as having the right one. Each Playwright release pins an exact browser
-build number: a cached `webkit-2287` from some other project is invisible to a
-`webkit-2336` client, and `ls ~/Library/Caches/ms-playwright` showing a webkit
-is therefore not evidence you can skip this. The failure reads `Executable
-doesn't exist at .../webkit-2336`.
+build number: a cached build from some other project is invisible to a newer
+client, and `ls ~/Library/Caches/ms-playwright` showing a browser is therefore
+not evidence you can skip this. The failure reads `Executable doesn't exist at
+...`.
 
 **Point it at the Vite dev server**, not at a built app — `http://127.0.0.1:5273/`
 with `bun run dev` already up. Building first adds a step that can fail on its
@@ -1561,10 +1598,10 @@ one used — copy it, do not reconstruct it:
 
 ```js
 // $CLAUDE_JOB_DIR/tmp/shot.mjs  ·  run: SHOT_DIR=$PWD bun run shot.mjs
-import { webkit } from "playwright";
+import { chromium } from "playwright";
 
 const out = process.env.SHOT_DIR;
-const browser = await webkit.launch();
+const browser = await chromium.launch();
 
 for (const scheme of ["dark", "light"]) {
   const page = await browser.newPage({
@@ -1692,7 +1729,7 @@ Two consequences, both of which replaced something:
   `-webkit-app-region: drag` was the mechanism and told you to check the built
   CSS. The CSS _is_ emitted. Nothing reads it.
 
-  Electrobun's preload matches on the DOM, and on exactly two things:
+  Electrobun's preload matched on the DOM, and on exactly two things:
 
   ```
     target.closest('[style*="app-region"][style*="drag"]')   an INLINE style
@@ -1700,13 +1737,23 @@ Two consequences, both of which replaced something:
   ```
 
   StyleX produces neither — it produces a class of its own plus a stylesheet
-  rule. So the property had never moved this window. It moved because
-  `hiddenInset` left a real title bar behind the strip and AppKit was doing the
-  work, and the bug was invisible for exactly as long as that title bar existed.
+  rule. So under electrobun the property had never moved this window. It moved
+  because `hiddenInset` left a real title bar behind the strip and AppKit was
+  doing the work, and the bug was invisible for exactly as long as that title
+  bar existed.
 
-  So the bar wears `electrobun-webkit-app-region-drag` as well, and everything
-  interactive in it wears the `no-drag` counterpart. `withRegion` in `Bars.tsx`
-  appends the class to whatever `stylex.props` returned.
+  **Electron reads the computed style, so the declaration is live again** — and
+  the classes stayed, pointed at two rules in `global.css`. That is not belt and
+  braces: StyleX drops declarations it does not understand _in silence_, which
+  is already recorded here for `border` and `background`, and the failure that
+  produces is a window nobody can move. A property written in a hand-authored
+  sheet cannot be lost by a compiler that never sees it. `withRegion` in
+  `Bars.tsx` appends `awp-app-region-drag`, and everything interactive in the
+  bar wears the `no-drag` counterpart.
+
+  Verified rather than assumed: `probe:shell` reads
+  `getComputedStyle(bar).webkitAppRegion` back out of the running window and it
+  says `drag`.
 
   The general shape, which has come up here more than once: **a declaration
   being emitted is not evidence that anything consumes it.** The same mistake
@@ -1740,13 +1787,90 @@ hiding it for. And it shows peaks beside live figures, because by the time a
 hand leaves the trackpad the live figure is zero — a reading only anyone fast
 enough to catch is not a reading.
 
+## The shell is Electron, and it owns four seams
+
+The window was electrobun's and is now Electron's. Almost nothing moved: the
+renderer is the same Vite build, the daemon is the same separate Bun process on
+the same socket, and the pane's byte stream still goes window → daemon with one
+hop and one schema. What a shell is for is the handful of things only a native
+process can do, and there are exactly four of them.
+
+```
+  apps/amoeba/src/electron/
+    main.ts        the window, the app lifecycle, the geometry watch
+    menu.ts        the Edit menu — see the paste note, it is not furniture
+    protocol.ts    app:// , which serves the built renderer
+    webviews.ts    the web panel's native view
+    preload/host   the window's bridge: ids and rectangles
+    preload/guest  one function, in a stranger's page
+```
+
+**The daemon did not move and must not.** It runs under Bun, which has
+`bun:sqlite` and a pty; Electron's main process is Node. But that is not the
+reason it stays out — a daemon that is a child of the window cannot outlive it,
+and the whole point of zmx owning the sessions is that closing a window is not
+the same as ending the work.
+
+**`app://`, not `file://`.** The scheme replaces electrobun's `views://` and the
+substitution is not cosmetic: `@pierre/diffs` tokenizes in module workers, and a
+module worker refuses to load from a `file://` origin. AGENTS.md already records
+what a missing worker pool looks like — the same pixels, later — so this would
+have shipped as "the built app feels slow" and nothing else. A registered
+standard scheme has a real origin, so workers, `fetch` and the module graph all
+behave as they do against the dev server. The privileges have to be declared
+before `app.ready`, which is why `declareScheme()` is called at module scope.
+
+**`net.fetch` reads inside `app.asar`**, which was checked rather than assumed —
+the packaged renderer lives in the archive, and a protocol handler that could
+not read it would present as a white window in the packaged build only:
+
+```
+  renderer/index.html   200   393 bytes
+  electron/main.js      200   63321 bytes
+```
+
+**Two preloads, and the guest one is the interesting half.** The window's
+preload is sandboxed and exposes a bridge of five functions. The guest preload
+runs inside whatever site the web panel is pointed at, and exposes _one_ — the
+way back to the window. Electrobun handed every view its entire preload and the
+annotator was built on what came free; here it is a deliberate list of one.
+
+**The renderer never navigates, and nothing opens a second window.** A link in a
+diff or a PR body goes to the person's browser through `shell.openExternal`; a
+window opened by the _guest_ page becomes a navigation in it, because a popup
+would be a second native view with no rectangle to live in.
+
+**`trafficLightPosition` is not `trafficLightOffset`.** Electrobun's was a delta
+from where AppKit would put the lights; Electron's is the position itself. The
+window's top bar is 40px and centres its content at 20, the buttons are 16
+across, so the group starts at 12. A knob that reads the same and means
+something else is the kind of thing a port carries over unnoticed.
+
+**The renderer's console reaches this process now.** Under electrobun it did not
+— `console.log` was the first channel reached for out of the renderer and it
+printed nothing, which is why the geometry watch used to make the _page_ `fetch`
+a URL. Electron gives the window's console back, so `main.ts` forwards the error
+level and the env var that named a log endpoint is gone. Only errors: a
+main-process log that echoes every render is one nobody reads.
+
+**`bun run probe:shell` is how any of this is known to work.** See _Seeing the
+renderer_ — the harness is the application binary now, not a similar browser.
+
 ## A native webview does not stack
 
-The web panel is a real WKWebView, drawn by another process over the top of the
-renderer at a rectangle it is told to occupy. An `<iframe>` was the shorter
-answer and the wrong one — most of what a person wants beside an agent sends
-`X-Frame-Options` or a `frame-ancestors` policy and renders as a blank
-rectangle with a console error nobody sees.
+The web panel is a real browser view — a `WebContentsView` the main process
+creates and positions over the renderer at a rectangle it is told to occupy. An
+`<iframe>` was the shorter answer and the wrong one — most of what a person
+wants beside an agent sends `X-Frame-Options` or a `frame-ancestors` policy and
+renders as a blank rectangle with a console error nobody sees.
+
+**And it is not Electron's `<webview>` tag**, which its own docs discourage and
+which is a `WebContentsView` underneath anyway. What the tag adds over calling
+it directly is a custom element — and a custom element is exactly what the port
+could not keep, because a preload runs in an isolated world and an element
+defined there is invisible to the page's own scripts. So the element lives in
+the renderer (`host.ts`) over a bridge that carries ids and rectangles, and the
+main process holds the views (`src/electron/webviews.ts`).
 
 What that costs is the thing every React instinct gets wrong: **it is not in
 the stacking context, so nothing rendered here can be in front of it.** There
@@ -1764,7 +1888,7 @@ Nothing about it reads as a stacking problem from the dialog's side. The
 backdrop dims, focus moves in, Escape closes it — every part works except the
 one that shows it to a person.
 
-The tag offers two repairs and they are not interchangeable:
+Electrobun's tag offered two repairs and they were not interchangeable:
 
 ```
   toggleHidden(true)   the whole webview stops being drawn
@@ -1775,6 +1899,12 @@ A mask suits something small overlapping a corner. A modal is not that — it
 makes the rest of the window inert, so there is nothing left for the page
 underneath to be useful for, and the mask would end up the size of the panel.
 So `overlays.ts` holds a **count** of open modals and the panel hides on it.
+
+**The port simplified that by having only the first.** Electron has no mask; the
+repair is `view.setVisible(false)`, which is what `toggleHidden` now calls. The
+decision above made the second one unused before it was unavailable, so nothing
+was lost — which is the useful reading: a feature declined for a reason survives
+a port, and one kept because it was there does not.
 
 Three things about that count, each of which was a way to get it wrong:
 
@@ -1789,25 +1919,26 @@ Three things about that count, each of which was a way to get it wrong:
   registered — it is in another column, and blanking the browser for it would
   read as a bug in the browser.
 
-Unhiding forces a resync. While hidden the element's rectangle is zero and the
-tag's own loop polls at 100ms, so the page otherwise returns a tenth of a
+Unhiding forces a resync. While hidden the box's rectangle is pushed as zero
+and the sync loop polls at 100ms, so the page otherwise returns a tenth of a
 second late, which reads as the panel being slow to wake up.
 
-**Verified by stubbing the tag, because the native half cannot be driven.**
-Playwright has no Electrobun, so `customElements.define("electrobun-webview",
-…)` runs in an init script before any app code and the calls are counted:
+**Position is not size, and only one of them has an observer.** A divider drag
+moves this box without resizing it and a folding column resizes an ancestor, so
+`host.ts` runs a `ResizeObserver` _and_ the poll. Electrobun's own tag polled at
+the same interval, for the same reason.
 
-```
-  on mount   no calls                              ← nothing spurious
-  cmd+N      toggleHidden true
-  escape     toggleHidden false, syncDimensions true
-```
+**The native half can now be driven, and is.** Under electrobun it could not be
+— Playwright has no Electrobun, so the check was a stubbed custom element and
+counted calls, which proved the renderer half and left "does the native side
+stop drawing" unwatched. `probe:shell` runs the real binary: it asks the page's
+own `awpHost` for a view, tells it to run a script, and waits for the script's
+answer to arrive back on `host-message`. That is three processes and the guest
+preload, and no test reaches any of it.
 
-That proves the renderer half — that the panel learns a modal opened and says
-so. Whether the native side then stops drawing is still unwatched, and the
-panel says which of the two paths it is on the moment it is opened: outside
-Electrobun `customElements.get` answers undefined and it says so in words,
-because an empty box is also what a page that failed to load looks like.
+Outside the app window the bridge is simply absent, and the panel says so in
+words rather than showing an empty box — because an empty box is also what a
+page that failed to load looks like.
 
 ## An orphaned webview cannot be closed by anything
 
@@ -1848,43 +1979,32 @@ returns early when the rect is zero by zero, which is exactly what a detached
 element reports. So it keeps its birth rectangle and no later layout reaches
 it.
 
-`patches/electrobun@1.18.1.patch` fixes it at the source, because nothing
-outside the element can: a `_detached` flag set in `disconnectedCallback`, and
+`patches/electrobun@1.18.1.patch` fixed it at the source, because nothing
+outside the element could: a `_detached` flag set in `disconnectedCallback`, and
 checked twice — after the rAF, and after the request returns, where an arriving
-id is now removed rather than adopted.
+id is removed rather than adopted.
 
-Two things this is not.
+**It was never an argument for Electron, and the port proves that both ways.**
+Electron's `<webview>` is discouraged in its own docs, and `WebContentsView` is
+also a native view positioned over the page by hand — same "does not stack"
+property, same detach-during-init shape. `create` is still a round trip and
+StrictMode still rehearses a mount inside one frame. The bug was a missing
+guard, not an architecture, and the guard had to be written again.
 
-**It is not an argument for Electron.** Electron's `<webview>` is discouraged
-in its own docs, and the replacement — `WebContentsView` — is also a native
-view positioned over the page by hand, with the same "does not stack" property
-and the same detach-during-init shape. The bug is a missing guard, not an
-architecture.
+What _did_ change is where it can live, and that is the whole benefit. The
+element is the renderer's own now, so the flag is a field on an object this repo
+owns — `gone` in `host.ts`, checked after the await, with the arriving view
+destroyed rather than adopted. The main process holds the matching half: a
+`destroy` for an id still in flight is remembered in `cancelled`, and `create`
+throws its own view away when it finds it there. **Two halves, because either
+side can be the one that is late.** The patch is gone with the dependency.
 
-**It is not fixable from the consuming side.** Every repair available to a
-React component makes it worse: removing the element fires the callback that
-does nothing; re-appending it to rescue it fires `connectedCallback` and
-creates a _second_ native view; keeping a module-level singleton and
-re-parenting it fires both. Moving a node between parents is a disconnect and a
-connect, and this element cannot survive either.
-
-**The preload is a pre-compiled string, and that is what ships.** Patching
-`dist/api/bun/preload/webviewTag.ts` alone changes nothing at all: the build
-bundles `dist/api/bun/preload/.generated/compiled.ts`, which holds the whole
-preload as one escaped JS string. The first patch here was written, committed,
-built and launched, and the running app was byte-identical to one built without
-it — the same tell as the React Compiler that was not running. Patch both, and
-check the built bundle rather than the source:
-
-```
-  grep -c "_detached" apps/amoeba/build/dev-macos-arm64/\
-      amoeba-dev.app/Contents/Resources/app/bun/index.js
-```
-
-Restarting is not enough either — `electrobun dev` rebuilds, so the app must be
-rebuilt, not relaunched. And an orphan already on screen is not cleaned up by
-any of this: there is no handle left to clean it up with, so the process has to
-go.
+**It was not fixable from the consuming side under electrobun**, and that is
+what forced the patch: removing the element fired a callback that did nothing;
+re-appending it created a _second_ native view; a module-level singleton
+re-parented fired both. Moving a node between parents is a disconnect and a
+connect, and that element could survive neither. An element that is a plain
+`<div>` this repo positions has no such lifecycle to lose.
 
 The general shape, which has come up here before: **a cleanup that guards on a
 field set by an async step does not run during that step.** The guard reads as
@@ -1911,9 +2031,9 @@ puts the text on the clipboard and synthesises cmd+V; a permission prompt is a
 wall it has no way through. So the symptom was a paste menu appearing when
 somebody spoke.
 
-`apps/amoeba/src/bun/menu.ts` installs the menu, and the roles map to
+`apps/amoeba/src/electron/menu.ts` installs the menu, and the roles map to
 NSResponder selectors — `undo:`, `paste:`, `selectAll:` — so AppKit performs a
-real paste and WebKit raises a `paste` event carrying the text. No permission,
+real paste and the page gets a `paste` event carrying the text. No permission,
 no prompt, and route one in `clipboard.ts` already handled that event.
 
 Three things about it worth keeping.
@@ -1928,9 +2048,11 @@ broken for text everywhere in it, not just where somebody noticed.
 cmd+N: that chord opens the new-thread composer, and a menu item claiming it
 would take the key before the renderer ever saw it.
 
-**The accelerators are spelled out.** Nothing in electrobun's JS layer assigns
+**The accelerators are spelled out.** Nothing in electrobun's JS layer assigned
 a default one, and a Paste item with no key equivalent looks completely correct
-in the menu bar while fixing nothing.
+in the menu bar while fixing nothing. Electron _does_ supply defaults for its
+roles, and they are still written out — the claim this menu makes on the
+keyboard should be readable in the file that makes it.
 
 The keystroke route is now a fallback rather than the plan, and it defers
 instead of deciding, because there is no way to ask whether the chord is
@@ -2017,20 +2139,27 @@ webview rather than position it. The whole design is the shape of the two wires
 that exist, and there are only two.
 
 ```
-  this window  ──  element.executeJavascript(js)   ──►  the page
-  this window  ◄──  window.__electrobunSendToHost  ──   the page
-                     arriving as a "host-message" event on the tag
+  this window  ──  view.executeJavascript(js)  ──►  the page
+  this window  ◄──  window.__awpSendToHost     ──   the page
+                     arriving as a "host-message" event on the view
 ```
 
-**`executeJavascript` returns nothing.** It is `send`, not `request`, and the
-native call under it is `evaluateJavaScriptWithNoCompletion`. So the picker
-cannot be asked a question — it has to volunteer. That is why it is a script
+**`executeJavascript` returns nothing.** Under electrobun it could not — the
+native call was `evaluateJavaScriptWithNoCompletion` — and under Electron it is
+kept that way deliberately, because a returned promise would be a second channel
+beside the one below and the answer would then have two implementations. So the
+picker is not asked a question; it volunteers one. That is why it is a script
 that installs listeners and reports, rather than a function that is called.
 
-**`__electrobunSendToHost` is on every page, and that is not this repo's
-doing.** Every `BrowserView` — including the child a tag creates for an
-arbitrary site — is given Electrobun's full preload, which defines it. Worth
-knowing before designing around a page that "might not have it": it does.
+**`__awpSendToHost` is in every page, and one line puts it there.**
+`src/electron/preload/guest.ts` runs in every page the panel visits — sandboxed,
+context isolated, exposing exactly that function and nothing else. Electrobun
+gave every view its whole preload and `__electrobunSendToHost` came free; the
+port had to choose what a stranger's page gets, and the answer is: this.
+
+**The old name is still accepted.** The injected picker is a _string_ and tries
+both, which costs one line and means the script is not the thing that has to
+change if it is ever run under a different host.
 
 **`host-message` is the page's channel, not this feature's.** Any script on any
 site can put any object down it, and the native side `JSON.parse`s it before it
@@ -2755,9 +2884,9 @@ cd apps/amoeba && VITE_AWP_DAEMON_URL=ws://127.0.0.1:5284 \
 
 Then open **`http://127.0.0.1:5283/#/`** in a browser.
 
-**Vite and not `bun run amoeba`.** That script starts Electrobun as well, which
-means a second native window, a second webview process and a second menu bar
-claiming cmd+V — and Electrobun is told its dev-server port by an env var baked
+**Vite and not `bun run amoeba`.** That script starts Electron as well, which
+means a second native window, a second renderer process and a second menu bar
+claiming cmd+V — and Electron is told its dev-server port by an env var baked
 into the script. A browser tab is the cheaper half and answers nearly every
 question: the layout, the theme, the panels, the pane's own rendering, and every
 call over the socket. What a browser cannot answer is anything about the native

@@ -1,6 +1,6 @@
 // The daemon, as a process.
 //
-// Separate from the Electrobun main process on purpose, for now. A daemon that
+// Separate from the window's main process on purpose, for now. A daemon that
 // is a child of the window cannot outlive it, and the whole point of zmx owning
 // the sessions is that closing a window is not the same as ending the work.
 // Embedding it later is a decision about lifecycle, not about wiring — the

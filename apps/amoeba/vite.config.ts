@@ -3,8 +3,8 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { styleXPlugin } from "./stylex.babel.mjs";
 
-// The renderer's build. Electrobun copies the output in; it does not compile
-// it — see electrobun.config.ts.
+// The renderer's build. The Electron shell serves the output over `app://`; it
+// does not compile it — see src/electron/protocol.ts.
 //
 // ── why the separate Babel plugin ──────────────────────────────────────────
 // `@vitejs/plugin-react` v6 transforms with oxc and **removed the inline
@@ -39,10 +39,10 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     watch: {
-      // Electrobun assembles an .app under build/, and copies the renderer's
-      // index.html into it. Vite watches that by default and answers with a
-      // full page reload — which is the one thing HMR exists to avoid, and
-      // which would wipe a pane's scrollback every time Electrobun rebuilds.
+      // The shell's bundles and any packaged .app land under dist/ and build/.
+      // Vite watches those by default and answers with a full page reload —
+      // which is the one thing HMR exists to avoid, and which would wipe a
+      // pane's scrollback every time the shell is rebuilt.
       ignored: ["**/build/**", "**/artifacts/**", "**/dist/**"],
     },
     // Fixed, and strict: the main process is told this port by env, and a Vite
@@ -50,6 +50,28 @@ export default defineConfig({
     // nothing, with no error to read.
     port: 5273,
     strictPort: true,
+  },
+  optimizeDeps: {
+    // ── the worker entry the optimizer cannot find on its own ──────────────
+    //
+    // A worker is its own module graph. Vite's initial scan crawls the page's
+    // imports, and `highlight.worker.ts` is not one of them — it is reached
+    // through `new Worker(new URL(…))`, and only when the diff panel first
+    // tokenizes something. So the dependency was discovered *at runtime*, which
+    // is the one discovery that cannot be handled quietly:
+    //
+    //   [optimizer] bundling dependencies...
+    //   dependency optimized: @pierre/diffs/worker/worker.js
+    //   optimized dependencies changed. reloading      ← a full page reload
+    //
+    // A full reload is the thing this config already goes out of its way to
+    // avoid — see `watch.ignored` — because it wipes a pane's scrollback. It
+    // arrived a minute or two into a session, on the first patch anybody opened,
+    // and read as the window blacking out.
+    //
+    // Naming it here puts it in the initial scan instead, where it costs a few
+    // hundred milliseconds of a cold start and nothing at all afterwards.
+    include: ["@pierre/diffs/worker/worker.js"],
   },
   build: {
     outDir: "dist/renderer",
