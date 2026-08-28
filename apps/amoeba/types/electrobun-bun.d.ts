@@ -31,6 +31,14 @@ declare module "electrobun/bun" {
     preload?: string | null;
     frame?: Partial<WindowFrame>;
     titleBarStyle?: "hidden" | "hiddenInset" | "default";
+    /**
+     * Move the traffic lights from where AppKit would put them.
+     *
+     * A delta, and `{ x: 0, y: 0 }` is the default. Undocumented on either
+     * side — it goes straight through the FFI as two f64s — so the sign is
+     * something to find out by looking. See the note where it is used.
+     */
+    trafficLightOffset?: { x: number; y: number };
     transparent?: boolean;
     hidden?: boolean;
   }
