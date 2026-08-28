@@ -42,7 +42,8 @@
     "probe:workspace": "bun packages/server/src/probe/workspace-create.ts",
     "probe:thread-parent": "bun packages/server/src/probe/thread-parent.ts",
     "probe:inbox": "bun packages/server/src/probe/inbox.ts",
-    "probe:ask": "bun packages/server/src/probe/daemon-ask.ts"
+    "probe:ask": "bun packages/server/src/probe/daemon-ask.ts",
+    "probe:acp": "bun packages/server/src/probe/acp.ts"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
