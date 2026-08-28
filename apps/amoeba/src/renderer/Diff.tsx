@@ -509,8 +509,8 @@ const styles = stylex.create({
   // *patch* rather than over the panel, so the head row and the revision list
   // stay reachable while it is open — it is an index, not a mode.
   patch: { position: "relative", flex: 1, minHeight: 0 },
-  /** A head-row button that is currently on. */
-  buttonOn: { borderColor: colors.accent, color: colors.accent },
+  /** A bare head-row control that is currently on. */
+  pegOn: { color: colors.accent },
   view: { height: "100%", overflowY: "auto" },
 
   // ── the file header, made into a control ────────────────────────────────
@@ -1364,6 +1364,32 @@ export function Diff({
           {folded ? <CaretLineDownIcon size={13} /> : <CaretLineUpIcon size={13} />}
         </button>
 
+        {/* The index, on the left, beside the control that collapses the
+            revision list.
+
+            Both put a region on screen or take it away, and both act on
+            something to the *left* of where the eye is reading — so they
+            belong together at that end. The buttons at the other end act on
+            the patch itself: fold it, unfold it, send what was written about
+            it.
+
+            Drawn like the caret rather than like those: no outline at rest.
+            An outlined icon button sitting beside a bare one is the thing
+            that read as ugly, and the fix is to stop it being a different
+            kind of control rather than to restyle it. */}
+        {items.length > 1 && (
+          <button
+            type="button"
+            aria-expanded={tree}
+            aria-label={tree ? "hide the file tree" : "show the file tree"}
+            title={tree ? "hide the file tree" : "jump to a file"}
+            {...stylex.props(styles.peg, tree && styles.pegOn)}
+            onClick={() => setTree((was) => !was)}
+          >
+            <TreeStructureIcon size={13} weight="bold" />
+          </button>
+        )}
+
         {stat !== undefined && stat.files > 0 ? (
           <span {...stylex.props(styles.stat)}>
             <span {...stylex.props(styles.statPart)}>
@@ -1394,23 +1420,6 @@ export function Diff({
             {review.sending
               ? "sending…"
               : `send ${review.unsent} ${review.unsent === 1 ? "comment" : "comments"}`}
-          </button>
-        )}
-
-        {/* The index. Beside the fold pair rather than by the stat, because
-            all three are about how the patch is *got at* rather than about
-            what it says — and it is only worth having when there is more than
-            one file to find. */}
-        {items.length > 1 && (
-          <button
-            type="button"
-            aria-expanded={tree}
-            aria-label={tree ? "hide the file tree" : "show the file tree"}
-            title={tree ? "hide the file tree" : "jump to a file"}
-            {...stylex.props(styles.button, styles.icon, tree && styles.buttonOn)}
-            onClick={() => setTree((was) => !was)}
-          >
-            <TreeStructureIcon size={13} weight="bold" />
           </button>
         )}
 

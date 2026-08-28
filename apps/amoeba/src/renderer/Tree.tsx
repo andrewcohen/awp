@@ -120,6 +120,11 @@ export function Tree({ paths, onPick, onClose }: TreeProps) {
     // The patch's order is the diff's order, which is not the reading order of
     // a tree. Let it sort.
     presorted: false,
+    // Open, because a patch is not a repository. A file tree of a whole
+    // checkout has to start closed or it is thousands of rows; a tree of the
+    // fifteen files in one diff has nothing to hide, and a person opening it
+    // to find a file should see the files.
+    initialExpansion: "open",
   });
 
   // A new patch while the tree is open. Joined rather than compared by
