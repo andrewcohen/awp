@@ -125,10 +125,9 @@ const styles = stylex.create({
   // `flex: 1` is what this was, and its parent is an `<aside>` that is not a
   // flex container — so the rule did nothing, the wrapper's height went to
   // auto, and everything inside asking for `height: 100%` resolved against
-  // nothing. The tell was the web panel: its `<electrobun-webview>` is a
-  // native view positioned from its element's rectangle, so a wrong height
-  // there is not a clipped panel, it is a native view drawn at the wrong size
-  // over the window.
+  // nothing. The tell was the web panel: its browser view is positioned from
+  // its box's rectangle, so a wrong height there is not a clipped panel, it is
+  // a native view drawn at the wrong size over the window.
   grow: { height: "100%", minHeight: 0 },
   // The appearance control, pinned to the bottom-left of the window.
   //

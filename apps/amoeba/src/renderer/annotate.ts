@@ -2,25 +2,25 @@
 //
 // ── the page is another process, and that decides everything below ─────────
 //
-// The web panel is a real WKWebView drawn over the renderer by the native
-// side. Nothing in this window can reach that document: no ref, no query, no
-// event bubbling out of it. The only two wires between here and there are the
-// ones Electrobun already runs, and they are both one-way:
+// The web panel is a real browser view drawn over the renderer by the main
+// process. Nothing in this window can reach that document: no ref, no query, no
+// event bubbling out of it. There are exactly two wires between here and there,
+// and they are both one-way:
 //
-//   this window  ──  element.executeJavascript(js)   ──►  the page
-//   this window  ◄──  window.__electrobunSendToHost  ──   the page
-//                     arriving as a "host-message" event on the tag
+//   this window  ──  view.executeJavascript(js)  ──►  the page
+//   this window  ◄──  window.__awpSendToHost     ──   the page
+//                     arriving as a "host-message" event on the view
 //
-// `executeJavascript` returns nothing at all — it is `send`, not `request`, and
-// the native call behind it is `evaluateJavaScriptWithNoCompletion`. So the
-// picker cannot be asked a question; it has to volunteer an answer. Hence a
-// script that installs listeners and reports, rather than a function that is
-// called and returns.
+// `executeJavascript` is `send`, not `request` — it was
+// `evaluateJavaScriptWithNoCompletion` under electrobun and it is a deliberate
+// fire-and-forget under Electron, because a second channel beside the one below
+// would be a second implementation of the same answer. So the picker cannot be
+// asked a question; it has to volunteer one. Hence a script that installs
+// listeners and reports, rather than a function that is called and returns.
 //
-// `__electrobunSendToHost` is defined by Electrobun's own preload, which every
-// BrowserView gets — including the child webview a tag creates for an arbitrary
-// page. That is why this works on a site nobody here controls, and it is not
-// something this file arranged.
+// `__awpSendToHost` is put in every page by the guest preload — see
+// `src/electron/preload/guest.ts` — which is why this works on a site nobody
+// here controls.
 //
 // ── what comes back is the page's words, and the page is a stranger ────────
 //
@@ -78,11 +78,11 @@ export type Message =
   | { readonly kind: "cancelled" };
 
 /**
- * A message off the tag, if it is one of ours.
+ * A message off the view, if it is one of ours.
  *
  * Guarded rather than cast, and the marker is the whole reason: `host-message`
  * is the page's channel, not this feature's. Any script on any site can call
- * `__electrobunSendToHost` with anything, and that value arrives here already
+ * `__awpSendToHost` with anything, and that value arrives here already
  * `JSON.parse`d by the native side. A cast would put a stranger's object
  * straight into a prompt.
  */
@@ -182,9 +182,11 @@ export const pickerSource = (): string => `
   if (window[KEY]) { window[KEY].arm(); return; }
 
   const send = (message) => {
-    if (typeof window.__electrobunSendToHost === "function") {
-      window.__electrobunSendToHost(message);
-    }
+    // Two names for one wire. The app's own is first; the second is what
+    // electrobun's preload called it, and is kept because this script is a
+    // string that has to work against whatever host is under it.
+    const to = window.__awpSendToHost || window.__electrobunSendToHost;
+    if (typeof to === "function") { to(message); }
   };
 
   // An id nobody wrote is not an address — the same patterns as \`minted\`

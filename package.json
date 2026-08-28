@@ -44,7 +44,8 @@
     "probe:inbox": "bun packages/server/src/probe/inbox.ts",
     "probe:ask": "bun packages/server/src/probe/daemon-ask.ts",
     "probe:acp": "bun packages/server/src/probe/acp.ts",
-    "probe:chat": "bun packages/server/src/probe/chat.ts"
+    "probe:chat": "bun packages/server/src/probe/chat.ts",
+    "probe:shell": "bun run --filter amoeba probe:shell"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",
@@ -55,7 +56,6 @@
     "vitest": "4.1.11"
   },
   "patchedDependencies": {
-    "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch",
-    "electrobun@1.18.1": "patches/electrobun@1.18.1.patch"
+    "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch"
   }
 }
