@@ -163,10 +163,10 @@ const styles = stylex.create({
     zIndex: 2,
     alignItems: "center",
     height: space.titlebar,
-    // No longer clearing the traffic lights — the window is `titleBarStyle:
-    // "hidden"` and there are none. `space.lightsInline` was 5.25rem of
-    // nothing but room for three circles.
-    paddingInlineStart: "0.35rem",
+    // Clearing the traffic lights, which are back: `titleBarStyle: "hidden"`
+    // was tried and reverted because a tiling window manager stops managing an
+    // untitled window. See the note in the main process.
+    paddingInlineStart: space.lightsInline,
     paddingInlineEnd: "0.35rem",
     // Its own ground, because it is absolute and whatever is beneath it would
     // otherwise show through the buttons. It matters most folded, when the
@@ -314,10 +314,11 @@ export function TopBar({
           mirrored glyph alone. Now the icon's mirror and its position say the
           same thing, and neither is carrying the distinction by itself.
 
-          The left one now sits at the window's actual edge. It used to be
-          held off by 5.25rem of padding that existed only to clear the traffic
-          lights, and those are gone — see `titleBarStyle` in the main
-          process. */}
+          The left one cannot go further left than this: the window is
+          `hiddenInset`, so the traffic lights float over the first 5.25rem and
+          the bar's own start padding is what clears them. Removing them was
+          tried and cost tiling-window-manager support — see the note in the
+          main process. */}
       <button
         type="button"
         aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}

@@ -28,23 +28,36 @@ export const mainWindow = new BrowserWindow({
   title: "amoeba",
   url,
   frame: { x: 100, y: 100, width: 1200, height: 800 },
-  // ── no title bar, and no traffic lights ────────────────────────────────
+  // ── inset controls, and the reason `hidden` was tried and reverted ──────
   //
-  // `hidden` maps to `Titled: false, FullSizeContentView: true`, which takes
-  // away every native way to move, close or minimise the window. Two things
-  // had to exist first, and both now do:
+  // `hidden` maps to `Titled: false, FullSizeContentView: true`, and it works:
+  // the lights go, the top bar starts at the window's own edge, the Window
+  // menu covers close and minimise, and the drag region moves it.
   //
-  //   the Window menu     Close ⌘W, Minimize ⌘M, Zoom — in `menu.ts`
-  //   a drag region       the top bar, wearing electrobun's own class
+  // **A tiling window manager stops managing it.** Reported within a minute of
+  // the flag landing — "my aerospace seems to not have resized it" — and it is
+  // not a bug in either program. AeroSpace, yabai and the rest pick windows out
+  // through the accessibility API and skip anything that is not a *standard*
+  // window; an untitled one is not, so it is left floating. On a 3440x1440
+  // display the difference is the whole point of the display:
   //
-  // The second is the one that nearly shipped broken. `-webkit-app-region:
-  // drag` was already on that bar and had never moved anything: electrobun
-  // matches on an inline style attribute or on `.electrobun-webkit-app-region-
-  // drag`, and StyleX emits a class of its own plus a stylesheet rule. The bar
-  // moved the window because `hiddenInset` left a real title bar behind it and
-  // AppKit was doing the work. Take the title bar away and there is nothing.
-  // See the note in `Bars.tsx`.
-  titleBarStyle: "hidden",
+  //   hiddenInset   3424x1393    tiled to the screen, less the gaps
+  //   hidden        whatever it was last dragged to
+  //
+  // Three circles are a small price for being a window somebody's tiler will
+  // manage, and the person running the tiler is the person using this. So the
+  // title bar stays.
+  //
+  // `trafficLightOffset: { x, y }` is the knob that is actually available here
+  // if they are in the way — it moves them, it cannot remove them.
+  //
+  // What the attempt was worth keeping: it found that the top bar's drag
+  // region had never worked. `-webkit-app-region: drag` is emitted by StyleX
+  // as a class and a stylesheet rule, and electrobun reads neither — only an
+  // inline style attribute or its own class name. The bar moved the window
+  // because this very flag leaves a real title bar behind it. `Bars.tsx` now
+  // wears electrobun's class as well, so the region works on its own merits.
+  titleBarStyle: "hiddenInset",
 });
 
 // After the window, because two of its items act on one: Reload, and the

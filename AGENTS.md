@@ -1577,9 +1577,28 @@ the appearance toggle ended up in a sidebar footer for exactly that reason.
 
 Two consequences, both of which replaced something:
 
-- **There is no title bar and there are no traffic lights.** The window is
-  `titleBarStyle: "hidden"`. The top bar used to hold 5.25rem of padding whose
-  only job was to clear three circles; it does not any more.
+- **The traffic lights stay, and a tiling window manager is why.** The window
+  is `hiddenInset`, so the controls float over the first 5.25rem and the top
+  bar's start padding clears them.
+
+  `titleBarStyle: "hidden"` was tried. It works — the lights go, the Window
+  menu covers close and minimise, the drag region moves it — and it was
+  reverted within a minute, because **AeroSpace stopped managing the window**.
+  That is not a bug in either program: a tiler picks windows out through the
+  accessibility API and skips anything that is not a _standard_ window, and an
+  untitled window is not one. On a 3440x1440 display the difference is the
+  whole point of the display:
+
+  ```
+    hiddenInset   3424x1393    tiled to the screen, less the gaps
+    hidden        whatever it was last dragged to
+  ```
+
+  Three circles are a small price for being a window somebody's tiler will
+  manage, and the person running the tiler is the person using this.
+  `trafficLightOffset: { x, y }` is the knob actually available if they are in
+  the way — it moves them, it cannot remove them.
+
 - **The top bar is the drag handle, and the CSS property is not what makes it
   one.** This is worth reading before trusting it, because an earlier version
   of this note was wrong in the way that is hardest to catch: it said
