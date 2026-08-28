@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MODE, migrations, permissionOf, updateOf } from "./chat";
+import { MODE, migrations, optionsOf, permissionOf, updateOf } from "./chat";
 
 // The shapes here are not invented: they are the updates a real turn produced,
 // copied off a spike against the adapter on 2026-08-28. A fixture written from
@@ -36,11 +36,31 @@ describe("updateOf", () => {
     ).toBe("thought");
   });
 
-  it("drops the updates nobody reads", () => {
-    // Both arrive on every turn. Dropped here rather than in the renderer, so
-    // the wire is the size of what is shown.
-    expect(updateOf({ update: { sessionUpdate: "usage_update" } })).toBeUndefined();
+  it("drops the command list, which nothing draws yet", () => {
+    // Two arrive on every turn and both were dropped as "nobody reads these".
+    // One of them turned out to be the only place the context figure exists —
+    // see below — and this is the other. It is the slash-command list, and it
+    // stays dropped only until something shows it.
     expect(updateOf({ update: { sessionUpdate: "available_commands_update" } })).toBeUndefined();
+  });
+
+  it("reads the context figure, which arrives as a whole reading", () => {
+    expect(
+      updateOf({ update: { sessionUpdate: "usage_update", used: 18_606, size: 200_000 } }),
+    ).toEqual({ kind: "usage", used: 18_606, size: 200_000 });
+  });
+
+  it("takes the cost out of the object it arrives in", () => {
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "usage_update",
+          used: 1,
+          size: 2,
+          cost: { amount: 0.1166475, currency: "USD" },
+        },
+      })?.cost,
+    ).toBeCloseTo(0.1166, 4);
   });
 
   it("drops content that is not text", () => {
@@ -185,5 +205,53 @@ describe("the record of which session is ours", () => {
     expect(sql).toContain("primary key (project, workspace)");
     // Named, not numbered, and fixed the moment it has run anywhere.
     expect(migrations.map((migration) => migration.name)).toEqual(["chat.001-sessions"]);
+  });
+});
+
+describe("optionsOf", () => {
+  // The shapes are the adapter's own, measured 2026-08-28: four options, all
+  // selects, all with a current value and the values they accept.
+  const raw = [
+    {
+      id: "mode",
+      name: "Mode",
+      description: "Session permission mode",
+      category: "mode",
+      type: "select",
+      currentValue: "auto",
+      options: [
+        { value: "auto", name: "Auto", description: "Use a model classifier" },
+        { value: "default", name: "Manual" },
+      ],
+    },
+    {
+      id: "model",
+      name: "Model",
+      type: "select",
+      currentValue: "opus",
+      options: [{ value: "opus", name: "Opus" }],
+    },
+  ];
+
+  it("keeps the id, the current value and every value on offer", () => {
+    const [mode] = optionsOf(raw);
+    expect(mode).toEqual({
+      id: "mode",
+      name: "Mode",
+      description: "Session permission mode",
+      currentValue: "auto",
+      values: [
+        { value: "auto", name: "Auto", description: "Use a model classifier" },
+        { value: "default", name: "Manual" },
+      ],
+    });
+  });
+
+  it("keeps only what this window can draw", () => {
+    // A row it cannot draw is worse than a row that is not there: it would be
+    // a control that looks operable and is not. Every option the adapter
+    // offers today is a select, so nothing is lost by saying so.
+    expect(optionsOf([{ id: "note", type: "string", currentValue: "hi" }])).toEqual([]);
+    expect(optionsOf(undefined)).toEqual([]);
   });
 });

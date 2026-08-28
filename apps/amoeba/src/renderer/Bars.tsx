@@ -3,6 +3,7 @@ import type { SessionInfo, WorkspaceFacts } from "@awp-kit/protocol";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
 import type { Collapsed } from "./columns";
+import type { Face } from "./remembered";
 import { colors, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
 
@@ -83,6 +84,27 @@ const withRegion = (
 });
 
 const styles = stylex.create({
+  /** The two faces, as one segmented control rather than two buttons. */
+  faces: {
+    display: "flex",
+    borderStyle: "solid",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: "0.3rem",
+    overflow: "hidden",
+  },
+  faceButton: {
+    fontFamily: text.ui,
+    fontSize: text.small,
+    padding: "0.1rem 0.5rem",
+    borderStyle: "none",
+    // Shorthands are dropped in silence by StyleX; the long forms are not.
+    backgroundColor: "transparent",
+    color: colors.muted,
+    cursor: "pointer",
+  },
+  faceOn: { backgroundColor: colors.raised, color: colors.text },
+
   bar: {
     display: "flex",
     alignItems: "center",
@@ -425,6 +447,8 @@ export function AgentBar({
   facts,
   connected,
   collapsed,
+  face,
+  onFace,
   onFold,
 }: {
   readonly jobs: ReadonlyArray<Job>;
@@ -433,6 +457,9 @@ export function AgentBar({
   readonly facts: WorkspaceFacts | undefined;
   readonly connected: boolean;
   readonly collapsed: Collapsed;
+  /** Which face the agent column is wearing, or nothing when there is no choice. */
+  readonly face: Face | undefined;
+  readonly onFace: (face: Face) => void;
   readonly onFold: (which: keyof Collapsed) => void;
 }) {
   const counted = tally(jobs);
@@ -461,6 +488,35 @@ export function AgentBar({
       <Title session={session} facts={facts} />
 
       <span {...stylex.props(styles.spacer)} />
+
+      {/* ── the escape hatch, and it is deliberately a view and not a mode ──
+
+          Both halves are always there. The create job starts a zmx session
+          whichever of these is selected, so this switches what is drawn and
+          never what exists — which is the whole reason it is safe to offer. A
+          chat that misbehaves is one press away from the terminal that was
+          running underneath it the entire time.
+
+          Only where there is a choice to make. A session awp did not create
+          has no workspace to hold a conversation in, so the pair is absent
+          rather than present and inert. */}
+      {face !== undefined && (
+        <span {...stylex.props(styles.faces)} role="group" aria-label="how to watch the agent">
+          {(["terminal", "chat"] as const).map((one) => (
+            <button
+              key={one}
+              type="button"
+              data-nav-item
+              aria-pressed={face === one}
+              title={one === "chat" ? "the conversation" : "the terminal it is running in"}
+              onClick={() => onFace(one)}
+              {...stylex.props(styles.faceButton, face === one && styles.faceOn)}
+            >
+              {one}
+            </button>
+          ))}
+        </span>
+      )}
 
       {counted.running > 0 && (
         <span {...stylex.props(styles.strong)}>{counted.running} running</span>

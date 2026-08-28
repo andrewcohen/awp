@@ -7,6 +7,8 @@ import {
 } from "@awp-kit/protocol/client";
 import type {
   AgentTask,
+  ChatConfigOption,
+  ChatUpdate,
   CommentSide,
   Effort,
   Inbox,
@@ -642,4 +644,82 @@ export const listTasks = (from: string): Promise<ReadonlyArray<AgentTask>> =>
 export const sendTask = (project: string, workspace: string, task: AgentTask): Promise<string> =>
   runtime.runPromise(
     Effect.flatMap(AwpClient, (rpc) => rpc.TaskSend({ project, workspace, task })),
+  );
+
+// ── the chat ───────────────────────────────────────────────────────────────
+
+/**
+ * Watch a conversation until the returned function is called.
+ *
+ * The same shape as {@link watchJobs}, and for the same reason: the stream's
+ * lifetime is the request's, so interrupting the fiber is what closes the
+ * daemon's end — and the daemon's end is an adapter process, which goes when
+ * the last window on that workspace does.
+ *
+ * The history arrives first, in the same shape as everything after it, so a
+ * reader does not have to know which it is looking at. That is `session/load`
+ * doing the work rather than anything here.
+ */
+export const watchChat = (
+  project: string,
+  workspace: string,
+  onUpdate: (update: ChatUpdate) => void,
+): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
+      Effect.sync(() => onUpdate(update)),
+    ),
+  );
+
+/**
+ * Say something to the agent working in a workspace.
+ *
+ * Resolves when the turn has started, not when it ends — the answer arrives
+ * down {@link watchChat}. A promise that settled at the end of a turn would be
+ * one a send button had to wait on for minutes.
+ */
+export const chatSend = (project: string, workspace: string, text: string): Promise<void> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text })),
+  );
+
+/**
+ * What the session is running as: the model, the effort, the permission mode.
+ *
+ * A call rather than something on the stream, because it is asked when a panel
+ * opens and again after a change — where an update would put the whole list of
+ * models on the wire several times a turn.
+ */
+export const chatConfig = (
+  project: string,
+  workspace: string,
+): Promise<ReadonlyArray<ChatConfigOption>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatConfig({ project, workspace })));
+
+/**
+ * Change one, and take back the whole set as it now stands.
+ *
+ * The reply is the list rather than an acknowledgement, so nothing has to ask
+ * again to find out what it just did — and a value the agent adjusted or
+ * refused comes back as what actually happened.
+ */
+export const chatSet = (
+  project: string,
+  workspace: string,
+  option: string,
+  value: string,
+): Promise<ReadonlyArray<ChatConfigOption>> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSet({ project, workspace, option, value })),
+  );
+
+/** Answer a permission request, by the id its update carried. */
+export const chatAnswer = (
+  project: string,
+  workspace: string,
+  request: string,
+  option: string,
+): Promise<void> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatAnswer({ project, workspace, request, option })),
   );

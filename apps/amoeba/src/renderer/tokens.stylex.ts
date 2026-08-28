@@ -96,6 +96,8 @@ export const hue = stylex.defineConsts({
   // above a panel has to be lighter than the panel, and Latte has nothing
   // lighter than its base to be.
   latteRaised: "#ffffff",
+  /** White, and the only pure white in the window. See `page`. */
+  lattePage: "#ffffff",
   latteText: "#4c4f69",
   latteMuted: "#5e6173",
   // One step deeper than Latte's surface0 as well. A divider at #ccd0da on a
@@ -123,6 +125,8 @@ export const hue = stylex.defineConsts({
   macchiatoBase: "#1e2030",
   macchiatoSurface: "#24273a",
   macchiatoRaised: "#363a4f",
+  /** Catppuccin's crust: the deepest of the greys, and the mirror of white. */
+  macchiatoPage: "#181926",
   macchiatoText: "#cad3f5",
   // Overlay1 rather than surface2. The old value was 2.60 against the base,
   // which is below the mark threshold let alone the text one — and this is the
@@ -171,6 +175,20 @@ export const colors = stylex.defineVars({
   surface: { default: hue.latteSurface, [dark]: hue.macchiatoSurface },
   /** A row under the pointer, or a control pressed in. */
   raised: { default: hue.latteRaised, [dark]: hue.macchiatoRaised },
+  /**
+   * A page: something long enough to be read rather than glanced at.
+   *
+   * The one role whose two values are not a step in the same direction. In
+   * Latte it is white — the lightest surface there is — and in Macchiato it is
+   * the deepest. That is the point: a document reads as paper in a light theme
+   * and as ink in a dark one, and taking `surface` in both would make the chat
+   * a slightly raised panel rather than a thing you read.
+   *
+   * Not `raised`, which is white in Latte too. That one means "under the
+   * pointer", and a ground that is also the hover colour leaves a hovered row
+   * invisible.
+   */
+  page: { default: hue.lattePage, [dark]: hue.macchiatoPage },
   /** Ordinary reading weight. */
   text: { default: hue.latteText, [dark]: hue.macchiatoText },
   /** Present but secondary — a reason, a subtitle, a disabled row. */

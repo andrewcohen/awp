@@ -1466,7 +1466,7 @@ export type ChatPermissionOption = (typeof ChatPermissionOption)["Type"];
  * optional, and the window merges by id rather than appending.
  */
 export const ChatUpdate = Schema.Struct({
-  kind: Schema.Literals(["message", "tool", "permission"]),
+  kind: Schema.Literals(["message", "tool", "permission", "turn", "usage"]),
 
   /** message: who, and what they said. Chunks, so they are appended. */
   role: Schema.optional(ChatRole),
@@ -1482,9 +1482,71 @@ export const ChatUpdate = Schema.Struct({
 
   /** permission: what a person may answer. */
   options: Schema.optional(Schema.Array(ChatPermissionOption)),
+
+  /**
+   * turn: `started` or `ended`, and why it ended.
+   *
+   * There is no turn boundary in the updates the adapter sends — a turn is a
+   * request and a reply, and the reply is not an update. So the daemon says so
+   * itself, on either side of the prompt it made. Without it the panel cannot
+   * tell "the agent is thinking" from "the agent had nothing to say", and
+   * those look identical: an empty space.
+   *
+   * On the wire rather than kept in the window because a second window on the
+   * same workspace has to know too, and because a window opening in the middle
+   * of a turn should say so rather than looking idle.
+   */
+  stopReason: Schema.optional(Schema.String),
+
+  // ── usage ───────────────────────────────────────────────────────────────
+  //
+  // Arrives on its own, several times a turn, and was being dropped as
+  // something nobody reads. It is the only place the context figure exists.
+  //
+  // **`size` changes mid-turn.** Measured: 200000 on the first update of a
+  // turn and 1000000 on the last, because the model in use has a larger window
+  // than the default and the adapter learns that as it goes. So the newest
+  // pair is the answer and an earlier one must not be kept beside it.
+
+  /** Tokens used so far in this session. */
+  used: Schema.optional(Schema.Number),
+  /** The context window, in tokens. */
+  size: Schema.optional(Schema.Number),
+  /** What the session has cost so far, in whatever currency the agent reports. */
+  cost: Schema.optional(Schema.Number),
 });
 
 export type ChatUpdate = (typeof ChatUpdate)["Type"];
+
+/**
+ * One thing about a session a person may change.
+ *
+ * Everything the adapter lets a client set arrives in this one shape — the
+ * permission mode, the model, the effort, fast mode — each a select with its
+ * current value and the values it accepts. Measured 2026-08-28: four of them,
+ * all `type: "select"`, all through `session/set_config_option`.
+ *
+ * That is why there is no `ChatModel` and no `ChatMode` call. Three bespoke
+ * controls would be three things to keep in step with an adapter that already
+ * answers the question generically, and a fifth option appearing upstream
+ * would be a fifth thing to add here rather than a row that simply shows up.
+ */
+export const ChatConfigOption = Schema.Struct({
+  /** `mode`, `model`, `effort`, `fast` — the adapter's own ids. */
+  id: Schema.String,
+  name: Schema.String,
+  description: Schema.optional(Schema.String),
+  currentValue: Schema.String,
+  values: Schema.Array(
+    Schema.Struct({
+      value: Schema.String,
+      name: Schema.String,
+      description: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
+export type ChatConfigOption = (typeof ChatConfigOption)["Type"];
 
 /** The conversation could not be had. */
 export class ChatUnavailable extends Schema.TaggedError<ChatUnavailable>()("ChatUnavailable", {
@@ -1617,6 +1679,38 @@ export class AwpRpcs extends RpcGroup.make(
       request: Schema.String,
       option: Schema.String,
     },
+    error: ChatUnavailable,
+  }),
+
+  /**
+   * What this session is running as, and what it could be running as instead.
+   *
+   * A call rather than a field on the stream, because it is asked once when a
+   * panel opens and again after a change — where an update on the stream would
+   * put a list of every model on the wire several times a turn.
+   */
+  Rpc.make("ChatConfig", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.Array(ChatConfigOption),
+    error: ChatUnavailable,
+  }),
+
+  /**
+   * Change one of them, and get the whole set back as it now stands.
+   *
+   * The reply carries the list rather than an acknowledgement, so a client
+   * never has to ask again to find out what it just did — and so a setting the
+   * agent refused or adjusted comes back as what actually happened rather than
+   * as what was requested.
+   */
+  Rpc.make("ChatSet", {
+    payload: {
+      project: Schema.String,
+      workspace: Schema.String,
+      option: Schema.String,
+      value: Schema.String,
+    },
+    success: Schema.Array(ChatConfigOption),
     error: ChatUnavailable,
   }),
 

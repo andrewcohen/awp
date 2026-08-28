@@ -9,6 +9,7 @@ import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
 import { LeftColumn } from "./LeftColumn";
 import { NewThread, type NewThreadRequest } from "./NewThread";
+import { Chat } from "./Chat";
 import { Pane } from "./Pane";
 import { addressFrom, addressOf, pathOf, sessionAt } from "./address";
 import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
@@ -16,6 +17,9 @@ import {
   rememberCollapsed,
   rememberPlace,
   rememberWidths,
+  type Face,
+  rememberFace,
+  rememberedFace,
   rememberedCollapsed,
   rememberedWidths,
 } from "./remembered";
@@ -210,6 +214,13 @@ export function App() {
   // window that reopened both every time would undo the one choice the user
   // makes to get them out of the way.
   const [collapsed, setCollapsed] = useState<Collapsed>(rememberedCollapsed);
+
+  // Which face the agent column wears for whatever is open.
+  //
+  // Read per selection rather than held per workspace: the address changes far
+  // more often than the preference does, and a map in state would be a second
+  // copy of what localStorage already holds.
+  const [face, setFace] = useState<Face>("terminal");
   const columns = fitColumns(width, want, collapsed);
   // The same arithmetic with nothing folded: what each column is on its way to,
   // or on its way back from. `hold` needs it and `columns` cannot supply it —
@@ -292,6 +303,23 @@ export function App() {
   // and the panel shows one — the first is the one it was started for, and a
   // second tab per pull request is a strip nobody asked for.
   const openPr = prOf(open?.identity, threads);
+
+  // The preference belongs to the workspace, and what is open changes under
+  // it. Read on selection rather than kept in a map: localStorage already
+  // holds every workspace's answer, and a copy in state would be the one that
+  // goes stale when another window writes.
+  // Two strings rather than the identity object: a fresh object every render
+  // is a dependency that always differs, so the effect would run on every
+  // render and read localStorage each time.
+  const openProject = open?.identity?.project;
+  const openWorkspace = open?.identity?.workspace;
+  useEffect(() => {
+    setFace(
+      openProject === undefined || openWorkspace === undefined
+        ? "terminal"
+        : rememberedFace(openProject, openWorkspace),
+    );
+  }, [openProject, openWorkspace]);
 
   // The modal, as a request rather than a boolean. It carries what the window
   // knew at the moment it was opened — which project was on screen, and which
@@ -486,11 +514,44 @@ export function App() {
             }
             connected={connected}
             collapsed={collapsed}
+            face={open?.identity === undefined ? undefined : face}
+            onFace={(chosen) => {
+              if (open?.identity === undefined) {
+                return;
+              }
+              rememberFace(open.identity.project, open.identity.workspace, chosen);
+              setFace(chosen);
+            }}
             onFold={(which) => fold(which)()}
           />
-          <Boundary where="the terminal">
-            <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
-          </Boundary>
+          {/* Two faces on one agent, and the terminal is the one that is
+              always there. `open.identity` is what decides whether there is a
+              choice at all: a session awp did not create has no workspace, so
+              there is nothing to hold a conversation in and the pane is the
+              only honest answer.
+
+              A separate boundary each, and not one around the pair. The chat
+              is the newer code by a wide margin — if it throws, the terminal
+              underneath it is exactly what somebody needs to still be able to
+              reach. */}
+          {open?.identity !== undefined && face === "chat" ? (
+            <Boundary where="the chat">
+              {/* Keyed, so a different workspace remounts rather than being
+                  cleared by an effect. Clearing in an effect is a second
+                  render for something React already has a way to express, and
+                  it leaves one frame in which the previous conversation is on
+                  screen under the new workspace's name. */}
+              <Chat
+                key={`${open.identity.project}/${open.identity.workspace}`}
+                project={open.identity.project}
+                workspace={open.identity.workspace}
+              />
+            </Boundary>
+          ) : (
+            <Boundary where="the terminal">
+              <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
+            </Boundary>
+          )}
         </main>
 
         <Divider
