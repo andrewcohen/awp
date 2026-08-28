@@ -37,12 +37,15 @@ let breaking: Set<string> = new Set();
 let present: Set<string> = new Set();
 /** What the config file says to run in a new workspace. */
 let hooks: ReadonlyArray<string> = [];
+/** Threads the store holds. A rollback empties this, which is the point. */
+let threadIds: Set<string> = new Set();
 
 beforeEach(() => {
   trace = [];
   breaking = new Set();
   present = new Set();
   hooks = [];
+  threadIds = new Set(["20260826-aaaa"]);
 });
 
 const act = (what: string): Effect.Effect<void, { readonly reason: string }> =>
@@ -83,11 +86,22 @@ const deps = (): WorkspaceDeps => ({
     // created with. Its absence is what found the runner's defect hole: the
     // step threw, and the job sat at `running` forever rather than failing.
     rename: (thread: string, title: string) => act(`thread.rename(${thread}:${title})`),
-    // The `thread` step checks the thread is really there before building
+    // The `thread` step ensures the thread is really there before building
     // anything for it, and removes it on the way back out if it ended up
-    // holding nothing.
-    list: () => Effect.succeed([{ id: "20260826-aaaa" }]),
-    deleteIfEmpty: (thread: string) => act(`thread.delete(${thread})`).pipe(Effect.as(true)),
+    // holding nothing. Backed by a real set rather than a constant, because
+    // the two halves have to be able to disagree: a rollback deletes, and the
+    // retry after it has to find the thread gone.
+    list: () => Effect.sync(() => [...threadIds].map((id) => ({ id }))),
+    restore: (thread: string, title: string) =>
+      act(`thread.restore(${thread}:${title})`).pipe(
+        Effect.as(true),
+        Effect.tap(() => Effect.sync(() => threadIds.add(thread))),
+      ),
+    deleteIfEmpty: (thread: string) =>
+      act(`thread.delete(${thread})`).pipe(
+        Effect.as(true),
+        Effect.tap(() => Effect.sync(() => threadIds.delete(thread))),
+      ),
   } as unknown as Threads["Service"],
 
   files: {
@@ -373,6 +387,51 @@ describe("when a step fails", () => {
 
     expect(job.attempts).toBe(1);
     expect(trace.filter((line) => line.startsWith("jj.add"))).toHaveLength(1);
+  });
+
+  test("a retry after the rollback works, because the thread comes back", async () => {
+    // The bug this is here for, and it made the retry button a lie for every
+    // create that ever rolled back.
+    //
+    //   attempt   the handler's thread exists, the job builds on it, a step
+    //             fails, and the rollback's last undo deletes the thread
+    //   retry     `done` was emptied, so the `thread` step runs first — and
+    //             it used to *assert* the thread was there and refuse
+    //
+    // "there is no thread to build for", about a thread that existed until the
+    // rollback took it. The general rule the fix states: compensation has to
+    // leave the world in a state `run` can be re-entered from.
+    const [failed, retried] = await run((jobs) =>
+      Effect.gen(function* () {
+        breaking.add("zmx.start(awp.rowan.tiered-discounts.agent)");
+        const queued = yield* jobs.enqueue(createWorkspaceRef, input());
+        const first = yield* settle(jobs, queued.id);
+
+        // The rollback really did take it, or the retry below proves nothing.
+        expect(threadIds.has("20260826-aaaa")).toBe(false);
+
+        breaking.clear();
+        trace = [];
+        yield* jobs.retry(queued.id);
+        return [first, yield* settle(jobs, queued.id)] as const;
+      }),
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(retried.status).toBe("succeeded");
+    // Put back before anything is built on it, and named — a thread returning
+    // to the sidebar with no line in the log is its own small mystery.
+    expect(trace[0]).toBe("thread.restore(20260826-aaaa:Tiered discounts)");
+    expect(threadIds.has("20260826-aaaa")).toBe(true);
+  });
+
+  test("a retry that never lost the thread does not touch it", async () => {
+    // `restore` is idempotent, and the step must not call it for a thread that
+    // is simply there — a job resumed after a daemon restart has its thread,
+    // and rewriting the row would overwrite a title somebody has since edited.
+    const job = await make();
+    expect(job.status).toBe("succeeded");
+    expect(trace.some((line) => line.startsWith("thread.restore"))).toBe(false);
   });
 
   test("an undo that fails leaves the job dirty and stops there", async () => {

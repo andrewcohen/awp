@@ -613,6 +613,11 @@ export const layer = AwpRpcs.toLayer(
           const job = yield* jobs
             .enqueue(createWorkspaceRef, {
               thread: thread.id,
+              // Recorded, not re-derived. `followsFrom` was resolved from the
+              // chosen base a moment ago and the job may have to rebuild this
+              // thread on a retry — see the `thread` step. A resumed job has
+              // only its record.
+              threadParent: followsFrom,
               project,
               description,
               repo,

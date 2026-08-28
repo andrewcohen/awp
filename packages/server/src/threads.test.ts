@@ -268,3 +268,60 @@ describe("threads", () => {
     expect(outcome).toMatchObject({ thread: "nope" });
   });
 });
+
+describe("restore", () => {
+  // The counterpart of deleteIfEmpty, and the reason it had to exist: without
+  // it, `create-workspace`'s first step asserted a thread that its own last
+  // undo removed, so every rolled-back create was permanently unretryable.
+  test("puts a deleted thread back under the same id", async () => {
+    const path = file();
+    const id = await on(path, (threads) =>
+      Effect.gen(function* () {
+        const made = yield* threads.create("tiered discounts");
+        yield* threads.deleteIfEmpty(made.id);
+        return made.id;
+      }),
+    );
+
+    // A second connection, because the point of the id surviving is that
+    // something holding a reference to it later can still resolve it.
+    const back = await on(path, (threads) =>
+      Effect.gen(function* () {
+        const did = yield* threads.restore(id, "Tiered discounts");
+        return { did, all: yield* threads.list() };
+      }),
+    );
+
+    expect(back.did).toBe(true);
+    expect(back.all.map((one) => one.id)).toEqual([id]);
+    expect(back.all[0]?.title).toBe("Tiered discounts");
+  });
+
+  test("keeps the lineage it is given", async () => {
+    const seen = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        const parent = yield* threads.create("the work before");
+        yield* threads.restore("20260828-zzzz", "the work after", parent.id);
+        return { parent: parent.id, all: yield* threads.list() };
+      }),
+    );
+    expect(seen.all.find((one) => one.id === "20260828-zzzz")?.parentId).toBe(seen.parent);
+  });
+
+  test("a thread already there is left exactly as it is", async () => {
+    // Idempotent, because the runner re-enters a step — and, more than that,
+    // it must never overwrite a title somebody has since edited. A job resumed
+    // after a daemon restart still names its thread, and that thread may have
+    // been renamed twice since.
+    const seen = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        const made = yield* threads.create("what was typed");
+        yield* threads.rename(made.id, "what a person called it");
+        const did = yield* threads.restore(made.id, "what was typed");
+        return { did, all: yield* threads.list() };
+      }),
+    );
+    expect(seen.did).toBe(false);
+    expect(seen.all[0]?.title).toBe("what a person called it");
+  });
+});

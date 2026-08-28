@@ -196,19 +196,56 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
    * left an empty thread in the sidebar with no way to remove one — the failure
    * was undone everywhere except the place a person was looking.
    *
-   * `run` is a real check rather than a formality. A job naming a thread that
-   * is not there would build a workspace nothing can claim, and would find that
-   * out four steps later.
+   * ── and then nothing could be retried ─────────────────────────────────────
+   *
+   * `run` used to be a check and only a check: the thread is there, or the job
+   * is refused. Put beside an undo that *removes* the thread, that made every
+   * rolled-back create permanently unretryable —
+   *
+   *   attempt   handler makes the thread → … → a later step fails
+   *   rollback  walks back, and the last undo deletes the thread
+   *   retry     `done` was emptied, so this step runs first — and refuses,
+   *             naming a thread that existed until the rollback removed it
+   *
+   * — and the retry button reported it as "there is no thread to build for",
+   * which reads as a job asking for something that was never there rather than
+   * as the rollback having taken it. The general shape is worth keeping:
+   * **compensation has to leave the world in a state `run` can be re-entered
+   * from.** An undo that destroys its own step's precondition does not.
+   *
+   * So `run` ensures rather than asserts. It still refuses nothing silently —
+   * a restored thread is logged, because a thread reappearing in the sidebar
+   * with no explanation is its own small mystery.
+   *
+   * The title is `label ?? description`, which is exactly what the thread had:
+   * the handler titles it with the description, and the `name` step renames it
+   * to the label. On a retry both are already on the record, so the restored
+   * thread comes back with the better of the two.
    */
   const threadStep: JobStep<CreateWorkspace> = {
     name: "thread",
-    run: (input) =>
+    run: (input, context) =>
       threads.list().pipe(
         Effect.mapError(refused("could not read the threads")),
         Effect.flatMap((all) =>
           all.some((entry) => entry.id === input.thread)
             ? Effect.void
-            : Effect.fail(permanent(`there is no thread ${input.thread} to build for`)),
+            : threads
+                .restore(
+                  input.thread,
+                  input.label !== undefined && input.label.trim() !== ""
+                    ? input.label
+                    : input.description,
+                  input.threadParent,
+                )
+                .pipe(
+                  Effect.mapError(refused("could not restore the thread")),
+                  Effect.flatMap((back) =>
+                    back
+                      ? context.log(`put back the thread ${input.thread}, removed by a rollback`)
+                      : Effect.void,
+                  ),
+                ),
         ),
       ),
     undo: (input, context) =>
