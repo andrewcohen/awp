@@ -357,7 +357,7 @@ const styles = stylex.create({
     // it is carrying buttons or a sentence. Without it the panel shifted every
     // time a patch went from "no changes" to a stat, which reads as the layout
     // twitching rather than as content arriving.
-    minHeight: "1.75rem",
+    minHeight: "2rem",
     // Symmetric, and no vertical padding at all — the floor above sets the
     // height and `alignItems: center` places the content in it. The asymmetric
     // version this replaced pulled the caret four pixels closer to the left
@@ -365,16 +365,16 @@ const styles = stylex.create({
     // as the whole row being off rather than as one control being wrong.
     paddingBlock: 0,
     paddingInline: "0.35rem",
-    // **Filled, not ruled.** Two rules were tried here first — one above and
-    // one below — and both were wrong for the same reason: the row is a band
-    // between two scrolling things, and a band is a shape, not a pair of
-    // lines. One step off the window's base is enough to say so, and it says
-    // it on all four sides at once instead of on two.
+    // **Nothing at all: no rule, no fill.** Three things were tried here in
+    // one afternoon and each was reported worse than the last — a band with a
+    // rule under it, a rule with space above it, then a fill. What they have
+    // in common is that each one *drew* the separation. The room is the
+    // separation, and the row simply sits in it.
     //
-    // It also does the job a rule was there for. The patch scrolls under this
-    // row, and what stops the code appearing to be part of it is that the row
-    // is a different colour, which stays true while it moves.
-    backgroundColor: colors.surface,
+    // The patch scrolls under this row and is left to do so. If that turns out
+    // to need an edge, the edge belongs to the scrolling thing rather than to
+    // this row — appearing when there is something above the fold and not
+    // otherwise, which is a different rule from a line that is always there.
     color: colors.muted,
     fontSize: text.small,
   },
