@@ -153,11 +153,32 @@ const make = Effect.gen(function* () {
         }
 
         // Asked first, and this is the guard as much as the idempotence. A
-        // session that already exists is left exactly as it is — `zmx run`
-        // against a live session would send a command into whatever is running
-        // in there, which for a name that was not ours is someone's editor.
+        // session that already exists **and is still running something** is
+        // left exactly as it is — `zmx run` against one would type a command
+        // into whatever is in there, which for a name that was not ours is
+        // someone's editor.
+        //
+        // ── live, not merely present ──────────────────────────────────────
+        //
+        // This used to skip on the name alone, and that adopted corpses. A
+        // session whose task has exited is still listed by `zmx ls`, so a
+        // retry after a failed create found the name, did nothing, and left
+        // the job briefing a dead shell:
+        //
+        //   ZMX_TASK_COMPLETED:1
+        //   $ Port the review capability from …
+        //   -bash: syntax error near unexpected token `('
+        //
+        // The prompt was typed at bash, which is what "the session had ended"
+        // looks like from the outside. `ended` is exactly the distinction the
+        // original guard was reaching for: a session with nothing running is
+        // idle, and typing a command into an idle session is what `zmx run`
+        // is for. zmx supports it directly — `handleRun` resets its task
+        // tracking so a second run on one session is not ignored — and it
+        // keeps the scrollback, which killing and recreating would not.
         const existing = yield* list();
-        if (existing.some((session) => session.name === options.name)) {
+        const already = existing.find((session) => session.name === options.name);
+        if (already !== undefined && !already.ended) {
           return;
         }
 

@@ -341,6 +341,7 @@ describe("making a workspace", () => {
       "bookmark",
       "trust",
       "session",
+      "labels",
       "bootstrap",
       "claim",
       "brief",
@@ -387,6 +388,36 @@ describe("when a step fails", () => {
 
     expect(job.attempts).toBe(1);
     expect(trace.filter((line) => line.startsWith("jj.add"))).toHaveLength(1);
+  });
+
+  test("a session that started is killed when labelling it refuses", async () => {
+    // The bug that made a workspace unusable and reported success at it.
+    //
+    // `session` used to start the session *and* label it. A label zmx would
+    // not take failed the step — so `session` never entered `done`, so its
+    // undo never ran, and the rollback then removed the workspace directory
+    // out from under a shell still sitting in it:
+    //
+    //   The current directory no longer exists (it was deleted or moved).
+    //   Start Claude Code from an existing directory.
+    //
+    // A session nothing would ever kill, in a directory that no longer
+    // existed, left by a rollback that called itself clean. The rule the split
+    // states: a step may make at most one externally visible change, because
+    // one made before the failure has no undo registered for it.
+    breaking.add("zmx.label(awp.rowan.tiered-discounts.agent:tiered-discounts)");
+    present.add(workspacePath("rowan", "tiered-discounts") + "/.jj");
+
+    const job = await make();
+
+    expect(job.status).toBe("failed");
+    expect(job.cleanup).toBe("clean");
+    // The order is the assertion: killed *before* the directory it is standing
+    // in is removed.
+    const killed = trace.indexOf("zmx.kill(awp.rowan.tiered-discounts.agent)");
+    const removed = trace.indexOf(`rm(${workspacePath("rowan", "tiered-discounts")})`);
+    expect(killed).toBeGreaterThan(-1);
+    expect(removed).toBeGreaterThan(killed);
   });
 
   test("a retry after the rollback works, because the thread comes back", async () => {

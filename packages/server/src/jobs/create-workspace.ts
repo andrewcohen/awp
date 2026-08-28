@@ -489,20 +489,49 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
             env: { AWP_WORKSPACE: workspace, AWP_REPO_ROOT: input.repo },
           })
           .pipe(Effect.mapError(refused("could not start the session")));
-
-        // Written after the session exists, and this is the pair that makes a
-        // workspace recoverable at all: the name is shortened to fit a socket
-        // path and cannot be split back into its parts, so the labels are the
-        // only unshortened truth. See `identityLabels`.
-        yield* mux
-          .setLabels(name, identityLabels(input.project, workspace, AGENT, input.label))
-          .pipe(Effect.mapError(refused("could not label the session")));
       }),
     undo: (input, context) =>
       Effect.gen(function* () {
         const name = agentSession(input.project, yield* named(input));
         yield* mux.kill(name).pipe(Effect.mapError(refused("could not kill the session")));
         yield* context.log(`killed ${name}`);
+      }),
+  };
+
+  /**
+   * The labels, as a step of their own.
+   *
+   * **Its own step because a step's undo only runs once the step finished**,
+   * and these two used to be one. `start` succeeded, `setLabels` refused a
+   * label with a colon in it, and the step failed — so `session` never entered
+   * `done`, so its undo never ran, so the rollback removed the workspace
+   * directory out from under a shell that was still sitting in it:
+   *
+   *   The current directory no longer exists (it was deleted or moved).
+   *   Start Claude Code from an existing directory.
+   *
+   * A session nothing would ever kill, in a directory that no longer existed,
+   * left behind by a rollback that reported itself clean. The general shape is
+   * worth stating: **a step may make at most one externally visible change**,
+   * because a change made before the failure is a change with no undo
+   * registered for it. Two acts, two steps.
+   *
+   * No undo of its own. Labels live and die with the session, so killing it —
+   * which is the step before this one's undo — takes them with it.
+   *
+   * What they are for: the name is shortened to fit a socket path and cannot
+   * be split back into its parts, so the labels are the only unshortened
+   * truth. See `identityLabels`.
+   */
+  const labelsStep: JobStep<CreateWorkspace> = {
+    name: "labels",
+    run: (input) =>
+      Effect.gen(function* () {
+        const workspace = yield* named(input);
+        const name = agentSession(input.project, workspace);
+        yield* mux
+          .setLabels(name, identityLabels(input.project, workspace, AGENT, input.label))
+          .pipe(Effect.mapError(refused("could not label the session")));
       }),
   };
 
@@ -601,6 +630,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       bookmarkStep,
       trustStep,
       sessionStep,
+      labelsStep,
       bootstrapStep,
       claimStep,
       briefStep,

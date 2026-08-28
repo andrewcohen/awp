@@ -48,10 +48,14 @@ const RECORD = "";
 
 let scratch = "";
 let log = "";
+/** What the fake `zmx ls` prints. Written per test. */
+let listing = "";
 
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "awp-send-"));
   log = join(scratch, "argv");
+  listing = join(scratch, "listing");
+  writeFileSync(listing, "");
   writeFileSync(
     join(scratch, "zmx"),
     [
@@ -61,6 +65,10 @@ beforeAll(() => {
       // back as a single argument.
       `printf '%s\\037' "$@" >> "${log}"`,
       `printf '\\036' >> "${log}"`,
+      // `ls` answers from a file a test writes, which is what lets one say
+      // "this session exists and is running" and another "it exists and its
+      // task has exited" without a real zmx.
+      `if [ "$1" = "ls" ]; then cat "${listing}"; fi`,
       "",
     ].join("\n"),
   );
@@ -90,6 +98,14 @@ const calls = (): ReadonlyArray<ReadonlyArray<string>> => {
     .filter((one) => one !== "")
     .map((one) => one.split(UNIT).filter((arg) => arg !== ""));
 };
+
+const start = (name: string): Promise<void> =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const mux = yield* Multiplexer;
+      return yield* mux.start({ name, cwd: scratch, command: ["claude"] });
+    }).pipe(Effect.provide(Zmx.layer), Effect.provide(platform), Effect.orDie),
+  );
 
 const send = (name: string, text: string): Promise<void> =>
   Effect.runPromise(
@@ -126,5 +142,53 @@ describe("send", () => {
     // nothing.
     await send("s", "");
     expect(calls()).toEqual([]);
+  });
+});
+
+describe("start", () => {
+  // `zmx ls` prints one session per line as tab-separated `key=value`.
+  const listed = (name: string, ended: boolean) =>
+    writeFileSync(
+      listing,
+      `  name=${name}\tpid=1\tclients=0\tcreated=1\tstart_dir=/w\t` +
+        `${ended ? "ended=2\texit_code=1\t" : ""}awp_kind=agent\n`,
+    );
+
+  test("creates the session when there is none", async () => {
+    await start("awp.thicket.lantern.agent");
+    const [, run] = calls();
+    expect(run).toEqual(["run", "awp.thicket.lantern.agent", "-d", "claude"]);
+  });
+
+  test("leaves a live session alone", async () => {
+    // The guard, and the reason it exists: `zmx run` types into whatever is in
+    // there, which for a name that was not ours is somebody's editor.
+    listed("awp.thicket.lantern.agent", false);
+    await start("awp.thicket.lantern.agent");
+    expect(calls().map(([verb]) => verb)).toEqual(["ls"]);
+  });
+
+  test("runs again in a session whose task has ended", async () => {
+    // What "the session had ended" was. A session whose task exited is still
+    // listed, so skipping on the name alone adopted the corpse: the retry did
+    // nothing, and the job briefed a dead shell —
+    //
+    //   ZMX_TASK_COMPLETED:1
+    //   $ Port the review capability from …
+    //   -bash: syntax error near unexpected token `('
+    //
+    // `ended` is exactly the distinction the guard was reaching for. An idle
+    // session is what `zmx run` is for, and running in it keeps the scrollback
+    // that killing and recreating would lose.
+    listed("awp.thicket.lantern.agent", true);
+    await start("awp.thicket.lantern.agent");
+    const [, run] = calls();
+    expect(run).toEqual(["run", "awp.thicket.lantern.agent", "-d", "claude"]);
+  });
+
+  test("a different session being live says nothing about this one", async () => {
+    listed("awp.orchard.something-else.agent", false);
+    await start("awp.thicket.lantern.agent");
+    expect(calls().map(([verb]) => verb)).toEqual(["ls", "run"]);
   });
 });
