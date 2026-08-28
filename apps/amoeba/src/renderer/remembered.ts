@@ -45,6 +45,7 @@ const WIDTHS = "amoeba.widths";
 const PLACE = "amoeba.place";
 const LOOSE = "amoeba.loose";
 const SPLIT = "amoeba.split";
+const SPLIT_OPEN = "amoeba.split.open";
 const PAGE = "amoeba.page";
 const PANELS = "amoeba.panels";
 
@@ -192,6 +193,32 @@ export const rememberedSplit = (): number => {
 
 export const rememberSplit = (height: number): void => {
   writeStored(SPLIT, String(Math.round(height)));
+};
+
+/**
+ * How tall the list was the last time it was open.
+ *
+ * A second value, because the first one has to be able to hold zero: folded is
+ * a state the panel restores on launch, so it cannot be inferred from a height
+ * and the height cannot be inferred from it. Collapsing writes this one and
+ * then writes zero to the other; expanding reads it back.
+ *
+ * Without it, expanding went to {@link DEFAULT_SPLIT} and threw away a
+ * boundary somebody had put somewhere on purpose — which is the same thing
+ * `DEFAULT_SPLIT`'s own note says a fraction would do on every window resize.
+ */
+export const rememberedOpenSplit = (): number => {
+  const height = Number(readStored(SPLIT_OPEN));
+  // Zero is not a legal value here, unlike in `rememberedSplit`: this is the
+  // height to *open* to, and opening to nothing is not opening.
+  if (!Number.isFinite(height) || height <= 0) {
+    return DEFAULT_SPLIT;
+  }
+  return Math.round(height);
+};
+
+export const rememberOpenSplit = (height: number): void => {
+  writeStored(SPLIT_OPEN, String(Math.round(height)));
 };
 
 /**

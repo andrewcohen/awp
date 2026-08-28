@@ -13,9 +13,10 @@ import { listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
 import { contentOf, statOf, subjectOf, versionOf } from "./patch";
 import {
-  DEFAULT_SPLIT,
+  rememberOpenSplit,
   rememberSplit,
   rememberViewed,
+  rememberedOpenSplit,
   rememberedSplit,
   rememberedViewed,
 } from "./remembered";
@@ -763,7 +764,16 @@ export function Diff({
     const next = height < MIN_SPLIT ? 0 : Math.round(height);
     setSplit(next);
     rememberSplit(next);
+    // Where to come back to. Written on the way *down* as well as while open,
+    // so a collapse — by drag or by button — keeps the boundary somebody put
+    // there rather than replacing it with the default on the way back up.
+    if (next > 0) {
+      rememberOpenSplit(next);
+    }
   };
+
+  /** Put the list away, or bring it back to the height it was. */
+  const toggleList = () => resize(folded ? rememberedOpenSplit() : 0);
 
   // Put the selected revision under the one row that is left.
   //
@@ -1227,7 +1237,7 @@ export function Diff({
           aria-label={folded ? "show the revision list" : "collapse the revision list"}
           title={folded ? "show the revision list" : "collapse to the selected revision"}
           {...stylex.props(styles.peg)}
-          onClick={() => resize(folded ? DEFAULT_SPLIT : 0)}
+          onClick={toggleList}
         >
           {/* The sidebar's own glyph, turned a quarter turn.
 
