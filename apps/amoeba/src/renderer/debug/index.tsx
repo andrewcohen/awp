@@ -22,8 +22,12 @@ export interface DebugTool {
 
 export const debugTools: ReadonlyArray<DebugTool> = [
   {
-    id: "meter",
-    label: "meter",
+    // Named for the column it lives in rather than for the one instrument
+    // in it. There will be more than one — attach timings, protocol traffic —
+    // and a tab called "meter" would have to be renamed on the day there are
+    // two, at which point somebody has an ID in storage pointing at nothing.
+    id: "debug",
+    label: "debug",
     render: () => <Meter />,
   },
 ];

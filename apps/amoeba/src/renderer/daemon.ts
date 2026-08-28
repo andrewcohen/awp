@@ -6,6 +6,7 @@ import {
   layerConnection,
 } from "@awp-kit/protocol/client";
 import type {
+  AgentTask,
   CommentSide,
   Effort,
   PageNote,
@@ -502,4 +503,25 @@ export const sendReview = (project: string, workspace: string): Promise<ReviewSe
 export const sendNote = (project: string, workspace: string, note: PageNote): Promise<string> =>
   runtime.runPromise(
     Effect.flatMap(AwpClient, (rpc) => rpc.NoteSend({ project, workspace, note })),
+  );
+
+/**
+ * The task list the agent working in `from` is keeping.
+ *
+ * Never rejects for an ordinary absence — a directory no agent has run in
+ * answers with an empty array, which is what the panel shows as "nothing
+ * here". A rejection means the daemon is gone.
+ */
+export const listTasks = (from: string): Promise<ReadonlyArray<AgentTask>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.TaskList({ from })));
+
+/**
+ * Ask the agent to pick one task up, now.
+ *
+ * Rejects with `NoAgent` when the workspace has no agent to type into.
+ * Resolves with the prompt that was typed.
+ */
+export const sendTask = (project: string, workspace: string, task: AgentTask): Promise<string> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.TaskSend({ project, workspace, task })),
   );

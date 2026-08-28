@@ -4,6 +4,7 @@ import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
 import { Diff } from "./Diff";
 import { Jobs } from "./Jobs";
+import { Tasks } from "./Tasks";
 import { Web } from "./Web";
 import { debugTools } from "./debug";
 import type { ColorScheme } from "@awp-kit/pane";
@@ -27,15 +28,17 @@ import { colors, space, text } from "./tokens.stylex";
 // tools last because they are the ones opened when something feels wrong
 // rather than on purpose.
 //
-//   diff   looked at continuously while working, and opens by default
+//   tasks  what the agent is about to do, and the one control that changes
+//          what happens next — so it opens by default
+//   diff   looked at continuously while working
 //   web    reached for while reading a diff — docs, an issue, a dashboard
 //   jobs   read when a job is running, which is a few seconds a day, and
 //          always with the count in the status bar already saying so
+//   debug  opened when something feels wrong, never on purpose
 //
-// Jobs was second and is now third. Nothing about the panel changed; what
-// changed is that there is now something between it and the diff that gets
-// opened far more often, and a tab strip that does not put those together
-// makes the common move the longer one.
+// The order has moved twice and both moves were the same argument: the tab a
+// person reaches for most often should be the one nearest the start of the
+// strip, because everything else is measured in extra keystrokes from it.
 //
 // ── why the panels take an argument now ──────────────────────────────────
 //
@@ -86,6 +89,16 @@ interface Panel {
 }
 
 const panels: ReadonlyArray<Panel> = [
+  // First, because it is the one that says what happens next. Everything else
+  // in this column is about work that has already happened — a diff of what
+  // was written, a job that ran, a page being read against it.
+  {
+    id: "tasks",
+    label: "tasks",
+    render: ({ dir, project, workspace }) => (
+      <Tasks dir={dir} project={project} workspace={workspace} />
+    ),
+  },
   {
     id: "diff",
     label: "diff",
@@ -218,7 +231,12 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
   // The empty string for a session no thread claims — one bucket they share,
   // which is the honest answer: there is no thread to tell them apart by.
   const key = thread ?? "";
-  const open = byThread[key] ?? first;
+  // A stored id that no longer names a tab falls back rather than selecting
+  // nothing. It happens whenever the strip changes — "meter" became "debug" —
+  // and the failure is silent and total: Base UI renders no panel at all for a
+  // value none of its tabs carry, which reads as the column being broken.
+  const stored = byThread[key];
+  const open = stored !== undefined && panels.some((panel) => panel.id === stored) ? stored : first;
 
   return (
     <Tabs.Root

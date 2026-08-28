@@ -175,6 +175,7 @@ export const notePrompt = (note: PageNote): string => {
   return lines.join("\n");
 };
 import { refusalFor } from "./attachment";
+import { readTasks, taskPrompt } from "./agent-tasks";
 import { Multiplexer, type Session, identities } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
 import { Sessions } from "./sessions";
@@ -850,6 +851,27 @@ export const layer = AwpRpcs.toLayer(
           const at = new Date(yield* Clock.currentTimeMillis);
           const sent = yield* reviews.markSent(project, workspace, at).pipe(Effect.orDie);
           return { sent, prompt };
+        }),
+
+      // The agent's own list, read off disk. No error channel: absence,
+      // an agent that kept no list, and an agent that is not Claude Code are
+      // all the empty array. See `readTasks`.
+      TaskList: ({ from }) => readTasks(from),
+
+      // Same shape as NoteSend, and the same order for the same reason: the
+      // agent is looked up before the prompt is composed, so "there is nobody
+      // to tell" is a refusal rather than a send into nothing.
+      TaskSend: ({ project, workspace, task }) =>
+        Effect.gen(function* () {
+          const name = sessionName(project, workspace, AGENT);
+          const found = yield* mux.lookup(name).pipe(Effect.orDie);
+          if (found === undefined || found.ended) {
+            return yield* Effect.fail(new NoAgent({ project, workspace }));
+          }
+
+          const prompt = taskPrompt(task);
+          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          return prompt;
         }),
 
       NoteSend: ({ project, workspace, note }) =>
