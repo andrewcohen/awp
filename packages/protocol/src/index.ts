@@ -442,6 +442,15 @@ export type ReviewTarget = (typeof ReviewTarget)["Type"];
 export const ArchiveThread = Schema.Struct({
   thread: Schema.String,
   /**
+   * What the thread is called, for the job's own title.
+   *
+   * On the input rather than looked up, because a job record has to be
+   * readable before its first step has run — and because a title is a caption
+   * on what somebody asked for at the moment they asked. A thread renamed
+   * afterwards does not retitle the job that archived it.
+   */
+  title: Schema.String,
+  /**
    * Whether to delete each workspace's bookmark as well.
    *
    * **Off by default, and that is the safety.** A bookmark is not part of a
@@ -1792,7 +1801,11 @@ export class AwpRpcs extends RpcGroup.make(
    * be cleared, and this cannot be undone.
    */
   Rpc.make("ThreadArchiveStart", {
-    payload: ArchiveThread,
+    // Not `ArchiveThread` itself. The job's input carries a title and a plan
+    // that the *daemon* fills in — a client sending either would be sending a
+    // second copy of something the daemon has in hand, and the plan is not a
+    // client's to decide at all.
+    payload: { thread: Schema.String, deleteBookmarks: Schema.Boolean },
     success: Schema.Struct({ job: Schema.String }),
     error: ThreadNotFound,
   }),

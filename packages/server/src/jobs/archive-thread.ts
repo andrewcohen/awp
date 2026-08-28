@@ -53,9 +53,10 @@ import { workspacePath, type WorkspaceFiles } from "./create-workspace";
 export const archiveThreadRef: JobRef<ArchiveThread> = {
   name: "archive-thread",
   input: ArchiveThreadSchema,
-  // The id, because the title is not on the input and the record has to be
-  // readable from the jobs panel before the first step has run.
-  title: (input) => `archive ${input.thread}`,
+  // The name, not the id. A row reading `archive 20260828-wjrq` names
+  // something only this system can resolve, in a panel a person reads to find
+  // out what is happening.
+  title: (input) => `archive ${input.title.trim() === "" ? input.thread : input.title.trim()}`,
 };
 
 export interface ArchiveDeps {
@@ -115,26 +116,64 @@ export const archiveThread = (deps: ArchiveDeps): JobKind<ArchiveThread> => {
           return yield* Effect.fail(permanent(`there is no thread ${input.thread}`));
         }
 
+        // ── asking the checkout, not the project list ────────────────────
+        //
+        // The first version of this looked the repository up in `projects`,
+        // and on a real machine reclaimed nothing at all:
+        //
+        //   skipping awp/test1234 — awp is not an imported project
+        //   nothing to reclaim — the thread holds no workspaces
+        //   archived
+        //
+        // The thread went away and its workspace, directory and session all
+        // stayed. **A project is a claim, not a consequence of a session** —
+        // that is stated at length in AGENTS.md — so the `projects` table is
+        // empty on a machine where nobody has pressed import, while the
+        // workspaces are all still there. Creating one never needed the table
+        // either: `ThreadStart` is handed a directory and resolves it with
+        // `sourceRoot`.
+        //
+        // So the checkout answers for itself. `jj.sourceRoot` on a secondary
+        // workspace is exactly the question "which repository is this a
+        // checkout of", and it is right whether or not anybody has claimed the
+        // project.
+        //
+        // The imported row is the fallback rather than the source, for the one
+        // case the directory cannot answer: a resumed job whose earlier
+        // attempt already removed it, where jj still holds the workspace
+        // registration that needs forgetting.
         const known = yield* projects
           .list()
           .pipe(Effect.mapError(refused("could not read the projects")));
         const roots = new Map(known.map((project) => [project.name, project.root]));
 
         const plan: Array<Planned> = [];
+        const skipped: Array<string> = [];
         for (const member of thread.members) {
-          const repo = roots.get(member.project);
+          const dir = workspacePath(member.project, member.workspace);
+          const found: string | undefined = yield* jj
+            .sourceRoot(dir)
+            .pipe(Effect.orElseSucceed(() => undefined));
+          const repo = found ?? roots.get(member.project);
           if (repo === undefined) {
-            yield* context.log(
-              `skipping ${member.project}/${member.workspace} — ${member.project} is not an imported project`,
-            );
+            skipped.push(`${member.project}/${member.workspace}`);
             continue;
           }
           plan.push({ project: member.project, workspace: member.workspace, repo });
         }
 
+        // Said separately, because "skipped" and "held nothing" are different
+        // facts and the first version printed the second when the first was
+        // true — which reads as a thread with no workspaces rather than as a
+        // job that declined to touch one.
+        if (skipped.length > 0) {
+          yield* context.log(
+            `could not find the repository for ${skipped.join(", ")} — leaving them alone`,
+          );
+        }
         yield* context.log(
           plan.length === 0
-            ? "nothing to reclaim — the thread holds no workspaces"
+            ? "nothing to reclaim"
             : `reclaiming ${plan.map((one) => `${one.project}/${one.workspace}`).join(", ")}`,
         );
         return { plan };
