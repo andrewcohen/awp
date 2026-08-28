@@ -43,9 +43,16 @@ body,
 
 body {
   /* The webview's default is white, and it paints before React does. Without
-   * this, launching in dark mode flashes a white window for a frame. */
-  background: Canvas;
-  color: CanvasText;
+   * this, launching in dark mode flashes a white window for a frame.
+   *
+   * `Canvas` is the engine's own ground, which in light mode is pure white —
+   * lighter than every surface the app draws, so anywhere the shell did not
+   * cover, white showed through and read as a hole. Named explicitly instead,
+   * to the same hues `tokens.stylex.ts` uses for `colors.base`. It cannot be
+   * the token: this rule paints before StyleX's variables exist, which is the
+   * whole reason the rule is here. */
+  background: light-dark(#dce0e8, #1e2030);
+  color: light-dark(#4c4f69, #cad3f5);
   -webkit-font-smoothing: antialiased;
 }
 

@@ -43,7 +43,8 @@ const dark = "@media (prefers-color-scheme: dark)";
 // not a shortage of colour, it was colour nobody could see.
 //
 // So the chrome's Latte hues are Catppuccin's, **darkened along their own hue
-// and saturation until each clears 4.6** — the smallest change that fixes it,
+// and saturation until each clears 4.6** — and darkened a second time when
+// the ground itself went down a step, because a ratio is a fact about a pair — the smallest change that fixes it,
 // rather than a different palette. Macchiato needed none of this: every one of
 // its hues is between 6.5 and 11 against its base already, which is the
 // asymmetry a dark-first palette has and nobody notices until they look.
@@ -51,25 +52,67 @@ const dark = "@media (prefers-color-scheme: dark)";
 // This is allowed here and would not be in palette.ts. The pane's sixteen slots
 // have to be upstream's exact hexes or a program choosing colours against them
 // looks wrong; the chrome answers to nothing but this app.
+// ── and then the light theme was still unreadable, for a different reason ──
+//
+// "our white theme is soo white a lot of it is hard to read". Measured after
+// the darkening above, every piece of *text* passed — the worst was the
+// selected tab at 4.27. So this was not a contrast problem at all. It was that
+// nothing had an edge:
+//
+//   body       255,255,255   pure white, and it shows through
+//   shell      230,233,239   latte mantle
+//   columns    transparent   all three, inheriting the shell
+//   pane       239,241,245   latte base
+//
+// One sheet, within twenty-five levels of white, with the columns not drawing
+// a ground at all. A window with no surfaces in it is hard to read however
+// well its text scores, because reading starts with knowing what is a panel.
+//
+// The dark theme never had this: base → surface → raised runs #1e2030 →
+// #24273a → #363a4f, a ladder of about fifty levels going *lighter* as a
+// thing comes forward. The light theme's ran #e6e9ef → #eff1f5 → #dce0e8 —
+// nineteen levels, and `raised` going backwards.
+//
+// So the light ladder now runs the same direction as the dark one and spans
+// about the same distance. That means leaving Catppuccin at the top: Latte
+// stops at base, and a surface above the window ground has to be lighter than
+// the lightest hue in the palette. White is the honest end of that ladder.
+//
+//   base     #dce0e8   the window ground — crust, a step below mantle
+//   surface  #eff1f5   a panel on it — Latte's base, and the pane's own
+//   raised   #ffffff   a control on a panel
+//
+// The pane is the reason `surface` does not move: `palette.ts` must hand the
+// emulator upstream's exact `#eff1f5`, so the pane is a surface by
+// construction, and the chrome had to go *down* to sit behind it rather than
+// the pane coming up.
 export const hue = stylex.defineConsts({
-  // Catppuccin Latte. Mantle rather than base, so a surface can sit above it —
-  // the pane draws its own base, which is the lighter one.
-  latteBase: "#e6e9ef",
+  // Catppuccin Latte, one step deeper than it publishes at the bottom so the
+  // ladder has room. Crust rather than mantle for the ground; Latte's base is
+  // a panel above it, which is also what the pane draws for itself.
+  latteBase: "#dce0e8",
   latteSurface: "#eff1f5",
-  latteRaised: "#dce0e8",
+  // Off the palette deliberately, and the only hue here that is: a control
+  // above a panel has to be lighter than the panel, and Latte has nothing
+  // lighter than its base to be.
+  latteRaised: "#ffffff",
   latteText: "#4c4f69",
-  latteMuted: "#63677a",
-  latteBorder: "#ccd0da",
-  latteLive: "#2f7620",
-  latteWarn: "#ce0f38",
+  latteMuted: "#5e6173",
+  // One step deeper than Latte's surface0 as well. A divider at #ccd0da on a
+  // ground of #dce0e8 is a two-level difference — a line that is drawn and
+  // cannot be seen, which is worse than no line because the layout then looks
+  // like a mistake rather than a choice.
+  latteBorder: "#bcc0cc",
+  latteLive: "#2d701e",
+  latteWarn: "#c30e35",
   // Peach, darkened. The accent, and the only hue here chosen for what it means
   // rather than for a role it already had — see `colors.accent`.
-  latteAccent: "#b44201",
+  latteAccent: "#ab3f01",
   // The states an agent can be in. Yellow for waiting because it is the one a
   // person has to act on and yellow is what the eye finds first; blue for
   // ready because it is present without being urgent.
-  latteWaiting: "#915c13",
-  latteReady: "#0c59f4",
+  latteWaiting: "#895712",
+  latteReady: "#0b54e8",
 
   // Catppuccin Macchiato, mantle for the same reason. The pane's base is
   // #24273a and sits above this.
