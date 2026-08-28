@@ -214,6 +214,26 @@ export type ThreadGroup = {
 };
 
 /** Where a workspace sits, if any thread has claimed it. */
+/**
+ * Which thread holds a given pair, by id.
+ *
+ * The pair rather than a `Workspace`, because the caller that needs this has an
+ * open session's identity and not a row — see the accessory column, which files
+ * its panel choice under the thread rather than under the checkout.
+ */
+export const threadHolding = (
+  threads: ReadonlyArray<Thread>,
+  project: string | undefined,
+  workspace: string | undefined,
+): string | undefined =>
+  project === undefined || workspace === undefined
+    ? undefined
+    : threads.find((thread) =>
+        thread.members.some(
+          (member) => member.project === project && member.workspace === workspace,
+        ),
+      )?.id;
+
 const claimant = (threads: ReadonlyArray<Thread>, workspace: Workspace): Thread | undefined => {
   const id = workspace.sessions[0]?.identity;
   if (id === undefined || workspace.foreign) {

@@ -46,6 +46,7 @@ const PLACE = "amoeba.place";
 const LOOSE = "amoeba.loose";
 const SPLIT = "amoeba.split";
 const PAGE = "amoeba.page";
+const PANELS = "amoeba.panels";
 
 /**
  * Stored as two letters rather than JSON.
@@ -121,6 +122,22 @@ export const rememberLooseOpen = (open: boolean): void => {
   writeStored(LOOSE, open ? "o" : "c");
 };
 
+const asMap = (raw: string | undefined): Record<string, string> => {
+  if (raw === undefined) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    // Written by an older version, or by hand. A preference that cannot be
+    // read is a preference nobody set.
+    return {};
+  }
+};
+
 // ── where the window was ───────────────────────────────────────────────────
 //
 // The address is the router's, and the history keeps it across a reload — a
@@ -178,21 +195,34 @@ export const rememberSplit = (height: number): void => {
 };
 
 /**
- * The address the web panel was last showing.
+ * The address the web panel was last showing, per thread.
  *
- * One per window rather than one per workspace, and that is a judgement rather
- * than an oversight: the page in that panel is usually a dev server or a set of
- * docs, which follows the person around the window and not the checkout. If it
- * turns out to follow the workspace, `rememberedViewed` below is the shape to
- * copy.
+ * It was one per window, on the judgement that the page in that panel is
+ * usually a dev server or a set of docs and follows the person rather than the
+ * checkout. Use said otherwise: "I don't want to remember the same URL in each
+ * thread". A thread is a piece of work, and the page beside it is part of that
+ * work — the ticket, the preview, the failing build.
+ *
+ * Keyed by thread rather than by workspace for the same reason the panel
+ * choice is: a thread holding two checkouts is one thing somebody is doing.
  */
-export const rememberedPage = (): string | undefined => {
-  const stored = readStored(PAGE);
-  return stored === undefined || stored === "" ? undefined : stored;
-};
+export const rememberedPages = (): Record<string, string> => asMap(readStored(PAGE));
 
-export const rememberPage = (url: string | undefined): void => {
-  writeStored(PAGE, url === undefined || url === "" ? undefined : url);
+export const rememberPage = (thread: string | undefined, url: string | undefined): void => {
+  if (thread === undefined) {
+    // Nothing open, or a session no thread claims. Filing it under a
+    // placeholder would hand this page to the next unclaimed session as though
+    // somebody had chosen it there.
+    return;
+  }
+  const was = asMap(readStored(PAGE));
+  if (url === undefined || url === "") {
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete was[thread];
+  } else {
+    was[thread] = url;
+  }
+  writeStored(PAGE, JSON.stringify(was));
 };
 
 // ── which files of a patch have been looked at ─────────────────────────────
@@ -248,4 +278,34 @@ export const rememberViewed = (
     viewedKey(project, workspace, revision),
     paths.length === 0 ? undefined : paths.join("\n"),
   );
+};
+
+// ── which panel each thread had open ───────────────────────────────────────
+//
+// One panel choice for the whole window was wrong in the way that only shows
+// up once there is more than one thread: the diff panel is what you want while
+// reviewing one piece of work and the web panel is what you want while
+// building another, and switching between them re-answered a question that had
+// already been answered for each.
+//
+// Keyed by thread rather than by workspace, because the choice belongs to the
+// *work*. A thread holding two checkouts of the same branch is one thing
+// somebody is doing, and looking at the diff in one of them and the browser in
+// the other is not a distinction anybody drew on purpose.
+//
+// A map rather than a key per thread. Threads are made and forgotten
+// constantly, and a key per thread is a key per thread forever — this way the
+// whole record is one entry that can be pruned or dropped.
+
+/** Every thread's last panel, by thread id. Read once, at mount. */
+export const rememberedPanels = (): Record<string, string> => asMap(readStored(PANELS));
+
+export const rememberPanel = (thread: string | undefined, panel: string): void => {
+  if (thread === undefined) {
+    // Nothing open, or a session no thread claims. There is nowhere to file
+    // the choice, and filing it under a placeholder would hand it to the next
+    // unclaimed session as though it had been chosen for that one.
+    return;
+  }
+  writeStored(PANELS, JSON.stringify({ ...asMap(readStored(PANELS)), [thread]: panel }));
 };

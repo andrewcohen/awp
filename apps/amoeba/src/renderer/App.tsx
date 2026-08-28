@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
 import { Boundary } from "./Boundary";
+import { AppearanceToggle } from "./Appearance";
 import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
 import { NewThread, type NewThreadRequest } from "./NewThread";
@@ -27,6 +28,7 @@ import { useConnection } from "./useConnection";
 import { useSessions } from "./useSessions";
 import { factsKey, useFacts } from "./useFacts";
 import { useProjects } from "./useProjects";
+import { threadHolding } from "./workspaces";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
 
@@ -94,6 +96,52 @@ const styles = stylex.create({
   // A header and then the thing itself. The pane observes its own box, so it
   // simply gets a shorter one — nothing has to tell it the header is there.
   stacked: { display: "flex", flexDirection: "column" },
+  // ── why a fold looked stiff, and it was not the curve ────────────────────
+  //
+  // The fold animates `flex-basis`, so the column's width changed every frame
+  // — and every frame the content inside it laid out again at the new width.
+  // A list of names re-wraps, a title re-ellipsises, a tab strip re-flows;
+  // thirty times on the way out. That is what "stiff/janky" was, and no
+  // easing curve fixes it because the jank is not in the easing.
+  //
+  // So while a fold is running the content is held at the width it had, and
+  // the column clips it. One thing moves — an edge — and everything behind
+  // that edge stays exactly as it was drawn.
+  //
+  // **Only while folding.** A divider drag also changes the width, and there
+  // the reflow is the whole point: someone is choosing how wide a column
+  // should be and has to see what fits. `folding` is already the flag that
+  // tells the two apart, which is why it exists.
+  hold: (px: number) => ({ width: `${px}px`, height: "100%" }),
+  /** The sidebar is a list and then, at the bottom, the window's own control. */
+  stack: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
+  // A plain block at full height, deliberately not a flex child.
+  //
+  // `flex: 1` is what this was, and its parent is an `<aside>` that is not a
+  // flex container — so the rule did nothing, the wrapper's height went to
+  // auto, and everything inside asking for `height: 100%` resolved against
+  // nothing. The tell was the web panel: its `<electrobun-webview>` is a
+  // native view positioned from its element's rectangle, so a wrong height
+  // there is not a clipped panel, it is a native view drawn at the wrong size
+  // over the window.
+  grow: { height: "100%", minHeight: 0 },
+  // The appearance control, pinned to the bottom-left of the window.
+  //
+  // It was in the footer, and when the footer went it went to the corner strip
+  // — which was wrong twice over: that strip is 40px of chrome already holding
+  // a fold control, and this belongs at the bottom. It is the sidebar's own
+  // footer rather than the window's, because a full-width band across three
+  // columns for one icon is exactly what deleting the footer was for.
+  appearance: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+    height: "1.9rem",
+    paddingInline: "0.35rem",
+    borderTopWidth: 1,
+    borderTopStyle: "solid",
+    borderTopColor: colors.border,
+  },
 
   // ── the fold, animated, and only the fold ────────────────────────────────
   //
@@ -162,6 +210,10 @@ export function App() {
   // makes to get them out of the way.
   const [collapsed, setCollapsed] = useState<Collapsed>(rememberedCollapsed);
   const columns = fitColumns(width, want, collapsed);
+  // The same arithmetic with nothing folded: what each column is on its way to,
+  // or on its way back from. `hold` needs it and `columns` cannot supply it —
+  // that one is mid-animation by definition.
+  const full = fitColumns(width, want);
 
   // True only for the length of a fold, and the reason is in `styles.eased`:
   // the same width is written by a drag and by a window resize, and neither of
@@ -346,26 +398,34 @@ export function App() {
             folding && styles.eased(FOLD_MS),
           )}
         >
-          <Boundary where="the sidebar">
-            <Sidebar
-              sessions={sessions}
-              facts={facts}
-              selected={open?.name}
-              onSelect={(session) => {
-                void navigate({ to: pathOf(addressOf(session)) });
-              }}
-              threads={threads}
-              onThreadsChanged={reloadThreads}
-              failure={failure}
-              onNew={() =>
-                setNewThread({
-                  project: open?.identity?.project,
-                  workspace: open?.identity?.workspace,
-                  fromWorkspace: false,
-                })
-              }
-            />
-          </Boundary>
+          <div {...stylex.props(styles.stack, folding && styles.hold(full.sidebar))}>
+            <Boundary where="the sidebar">
+              <Sidebar
+                sessions={sessions}
+                facts={facts}
+                selected={open?.name}
+                onSelect={(session) => {
+                  void navigate({ to: pathOf(addressOf(session)) });
+                }}
+                threads={threads}
+                onThreadsChanged={reloadThreads}
+                failure={failure}
+                onNew={() =>
+                  setNewThread({
+                    project: open?.identity?.project,
+                    workspace: open?.identity?.workspace,
+                    fromWorkspace: false,
+                  })
+                }
+              />
+            </Boundary>
+
+            {/* Pinned to the bottom of the window, which is where it was before
+                the bars existed and where it was asked to stay. */}
+            <div {...stylex.props(styles.appearance)}>
+              <AppearanceToggle />
+            </div>
+          </div>
         </aside>
 
         <Divider
@@ -427,15 +487,18 @@ export function App() {
               terminal with it. The accessory column is where this earns its
               keep: it holds the newest code, and a bad option handed to the
               diff renderer used to white out the whole window. */}
-          <Boundary where="the accessory panel">
-            <Accessory
-              onFold={fold("accessory")}
-              dir={open?.startDir}
-              project={open?.identity?.project}
-              workspace={open?.identity?.workspace}
-              scheme={scheme}
-            />
-          </Boundary>
+          <div {...stylex.props(styles.grow, folding && styles.hold(full.accessory))}>
+            <Boundary where="the accessory panel">
+              <Accessory
+                onFold={fold("accessory")}
+                thread={threadHolding(threads, open?.identity?.project, open?.identity?.workspace)}
+                dir={open?.startDir}
+                project={open?.identity?.project}
+                workspace={open?.identity?.workspace}
+                scheme={scheme}
+              />
+            </Boundary>
+          </div>
         </aside>
       </div>
 

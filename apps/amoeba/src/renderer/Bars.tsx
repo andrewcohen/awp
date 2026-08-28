@@ -2,7 +2,6 @@ import type { Job } from "@awp-kit/jobs";
 import type { SessionInfo, WorkspaceFacts } from "@awp-kit/protocol";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
-import { AppearanceToggle } from "./Appearance";
 import type { Collapsed } from "./columns";
 import { colors, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
@@ -286,15 +285,6 @@ export function TopBar({
       >
         <SidebarSimpleIcon size={15} aria-hidden />
       </button>
-
-      {/* The window's own setting, in the one strip that is never folded away.
-      
-          It was in the footer until there was no footer. Neither of the other
-          two headers would do: the agent's is about the session and the
-          panels' is about the panels, and an appearance control is about
-          neither. This strip is the window talking about itself, which is
-          exactly what it is. */}
-      <AppearanceToggle />
     </header>
   );
 }

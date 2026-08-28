@@ -7,6 +7,7 @@ import { Jobs } from "./Jobs";
 import { Web } from "./Web";
 import { debugTools } from "./debug";
 import type { ColorScheme } from "@awp-kit/pane";
+import { rememberPanel, rememberedPanels } from "./remembered";
 import { colors, space, text } from "./tokens.stylex";
 
 // The accessory column: a set of panels, one at a time.
@@ -66,6 +67,15 @@ export interface PanelContext {
    */
   readonly project: string | undefined;
   readonly workspace: string | undefined;
+  /**
+   * The thread the open session belongs to, or nothing claims it.
+   *
+   * In the context rather than beside it because two panels want it for the
+   * same reason: a preference belongs to the *work*, not to the checkout. The
+   * tab strip files which panel is open under it, and the web panel files
+   * which page is loaded.
+   */
+  readonly thread: string | undefined;
   readonly scheme: ColorScheme;
 }
 
@@ -85,12 +95,14 @@ const panels: ReadonlyArray<Panel> = [
   },
   // The pair, and nothing else. The page itself is not per-workspace — a
   // default address per workspace is the obvious next thing and is deliberately
-  // not guessed at, see `rememberedPage` — but a *note* about the page is typed
+  // not guessed at, see `rememberedPages` — but a *note* about the page is typed
   // at an agent, and an agent belongs to a workspace.
   {
     id: "web",
     label: "web",
-    render: ({ project, workspace }) => <Web project={project} workspace={workspace} />,
+    render: ({ project, workspace, thread }) => (
+      <Web project={project} workspace={workspace} thread={thread} />
+    ),
   },
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
@@ -178,17 +190,44 @@ const styles = stylex.create({
 });
 
 export function Accessory({ onFold, ...context }: PanelContext & { readonly onFold: () => void }) {
+  // What every per-thread preference here is filed under. Not the workspace: a
+  // thread holding two checkouts of the same branch is one thing somebody is
+  // doing, and having the diff open in one and the browser in the other is not
+  // a distinction anybody drew on purpose.
+  const { thread } = context;
   // Controlled, rather than letting Base UI keep the value to itself. StyleX
   // resolves its styles at render — `stylex.props(a, on && b)` — so which tab
   // is selected has to be a value this component can read. Base UI still owns
   // the behaviour: the arrow keys, the roving tab stop and the aria wiring all
   // work the same whether or not the value is held here.
-  const [open, setOpen] = useState<string>(panels[0]?.id ?? "");
+  //
+  // ── one choice per thread, not one per window ────────────────────────────
+  //
+  // A single value for the whole window is wrong in the way that only shows up
+  // once there is more than one thread: the diff is what you want while
+  // reviewing one piece of work and the browser is what you want while
+  // building another, and moving between them re-answered a question that had
+  // already been answered for each.
+  //
+  // A map keyed by thread, seeded from storage once. Derived rather than
+  // synchronised: an effect watching `thread` would render the previous
+  // thread's panel for a frame first, which is the panel flickering as a row
+  // is clicked.
+  const [byThread, setByThread] = useState<Record<string, string>>(rememberedPanels);
+  const first = panels[0]?.id ?? "";
+  // The empty string for a session no thread claims — one bucket they share,
+  // which is the honest answer: there is no thread to tell them apart by.
+  const key = thread ?? "";
+  const open = byThread[key] ?? first;
 
   return (
     <Tabs.Root
       value={open}
-      onValueChange={(value) => setOpen(String(value))}
+      onValueChange={(value) => {
+        const chosen = String(value);
+        setByThread((was) => ({ ...was, [key]: chosen }));
+        rememberPanel(thread, chosen);
+      }}
       {...stylex.props(styles.column)}
     >
       <Tabs.List {...stylex.props(styles.list)}>

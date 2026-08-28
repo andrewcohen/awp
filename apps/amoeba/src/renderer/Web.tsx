@@ -9,7 +9,7 @@ import { type Picked, messageFrom, pickerSource, stopSource } from "./annotate";
 import { addressFor } from "./browse";
 import { sendNote } from "./daemon";
 import { useOverlaysOpen } from "./overlays";
-import { rememberPage, rememberedPage } from "./remembered";
+import { rememberPage, rememberedPages } from "./remembered";
 import { colors, text } from "./tokens.stylex";
 
 // A browser in the accessory column.
@@ -199,17 +199,42 @@ const styles = stylex.create({
 export function Web({
   project,
   workspace,
+  thread,
 }: {
   readonly project: string | undefined;
   readonly workspace: string | undefined;
+  /** The thread this panel's page belongs to, or nothing claims the session. */
+  readonly thread: string | undefined;
 }) {
   const stage = useRef<HTMLDivElement>(null);
   const view = useRef<WebviewTag | undefined>(undefined);
 
-  // What is in the box, which is not the same as what is loaded — a half-typed
-  // address is neither, and the two only agree after enter or a navigation.
-  const [typed, setTyped] = useState(rememberedPage() ?? "");
-  const [here, setHere] = useState(rememberedPage());
+  // ── a page per thread, not per window ────────────────────────────────────
+  //
+  // Both of these used to be one value. A thread is a piece of work and the
+  // page beside it is part of that work — the ticket, the preview, the failing
+  // build — so moving between threads carried the wrong page along.
+  //
+  // Maps rather than state re-seeded by an effect: an effect watching `thread`
+  // renders the previous thread's page for a frame first, and for this panel a
+  // frame of the wrong page is a native webview told to load it.
+  //
+  // `pages` is what is loaded and is remembered across launches. `drafts` is
+  // what is in the box, which is not the same thing — a half-typed address is
+  // neither, and the two only agree after enter or a navigation — and is
+  // deliberately not persisted: a URL somebody started typing and left is not
+  // a page they chose.
+  const [pages, setPages] = useState<Record<string, string>>(rememberedPages);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const key = thread ?? "";
+  const here: string | undefined = pages[key];
+  const typed = drafts[key] ?? here ?? "";
+  const setHere = (url: string) => {
+    setPages((was) => ({ ...was, [key]: url }));
+  };
+  const setTyped = (draft: string) => {
+    setDrafts((was) => ({ ...was, [key]: draft }));
+  };
   const [can] = useState(available);
 
   // Something modal is open, and this panel is drawn over the top of it.
@@ -335,7 +360,7 @@ export function Web({
       if (typeof url === "string" && url !== "") {
         setHere(url);
         setTyped(url);
-        rememberPage(url);
+        rememberPage(thread, url);
       }
     };
     element.on?.("did-navigate", navigated);
@@ -426,7 +451,7 @@ export function Web({
     }
     setHere(url);
     setTyped(url);
-    rememberPage(url);
+    rememberPage(thread, url);
     view.current?.loadURL(url);
   };
 
