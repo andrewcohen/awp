@@ -21,6 +21,18 @@ import { colors, space, text } from "./tokens.stylex";
 //
 // So there are exactly two verbs on a row: read it, and ask for it now.
 //
+// ── a row is one line until it is asked to be more ─────────────────────────
+//
+// The description was clamped to two lines to begin with, which was still far
+// too much: a description here is a paragraph or several, and two lines of
+// every one of twenty-four tasks is a column of prose nobody can scan. What a
+// list is for is finding the row you want, and a subject is the whole of what
+// that takes.
+//
+// So the description is out of the layout entirely until the subject is
+// clicked. That makes the panel a list of titles, which is what it should have
+// been, and the reading of one task a deliberate act.
+//
 // ── done tasks are a count, not rows ───────────────────────────────────────
 //
 // A finished task is worth knowing the number of and almost never worth
@@ -122,15 +134,6 @@ const styles = stylex.create({
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
   },
-  // Two lines while closed: enough to tell two tasks apart, short enough that
-  // a list of eight still fits on a screen.
-  clamped: {
-    display: "-webkit-box",
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: "vertical",
-    overflow: "hidden",
-  },
-
   // Hidden by opacity and *not* by display, or it would leave the layout and
   // stop being reachable from the keyboard — which is the mandate in
   // AGENTS.md, and the reason `MoveToThread` is shaped the same way.
@@ -203,9 +206,9 @@ function Row({ task, onSend, state }: RowProps) {
           {task.subject}
         </button>
 
-        {task.description.trim() === "" ? undefined : (
-          <p {...stylex.props(styles.detail, !open && styles.clamped)}>{task.description.trim()}</p>
-        )}
+        {open && task.description.trim() !== "" ? (
+          <p {...stylex.props(styles.detail)}>{task.description.trim()}</p>
+        ) : undefined}
       </div>
 
       <button
