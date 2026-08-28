@@ -311,6 +311,10 @@ const handlers = AwpRpcs.toLayer({
   ReviewStart: () => Effect.succeed({ thread, job, workspace: "pr-412", created: true }),
   PullRequestRepair: () => Effect.succeed({ prompt: "PR #412 has failing CI checks.", mine: true }),
   AgentSend: () => Effect.void,
+  ChatOpen: () =>
+    Stream.fromArray([{ kind: "message" as const, role: "agent" as const, text: "hello" }]),
+  ChatSend: () => Effect.void,
+  ChatAnswer: () => Effect.void,
   Revisions: () => Effect.succeed([revision]),
   Diff: () => Effect.succeed(patch),
   WorkspaceChanges: () => Stream.fromArray([{ at: 1_787_000_000_000 }]),

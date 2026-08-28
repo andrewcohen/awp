@@ -13,6 +13,7 @@ import { Jobs } from "@awp-kit/jobs";
 import {
   AttachRefused,
   AwpRpcs,
+  ChatUnavailable,
   CreateWorkspace as CreateWorkspaceSchema,
   DiffUnavailable,
   JobNotFound,
@@ -32,6 +33,7 @@ import {
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { Clock, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { Chat } from "./chat";
 import { InboxFeed } from "./inbox-feed";
 import { type Repairable, looksMine, repairPrompt } from "./repair";
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
@@ -298,6 +300,7 @@ export const layer = AwpRpcs.toLayer(
     const facts = yield* WorkspaceState;
     const config = yield* Settings;
     const jj = yield* Jj;
+    const chat = yield* Chat;
     // Taken once, here, rather than per request. A handler's return value has
     // to name no requirements — the rpc layer is what settles them — so the
     // watcher's file system is closed over instead of being asked for inside
@@ -599,6 +602,30 @@ export const layer = AwpRpcs.toLayer(
       // The stream's lifetime is the request's, so a client that goes away
       // unsubscribes from the feed. Nothing has to notice the disconnection.
       JobChanges: () => jobs.changes,
+
+      // The conversation, and the two calls that add to it.
+      //
+      // A refusal here is a sentence, not a defect: the adapter not being
+      // installed and there being no claude on the PATH are both things a
+      // person fixes, and both are what `ChatError` already carries. Dying
+      // would take the window's socket with it for a condition it could have
+      // rendered.
+      ChatOpen: ({ project, workspace }) =>
+        Stream.unwrap(
+          chat
+            .open(project, workspace)
+            .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+        ),
+
+      ChatSend: ({ project, workspace, text }) =>
+        chat
+          .send(project, workspace, text)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
+      ChatAnswer: ({ project, workspace, request, option }) =>
+        chat
+          .answer(project, workspace, request, option)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
 
       JobLog: ({ job }) => known(job).pipe(Effect.flatMap(() => jobs.log(job).pipe(Effect.orDie))),
 

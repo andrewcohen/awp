@@ -10,6 +10,7 @@ import type { RpcClient } from "effect/unstable/rpc";
 import { RpcTest } from "effect/unstable/rpc";
 import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
+import { Chat } from "./chat";
 import { Github, GithubError, type Remark } from "./github";
 import type { PullRequest } from "./github-parse";
 import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
@@ -213,6 +214,17 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // faked, because the real one spawns claude and takes ten seconds; the
         // model call has its own probe.
         Layer.provide(settings.layer(configFor(fakes))),
+        // A conversation nobody has. The chat calls are exercised by
+        // `chat.test.ts` against the update parsing, and end to end by
+        // `probe:chat` — a fake here would only assert that the handler
+        // forwards three arguments, which is what reading it says.
+        Layer.provide(
+          Layer.succeed(Chat)({
+            open: () => Effect.succeed(Stream.empty),
+            send: () => Effect.void,
+            answer: () => Effect.void,
+          }),
+        ),
         Layer.provide(
           Layer.succeed(Jj)({
             sourceRoot: (dir: string) => Effect.succeed(`/repos/${dir.split("/").at(-1) ?? ""}`),

@@ -14,6 +14,7 @@ import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Effect, FileSystem, Layer } from "effect";
 import { Bootstrap, layer as bootstrapLayer } from "./bootstrap";
+import { layer as chatLayer, migrations as chatMigrations } from "./chat";
 import { Github } from "./github";
 import * as githubCli from "./github-cli";
 import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
@@ -127,6 +128,7 @@ export const db = Layer.orDie(
     ...reviewMigrations,
     ...projectMigrations,
     ...inboxMigrations,
+    ...chatMigrations,
   ]),
 );
 
@@ -197,6 +199,7 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(NodeSocketServer.layerWebSocket({ host: DAEMON_HOST, port: DAEMON_PORT })),
   Layer.provide(handlers.layer),
   Layer.provide(services),
+  Layer.provide(chatLayer),
   Layer.provide(jobs),
   Layer.provide(threads),
   Layer.provide(reviews),
