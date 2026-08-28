@@ -191,6 +191,25 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  // The header's two halves, as one line that can be clipped from the right.
+  // `minWidth: 0` with the `flex`, or a long title pushes the counts off the
+  // bar rather than being ellipsised — the pair AGENTS.md names.
+  named: {
+    display: "flex",
+    alignItems: "baseline",
+    flex: 1,
+    minWidth: 0,
+    // No gap. The slash is the separator, and space either side of it would
+    // make it a third thing on the line rather than the join between two.
+    gap: 0,
+  },
+  /** An address: the project, and the slash that ends it. */
+  where: {
+    flexShrink: 0,
+    color: colors.muted,
+    fontFamily: text.mono,
+    fontSize: text.title,
+  },
 
   // The agent column's header. Same height as the corner strip and the panels'
   // tab strip, so the three line up across the window — they are one band of
@@ -361,6 +380,45 @@ export function TopBar({
  * `0 running · 0 failed` teaches the eye to skip it, which costs exactly the
  * one moment it exists for.
  */
+/**
+ * `<project>/<title>`, or the honest thing when there is no project to name.
+ *
+ * A session awp did not create has no identity, so there is no project and no
+ * display name — only the name zmx knows it by. That is an address rather than
+ * a title, so it is drawn as one: whole, in mono, and not pretending to be
+ * prose it is not.
+ */
+function Title({
+  session,
+  facts,
+}: {
+  readonly session: SessionInfo | undefined;
+  readonly facts: WorkspaceFacts | undefined;
+}) {
+  if (session === undefined) {
+    return <span {...stylex.props(styles.strong, styles.title)}>no session</span>;
+  }
+
+  const project = session.identity?.project;
+  if (project === undefined) {
+    return <span {...stylex.props(styles.where, styles.title)}>{session.name}</span>;
+  }
+
+  // The best name there is, in the order they are worth: what a person called
+  // it, what the model called it, and the directory as the name of last
+  // resort. The slug is a fallback rather than a field — a workspace whose
+  // display name is its slug says the slug once, not twice.
+  const title =
+    facts?.displayName ?? session.identity?.label ?? session.identity?.workspace ?? session.name;
+
+  return (
+    <span {...stylex.props(styles.named)}>
+      <span {...stylex.props(styles.where)}>{project}/</span>
+      <span {...stylex.props(styles.strong, styles.title)}>{title}</span>
+    </span>
+  );
+}
+
 export function AgentBar({
   jobs,
   session,
@@ -381,17 +439,26 @@ export function AgentBar({
 
   return (
     <header {...stylex.props(styles.bar, styles.agentBar)}>
-      {/* Just the name. It was `displayName · project · kind` once, which is
-          three fields where a title has one job — the project and the kind are
-          both already on the selected sidebar row. */}
-      <span {...stylex.props(styles.strong, styles.title)}>
-        {session === undefined
-          ? "no session"
-          : (facts?.displayName ??
-            session.identity?.label ??
-            session.identity?.workspace ??
-            session.name)}
-      </span>
+      {/* ── where the work is, then what it is ───────────────────────────
+
+          `<project>/<title>`, and nothing else. It was `displayName · project
+          · kind` once — three fields where a header has one job — and then
+          just the title, which lost the one piece of context a person
+          switching between two workspaces actually needs.
+
+          The order is not decoration: the project narrows, the title names.
+          Read left to right it answers "where am I" before "what is this",
+          which is the order somebody arriving at the window asks them in.
+
+          Two families, per the rule. A project is an address — a directory
+          somebody types elsewhere — so it is mono; a title is prose and is
+          ui. The slash carries the join, which is why there is no chip, no
+          rule and no extra gap around it: a separator that is doing its job
+          does not need furniture.
+
+          The project does not truncate and the title does. A clipped title is
+          still a title; a clipped project is a different project. */}
+      <Title session={session} facts={facts} />
 
       <span {...stylex.props(styles.spacer)} />
 
