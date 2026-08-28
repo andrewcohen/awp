@@ -58,6 +58,9 @@ const styles = stylex.create({
   shown: { opacity: 1 },
   positioner: { zIndex: 20 },
   menu: {
+    // Portalled, so the family is stated rather than inherited — see the
+    // note on NewThread's popup.
+    fontFamily: text.ui,
     minWidth: "12rem",
     maxHeight: "18rem",
     overflowY: "auto",
