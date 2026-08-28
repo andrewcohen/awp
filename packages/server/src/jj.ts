@@ -101,6 +101,15 @@ export interface DiffOf {
   readonly dir: string;
   readonly revision: string;
   /**
+   * The other end, for a range rather than a single revision.
+   *
+   * Absent asks `jj diff -r <revision>`: what that one commit did. Present
+   * asks `--from <from> --to <revision>`: the net effect of everything
+   * between them, which is a different patch and not a concatenation of the
+   * ones in between — a file touched three times appears once.
+   */
+  readonly from?: string;
+  /**
    * Snapshot the working copy first, so the answer includes what is on disk.
    *
    * **The one read here that is allowed to write**, and it is not an oversight.
