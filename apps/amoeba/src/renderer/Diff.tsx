@@ -1,7 +1,7 @@
 import type { CommentSide, ReviewComment, Revision } from "@awp-kit/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
-import { TreeStructureIcon } from "@phosphor-icons/react/TreeStructure";
+import { TreeViewIcon } from "@phosphor-icons/react/TreeView";
 import { CaretLineDownIcon } from "@phosphor-icons/react/CaretLineDown";
 import { CaretLineUpIcon } from "@phosphor-icons/react/CaretLineUp";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
@@ -1340,43 +1340,13 @@ export function Diff({
           this patch is. The controls on the right are for acting on a patch,
           so they are absent when there is no patch to act on. */}
       <div {...stylex.props(styles.head)}>
-        <button
-          type="button"
-          aria-expanded={!folded}
-          aria-label={folded ? "show the revision list" : "collapse the revision list"}
-          title={folded ? "show the revision list" : "collapse to the selected revision"}
-          {...stylex.props(styles.peg)}
-          onClick={toggleList}
-        >
-          {/* A caret against a line: collapse *to the top edge*, and back.
+        {/* The index, at the left edge — which is where the thing it opens
+            appears. The tree slides in over the left of the patch, so its
+            control points at it.
 
-              Three glyphs were tried. A bare caret says a direction and not
-              what it acts on. `SidebarSimple` rotated a quarter turn says the
-              right thing and looks wrong doing it — the icon is drawn for a
-              vertical edge and its rounded square reads as tilted rather than
-              as turned, which was reported immediately.
-
-              The line is what the bare caret was missing: it names the edge
-              the list folds against. And here the picture *should* swap
-              between states, unlike the sidebar's and the panels' controls —
-              those name a region, which does not change, and this names a
-              direction, which does. */}
-          {folded ? <CaretLineDownIcon size={13} /> : <CaretLineUpIcon size={13} />}
-        </button>
-
-        {/* The index, on the left, beside the control that collapses the
-            revision list.
-
-            Both put a region on screen or take it away, and both act on
-            something to the *left* of where the eye is reading — so they
-            belong together at that end. The buttons at the other end act on
-            the patch itself: fold it, unfold it, send what was written about
-            it.
-
-            Drawn like the caret rather than like those: no outline at rest.
-            An outlined icon button sitting beside a bare one is the thing
-            that read as ugly, and the fix is to stop it being a different
-            kind of control rather than to restyle it. */}
+            Drawn without an outline at rest. An outlined icon button sitting
+            beside a bare one is what read as ugly, and the repair is to stop
+            it being a different kind of control rather than to restyle it. */}
         {items.length > 1 && (
           <button
             type="button"
@@ -1386,10 +1356,14 @@ export function Diff({
             {...stylex.props(styles.peg, tree && styles.pegOn)}
             onClick={() => setTree((was) => !was)}
           >
-            <TreeStructureIcon size={13} weight="bold" />
+            {/* `TreeView`, not `TreeStructure`. The latter is a node graph — boxes
+                joined by lines, the picture of a hierarchy in the abstract —
+                and it reads as a diagram rather than as a list of files.
+                `TreeView` is rows with indent guides, which is what is
+                actually behind the button. */}
+            <TreeViewIcon size={14} weight="bold" />
           </button>
         )}
-
         {stat !== undefined && stat.files > 0 ? (
           <span {...stylex.props(styles.stat)}>
             <span {...stylex.props(styles.statPart)}>
@@ -1409,7 +1383,6 @@ export function Diff({
             {failure ?? (patch === undefined ? "reading the diff…" : "no changes")}
           </span>
         )}
-
         {review.unsent > 0 && (
           <button
             type="button"
@@ -1422,7 +1395,6 @@ export function Diff({
               : `send ${review.unsent} ${review.unsent === 1 ? "comment" : "comments"}`}
           </button>
         )}
-
         {/* Fold and unfold everything. Two buttons rather than one that
             toggles, because a single control has to decide what "the opposite
             of a patch with four of ten files folded" is — and either answer is
@@ -1449,6 +1421,40 @@ export function Diff({
             </button>
           </>
         )}
+        {/* ── the list's collapse, at the far right ──────────────────────────
+
+            It began beside the tree's button on the left, on the argument that
+            both act on a region rather than on the patch. What that missed is
+            *which* region: the tree opens over the patch on the left, and the
+            revision list is above — so grouping them made one control point at
+            the thing beside it and the other at the thing over it.
+
+            At the right edge it is the last control on the row, which is where
+            a "put this away" belongs — the same place the accessory column's
+            own fold sits, one row up. */}{" "}
+        <button
+          type="button"
+          aria-expanded={!folded}
+          aria-label={folded ? "show the revision list" : "collapse the revision list"}
+          title={folded ? "show the revision list" : "collapse to the selected revision"}
+          {...stylex.props(styles.peg)}
+          onClick={toggleList}
+        >
+          {/* A caret against a line: collapse *to the top edge*, and back.
+
+              Three glyphs were tried. A bare caret says a direction and not
+              what it acts on. `SidebarSimple` rotated a quarter turn says the
+              right thing and looks wrong doing it — the icon is drawn for a
+              vertical edge and its rounded square reads as tilted rather than
+              as turned, which was reported immediately.
+
+              The line is what the bare caret was missing: it names the edge
+              the list folds against. And here the picture *should* swap
+              between states, unlike the sidebar's and the panels' controls —
+              those name a region, which does not change, and this names a
+              direction, which does. */}
+          {folded ? <CaretLineDownIcon size={13} /> : <CaretLineUpIcon size={13} />}
+        </button>
       </div>
 
       {review.failure !== undefined && (
