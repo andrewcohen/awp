@@ -114,13 +114,30 @@ const styles = stylex.create({
     transform: "translate(-50%, -50%)",
     display: "flex",
     flexDirection: "column",
-    width: "min(38rem, calc(100vw - 4rem))",
+    // Wider than it was. 38rem was chosen when the window's face was a
+    // monospace at 15px; a proportional face at the same size fits more per
+    // line and made the box read as cramped rather than as roomy.
+    width: "min(46rem, calc(100vw - 6rem))",
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderStyle: "solid",
     borderColor: colors.border,
     borderRadius: "0.5rem",
     color: colors.text,
+    // ── the family, stated rather than inherited ────────────────────────────
+    //
+    // A Base UI dialog is portalled to `document.body`, so it renders *outside*
+    // `#root` — and `#root`'s first child is where the window's font is set.
+    // `body` has none, so everything in here fell back to the engine's default
+    // serif while every size was correct, which is why it read as a font bug
+    // rather than as a portal one:
+    //
+    //   dialog     -webkit-standard   15px
+    //   textarea   -webkit-standard   16px
+    //
+    // Every portal in this window needs this line. There are three — this, the
+    // chip menu below, and MoveToThread's.
+    fontFamily: text.ui,
     fontSize: text.body,
     boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
     // No padding of its own. Each band pads itself, so the rules between them
@@ -182,14 +199,14 @@ const styles = stylex.create({
   composer: {
     display: "flex",
     alignItems: "flex-end",
-    gap: "0.5rem",
-    padding: "0.6rem",
+    gap: "0.6rem",
+    padding: "0.8rem",
   },
   brief: {
     flex: 1,
     minWidth: 0,
-    minHeight: "3.5rem",
-    maxHeight: "14rem",
+    minHeight: "5rem",
+    maxHeight: "18rem",
     padding: "0.25rem",
     backgroundColor: "transparent",
     // Borderless on purpose: the popup's own edge is the box. A border here
