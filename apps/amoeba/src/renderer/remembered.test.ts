@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import {
   DEFAULT_SPLIT,
+  rememberSideBySide,
+  rememberedSideBySide,
   rememberOpenSplit,
   rememberPage,
   rememberPanel,
@@ -123,5 +125,29 @@ describe("the height to open the revision list to", () => {
     // meaningful — folded — and this one cannot.
     rememberOpenSplit(0);
     expect(rememberedOpenSplit()).toBe(DEFAULT_SPLIT);
+  });
+});
+
+describe("side by side", () => {
+  // The first preference here that is one setting for the window rather than
+  // one per thread. The open panel and the loaded page are properties of a
+  // piece of work; unified against split is a reading habit.
+  test("is unified until asked otherwise", () => {
+    expect(rememberedSideBySide()).toBe(false);
+  });
+
+  test("comes back as it was put, both ways", () => {
+    rememberSideBySide(true);
+    expect(rememberedSideBySide()).toBe(true);
+    rememberSideBySide(false);
+    expect(rememberedSideBySide()).toBe(false);
+  });
+
+  test("is not filed under a thread", () => {
+    // Stated as a test because the other two preferences in this file are, and
+    // a future change that "made it consistent" would be undoing the decision
+    // rather than fixing an oversight.
+    rememberSideBySide(true);
+    expect(readStored("amoeba.diff.split")).toBe("yes");
   });
 });
