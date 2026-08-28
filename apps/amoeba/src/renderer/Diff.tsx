@@ -511,6 +511,8 @@ const styles = stylex.create({
   patch: { position: "relative", flex: 1, minHeight: 0 },
   /** A bare head-row control that is currently on. */
   pegOn: { color: colors.accent },
+  /** …and one with nothing to act on. Still there, and saying so. */
+  pegOff: { opacity: 0.35, cursor: "default" },
   view: { height: "100%", overflowY: "auto" },
 
   // ── the file header, made into a control ────────────────────────────────
@@ -1340,30 +1342,53 @@ export function Diff({
           this patch is. The controls on the right are for acting on a patch,
           so they are absent when there is no patch to act on. */}
       <div {...stylex.props(styles.head)}>
-        {/* The index, at the left edge — which is where the thing it opens
-            appears. The tree slides in over the left of the patch, so its
-            control points at it.
+        {/* ── the row keeps its shape ─────────────────────────────────────
 
-            Drawn without an outline at rest. An outlined icon button sitting
-            beside a bare one is what read as ugly, and the repair is to stop
-            it being a different kind of control rather than to restyle it. */}
-        {items.length > 1 && (
-          <button
-            type="button"
-            aria-expanded={tree}
-            aria-label={tree ? "hide the file tree" : "show the file tree"}
-            title={tree ? "hide the file tree" : "jump to a file"}
-            {...stylex.props(styles.peg, tree && styles.pegOn)}
-            onClick={() => setTree((was) => !was)}
-          >
-            {/* `TreeView`, not `TreeStructure`. The latter is a node graph — boxes
+            These were rendered only when there was more than one file, on the
+            argument that a control for acting on a patch has no business
+            existing when there is no patch. That is true and it looked
+            broken: the top of a jj stack is empty most of the day, so the
+            ordinary state of this row was a single caret at the far edge with
+            nothing else on it, which reads as a panel that failed to draw
+            rather than as a revision with no changes in it.
+
+            So they are always here and go quiet when there is nothing to act
+            on. A disabled control still says what the row is for; an absent
+            one says the row is broken.
+
+            `send` stays conditional, and the difference is worth stating: it
+            is not a permanent part of this row, it is a thing that *appears*
+            when there is something to send. A "send 0 comments" button would
+            be the noise this is trying to avoid.
+
+            The index sits at the left edge, which is where the thing it opens
+            appears — the tree slides in over the left of the patch, so its
+            control points at it. Drawn without an outline at rest: an
+            outlined icon button beside a bare one is what read as ugly, and
+            the repair is to stop it being a different kind of control rather
+            than to restyle it. */}
+        <button
+          type="button"
+          aria-expanded={tree}
+          disabled={items.length === 0}
+          aria-label={tree ? "hide the file tree" : "show the file tree"}
+          title={
+            items.length === 0
+              ? "no files to jump to"
+              : tree
+                ? "hide the file tree"
+                : "jump to a file"
+          }
+          {...stylex.props(styles.peg, tree && styles.pegOn, items.length === 0 && styles.pegOff)}
+          onClick={() => setTree((was) => !was)}
+        >
+          {/* `TreeView`, not `TreeStructure`. The latter is a node graph — boxes
                 joined by lines, the picture of a hierarchy in the abstract —
                 and it reads as a diagram rather than as a list of files.
                 `TreeView` is rows with indent guides, which is what is
                 actually behind the button. */}
-            <TreeViewIcon size={14} weight="bold" />
-          </button>
-        )}
+          <TreeViewIcon size={14} weight="bold" />
+        </button>
         {stat !== undefined && stat.files > 0 ? (
           <span {...stylex.props(styles.stat)}>
             <span {...stylex.props(styles.statPart)}>
@@ -1399,28 +1424,26 @@ export function Diff({
             toggles, because a single control has to decide what "the opposite
             of a patch with four of ten files folded" is — and either answer is
             wrong half the time. Two buttons each state what they do. */}
-        {items.length > 1 && (
-          <>
-            <button
-              type="button"
-              aria-label="collapse every file"
-              title="fold all"
-              {...stylex.props(styles.button, styles.icon)}
-              onClick={() => foldAll(true)}
-            >
-              <ArrowsInLineVerticalIcon size={13} weight="bold" />
-            </button>
-            <button
-              type="button"
-              aria-label="expand every file"
-              title="unfold all"
-              {...stylex.props(styles.button, styles.icon)}
-              onClick={() => foldAll(false)}
-            >
-              <ArrowsOutLineVerticalIcon size={13} weight="bold" />
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          disabled={items.length === 0}
+          aria-label="collapse every file"
+          title="fold all"
+          {...stylex.props(styles.button, styles.icon, items.length === 0 && styles.busy)}
+          onClick={() => foldAll(true)}
+        >
+          <ArrowsInLineVerticalIcon size={13} weight="bold" />
+        </button>
+        <button
+          type="button"
+          disabled={items.length === 0}
+          aria-label="expand every file"
+          title="unfold all"
+          {...stylex.props(styles.button, styles.icon, items.length === 0 && styles.busy)}
+          onClick={() => foldAll(false)}
+        >
+          <ArrowsOutLineVerticalIcon size={13} weight="bold" />
+        </button>
         {/* ── the list's collapse, at the far right ──────────────────────────
 
             It began beside the tree's button on the left, on the argument that
@@ -1476,9 +1499,14 @@ export function Diff({
               const found = items.find(
                 (item) => item.type === "diff" && item.fileDiff.name === path,
               );
-              if (found !== undefined) {
-                view.current?.scrollTo({ type: "item", id: found.id, align: "start" });
+              if (found === undefined) {
+                return;
               }
+              view.current?.scrollTo({ type: "item", id: found.id, align: "start" });
+              // And get out of the way. The tree is opened to find one file,
+              // which is a moment rather than a mode — leaving it up means the
+              // thing it was opened to reveal is under it.
+              setTree(false);
             }}
             onClose={() => setTree(false)}
           />
