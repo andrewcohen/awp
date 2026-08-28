@@ -19,7 +19,12 @@ import { colors, space, text } from "./tokens.stylex";
 // write, it is the same gesture as sending a review or a page note, and it
 // goes down the same wire.
 //
-// So there are exactly two verbs on a row: read it, and ask for it now.
+// So there are exactly two verbs on a row: read it, and ask for it next.
+//
+// **Next, not now.** The prompt asks the agent to finish what it is doing
+// first — see `taskPrompt`. Send is for adding to the queue, and an agent that
+// abandons a half-made change to start something else has cost more than the
+// task was worth.
 //
 // ── a row is one line until it is asked to be more ─────────────────────────
 //
@@ -218,7 +223,7 @@ function Row({ task, onSend, state }: RowProps) {
         title={
           onSend === undefined
             ? "this session is not one of ours, so there is no agent to tell"
-            : `ask the agent to pick up "${task.subject}" now`
+            : `ask the agent to pick up "${task.subject}" next`
         }
         onClick={onSend}
         {...stylex.props(

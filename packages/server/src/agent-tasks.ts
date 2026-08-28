@@ -177,6 +177,12 @@ export const readTasks = (
  * element's text because pointing at `<body>` would paste a page into a
  * terminal; a task description is something a person wrote on purpose, and
  * cutting it would drop the half that says what "done" means.
+ *
+ * **"next", not "now".** A prompt typed into a running agent arrives in the
+ * middle of whatever it was doing, and "now" reads as an instruction to drop
+ * it. That is almost never what pressing send means — the button is for adding
+ * to the queue, not for interrupting — and an agent that abandons a half-made
+ * change to start something else has cost more than the task was worth.
  */
 export const taskPrompt = (task: AgentTask): string =>
   [
@@ -184,5 +190,5 @@ export const taskPrompt = (task: AgentTask): string =>
     `task ${task.id}: ${task.subject}`,
     ...(task.description.trim() === "" ? [] : ["", task.description.trim()]),
     "",
-    "Please pick this up now.",
+    "Please pick this up next — finish what you are doing first.",
   ].join("\n");

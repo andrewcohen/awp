@@ -28,17 +28,19 @@ import { colors, space, text } from "./tokens.stylex";
 // tools last because they are the ones opened when something feels wrong
 // rather than on purpose.
 //
+//   diff   looked at continuously while working, and opens by default
 //   tasks  what the agent is about to do, and the one control that changes
-//          what happens next — so it opens by default
-//   diff   looked at continuously while working
+//          what happens next — reached for between pieces of work
 //   web    reached for while reading a diff — docs, an issue, a dashboard
 //   jobs   read when a job is running, which is a few seconds a day, and
 //          always with the count in the status bar already saying so
 //   debug  opened when something feels wrong, never on purpose
 //
-// The order has moved twice and both moves were the same argument: the tab a
-// person reaches for most often should be the one nearest the start of the
-// strip, because everything else is measured in extra keystrokes from it.
+// Ordered by how often a person turns to them and not by how much each one
+// decides. Tasks was briefly first on the second argument — it is the only
+// panel here that changes what happens next — and that is the wrong axis: a
+// tab strip is paid for in reaches, and the diff is looked at continuously
+// while a task list is consulted between pieces of work.
 //
 // ── why the panels take an argument now ──────────────────────────────────
 //
@@ -89,21 +91,18 @@ interface Panel {
 }
 
 const panels: ReadonlyArray<Panel> = [
-  // First, because it is the one that says what happens next. Everything else
-  // in this column is about work that has already happened — a diff of what
-  // was written, a job that ran, a page being read against it.
-  {
-    id: "tasks",
-    label: "tasks",
-    render: ({ dir, project, workspace }) => (
-      <Tasks dir={dir} project={project} workspace={workspace} />
-    ),
-  },
   {
     id: "diff",
     label: "diff",
     render: ({ dir, project, workspace, scheme }) => (
       <Diff dir={dir} project={project} workspace={workspace} scheme={scheme} />
+    ),
+  },
+  {
+    id: "tasks",
+    label: "tasks",
+    render: ({ dir, project, workspace }) => (
+      <Tasks dir={dir} project={project} workspace={workspace} />
     ),
   },
   // The pair, and nothing else. The page itself is not per-workspace — a
