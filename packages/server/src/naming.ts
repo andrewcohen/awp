@@ -104,6 +104,83 @@ export const sanitize = (value: string): string => {
 };
 
 /**
+ * How long a label value is allowed to be. **Amoeba's bound, not zmx's.**
+ *
+ * Read out of zmx 0.7.0's own source rather than guessed: `label.zig`'s
+ * `assertLabel` checks the character set and nothing else, values are
+ * heap-allocated, and `ipc.zig` grows its read buffer, so there is no length
+ * at which zmx starts refusing. A label is bounded here because it is *read*,
+ * not because it is rejected.
+ *
+ * `zmx ls` prints labels inline, one session per line, beside three other
+ * columns. Something longer than a session name is not being read at a glance,
+ * and one long label pushes every other column off the terminal.
+ */
+const MAX_LABEL = 48;
+
+/**
+ * A label value zmx will actually accept.
+ *
+ * ── the bug this exists for ───────────────────────────────────────────────
+ *
+ * `identityLabels` used to pass the label through untouched, under a comment
+ * saying a label is *data* rather than an address and so may hold anything.
+ * That is the right distinction and the wrong conclusion: zmx validates every
+ * value it is given, whatever the value means to awp.
+ *
+ *   zmx set <name> awp_label=Review: Inbox UI
+ *   error: key-value kvs can only contain [a-z, A-Z, 0-9, -_.] characters:
+ *          value=[Review:]
+ *
+ * Two refusals in one line, and the second is the one the message hides. The
+ * value zmx complains about is `Review:` rather than the whole string, so it
+ * had already split the pair on whitespace before validating — a space is as
+ * fatal as the colon, and a label made only of legal characters with a space
+ * in it would fail the same way.
+ *
+ * Confirmed against zmx 0.7.0's source rather than inferred from the message:
+ * `main.zig` joins the pairs with a space, `label.LabelIterator` scans to `=`
+ * and then to the next space, and `label.assertLabel` allows only alphanumeric
+ * plus `-_.` in both halves. Neither half is in the CLI's help.
+ *
+ * What it cost: labelling is a step of `create-workspace`, so a colon in a
+ * sentence somebody typed failed the job, and the compensation took the whole
+ * workspace back out again. The person got no workspace, and an error about
+ * key-value pairs.
+ *
+ * ── lossy, deliberately ───────────────────────────────────────────────────
+ *
+ * Percent-encoding would round-trip exactly and is the wrong trade here. The
+ * reason the label is on the session at all is that `zmx ls` prints it where a
+ * person can read it, and `Review%3A%20Inbox%20UI` gives that up to preserve
+ * a colon. The exact sentence is not lost — it is the thread's title, and the
+ * label is a fallback for a workspace no thread claimed.
+ *
+ * So the two names are deliberately different things, and the split is the
+ * point rather than a compromise:
+ *
+ *   threads.title   `Review: Inbox UI`   what a person called the work, exact,
+ *                                        durable, and what the window shows
+ *   awp_label       `Review-Inbox-UI`    terse, legal, and short enough to
+ *                                        read in a column of `zmx ls`
+ *
+ * A run of illegal characters becomes a single `-` rather than one each, so a
+ * sentence reads as words: `Review: Inbox UI` → `Review-Inbox-UI`, not
+ * `Review--Inbox-UI`. Leading and trailing separators are trimmed, so nothing
+ * comes back looking like it was cut off mid-word when it was not.
+ *
+ * Answers the empty string when there is nothing legal left, which is what
+ * {@link identityLabels} already treats as "no label".
+ */
+export const labelValue = (value: string): string => {
+  const collapsed = value.replaceAll(/[^A-Za-z0-9\-_.]+/gu, "-");
+  const trimmed = collapsed.replaceAll(/^[-_.]+|[-_.]+$/gu, "");
+  return trimmed.length <= MAX_LABEL
+    ? trimmed
+    : trimmed.slice(0, MAX_LABEL).replaceAll(/[-_.]+$/gu, "");
+};
+
+/**
  * Bound a name segment, keeping the front of it and a fingerprint of the whole.
  *
  * Truncation alone cannot be used: two workspaces named after the same PR
@@ -278,21 +355,29 @@ export const parseSessionName = (name: string): SessionIdentity | undefined => {
  * there is nothing to reconcile when one is killed from outside awp, and
  * `zmx ls` prints them inline — the read costs no extra call.
  *
- * Unsanitized, deliberately: a label is data rather than an address, so it can
- * hold the workspace's real name, which is what has to be matched against a
- * workspace and what a human reading `zmx ls` wants to see.
+ * The three address labels are unsanitized, deliberately: they are data rather
+ * than an address, so they hold the workspace's real name, which is what has to
+ * be matched against a workspace and what a human reading `zmx ls` wants to
+ * see. That is right for a slug and was wrongly extended to the fourth label,
+ * which holds a sentence — see {@link labelValue} for what that cost.
  */
 export const identityLabels = (
   project: string,
   workspace: string,
   kind: string,
   label?: string,
-): Record<string, string> => ({
-  [LABEL_PROJECT]: project.trim(),
-  [LABEL_WORKSPACE]: workspace.trim(),
-  [LABEL_KIND]: kind.trim(),
-  // Omitted when there is none, rather than written empty. This is a label read
-  // by people in `zmx ls` as well as by awp, and a column of `awp_label=` on
-  // every session is noise that says nothing.
-  ...(label !== undefined && label.trim() !== "" ? { [LABEL_LABEL]: label.trim() } : {}),
-});
+): Record<string, string> => {
+  // Through `labelValue`, because zmx refuses a value carrying a space or a
+  // colon and this one holds a sentence.
+  const shown = label === undefined ? "" : labelValue(label);
+  return {
+    [LABEL_PROJECT]: project.trim(),
+    [LABEL_WORKSPACE]: workspace.trim(),
+    [LABEL_KIND]: kind.trim(),
+    // Omitted when there is none, rather than written empty. This is a label
+    // read by people in `zmx ls` as well as by awp, and a column of
+    // `awp_label=` on every session is noise that says nothing. A label with
+    // nothing legal left in it is the same as having none.
+    ...(shown === "" ? {} : { [LABEL_LABEL]: shown }),
+  };
+};

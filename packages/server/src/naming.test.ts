@@ -1,10 +1,12 @@
 import { describe, expect, test } from "vitest";
 import {
   LABEL_KIND,
+  LABEL_LABEL,
   LABEL_PROJECT,
   LABEL_WORKSPACE,
   MAX_SESSION_NAME,
   identityLabels,
+  labelValue,
   parseSessionName,
   sanitize,
   sessionKind,
@@ -272,5 +274,75 @@ describe("identityLabels", () => {
     const name = sessionName("thicket", workspace, "agent");
     expect(parseSessionName(name)?.workspace).not.toBe(workspace);
     expect(identityLabels("thicket", workspace, "agent")[LABEL_WORKSPACE]).toBe(workspace);
+  });
+
+  test("puts the label through labelValue, because zmx validates it", () => {
+    // The whole bug, at the level it reaches production: a colon in a sentence
+    // somebody typed failed the labelling step of `create-workspace`, and the
+    // compensation then took the workspace back out. Removing `labelValue`
+    // from `identityLabels` fails here.
+    expect(identityLabels("awp", "review-inbox", "agent", "Review: Inbox UI")[LABEL_LABEL]).toBe(
+      "Review-Inbox-UI",
+    );
+  });
+
+  test("a label with nothing legal in it is no label at all", () => {
+    expect(identityLabels("awp", "w", "agent", "??? !!!")).not.toHaveProperty(LABEL_LABEL);
+  });
+});
+
+describe("labelValue", () => {
+  // zmx's rule, in its own words:
+  //
+  //   error: key-value kvs can only contain [a-z, A-Z, 0-9, -_.] characters
+  //
+  // and, hidden inside the same message, a second one: it reported the value
+  // as `Review:` rather than `Review: Inbox UI`, so it had split the pair on
+  // whitespace before validating. A space is as fatal as the colon.
+  const LEGAL = /^[A-Za-z0-9\-_.]*$/u;
+
+  test("leaves a value that was already legal alone", () => {
+    expect(labelValue("tiered-discounts")).toBe("tiered-discounts");
+    expect(labelValue("v1.2_final")).toBe("v1.2_final");
+  });
+
+  test("a run of illegal characters becomes one separator, so words survive", () => {
+    // One each would give `Review--Inbox-UI`, which reads as a mistake.
+    expect(labelValue("Review: Inbox UI")).toBe("Review-Inbox-UI");
+    expect(labelValue("a  —  b")).toBe("a-b");
+  });
+
+  test("nothing comes back looking cut off at either end", () => {
+    expect(labelValue("  leading and trailing  ")).toBe("leading-and-trailing");
+    expect(labelValue("...dots...")).toBe("dots");
+  });
+
+  test("nothing legal left is the empty string", () => {
+    expect(labelValue("")).toBe("");
+    expect(labelValue("   ")).toBe("");
+    expect(labelValue("日本語")).toBe("");
+  });
+
+  test("a long sentence is bounded, and not left ending in a separator", () => {
+    const said = "port the review capability from the deck starting with the inbox scope";
+    const value = labelValue(said);
+    expect(value.length).toBeLessThanOrEqual(48);
+    expect(value.endsWith("-")).toBe(false);
+  });
+
+  test("whatever it answers, zmx would accept it", () => {
+    // The property, rather than the examples: everything above is one case of
+    // this, and this is the thing the labelling step actually depends on.
+    for (const said of [
+      "Review: Inbox UI",
+      "fix(jobs): trust a new workspace",
+      "50% faster!",
+      "a/b\\c",
+      "  ",
+      "日本語 mixed with ascii",
+      "x".repeat(300),
+    ]) {
+      expect(labelValue(said)).toMatch(LEGAL);
+    }
   });
 });
