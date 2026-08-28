@@ -21,6 +21,8 @@ const session = (
   clients: 0,
   startDir,
   ended: false,
+  busy: true,
+  taskEnded: false,
   exitCode: 0,
   created: undefined,
   cmd: "claude",

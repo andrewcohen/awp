@@ -25,7 +25,7 @@
 import { Effect, Result } from "effect";
 import * as client from "@awp-kit/protocol/client";
 import { DAEMON_HOST, DAEMON_PORT } from "../daemon";
-import { identity, isLive } from "../multiplexer";
+import { identity } from "../multiplexer";
 
 const url = `ws://${DAEMON_HOST}:${DAEMON_PORT}`;
 
@@ -39,9 +39,12 @@ const program = Effect.gen(function* () {
   console.log(`\n  ${sessions.length} sessions over the wire in ${elapsed}ms\n`);
 
   for (const session of sessions.slice(0, 12)) {
-    const mine = identity({ ...session, created: session.created });
+    // `busy` and `taskEnded` are the daemon's own — the wire carries `ended`,
+    // which is the only one a client has any use for. Filled in so this can
+    // build a `Session` to ask `identity` about.
+    const mine = identity({ ...session, created: session.created, busy: true, taskEnded: false });
     console.log(
-      `  ${isLive(session) ? "live" : "dead"}  ${session.name.padEnd(48)}` +
+      `  ${session.ended ? "dead" : "live"}  ${session.name.padEnd(48)}` +
         `  clients=${session.clients}  ${mine?.kind ?? "-"}`,
     );
   }

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -147,12 +148,21 @@ describe("send", () => {
 
 describe("start", () => {
   // `zmx ls` prints one session per line as tab-separated `key=value`.
-  const listed = (name: string, ended: boolean) =>
+  //
+  // The pid is what decides this now, not zmx's `ended` — that field turned
+  // out to be about the last *task* rather than the session, so `start` asks
+  // the process table instead. See `withProcesses`.
+  //
+  //   this process   alive, and not a shell   → busy
+  //   999999         not in the table         → over
+  const listed = (name: string, pid: number) =>
     writeFileSync(
       listing,
-      `  name=${name}\tpid=1\tclients=0\tcreated=1\tstart_dir=/w\t` +
-        `${ended ? "ended=2\texit_code=1\t" : ""}awp_kind=agent\n`,
+      `  name=${name}\tpid=${pid}\tclients=0\tcreated=1\tstart_dir=/w\tawp_kind=agent\n`,
     );
+
+  /** A pid nothing is using. Chosen high; checked, rather than assumed. */
+  const GONE = 999_999;
 
   test("creates the session when there is none", async () => {
     await start("awp.thicket.lantern.agent");
@@ -163,12 +173,12 @@ describe("start", () => {
   test("leaves a live session alone", async () => {
     // The guard, and the reason it exists: `zmx run` types into whatever is in
     // there, which for a name that was not ours is somebody's editor.
-    listed("awp.thicket.lantern.agent", false);
+    listed("awp.thicket.lantern.agent", process.pid);
     await start("awp.thicket.lantern.agent");
     expect(calls().map(([verb]) => verb)).toEqual(["ls"]);
   });
 
-  test("runs again in a session whose task has ended", async () => {
+  test("runs again in a session whose process is gone", async () => {
     // What "the session had ended" was. A session whose task exited is still
     // listed, so skipping on the name alone adopted the corpse: the retry did
     // nothing, and the job briefed a dead shell —
@@ -180,14 +190,39 @@ describe("start", () => {
     // `ended` is exactly the distinction the guard was reaching for. An idle
     // session is what `zmx run` is for, and running in it keeps the scrollback
     // that killing and recreating would lose.
-    listed("awp.thicket.lantern.agent", true);
+    listed("awp.thicket.lantern.agent", GONE);
     await start("awp.thicket.lantern.agent");
     const [, run] = calls();
     expect(run).toEqual(["run", "awp.thicket.lantern.agent", "-d", "claude"]);
   });
 
+  test("runs again in a session sitting at a shell prompt", async () => {
+    // The case the whole fix is about, against a real idle shell rather than a
+    // hand-written process table.
+    //
+    // A session whose agent has exited is still listed and its shell is still
+    // alive, so neither "the name exists" nor "the process is gone" answers
+    // it. Skipping here is what left a job briefing a dead prompt:
+    //
+    //   ZMX_TASK_COMPLETED:1
+    //   $ Port the review capability from …
+    //   -bash: syntax error near unexpected token `('
+    const idle = spawn("/bin/sh", ["-c", "read line"], { stdio: ["pipe", "ignore", "ignore"] });
+    try {
+      // Give it a moment to be in the process table under its own name rather
+      // than still wearing the parent's.
+      await new Promise((done) => setTimeout(done, 150));
+      listed("awp.thicket.lantern.agent", idle.pid ?? GONE);
+      await start("awp.thicket.lantern.agent");
+      const [, run] = calls();
+      expect(run).toEqual(["run", "awp.thicket.lantern.agent", "-d", "claude"]);
+    } finally {
+      idle.kill();
+    }
+  });
+
   test("a different session being live says nothing about this one", async () => {
-    listed("awp.orchard.something-else.agent", false);
+    listed("awp.orchard.something-else.agent", process.pid);
     await start("awp.thicket.lantern.agent");
     expect(calls().map(([verb]) => verb)).toEqual(["ls", "run"]);
   });

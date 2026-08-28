@@ -45,8 +45,25 @@ export interface Session {
   /** How many clients are looking at it. Each one imposes its size. */
   readonly clients: number;
   readonly startDir: string;
-  /** True once the command has exited. The session is still listed. */
+  /**
+   * The session's process is gone.
+   *
+   * **Answered from the process table, not from `zmx ls`.** zmx's own `ended`
+   * is about the last *task* — see `withProcesses` — and a live agent reports
+   * it routinely, which is what drew a working session in the sidebar as
+   * exited.
+   */
   readonly ended: boolean;
+  /**
+   * Something is running in the session, as opposed to a shell at a prompt.
+   *
+   * What `start` asks before deciding whether `zmx run` would interrupt
+   * anything. Distinct from `ended`: a session can be perfectly alive and have
+   * nothing in it, and that is the one state a new command may be run in.
+   */
+  readonly busy: boolean;
+  /** zmx's report about the last task it ran. Not about the session. */
+  readonly taskEnded: boolean;
   readonly exitCode: number;
   /** When zmx started it. `zmx ls` reports a unix stamp; this is a Date. */
   readonly created: Date | undefined;
