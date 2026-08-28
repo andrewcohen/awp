@@ -26,6 +26,7 @@ import {
   type SessionIdentity,
   type SessionInfo,
   SessionNotFound,
+  ThreadNotFound,
   ThreadStartFailed,
 } from "@awp-kit/protocol";
 import { homedir } from "node:os";
@@ -36,6 +37,7 @@ import { type Repairable, looksMine, repairPrompt } from "./repair";
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
 import { type Claim, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./inbox";
 import { Jj } from "./jj";
+import { archiveThreadRef } from "./jobs/archive-thread";
 import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
@@ -1397,7 +1399,22 @@ export const layer = AwpRpcs.toLayer(
 
       ProjectForget: ({ name }) => projects.forget(name).pipe(Effect.orDie),
 
-      ThreadList: () => threads.list().pipe(Effect.orDie),
+      // ── archived threads do not come back on this call ──────────────────
+      //
+      // The store returns them — its own comment says "the caller filters" —
+      // and until now no caller did. Measured before it was fixed: twenty of
+      // twenty-nine threads had `archived_at` set and every one was still in
+      // the sidebar, so archiving had been written and never read for the life
+      // of the store.
+      //
+      // Filtered here rather than in the store, because the store is also what
+      // `restore` and the archive job read, and both of those have to be able
+      // to see a thread that has been put away.
+      ThreadList: () =>
+        threads.list().pipe(
+          Effect.map((all) => all.filter((thread) => thread.archivedAt === undefined)),
+          Effect.orDie,
+        ),
 
       ThreadCreate: ({ title }) => threads.create(title).pipe(Effect.orDie),
 
@@ -1406,6 +1423,23 @@ export const layer = AwpRpcs.toLayer(
 
       ThreadArchive: ({ thread, archived }) =>
         threads.archive(thread, archived).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
+      // The destructive half, and a job because of it — see archive-thread.ts.
+      // `ThreadArchive` above is the reversible flag; this kills sessions,
+      // forgets workspaces and removes directories, which is work with a
+      // progress panel rather than a promise.
+      ThreadArchiveStart: (payload) =>
+        Effect.gen(function* () {
+          const all = yield* threads.list().pipe(Effect.orDie);
+          // Refused here rather than inside the job, so a thread that is not
+          // there is a reply the button can show instead of a job record that
+          // exists only to fail.
+          if (!all.some((one) => one.id === payload.thread)) {
+            return yield* Effect.fail(new ThreadNotFound({ thread: payload.thread }));
+          }
+          const job = yield* jobs.enqueue(archiveThreadRef, payload).pipe(Effect.orDie);
+          return { job: job.id };
+        }),
 
       ThreadAttach: ({ thread, member }) =>
         threads.attach(thread, member).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),

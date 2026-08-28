@@ -423,6 +423,63 @@ export type ReviewTarget = (typeof ReviewTarget)["Type"];
  * and deliberately for now: there is no config service, and a command baked
  * into the job is a command nobody can see. It moves the day settings exist.
  */
+/**
+ * What archiving a thread needs to know.
+ *
+ * ── archive is a label; reclaim is an act ──────────────────────────────────
+ *
+ * `ThreadArchive` sets a flag and can be undone by clearing it. This is the
+ * other half, and it is not reversible: a removed checkout does not come back,
+ * so an unarchive afterwards restores the row and not the work. Putting both
+ * behind one word is what makes the word ambiguous, which is why the
+ * destructive one is a *job* — it has a progress panel, a log, and steps that
+ * can be looked at afterwards.
+ *
+ * Measured before this existed: twenty of twenty-nine threads in the store had
+ * `archived_at` set, and `ThreadList` returned all twenty-nine. Archiving was
+ * written and never read.
+ */
+export const ArchiveThread = Schema.Struct({
+  thread: Schema.String,
+  /**
+   * Whether to delete each workspace's bookmark as well.
+   *
+   * **Off by default, and that is the safety.** A bookmark is not part of a
+   * workspace — it is a name for a commit, stored in the repository, so it
+   * outlives the checkout being removed. Keeping it is what keeps the *work*
+   * addressable; deleting it can leave commits with nothing pointing at them,
+   * and jj collects those eventually.
+   *
+   * Everywhere else here, forgetting takes nothing with it. This is the one
+   * place a person can ask for the opposite, and they have to ask.
+   */
+  deleteBookmarks: Schema.Boolean,
+  /**
+   * Which workspaces are being reclaimed, and where each one's repository is.
+   *
+   * **Absent on the way in, present from the first step onward.** The `plan`
+   * step reads the thread's members once and records them here, so a resumed
+   * job reclaims what the thread held when the button was pressed rather than
+   * whatever it holds now.
+   *
+   * `Schema.optional` and not `UndefinedOr`: the store is JSON, which has no
+   * `undefined`, so a required key left unset comes back *absent* and the kind
+   * dies on its first step in a message about the wrong thing.
+   */
+  plan: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        project: Schema.String,
+        workspace: Schema.String,
+        /** The repository's path. `jj -R` takes one, and a member has a name. */
+        repo: Schema.String,
+      }),
+    ),
+  ),
+});
+
+export type ArchiveThread = (typeof ArchiveThread)["Type"];
+
 export const CreateWorkspace = Schema.Struct({
   /** The thread that claims it. See {@link Thread}. */
   thread: Schema.String,
@@ -1719,6 +1776,24 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("ThreadArchive", {
     payload: { thread: Schema.String, archived: Schema.Boolean },
     success: Thread,
+    error: ThreadNotFound,
+  }),
+
+  /**
+   * Archive a thread *and* reclaim what it holds, as a job.
+   *
+   * A job rather than a call, for the reason every destructive multi-step
+   * thing here is one: it kills sessions, forgets workspaces and removes
+   * directories, and a failure part way through has to be visible and
+   * resumable rather than a rejected promise. The reply is the job's id, and
+   * the panel already streaming job changes is what shows the rest.
+   *
+   * {@link ThreadArchive} stays, and is what brings a thread back — a flag can
+   * be cleared, and this cannot be undone.
+   */
+  Rpc.make("ThreadArchiveStart", {
+    payload: ArchiveThread,
+    success: Schema.Struct({ job: Schema.String }),
     error: ThreadNotFound,
   }),
 

@@ -342,6 +342,21 @@ export const detachThread = (thread: string, member: ThreadMember): Promise<Thre
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadDetach({ thread, member })));
 
 /**
+ * Archive a thread and reclaim what it holds. Answers with the job's id.
+ *
+ * A job rather than a call because it kills sessions, forgets workspaces and
+ * removes directories — see archive-thread.ts. The panel already streaming job
+ * changes is what shows the rest, so nothing here waits for it to finish.
+ */
+export const archiveThread = (thread: string, deleteBookmarks: boolean): Promise<string> =>
+  runtime.runPromise(
+    Effect.map(
+      Effect.flatMap(AwpClient, (rpc) => rpc.ThreadArchiveStart({ thread, deleteBookmarks })),
+      (reply) => reply.job,
+    ),
+  );
+
+/**
  * Everywhere a new workspace in this project could start from.
  *
  * Asked of the daemon rather than worked out here, because turning a branch

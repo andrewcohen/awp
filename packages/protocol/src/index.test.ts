@@ -268,6 +268,7 @@ const handlers = AwpRpcs.toLayer({
   ThreadCreate: () => Effect.succeed(thread),
   ThreadRename: () => Effect.succeed(thread),
   ThreadArchive: () => Effect.succeed(thread),
+  ThreadArchiveStart: () => Effect.succeed({ job: "20260828-0000" }),
   ThreadAttach: () => Effect.succeed(thread),
   ThreadDetach: () => Effect.succeed(thread),
   ThreadLinkPr: () => Effect.succeed(thread),

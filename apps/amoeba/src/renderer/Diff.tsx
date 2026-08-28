@@ -11,7 +11,13 @@ import { CodeView, type CodeViewHandle, type CodeViewItem } from "@pierre/diffs/
 import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import * as stylex from "@stylexjs/stylex";
 import { parsePatchFiles } from "@pierre/diffs";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
 import { FOLD_MS } from "./columns";
@@ -141,6 +147,11 @@ const WORKING_COPY_ROW = "working-copy";
  */
 const GUTTER_CSS = `
 [data-column-number] { cursor: pointer; }
+
+/* The whole file header folds, not only the caret in front of it — see
+   headerToggle in this file. The cursor is the only part of that a person can
+   see before they try it. */
+[data-diffs-header] { cursor: pointer; }
 
 /* The same scrollbars as the rest of the window — see global.css, which cannot
    reach in here. A shadow root is exactly what a stylesheet does not cross, so
@@ -1214,6 +1225,62 @@ export function Diff({
     });
   };
 
+  // ── the header is the control, not just the caret ───────────────────────
+  //
+  // A 1.4rem caret at the far left of a header that is otherwise a filename
+  // and two counts is a small target for the most common thing anybody does
+  // to a file they have finished reading. So the header folds it too.
+  //
+  // It has to be delegated, and the reason is the shadow root: the header is
+  // the library's own DOM, built from a hast tree inside `<diffs-container>`,
+  // and there is no `onHeaderClick` to pass. A listener on the wrapper hears
+  // the click all the same — `composedPath()` is what crosses the boundary,
+  // where `event.target` is retargeted to the host and says nothing about
+  // which part was hit.
+  //
+  // The id comes back the same way it went in. Our caret is rendered into
+  // `renderHeaderPrefix`, which the library places in the *light* DOM as
+  // `<div slot="header-prefix">` on the container — so from the header, the
+  // host's own subtree holds a button already carrying the item's id. That
+  // beats mapping elements to items by position, which is a second copy of
+  // the ordering.
+  const headerToggle = (event: ReactMouseEvent<HTMLDivElement>) => {
+    // A drag that selected the filename is not a click on the header. Without
+    // this, reading a path by selecting it folds the file underneath it.
+    if (window.getSelection()?.isCollapsed === false) {
+      return;
+    }
+
+    let header: HTMLElement | undefined;
+    for (const node of event.nativeEvent.composedPath()) {
+      if (!(node instanceof HTMLElement)) {
+        continue;
+      }
+      // Anything that is already a control answers for itself — the caret,
+      // the viewed checkbox and its label. Reached before the header, because
+      // they are inside it, so this is a return and not a flag.
+      if (node.matches("button, input, label, a, textarea, select")) {
+        return;
+      }
+      if (node.dataset["diffsHeader"] !== undefined) {
+        header = node;
+        break;
+      }
+    }
+    if (header === undefined) {
+      return;
+    }
+
+    const root = header.getRootNode();
+    const host = root instanceof ShadowRoot ? root.host : undefined;
+    const id = host?.querySelector<HTMLElement>('[slot="header-prefix"] [data-item-id]')?.dataset[
+      "itemId"
+    ];
+    if (id !== undefined) {
+      toggle(id);
+    }
+  };
+
   /** Fold every file, or none. The bar's two buttons. */
   const foldAll = (shutThem: boolean) => {
     setFolds({ at, ids: shutThem ? parsed.map((one) => one.id) : NO_FOLDS });
@@ -1547,7 +1614,7 @@ export function Diff({
         <div {...stylex.props(styles.said, styles.warn)}>{review.failure}</div>
       )}
 
-      <div {...stylex.props(styles.patch)}>
+      <div {...stylex.props(styles.patch)} onClick={headerToggle}>
         {/* The index, over the patch.
 
             Mounted whenever there is a patch and told whether it is open,
@@ -1625,6 +1692,9 @@ export function Diff({
                 aria-expanded={item.collapsed !== true}
                 aria-label={`${item.collapsed === true ? "expand" : "collapse"} ${item.id}`}
                 onClick={() => toggle(item.id)}
+                // Read back by `headerToggle`, which has the header and needs
+                // the item. See the note there.
+                data-item-id={item.id}
                 {...stylex.props(styles.fold)}
               >
                 {item.collapsed === true ? (
