@@ -444,6 +444,7 @@ const Dot = ({
 function Row({
   workspace,
   facts,
+  title,
   selected,
   onSelect,
   threads,
@@ -453,6 +454,16 @@ function Row({
   readonly workspace: Workspace;
   /** What is known about this workspace, or nothing has reported on it. */
   readonly facts: WorkspaceFacts | undefined;
+  /**
+   * The name to show, when the row is standing in for its whole thread.
+   *
+   * A thread holding one workspace draws no heading — see `Group` — so the
+   * thread's title has nowhere else to be, and it is the truest name there
+   * is: the sentence a person typed, kept exactly, in this window's own
+   * store. Absent when the row is one of several under a heading, where
+   * repeating the group's name on every child would say nothing.
+   */
+  readonly title: string | undefined;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
   readonly threads: ReadonlyArray<Thread>;
@@ -503,17 +514,18 @@ function Row({
   //                       `Review-Inbox-UI`. See `labelValue`.
   //   workspace.name      the slug, which every workspace has
   //
-  // The exact sentence is the thread's title, and it is already on screen: the
-  // heading this row nests under. So a row is free to say which *workspace* it
-  // is rather than repeating what the group is called, which is what the terse
-  // form does anyway.
+  // The exact sentence is the thread's title. Where the row stands in for its
+  // whole thread it arrives as `title` and wins outright — it is the only one
+  // of the four that is neither shortened, sanitized nor second-hand. Where
+  // the row is one of several under a heading, the title is already on screen
+  // above it, so the row says which *workspace* it is instead.
   //
   // The Go one first and not last, which is the opposite of the obvious
   // ranking. amoeba's own label is the better long-term home — it travels with
   // the session and needs no second file — but a workspace with both got them
   // from the same sentence, and a workspace with only one of them is the
   // ordinary case either way. First is where the data actually is.
-  const shown = facts?.displayName ?? workspace.label ?? workspace.name;
+  const shown = title ?? facts?.displayName ?? workspace.label ?? workspace.name;
   const slug = shown === workspace.name ? undefined : workspace.name;
 
   // Shown when worth showing, which is not whenever it exists. Eighteen of
@@ -671,6 +683,47 @@ function Group({
   readonly folded: boolean;
   readonly onFold: (() => void) | undefined;
 }) {
+  // ── one workspace is not a group ─────────────────────────────────────────
+  //
+  // Thread and workspace are one-to-one today, so every thread drew a heading
+  // above a single row and the two said the same thing twice:
+  //
+  //   before                        after
+  //   ▸ Review: Inbox UI            ◉ Review: Inbox UI
+  //     ◉ Review-Inbox-UI             review-inbox · andrew/review-inbox
+  //       review-inbox · …
+  //
+  // Two lines of chrome to name one thing, and an indent implying a structure
+  // with one member. So the heading appears when it earns its line — when the
+  // thread actually holds more than one workspace — and is absent when it
+  // would only be repeating the row beneath it.
+  //
+  // **Not a change to the data.** The thread is still there, still holds the
+  // pair, still groups the moment a second workspace joins it. What changes is
+  // that the grouping is drawn only where there is grouping to see, which is
+  // the same reason `slug` is hidden when it equals the name.
+  //
+  // The empty thread keeps its heading: it has no row to collapse into, and a
+  // thread waiting for its job to finish is exactly the thing a person is
+  // watching for.
+  if (onFold === undefined && group.thread !== undefined && group.workspaces.length === 1) {
+    const only = group.workspaces[0];
+    return only === undefined ? null : (
+      <div {...stylex.props(styles.group)}>
+        <Row
+          workspace={only}
+          facts={factsFor(facts, only)}
+          title={group.title}
+          selected={selected}
+          onSelect={onSelect}
+          threads={threads}
+          thread={group.thread}
+          onThreadsChanged={onThreadsChanged}
+        />
+      </div>
+    );
+  }
+
   const heading =
     onFold === undefined ? (
       <div {...stylex.props(styles.heading)}>
@@ -710,6 +763,9 @@ function Group({
               <Row
                 workspace={workspace}
                 facts={factsFor(facts, workspace)}
+                // No title: the heading above already says it, and repeating
+                // it on every child would name the group four times.
+                title={undefined}
                 selected={selected}
                 onSelect={onSelect}
                 threads={threads}
