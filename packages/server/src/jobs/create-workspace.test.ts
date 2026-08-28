@@ -551,6 +551,45 @@ describe("bootstrap hooks", () => {
     );
   });
 
+  test("<root> becomes the source repository, before the shell sees it", async () => {
+    // The failure this is here for, in a real project's config:
+    //
+    //   cp <root>/.env .env      →   sh: root: No such file or directory
+    //
+    // `<` is a redirect, so an unsubstituted placeholder did not survive as a
+    // literal to be spotted in the error — it turned into syntax, and the
+    // shell answered about a file called `root`. A failing hook fails the job,
+    // so a configuration written for the Go implementation took the whole
+    // workspace back out.
+    hooks = ["cp <root>/.env .env"];
+
+    await make();
+
+    expect(trace).toContain("hook(cp /repos/rowan/.env .env@rowan/tiered-discounts)");
+  });
+
+  test("<root> is the source repository and not the new workspace", async () => {
+    // The distinction the placeholder exists for. `.env` is untracked, so it
+    // is in the repository the workspace was made *from* and nowhere else — a
+    // hook copying it out of the workspace copies nothing, succeeds, and
+    // leaves an agent without its environment.
+    hooks = ["cp <root>/.env ."];
+
+    await make();
+
+    const [line] = trace.filter((one) => one.startsWith("hook("));
+    expect(line).toContain("/repos/rowan/.env");
+    expect(line).not.toContain("workspaces/rowan/tiered-discounts/.env");
+  });
+
+  test("every occurrence on a line, not just the first", async () => {
+    hooks = ["cp <root>/a <root>/b ."];
+
+    await make();
+
+    expect(trace).toContain("hook(cp /repos/rowan/a /repos/rowan/b .@rowan/tiered-discounts)");
+  });
+
   test("none configured runs nothing at all", async () => {
     // And the step still exists — see the step-list test above. A list that
     // varied by configuration is a list a restarted daemon could not reproduce.
