@@ -111,8 +111,21 @@ type Client = RpcClient.RpcClient<
 interface Fakes {
   /** Written into a config file, because Settings reads one. */
   readonly bookmarkPrefix?: string | undefined;
-  /** What `jj bookmark list` reports. Local rows only; remotes are filtered. */
-  readonly bookmarks?: ReadonlyArray<string> | undefined;
+  /**
+   * What `jj bookmark list` reports.
+   *
+   * A bare string is a local bookmark pointing nowhere in particular, which is
+   * all most tests here need. The object form exists for the one question that
+   * needs targets: what `trunk()` is called, which is answered by matching the
+   * commit it resolves to against this list.
+   */
+  readonly bookmarks?:
+    | ReadonlyArray<
+        string | { readonly name: string; readonly remote?: string; readonly target?: string }
+      >
+    | undefined;
+  /** The commit `trunk()` resolves to, for the label question above. */
+  readonly trunkCommit?: string | undefined;
   /**
    * Refuse any revset mentioning `trunk()`, the way jj does when it cannot
    * settle on one. The only branch in `Revisions` a test can reach.
@@ -147,7 +160,11 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
             sourceRoot: (dir: string) => Effect.succeed(`/repos/${dir.split("/").at(-1) ?? ""}`),
             bookmarks: () =>
               Effect.succeed(
-                (fakes.bookmarks ?? []).map((name) => ({ name, remote: undefined, target: [] })),
+                (fakes.bookmarks ?? []).map((entry) =>
+                  typeof entry === "string"
+                    ? { name: entry, remote: undefined, target: undefined }
+                    : { name: entry.name, remote: entry.remote, target: entry.target },
+                ),
               ),
             // Answers with the revset it was handed, as the description of its
             // one row. What is under test is which revset the handler chose,
@@ -160,7 +177,13 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                 : Effect.succeed([
                     {
                       changeId: "aaa",
-                      commitId: "bbb",
+                      // The commit `trunk()` sits on, when a test says. Every
+                      // other revset gets the placeholder, which matches no
+                      // bookmark and so leaves the label at its fallback.
+                      commitId:
+                        revset === "trunk()" && fakes.trunkCommit !== undefined
+                          ? fakes.trunkCommit
+                          : "bbb",
                       description: `${revset} limit ${limit}`,
                       author: "someone",
                       authored: undefined,
@@ -634,7 +657,9 @@ describe("jobs over the contract", () => {
       bookmarks: ["andrew/lantern", "main", "andrew/orchard"],
     });
 
-    expect(offered[0]).toEqual({ revset: "trunk()", label: "trunk", workspace: undefined });
+    // Named for the place, not the method. With no bookmark sitting on the
+    // commit `trunk()` resolves to, there is nothing to name it after.
+    expect(offered[0]).toEqual({ revset: "trunk()", label: "main line", workspace: undefined });
     expect(offered.slice(1).map((entry) => entry.revset)).toEqual([
       "andrew/lantern",
       "andrew/orchard",
@@ -647,6 +672,62 @@ describe("jobs over the contract", () => {
     // Not everything prefixed is awp's, and nothing here pretends otherwise:
     // a bookmark outside the prefix names no workspace at all.
     expect(offered.find((entry) => entry.revset === "main")?.workspace).toBeUndefined();
+  });
+
+  // "trunk" names the *method* — jj's alias for the remote's default bookmark,
+  // then main, then master. A person branching from it wants the name they
+  // would say out loud, so the row is labelled with the bookmark that is
+  // actually there.
+  it("labels the main line with the bookmark it resolves to", async () => {
+    const offered = await run((rpc) => rpc.ThreadBases({ from: "/somewhere/thicket" }), {
+      trunkCommit: "9f239c56",
+      bookmarks: [{ name: "main", target: "9f239c56" }, "andrew/lantern"],
+    });
+
+    expect(offered[0]?.label).toBe("main");
+    // And it appears once. The bookmark trunk() resolved to would otherwise be
+    // listed again under its own revset, so one name would name two rows.
+    expect(offered.filter((entry) => entry.label === "main")).toHaveLength(1);
+    // The robust revset survives — it is what keeps working when the bookmark
+    // is moved or renamed.
+    expect(offered[0]?.revset).toBe("trunk()");
+  });
+
+  it("spells a remote main line the way jj does", async () => {
+    // The ordinary case on this machine, where local `main` is behind the
+    // remote by a fetch: trunk() lands on the remote row, and calling that
+    // `main` would claim a commit the local bookmark is not on.
+    //
+    //   trunk()                 9f239c56
+    //   main  remote origin  →  9f239c56    ← the match
+    //   main  local          →  158b02fe    behind
+    const offered = await run((rpc) => rpc.ThreadBases({ from: "/somewhere/thicket" }), {
+      trunkCommit: "9f239c56",
+      bookmarks: [
+        { name: "main", remote: "origin", target: "9f239c56" },
+        { name: "main", target: "158b02fe" },
+      ],
+    });
+
+    expect(offered[0]?.label).toBe("main@origin");
+    // The local `main` is a different place and is still offered as itself.
+    expect(offered.slice(1).map((entry) => entry.label)).toEqual(["main"]);
+  });
+
+  it("prefers the local name when both sit on the same commit", async () => {
+    // A local name is what a person types, so it wins over the remote spelling
+    // when the two agree — which is what a repository looks like just after a
+    // fetch.
+    const offered = await run((rpc) => rpc.ThreadBases({ from: "/somewhere/thicket" }), {
+      trunkCommit: "9f239c56",
+      bookmarks: [
+        { name: "main", remote: "origin", target: "9f239c56" },
+        { name: "main", target: "9f239c56" },
+      ],
+    });
+
+    expect(offered[0]?.label).toBe("main");
+    expect(offered).toHaveLength(1);
   });
 
   it("records the thread a chosen base belongs to, and shrugs when it has none", async () => {

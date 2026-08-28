@@ -356,7 +356,8 @@ function Chip<T extends string>({
       >
         {icon}
         {/* The chip shows the label, which for a revset is not the value —
-            `trunk()` is spelled `trunk` here and the title says the rest. */}
+            `trunk()` arrives labelled with the bookmark it resolves to, and
+            the title says the rest. */}
         <span>{label}</span>
         <CaretDownIcon size={9} weight="bold" {...stylex.props(styles.chipCaret)} />
       </Select.Trigger>
@@ -528,17 +529,24 @@ function Composer({
             branch they wanted to continue from. */}
         <Chip
           id="new-thread-base"
-          label={bases.find((entry) => entry.revset === base)?.label ?? "trunk"}
+          // The daemon resolves `trunk()` to the bookmark it actually points
+          // at, so this reads `main` or `main@origin` rather than naming the
+          // method used to find it. The fallback is only on screen for the
+          // frame before the list arrives.
+          label={bases.find((entry) => entry.revset === base)?.label ?? "main line"}
           title={
             base === TRUNK
-              ? "trunk() — jj resolves the remote's default bookmark, then main, master, trunk"
+              ? "the project's main line — jj's trunk(): the remote's default bookmark, then main, master, trunk"
               : `branch from ${base}`
           }
           value={base}
           onChange={setBase}
           options={
             bases.length === 0
-              ? [{ value: TRUNK, label: "trunk" }]
+              ? // Only on screen before the daemon's list arrives, or when the
+                // repository has no bookmarks at all. Named for what it is
+                // rather than for the revset that finds it.
+                [{ value: TRUNK, label: "main line" }]
               : bases.map((entry) => ({ value: entry.revset, label: entry.label }))
           }
           icon={<GitBranchIcon size={11} {...stylex.props(styles.chipIcon)} />}
