@@ -3,6 +3,7 @@ import { RpcTest } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 import type { Job } from "@awp-kit/jobs";
 import {
+  type AgentTask,
   AttachRefused,
   AwpRpcs,
   type Patch,
@@ -187,6 +188,14 @@ const facts: WorkspaceFacts = {
   lastActiveAt: new Date("2026-08-27T09:14:00.000Z"),
 };
 
+/** One of the agent's own tasks. Not a job — see `AgentTask` in the contract. */
+const task: AgentTask = {
+  id: "3",
+  subject: "make the lamp light",
+  description: "the switch is wired but nothing happens",
+  status: "pending",
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -198,6 +207,8 @@ const handlers = AwpRpcs.toLayer({
   JobList: () => Effect.succeed([job]),
   JobChanges: () => Stream.fromArray([job]),
   JobLog: () => Effect.succeed(["a line"]),
+  TaskList: () => Effect.succeed([task]),
+  TaskSend: () => Effect.succeed("— a task from this workspace's list"),
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,
   JobClear: () => Effect.succeed(0),

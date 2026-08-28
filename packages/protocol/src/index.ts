@@ -571,6 +571,34 @@ export class NoAgent extends Schema.TaggedError<NoAgent>()("NoAgent", {
   workspace: Schema.String,
 }) {}
 
+// ── the agent's own task list ──────────────────────────────────────────────
+//
+// Not the daemon's. `Job` is work amoeba is doing and owns; an `AgentTask` is
+// work the *agent* wrote down for itself, read off Claude Code's files. The
+// two are deliberately different types with different verbs — a job can be
+// retried and cancelled, and a task can only be read and quoted back.
+//
+// Nothing here writes to that list. See `agent-tasks.ts` for why: the agent
+// owns it, and a second writer would need the lock `claude-trust.ts` needed.
+
+export const AgentTask = Schema.Struct({
+  /** The agent's own id for it, which is what the agent will recognise. */
+  id: Schema.String,
+  subject: Schema.String,
+  /** May be empty. Sent whole — see `taskPrompt` for why it is not capped. */
+  description: Schema.String,
+  /**
+   * `pending`, `in_progress`, `completed` — and whatever else it grows.
+   *
+   * A plain string rather than a literal union on purpose: this field is
+   * somebody else's, and a union would turn a new status upstream into a
+   * decode failure that loses the whole list rather than one unfamiliar word.
+   */
+  status: Schema.String,
+});
+
+export type AgentTask = (typeof AgentTask)["Type"];
+
 export const ThreadBase = Schema.Struct({
   /** What to hand jj: `trunk()`, or a bookmark name. */
   revset: Schema.String,
@@ -1183,6 +1211,44 @@ export class AwpRpcs extends RpcGroup.make(
    * ever. That is not a tuning problem; it is a loop, and the ignore list is
    * what makes this feature possible at all.
    */
+  /**
+   * What the agent working in this directory has written down for itself.
+   *
+   * Keyed by a directory rather than by a workspace, like the diff calls and
+   * for the same reason: it is a question about a checkout on disk, and a
+   * session amoeba did not make still has one.
+   *
+   * Never fails. A directory with no agent history, an agent that kept no
+   * list, and a machine whose agent is not Claude Code are all the empty
+   * array, because "nothing to show" is the true answer to all three.
+   */
+  Rpc.make("TaskList", {
+    payload: {
+      /** A directory in the workspace — a session's `startDir` will do. */
+      from: Schema.String,
+    },
+    success: Schema.Array(AgentTask),
+  }),
+
+  /**
+   * Hand one task to the agent as a prompt, now.
+   *
+   * Unbatched, like {@link Rpc NoteSend} and unlike `ReviewSend`: clicking
+   * send on a task is one whole gesture, and there is no second one on the
+   * way. The reply is the prompt that was typed, which is what makes the call
+   * testable and what a person can be shown when they ask what was said.
+   *
+   * The task is sent by value rather than by id. The daemon would otherwise
+   * have to read the list again to find it, and the list it read would be the
+   * one *after* whatever the agent did in between — so a person could press
+   * send on one task and have another delivered.
+   */
+  Rpc.make("TaskSend", {
+    payload: { project: Schema.String, workspace: Schema.String, task: AgentTask },
+    success: Schema.String,
+    error: NoAgent,
+  }),
+
   Rpc.make("WorkspaceChanges", {
     payload: {
       /** A directory in the workspace — a session's `startDir` will do. */
