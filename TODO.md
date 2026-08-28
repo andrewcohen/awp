@@ -11,7 +11,7 @@ rather than the summary when what you learn changes the shape of the work.
 
 Regenerated wholesale. Do not hand-edit a single entry expecting it to survive — change the task, then write this out again. `bun run fmt` reflows this file, so the sequence is regenerate, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-47 open, 71 finished, as of 2026-08-28.
+49 open, 71 finished, as of 2026-08-28.
 
 In progress: #91.
 
@@ -1097,3 +1097,77 @@ person's repositories.
 Related: #91 (the chat), #115 (config strip), #118 (subagents), #63 (running a
 workspace's services — a different long-running-process problem with some of
 the same answers).
+
+## 120. Electron's 317MB runtime must not land in every workspace
+
+The same shape as #112, which removed a 306MB ACP adapter from every checkout — and this one is bigger and was two lines from being shipped.
+
+**What is true today.** Electron installs, its binary does not. Bun refuses to run a package's postinstall unless it is named in `trustedDependencies`, and electron's postinstall is what downloads the runtime. So `bun run dev` builds the main process and then has nothing to launch, which reads as the app simply not appearing rather than as a missing step.
+
+    node_modules/.bun/electron@44.0.0/…/electron/   install.js, cli.js, index.js
+                                          /dist     absent until install.js runs
+                                                    317MB extracted, 128MB cached zip
+
+Adding `trustedDependencies: ["electron"]` fixes the launch and creates the real problem: the create-workspace job's bootstrap hook runs `bun install` in every workspace it makes, and the field is repo-wide, so **every workspace would extract its own 317MB**. It was added, measured, and taken back out for exactly that reason.
+
+**Electron v44's installer has no skip flag.** Checked rather than assumed — the whole set of switches it honours is:
+
+    electron_config_cache · force_no_cache · ELECTRON_INSTALL_ARCH
+    ELECTRON_INSTALL_PLATFORM · ELECTRON_OVERRIDE_DIST_PATH
+    electron_use_remote_checksums · npm_config_{arch,platform}
+
+No `ELECTRON_SKIP_BINARY_DOWNLOAD`. So the per-install opt-out that older versions had is not available, and `trustedDependencies` is all-or-nothing.
+
+**The shape that fits, and it is the user's own:** a workspace is web-only, and only the main line runs the native shell. That is already how this repo says to look at a branch — the second-instance section in AGENTS.md points at Vite and a browser tab, because a tab answers the layout, the theme, the panels, the pane's own rendering and every call over the socket. What a tab cannot answer is the native webview, the menu, and the window's own chrome, and those are exactly the things somebody opens the main line for.
+
+So:
+
+- **Leave `trustedDependencies` out**, which is where it is now. Nothing
+  downloads a runtime as a side effect of making a workspace.
+- **One command on the main line**, run once per machine, that resolves
+  electron's package directory and runs its `install.js`.
+  `ELECTRON_OVERRIDE_DIST_PATH` is the other half worth looking at: one
+  extracted copy pointed at from everywhere beats one per checkout even on
+  the main line.
+- **`dev` should refuse with that sentence** when the binary is missing.
+  The current failure is electron-not-found, three lines into a build, and
+  it took a measurement to work out what it meant.
+
+Related: #112 (the same 306MB lesson, one package earlier), #40 (the bootstrap
+hook that runs `bun install`), #103 (what a workspace starts on its own).
+
+## 121. HIGH: a message typed while the agent is working lands out of order
+
+Reported: "when you steer the message gets out of order".
+
+Steering is typing at an agent that is already mid-turn — a correction, a "no, not that file", a "stop and do X instead". It is the most valuable thing a person does in this window, and the transcript puts it in the wrong place.
+
+**The likely cause is the optimistic echo.** `say()` in Chat.tsx appends the typed message locally so the send reads as instant:
+
+    setHeld((current) => fold(current, { kind: "message", role: "user", text: words }));
+    void chatSend(project, workspace, words);
+
+That lands at the end of the list _now_. What the agent is saying arrives afterwards over the stream and appends after it — so a reply that was already in flight, and belongs before the steer, is drawn below it. Two turns in, the order reads as though the agent answered a question it had not been asked yet.
+
+There is a second suspect and it should be ruled out before the first is fixed: the daemon replays `user_message_chunk` from the transcript, so a steer may also arrive a _second_ time from the agent's side, at whatever position the agent recorded it. Whether that shows up as a duplicate or as a reorder depends on timing, and nobody has looked.
+
+What to check, in order — this is a measurement before it is a fix:
+
+- **Record a real steer.** Send a prompt, wait for the reply to start, send a
+  second message, and dump the update sequence with timestamps. `probe:chat`
+  already drives a real adapter and collects updates; this is one more step
+  in it.
+- **Does the agent echo the steer back?** If `user_message_chunk` arrives for
+  it, the optimistic copy is a duplicate and the fix is to drop one of them —
+  which one decides whether sending still feels instant.
+- **Does a turn boundary help?** The wire now carries `turn started` and
+  `turn ended`. A message sent mid-turn is distinguishable from one that
+  starts a turn, and that distinction may be what the panel should draw
+  rather than pretending the two are the same kind of thing.
+
+Do not fix this by sorting on a timestamp. Chunks are appended in arrival
+order by design, and a sort would reorder the fragments of a single reply.
+
+Related: #91 (the chat), #117 (quote and reply — a different way to point at
+something mid-turn), #94 (a sent message sometimes lands without its Return —
+different symptom, also about a message not arriving the way it was typed).
