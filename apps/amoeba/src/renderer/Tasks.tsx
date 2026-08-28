@@ -99,7 +99,13 @@ const styles = stylex.create({
 
   row: {
     display: "flex",
-    alignItems: "flex-start",
+    // Baseline, not flex-start. Three things of three different heights sit on
+    // this row — a bullet, a line of text and a bordered button — and aligning
+    // their *boxes* aligns nothing a reader can see, because none of the three
+    // fills its box the same way. What the eye lines up on is the text, so
+    // that is what the layout lines up on. The same rule the sidebar's rows
+    // already follow.
+    alignItems: "baseline",
     gap: "0.45rem",
     padding: "0.35rem 0.6rem",
     // The row is the hover target for the send button, which is otherwise
@@ -108,7 +114,14 @@ const styles = stylex.create({
   },
   // Sized against the subject beside it rather than against the type floor —
   // a bullet is not a word. See the note on the floor in AGENTS.md.
-  dot: { flexShrink: 0, marginTop: "0.3rem", fontSize: "0.55rem", lineHeight: 1 },
+  //
+  // A fixed width rather than an intrinsic one, so `●` and `○` — which are not
+  // the same width — do not move the subject a pixel as a task starts. Copied
+  // from the sidebar's row, where the same two glyphs alternate.
+  //
+  // The `marginTop` this replaced was a nudge under flex-start, and it was
+  // wrong at every size but the one it was tuned at.
+  dot: { width: "0.85rem", flexShrink: 0, fontSize: 10, color: colors.muted },
   doing: { color: colors.live },
   todo: { color: colors.muted },
 
