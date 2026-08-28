@@ -68,8 +68,12 @@ const styles = stylex.create({
   // code in a column that is a few hundred pixels wide to begin with — and the
   // tree is opened to find one file, which is a moment rather than a mode.
   //
+  // **It closes on a pick**, for the same reason: leaving it up would leave the
+  // file it was opened to find sitting underneath it. See `onPick` in `Diff`.
+  //
   // Not a modal, deliberately: the point is clicking a file and watching the
-  // patch move behind it, which a modal's inertness would prevent.
+  // patch move — and with the tree closing behind the click, that motion is
+  // the whole of the feedback that the pick landed.
   over: {
     position: "absolute",
     insetBlock: 0,
