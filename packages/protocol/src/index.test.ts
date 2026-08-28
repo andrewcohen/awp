@@ -315,6 +315,8 @@ const handlers = AwpRpcs.toLayer({
     Stream.fromArray([{ kind: "message" as const, role: "agent" as const, text: "hello" }]),
   ChatSend: () => Effect.void,
   ChatAnswer: () => Effect.void,
+  ChatConfig: () => Effect.succeed([]),
+  ChatSet: () => Effect.succeed([]),
   Revisions: () => Effect.succeed([revision]),
   Diff: () => Effect.succeed(patch),
   WorkspaceChanges: () => Stream.fromArray([{ at: 1_787_000_000_000 }]),

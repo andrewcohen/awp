@@ -223,6 +223,8 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
             open: () => Effect.succeed(Stream.empty),
             send: () => Effect.void,
             answer: () => Effect.void,
+            config: () => Effect.succeed([]),
+            set: () => Effect.succeed([]),
           }),
         ),
         Layer.provide(

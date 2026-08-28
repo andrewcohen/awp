@@ -627,6 +627,16 @@ export const layer = AwpRpcs.toLayer(
           .answer(project, workspace, request, option)
           .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
 
+      ChatConfig: ({ project, workspace }) =>
+        chat
+          .config(project, workspace)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
+      ChatSet: ({ project, workspace, option, value }) =>
+        chat
+          .set(project, workspace, option, value)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
       JobLog: ({ job }) => known(job).pipe(Effect.flatMap(() => jobs.log(job).pipe(Effect.orDie))),
 
       // `retry` returns the record unchanged for a job that is still running,

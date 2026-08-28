@@ -47,7 +47,7 @@ import { Db, type Migration, attempt } from "@awp-kit/store";
 import { Context, Data, Effect, Layer, Queue, RcMap, Ref, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { realpathSync } from "node:fs";
-import type { ChatUpdate } from "@awp-kit/protocol";
+import type { ChatConfigOption, ChatUpdate } from "@awp-kit/protocol";
 import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
 import { workspacePath } from "./jobs/create-workspace";
 import { childEnv } from "./zmx-session";
@@ -122,6 +122,13 @@ interface Conversation {
   readonly send: (text: string) => Effect.Effect<void, ChatError>;
   /** Answer a permission request by the id the update carried. */
   readonly answer: (request: string, option: string) => Effect.Effect<void, ChatError>;
+  /** What this session is running as, and what it could be running as instead. */
+  readonly config: Effect.Effect<ReadonlyArray<ChatConfigOption>, ChatError>;
+  /** Change one, and get the whole set back as it now stands. */
+  readonly set: (
+    option: string,
+    value: string,
+  ) => Effect.Effect<ReadonlyArray<ChatConfigOption>, ChatError>;
 }
 
 /** The text of a content block, if it is text. */
@@ -181,8 +188,51 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
     } as ChatUpdate;
   }
 
+  // The context figure, and the only place it exists. `size` is not constant:
+  // measured 200000 on a turn's first update and 1000000 on its last, because
+  // the model in use has a larger window than the default and the adapter
+  // learns that as it goes. So this is a whole reading each time, never a
+  // delta, and the newest one wins.
+  if (kind === "usage_update") {
+    const cost = update["cost"] as Record<string, unknown> | undefined;
+    return {
+      kind: "usage",
+      ...(typeof update["used"] === "number" ? { used: update["used"] } : {}),
+      ...(typeof update["size"] === "number" ? { size: update["size"] } : {}),
+      ...(typeof cost?.["amount"] === "number" ? { cost: cost["amount"] } : {}),
+    };
+  }
+
   return undefined;
 };
+
+/**
+ * The adapter's config options, in this window's shape.
+ *
+ * Only the selects, because a select is the only kind this window can draw and
+ * a row it cannot draw is worse than a row that is not there. Every option the
+ * adapter offers today is one — mode, model, effort and fast mode — so nothing
+ * is lost by saying so.
+ */
+export const optionsOf = (raw: unknown): ReadonlyArray<ChatConfigOption> =>
+  (Array.isArray(raw) ? raw : [])
+    .map((one) => one as Record<string, unknown>)
+    .filter((one) => one["type"] === "select" && typeof one["id"] === "string")
+    .map((one) => ({
+      id: String(one["id"]),
+      name: String(one["name"] ?? one["id"]),
+      ...(typeof one["description"] === "string" ? { description: one["description"] } : {}),
+      currentValue: String(one["currentValue"] ?? ""),
+      values: (Array.isArray(one["options"]) ? one["options"] : [])
+        .map((value) => value as Record<string, unknown>)
+        .map((value) => ({
+          value: String(value["value"] ?? ""),
+          name: String(value["name"] ?? value["value"] ?? ""),
+          ...(typeof value["description"] === "string"
+            ? { description: value["description"] }
+            : {}),
+        })),
+    }));
 
 /** A permission request as something with buttons on it. */
 export const permissionOf = (params: Record<string, unknown>, id: string): ChatUpdate => {
@@ -421,6 +471,11 @@ export const conversation = (
       );
     }
 
+    // The options the open reply carried. Kept rather than re-asked because
+    // there is no call that answers "what are my options" — they arrive with
+    // the session and are updated by setting one.
+    const settings = yield* Ref.make(optionsOf(opened["configOptions"]));
+
     // After the session exists, and ignored if the adapter will not have it:
     // an older one that cannot set a mode is still a usable conversation, and
     // refusing to open at all would be a worse answer than a session running
@@ -462,10 +517,27 @@ export const conversation = (
       // Forked, because a turn takes as long as the work does and the answer
       // comes back down the update stream. Awaiting it here would make sending
       // a message a call that returns when the agent has finished thinking.
+      // The two `turn` updates around it are the daemon's own, and they have
+      // to be: a turn is a request and a reply, and the reply is not an
+      // update, so nothing the adapter sends marks either edge. Without them a
+      // window cannot tell an agent that is working from one that answered
+      // with nothing — both are an empty space.
       send: (text: string) =>
-        Effect.asVoid(
-          Effect.forkIn(Effect.ignore(request("session/prompt", promptOf(text))), mine),
-        ),
+        Effect.gen(function* () {
+          yield* emit({ kind: "turn", status: "started" });
+          yield* Effect.forkIn(
+            request("session/prompt", promptOf(text)).pipe(
+              Effect.map((reply) => String(reply["stopReason"] ?? "")),
+              // A refused or crashed turn still ends. Reporting only the happy
+              // edge leaves the window saying "working" for the rest of the
+              // session, which is the worst of the three states to be wrong
+              // about.
+              Effect.orElseSucceed(() => "failed"),
+              Effect.flatMap((stopReason) => emit({ kind: "turn", status: "ended", stopReason })),
+            ),
+            mine,
+          );
+        }),
 
       answer: (requestId: string, option: string) =>
         Effect.gen(function* () {
@@ -481,6 +553,30 @@ export const conversation = (
             return rest;
           });
           yield* pending.reply({ outcome: { outcome: "selected", optionId: option } });
+        }),
+
+      config: Ref.get(settings),
+
+      set: (option: string, value: string) =>
+        Effect.gen(function* () {
+          const reply = yield* request("session/set_config_option", {
+            sessionId,
+            optionId: option,
+            value,
+          });
+          // The reply's own list if it carries one, and the current value
+          // patched in if it does not. Trusting the reply is what makes a
+          // setting the agent adjusted or refused come back as what actually
+          // happened — an adapter that answers with nothing is the case the
+          // patch is for, not the ordinary one.
+          const fresh = optionsOf(reply["configOptions"]);
+          if (fresh.length > 0) {
+            yield* Ref.set(settings, fresh);
+            return fresh;
+          }
+          return yield* Ref.updateAndGet(settings, (all) =>
+            all.map((one) => (one.id === option ? { ...one, currentValue: value } : one)),
+          );
         }),
     };
   });
@@ -545,6 +641,20 @@ export class Chat extends Context.Service<
       request: string,
       option: string,
     ) => Effect.Effect<void, ChatError>;
+
+    /** What the session is running as. */
+    readonly config: (
+      project: string,
+      workspace: string,
+    ) => Effect.Effect<ReadonlyArray<ChatConfigOption>, ChatError>;
+
+    /** Change one of those, and get the set back as it now stands. */
+    readonly set: (
+      project: string,
+      workspace: string,
+      option: string,
+      value: string,
+    ) => Effect.Effect<ReadonlyArray<ChatConfigOption>, ChatError>;
   }
 >()("awp/Chat") {}
 
@@ -627,6 +737,11 @@ export const make = Effect.gen(function* () {
 
     answer: (project: string, workspace: string, request: string, option: string) =>
       held(project, workspace, (one) => one.answer(request, option)),
+
+    config: (project: string, workspace: string) => held(project, workspace, (one) => one.config),
+
+    set: (project: string, workspace: string, option: string, value: string) =>
+      held(project, workspace, (one) => one.set(option, value)),
   };
 });
 

@@ -1,8 +1,6 @@
 import type { Effort, Project, ThreadBase } from "@awp-kit/protocol";
 import { Dialog } from "@base-ui/react/dialog";
-import { Select } from "@base-ui/react/select";
 import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
-import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { FolderIcon } from "@phosphor-icons/react/Folder";
 import { FolderPlusIcon } from "@phosphor-icons/react/FolderPlus";
 import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
@@ -10,7 +8,9 @@ import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { startThread, threadBases } from "./daemon";
 import { ImportProject } from "./ImportProject";
+import { Chip } from "./Chip";
 import { useOverlay } from "./overlays";
+import { type Face, rememberFaceDefault, rememberedFaceDefault } from "./remembered";
 import { colors, text } from "./tokens.stylex";
 
 // Starting a thread: a composer, not a form.
@@ -316,69 +316,6 @@ const styles = stylex.create({
  * portal/positioner/popup stack is four chances for one of them to be spelled
  * differently — and the one that differs is the one whose popup gets clipped.
  */
-function Chip<T extends string>({
-  id,
-  label,
-  title,
-  value,
-  onChange,
-  options,
-  icon,
-  quiet,
-  disabled,
-}: {
-  readonly id: string;
-  /** What the chip reads as, which is not always the raw value. */
-  readonly label: string;
-  readonly title: string;
-  readonly value: T;
-  readonly onChange: (value: T) => void;
-  /** In the order they should be read. */
-  readonly options: ReadonlyArray<{ readonly value: T; readonly label: string }>;
-  readonly icon?: React.ReactNode | undefined;
-  readonly quiet?: boolean | undefined;
-  readonly disabled?: boolean | undefined;
-}) {
-  return (
-    <Select.Root
-      value={value}
-      // Base UI types the value as whatever it was given, so it arrives here
-      // unnarrowed. This is the only cast on the screen, and it is here rather
-      // than at four call sites: every value the popup can emit came out of
-      // `options`, so T is exactly what it is.
-      onValueChange={(next) => onChange(String(next) as T)}
-      disabled={disabled ?? false}
-    >
-      <Select.Trigger
-        id={id}
-        title={title}
-        {...stylex.props(styles.chip, quiet === true && styles.chipQuiet)}
-      >
-        {icon}
-        {/* The chip shows the label, which for a revset is not the value —
-            `trunk()` arrives labelled with the bookmark it resolves to, and
-            the title says the rest. */}
-        <span>{label}</span>
-        <CaretDownIcon size={9} weight="bold" {...stylex.props(styles.chipCaret)} />
-      </Select.Trigger>
-
-      {/* Portalled, so nothing it opens inside can clip it. */}
-      <Select.Portal>
-        <Select.Positioner sideOffset={4} align="start" {...stylex.props(styles.positioner)}>
-          <Select.Popup {...stylex.props(styles.menu)}>
-            {options.map((option) => (
-              <Select.Item key={option.value} value={option.value} {...stylex.props(styles.item)}>
-                <Select.ItemIndicator {...stylex.props(styles.tick)}>✓</Select.ItemIndicator>
-                <Select.ItemText>{option.label}</Select.ItemText>
-              </Select.Item>
-            ))}
-          </Select.Popup>
-        </Select.Positioner>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
-
 /**
  * The composer. Mounted when the dialog opens, unmounted when it closes.
  *
@@ -412,6 +349,14 @@ function Composer({
   const [bases, setBases] = useState<ReadonlyArray<ThreadBase>>([]);
   const [model, setModel] = useState(INHERIT);
   const [effort, setEffort] = useState<Effort | typeof INHERIT>(INHERIT);
+  // Which face the workspace this makes should open as.
+  //
+  // A default rather than a choice recorded against the workspace, and it has
+  // to be: the workspace has no name yet when this dialog closes — the model
+  // invents one, one step into the job — so there is nothing to key a
+  // per-workspace preference by. The bar above the agent is where a particular
+  // workspace is switched afterwards.
+  const [face, setFace] = useState<Face>(rememberedFaceDefault);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
   const [importing, setImporting] = useState(false);
@@ -461,6 +406,11 @@ function Composer({
     }
     setBusy(true);
     setFailure(undefined);
+    // Before the call, not after it. The workspace this makes is named by a
+    // model one step into the job, and the window reads the default the first
+    // time it draws that workspace — which can be well before this promise
+    // settles.
+    rememberFaceDefault(face);
     startThread({
       description: described,
       project,
@@ -620,6 +570,31 @@ function Composer({
             ...EFFORTS.map((level) => ({ value: level, label: level })),
           ]}
           quiet={effort === INHERIT}
+          disabled={busy}
+        />
+
+        {/* ── the escape hatch ─────────────────────────────────────────────
+
+            Both halves are made either way: the job starts a zmx session
+            whatever this says, so this chooses which of the two the agent
+            column opens on and never which of them exists. That is what makes
+            it safe to default a new workspace into the chat and still be one
+            press from the terminal if the chat is wrong.
+
+            Written down on submit rather than on change, so a dialog somebody
+            opened, fiddled with and dismissed leaves the preference where it
+            was. */}
+        <Chip
+          id="new-thread-face"
+          label={face === "chat" ? "chat" : "terminal"}
+          title="what the agent column opens on — the terminal is always there either way"
+          value={face}
+          onChange={setFace}
+          options={[
+            { value: "terminal", label: "terminal" },
+            { value: "chat", label: "chat" },
+          ]}
+          quiet={face === "terminal"}
           disabled={busy}
         />
 
