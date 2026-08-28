@@ -91,6 +91,24 @@ export const migrations: ReadonlyArray<Migration> = [
     name: "reviews.002-range",
     up: [`alter table review_comments add column end_line integer not null default -1`],
   },
+  {
+    // Who filed it, what kind of remark it is, and the line's text as they saw
+    // it. Appended for the reason 002 was: a name is fixed once it has run.
+    //
+    // The defaults are what the rows that exist actually are. Every comment
+    // written before an agent could file one was written by a person in the
+    // window, and every one of those is an observation — a `suggestion` default
+    // would relabel work somebody already did.
+    //
+    // `text` is nullable rather than defaulted: a comment written in the window
+    // never had one, and the empty string would read as "the line was blank".
+    name: "reviews.003-author-kind",
+    up: [
+      `alter table review_comments add column author text not null default 'human'`,
+      `alter table review_comments add column kind text not null default 'comment'`,
+      `alter table review_comments add column text text`,
+    ],
+  },
 ];
 
 export class Reviews extends Context.Service<
@@ -147,6 +165,10 @@ const ask = <A>(reason: string, run: () => A): Effect.Effect<A, ReviewStoreError
 const date = (value: unknown): Date | undefined =>
   typeof value === "number" ? new Date(value) : undefined;
 
+/** A nullable text column, as the wire's `string | undefined`. */
+const text = (value: unknown): string | undefined =>
+  typeof value === "string" && value !== "" ? value : undefined;
+
 /**
  * A stored row, as the shape on the wire.
  *
@@ -168,6 +190,16 @@ const toComment = (row: Record<string, unknown>): ReviewComment => ({
   // is the only place that has to know the two spellings of that.
   endLine: Number(row["end_line"]) < 0 ? Number(row["line"]) : Number(row["end_line"]),
   body: String(row["body"]),
+  // Both narrowed rather than cast. `strict` stops `author = 7` reaching the
+  // column and does nothing about `author = 'nobody'`, and the value crossing
+  // the wire is a union — so an unknown string becomes the honest default here
+  // rather than a decode failure two layers up, in a message about a schema.
+  author: row["author"] === "agent" ? "agent" : "human",
+  kind:
+    row["kind"] === "suggestion" || row["kind"] === "question" || row["kind"] === "praise"
+      ? row["kind"]
+      : "comment",
+  text: text(row["text"]),
   createdAt: new Date(Number(row["created_at"])),
   sentAt: date(row["sent_at"]),
 });
@@ -180,8 +212,9 @@ export const make = Effect.gen(function* () {
   // `alter table` would silently shift every value along.
   const insert = db.prepare(
     `insert into review_comments
-       (id, project, workspace, revision, path, side, line, end_line, body, created_at, sent_at)
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, project, workspace, revision, path, side, line, end_line, body,
+        author, kind, text, created_at, sent_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const readAll = db.prepare(
     `select * from review_comments
@@ -216,6 +249,9 @@ export const make = Effect.gen(function* () {
           comment.line,
           comment.endLine,
           comment.body,
+          comment.author,
+          comment.kind,
+          comment.text ?? null,
           comment.createdAt.getTime(),
           comment.sentAt?.getTime() ?? null,
         );

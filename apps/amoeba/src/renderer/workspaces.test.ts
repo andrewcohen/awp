@@ -179,6 +179,7 @@ const thread = (over: Partial<Thread> = {}): Thread => ({
   archivedAt: undefined,
   parentId: undefined,
   members: [],
+  prs: [],
   ...over,
 });
 

@@ -1,4 +1,4 @@
-import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
+import type { SessionIdentity, SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
 
 // The sidebar lists workspaces. zmx lists sessions. This is the difference.
 //
@@ -356,4 +356,37 @@ export const groupByThread = (
         ...groups,
         { key: "\u0000loose", title: "not in a thread", thread: undefined, workspaces: sorted },
       ];
+};
+
+/**
+ * The pull request the open workspace is about, if its thread names one.
+ *
+ * Here rather than in App for the reason everything else in this file is: it is
+ * a pure question about the records, and the one place a test can pin what
+ * "belongs to" means. The thread is found by the pair a session's identity
+ * already carries — the same join the sidebar's nesting uses.
+ *
+ * The first of the thread's pull requests. A thread may be about several — a
+ * change spanning two repositories, or a stack — and the panel shows one; the
+ * first is the one it was started for, and a tab per pull request is a strip
+ * nobody asked for. Narrowed to the *same project* first, though: a thread
+ * holding a frontend and an api workspace has a pull request for each, and the
+ * one to show beside a workspace is that workspace's.
+ */
+export const prOf = (
+  identity: SessionIdentity | undefined,
+  threads: ReadonlyArray<Thread>,
+): { readonly project: string; readonly number: number } | undefined => {
+  if (identity === undefined) {
+    return undefined;
+  }
+  const holding = threads.find(
+    (thread) =>
+      thread.archivedAt === undefined &&
+      thread.members.some(
+        (member) => member.project === identity.project && member.workspace === identity.workspace,
+      ),
+  );
+  const mine = holding?.prs.filter((pr) => pr.project === identity.project) ?? [];
+  return mine[0] ?? holding?.prs[0];
 };

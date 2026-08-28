@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { type JobError, type JobKind, type JobRef, type JobStep, permanent } from "@awp-kit/jobs";
 import { type CreateWorkspace, CreateWorkspace as CreateWorkspaceSchema } from "@awp-kit/protocol";
 import { Effect } from "effect";
+import type { Github } from "../github";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
 import { trustWorkspace, untrustWorkspace } from "../claude-trust";
@@ -11,21 +12,23 @@ import type { Bootstrap } from "../bootstrap";
 import type { Settings } from "../settings";
 import type { Threads } from "../threads";
 import { type WorkspaceIntent, nameFrom } from "../intent";
+import { fetchHead } from "../review-head";
 
 // Making a workspace: the first job that does anything.
 //
-// Four steps, and every one of them can leave something behind — which is the
-// entire reason the jobs package exists and, until now, had nothing real to
-// point at.
+// Nine steps, and nearly every one of them can leave something behind — which
+// is the entire reason the jobs package exists and, until now, had nothing real
+// to point at.
 //
 //   1  thread      check it is there        undo: remove it, if empty
 //   2  name        ask a model for one       undo: none — nothing outside
-//   3  workspace   jj workspace add          undo: forget it, remove it
-//   4  bookmark    jj bookmark set           undo: delete it
-//   5  session     zmx run -d, then labels   undo: kill it
-//   6  bootstrap   the configured hooks      undo: none — the directory goes
-//   7  claim       the thread takes it       undo: the thread lets it go
-//   8  brief       type into the agent       undo: none — impossible
+//   3  fetch       a review's base, if any   undo: none — refs are additive
+//   4  workspace   jj workspace add          undo: forget it, remove it
+//   5  bookmark    jj bookmark set           undo: delete it
+//   6  session     zmx run -d, then labels   undo: kill it
+//   7  bootstrap   the configured hooks      undo: none — the directory goes
+//   8  claim       the thread takes it       undo: the thread lets it go
+//   9  brief       type into the agent       undo: none — impossible
 //
 // `bootstrap` sits after `session` rather than straight after `workspace`, and
 // the reason is what a person sees: a hook can take minutes — `bun install` on
@@ -51,7 +54,7 @@ import { type WorkspaceIntent, nameFrom } from "../intent";
 //
 // ── every step is safe to run twice ────────────────────────────────────────
 // The runner re-enters the step that failed, so the second attempt finds
-// whatever the first one managed. Each of the four is idempotent underneath:
+// whatever the first one managed. Each of them is idempotent underneath:
 // `addWorkspace` and `forgetWorkspace` check first, `bookmark set` is
 // idempotent in jj, `start` leaves an existing session alone, and a thread
 // claiming a workspace it already holds changes nothing.
@@ -97,6 +100,11 @@ export interface WorkspaceFiles {
 
 export interface WorkspaceDeps {
   readonly jj: Jj["Service"];
+  /**
+   * Only for a review, and only for a fork. See the `fetch` step — a fork's
+   * head branch is not on `origin`, so `jj git fetch` does not bring it down.
+   */
+  readonly github: Github["Service"];
   readonly mux: Multiplexer["Service"];
   readonly threads: Threads["Service"];
   readonly files: WorkspaceFiles;
@@ -201,7 +209,7 @@ export const expandHook = (command: string, repo: string): string =>
   command.replaceAll("<root>", repo);
 
 export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> => {
-  const { jj, mux, threads, files, intent, settings, run } = deps;
+  const { jj, mux, threads, files, intent, settings, run, github } = deps;
 
   const agentSession = (project: string, workspace: string): string =>
     sessionName(project, workspace, AGENT);
@@ -278,6 +286,14 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
                     ? input.label
                     : input.description,
                   input.threadParent,
+                  // Part of what the thread was. A review whose rollback took
+                  // the thread and whose retry put it back without the link
+                  // would leave the inbox row unable to find the work being
+                  // done for it — which is the same failure this step exists to
+                  // prevent for the thread itself.
+                  input.review === undefined
+                    ? undefined
+                    : { project: input.project, number: input.review.number },
                 )
                 .pipe(
                   Effect.mapError(refused("could not restore the thread")),
@@ -367,6 +383,68 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         yield* threads.rename(input.thread, resolved.label).pipe(Effect.ignore);
 
         return patch;
+      }),
+  };
+
+  /**
+   * Make the base revision exist, and say what it turned out to be.
+   *
+   * A no-op for ordinary work, and the whole of what a review needs before a
+   * workspace can be made: a pull request's head is a branch on a remote, and
+   * `jj workspace add -r <branch>` against a repository that has not fetched
+   * says the revision does not exist — one step in, in a message about
+   * revisions rather than about GitHub.
+   *
+   * ── it patches `base`, and that is what the patch mechanism is for ────────
+   *
+   * The handler enqueues a *branch name*, which is not a revision. Which revset
+   * that branch is depends on what the fetch produced, and only this step is
+   * standing there when it does:
+   *
+   *   fetched from origin   `feature@origin` — a remote bookmark, because jj
+   *                         does not track fetched branches locally by default
+   *   fetched from a fork   `feature` — written to refs/heads by git, so it is
+   *                         a local bookmark once jj has imported the refs
+   *
+   * **The remote one wins when both exist**, and that is deliberate: a local
+   * bookmark of the same name is somebody's own copy, which may be behind the
+   * pull request. Reviewing a stale branch is worse than not reviewing, because
+   * nothing about it says so.
+   *
+   * No undo. A fetch adds refs to a repository and takes nothing away, and
+   * un-fetching them would be undoing something a person's own `jj git fetch`
+   * does daily.
+   */
+  const fetchStep: JobStep<CreateWorkspace> = {
+    name: "fetch",
+    run: (input, context) =>
+      Effect.gen(function* () {
+        const review = input.review;
+        if (review === undefined) {
+          // Silent, like the bookmark step's own no-op: "nothing to fetch" in
+          // every ordinary job's log is a line that teaches the eye to skip it.
+          return;
+        }
+
+        yield* context.log("fetching from the git remotes");
+        if (review.fork !== undefined) {
+          yield* context.log(
+            `fetching ${review.fork.owner}/${review.fork.repo} ${review.headRef} — the head is on a fork`,
+          );
+        }
+        // Shared with `WorkspaceRepair`, which asks the same three questions
+        // when a pull request has moved since the workspace was made. See
+        // `review-head.ts`.
+        const base = yield* fetchHead(jj, github, { repo: input.repo, review }).pipe(
+          // By tag, not by reading one: `catchTag` narrows, and the two failures
+          // want different words — a head that is not there after a fetch is a
+          // refusal about this pull request, and a jj that would not run is a
+          // refusal about jj.
+          Effect.catchTag("HeadMissing", (error) => Effect.fail(permanent(error.reason))),
+          Effect.mapError(refused("could not resolve the pull request's head")),
+        );
+        yield* context.log(`reviewing #${review.number} from ${base}`);
+        return { base };
       }),
   };
 
@@ -668,6 +746,9 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     steps: [
       threadStep,
       nameStep,
+      // Before `workspace`, because it is what makes `base` name something jj
+      // can find. A no-op for everything that is not a review.
+      fetchStep,
       workspaceStep,
       bookmarkStep,
       trustStep,

@@ -183,6 +183,32 @@ export class Jj extends Context.Service<
 
     readonly bookmarks: (repo: string) => Effect.Effect<ReadonlyArray<JjBookmark>, JjError>;
 
+    /**
+     * Bring the git remotes' refs down: `jj git fetch`.
+     *
+     * A write, and therefore snapshotting, unlike every other question the
+     * daemon asks — which is right: fetching changes the repository, and a
+     * fetch that suppressed the snapshot would leave the imported refs in a
+     * different operation from the files beside them.
+     *
+     * Whoever needs a branch that only exists on a remote has to call this
+     * first. That is not the ordinary case for anything awp creates — a thread
+     * branches off something local — and it is *every* case for reviewing a
+     * pull request.
+     */
+    readonly fetch: (repo: string) => Effect.Effect<void, JjError>;
+
+    /**
+     * Re-read the git refs: `jj git import`.
+     *
+     * jj caches its view of the git refs per operation, so a ref written into
+     * the repository by `git` itself — which is how a fork's head branch
+     * arrives — is invisible to the next jj command until this has run. Nothing
+     * about the symptom points here: the bookmark simply is not in
+     * `bookmark list`, and the revision "does not exist".
+     */
+    readonly importGit: (repo: string) => Effect.Effect<void, JjError>;
+
     /** Add a workspace, or do nothing if one of that name is already there. */
     readonly addWorkspace: (options: AddWorkspace) => Effect.Effect<void, JjError>;
 

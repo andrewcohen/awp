@@ -14,6 +14,9 @@ import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Effect, FileSystem, Layer } from "effect";
 import { Bootstrap, layer as bootstrapLayer } from "./bootstrap";
+import { Github } from "./github";
+import * as githubCli from "./github-cli";
+import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
 import { createWorkspace } from "./jobs/create-workspace";
 import { Jj } from "./jj";
 import * as intent from "./intent";
@@ -43,7 +46,37 @@ import * as zmx from "./zmx";
  * something else by accident.
  */
 export const DAEMON_HOST = "127.0.0.1";
-export const DAEMON_PORT = 5274;
+
+/**
+ * The port, and the one thing about this daemon that is allowed to move.
+ *
+ * `AWP_DAEMON_PORT` exists for one situation: a second daemon running beside
+ * the one somebody is working in, built from a branch, so a change can be
+ * looked at without stopping the instance they are using. That is a development
+ * need rather than a setting — it is not in the config file, because a port a
+ * person could set permanently is a port every other client would then have to
+ * be told about.
+ *
+ * The host stays stated here. The daemon hands out ptys attached to the user's
+ * own agent sessions, so binding anywhere but the loopback interface would put a
+ * shell on the network — which is not a thing an environment variable should be
+ * able to do.
+ *
+ * A value that is not a port is refused rather than falling back: a typo that
+ * silently started the daemon on 5274 would be found by the *other* daemon
+ * failing to start, minutes later, somewhere else.
+ */
+export const DAEMON_PORT = ((): number => {
+  const asked = process.env["AWP_DAEMON_PORT"];
+  if (asked === undefined || asked.trim() === "") {
+    return 5274;
+  }
+  const port = Number(asked);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`AWP_DAEMON_PORT is not a port: ${asked}`);
+  }
+  return port;
+})();
 
 /**
  * ndjson, deliberately, and worth revisiting once there is a measurement.
@@ -92,6 +125,7 @@ export const db = Layer.orDie(
     ...threadMigrations,
     ...reviewMigrations,
     ...projectMigrations,
+    ...inboxMigrations,
   ]),
 );
 
@@ -127,6 +161,7 @@ export const jobs = Layer.unwrap(
       intent: yield* WorkspaceIntent,
       settings: yield* Settings,
       run: yield* Bootstrap,
+      github: yield* Github,
     };
     return jobsLayer([erase(createWorkspace(deps))]);
   }),
@@ -161,11 +196,13 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(threads),
   Layer.provide(reviews),
   Layer.provide(projects),
+  Layer.provide(inboxLayer),
   Layer.provide(workspaceState.layer()),
   Layer.provide(db),
   Layer.provide(intent.layer),
   Layer.provide(settings.layer()),
   Layer.provide(jjCli.layer),
+  Layer.provide(githubCli.layer),
   Layer.provide(bootstrapLayer),
   Layer.provide(zmx.layer),
 );

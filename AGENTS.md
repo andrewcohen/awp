@@ -753,11 +753,36 @@ typeahead, the roving tab stop, the aria wiring and — the one that shows up as
 a visual bug rather than an accessibility one — the portal, without which a
 popup inside a scrolling column is clipped by it.
 
-`@effect/atom-react` is a dependency already and is **not yet imported
-anywhere**. That is deliberate: it is the answer when the window needs shared
-state, and reaching for something else on the day it does is the mistake this
-list exists to prevent. It is not an invitation to introduce an atom before
-there is one to have.
+`@effect/atom-react` was a dependency imported by nothing, kept as the answer
+for the day the window needed shared state. **That day arrived, and it was Base
+UI's doing.** A hidden tab is unmounted, so every panel's `useState` is destroyed
+by switching away from it — which the diff panel _wants_ (it re-reads the patch
+on the way back) and the inbox does not: forty-five pull requests, fetched over a
+socket, thrown away because somebody glanced at the diff. What that looked like
+was an empty panel saying `reading…` every single time the tab was opened, for a
+list the daemon already had in memory.
+
+So `atoms.ts` holds the inbox, and `useInbox` reads and writes it. Three things
+about that shape:
+
+- **An atom rather than a module-level `let`**, because a `let` holds the value
+  and tells nobody. What is wanted is the value _plus_ a subscription, so a fetch
+  that finishes after its component unmounted still reaches whichever component
+  is mounted now. That is `useSyncExternalStore`'s shape, and an atom is it.
+- **Plain state atoms, not `Atom.make(effect)`.** The fetching stays in
+  `daemon.ts` behind promises — the seam this window keeps between Effect and
+  React — and moving it into an atom would relocate that decision into a file
+  about state.
+- **No provider.** `RegistryContext` defaults to a standalone registry when none
+  is present, so nothing in the tree changed.
+
+The guard against a read per tab switch is module scope too, for the same reason
+the atoms are: it has to outlive the component that set it.
+
+It is still not an invitation to introduce an atom before there is one to have —
+the PR panel is the obvious next one and is deliberately still using `useState`,
+because the daemon caches its answer and a remount costs a round trip rather
+than a `gh` call.
 
 The router _is_ now used, and the reason is worth stating because the obvious
 one is wrong. The window has one screen and no navigation to speak of, so
@@ -1240,8 +1265,70 @@ and a _word_ appearing in that list is a bug.
 The first pass put the orange on every thread heading, which is a second body
 colour: with an accent on everything, nothing is left to mark the one row that
 matters. It is now on exactly two things that answer "this, here" — the
-selected row's edge and the selected tab — plus the pull request number, which
-earns it by being the only thing on the strip pointing outside the window.
+selected row's edge and the selected tab — plus the sidebar's pull request
+number, which earns it by being the only thing on that strip pointing outside
+the window.
+
+**An accent marks a deviation from the rows around it, so the same field earns
+it in one list and not in another.** The inbox found this the second way round:
+its rows drew the PR number in the accent, on exactly the argument above, and
+the window came back as "too much orange". In the sidebar a PR number is an
+exception — most rows have none. In the inbox _every_ row is a pull request, so
+the number is the baseline, and an accent on the baseline is thirty accents in a
+column.
+
+It is the same arithmetic as the inbox's leading state icon having no icon for
+the ordinary case, and the same as `waiting` and `live` in the sidebar: a colour
+that appears on most rows is not emphasis, it is the body text of that column.
+Counted after the fix, the whole window spends the accent in four places:
+
+```
+  Accessory  the selected panel tab
+  LeftColumn the selected column tab
+  Sidebar    the selected row's 2px edge
+  Sidebar    a row's PR number — an exception on that strip
+```
+
+### Two vocabularies, and a colour belongs to one
+
+The inbox also borrowed the _agent_ state colours for **review** states, which
+put one green on two subjects: "a session is alive" in one column and "a pull
+request is approved" in the next.
+
+```
+  chrome    base · surface · raised · text · muted · border
+  accent    accent
+  agent     live · waiting · ready
+  review    asked · warn · live · muted
+```
+
+`warn`, `live` and `muted` appear twice on purpose — a red that means broken and
+a grey that means secondary are the same claim whatever the subject, and minting
+`failing` and `draft` as aliases would add a name without adding a distinction.
+
+`asked` is the one that had to exist: "somebody is asking you to look at their
+work" is a review state with no agent equivalent. It was the accent (thirty
+rows) and then nearly became `ready`, which is the near miss worth naming —
+`ready` is blue and does mean "waiting to be read", but it is an agent state,
+so one token for both would make a row's colour ambiguous exactly while somebody
+is scanning for what to do next.
+
+Mauve, from Catppuccin like every other hue here, and the only one in that table
+not already spoken for: red, yellow, green, blue and orange were all taken.
+Measured against each flavour's own base, and Latte's needed the same treatment
+every other Latte token got — darkened along its own hue and saturation until it
+clears 4.6:
+
+```
+  mauve as published    latte 4.09  FAIL      macchiato 7.48  AAA
+  latte darkened        #7e35dd → 4.61  AA
+```
+
+**The `Record<ChromeRole, string>` tables in theme.ts are what caught the
+half-finished job.** Adding the token and forgetting the forced-light and
+forced-dark themes is a window with one wrong colour in a state nobody looks at
+— which is exactly what happened to `warn` once. It is a type error now, and it
+fired within a minute of the token being added.
 
 ## StyleX fails quietly, twice
 
@@ -2031,6 +2118,546 @@ a page has a URL and a selector. `NoteSend` is therefore its own call, and it is
 while reading a diff, and a page note is one whole gesture with no second one on
 the way. A draft that waits for a batch is a draft nobody remembers to deliver.
 
+## The inbox is a list of pull requests, not of workspaces
+
+The deck's inbox scope was built out of **workspace** rows, and a pull request
+with no local checkout had to be invented as a "virtual" row. That took three
+passes — review-requested, then your own, then a fourth to fill the holes a
+partly-shown stack left — each with its own dedup table against the ones before
+it.
+
+```
+  deck    workspaces, plus synthesized PRs      3 synthesis passes, 3 dedups
+  here    pull requests, plus a workspace       0
+          annotation on the ones that have one
+```
+
+Nothing here is cleverer; it starts from the set GitHub returns. A stack's
+middle link is frequently somebody else's PR, which is _why_ the deck needed the
+third pass: its rows could not represent one. With the PRs as the rows, the
+base/head graph is already in hand.
+
+**A row's section is the whole stack's, not its own.** The first version here
+computed it from a row's own ancestor chain, which reads as correct and splits
+every stack whose tip is what makes it your problem:
+
+```
+  #20 tip     needs your review    ← the request names you
+  #10 base    other open PRs       ← somebody else's, so it sorted away
+              and the chain drew broken, under two headings
+```
+
+`inbox.test.ts`'s "a stack stays together" is the test that caught it.
+
+**The daemon classifies, sections and orders.** Same argument as
+`SessionIdentity` being on the wire: `bucketOf`'s precedence is subtle enough
+that the archive locked it with tests, and a client re-deriving it is a second
+implementation. The one clause worth knowing without reading it: a review
+request wins over everything the PR itself says, including its CI being red.
+
+**The merge queue is deliberately not read.** The archive treated "queued" as
+ready-to-merge, and that signal exists only in GraphQL — `gh pr list --json`
+does not expose it — so it cost a second query per repository per refresh for a
+state that lasts minutes. A queued PR that is approved and green already reads
+as ready; one that is neither lands in "Mine", which is a row under the wrong
+heading rather than a row nobody can find.
+
+**A repository with no GitHub remote is not a failure, and must not be asked.**
+Reported from a real window, and it is the shape of complaint that trains a
+person to stop reading warnings:
+
+```
+  orchard: no git remotes found
+  Notes Vault: no git remotes found
+  harbor-works: none of the git remotes configured for this repository point
+                to a known GitHub host
+```
+
+Every sentence is true and none is actionable — a vault of notes and a scratch
+repository are working exactly as intended and have no pull requests to have.
+Worse, `gh` can only report the condition as an error, so the panel had a
+permanent red row per repository, which costs the one project whose token really
+has expired.
+
+So it is decided **before** `gh` is asked, and locally: `git remote -v`, whose
+hosts are matched against the ones `gh` itself knows — github.com plus the
+top-level keys of `~/.config/gh/hosts.yml`, which is where `gh auth login`
+records an enterprise host. A repository that matches nothing is left out of
+`sources` entirely, so nothing is said about it at all.
+
+Two details worth keeping. Hosts are compared **exactly**, never by suffix:
+`github.com.evil.example` ends with the right string. And a directory that is
+not a git repository counts as off GitHub rather than as an error, which is what
+a jj workspace with no colocated git is.
+
+**A failure is per project.** One repository's `gh` being unauthenticated, or
+its remote not being GitHub at all, must not cost the others their rows — so
+`InboxSource` carries a sentence per project and the call has no error channel
+at all. The one global failure is the login, and it is not fatal either: what it
+costs is every viewer-relative bucket, which is why `Inbox.viewer` is on the
+answer. An inbox that is empty because nobody is signed in looks exactly like an
+inbox with nothing in it.
+
+### The icons are Phosphor, and the baseline row has none
+
+`@phosphor-icons/react`, deep-imported per icon — `@phosphor-icons/react/XCircle`
+— which is what the rest of the window already does. Not a glyph font: the deck
+used Nerd Font codepoints in the Private Use Area, which is right for a terminal
+and is tofu here, because this window ships Inter and JetBrains Mono and nothing
+else.
+
+**One icon leads the row, chosen by priority, and the ordinary state has none.**
+That is the deck's rule kept rather than a space saving: an open pull request
+with green CI and nobody waiting is most rows, and painting it teaches the eye
+to skim the icon column — which costs the one row that deviates. The slot keeps
+its width regardless, so the titles still line up.
+
+```
+  ✗ ci red             go and look now
+  ⧗ ci running         nothing to do yet
+  ● changes requested  somebody wants work from you
+  ◌ asked again        you reviewed it, and the author came back
+  ○ review requested   a first request
+  ✓ approved           one press from done
+  ▤ draft              not submitted, so its CI is information
+  (nothing)            open, green, nobody waiting
+```
+
+Two chat bubbles rather than one for the review states, which is also the deck's
+choice: a conversation is what a review is, where a tick or a flag reads as a
+verdict. Hollow is "somebody is asking", dotted is "asking again".
+
+What the lead cannot also say goes on the second line, small and after the
+branch — conflicts, behind, notes on your own PR, an ancestor that cannot merge.
+A pull request is regularly two things at once and one icon cannot be both.
+
+**`title` goes on the wrapping span, never on the icon.** Phosphor renders an
+`<svg>`, and a `title` _attribute_ on an SVG element is not a tooltip — SVG
+wants a `<title>` child, which the component does not take. Every icon is
+`aria-hidden` and the words are said once in the row's own `title`, because an
+icon that announces itself in the middle of a title makes the title unreadable.
+
+### `gh -R` is not `jj -R`
+
+jj's takes a path. gh's takes `OWNER/REPO` and refuses a directory outright:
+
+```
+  gh pr list -R /Users/…/thicket
+  expected the "[HOST/]OWNER/REPO" format, got "/Users/…/thicket"
+```
+
+So every call in `github-cli.ts` names its repository by **running in it** —
+`ChildProcess.make(…, { cwd })` — and `gh` resolves owner and name off the
+remote. The Go implementation did the same thing, its runner taking a directory.
+
+Two consequences found by `bun run probe:inbox`, which is what a fake could
+never have said:
+
+- **A secondary jj workspace is not a git repository.** `gh` needs one, and
+  `~/.awp/workspaces/<project>/<workspace>` has no `.git` — so the repository
+  handed to gh has to be the _source_ root, which is what `Jj.sourceRoot` and
+  the `Project.root` record already hold. Pointing this at a workspace answers
+  `fatal: not a git repository`.
+- **`gh pr list` with `statusCheckRollup` is seconds, not milliseconds.**
+  Measured 4.5s for eleven pull requests on a repository with real CI. That is
+  the whole reason `InboxFeed` has a cache with a lifetime rather than a refresh
+  button alone: the panel is mounted every time its tab is opened.
+
+### Pressing a row has to change the row
+
+The click started a job and the row said nothing for half a minute, which is
+indistinguishable from a button that does not work — and pressing it again is
+the natural response. The state it was reading was "does a thread hold
+`pr-<n>`", and the claim is the create job's **second-to-last** step.
+
+```
+  press ──▶ ReviewStart ──▶ fetch · workspace · bookmark · trust · session ·
+            (a gh call)     bootstrap ──▶ claim ──▶ brief
+            ↑ nothing                     ↑ the row's only signal, 30s later
+```
+
+Four states now, each a different thing to do next, and the sources are three
+records the daemon already holds:
+
+```
+  starting…      local, between the press and the reply — a gh call, not instant
+  <step> N/M     the job. WHICH step, because fetch and bootstrap wait on very
+                 different things
+  failed         the job stopped, with its sentence on the hover. Only when
+                 there is no workspace: a hook that failed after building one
+                 leaves something worth opening
+  open           a workspace exists
+```
+
+**Openable when the SESSION exists, not when the claim lands.** The annotation
+reads the session listing as well as the threads, which moves the row's "open"
+a step earlier — into the window a person is watching. The thread is still
+reported separately, because it is what says the job finished.
+
+**The job's id crosses the wire, not the record.** A job changes on its own and
+the window already has a live feed of every one; sending the record would put a
+second, staler copy on a list that is a snapshot, and the two would disagree
+exactly while somebody watched a row progress. The id is the join, `JobChanges`
+is the truth — and the panel is handed the jobs the window already streams
+rather than subscribing again, because an rpc stream is a request and a second
+listener is a second feed.
+
+**No spinner.** The jobs panel's rule, and it holds harder in a list somebody
+leaves open all day: the word already says it is running.
+
+**A key is composed in one place and parsed in the same file.** `reviewKey` and
+`reviewOf` sit together for the reason `reviewWorkspace` and `reviewNumber` do —
+a format written in one file and read in another drifts by a colon. Matching a
+job by its key is one string comparison per job, where reading its stored input
+would be a schema decode per job on every listing.
+
+**Minting a name and recognising one are different rules.** `reviewWorkspace`
+mints `pr-<number>` and nothing else, because a branch in the name is an
+identity that goes stale on a force-push. `reviewNumber` has to be wider, and
+this machine is the reason: every review workspace made before amoeba carries
+the Go implementation's `pr-<number>-<branch>`.
+
+```
+  awp.thicket.pr-2340-header-allowlist-6fb6.agent   ← eight of these on this
+  awp.orchard.pr-558-typed-router-ide-bfad.agent      machine, all reviews
+```
+
+A reader matching only the new shape reports every one of those pull requests as
+unreviewed, and the row then offers to build a _second_ workspace beside the one
+already there. Found by reading a real session list, not by a test.
+
+### The pull request cache, and the four things wrong with the first one
+
+`gh pr list` with `statusCheckRollup` is seconds, and the inbox is asked every
+time its tab is opened — so there is a cache. What that cache went through is
+worth keeping, because three of the four faults were invisible and one killed
+the daemon.
+
+```
+  cold, nothing anywhere                    11.5s
+  warm disk, daemon just restarted           0.40s
+  warm memory                                0.28s
+```
+
+**On disk, not only in memory.** It was a `Ref<Map>`, which a restart empties —
+and this repository is worked on by restarting the daemon. `pr_lists`,
+`pr_details` and `gh_viewer` in `awp.sqlite`, payloads as JSON in a text column
+because what is stored is _this daemon's projection_ of gh's answer: a column
+per field would make every change to `github-parse.ts` a migration. A row that
+will not parse counts as a miss, which is the honest reading of "written by a
+version that is no longer here".
+
+**Two lifetimes that fought each other.** The first version used a two-minute
+memory TTL to decide re-fetching and a one-hour disk TTL to decide whether a
+stored row was worth loading. Those disagree by construction: a row read off
+disk carries the moment it was _fetched_, so a twenty-minute-old row is loaded
+and instantly judged stale, and the read pays the full `gh` call anyway.
+
+```
+  warm disk, first read     2.6s
+  warm disk, second read    7.9s   ← re-fetched everything, every time
+```
+
+They now mean different things. `DISK_TTL_MS` answers "is there anything worth
+saying" — an hour-old inbox with `read at 09:14` under it beats a spinner —
+and `TTL_MS` answers "is it worth re-reading", **behind** the answer rather than
+in front of it: `Effect.forkDetach`, guarded by a set of in-flight repositories
+so three tab switches are not three `gh` calls. `refresh` stays synchronous,
+because somebody pressing a button is asking to wait.
+
+**A cache that was never hit, and said nothing.** The viewer row was read
+through the same `stored` helper the others use — which parses a column called
+`payload`, where that table keeps its teams in a column called `teams`. Every
+read threw on `JSON.parse("undefined")`, missed, and asked `gh` again. It cost
+exactly the 1.7 seconds it had been added to remove, and the only tell was a
+number that would not come down. **A cache with no hit counter is a cache you
+cannot tell is broken** — the measurement above is the counter.
+
+**And the daemon would not start.** The `gh_viewer` table was first added as a
+third statement inside `inbox.001-cache`, which had already run. The name was
+recorded, the statement never executed, and:
+
+```
+  ERROR: SQLiteError: no such table: gh_viewer
+    at <anonymous> (packages/server/src/inbox-feed.ts:217:25)
+```
+
+Which is this file's own rule — a migration's name is fixed the moment it has
+run anywhere — and the loud failure is what `create table` rather than
+`create table if not exists` buys.
+
+### One field kills the query, and it is not the slow one
+
+A repository with a hundred open pull requests could not be listed at all: six
+seconds, then `GraphQL: Something went wrong while executing your query`. It
+read as a slow cache; it was a failing project being retried on every read,
+because a failure is deliberately never cached.
+
+Bisected against the real repository:
+
+```
+  the whole field set (18)        GraphQL: Something went wrong    ✗
+  without `reviews`              GraphQL: Something went wrong    ✗
+  without `mergeStateStatus`     12 rows in 4.6s                  ✓
+```
+
+`mergeStateStatus` makes GitHub compute mergeability for **every** pull request
+in the answer, and past some size that exceeds their own time limit. The field is
+not slow, it is _fatal_ — which is the opposite of how one reasons about
+expensive fields, and the reason to write the measurement down.
+
+So the listing asks for everything and asks again without that field when
+refused. What it costs is `conflicts` and `behind base` being unknown there, and
+`InboxSource.degraded` says so in a sentence — muted rather than red, because
+nothing is broken. **Silence was the alternative and is worse:** a clean-looking
+inbox for the one repository where nothing is _able_ to report a conflict.
+
+### The PR tab, and markdown
+
+A workspace whose thread names a pull request gets one more panel, first in the
+strip and labelled `PR #2418`. First because a review workspace exists _because_
+of a pull request — while one is open the PR is the subject and the diff is a way
+of reading it. Absent entirely otherwise, rather than present and empty: this is
+the column somebody switches most, and a permanent empty room in it costs a
+keystroke every time.
+
+Which PR is derived in the window from the thread record it already holds — no
+call, because a call would be a second copy of something on screen. The panel's
+own content is cached like the listing, for a reason particular to the strip:
+**Base UI unmounts a hidden tab**, so switching to the diff and back remounts
+this panel, and without a cache every switch would be a `gh pr view`.
+
+**Markdown is a library, and that is a deliberate exception to "do not add a
+fourth thing".** The stack rule is about UI frameworks; this is a content
+renderer, like `@pierre/diffs` and the icon set. It was preformatted text first,
+which in practice showed `## Summary` and `- [ ] done` as literal characters —
+most of a PR body. `react-markdown` rather than `marked`, and the reason is the
+content's provenance: `marked` returns a string of HTML that has to go through
+`dangerouslySetInnerHTML`, and this text was written by whoever opened the pull
+request. That needs a sanitiser beside it — two dependencies and a rule to get
+right — against one that builds React elements and never produces HTML.
+`remark-gfm` because a task list is what half of all PR descriptions are.
+
+Two details in `Markdown.tsx` worth not rediscovering: the components map is at
+**module scope**, because rebuilding it per render makes every element type a new
+component identity and remounts the whole body — losing the scroll position of a
+code block somebody is reading; and an image is rendered as its alt text, because
+a screenshot in a PR body lives on GitHub's user-content host, which this window
+has no session for, so an `<img>` would be a broken icon where a caption will do.
+
+### A stack, drawn as a tree
+
+`├─`, `└─` and the `│` above them, monospace so consecutive rows line up as
+columns — in a proportional face `│  ` is a different width from `└─ ` and the
+tree bends.
+
+```
+  #10 base
+   ├─ #20
+   │  └─ #25
+   └─ #30
+```
+
+Drawn from the _list_, not from the row, and that is why `InboxItem.stack` came
+back after being removed as "an implementation of contiguity": a guide character
+is a statement about what comes **after** a row — `└─` means nothing else hangs
+off my parent below me — and only the client is holding the list. A client
+inferring stack membership from runs of `depth` would be re-deriving the grouping
+the daemon already did.
+
+The root draws nothing: it is the trunk, and a guide in front of it points at a
+parent that is not on screen. A lone pull request has no `stack` at all, which is
+what stops a `└─` appearing in front of every unstacked row.
+
+### A pull request moves, and the checkout does not
+
+The signal a review cannot do without, and the one that is invisible without it.
+A review workspace is a checkout of the head at the moment it was made; the
+author then pushes a fix, or force-pushes a rewrite, and from that moment the
+diff being read, the comments being written and the agent's findings are all
+about code the pull request no longer has. Nothing on screen changes. That is
+worse than being out of date, because a review delivered against an old head
+reads as a review of the current one.
+
+Measured on this machine the first time the check ran — two of two review
+checkouts were stale, and one of them was made two hours earlier:
+
+```
+  checkouts   thicket/pr-2320 MOVED, thicket/pr-2418 MOVED
+  by hand     present(<the PR's head>) & ::@   → empty
+              present(<the PR's head>)         → empty
+              the head is not in the repository at all
+```
+
+**Asked as "is the head an ancestor of `@`", not "is it equal to `@`".** Somebody
+who has committed something of their own on top is still reviewing the right
+code, and an equality check would call that stale every time.
+
+**`present()` is what makes it one jj call rather than three.** Without it an
+absent commit is an error — `Revision \`deadbeef…\` doesn't exist`, which is
+exactly what a force-push leaves behind — and the caller has to tell that apart
+from a broken directory by reading jj's prose. With it, an absent commit is an
+empty answer, which is the same conclusion as having something older: this
+checkout does not contain what the pull request is. A directory that is not a
+workspace answers "nothing to repair" rather than claiming a stale checkout that
+is not there.
+
+**The daemon asks jj; the feed asks the daemon.** The head commit is in the
+listing, which is `InboxFeed`'s, and answering the question means asking jj about
+a workspace, which is the handler's — so `read` takes a `contains` callback. It
+is asked only for rows that have a workspace, which on a real machine is a
+handful of forty-eight, concurrently, and locally.
+
+### Repair is a prompt, not an act
+
+The first version of this moved the checkout: fetch, then `jj new <head>`. It
+worked, and it was the wrong feature under the right name — the deck's `C r`
+composes a **sentence** describing what is wrong with the pull request and hands
+it to a form, and what a person expects from a button called repair is that.
+The checkout-mover was removed rather than kept beside it: two things called
+repair is how the confusion gets built in.
+
+`repair.ts` is the deck's own logic, ported, and nearly every line of it is a
+decision somebody got wrong first.
+
+**Tone follows ownership.** On your own pull request the agent is asked to _fix_
+— resolve the conflict, push the branch. On somebody else's it is asked to
+_look_: investigate and report, change no files, push nothing. Reviewing a
+stranger's PR should not have an agent start rebasing their branch.
+
+**An issue with no reviewer's angle is dropped, not translated.** The archive
+records the failure: a reviewer was asked to report how far behind its base
+someone else's branch was, which is the author's rebase and nothing a reviewer
+can act on. So a missing `look` _means_ "not a reviewer's problem", and a new
+issue has to decide that on purpose rather than inherit a plausible-sounding
+review action.
+
+**Review feedback gates the whole prompt.** When one of the issues is a
+reviewer's comments, the agent is told to propose the problem and its fix for
+each point and wait — because an agent told to fix CI _and_ answer a reviewer in
+one message should not do half of it unprompted.
+
+**Approving and still wanting something are not exclusive.** An approved PR with
+comments used to answer "nothing to repair", which is the tool deciding on the
+user's behalf that a reviewer's remarks were settled. It now asks which points
+are still open at the current head.
+
+**A local read beats `gh pr diff`.** The review-tone prompt tells the agent to
+fetch and park the working copy on the head, because that lets it open files at
+the right revision, chase context and run tests — where a raw patch allows none
+of it. `gh pr diff` stays as the fork fallback.
+
+**And it is offered, not sent.** `PullRequestRepair` returns text; `AgentSend`
+delivers whatever is in the box afterwards. On your own pull request that text
+tells an agent to push, so the person whose branch it is reads it first and edits
+it if they want something else. That is also why the send is a _general_ call
+rather than one that re-composes: what should arrive is what was in the box.
+
+Measured against real pull requests, which is the only way to see whether the
+sentences read as English:
+
+```
+  #545  theirs → look   conflicts + a pending request for your review
+                        "Do NOT modify files, run jj/git mutations, or push"
+  #2364 theirs → look   one issue, one sentence, with the local-read recipe
+```
+
+### A thread says which pull request it is about
+
+It was readable without saying it: a review workspace is `pr-<n>`, so the number
+could be parsed back out of a thread member. That holds until any of the
+ordinary things happen — a workspace renamed, a PR opened for work that already
+had a thread, a review done in a checkout somebody made by hand — and each of
+those is a thread whose pull request awp cannot name.
+
+So it is recorded, for the same reason `parentId` is: a name is an address, and
+this is a claim about the work. `thread_prs` with **UNIQUE (project, number)** —
+one thread per pull request, the same rule a workspace's single claim has, and
+for the same reason: two threads about one PR has no rendering, because the
+inbox row would have to pick which to point at.
+
+**Several per thread, though.** A thread already holds several workspaces in
+several repositories, and each has its own pull request — a frontend change and
+the api behind it is one piece of work and two PRs. A stack in one repository is
+the same case.
+
+Three writers, and each is a different moment:
+
+```
+  ReviewStart   links at creation, so the row and the sidebar can name the PR
+                now rather than in the half minute the job takes
+  restore()     puts the link back with the thread — the one place a
+                rolled-back thread is rebuilt, so the link belongs in it
+  ThreadLinkPr  a person saying so, for the cases above that no name encodes
+```
+
+The inbox join reads the link **after** the name-based recovery, so the link
+wins. The name path stays because this machine is full of workspaces that
+predate the field — including the Go implementation's `pr-<n>-<branch>` — and a
+row that could not find its thread would offer to build a second one.
+
+No chip for it in the sidebar, deliberately: a review thread's title already
+begins `#2418`, and the workspace row already shows `facts.pr`. A third copy of
+the same number is duplication, not information. The link exists to be the
+record the inbox joins on.
+
+### A review is the same job, with one step turned on
+
+Reviewing a PR is `create-workspace` with `review` on its input. That switches
+the `fetch` step from a no-op into a fetch and changes nothing else — and two
+other differences fall out rather than being arranged:
+
+```
+  workspace  pre-set to `pr-<n>`   so the `name` step skips the model. Ten
+                                   seconds spent inventing a name that must
+                                   not vary is ten seconds wasted
+  bookmark   none                  it is composed by the step that names, so a
+                                   job that skips naming has none. `pr-123` is
+                                   not a branch anybody should push
+```
+
+**The base is patched by the step, not decided by the handler.** A PR's head is
+a branch name, which is not a revision until something has fetched it — and
+which revset it becomes depends on what the fetch produced:
+
+```
+  from origin    feature@origin   jj does not track a fetched branch locally
+  from a fork    feature          git wrote refs/heads, so jj imports it local
+```
+
+The remote one wins when both exist: a local bookmark of the same name is
+somebody's own copy and may be behind the pull request, and reviewing a stale
+branch is worse than not reviewing because nothing about it says so.
+
+**`jj git import` after a fork fetch, or jj cannot see the ref.** jj caches its
+view of the git refs per operation, and nothing about the symptom points at it:
+the bookmark is simply not in `bookmark list` and the revision "does not exist".
+
+**The name is `pr-<n>`, and the branch is deliberately not in it.** The archive
+called it `pr-<n>-<branch>`, which reads better in a directory listing and is
+the wrong identity — a branch can be renamed or force-pushed while the pull
+request stays the same one, and this name is what every idempotence check is.
+
+**Idempotent by two records, because one is not enough.**
+
+```
+  a thread holding `pr-<n>`   the review finished. Its job record may have been
+                              cleared and the workspace is still there
+  the job's idempotency key   the review is still being built. The claim is the
+                              job's second-to-last step, so a running job holds
+                              a thread no member lookup can find
+```
+
+`ReviewStart` answers with `created: false` in both cases, so the row can go to
+the workspace rather than reporting a success that did not happen. The window
+therefore does not track what it has started — a reload mid-create would forget,
+and the daemon would not.
+
+There is a third case, and it is a race rather than a state: two presses in one
+second. `enqueue` answers the second with the first job, which leaves the thread
+the handler had just made as litter — so the handler compares the thread on the
+returned job's record with the one it created, and removes its own if it lost.
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes
@@ -2090,6 +2717,141 @@ It fixes **file content only**. Commit messages are separate, and the check
 that catches them is `jj log -T description` piped through the same filter;
 rewrite each with `jj describe -r <id> --stdin`. Five were missed on the first
 pass because the trees came back clean and the messages were not looked at.
+
+## A second instance, beside the one you are working in
+
+This repository is developed from inside the application it builds, so the
+ordinary way to look at a change — restart the app — stops the window the change
+is being made in. The answer is a **second daemon and a second renderer**, on
+their own ports, with the running pair untouched.
+
+```
+  in use     5273 renderer · 5274 daemon        do not touch
+  the branch 5283 renderer · 5284 daemon        the one under test
+```
+
+Two overrides, and no more. Both are development handles rather than settings —
+neither is in the config file, because a port a person could set permanently is
+a port every other client would then have to be told about.
+
+```
+  AWP_DAEMON_PORT       which port the daemon binds. The HOST is not
+                        overridable: the daemon hands out ptys onto the user's
+                        own agent sessions, so binding off the loopback
+                        interface would put a shell on the network
+  VITE_AWP_DAEMON_URL   which daemon the renderer talks to. Substituted by
+                        Vite at BUILD time — the renderer has no process
+                        environment to read at runtime
+```
+
+The two commands, from the repository root:
+
+```
+AWP_DAEMON_PORT=5284 bun run daemon
+
+cd apps/amoeba && VITE_AWP_DAEMON_URL=ws://127.0.0.1:5284 \
+  bunx vite --port 5283 --strictPort --clearScreen false
+```
+
+Then open **`http://127.0.0.1:5283/#/`** in a browser.
+
+**Vite and not `bun run amoeba`.** That script starts Electrobun as well, which
+means a second native window, a second webview process and a second menu bar
+claiming cmd+V — and Electrobun is told its dev-server port by an env var baked
+into the script. A browser tab is the cheaper half and answers nearly every
+question: the layout, the theme, the panels, the pane's own rendering, and every
+call over the socket. What a browser cannot answer is anything about the native
+webview — see the web panel, which says so in words rather than rendering an
+empty box.
+
+**`--strictPort`, always.** A Vite that quietly moved to the next free port
+would leave you looking at the instance you were trying not to disturb, and
+nothing on screen would say which one it was.
+
+Three things to check before clicking anything, in this order.
+
+**The database is shared.** `~/.awp/awp.sqlite` is one file and both daemons
+open it. That is usually what you want — the real threads are there, so a
+feature that joins against them can be exercised for real — but two jobs
+runners over one store both resume non-terminal jobs on start, and the
+deduplication that stops a job running twice is per process. So look first:
+
+```
+sqlite3 ~/.awp/awp.sqlite \
+  "select count(*) from jobs where status in ('queued','running')"
+```
+
+Zero is the safe state and the ordinary one. If it is not zero, wait for them,
+or point the second daemon at its own file and accept that its threads, jobs
+and projects will be empty.
+
+**Anything you do there is real.** A review started in the second window makes
+a real jj workspace, a real bookmark and a real zmx session, in the real store.
+It is a second instance, not a sandbox.
+
+**Opening a workspace route attaches to that session, and resizes it.** This is
+the rule stated at length in _A browser probe attaches to a session, and resizes
+it_, and a hand-driven browser is the same hazard as a headless one: a session
+takes its size from whoever is looking at it, so clicking a row in the second
+window reflows a terminal somebody is working in — to whatever the agent column
+computes to in that browser tab.
+
+```
+  #/                          the fixture. Attaches to nothing        ← start here
+  #/w/<project>/<ws>/agent    a real session, sized to this tab
+```
+
+`#/` is enough for anything about layout, theme, scrollbars, a panel's own
+behaviour, or a call to the daemon. When a session genuinely is the thing under
+test, name a workspace this repo created for the purpose — the `ours()` shape
+`probe:workspace` uses — and never one a person is working in.
+
+**Two daemons on one store means "the reply is the update" stops holding.**
+Threads deliberately have no change stream — a thread changes when a person
+changes it, in this window, so the reply to the change _is_ the update — and the
+one thing that nudges a window to re-read is a job of its own finishing. With a
+second instance, the person changing a thread is in the other window, and the
+job ran in the other daemon's runner, whose change feed is per process.
+
+Measured, after starting a review in the branch window:
+
+```
+  ws://127.0.0.1:5284   threads 26   review work thicket/pr-2418
+  ws://127.0.0.1:5274   threads 26   review work thicket/pr-2418   ← the daemon knows
+                        the base-branch WINDOW did not, until it was reloaded
+```
+
+So a record missing from the other window is not evidence it is missing.
+`bun run probe:ask <url>` asks a specific daemon what it reports, which is the
+only way to tell a stale window from an absent row — and both its calls are
+questions, so it is safe against a daemon somebody is working in.
+
+The corollary is a real hazard rather than a curiosity: a **non-terminal** job
+written by one daemon can be resumed by the other, whose registry is a different
+build. A `create-workspace` record whose `steps` list includes `fetch` resumed by
+a daemon whose kind has no such step runs a different list against the same
+`done`. Terminal jobs are inert and are the ordinary case; before starting a
+second daemon, the check for in-flight jobs above is what keeps this theoretical.
+
+Stopping it: the daemon and Vite are ordinary processes on those ports.
+
+```
+lsof -nP -iTCP:5283 -sTCP:LISTEN -iTCP:5284 -sTCP:LISTEN
+```
+
+**Verify the renderer is pointed where you think.** The substitution happens at
+build time, so a missing variable is not an error — it is a window quietly
+talking to the daemon on 5274, which looks exactly like a working second
+instance until a branch-only call fails. Ask the dev server what it served:
+
+```
+curl -s http://127.0.0.1:5283/src/renderer/daemon.ts | head -1
+#  import.meta.env = {… "VITE_AWP_DAEMON_URL": "ws://127.0.0.1:5284"};
+```
+
+That line is the whole check, and it is the same shape as every other silent
+failure in this file: read what the other process received, not what was handed
+to it.
 
 ## Working here
 

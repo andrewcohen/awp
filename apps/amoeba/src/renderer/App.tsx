@@ -7,9 +7,9 @@ import { Boundary } from "./Boundary";
 import { AppearanceToggle } from "./Appearance";
 import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
+import { LeftColumn } from "./LeftColumn";
 import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Pane } from "./Pane";
-import { Sidebar } from "./Sidebar";
 import { addressFrom, addressOf, pathOf, sessionAt } from "./address";
 import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
 import {
@@ -31,6 +31,7 @@ import { useProjects } from "./useProjects";
 import { threadHolding } from "./workspaces";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
+import { PRIMARY, prOf } from "./workspaces";
 
 // The window: two bars with three columns between them.
 //
@@ -283,6 +284,15 @@ export function App() {
   // attached to. Derived, never written back — see `sessionAt`.
   const open = sessionAt(address, sessions);
 
+  // Which pull request the open workspace is about, if its thread names one.
+  //
+  // Derived here from the threads this window already holds rather than asked
+  // for: the link is on the thread record, so a call would be a second copy of
+  // something already on screen. `prs[0]` because a thread may be about several
+  // and the panel shows one — the first is the one it was started for, and a
+  // second tab per pull request is a strip nobody asked for.
+  const openPr = prOf(open?.identity, threads);
+
   // The modal, as a request rather than a boolean. It carries what the window
   // knew at the moment it was opened — which project was on screen, and which
   // workspace — so the form can read them once at mount instead of tracking a
@@ -400,15 +410,37 @@ export function App() {
         >
           <div {...stylex.props(styles.stack, folding && styles.hold(full.sidebar))}>
             <Boundary where="the sidebar">
-              <Sidebar
+              <LeftColumn
                 sessions={sessions}
                 facts={facts}
+                // The jobs this window already streams, rather than a second
+                // subscription inside the panel: `JobChanges` is a request, so a
+                // second listener is a second feed over the same socket for the
+                // same records.
+                jobs={jobs}
                 selected={open?.name}
                 onSelect={(session) => {
                   void navigate({ to: pathOf(addressOf(session)) });
                 }}
+                // The address, not a session: an inbox row knows the
+                // `(project, workspace)` pair — which is what the daemon records
+                // — and not which of its sessions happens to be running. The
+                // address resolves that, and answers with nothing while a job is
+                // still building the workspace, which is the honest state.
+                onOpenWorkspace={(project, workspace) => {
+                  void navigate({
+                    to: pathOf({ at: "workspace", project, workspace, kind: PRIMARY }),
+                  });
+                }}
                 threads={threads}
-                onThreadsChanged={reloadThreads}
+                onThreadsChanged={() => {
+                  reloadThreads();
+                  // And the sessions, because starting a review makes one. The
+                  // job is what actually creates it, so this is the optimistic
+                  // half; the `finished` effect above is what catches up when
+                  // the job lands.
+                  reloadSessions();
+                }}
                 failure={failure}
                 onNew={() =>
                   setNewThread({
@@ -491,6 +523,10 @@ export function App() {
             <Boundary where="the accessory panel">
               <Accessory
                 onFold={fold("accessory")}
+                // The pull request the open workspace is about, which is what
+                // makes the `PR` tab exist at all — derived from the threads
+                // this window already holds rather than asked for.
+                pr={openPr}
                 thread={threadHolding(threads, open?.identity?.project, open?.identity?.workspace)}
                 dir={open?.startDir}
                 project={open?.identity?.project}

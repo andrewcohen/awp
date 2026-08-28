@@ -270,6 +270,40 @@ export const ThreadMember = Schema.Struct({
 
 export type ThreadMember = (typeof ThreadMember)["Type"];
 
+/**
+ * A pull request a thread is about.
+ *
+ * ── why this is recorded rather than read off a directory name ─────────────
+ *
+ * It *was* readable: a review workspace is called `pr-<number>`, so the number
+ * could be parsed back out of the member. That works until any of the ordinary
+ * things happen — somebody renames a workspace, opens a PR for work that
+ * already had a thread, or reviews a PR in a checkout they made by hand — and
+ * every one of those is a thread whose pull request awp then cannot name.
+ *
+ * It is the same argument as `parentId`: a name is an address and this is a
+ * claim about the work. The address is still used, for the workspaces that
+ * predate this field and for the Go implementation's `pr-<n>-<branch>`.
+ *
+ * ── and why a thread may have several ──────────────────────────────────────
+ *
+ * Because a thread already holds several workspaces, and each is in a different
+ * repository with its own pull request — a change to a frontend and the api
+ * behind it is one piece of work and two PRs. A stack in one repository is the
+ * other case: two open PRs, one thread, and the second is not a different job.
+ *
+ * The reverse is *not* many-to-many: a pull request belongs to at most one
+ * thread, enforced the way a workspace's single claim is. Two threads about one
+ * PR has no rendering — the inbox row would have to pick which of them to point
+ * at, and a person would have to work out which was lying.
+ */
+export const ThreadPr = Schema.Struct({
+  project: Schema.String,
+  number: Schema.Int,
+});
+
+export type ThreadPr = (typeof ThreadPr)["Type"];
+
 export const Thread = Schema.Struct({
   id: Schema.String,
   /**
@@ -304,6 +338,8 @@ export const Thread = Schema.Struct({
    */
   parentId: Schema.UndefinedOr(Schema.String),
   members: Schema.Array(ThreadMember),
+  /** The pull requests this work is about. See {@link ThreadPr}. */
+  prs: Schema.Array(ThreadPr),
 });
 
 export type Thread = (typeof Thread)["Type"];
@@ -346,6 +382,36 @@ export type Effort = (typeof Effort)["Type"];
  * model that exists.
  */
 export const Model = Schema.String;
+
+/**
+ * The pull request a workspace is being made to review.
+ *
+ * On the payload rather than looked up by the job, and that is the rule the
+ * jobs package states in general: **a resumed job has only its record.** A
+ * daemon restarted mid-create has no answer from GitHub in memory and no
+ * reason to spend another round trip on one, so what the fetch needs travels
+ * with the job.
+ *
+ * `headRef` is a branch name and not a revision on purpose — it does not exist
+ * locally until the fetch step has run, which is why that step is the one that
+ * resolves `base`. See `create-workspace.ts`.
+ */
+export const ReviewTarget = Schema.Struct({
+  number: Schema.Int,
+  /** The PR's own branch, as GitHub names it. */
+  headRef: Schema.String,
+  /**
+   * The head repository when it is a fork, `owner/name`.
+   *
+   * A fork's head branch is not on `origin`, so `jj git fetch` does not bring
+   * it down and the base would name a branch nothing has heard of. Absent means
+   * the head is on the repository itself, which is the ordinary case and needs
+   * no second fetch.
+   */
+  fork: Schema.optional(Schema.Struct({ owner: Schema.String, repo: Schema.String })),
+});
+
+export type ReviewTarget = (typeof ReviewTarget)["Type"];
 
 /**
  * What making a workspace needs to know.
@@ -422,6 +488,16 @@ export const CreateWorkspace = Schema.Struct({
    * shared repository's bookmark list is a name nobody can attribute.
    */
   bookmark: Schema.optional(Schema.String),
+  /**
+   * The pull request this workspace is for, or absent for ordinary work.
+   *
+   * Present is what turns the `fetch` step from a no-op into a fetch, and it is
+   * the only difference between the two jobs. Everything else a review needs —
+   * a pre-set `workspace`, so the naming step does not spend ten seconds on a
+   * name that is already decided, and no `bookmark`, because `pr-123` is not a
+   * branch anybody should push — falls out of fields that already existed.
+   */
+  review: Schema.optional(ReviewTarget),
   /** What the agent session runs. */
   agent: Schema.Array(Schema.String),
 });
@@ -453,6 +529,16 @@ export type CreateWorkspace = (typeof CreateWorkspace)["Type"];
 export const CommentSide = Schema.Literals(["deletions", "additions"]);
 
 export type CommentSide = (typeof CommentSide)["Type"];
+
+/** Who filed a remark. See {@link ReviewComment.author}. */
+export const CommentAuthor = Schema.Literals(["human", "agent"]);
+
+export type CommentAuthor = (typeof CommentAuthor)["Type"];
+
+/** What kind of remark it is. See {@link ReviewComment.kind}. */
+export const CommentKind = Schema.Literals(["comment", "suggestion", "question", "praise"]);
+
+export type CommentKind = (typeof CommentKind)["Type"];
 
 /**
  * Something a person said about one line of one revision.
@@ -500,6 +586,50 @@ export const ReviewComment = Schema.Struct({
    */
   endLine: Schema.Int,
   body: Schema.String,
+  /**
+   * Who wrote it.
+   *
+   * The field that makes a *review* out of a list of comments. A person reading
+   * their own remarks knows which are theirs; the moment an agent files
+   * findings into the same store, a panel that drew them alike would be asking
+   * somebody to remember which of thirty lines they wrote.
+   *
+   * It also decides what may be done with one: a person's comment is a draft
+   * until it is sent, and an agent's finding is already delivered to the person
+   * — the direction is reversed, and the panel has to be able to tell.
+   */
+  author: CommentAuthor,
+  /**
+   * What kind of remark it is.
+   *
+   * Four, from the archive, and the set is closed on purpose: a reviewer given
+   * a free-text label uses ten and the reader learns none of them. Each one
+   * says something different about what to do next —
+   *
+   *   comment     an observation. Nothing is being asked for
+   *   suggestion  a change worth making
+   *   question    an answer is wanted before anything changes
+   *   praise      worth keeping, and worth saying so
+   *
+   * `praise` is the one that looks like a nicety and is not: a review of only
+   * problems reads as a verdict on the work, and an agent with no way to say
+   * "this part is right" restates every problem harder.
+   */
+  kind: CommentKind,
+  /**
+   * The line's text as the filer saw it, when they said.
+   *
+   * Recorded for two reasons and used for one of them today. The one: filing
+   * verifies it against the file, so a finding aimed at a line number that has
+   * since moved is refused where the mistake is rather than becoming a remark
+   * about the wrong line. The other: it is what a later relocation pass would
+   * need to find the line again after the code moves — the archive anchored to
+   * content for exactly that, and nothing here does it yet.
+   *
+   * Absent for a comment written in the window, where the panel already knows
+   * which line it is on and the anchor cannot be stale.
+   */
+  text: Schema.optional(Schema.String),
   createdAt: Schema.Date,
   /** When the agent was told, or absent while it is a draft. */
   sentAt: Schema.UndefinedOr(Schema.Date),
@@ -515,6 +645,43 @@ export type ReviewComment = (typeof ReviewComment)["Type"];
  * shown when they ask what was actually said, which is otherwise knowable only
  * by scrolling the agent's own terminal back.
  */
+/**
+ * A finding could not be filed, said in a sentence.
+ *
+ * One error with one sentence rather than a tag per cause, the same shape as
+ * {@link ProjectImportFailed}: every reason is a thing about the directory, the
+ * path or the line that the caller can look at and fix, and nothing branches on
+ * which. What reads it is an agent, in a terminal, so the sentence *is* the
+ * interface.
+ */
+export class ReviewFileFailed extends Schema.TaggedError<ReviewFileFailed>()("ReviewFileFailed", {
+  reason: Schema.String,
+}) {}
+
+/**
+ * A filed finding, and where it went.
+ *
+ * The `where` is not decoration. An agent filing from the wrong directory is
+ * the failure this whole call is shaped around, and the only thing that makes
+ * it visible is a reply naming the review — which the caller is told to read.
+ */
+export const ReviewFiled = Schema.Struct({
+  comment: ReviewComment,
+  /** `added a suggestion to thicket/pr-2418 on src/router.ts:42`. */
+  where: Schema.String,
+});
+
+export type ReviewFiled = (typeof ReviewFiled)["Type"];
+
+/** Which review a directory is in, and what is already filed against it. */
+export const ReviewFound = Schema.Struct({
+  project: Schema.String,
+  workspace: Schema.String,
+  comments: Schema.Array(ReviewComment),
+});
+
+export type ReviewFound = (typeof ReviewFound)["Type"];
+
 export const ReviewSent = Schema.Struct({
   sent: Schema.Array(ReviewComment),
   prompt: Schema.String,
@@ -620,6 +787,461 @@ export type ThreadBase = (typeof ThreadBase)["Type"];
 export const ThreadStarted = Schema.Struct({ thread: Thread, job: Job });
 
 export type ThreadStarted = (typeof ThreadStarted)["Type"];
+
+// ── the inbox ──────────────────────────────────────────────────────────────
+//
+// Every open pull request awp can see, sectioned by what the next move is.
+// Ported from the deck's inbox scope, and one thing about it is inverted.
+//
+//   deck    the rows were WORKSPACES, and a PR with no local checkout had to
+//           be synthesized as a "virtual" row — three passes of it (review
+//           requested, mine, and a fourth to fill the holes a partly-shown
+//           stack left), each deduping against the ones before
+//   here    the rows are PULL REQUESTS, and a local workspace is an
+//           annotation on one
+//
+// Nothing was cleverer about the second; it starts from the list GitHub
+// actually returns. All three synthesis passes and their dedup tables exist
+// only because the first one started from the wrong set.
+//
+// **The daemon classifies, sections and orders.** A client receives rows it can
+// render top to bottom, for the same reason `SessionIdentity` is on the wire: a
+// client re-deriving a rule is a second implementation of it, and the copy that
+// drifts is the one nobody tests. The rule here is `PRInboxBucket`'s
+// precedence, which is subtle enough that the archive locked it with tests.
+
+/** How CI rolls up. `none` is a PR with no checks, which is not a failure. */
+export const CIState = Schema.Literals(["none", "pending", "passing", "failing"]);
+
+export type CIState = (typeof CIState)["Type"];
+
+/**
+ * GitHub's branch-protection verdict, or `none` when nobody has reviewed.
+ *
+ * Not the same question as "did anyone leave feedback" — see
+ * {@link InboxItem.hasReviewComments}, which is the only signal that catches a
+ * reviewer who commented without formally requesting changes.
+ */
+export const ReviewDecision = Schema.Literals([
+  "none",
+  "approved",
+  "changes-requested",
+  "review-required",
+]);
+
+export type ReviewDecision = (typeof ReviewDecision)["Type"];
+
+/**
+ * Whether the PR would merge as it stands.
+ *
+ * `behind` only ever appears when the repository requires up-to-date branches;
+ * without that rule GitHub reports an out-of-date PR as `clean`, so a client
+ * must not read the absence of `behind` as "up to date".
+ */
+export const MergeState = Schema.Literals([
+  "unknown",
+  "clean",
+  "dirty",
+  "behind",
+  "blocked",
+  "draft",
+  "unstable",
+  "has-hooks",
+]);
+
+export type MergeState = (typeof MergeState)["Type"];
+
+/**
+ * Which section of the inbox a row belongs to, and the order the sections are
+ * drawn in: most-your-problem first.
+ *
+ * Sections rather than the attention scope's flat list of reasons, because the
+ * question the inbox answers is "what is my next move", and the five answers
+ * are stable enough to be headings. The archive's precedence, kept:
+ *
+ *   needs-your-review   somebody asked you — wins over everything, including
+ *                       the PR's own state, because it names you
+ *   needs-action        yours, and something is wrong with it
+ *   ready-to-merge      yours, approved and green
+ *   other-open          neither yours nor waiting on you
+ *   mine                yours, and the ball is elsewhere — or still a draft
+ */
+export const InboxBucket = Schema.Literals([
+  "needs-your-review",
+  "needs-action",
+  "ready-to-merge",
+  "other-open",
+  "mine",
+]);
+
+export type InboxBucket = (typeof InboxBucket)["Type"];
+
+/** The heading for a bucket. One place, so two surfaces cannot disagree. */
+export const bucketLabel = (bucket: InboxBucket): string => {
+  switch (bucket) {
+    case "needs-your-review":
+      return "Needs your review";
+    case "needs-action":
+      return "Needs action";
+    case "ready-to-merge":
+      return "Ready to merge";
+    case "other-open":
+      return "Other open PRs";
+    case "mine":
+      return "Mine";
+  }
+};
+
+/** The order the sections are drawn in. */
+export const inboxBuckets: ReadonlyArray<InboxBucket> = [
+  "needs-your-review",
+  "needs-action",
+  "ready-to-merge",
+  "other-open",
+  "mine",
+];
+
+/**
+ * One open pull request, as a row.
+ *
+ * The viewer-relative fields — `mine`, `reviewRequested`, `reviewRerequested` —
+ * are reduced to booleans by the daemon against the authenticated `gh` login,
+ * so nothing downstream has to know whose inbox it is rendering. With no login
+ * they are all false, which is why {@link Inbox.viewer} is on the answer: every
+ * bucket that names the viewer is empty in that case, and an inbox that is
+ * empty because nobody is signed in must not look like an inbox with nothing in
+ * it.
+ */
+export const InboxItem = Schema.Struct({
+  /** The project this PR's repository is, by awp's name for it. */
+  project: Schema.String,
+  /** That repository's root, so an action does not have to resolve it again. */
+  repo: Schema.String,
+
+  number: Schema.Int,
+  title: Schema.String,
+  /** The author's login, whoever they are. */
+  author: Schema.String,
+  url: Schema.String,
+  /** The PR's own branch, and the branch it merges into. */
+  headRef: Schema.String,
+  baseRef: Schema.String,
+
+  draft: Schema.Boolean,
+  ci: CIState,
+  review: ReviewDecision,
+  mergeState: MergeState,
+  labels: Schema.Array(Schema.String),
+
+  mine: Schema.Boolean,
+  reviewRequested: Schema.Boolean,
+  /** You reviewed it once and the author has asked again. */
+  reviewRerequested: Schema.Boolean,
+  /**
+   * A reviewer left COMMENTED or CHANGES_REQUESTED feedback.
+   *
+   * Distinct from `review`, and the distinction is the whole reason it is here:
+   * a plain review comment never moves GitHub's verdict off `review-required`,
+   * so this is the only signal that catches "somebody gave you notes".
+   */
+  hasReviewComments: Schema.Boolean,
+
+  bucket: InboxBucket,
+  /**
+   * How deep in its stack: 0 for a PR based on the trunk, 1+ for one based on
+   * another open PR's branch. Drives the row's indent.
+   *
+   * Derived from the base/head graph over the repository's open PRs, which the
+   * daemon has in hand anyway — the deck needed a whole extra synthesis pass
+   * here only because its rows were workspaces and a stack's middle link is
+   * frequently somebody else's PR.
+   */
+  depth: Schema.Int,
+  /**
+   * Which stack this row belongs to — the head branch of its root — or absent
+   * when the pull request stands alone.
+   *
+   * **It was removed from here once**, as "an implementation of contiguity": the
+   * daemon sorts the rows, so a client had no use for it. Drawing the tree gave
+   * it one. A guide character depends on what comes *after* a row within the
+   * same stack, and a client inferring stack membership from runs of `depth`
+   * would be re-deriving the grouping the daemon already did — which is the
+   * thing this whole record exists to avoid.
+   *
+   * Absent for a lone pull request rather than set to its own branch, because
+   * that is what decides whether any guide is drawn at all: a tree of one is
+   * not a tree, and a `└─` in front of every unstacked row is noise.
+   */
+  stack: Schema.optional(Schema.String),
+  /** An open ancestor that is not ready to merge. It cannot land yet. */
+  blocked: Schema.Boolean,
+
+  /**
+   * The awp workspace reviewing this PR, when it exists.
+   *
+   * What makes the row's action idempotent *visibly* — a row with a workspace
+   * offers to open it rather than to make a second one.
+   *
+   * **Set as soon as the workspace can be opened, not when it is finished.**
+   * Two sources, and the second was added because the first was too late: a
+   * thread claiming it, and a *session* whose identity names it. The claim is
+   * the create job's second-to-last step, so a row built on it alone said
+   * nothing for the thirty seconds between the session appearing and the job
+   * ending — which is precisely the window a person is watching.
+   */
+  workspace: Schema.optional(Schema.String),
+  /** The thread holding that workspace, once one has claimed it. */
+  thread: Schema.optional(Schema.String),
+  /**
+   * The workspace does not contain what the pull request now is.
+   *
+   * ── the one signal a review cannot do without ─────────────────────────────
+   *
+   * A review workspace is a checkout of the head at the moment it was made, and
+   * a pull request moves: the author pushes a fix, or force-pushes a rewrite.
+   * From then on the diff being read, the comments being written and the agent's
+   * findings are all about code the pull request no longer has — and *nothing on
+   * screen says so*. That is worse than being out of date, because a review
+   * delivered against an old head reads as a review of the current one.
+   *
+   * Asked as "is the head an ancestor of the working copy", not "are they equal":
+   * a person who has committed something of their own on top is still reviewing
+   * the right code. Absent evidence counts as moved — a head that was
+   * force-pushed away is not in the repository at all, and "we do not have what
+   * the pull request is" and "we have something older" call for the same act.
+   *
+   * False for a row with no workspace, where there is nothing to be stale.
+   */
+  moved: Schema.Boolean,
+  /**
+   * The job that built this review, or is building it now.
+   *
+   * The **id** and not the record, deliberately. A job changes on its own and
+   * the client already has a live feed of every one of them, so sending the
+   * record here would put a second, staler copy on a list that is a snapshot —
+   * and the two would disagree exactly while a person watched a row progress.
+   * The id is the join; `JobChanges` is the truth.
+   *
+   * Present whatever became of it, including a failure: a review whose job
+   * failed is a row that has to be able to say so, rather than one that looks
+   * untouched and starts a second job on the next press.
+   */
+  job: Schema.optional(Schema.String),
+});
+
+export type InboxItem = (typeof InboxItem)["Type"];
+
+/**
+ * Where one project's rows came from, and what went wrong if they did not.
+ *
+ * **Per project, because one repository's failure must not lose the others.**
+ * `gh` is missing, or a repository's remote is not GitHub, or a token expired —
+ * and the honest answer is the other projects' pull requests plus a sentence
+ * about the one that could not be read. A single error for the whole call would
+ * turn one unauthenticated repository into an empty inbox.
+ */
+export const InboxSource = Schema.Struct({
+  project: Schema.String,
+  root: Schema.String,
+  /** When these rows were read from GitHub. Absent when they never were. */
+  fetchedAt: Schema.optional(Schema.Date),
+  /** `gh`'s own sentence about why not. */
+  failure: Schema.optional(Schema.String),
+  /**
+   * What had to be given up to read this project's rows, if anything.
+   *
+   * Distinct from `failure`, which means there are no rows. This means there
+   * *are* rows and one signal is missing from them — GitHub refuses to compute
+   * mergeability for a hundred pull requests on a busy repository, so conflicts
+   * and behind-base are unknown there. Said out loud rather than degrading
+   * silently, which would leave a person reading a clean-looking inbox for a
+   * repository where nothing can say a PR is in conflict.
+   */
+  degraded: Schema.optional(Schema.String),
+});
+
+export type InboxSource = (typeof InboxSource)["Type"];
+
+export const Inbox = Schema.Struct({
+  /** Every row, already sectioned and ordered. See {@link InboxItem.bucket}. */
+  items: Schema.Array(InboxItem),
+  sources: Schema.Array(InboxSource),
+  /**
+   * The authenticated `gh` login, or absent when there is none.
+   *
+   * On the answer rather than left implicit because it is the difference
+   * between "nothing is waiting on you" and "nobody knows who you are". Every
+   * viewer-relative bucket is empty without it.
+   */
+  viewer: Schema.optional(Schema.String),
+});
+
+export type Inbox = (typeof Inbox)["Type"];
+
+/**
+ * ── `Schema.optional`, not `Schema.UndefinedOr`, for anything absent-able ────
+ *
+ * Measured, after a pull request panel refused to decode with
+ * `Missing key at ["value"]["remarks"][0]["verdict"]`:
+ *
+ *   ENCODED     {"author":…,"body":…}   keys: author, body, verdict, at
+ *   AFTER JSON  {"author":…,"body":…}   ← stringify drops an undefined value
+ *   DECODED     Missing key at ["verdict"]
+ *
+ * The serialization is ndjson, which is `JSON.stringify`, and JSON has no
+ * `undefined` — so a field spelled `UndefinedOr` and *given* undefined arrives
+ * as an absent key, and `UndefinedOr` requires the key to be there. It is the
+ * same rule the jobs store already documents for its own JSON column; what is
+ * new is that it applies to the wire, which is the same JSON.
+ *
+ * `Schema.optional` accepts both spellings — absent, and present-but-undefined —
+ * and its TypeScript type is `x?: T | undefined`, so a caller may still pass
+ * `undefined` explicitly under `exactOptionalPropertyTypes`.
+ *
+ * The older fields here are deliberately left as they are: they are what a
+ * caller has always written, they are covered by the round-trip tests in
+ * index.test.ts, and changing them all at once would be a large edit whose
+ * failures would be indistinguishable from this one's. New ones use `optional`.
+ */
+/** Something somebody said on a pull request — a comment, or a review's body. */
+export const PullRequestRemark = Schema.Struct({
+  author: Schema.String,
+  body: Schema.String,
+  /** `approved`, `changes requested`, `commented` — absent for a comment. */
+  verdict: Schema.optional(Schema.String),
+  at: Schema.optional(Schema.Date),
+});
+
+export type PullRequestRemark = (typeof PullRequestRemark)["Type"];
+
+/**
+ * One pull request, in the detail a panel shows and a briefing reads.
+ *
+ * Deliberately a different shape from {@link InboxItem}, which is a *row*: this
+ * carries the description and the conversation, and the listing cannot afford
+ * either — `gh pr list` asks for a hundred at once. The fields they share are
+ * projected by the same functions in the daemon, so the state a row shows and
+ * the state this shows cannot disagree.
+ *
+ * **Not restricted to open pull requests.** A panel is opened on one that merged
+ * an hour ago, and answering "no such pull request" for it would be a lie about
+ * a thing plainly on the screen — `state` says which it is.
+ */
+export const PullRequest = Schema.Struct({
+  project: Schema.String,
+  number: Schema.Int,
+  title: Schema.String,
+  /** Markdown, as the author wrote it. Empty is ordinary. */
+  body: Schema.String,
+  url: Schema.String,
+  author: Schema.String,
+  /** `open`, `merged`, `closed`. */
+  state: Schema.String,
+  draft: Schema.Boolean,
+  baseRef: Schema.String,
+  headRef: Schema.String,
+  ci: CIState,
+  review: ReviewDecision,
+  mergeState: MergeState,
+  labels: Schema.Array(Schema.String),
+  /**
+   * A reviewer left something to act on, whatever GitHub's verdict says.
+   *
+   * Not viewer-relative — unlike `mine` and `reviewRequested`, which are about
+   * this machine's login and deliberately do not travel on this record. This one
+   * is a fact about the pull request, and it is what decides whether the panel
+   * offers a repair at all.
+   */
+  hasReviewComments: Schema.Boolean,
+  remarks: Schema.Array(PullRequestRemark),
+  /**
+   * The workspace reviewing this pull request, if a thread names one.
+   *
+   * Here as well as on {@link InboxItem} because the panel is opened *from* a
+   * workspace and has to be able to offer the repair below without the inbox
+   * having been read at all.
+   */
+  workspace: Schema.optional(Schema.String),
+  /** That workspace does not contain this head. See {@link InboxItem.moved}. */
+  moved: Schema.Boolean,
+  /** The size of the change, which is the first thing a reviewer wants. */
+  additions: Schema.Int,
+  deletions: Schema.Int,
+  files: Schema.Int,
+});
+
+export type PullRequest = (typeof PullRequest)["Type"];
+
+/**
+ * What was said to the agent about what is wrong with a pull request.
+ *
+ * ── the prompt comes back because it was sent, not to be approved ──────────
+ *
+ * The deck handed this to a form first and let a person edit it before it went.
+ * One press is better and the reason is what the button is for: somebody who
+ * pressed *repair* has already decided. A box between the decision and the act
+ * is a second decision to make about a sentence they did not write.
+ *
+ * So the prompt is on the answer for the reason {@link ReviewSent} carries one:
+ * it is what the panel shows when asked what was actually said, which is
+ * otherwise knowable only by scrolling the agent's own terminal back.
+ *
+ * **Empty means there was nothing to repair** — an open pull request with green
+ * CI, no conflicts and nobody waiting — and then nothing was sent.
+ */
+export const Repaired = Schema.Struct({
+  /** What was typed at the agent, or empty when there was nothing to say. */
+  prompt: Schema.String,
+  /**
+   * Which tone it was written in: an owner is asked to fix, a reviewer to look.
+   *
+   * On the answer because it changes what the window should say about the button
+   * — "fix and push" and "investigate and report" are different offers — and
+   * because the rule that decides it is the daemon's (the bookmark prefix is in
+   * its config).
+   */
+  mine: Schema.Boolean,
+  /** The workspace whose agent heard it. Absent when nothing was sent. */
+  workspace: Schema.optional(Schema.String),
+});
+
+export type Repaired = (typeof Repaired)["Type"];
+
+/**
+ * A review could not be started, said in a sentence.
+ *
+ * One error rather than a tag per case, the same shape as
+ * {@link ProjectImportFailed} and for the same reason: every cause is a thing
+ * about the PR or the repository a person can look at — it is closed, `gh`
+ * cannot reach it, the project is not one awp knows — and nothing branches on
+ * which. The window shows the sentence.
+ */
+export class ReviewStartFailed extends Schema.TaggedError<ReviewStartFailed>()(
+  "ReviewStartFailed",
+  { project: Schema.String, number: Schema.Int, reason: Schema.String },
+) {}
+
+/**
+ * What {@link AwpRpcs ReviewStart} hands back.
+ *
+ * `created` is the field that makes the call safe to press twice. A second
+ * click answers with the same thread and the same job and says it made
+ * nothing, so the window can go to the workspace rather than reporting a
+ * success that did not happen.
+ *
+ * `job` is absent when the work is already done and its record has since been
+ * cleared — a thread holding the workspace is proof enough, and the panel does
+ * not need a job to point at a finished workspace.
+ */
+export const ReviewStarted = Schema.Struct({
+  thread: Thread,
+  job: Schema.optional(Job),
+  /** The workspace's name, which is `pr-<number>`. */
+  workspace: Schema.String,
+  created: Schema.Boolean,
+});
+
+export type ReviewStarted = (typeof ReviewStarted)["Type"];
 
 // ── the diff of a workspace ────────────────────────────────────────────────
 //
@@ -849,8 +1471,70 @@ export class AwpRpcs extends RpcGroup.make(
       line: Schema.Int,
       endLine: Schema.Int,
       body: Schema.String,
+      /** Absent means `comment` — an observation, which most remarks are. */
+      kind: Schema.optional(CommentKind),
     },
     success: ReviewComment,
+  }),
+
+  /**
+   * File a finding from inside a workspace, as an agent does.
+   *
+   * ── why this is not `ReviewAdd` with two more fields ──────────────────────
+   *
+   * The caller is different in the one way that matters: it has a **directory**
+   * and not a `(project, workspace)` pair. An agent runs in a checkout and
+   * knows where it is standing; it does not know awp's name for the thing it is
+   * standing in, and asking it to work that out would be asking it to
+   * reimplement `~/.awp/workspaces/<project>/<workspace>`.
+   *
+   * That resolution is also the failure worth catching. The Go implementation
+   * lost seven findings on a real pull request to an agent running the command
+   * from the *source repository* rather than the workspace — both sides
+   * reported success, and the findings went into a different review. So the
+   * reply says which review it wrote to, in words, and the refusals below are
+   * all about the same question.
+   *
+   * `text` is the line as the agent read it, and is verified against the file
+   * before anything is stored: a finding aimed at a line number that has since
+   * moved is refused where the mistake is rather than becoming a remark about
+   * the wrong line.
+   */
+  Rpc.make("ReviewFile", {
+    payload: {
+      /** A directory inside the workspace being reviewed. */
+      from: Schema.String,
+      /** Repository-relative, as the diff names it. */
+      path: Schema.String,
+      line: Schema.Int,
+      /** Absent for a single line. */
+      endLine: Schema.optional(Schema.Int),
+      /** Absent means the new side, which is where all but a deletion lives. */
+      side: Schema.optional(CommentSide),
+      kind: Schema.optional(CommentKind),
+      body: Schema.String,
+      /** The line's exact text, checked against the file. */
+      text: Schema.optional(Schema.String),
+      /** Absent means `agent`: this call exists for one. */
+      author: Schema.optional(CommentAuthor),
+    },
+    success: ReviewFiled,
+    error: ReviewFileFailed,
+  }),
+
+  /**
+   * The review a directory is in, and everything already filed against it.
+   *
+   * The read half of {@link Rpc ReviewFile}, and it takes the same handle for
+   * the same reason. It answers with the pair it resolved as well as the
+   * comments, because "which review am I about to write to" is the question an
+   * agent has to be able to ask *before* filing — and the one that lost seven
+   * findings when it could not.
+   */
+  Rpc.make("ReviewAt", {
+    payload: { from: Schema.String },
+    success: ReviewFound,
+    error: ReviewFileFailed,
   }),
 
   /** Delete one, sent or not. Not an error when it has already gone. */
@@ -1055,6 +1739,22 @@ export class AwpRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Record that this thread is about a pull request, taking it from whichever
+   * thread held it before. See {@link ThreadPr} for why the second claim wins.
+   */
+  Rpc.make("ThreadLinkPr", {
+    payload: { thread: Schema.String, pr: ThreadPr },
+    success: Thread,
+    error: ThreadNotFound,
+  }),
+
+  Rpc.make("ThreadUnlinkPr", {
+    payload: { thread: Schema.String, pr: ThreadPr },
+    success: Thread,
+    error: ThreadNotFound,
+  }),
+
+  /**
    * Make a workspace, in the background.
    *
    * Returns the job rather than the workspace, because the work outlives the
@@ -1144,6 +1844,99 @@ export class AwpRpcs extends RpcGroup.make(
     },
     success: ThreadStarted,
     error: ThreadStartFailed,
+  }),
+
+  /**
+   * Every open pull request awp can see, sectioned and ordered.
+   *
+   * One call for every project rather than one per project, because the sections
+   * cut across them: "needs your review" is a heading over three repositories,
+   * and a client assembling that from three replies would be sorting a list the
+   * daemon already knows how to sort.
+   *
+   * **No declared error.** A per-project failure is a field on the answer — see
+   * {@link InboxSource} — because one repository whose `gh` is unauthenticated
+   * must not cost the others their rows.
+   *
+   * `refresh` asks GitHub again rather than answering from what was last read.
+   * The default is the cache, because this is called every time a panel is
+   * opened and `gh pr list` against a busy repository is a couple of seconds.
+   */
+  Rpc.make("InboxList", {
+    payload: { refresh: Schema.optional(Schema.Boolean) },
+    success: Inbox,
+  }),
+
+  /**
+   * One pull request, by project and number.
+   *
+   * Its own call rather than a fatter {@link Rpc InboxList}, because the two
+   * are asked at different times for different reasons: the listing fills a
+   * panel that is open all day, and this answers "what is this pull request"
+   * for the one a workspace is about. It also answers for a merged one, which
+   * the inbox by definition does not.
+   *
+   * `undefined` when `gh` has no such pull request in that project — a number
+   * typed wrongly, or a project that is not on GitHub at all.
+   */
+  Rpc.make("PullRequestView", {
+    payload: {
+      project: Schema.String,
+      number: Schema.Int,
+      /**
+       * Ask GitHub again rather than answering from what was last read.
+       *
+       * The panel needs it for the same reason the inbox does, and slightly
+       * more: a description is edited while somebody reads it, and a comment
+       * arrives on a pull request the whole time. The cache is what makes
+       * switching tabs instant; this is the way to say "that is not what it
+       * says any more".
+       */
+      refresh: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.UndefinedOr(PullRequest),
+    error: ReviewStartFailed,
+  }),
+
+  /**
+   * What to tell an agent about what is wrong with a pull request.
+   *
+   * Composed by the daemon rather than the window, for the reason every rule on
+   * this wire is: it is a hundred lines of wording decisions — which issues a
+   * reviewer may be asked about, which are the author's chores, when the agent
+   * must propose before acting — and a second copy would drift into an agent
+   * being asked to do the wrong job. See `repair.ts`, which is the deck's own
+   * version of it.
+   *
+   * **It composes and sends in one call**, and answers with what it said. One
+   * press, because somebody who pressed repair has already decided — see
+   * {@link Repaired}. Refuses with {@link NoAgent} when the pull request has no
+   * workspace with a live agent to type into, which is a sentence rather than a
+   * silent success.
+   */
+  Rpc.make("PullRequestRepair", {
+    payload: { project: Schema.String, number: Schema.Int },
+    success: Repaired,
+    error: Schema.Union([ReviewStartFailed, NoAgent]),
+  }),
+
+  /**
+   * Make a thread and a workspace for reviewing a pull request, once.
+   *
+   * **Idempotent, and by two mechanisms rather than one.** The job carries an
+   * idempotency key — `review:<project>:<number>` — so a double-clicked button
+   * is one job; and the thread holding `pr-<number>` is looked for first, so a
+   * review whose job record has since been cleared is still not built twice.
+   * `created` says which of those happened.
+   *
+   * It returns as soon as the records exist, like {@link Rpc ThreadStart}: the
+   * fetch, the workspace, the session and the claim are the job's, and the job
+   * is what has a progress panel.
+   */
+  Rpc.make("ReviewStart", {
+    payload: { project: Schema.String, number: Schema.Int },
+    success: ReviewStarted,
+    error: ReviewStartFailed,
   }),
 
   /**

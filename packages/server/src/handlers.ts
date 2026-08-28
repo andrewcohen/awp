@@ -13,12 +13,15 @@ import { Jobs } from "@awp-kit/jobs";
 import {
   AttachRefused,
   AwpRpcs,
+  CreateWorkspace as CreateWorkspaceSchema,
   DiffUnavailable,
   JobNotFound,
   NoAgent,
   type PageNote,
   type Project,
   ProjectImportFailed,
+  ReviewFileFailed,
+  ReviewStartFailed,
   type ReviewComment,
   type SessionIdentity,
   type SessionInfo,
@@ -27,9 +30,13 @@ import {
 } from "@awp-kit/protocol";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import { Clock, Effect, FileSystem, Option, Path, Stream } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { InboxFeed } from "./inbox-feed";
+import { type Repairable, looksMine, repairPrompt } from "./repair";
+import { authored, reviewRequested, reviewRerequested } from "./github-parse";
+import { type Claim, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./inbox";
 import { Jj } from "./jj";
-import { createWorkspaceRef } from "./jobs/create-workspace";
+import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
 import { sessionName } from "./naming";
@@ -276,6 +283,7 @@ export const layer = AwpRpcs.toLayer(
     const threads = yield* Threads;
     const reviews = yield* Reviews;
     const projects = yield* Projects;
+    const inbox = yield* InboxFeed;
     const facts = yield* WorkspaceState;
     const config = yield* Settings;
     const jj = yield* Jj;
@@ -383,6 +391,77 @@ export const layer = AwpRpcs.toLayer(
           : `${member.workspace}@`;
       });
 
+    /**
+     * Whether a workspace's working copy has a pull request's head behind it.
+     *
+     * ── `present()`, and why it is one call rather than three ────────────────
+     *
+     * Asked as "is the head an ancestor of `@`" and not "is it equal to `@`",
+     * because a person who has committed something of their own on top is still
+     * reviewing the right code.
+     *
+     * Without `present()` an absent commit is an *error* — `Revision
+     * \`deadbeef…\` doesn't exist`, which is exactly what a force-push leaves
+     * behind — and the caller would have to tell that apart from a broken
+     * directory by reading jj's prose. With it, an absent commit is an empty
+     * answer, which is the same conclusion as having something older: this
+     * checkout does not contain what the pull request is.
+     *
+     * A directory that is not a workspace at all answers `true` — "nothing to
+     * repair" — rather than reporting a stale checkout that is not there. Saying
+     * nothing is the safer of the two wrong answers.
+     */
+    const containsHead = (
+      member: { readonly project: string; readonly workspace: string },
+      headOid: string,
+    ) =>
+      jj
+        .revisions({
+          dir: workspacePath(member.project, member.workspace),
+          revset: `present(${headOid}) & ::@`,
+          limit: 1,
+        })
+        .pipe(
+          Effect.map((found) => found.length > 0),
+          Effect.orElseSucceed(() => true),
+        );
+
+    /**
+     * Which workspace a directory is in, or a refusal saying it is in none.
+     *
+     * `~/.awp/workspaces/<project>/<workspace>` is the convention every other
+     * part of awp already reads — `suggestedBy` in multiplexer.ts recovers a
+     * session's identity from exactly this shape — so a directory inside one
+     * resolves without asking anything.
+     *
+     * A refusal and not a guess. The alternative is what the Go implementation
+     * did by accident: an agent that ran the command in the source repository
+     * filed seven findings into that repository's own review, and both sides
+     * reported success. A sentence naming the directory is the only thing that
+     * makes that visible from the agent's end.
+     */
+    const workspaceAt = (from: string) =>
+      Effect.gen(function* () {
+        const root = paths.join(homedir(), ".awp", "workspaces");
+        const full = paths.resolve(from);
+        if (full !== root && !full.startsWith(`${root}/`)) {
+          return yield* Effect.fail(
+            new ReviewFileFailed({
+              reason: `${full} is not inside an awp workspace — run this from the workspace being reviewed`,
+            }),
+          );
+        }
+        const [project, workspace] = full.slice(root.length + 1).split("/");
+        if (project === undefined || workspace === undefined || workspace === "") {
+          return yield* Effect.fail(
+            new ReviewFileFailed({
+              reason: `${full} is the workspaces directory itself, not a workspace in it`,
+            }),
+          );
+        }
+        return { project, workspace, dir: paths.join(root, project, workspace) };
+      });
+
     // A job the client named and the daemon has never heard of. Its own
     // failure rather than a defect: asking about a job that was cleaned up, or
     // typing an id, is a question with a negative answer.
@@ -393,6 +472,46 @@ export const layer = AwpRpcs.toLayer(
           job === undefined ? Effect.fail(new JobNotFound({ job: id })) : Effect.succeed(job),
         ),
       );
+
+    /**
+     * Every project awp knows about: the imported rows, plus what the running
+     * sessions imply.
+     *
+     * A closure rather than the body of `ProjectList`, because the inbox is
+     * over projects too and a second way of working out which those are would
+     * be a second answer to the same question. Merged here rather than in a
+     * client because only the daemon holds both halves; the imported row wins,
+     * being the one that survives a restart and the one `forget` applies to.
+     */
+    const allProjects = () =>
+      Effect.gen(function* () {
+        const imported = yield* projects.list().pipe(Effect.orDie);
+        const recorded = new Set(imported.map((one) => one.name));
+        const all = yield* mux.list().pipe(Effect.orDie);
+        const found = identities(all);
+
+        // One entry per project, so the jj call below happens once per
+        // project rather than once per session — a machine with thirty
+        // sessions has perhaps four projects.
+        const dirs = new Map<string, string>();
+        for (const session of all) {
+          const project = found.get(session.name)?.project;
+          const from = session.startDir;
+          if (project === undefined || from === undefined || from === "") continue;
+          if (recorded.has(project) || dirs.has(project)) continue;
+          dirs.set(project, from);
+        }
+
+        const derived: Project[] = [];
+        for (const [name, from] of dirs) {
+          const root = yield* jj.sourceRoot(from).pipe(Effect.option);
+          if (Option.isSome(root)) {
+            derived.push({ name, root: root.value, importedAt: undefined });
+          }
+        }
+
+        return [...imported, ...derived.toSorted((a, b) => a.name.localeCompare(b.name))];
+      });
 
     return {
       // No declared error, so a failure here is a defect. That is the honest
@@ -670,11 +789,499 @@ export const layer = AwpRpcs.toLayer(
           return { thread, job };
         }),
 
+      /**
+       * Every open pull request, sectioned and ordered. See `inbox.ts`.
+       *
+       * Thin, like every handler here: the projects come from `allProjects`,
+       * the rows and their cache from `InboxFeed`, and the only thing composed
+       * on the spot is the join between the two records awp holds — a thread
+       * and its members — and the pull request a workspace's name identifies.
+       */
+      InboxList: ({ refresh }) =>
+        Effect.gen(function* () {
+          const projectList = yield* allProjects();
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const running = yield* jobs.list().pipe(Effect.orDie);
+          const live = yield* mux.list().pipe(Effect.orDie);
+
+          // ── what awp already has for a pull request, from three records ────
+          //
+          // All three are keyed by the workspace *name*, which is the whole
+          // reason it is `pr-<number>` and nothing more — see
+          // `reviewWorkspace`. Nothing extra is stored to make a row idempotent.
+          //
+          //   a thread member      the review is finished, or its claim landed
+          //   a live session       the workspace EXISTS and can be opened,
+          //                        which happens a step earlier than the claim
+          //   a job with the key   one is being built, or one failed
+          //
+          // The session is the source that was missing. The claim is the create
+          // job's second-to-last step, so a row built on threads alone said
+          // nothing for the thirty seconds between the session appearing and
+          // the job ending — the window a person is actually watching.
+          const found = new Map<
+            string,
+            {
+              workspace: string | undefined;
+              thread: string | undefined;
+              job: string | undefined;
+              moved: boolean;
+            }
+          >();
+          const at = (project: string, number: number) => {
+            const key = `${project}:${number}`;
+            const already = found.get(key);
+            if (already !== undefined) {
+              return already;
+            }
+            const fresh = {
+              workspace: undefined,
+              thread: undefined,
+              job: undefined,
+              moved: false,
+            };
+            found.set(key, fresh);
+            return fresh;
+          };
+          const note = (
+            project: string,
+            number: number,
+            what: Partial<{ workspace: string; thread: string; job: string; moved: boolean }>,
+          ) => {
+            found.set(`${project}:${number}`, { ...at(project, number), ...what });
+          };
+
+          for (const thread of held) {
+            if (thread.archivedAt !== undefined) {
+              continue;
+            }
+            for (const member of thread.members) {
+              const number = reviewNumber(member.workspace);
+              if (number !== undefined) {
+                note(member.project, number, { workspace: member.workspace, thread: thread.id });
+              }
+            }
+          }
+
+          // The recorded link, which is the claim rather than the convention.
+          // After the name-based recovery above so it wins: a thread that says
+          // outright which pull request it is about beats a workspace whose
+          // name happens to encode one, and the two only disagree when somebody
+          // has renamed or re-linked something deliberately.
+          for (const thread of held) {
+            if (thread.archivedAt !== undefined) {
+              continue;
+            }
+            for (const pr of thread.prs) {
+              note(pr.project, pr.number, { thread: thread.id });
+            }
+          }
+
+          // The unshortened truth, from the labels awp wrote — a session name
+          // is shortened and cannot be split back into its parts.
+          const identified = identities(live);
+          for (const session of live) {
+            const identity = identified.get(session.name);
+            const number = identity === undefined ? undefined : reviewNumber(identity.workspace);
+            if (identity !== undefined && number !== undefined) {
+              note(identity.project, number, { workspace: identity.workspace });
+            }
+          }
+
+          for (const job of running) {
+            // By key rather than by the job's stored input: one string
+            // comparison per job, where the input is a schema decode per job on
+            // every listing. See `reviewOf`.
+            const about = reviewOf(job.key);
+            if (about !== undefined) {
+              note(about.project, about.number, { job: job.id });
+            }
+          }
+
+          const claimed: Claim = (project, number) => found.get(`${project}:${number}`);
+
+          const answer = yield* inbox.read({
+            projects: projectList,
+            refresh: refresh === true,
+            claimed,
+            contains: containsHead,
+          });
+
+          // ── a pull request opened for work that already had a workspace ────
+          //
+          // The commonest case there is, and nothing above finds it: somebody
+          // starts a thread, works, pushes, opens a PR. The workspace is not
+          // called `pr-<n>` — it is called after the work — and no link was
+          // recorded, because at the moment the thread was made there was no
+          // pull request to link.
+          //
+          // What identifies it is the head branch. awp names a workspace's
+          // bookmark `<prefix>/<workspace>`, so a PR whose head ref is
+          // `andrew/typed-router-headers` is the pull request *for* the
+          // workspace `typed-router-headers` — and there is no ambiguity
+          // in it, because the prefix is this person's own.
+          //
+          // **It is recorded, not merely reported**, and this is a write during
+          // a read — which this codebase is otherwise careful about (see the
+          // note on `--ignore-working-copy`). The argument for it: the
+          // conclusion is certain rather than inferred, the write is idempotent
+          // and only ever adds, and recording it is what makes the link survive
+          // the branch being renamed — which is exactly when the evidence
+          // disappears. Deriving it every time instead would mean the PR panel
+          // and the sidebar each need the pull request list to answer "which PR
+          // is this workspace about", and the list is the one thing they do not
+          // have.
+          const settings = yield* config.read();
+          const prefix = settings.bookmarkPrefix;
+          const items = yield* Effect.forEach(answer.items, (item) =>
+            Effect.gen(function* () {
+              if (item.thread !== undefined || item.workspace !== undefined) {
+                return item;
+              }
+              const workspace = workspaceOf(item.headRef, prefix);
+              if (workspace === undefined) {
+                return item;
+              }
+              const holding = held.find(
+                (thread) =>
+                  thread.archivedAt === undefined &&
+                  thread.members.some(
+                    (member) => member.project === item.project && member.workspace === workspace,
+                  ),
+              );
+              if (holding === undefined) {
+                return item;
+              }
+              yield* threads
+                .link(holding.id, { project: item.project, number: item.number })
+                .pipe(Effect.ignore);
+              // The workspace as well as the thread: the row's action is
+              // decided by whether there is something to open, and there is —
+              // it said "makes a workspace" for a workspace already on disk.
+              return { ...item, workspace, thread: holding.id };
+            }),
+          );
+
+          return { ...answer, items };
+        }),
+
+      /**
+       * One pull request, by project and number. See the contract.
+       *
+       * `ReviewStartFailed` is reused rather than a fourth error type minted:
+       * every reason is the same reason — awp does not know that project, or
+       * `gh` would not answer — and the sentence is what a panel shows.
+       */
+      PullRequestView: ({ project, number, refresh }) =>
+        Effect.gen(function* () {
+          const projectList = yield* allProjects();
+          const found = projectList.find((one) => one.name === project);
+          if (found === undefined) {
+            return yield* Effect.fail(
+              new ReviewStartFailed({
+                project,
+                number,
+                reason: `awp knows no project called ${project}`,
+              }),
+            );
+          }
+          // Through the feed, not straight at `gh`: the panel is unmounted every
+          // time somebody looks at the diff instead, so an uncached read here
+          // would be a second of nothing on every tab switch.
+          const detail = yield* inbox
+            .detail(found.root, number, refresh === true)
+            .pipe(
+              Effect.mapError(
+                (error) => new ReviewStartFailed({ project, number, reason: error.reason }),
+              ),
+            );
+          if (detail === undefined) {
+            return undefined;
+          }
+
+          // Which workspace is reviewing it, and whether that checkout still
+          // contains it. Both are on the answer so the panel can offer the
+          // repair without the inbox having been read at all — it is opened
+          // *from* a workspace, and the inbox may never have been looked at.
+          //
+          // The recorded link first, then the `pr-<n>` naming, which is the same
+          // order `InboxList` uses and for the same reason: the link is the
+          // claim and the name is the convention.
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const live = held.filter((thread) => thread.archivedAt === undefined);
+          const linked = live.find((thread) =>
+            thread.prs.some((pr) => pr.project === project && pr.number === number),
+          );
+          const named = live.find((thread) =>
+            thread.members.some(
+              (member) => member.project === project && reviewNumber(member.workspace) === number,
+            ),
+          );
+          const member =
+            linked?.members.find((one) => one.project === project) ??
+            named?.members.find(
+              (one) => one.project === project && reviewNumber(one.workspace) === number,
+            );
+
+          const moved =
+            member === undefined
+              ? false
+              : !(yield* containsHead({ project, workspace: member.workspace }, detail.headOid));
+
+          return { ...detail, project, workspace: member?.workspace, moved };
+        }),
+
+      /**
+       * The prompt for what is wrong with a pull request. See `repair.ts`.
+       *
+       * Built from the *listing* entry rather than the detail, because the
+       * viewer-relative answers live there — who asked for a review, and who
+       * has already given one — and from the `gh` login, which decides the tone.
+       * Neither reaches a client on `PullRequest`, and neither should: they are
+       * an answer about this machine's login.
+       */
+      PullRequestRepair: ({ project, number }) =>
+        Effect.gen(function* () {
+          const projectList = yield* allProjects();
+          const found = projectList.find((one) => one.name === project);
+          if (found === undefined) {
+            return yield* Effect.fail(
+              new ReviewStartFailed({
+                project,
+                number,
+                reason: `awp knows no project called ${project}`,
+              }),
+            );
+          }
+
+          const pr = yield* inbox
+            .find(found.root, number)
+            .pipe(
+              Effect.mapError(
+                (error) => new ReviewStartFailed({ project, number, reason: error.reason }),
+              ),
+            );
+          if (pr === undefined) {
+            return yield* Effect.fail(
+              new ReviewStartFailed({
+                project,
+                number,
+                reason: `#${number} is not an open pull request in ${project}`,
+              }),
+            );
+          }
+
+          const who = yield* inbox.who();
+          const settings = yield* config.read();
+          const target: Repairable = {
+            number: pr.number,
+            url: pr.url,
+            // The listing is open pull requests only, so anything it answers
+            // with is open. Stated rather than assumed, because `repairPrompt`
+            // refuses on any other state and a caller reading it should see why
+            // that branch is unreachable from here.
+            state: "open",
+            headRef: pr.headRef,
+            ci: pr.ci,
+            review: pr.review,
+            mergeState: pr.mergeState,
+            hasReviewComments: pr.hasReviewComments,
+            mine: authored(pr, who),
+            reviewRequested: reviewRequested(pr, who),
+            reviewRerequested: reviewRerequested(pr, who),
+          };
+
+          // Whether the local checkout is behind, which is an issue in both
+          // tones — it is a fact about this copy rather than about the pull
+          // request. Only askable when a workspace exists.
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const member = held
+            .filter((thread) => thread.archivedAt === undefined)
+            .flatMap((thread) =>
+              thread.prs.some((one) => one.project === project && one.number === number)
+                ? thread.members.filter((one) => one.project === project)
+                : [],
+            )[0];
+          const moved =
+            member === undefined
+              ? false
+              : !(yield* containsHead({ project, workspace: member.workspace }, pr.headOid));
+
+          const mine = target.mine || looksMine(target, settings.bookmarkPrefix);
+          const prompt = repairPrompt(target, { mine, moved });
+          if (prompt === "") {
+            // Nothing wrong, so nothing said. Answered rather than refused: the
+            // button was pressed on a pull request that is fine, which is a
+            // thing to be told rather than an error.
+            return { prompt, mine, workspace: undefined };
+          }
+          if (member === undefined) {
+            // There is something to say and nowhere to say it. `NoAgent` names
+            // the pull request's own project and number rather than a workspace,
+            // because the missing thing *is* the workspace.
+            return yield* Effect.fail(new NoAgent({ project, workspace: `#${String(number)}` }));
+          }
+
+          const name = sessionName(project, member.workspace, AGENT);
+          const session = yield* mux.lookup(name).pipe(Effect.orDie);
+          if (session === undefined || session.ended) {
+            return yield* Effect.fail(new NoAgent({ project, workspace: member.workspace }));
+          }
+          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          return { prompt, mine, workspace: member.workspace };
+        }),
+
+      /**
+       * Make a thread and a workspace for reviewing a pull request, once.
+       *
+       * ── idempotent by two mechanisms, and it needs both ──────────────────
+       *
+       *   the thread holding `pr-<n>`   a review that finished. Its job record
+       *                                 may have been cleared, and the
+       *                                 workspace is still there
+       *   the job's idempotency key     a review that is still being built.
+       *                                 The claim is the job's second-to-last
+       *                                 step, so a running job holds a thread
+       *                                 no member lookup can find
+       *
+       * The key is also what makes the button safe to press twice in one
+       * second: `enqueue` answers with the first job rather than making a
+       * second. What that costs is spelled out below, at the one place it can
+       * be seen — a thread made a moment before losing that race.
+       */
+      ReviewStart: ({ project, number }) =>
+        Effect.gen(function* () {
+          const declined = (reason: string) => new ReviewStartFailed({ project, number, reason });
+
+          const projectList = yield* allProjects();
+          const found = projectList.find((one) => one.name === project);
+          if (found === undefined) {
+            return yield* Effect.fail(declined(`awp knows no project called ${project}`));
+          }
+
+          const workspace = reviewWorkspace(number);
+          // Shared with `InboxList`, which has to find the same job — see
+          // `reviewKey`.
+          const key = reviewKey(project, number);
+
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const running = yield* jobs.list().pipe(Effect.orDie);
+          const already = running.find((job) => job.key === key);
+
+          const holding = held.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === project && member.workspace === workspace,
+              ),
+          );
+          if (holding !== undefined) {
+            return { thread: holding, job: already, workspace, created: false };
+          }
+
+          if (already !== undefined) {
+            // The job's own record, decoded, because the thread it is building
+            // for is on it and nowhere else this can reach: the claim that
+            // would make the thread findable by member is that job's
+            // second-to-last step.
+            const input = yield* Schema.decodeUnknownEffect(CreateWorkspaceSchema)(
+              already.input,
+            ).pipe(Effect.option);
+            const owner = Option.isSome(input)
+              ? held.find((thread) => thread.id === input.value.thread)
+              : undefined;
+            if (owner !== undefined) {
+              return { thread: owner, job: already, workspace, created: false };
+            }
+          }
+
+          const pr = yield* inbox
+            .find(found.root, number)
+            .pipe(Effect.mapError((error) => declined(error.reason)));
+          if (pr === undefined) {
+            return yield* Effect.fail(
+              declined(`#${number} is not an open pull request in ${project}`),
+            );
+          }
+
+          const settings = yield* config.read();
+          // `#123 title`, which is what the sidebar shows. Not asked of a model,
+          // unlike a thread started from a sentence: GitHub has already been
+          // given a title for this work by the person who opened the PR, and
+          // paraphrasing it would only make the row harder to match against the
+          // page it came from.
+          const label = `#${number} ${pr.title}`.trim();
+
+          const thread = yield* threads.create(label).pipe(Effect.orDie);
+          // Linked here, at the moment the thread exists, so the sidebar and
+          // the inbox row can name the pull request immediately rather than
+          // waiting for a job that takes half a minute. The job restores the
+          // link if a rollback takes the thread — see the `thread` step, which
+          // is the one place a thread is rebuilt.
+          yield* threads.link(thread.id, { project, number }).pipe(Effect.ignore);
+
+          const job = yield* jobs
+            .enqueue(
+              createWorkspaceRef,
+              {
+                thread: thread.id,
+                project,
+                description: label,
+                // Named here, so the job's `name` step finds it already decided
+                // and skips the model — a review's name is `pr-<number>` by
+                // definition, and ten seconds spent asking for one would be ten
+                // seconds spent inventing a name that must not vary.
+                //
+                // No `bookmark` for the same reason, and it falls out rather
+                // than being suppressed: the bookmark is composed by the step
+                // that names, so a job that skips naming has none. `pr-123` is
+                // not a branch anybody should push.
+                workspace,
+                label,
+                repo: found.root,
+                // A branch name, and not a revision yet. It does not exist
+                // locally until the fetch step has run, which is the step that
+                // resolves it — see `create-workspace.ts`.
+                base: pr.headRef,
+                review: {
+                  number,
+                  headRef: pr.headRef,
+                  ...(pr.fork === undefined ? {} : { fork: pr.fork }),
+                },
+                agent: agentWith(settings, {}),
+              },
+              { key },
+            )
+            .pipe(Effect.orDie);
+
+          // Lost the race: `enqueue` answered with a job that already existed,
+          // so the thread created a moment ago is litter. Removed only if it is
+          // still empty, which it is — nothing has had time to claim it — and
+          // the earlier job's thread is the one to answer with.
+          const recorded = yield* Schema.decodeUnknownEffect(CreateWorkspaceSchema)(job.input).pipe(
+            Effect.option,
+          );
+          const owns = Option.isSome(recorded) && recorded.value.thread === thread.id;
+          if (!owns) {
+            yield* threads.deleteIfEmpty(thread.id).pipe(Effect.ignore);
+            const earlier = Option.isSome(recorded)
+              ? (yield* threads.list().pipe(Effect.orDie)).find(
+                  (one) => one.id === recorded.value.thread,
+                )
+              : undefined;
+            return { thread: earlier ?? thread, job, workspace, created: false };
+          }
+
+          return { thread, job, workspace, created: true };
+        }),
+
       // Threads. A store that cannot be read or written is the daemon being
       // broken — the disk is full, or the file is owned by someone else — so
       // ThreadStoreError dies here rather than crossing the wire. ThreadNotFound
       // does cross it: naming a thread that is not there is a question with a
       // negative answer, which is a different thing entirely.
+      WorkspaceFactsChanges: () => facts.changes(),
+
       /**
        * The imported projects, plus the ones the running sessions imply.
        *
@@ -690,37 +1297,7 @@ export const layer = AwpRpcs.toLayer(
        * since been removed, and offering it would be offering a failure two
        * screens later.
        */
-      WorkspaceFactsChanges: () => facts.changes(),
-
-      ProjectList: () =>
-        Effect.gen(function* () {
-          const imported = yield* projects.list().pipe(Effect.orDie);
-          const recorded = new Set(imported.map((one) => one.name));
-          const all = yield* mux.list().pipe(Effect.orDie);
-          const found = identities(all);
-
-          // One entry per project, so the jj call below happens once per
-          // project rather than once per session — a machine with thirty
-          // sessions has perhaps four projects.
-          const dirs = new Map<string, string>();
-          for (const session of all) {
-            const project = found.get(session.name)?.project;
-            const from = session.startDir;
-            if (project === undefined || from === undefined || from === "") continue;
-            if (recorded.has(project) || dirs.has(project)) continue;
-            dirs.set(project, from);
-          }
-
-          const derived: Project[] = [];
-          for (const [name, from] of dirs) {
-            const root = yield* jj.sourceRoot(from).pipe(Effect.option);
-            if (Option.isSome(root)) {
-              derived.push({ name, root: root.value, importedAt: undefined });
-            }
-          }
-
-          return [...imported, ...derived.toSorted((a, b) => a.name.localeCompare(b.name))];
-        }),
+      ProjectList: () => allProjects(),
 
       /**
        * What is under the configured roots and not imported yet.
@@ -836,6 +1413,15 @@ export const layer = AwpRpcs.toLayer(
       ThreadDetach: ({ thread, member }) =>
         threads.detach(thread, member).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
 
+      // Which pull requests a thread is about. A claim somebody made, so it is
+      // written down rather than parsed back out of a workspace name — see
+      // `ThreadPr` in the contract.
+      ThreadLinkPr: ({ thread, pr }) =>
+        threads.link(thread, pr).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
+      ThreadUnlinkPr: ({ thread, pr }) =>
+        threads.unlink(thread, pr).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
+
       // Reviews. Same treatment as threads: a store that cannot be read is the
       // daemon being broken rather than a case a client can do anything about.
       ReviewList: ({ project, workspace }) => reviews.list(project, workspace).pipe(Effect.orDie),
@@ -852,6 +1438,14 @@ export const layer = AwpRpcs.toLayer(
           return yield* reviews.add({
             ...payload,
             id: commentId(at, Math.random()),
+            // The window's own comments are a person's. The other author files
+            // through `ReviewFile`, which is the call that has a directory
+            // rather than a pair.
+            author: "human",
+            kind: payload.kind ?? "comment",
+            // No anchor text: the panel knows which line it is on, so there is
+            // nothing that could have gone stale between the click and this.
+            text: undefined,
             createdAt: at,
             // Always a draft. Nothing on this contract can create a comment the
             // agent has already been told about, which is what makes `sentAt`
@@ -859,6 +1453,112 @@ export const layer = AwpRpcs.toLayer(
             sentAt: undefined,
           });
         }).pipe(Effect.orDie),
+
+      /**
+       * Which review a directory is in. The read half of `ReviewFile`.
+       *
+       * Answered before anything is filed, because "am I about to write to the
+       * right review" is the question that lost seven findings in the Go
+       * implementation when nothing could ask it.
+       */
+      ReviewAt: ({ from }) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(from);
+          const comments = yield* reviews.list(at.project, at.workspace).pipe(Effect.orDie);
+          return { ...at, comments };
+        }),
+
+      ReviewFile: (payload) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(payload.from);
+
+          if (payload.body.trim() === "") {
+            return yield* Effect.fail(new ReviewFileFailed({ reason: "the finding has no body" }));
+          }
+          if (payload.line < 1) {
+            return yield* Effect.fail(
+              new ReviewFileFailed({ reason: `line ${payload.line} is not a line` }),
+            );
+          }
+
+          // The path is checked against the workspace, and the line against the
+          // file. Both are refusals rather than stored guesses: a finding is
+          // read by a person against the code, and one pointing at a line that
+          // is not there is worse than no finding — it reads as a comment about
+          // whatever now occupies that number.
+          const full = paths.join(at.dir, payload.path);
+          if (!full.startsWith(`${at.dir}/`)) {
+            return yield* Effect.fail(
+              new ReviewFileFailed({ reason: `${payload.path} is outside the workspace` }),
+            );
+          }
+          const lines = yield* files.readFileString(full).pipe(
+            Effect.map((whole) => whole.split("\n")),
+            Effect.mapError(
+              () =>
+                new ReviewFileFailed({
+                  reason: `no file ${payload.path} in ${at.project}/${at.workspace}`,
+                }),
+            ),
+          );
+          const found = lines[payload.line - 1];
+          if (found === undefined) {
+            return yield* Effect.fail(
+              new ReviewFileFailed({
+                reason: `${payload.path} has ${lines.length} lines, so line ${payload.line} is not one`,
+              }),
+            );
+          }
+          // Compared with the ends trimmed. An agent quoting a line has almost
+          // certainly not preserved its indentation exactly, and refusing over
+          // whitespace would refuse a correct finding.
+          if (payload.text !== undefined && payload.text.trim() !== found.trim()) {
+            return yield* Effect.fail(
+              new ReviewFileFailed({
+                reason: `${payload.path}:${payload.line} reads "${found.trim()}", not "${payload.text.trim()}" — the line has moved`,
+              }),
+            );
+          }
+
+          const at2 = new Date(yield* Clock.currentTimeMillis);
+          const endLine = payload.endLine ?? payload.line;
+          const kind = payload.kind ?? "comment";
+          const comment = yield* reviews
+            .add({
+              id: commentId(at2, Math.random()),
+              project: at.project,
+              workspace: at.workspace,
+              // The working copy: a finding is about the checkout as it stands,
+              // which is what the agent has been reading.
+              revision: "@",
+              path: payload.path,
+              side: payload.side ?? "additions",
+              line: payload.line,
+              endLine: endLine < payload.line ? payload.line : endLine,
+              body: payload.body.trim(),
+              // This call exists for an agent; a person passing `--author human`
+              // is filing on their own behalf from a terminal, which is theirs
+              // to say rather than this handler's to assume.
+              author: payload.author ?? "agent",
+              kind,
+              text: found,
+              createdAt: at2,
+              // Already delivered, in the direction that matters: a finding is
+              // written *for* the person, so there is nobody left to send it to.
+              // See `ReviewComment.author`.
+              sentAt: at2,
+            })
+            .pipe(Effect.orDie);
+
+          const span =
+            comment.endLine > comment.line
+              ? `${comment.line}-${comment.endLine}`
+              : `${comment.line}`;
+          return {
+            comment,
+            where: `added a ${kind} to ${at.project}/${at.workspace} on ${payload.path}:${span}`,
+          };
+        }),
 
       ReviewRemove: ({ comment }) => reviews.remove(comment).pipe(Effect.orDie),
 

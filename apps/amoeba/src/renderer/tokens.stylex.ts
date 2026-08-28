@@ -113,6 +113,10 @@ export const hue = stylex.defineConsts({
   // ready because it is present without being urgent.
   latteWaiting: "#895712",
   latteReady: "#0b54e8",
+  // Mauve, darkened along its own hue and saturation until it clears the same
+  // 4.6 every other Latte token here is tuned to — 4.09 as Catppuccin
+  // publishes it, which is under the text threshold. See `colors.asked`.
+  latteAsked: "#7e35dd",
 
   // Catppuccin Macchiato, mantle for the same reason. The pane's base is
   // #24273a and sits above this.
@@ -130,8 +134,28 @@ export const hue = stylex.defineConsts({
   macchiatoAccent: "#f5a97f",
   macchiatoWaiting: "#eed49f",
   macchiatoReady: "#8aadf4",
+  // Mauve as published: 7.48 against the base, in line with the rest.
+  macchiatoAsked: "#c6a0f6",
 });
 
+// ── two vocabularies, and a colour belongs to exactly one ──────────────────
+//
+// The tokens below are grouped by what they describe, not by hue, because the
+// mistake available here is reaching for a colour that is already spoken for by
+// a different subject. Both were being drawn with one set until the inbox
+// arrived, and the result was a green that meant "a session is alive" in one
+// column and "a pull request is approved" in the next.
+//
+//   chrome    base · surface · raised · text · muted · border
+//   accent    accent — one thing on a screen, see its note
+//   agent     live · waiting · ready
+//   review    asked · warn · live · muted
+//
+// `warn`, `live` and `muted` appear in two rows of that table on purpose: a red
+// that means "broken" and a grey that means "secondary" are the same claim
+// whatever the subject, and minting `failing` and `draft` as aliases would add
+// a name without adding a distinction. `asked` exists precisely because it is
+// the one review state with no such claim behind it.
 export const colors = stylex.defineVars({
   /** Behind everything. The pane sits on its own, lighter, base. */
   base: { default: hue.latteBase, [dark]: hue.macchiatoBase },
@@ -185,6 +209,33 @@ export const colors = stylex.defineVars({
   waiting: { default: hue.latteWaiting, [dark]: hue.macchiatoWaiting },
   /** An agent finished and has not been read. */
   ready: { default: hue.latteReady, [dark]: hue.macchiatoReady },
+  /**
+   * Somebody is asking you to look at their work — a review requested, or
+   * requested again.
+   *
+   * ── why this is not `accent`, and why it is not `ready` ───────────────────
+   *
+   * It was `accent` first, and the window came back as "too much orange". The
+   * reason is arithmetic rather than taste: the accent is for one thing on a
+   * screen — see its own note — and the inbox draws a review state on *every*
+   * row of a section, so a single list spent the accent thirty times.
+   *
+   * `ready` is the near miss and is worse than it looks. It is blue and it does
+   * mean "waiting to be read", but it is an **agent** state, and this is a
+   * **review** state; the two vocabularies overlap in meaning and never in
+   * cause, so one token for both would make a row's colour ambiguous exactly
+   * when a person is scanning for what to do next:
+   *
+   *   agent states    live · waiting · ready      what a session is doing
+   *   review states   asked · warn · live · muted what a pull request needs
+   *
+   * Mauve, from the same Catppuccin table as every other hue here — the pane's
+   * sixteen slots are that palette's exact hexes, so a colour taken from it is
+   * one the terminal and the chrome share. It is also the only hue in the set
+   * that cannot be mistaken for one already in use: red, yellow, green, blue
+   * and orange were all spoken for.
+   */
+  asked: { default: hue.latteAsked, [dark]: hue.macchiatoAsked },
 });
 
 export const text = stylex.defineVars({
