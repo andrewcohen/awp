@@ -268,7 +268,13 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                       ]),
             // Likewise: the patch it hands back is the request it was given, so
             // a test can assert on the snapshot decision the handler made.
-            diff: (options: DiffOf) => Effect.succeed(JSON.stringify(options)),
+            diff: (options: DiffOf) =>
+              // A repository with no main line refuses the range and not the
+              // revision, which is what makes the handler's fallback a real
+              // path rather than a comment.
+              fakes.noTrunk === true && options.from !== undefined
+                ? Effect.fail({ _tag: "JjError", op: "diff", reason: "trunk() is ambiguous" })
+                : Effect.succeed(JSON.stringify(options)),
           } as unknown as Jj["Service"]),
         ),
         Layer.provide(
@@ -434,6 +440,60 @@ describe("the diff a workspace is asked for", () => {
     const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan", revision: "@" }));
 
     expect(JSON.parse(answer.patch).snapshot).toBe(true);
+  });
+
+  // ── the stack ───────────────────────────────────────────────────────────
+  //
+  // The net effect of the work, which is what a person reviews before
+  // shipping. A range, so `--from/--to` rather than `-r` — jj answers that
+  // with one patch in which a file touched three times appears once.
+  it("asks for a range, not a revision, when the stack is wanted", async () => {
+    const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan", stack: true }));
+
+    expect(JSON.parse(answer.patch)).toEqual({
+      dir: "/w/rowan",
+      revision: "@",
+      from: "trunk()",
+      // Snapshotted, unlike a named revision: the far end of the range is the
+      // working copy, so without it the stack would omit what an agent has
+      // written and not committed. It is also what makes a stack patch share
+      // its line numbers with the working copy's, which is what lets a comment
+      // on one be anchored to the other.
+      snapshot: true,
+    });
+  });
+
+  // Named on the way back, so a client can tell a stack patch apart from a
+  // working-copy one — which it otherwise could not, since the two are the
+  // same files at the same lines.
+  it("calls a stack patch a stack", async () => {
+    const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan", stack: true }));
+    expect(answer.revision).toBe("stack");
+  });
+
+  // The same fallback the revision list has, for the same reason: `trunk()`
+  // does not resolve in a repository with no main line, and a panel that
+  // answered "no diff" there would look broken in a fresh repo.
+  it("falls back to the working copy when there is no main line", async () => {
+    const answer = await run((rpc) => rpc.Diff({ from: "/w/rowan", stack: true }), {
+      noTrunk: true,
+    });
+
+    expect(JSON.parse(answer.patch)).toEqual({
+      dir: "/w/rowan",
+      revision: "@",
+      snapshot: true,
+    });
+    expect(answer.revision).toBe("stack");
+  });
+
+  // `stack` and `revision` are different questions, and a payload carrying
+  // both has already said which it wants.
+  it("prefers the stack when a revision is named as well", async () => {
+    const answer = await run((rpc) =>
+      rpc.Diff({ from: "/w/rowan", revision: "kmnpqrs", stack: true }),
+    );
+    expect(JSON.parse(answer.patch).from).toBe("trunk()");
   });
 
   it("reads a named revision without touching the working copy", async () => {

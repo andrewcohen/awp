@@ -254,6 +254,15 @@ const NO_TRUNK = "@";
 const STACK_LIMIT = 50;
 
 /**
+ * What a stack patch calls itself.
+ *
+ * Not a change id, because a range is not a revision. It is on the answer so a
+ * client can tell a stack patch apart from a working-copy one — which it
+ * otherwise could not, since the two share their line numbers by design.
+ */
+const STACK_REVISION = "stack";
+
+/**
  * The revision that means "the files as they are on disk right now".
  *
  * The literal `@` and not a change id, deliberately — see `Diff` in the
@@ -630,7 +639,37 @@ export const layer = AwpRpcs.toLayer(
        * said a different way, and the alternative is a call that silently
        * returns yesterday's answer because of which spelling was used.
        */
-      Diff: ({ from, revision }) => {
+      // ── one revision, or everything since the main line ─────────────────
+      //
+      // The stack is `--from trunk() --to @`: the net effect of the work,
+      // which is what a person reviews before shipping. Not a concatenation of
+      // the commits — a file touched in three of them appears once, with its
+      // final shape, and the ordering is what the revision list is for.
+      //
+      // **Snapshotted, like the working copy and unlike a named revision.**
+      // `@` is the working-copy commit, so the far end of the range is the
+      // files on disk; without the snapshot a workspace where an agent has
+      // edited six files and run no jj command would diff as though it had
+      // not. That also makes the line numbers in a stack patch the same line
+      // numbers the working copy's patch has, which is what lets a comment on
+      // one be anchored to the other — see WORKING_COPY below.
+      //
+      // The fallback is the same one the revision list has and for the same
+      // reason: `trunk()` does not resolve in a repository with no main line,
+      // and answering "no diff" there would be a panel that looks broken in a
+      // fresh repo. See NO_TRUNK.
+      Diff: ({ from, revision, stack }) => {
+        if (stack === true) {
+          return jj.diff({ dir: from, revision: NO_TRUNK, from: TRUNK, snapshot: true }).pipe(
+            Effect.catchTag("JjError", () =>
+              jj.diff({ dir: from, revision: NO_TRUNK, snapshot: true }),
+            ),
+            // Named `stack` on the way back, so a client can tell the answer
+            // apart from a working-copy patch that happens to look the same.
+            Effect.map((patch) => ({ revision: STACK_REVISION, patch })),
+            Effect.mapError((error) => new DiffUnavailable({ reason: error.reason })),
+          );
+        }
         const at = revision === undefined || revision === WORKING_COPY ? WORKING_COPY : revision;
         return jj.diff({ dir: from, revision: at, snapshot: at === WORKING_COPY }).pipe(
           Effect.map((patch) => ({ revision: at, patch })),

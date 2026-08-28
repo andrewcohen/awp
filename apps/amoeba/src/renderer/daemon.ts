@@ -536,8 +536,25 @@ export const listRevisions = (from: string, limit?: number): Promise<ReadonlyArr
  * the absent form shows what an agent has written and not yet committed. See
  * `Diff` in the contract.
  */
+/**
+ * The whole stack, as a revision this window can name.
+ *
+ * The panel selects a revision by change id, and `undefined` already means the
+ * working copy. A range is neither, so it needs a name — and the daemon answers
+ * a stack patch with the same string, which is what lets the panel's staleness
+ * check compare the two without knowing the difference.
+ */
+export const STACK = "stack";
+
 export const readDiff = (from: string, revision?: string): Promise<Patch> =>
-  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.Diff({ from, revision })));
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) =>
+      // Translated here rather than carried through the panel: `stack` is a
+      // boolean on the wire because it is a different question, not a
+      // revision the daemon could look up.
+      revision === STACK ? rpc.Diff({ from, stack: true }) : rpc.Diff({ from, revision }),
+    ),
+  );
 
 // ── comments on a diff ─────────────────────────────────────────────────────
 //

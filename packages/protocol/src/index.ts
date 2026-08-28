@@ -2066,6 +2066,21 @@ export class AwpRpcs extends RpcGroup.make(
       from: Schema.String,
       /** A change id. Absent means the working copy, freshly snapshotted. */
       revision: Schema.optional(Schema.String),
+      /**
+       * Everything since the main line, as one patch, instead of one revision.
+       *
+       * `jj diff --from trunk() --to @` — the *net effect* of the work, which
+       * is what a person reviews before shipping and what an agent is asked
+       * about when the question is "is this change right" rather than "what
+       * did that commit do". A file touched in three commits appears once,
+       * with its final shape; the ordering is deliberately not shown, because
+       * that is what the revision list is for.
+       *
+       * Wins over `revision` when both arrive. The two are different questions
+       * and a payload asking both has already decided which it wants by
+       * setting this.
+       */
+      stack: Schema.optional(Schema.Boolean),
     },
     success: Patch,
     error: DiffUnavailable,

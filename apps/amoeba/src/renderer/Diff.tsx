@@ -18,7 +18,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { listRevisions, readDiff, watchWorkspace } from "./daemon";
+import { STACK, listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
 import { FOLD_MS } from "./columns";
 import { contentOf, statOf, subjectOf, versionOf } from "./patch";
@@ -306,7 +306,13 @@ const styles = stylex.create({
   // the room to the subject is the same decision the jobs panel makes about a
   // job's title, and for the same reason: it is the field that cannot be
   // reconstructed from anything else on the row.
-  id: { flexShrink: 0, opacity: 0.7 },
+  // Mono, because a change id is an address — something a person types into
+  // `jj` somewhere else. It is also what makes the ids a column: a
+  // proportional face gives `4b13c06a` and `tkzuwuvz` different widths, so the
+  // subjects beside them stopped lining up.
+  id: { flexShrink: 0, opacity: 0.7, fontFamily: text.mono },
+  /** The stack's slot in the id column. A word, so it is not dressed as one. */
+  notAnId: { fontFamily: text.ui, fontStyle: "italic" },
   subject: {
     flex: 1,
     minWidth: 0,
@@ -1130,7 +1136,19 @@ export function Diff({
     );
   })();
 
-  const revision = at ?? WORKING_COPY;
+  // ── a stack comment is anchored to the working copy, and that is exact ──
+  //
+  // A `ReviewComment` names a `revision`, and a range is not one. Taking the
+  // working copy's is not the small lie it looks like: the stack is
+  // `trunk()..@` *snapshotted*, so its far end is the files on disk — the same
+  // content, and therefore the same line numbers, that the working copy's own
+  // patch has. A remark about line 42 of a file means the same line either
+  // way.
+  //
+  // Which also means the comments a person wrote on the working copy show up
+  // while reading the stack, and vice versa. That is right: they are about the
+  // same code.
+  const revision = at === undefined || at === STACK ? WORKING_COPY : at;
   const here = review.comments.filter((one) => one.revision === revision);
 
   // `collapsed`, the annotations and `version` folded in together.
@@ -1324,6 +1342,34 @@ export function Diff({
           more && styles.more,
         )}
       >
+        {/* ── the stack, above the commits ─────────────────────────────────
+
+            One more thing to look at, not a mode. A toggle would give the
+            panel two states to be in when it has one job, and the row is
+            selected exactly the way a revision is — same `at`, same
+            highlight, same keyboard step.
+
+            First, because it is the widest question in the list: everything
+            since the main line, then each commit that makes it up. Hidden
+            when there is nothing to list at all, so a workspace whose daemon
+            is unreachable does not offer a row that cannot answer. */}
+        {revisions.length > 0 && (
+          <button
+            type="button"
+            data-revision={STACK}
+            data-nav-item
+            title="everything since the main line, as one patch"
+            {...stylex.props(styles.revision, at === STACK && styles.on)}
+            onClick={() => setAt(STACK)}
+          >
+            {/* Where a change id goes, and deliberately not one — a range has
+                no id, and putting a fake one there would make the column of
+                addresses hold something nothing can resolve. */}
+            <span {...stylex.props(styles.id, styles.notAnId)}>stack</span>
+            <span {...stylex.props(styles.subject)}>everything since the main line</span>
+          </button>
+        )}
+
         {revisions.map((one) => {
           // The working copy addresses itself as absent — see the note at the
           // top of this file. Every other row is its change id.

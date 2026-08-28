@@ -129,9 +129,9 @@ const make = Effect.gen(function* () {
       return parseRevisions(out);
     });
 
-  const diff = ({ dir, revision, snapshot }: DiffOf) =>
+  const diff = ({ dir, revision, snapshot, from }: DiffOf) =>
     Effect.gen(function* () {
-      const op = `diff ${revision}`;
+      const op = from === undefined ? `diff ${revision}` : `diff ${from}..${revision}`;
       yield* required(op, "directory", dir);
       yield* required(op, "revision", revision);
 
@@ -144,8 +144,9 @@ const make = Effect.gen(function* () {
         ...(snapshot ? [] : ["--ignore-working-copy"]),
         "diff",
         "--git",
-        "-r",
-        revision,
+        // `-r` is one revision; `--from/--to` is a range, and jj answers the
+        // second with the net effect rather than with the commits in between.
+        ...(from === undefined ? ["-r", revision] : ["--from", from, "--to", revision]),
       ]);
     });
 
