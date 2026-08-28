@@ -10,7 +10,6 @@
     "daemon": "bun run src/main.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.70.0",
     "@awp-kit/jobs": "workspace:*",
     "@awp-kit/protocol": "workspace:*",
     "@awp-kit/store": "workspace:*",

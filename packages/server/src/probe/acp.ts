@@ -38,7 +38,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adapterPath, ask } from "../acp";
+import { INSTALL, adapterPath, ask, claudePath } from "../acp";
 import { childEnv } from "../zmx-session";
 
 const QUESTION = 'Reply with this JSON object and nothing else: {"ok": true}';
@@ -46,7 +46,12 @@ const QUESTION = 'Reply with this JSON object and nothing else: {"ok": true}';
 const program = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  console.log("\n  adapter  " + adapterPath());
+  const adapter = adapterPath();
+  console.log("\n  adapter  " + (adapter ?? `NOT INSTALLED — run:\n             ${INSTALL}`));
+  // The binary the adapter drives. It is deliberately not the SDK's own copy:
+  // that is a single 306MB file, and it would land in every workspace this
+  // repo makes. See the note in acp.ts.
+  console.log("  claude   " + (claudePath() ?? "NOT ON THE PATH"));
   // The parent's marker and the child's, side by side. The daemon is normally
   // started from inside a session, so `parent set` is the ordinary state and
   // the row is only interesting when the child's is not empty.
