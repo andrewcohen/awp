@@ -2,6 +2,7 @@ import type { CommentSide, ReviewComment, Revision } from "@awp-kit/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
 import { TreeViewIcon } from "@phosphor-icons/react/TreeView";
+import { ColumnsIcon } from "@phosphor-icons/react/Columns";
 import { CaretLineDownIcon } from "@phosphor-icons/react/CaretLineDown";
 import { CaretLineUpIcon } from "@phosphor-icons/react/CaretLineUp";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
@@ -18,9 +19,11 @@ import { contentOf, statOf, subjectOf, versionOf } from "./patch";
 import { Tree } from "./Tree";
 import {
   rememberOpenSplit,
+  rememberSideBySide,
   rememberSplit,
   rememberViewed,
   rememberedOpenSplit,
+  rememberedSideBySide,
   rememberedSplit,
   rememberedViewed,
 } from "./remembered";
@@ -509,6 +512,8 @@ const styles = stylex.create({
   // *patch* rather than over the panel, so the head row and the revision list
   // stay reachable while it is open — it is an index, not a mode.
   patch: { position: "relative", flex: 1, minHeight: 0 },
+  /** An outlined head-row control that is currently on. */
+  buttonOn: { borderColor: colors.accent, color: colors.accent },
   /** A bare head-row control that is currently on. */
   pegOn: { color: colors.accent },
   /** …and one with nothing to act on. Still there, and saying so. */
@@ -967,6 +972,23 @@ export function Diff({
   const view = useRef<CodeViewHandle<Note>>(null);
   const [tree, setTree] = useState(false);
 
+  // ── unified or side by side ──────────────────────────────────────────────
+  //
+  // The library supports both — `diffStyle` on its options — so the work here
+  // is the control and where the choice lives.
+  //
+  // **One setting for the window**, unlike the open panel and the loaded page,
+  // which are filed per thread. Those are properties of a piece of work; this
+  // is a reading habit, and somebody who wants two columns wants them
+  // everywhere. See `rememberedSideBySide`.
+  //
+  // It is offered at every width and defaults to unified. Split halves a
+  // column whose floor is 200px, so two columns of code in a hundred each is
+  // not a reading experience — but that is a judgement for the person looking
+  // at it, and a control that disappears when the window is narrow is a
+  // control somebody has to discover twice.
+  const [side, setSide] = useState(rememberedSideBySide);
+
   // Where a comment is being written, and what is in the box. One at a time,
   // because the selection it is anchored to is one at a time.
   const [selection, setSelection] = useState<CodeViewLineSelection | null>(null);
@@ -1424,6 +1446,47 @@ export function Diff({
             toggles, because a single control has to decide what "the opposite
             of a patch with four of ten files folded" is — and either answer is
             wrong half the time. Two buttons each state what they do. */}
+        {/* Beside the fold pair, because all three are about how the patch is
+            *drawn* rather than about what it says or where to find it. The
+            index is at the other end for exactly that reason.
+
+            **Refused while a comment is being written**, and that is not
+            caution for its own sake. A `ReviewComment` is anchored by
+            `revision`, `path`, `side` and two line numbers, and `side` is a
+            claim about which half of the diff a line is on. Unified and split
+            do not agree about what a side is on screen, so a composer carried
+            across the toggle would file its remark against a line the person
+            was not looking at.
+
+            Refusing is better than clearing: clearing throws away a sentence
+            somebody is halfway through typing, and the toggle is not urgent.
+            One reading of the tooltip says why. */}
+        <button
+          type="button"
+          aria-pressed={side}
+          disabled={items.length === 0 || selection !== null}
+          aria-label={side ? "show the diff unified" : "show the diff side by side"}
+          title={
+            selection !== null
+              ? "finish the comment first — a comment is anchored to a side"
+              : side
+                ? "unified"
+                : "side by side"
+          }
+          {...stylex.props(
+            styles.button,
+            styles.icon,
+            side && styles.buttonOn,
+            (items.length === 0 || selection !== null) && styles.busy,
+          )}
+          onClick={() => {
+            const next = !side;
+            setSide(next);
+            rememberSideBySide(next);
+          }}
+        >
+          <ColumnsIcon size={13} weight="bold" />
+        </button>
         <button
           type="button"
           disabled={items.length === 0}
@@ -1485,11 +1548,19 @@ export function Diff({
       )}
 
       <div {...stylex.props(styles.patch)}>
-        {/* The index, over the patch. Mounted only while open, so its model is
-            built from the paths of the patch actually on screen and nothing has
-            to keep the two in step. */}
-        {tree && items.length > 0 && (
+        {/* The index, over the patch.
+
+            Mounted whenever there is a patch and told whether it is open,
+            rather than mounted only while open — **a component that is not in
+            the tree has nothing to transition**, so it has to be here to slide
+            out. It is `inert` while away, so nothing can tab into it. See the
+            animation mandate in AGENTS.md.
+
+            Still unmounted when there is no patch at all, which is not a
+            visibility question: with no files there is no model to build. */}
+        {items.length > 0 && (
           <Tree
+            open={tree}
             paths={items.flatMap((item) => (item.type === "diff" ? [item.fileDiff.name] : []))}
             onPick={(path) => {
               // A path can appear twice in one patch — a file split across two
@@ -1670,9 +1741,11 @@ export function Diff({
             }}
             {...stylex.props(styles.view)}
             options={{
-              // Unified, because this column is two hundred pixels wide at its
-              // floor and split would give each side a hundred of them.
-              diffStyle: "unified",
+              // Unified by default, because this column is two hundred pixels
+              // wide at its floor and split would give each side a hundred of
+              // them. The control is offered at every width all the same — see
+              // the note on `side` above.
+              diffStyle: side ? "split" : "unified",
               // Wrapped for the same reason. A horizontal scrollbar per file
               // in a narrow column is a diff nobody reads the right-hand half
               // of.

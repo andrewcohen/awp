@@ -763,6 +763,50 @@ The router _is_ now used, and the reason is worth stating because the obvious
 one is wrong. The window has one screen and no navigation to speak of, so
 "needs routes" was never going to be what earned it.
 
+### Anything that appears or disappears is animated
+
+**A mandate, like the keyboard one.** Every show and hide in this window moves:
+a column folding, a panel sliding in, a list collapsing, a tree opening over a
+patch. Nothing pops.
+
+The reason is not decoration. A thing that vanishes between two frames leaves a
+person to work out _what_ just changed and _where the thing went_, and that
+work happens every single time. A thing that moves has already answered both by
+the time it has finished — which is why the columns were animated first and why
+the same treatment kept getting asked for everywhere else, one control at a
+time.
+
+```
+  FOLD_MS = 260                         columns.ts. One duration for the window.
+  cubic-bezier(0.32, 0.72, 0, 1)        out fast, in gently
+  @media (prefers-reduced-motion)       0s
+```
+
+Four rules that follow, each of which was learned by getting it wrong:
+
+- **One duration and one curve, from `columns.ts`.** Two animations in one
+  window that disagree about how long a fold takes read as two applications.
+- **Reduced motion means none, not less.** Somebody who has asked their system
+  for less motion is not asking for a faster version of it. Every eased style
+  carries the media query; a transition without one is a bug.
+- **A gesture is not animated.** A transition on a dragged boundary makes the
+  thing chase the pointer a frame behind, which reads as lag rather than as
+  motion. So the eased style goes _on for the toggle and off for the drag_ —
+  held in state for `FOLD_MS` and removed — rather than living on the element.
+- **Animate a property that can be animated.** `display: none` cannot, and
+  neither can a conditional render — a component that is not in the tree has
+  nothing to transition. Either keep it mounted and move `opacity` and a
+  `transform`, or hold the unmount until the transition has finished.
+
+**And a dynamic style, not a static one.** `${FOLD_MS}ms` inside
+`stylex.create` is a build error about theming rules — an identifier in a
+static style is resolved by StyleX and must come from a `.stylex.ts` file. A
+dynamic style takes the value at runtime and asks no such question. This has
+been walked into twice; see the note further down on StyleX failing quietly.
+**No gate catches it** — fmt, lint, typecheck, test and doctor are all green on
+the broken file, because only Vite runs the StyleX Babel pass. Fetch the module
+from the dev server and grep it after touching styles.
+
 ### Everything is reachable from the keyboard, and the keys are vim's
 
 **A mandate, not a preference.** Every control in this window has to be

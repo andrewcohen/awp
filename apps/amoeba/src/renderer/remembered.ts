@@ -46,6 +46,7 @@ const PLACE = "amoeba.place";
 const LOOSE = "amoeba.loose";
 const SPLIT = "amoeba.split";
 const SPLIT_OPEN = "amoeba.split.open";
+const SIDE_BY_SIDE = "amoeba.diff.split";
 const PAGE = "amoeba.page";
 const PANELS = "amoeba.panels";
 
@@ -219,6 +220,23 @@ export const rememberedOpenSplit = (): number => {
 
 export const rememberOpenSplit = (height: number): void => {
   writeStored(SPLIT_OPEN, String(Math.round(height)));
+};
+
+/**
+ * Whether the diff is drawn side by side rather than unified.
+ *
+ * **One setting for the window, not one per thread**, and it is the first
+ * preference here that is. The open panel and the loaded page are properties of
+ * a piece of *work* — which diff you are reading, which page you are reading
+ * against it — so they are filed under a thread. Unified against split is a
+ * reading habit: somebody who wants two columns wants them everywhere, and
+ * having to say so again in each thread would be the setting failing to be a
+ * setting.
+ */
+export const rememberedSideBySide = (): boolean => readStored(SIDE_BY_SIDE) === "yes";
+
+export const rememberSideBySide = (on: boolean): void => {
+  writeStored(SIDE_BY_SIDE, on ? "yes" : "no");
 };
 
 /**

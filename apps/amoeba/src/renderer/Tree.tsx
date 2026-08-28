@@ -1,6 +1,7 @@
 import { FileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef } from "react";
+import { FOLD_MS } from "./columns";
 import { colors, space, text } from "./tokens.stylex";
 
 // The patch's files as a tree, over the patch.
@@ -46,6 +47,15 @@ import { colors, space, text } from "./tokens.stylex";
 export interface TreeProps {
   /** Every path in the patch, in the order the patch carries them. */
   readonly paths: ReadonlyArray<string>;
+  /**
+   * Whether it should be on screen.
+   *
+   * A prop rather than the caller mounting and unmounting, because **a
+   * component that is not in the tree has nothing to transition**. It has to
+   * be here to slide out, so the caller keeps it mounted and this decides
+   * which way it is going. See the animation mandate in AGENTS.md.
+   */
+  readonly open: boolean;
   /** Jump the patch to a file. Called only for leaves, never for a directory. */
   readonly onPick: (path: string) => void;
   /** Put the tree away. */
@@ -87,6 +97,26 @@ const styles = stylex.create({
     // it needs to read as being in front rather than as being part of it.
     boxShadow: "0.5rem 0 1.5rem -0.5rem rgba(0, 0, 0, 0.45)",
   },
+  // ── it slides, per the mandate in AGENTS.md ───────────────────────────────
+  //
+  // `transform` and `opacity`, which are the two properties a compositor can
+  // animate without touching layout — this is drawn over a virtualised patch,
+  // and animating a width would reflow the code underneath it every frame.
+  //
+  // A *dynamic* style. `${FOLD_MS}ms` inside a static `stylex.create` value is
+  // a build error about theming rules, and no gate catches it because only
+  // Vite runs the StyleX pass. See the note in AGENTS.md.
+  moving: (ms: number) => ({
+    transitionProperty: "transform, opacity",
+    transitionTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
+    transitionDuration: {
+      default: `${ms}ms`,
+      "@media (prefers-reduced-motion: reduce)": "0s",
+    },
+  }),
+  /** Off to the left and invisible: where it comes from and where it goes. */
+  away: { transform: "translateX(-102%)", opacity: 0 },
+  shown: { transform: "translateX(0)", opacity: 1 },
   head: {
     display: "flex",
     alignItems: "center",
@@ -113,7 +143,16 @@ const styles = stylex.create({
   tree: { flex: 1, minHeight: 0 },
 });
 
-export function Tree({ paths, onPick, onClose }: TreeProps) {
+export function Tree({ paths, open, onPick, onClose }: TreeProps) {
+  // `open` drives the class directly, with no "wait one frame" dance.
+  //
+  // That dance is only needed when an element mounts straight into its shown
+  // state — the browser then has nothing to interpolate *from* and it simply
+  // appears. Here the element is already mounted and already at `away`, so
+  // flipping the class is a change on a live element and the transition runs.
+  // Keeping it mounted is what buys that, and it is the same thing that lets
+  // it slide *out*.
+
   const { model } = useFileTree({
     // Read once, on the first render. Every later change goes through the
     // effect below.
@@ -164,7 +203,14 @@ export function Tree({ paths, onPick, onClose }: TreeProps) {
   }, [selected, key, onPick]);
 
   return (
-    <div {...stylex.props(styles.over)}>
+    <div
+      // Out of the way of the keyboard and the pointer while it is off screen.
+      // It is still in the layout — that is what lets it animate — so without
+      // this a tab from the head row would land in an invisible tree.
+      inert={!open}
+      aria-hidden={!open}
+      {...stylex.props(styles.over, styles.moving(FOLD_MS), open ? styles.shown : styles.away)}
+    >
       <div {...stylex.props(styles.head)}>
         <span {...stylex.props(styles.count)}>
           {paths.length === 1 ? "1 file" : `${paths.length} files`}
