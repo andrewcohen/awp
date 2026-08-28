@@ -348,7 +348,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         // The fallback is not a second namer. It makes the words a person
         // already typed into a directory name; what the model adds is reading
         // the sentence, and `nameFrom` does not pretend to.
-        const resolved = yield* intent.resolve(input.description, input.project).pipe(
+        const resolved = yield* intent.resolve(input.description, input.project, input.repo).pipe(
           Effect.catchTag("IntentError", (error) =>
             Effect.gen(function* () {
               const made = nameFrom(input.description);

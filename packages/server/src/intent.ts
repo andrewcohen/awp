@@ -1,6 +1,6 @@
 import { Context, Data, Effect, Layer, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { capture, said } from "./run";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { ask } from "./acp";
 
 // Turning "add tiered discounts to checkout" into the arguments for a workspace.
 //
@@ -18,17 +18,22 @@ import { capture, said } from "./run";
 // "Dearest Mister Duck," before the object, and another wrapped it in a ```json
 // fence. So the outermost braces are located and the rest discarded.
 //
-// ── the flags are a trap ───────────────────────────────────────────────────
-// `--tools`, `--mcp-config` and `--allowed-tools` are **variadic**, so a prompt
-// that follows one is swallowed as another value for it. `claude -p --tools ""
-// "$PROMPT"` makes the prompt a tool name, leaves no prompt, and exits 1 with
-// empty output. Every flag here is written `--flag=value` for that reason, and
-// the prompt is always last.
+// ── it goes over ACP, not over `claude -p` ────────────────────────────────
+// The question used to be a headless CLI invocation whose answer was whatever
+// landed on stdout. It is now one ACP turn — see acp.ts, which also carries the
+// measurement. Two things about the old shape are worth keeping written down,
+// because both cost an afternoon and neither is visible in the diff:
 //
-// Measured while getting that wrong three times: disabling tools does **not**
-// make the call faster (12.6s vs 13.7s median over four runs each — inside the
-// noise). It is passed because a naming call that cannot reach for Bash is one
-// that cannot do anything surprising, which is a better reason than speed.
+//   `--tools`, `--mcp-config` and `--allowed-tools` are **variadic**, so a
+//   prompt following one is swallowed as another value for it. `claude -p
+//   --tools "" "$PROMPT"` makes the prompt a tool name, leaves no prompt, and
+//   exits 1 with empty output. Under ACP tools are a field in a JSON object
+//   and there is nothing to get wrong.
+//
+//   Disabling tools does not make the call faster — 12.6s against 13.7s median
+//   over four runs each, inside the noise. They are disabled because a naming
+//   call that cannot reach for Bash cannot do anything surprising, which is a
+//   better reason than speed and still applies.
 
 export class IntentError extends Data.TaggedError("IntentError")<{
   readonly reason: string;
@@ -101,7 +106,18 @@ export const nameFrom = (description: string): Intent => {
 export class WorkspaceIntent extends Context.Service<
   WorkspaceIntent,
   {
-    readonly resolve: (description: string, project: string) => Effect.Effect<Intent, IntentError>;
+    /**
+     * `repo` is the directory the question is asked in, and it is the source
+     * repository rather than the workspace being made — which does not exist
+     * yet at the step that asks. It decides which project's `CLAUDE.md` the
+     * model reads, so a project whose conventions name things a particular way
+     * gets a name in that style for free.
+     */
+    readonly resolve: (
+      description: string,
+      project: string,
+      repo: string,
+    ) => Effect.Effect<Intent, IntentError>;
   }
 >()("awp/WorkspaceIntent") {}
 
@@ -115,7 +131,14 @@ export class WorkspaceIntent extends Context.Service<
  */
 export const TIMEOUT = "45 seconds";
 
-/** Small and fast, because this is an extraction and not a piece of work. */
+/**
+ * Small and fast, because this is an extraction and not a piece of work.
+ *
+ * An adapter model id rather than a CLI `--model` value. They agree today —
+ * `session/new` answers with `default`, `sonnet` and `haiku` among its
+ * `availableModels` — but they are two different vocabularies and only one of
+ * them is being spoken here.
+ */
 const MODEL = "haiku";
 
 const prompt = (description: string, project: string): string =>
@@ -207,7 +230,7 @@ const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   return {
-    resolve: (description: string, project: string) =>
+    resolve: (description: string, project: string, repo: string) =>
       Effect.gen(function* () {
         const asked = description.trim();
         if (asked === "") {
@@ -216,17 +239,11 @@ const make = Effect.gen(function* () {
           );
         }
 
-        const captured = yield* capture(
-          spawner,
-          ChildProcess.make("claude", [
-            "-p",
-            `--model=${MODEL}`,
-            // `=` and not a space. See the note at the top: this flag is
-            // variadic and eats the prompt otherwise.
-            "--tools=",
-            prompt(asked, project),
-          ]),
-        ).pipe(
+        const answer = yield* ask(spawner, {
+          cwd: repo,
+          model: MODEL,
+          prompt: prompt(asked, project),
+        }).pipe(
           Effect.timeoutOrElse({
             duration: TIMEOUT,
             orElse: () =>
@@ -235,19 +252,15 @@ const make = Effect.gen(function* () {
           Effect.mapError((error) =>
             error instanceof IntentError
               ? error
-              : new IntentError({ reason: "could not run claude", cause: error }),
+              : new IntentError({ reason: error.reason, cause: error.cause }),
           ),
         );
 
-        if (captured.exitCode !== 0) {
-          return yield* Effect.fail(new IntentError({ reason: `claude: ${said(captured)}` }));
-        }
-
-        const found = validate(findObject(captured.stdout), asked);
+        const found = validate(findObject(answer), asked);
         if (found === undefined) {
           return yield* Effect.fail(
             new IntentError({
-              reason: `claude did not answer with usable JSON: ${said(captured)}`,
+              reason: `claude did not answer with usable JSON: ${answer.trim().slice(0, 400)}`,
             }),
           );
         }
