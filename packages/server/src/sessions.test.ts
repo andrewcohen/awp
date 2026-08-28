@@ -17,6 +17,8 @@ const session = (over: Partial<Session> = {}): Session => ({
   clients: 0,
   startDir: "/tmp",
   ended: false,
+  busy: true,
+  taskEnded: false,
   exitCode: 0,
   created: undefined,
   cmd: "claude",

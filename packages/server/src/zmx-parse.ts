@@ -66,7 +66,7 @@ export const parseSessionLine = (line: string): Session | undefined => {
   let pid = 0;
   let clients = 0;
   let startDir = "";
-  let ended = false;
+  let taskEnded = false;
   let exitCode = 0;
   let created: Date | undefined;
   let cmd = "";
@@ -98,7 +98,7 @@ export const parseSessionLine = (line: string): Session | undefined => {
         break;
       case "ended":
         // Presence is the signal, whatever the value.
-        ended = true;
+        taskEnded = true;
         break;
       case "exit_code":
         exitCode = toInt(value);
@@ -122,7 +122,24 @@ export const parseSessionLine = (line: string): Session | undefined => {
   // A row with no name is not addressable, so it is not a session.
   return name === ""
     ? undefined
-    : { name, pid, clients, startDir, ended, exitCode, created, cmd, labels };
+    : {
+        name,
+        pid,
+        clients,
+        startDir,
+        taskEnded,
+        // Both are answered from the process table, which this parser has no
+        // access to — `withProcesses` fills them in. The defaults are what a
+        // caller that never asks would see, and they are the safe way round:
+        // a session assumed live is one the sidebar shows and `start` leaves
+        // alone.
+        ended: false,
+        busy: true,
+        exitCode,
+        created,
+        cmd,
+        labels,
+      };
 };
 
 /** Parse the whole of `zmx ls`, skipping anything unreadable. */
@@ -142,3 +159,102 @@ export const requireName = (op: string, name: string): string | undefined =>
   name.trim() === "" ? `${op} a session: no name given` : undefined;
 
 export { CURRENT_MARKER, KNOWN_FIELDS };
+
+// ── what "ended" means, and why zmx cannot answer it ───────────────────────
+//
+// `zmx ls` reports `ended` and `exit_code` for the session's most recent
+// **task** — the thing `zmx run` typed in, tracked by the
+// `ZMX_TASK_COMPLETED:$?` marker it appends to the line. It says nothing about
+// whether the session is still there.
+//
+// Those are not the same question, and the sidebar was asking the first while
+// meaning the second. Measured on a live, working agent:
+//
+//   zmx ls    ended=1787923966  exit_code=1     ← reads as dead
+//   history   Claude Code drawing its UI        ← is alive
+//   ps 357    -bash, with a claude child        ← and busy
+//
+// Reported as "it looks pretty dead to me still in this sidebar", by somebody
+// who had just attached to it by hand and found it fine.
+//
+// So the process table answers it instead. Two different questions, and the
+// two callers want different ones:
+//
+//   ended   the process is gone         the sidebar, attach, the wire
+//   busy    something is running in it  `start`, deciding whether `zmx run`
+//                                       would interrupt anything
+//
+// **Busy needs both halves of its rule**, because a session comes in two
+// shapes and only one of them has a shell in it:
+//
+//   pid    comm     child            created by
+//   357    -bash    claude           `zmx run -d claude` — a shell, told to run
+//   18057  claude   claude helper    `zmx attach <name> claude` — no shell
+//
+// A child is the signal for the first; not being a shell is the signal for the
+// second. An idle `-bash` with no children is the one case that is genuinely
+// not busy, and it is exactly the case `start` has to be willing to run in.
+
+/** A shell sitting at a prompt is a session with nothing running in it. */
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu"]);
+
+/** One process, as the table reports it. */
+export interface ProcessRow {
+  readonly pid: number;
+  readonly ppid: number;
+  /** The executable's name. A login shell is reported with a leading `-`. */
+  readonly comm: string;
+}
+
+/**
+ * Parse `ps -eo pid=,ppid=,comm=`.
+ *
+ * Whitespace-separated, and `comm` may contain spaces on macOS when it is a
+ * path — so the first two fields are taken and the rest is the command,
+ * rather than splitting into exactly three.
+ */
+export const parseProcessTable = (output: string): ReadonlyArray<ProcessRow> => {
+  const rows: ProcessRow[] = [];
+  for (const line of output.split("\n")) {
+    const parts = line.trim().split(/\s+/u);
+    const pid = Number(parts[0]);
+    const ppid = Number(parts[1]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || parts.length < 3) {
+      continue;
+    }
+    rows.push({ pid, ppid, comm: parts.slice(2).join(" ") });
+  }
+  return rows;
+};
+
+/** The bare name of an executable, without a path or a login shell's dash. */
+const basename = (comm: string): string => {
+  const last = comm.slice(comm.lastIndexOf("/") + 1);
+  return last.startsWith("-") ? last.slice(1) : last;
+};
+
+/**
+ * Fill in `ended` and `busy` from a process table.
+ *
+ * Pure, and takes the rows rather than reading them, so the rule can be tested
+ * against a table written by hand — which is the only way to state the
+ * two-shapes case above without two live sessions to point at.
+ */
+export const withProcesses = (
+  sessions: ReadonlyArray<Session>,
+  processes: ReadonlyArray<ProcessRow>,
+): ReadonlyArray<Session> => {
+  const byPid = new Map(processes.map((row) => [row.pid, row]));
+  const parents = new Set(processes.map((row) => row.ppid));
+  return sessions.map((session) => {
+    const own = byPid.get(session.pid);
+    if (own === undefined) {
+      return { ...session, ended: true, busy: false };
+    }
+    return {
+      ...session,
+      ended: false,
+      busy: parents.has(session.pid) || !SHELLS.has(basename(own.comm)),
+    };
+  });
+};

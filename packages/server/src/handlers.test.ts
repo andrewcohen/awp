@@ -41,6 +41,8 @@ const session = (over: Partial<Session>): Session => ({
   clients: 0,
   startDir: "/tmp",
   ended: false,
+  busy: true,
+  taskEnded: false,
   exitCode: 0,
   created: new Date("2026-08-25T09:14:00.000Z"),
   cmd: "claude",

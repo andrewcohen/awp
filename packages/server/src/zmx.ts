@@ -19,7 +19,7 @@ import { Effect, Layer } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Multiplexer, MultiplexerError } from "./multiplexer";
 import { capture, said } from "./run";
-import { parseSessionList, requireName } from "./zmx-parse";
+import { parseProcessTable, parseSessionList, requireName, withProcesses } from "./zmx-parse";
 import { childEnv } from "./zmx-session";
 
 /**
@@ -82,7 +82,29 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const list = () => run("list", ["ls"]).pipe(Effect.map(parseSessionList));
+  /**
+   * Every session, with liveness answered by the process table.
+   *
+   * Two subprocesses rather than one, and the second is the point: `zmx ls`
+   * cannot say whether a session is still there — its `ended` is about the
+   * last task it ran — so `ps` is asked as well. See `withProcesses`.
+   *
+   * `ps` failing is not this function failing. A listing with liveness
+   * unknown is far better than no listing at all, and the parser's defaults
+   * are the safe way round: every session reads as live, which shows a row
+   * that might be stale rather than hiding one that is not.
+   */
+  const list = () =>
+    Effect.all(
+      [
+        run("list", ["ls"]).pipe(Effect.map(parseSessionList)),
+        capture(spawner, ChildProcess.make("ps", ["-eo", "pid=,ppid=,comm="])).pipe(
+          Effect.map((seen) => parseProcessTable(seen.stdout)),
+          Effect.orElseSucceed(() => []),
+        ),
+      ],
+      { concurrency: 2 },
+    ).pipe(Effect.map(([sessions, processes]) => withProcesses(sessions, processes)));
 
   /**
    * Run a zmx command from a given directory.
@@ -176,9 +198,15 @@ const make = Effect.gen(function* () {
         // is for. zmx supports it directly — `handleRun` resets its task
         // tracking so a second run on one session is not ignored — and it
         // keeps the scrollback, which killing and recreating would not.
+        //
+        // `busy` and not `ended`, because zmx's own `ended` turned out to be
+        // about the last *task* rather than the session — see
+        // `withProcesses`. What this needs to know is whether typing a command
+        // in would interrupt something, which is a question about the process
+        // table.
         const existing = yield* list();
         const already = existing.find((session) => session.name === options.name);
-        if (already !== undefined && !already.ended) {
+        if (already !== undefined && already.busy) {
           return;
         }
 

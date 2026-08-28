@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { type Session, identity, isLive } from "./multiplexer";
-import { parseSessionLine, parseSessionList, requireName } from "./zmx-parse";
+import {
+  parseProcessTable,
+  parseSessionLine,
+  parseSessionList,
+  requireName,
+  withProcesses,
+} from "./zmx-parse";
 
 // Fixtures are real `zmx ls` output captured on 2026-08-25, not invented. The
 // awkward cases are already in it: a start_dir containing a space, a cmd
@@ -125,17 +131,28 @@ describe("the caller's own session", () => {
 });
 
 describe("ended", () => {
-  test("a listed session is not necessarily a running one", () => {
+  test("zmx's `ended` is about the last task, and is read as such", () => {
     // zmx keeps a session listed after its command exits so the output can
-    // still be read. Attaching to one renders a dead program's last screen.
-    const dead = parseSessionLine(t("name=x", "pid=1", "ended=true", "exit_code=2"));
-    expect(dead?.ended).toBe(true);
-    expect(dead?.exitCode).toBe(2);
-    expect(isLive(dead as never)).toBe(false);
+    // still be read, and reports `ended` for that command — the thing
+    // `zmx run` typed in, tracked by the `ZMX_TASK_COMPLETED:$?` marker.
+    //
+    // **It is not a statement about the session**, and reading it as one drew
+    // a working agent in the sidebar as exited. So it lands on `taskEnded`,
+    // and `ended` is answered by `withProcesses` from the process table.
+    const done = parseSessionLine(t("name=x", "pid=1", "ended=true", "exit_code=2"));
+    expect(done?.taskEnded).toBe(true);
+    expect(done?.exitCode).toBe(2);
+    expect(done?.ended).toBe(false);
   });
 
-  test("a session without the field is live", () => {
-    expect(isLive(parseSessionLine(OBSIDIAN) as never)).toBe(true);
+  test("liveness is unknown until the process table has been asked", () => {
+    // The defaults are the safe way round: a session assumed live is one the
+    // sidebar shows and `start` leaves alone. `ps` failing should hide nothing
+    // and interrupt nothing.
+    const seen = parseSessionLine(OBSIDIAN);
+    expect(seen?.ended).toBe(false);
+    expect(seen?.busy).toBe(true);
+    expect(isLive(seen as never)).toBe(true);
   });
 });
 
@@ -182,5 +199,109 @@ describe("requireName", () => {
 
   test("allows a real one", () => {
     expect(requireName("kill", "awp.a.b.agent")).toBeUndefined();
+  });
+});
+
+/** A session at a given pid, with everything else at the parser's defaults. */
+const at = (pid: number): Session => ({
+  name: "s",
+  pid,
+  clients: 0,
+  startDir: "",
+  ended: false,
+  busy: true,
+  taskEnded: false,
+  exitCode: 0,
+  created: undefined,
+  cmd: "",
+  labels: {},
+});
+
+describe("withProcesses", () => {
+  // Real `ps -eo pid=,ppid=,comm=` rows, captured 2026-08-28 while one agent
+  // was mid-task and another idle. The two session shapes are both here and
+  // they are the whole reason the rule has two clauses:
+  //
+  //   357    -bash    ← `zmx run -d claude`: a shell, told to run something
+  //   18057  claude   ← `zmx attach <name> claude`: no shell at all
+  const TABLE = parseProcessTable(
+    [
+      "95732 18057 /Users/acohen/.local/bin/claude",
+      "18057 18056 claude",
+      "  357   356 -bash",
+      "34392   357 claude",
+      "  900   899 -bash",
+      "  700   699 vim",
+    ].join("\n"),
+  );
+
+  test("a session whose process is gone has ended", () => {
+    const [seen] = withProcesses([at(999_999)], TABLE);
+    expect(seen?.ended).toBe(true);
+    expect(seen?.busy).toBe(false);
+  });
+
+  test("a shell with something running in it is alive and busy", () => {
+    // The session that was reported as dead. It is a `-bash` — so the shell
+    // clause alone would call it idle — with a claude child, which is the
+    // clause that answers correctly.
+    const [seen] = withProcesses([at(357)], TABLE);
+    expect(seen?.ended).toBe(false);
+    expect(seen?.busy).toBe(true);
+  });
+
+  test("a shell at a prompt is alive and not busy", () => {
+    // The one state `start` is allowed to run a command in, and the only
+    // reason `busy` is a separate question from `ended`.
+    const [seen] = withProcesses([at(900)], TABLE);
+    expect(seen?.ended).toBe(false);
+    expect(seen?.busy).toBe(false);
+  });
+
+  test("a session that is the program, with no shell, is busy", () => {
+    // `zmx attach <name> vim` leaves no shell — the session's own process is
+    // the program, and it has no children of its own. A child-only rule calls
+    // this idle, and `start` would then type a command into a running editor,
+    // which is precisely what the guard exists to prevent.
+    const [seen] = withProcesses([at(700)], TABLE);
+    expect(seen?.busy).toBe(true);
+  });
+
+  test("an agent attached directly, with a helper of its own, is busy too", () => {
+    // The other shape of the same thing: claude as the session's own process,
+    // which does have children. Both clauses agree here, and that is fine —
+    // the two tests above are the ones that separate them.
+    const [seen] = withProcesses([at(18_057)], TABLE);
+    expect(seen?.busy).toBe(true);
+  });
+
+  test("zmx's own report about the last task is left alone", () => {
+    // Kept, and kept separate. It is a true statement about something else —
+    // whether the last thing `zmx run` typed in has finished — and the bug was
+    // reading it as a statement about the session.
+    const line =
+      "  name=awp.awp.review-inbox.agent\tpid=357\tclients=1\tstart_dir=/w\t" +
+      "ended=2\texit_code=1\tawp_kind=agent";
+    const parsed = parseSessionLine(line);
+    const [seen] = withProcesses([parsed as Session], TABLE);
+    expect(seen?.taskEnded).toBe(true);
+    expect(seen?.exitCode).toBe(1);
+    // And the session is not over, which is the whole finding.
+    expect(seen?.ended).toBe(false);
+  });
+});
+
+describe("parseProcessTable", () => {
+  test("keeps a command containing a space", () => {
+    // macOS reports a path here, and a path can contain a space. Splitting
+    // into exactly three fields would drop the tail and misread the name.
+    const [row] = parseProcessTable("42 1 /Applications/My App/bin/thing");
+    expect(row).toEqual({ pid: 42, ppid: 1, comm: "/Applications/My App/bin/thing" });
+  });
+
+  test("skips a header or anything unreadable", () => {
+    expect(parseProcessTable("  PID  PPID COMM\n\n7 1 bash")).toEqual([
+      { pid: 7, ppid: 1, comm: "bash" },
+    ]);
   });
 });
