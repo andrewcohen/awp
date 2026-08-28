@@ -1,6 +1,8 @@
 import { Data, Effect, Queue, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { childEnv } from "./zmx-session";
 
 // Asking Claude something over ACP instead of over `claude -p`.
@@ -54,19 +56,94 @@ export class AcpError extends Data.TaggedError("AcpError")<{
 }> {}
 
 /**
- * Where the adapter is.
+ * Where the adapter is, and why it is not a dependency of this repo.
  *
- * Resolved through the package rather than named as a path, because a path
- * into `node_modules` is right until bun hoists it somewhere else. The
- * subpath is reachable because the package publishes `"./*": "./*"`; its
- * default export is the library, and the executable is a different file.
+ * ── 306MB, in every workspace ─────────────────────────────────────────────
+ *
+ * Depending on `@agentclientprotocol/claude-agent-acp` pulls in the Claude
+ * Agent SDK, whose platform package is a **single 306MB file** — a whole
+ * bundled `claude`:
+ *
+ *   node_modules/.bun/@anthropic-ai+claude-agent-sdk-darwin-arm64@0.3.232
+ *     └── claude                                        306M, one file
+ *
+ * That is not one copy. The create job's bootstrap hook runs `bun install` in
+ * every workspace it makes, so every checkout on the machine would carry
+ * another. Measured on this one: 1.3GB, of which 1.1GB is node_modules.
+ *
+ * A blanket `--omit=optional` is not the answer either — TypeScript's own
+ * compiler binary is an optional dependency too, and the typecheck gate needs
+ * it.
+ *
+ * ── the machine already has a claude ──────────────────────────────────────
+ *
+ * The whole point of this path is to drive the `claude` a person already
+ * installed, so a second copy inside the tree is exactly the thing to remove.
+ * The SDK says so itself, in the error it raises when the binary is missing:
+ *
+ *   Claude native binary not found for darwin-arm64. Reinstall
+ *   @anthropic-ai/claude-agent-sdk without --omit=optional, or set
+ *   CLAUDE_CODE_EXECUTABLE.
+ *
+ * So the adapter lives once per machine at {@link TOOLS}, installed *with*
+ * `--omit=optional`, and is pointed at the system binary. Measured:
+ *
+ *   as a dependency, per workspace   306MB
+ *   at ~/.awp/tools, once            51MB, and it answers in 2.9s
+ *
+ * ── what this costs ───────────────────────────────────────────────────────
+ *
+ * A setup step, and a failure mode when nobody has run it. Both are answered
+ * by the sentence in {@link adapterPath}, which names the command — and by
+ * the naming call's fallback, which was already there for a model that cannot
+ * be reached and does not care why.
+ */
+const TOOLS = join(homedir(), ".awp", "tools");
+
+/** The adapter's executable, inside the per-machine install. */
+const ADAPTER = join(
+  TOOLS,
+  "node_modules",
+  "@agentclientprotocol",
+  "claude-agent-acp",
+  "dist",
+  "index.js",
+);
+
+/** How to put it there. Said in the failure, because a path is not an answer. */
+export const INSTALL = `mkdir -p ${TOOLS} && cd ${TOOLS} && bun add --omit=optional @agentclientprotocol/claude-agent-acp`;
+
+/**
+ * The adapter, or a refusal naming the command that installs it.
  *
  * Run under this process's own runtime — `process.execPath` — rather than
  * through the `.bin` shim, whose shebang names `node` and would ignore that
  * the daemon runs under Bun.
  */
-export const adapterPath = (): string =>
-  createRequire(import.meta.url).resolve("@agentclientprotocol/claude-agent-acp/dist/index.js");
+export const adapterPath = (): string | undefined => (existsSync(ADAPTER) ? ADAPTER : undefined);
+
+/**
+ * The `claude` the SDK should drive, found the way a shell would.
+ *
+ * Needed because the adapter is installed without its bundled binary, and
+ * looked up here rather than trusted from the environment: `childEnv()`
+ * empties every `CLAUDE_CODE_*` marker — a parent describing itself — and
+ * `CLAUDE_CODE_EXECUTABLE` is one of those names without being one of those
+ * things. Emptied and then set again, in that order, is the only way to have
+ * both rules.
+ */
+export const claudePath = (path: string | undefined = process.env["PATH"]): string | undefined => {
+  for (const dir of (path ?? "").split(":")) {
+    if (dir === "") {
+      continue;
+    }
+    const candidate = join(dir, "claude");
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+};
 
 const INITIALIZE = 1;
 const NEW_SESSION = 2;
@@ -154,12 +231,30 @@ export const ask = (
     const send = (message: unknown) =>
       Effect.asVoid(Queue.offer(outbox, encoder.encode(`${JSON.stringify(message)}\n`)));
 
+    const adapter = adapterPath();
+    if (adapter === undefined) {
+      return yield* Effect.fail(
+        new AcpError({ reason: `the ACP adapter is not installed — run:\n  ${INSTALL}` }),
+      );
+    }
+    const claude = claudePath();
+    if (claude === undefined) {
+      return yield* Effect.fail(new AcpError({ reason: "there is no claude on the PATH" }));
+    }
+
     const handle = yield* Effect.mapError(
       spawner.spawn(
-        ChildProcess.make(process.execPath, [adapterPath()], {
+        ChildProcess.make(process.execPath, [adapter], {
           cwd: question.cwd,
-          // The whole reason this runs at all. See the note at the top.
-          env: childEnv(),
+          env: {
+            // The whole reason this runs at all. See the note at the top.
+            ...childEnv(),
+            // After `childEnv`, never inside it. That function empties every
+            // `CLAUDE_CODE_*` key because they are a parent describing itself;
+            // this one is a path, and putting it in the exception list there
+            // would weaken a rule that has already been got wrong twice.
+            CLAUDE_CODE_EXECUTABLE: claude,
+          },
           stdin: { stream: Stream.fromQueue(outbox), endOnDone: false },
         }),
       ),

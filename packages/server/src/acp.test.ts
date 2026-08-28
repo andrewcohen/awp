@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adapterPath, chunkText, parseMessage } from "./acp";
+import { INSTALL, chunkText, claudePath, parseMessage } from "./acp";
 
 describe("parseMessage", () => {
   it("reads one line of the protocol", () => {
@@ -68,11 +68,33 @@ describe("chunkText", () => {
   });
 });
 
-describe("adapterPath", () => {
-  // A path into node_modules is right until bun hoists it somewhere else, so
-  // it is resolved through the package. This asserts the resolution works at
-  // all — a throw here is the dependency having moved or gone.
-  it("resolves the adapter's executable", () => {
-    expect(adapterPath()).toMatch(/claude-agent-acp\/dist\/index\.js$/u);
+describe("claudePath", () => {
+  // Found the way a shell would, and needed because the adapter is installed
+  // without the SDK's own 306MB copy — see the note in acp.ts.
+  it("takes the first claude on the PATH", () => {
+    // `/usr` certainly exists and holds no `claude`; the directory this repo
+    // lives in certainly does not. Both are here so the answer cannot come
+    // from the first entry by accident.
+    expect(claudePath("/nowhere-at-all:/usr")).toBeUndefined();
+  });
+
+  it("ignores an empty entry", () => {
+    expect(claudePath("::")).toBeUndefined();
+  });
+
+  // `""`, not `undefined` — the argument has a default, so passing undefined
+  // asks for the real PATH and the test would then depend on the machine.
+  it("answers nothing when the PATH is empty", () => {
+    expect(claudePath("")).toBeUndefined();
+  });
+});
+
+describe("INSTALL", () => {
+  // A path is not an answer. The refusal names the command, because the whole
+  // point of not depending on the adapter is that somebody has to install it.
+  it("names the command that puts the adapter there", () => {
+    expect(INSTALL).toContain("bun add");
+    expect(INSTALL).toContain("--omit=optional");
+    expect(INSTALL).toContain("@agentclientprotocol/claude-agent-acp");
   });
 });
