@@ -5,6 +5,7 @@ import { type CreateWorkspace, CreateWorkspace as CreateWorkspaceSchema } from "
 import { Effect } from "effect";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
+import { trustWorkspace, untrustWorkspace } from "../claude-trust";
 import { identityLabels, sessionName } from "../naming";
 import type { Bootstrap } from "../bootstrap";
 import type { Settings } from "../settings";
@@ -379,6 +380,41 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       }),
   };
 
+  // ── trust, between the directory and the agent ──────────────────────────
+  //
+  // Claude Code stops at a prompt in a directory it has not seen, and every
+  // workspace here is a fresh one — so every agent stopped there. It became an
+  // *exit* rather than a hang once `send` started delivering a real Return: the
+  // brief arrives, the Return lands on the highlighted option, and that option
+  // is "No, exit".
+  //
+  // After `workspace` because the directory has to exist, and before `session`
+  // because the agent has to be trusted before it launches. See claude-trust.ts
+  // for why this touches somebody else's file so carefully.
+  const trustStep: JobStep<CreateWorkspace> = {
+    name: "trust",
+    run: (input, context) =>
+      Effect.gen(function* () {
+        const dir = workspacePath(input.project, yield* named(input));
+        const changed = yield* trustWorkspace(dir).pipe(
+          Effect.mapError(refused("could not mark the workspace trusted")),
+        );
+        // Said only when it did something. "already trusted" and "no Claude
+        // Code config here" are both ordinary and neither is worth a line in
+        // every job's log.
+        if (changed) {
+          yield* context.log("trusted the workspace with Claude Code");
+        }
+      }),
+    undo: (input) =>
+      Effect.gen(function* () {
+        const dir = workspacePath(input.project, yield* named(input));
+        yield* untrustWorkspace(dir).pipe(
+          Effect.mapError(refused("could not remove the trust entry")),
+        );
+      }),
+  };
+
   const sessionStep: JobStep<CreateWorkspace> = {
     name: "session",
     run: (input, context) =>
@@ -526,6 +562,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
       nameStep,
       workspaceStep,
       bookmarkStep,
+      trustStep,
       sessionStep,
       bootstrapStep,
       claimStep,

@@ -325,6 +325,7 @@ describe("making a workspace", () => {
       "name",
       "workspace",
       "bookmark",
+      "trust",
       "session",
       "bootstrap",
       "claim",
