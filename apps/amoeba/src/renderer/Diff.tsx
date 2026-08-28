@@ -1,11 +1,12 @@
 import type { CommentSide, ReviewComment, Revision } from "@awp-kit/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
+import { TreeStructureIcon } from "@phosphor-icons/react/TreeStructure";
 import { CaretLineDownIcon } from "@phosphor-icons/react/CaretLineDown";
 import { CaretLineUpIcon } from "@phosphor-icons/react/CaretLineUp";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
 import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/ArrowsOutLineVertical";
-import { CodeView, type CodeViewItem } from "@pierre/diffs/react";
+import { CodeView, type CodeViewHandle, type CodeViewItem } from "@pierre/diffs/react";
 import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import * as stylex from "@stylexjs/stylex";
 import { parsePatchFiles } from "@pierre/diffs";
@@ -14,6 +15,7 @@ import { listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
 import { FOLD_MS } from "./columns";
 import { contentOf, statOf, subjectOf, versionOf } from "./patch";
+import { Tree } from "./Tree";
 import {
   rememberOpenSplit,
   rememberSplit,
@@ -503,7 +505,12 @@ const styles = stylex.create({
   // `minHeight: 0` is what makes "bounded" true in a flex column — without it
   // the box grows to its content and the clipping moves up a level rather
   // than going away.
-  patch: { flex: 1, minHeight: 0 },
+  // `relative`, because the tree is drawn over this and nothing else. Over the
+  // *patch* rather than over the panel, so the head row and the revision list
+  // stay reachable while it is open — it is an index, not a mode.
+  patch: { position: "relative", flex: 1, minHeight: 0 },
+  /** A head-row button that is currently on. */
+  buttonOn: { borderColor: colors.accent, color: colors.accent },
   view: { height: "100%", overflowY: "auto" },
 
   // ── the file header, made into a control ────────────────────────────────
@@ -949,6 +956,15 @@ export function Diff({
     });
   };
 
+  // ── the file tree, over the patch ────────────────────────────────────────
+  //
+  // A handle on the CodeView rather than a ref to a DOM node: `scrollTo` is on
+  // the library's own handle, and an item target is exactly what a tree row
+  // resolves to. Scrolling by hand would mean measuring virtualised rows the
+  // library is already measuring.
+  const view = useRef<CodeViewHandle<Note>>(null);
+  const [tree, setTree] = useState(false);
+
   // Where a comment is being written, and what is in the box. One at a time,
   // because the selection it is anchored to is one at a time.
   const [selection, setSelection] = useState<CodeViewLineSelection | null>(null);
@@ -1381,6 +1397,23 @@ export function Diff({
           </button>
         )}
 
+        {/* The index. Beside the fold pair rather than by the stat, because
+            all three are about how the patch is *got at* rather than about
+            what it says — and it is only worth having when there is more than
+            one file to find. */}
+        {items.length > 1 && (
+          <button
+            type="button"
+            aria-expanded={tree}
+            aria-label={tree ? "hide the file tree" : "show the file tree"}
+            title={tree ? "hide the file tree" : "jump to a file"}
+            {...stylex.props(styles.button, styles.icon, tree && styles.buttonOn)}
+            onClick={() => setTree((was) => !was)}
+          >
+            <TreeStructureIcon size={13} weight="bold" />
+          </button>
+        )}
+
         {/* Fold and unfold everything. Two buttons rather than one that
             toggles, because a single control has to decide what "the opposite
             of a patch with four of ten files folded" is — and either answer is
@@ -1414,8 +1447,31 @@ export function Diff({
       )}
 
       <div {...stylex.props(styles.patch)}>
+        {/* The index, over the patch. Mounted only while open, so its model is
+            built from the paths of the patch actually on screen and nothing has
+            to keep the two in step. */}
+        {tree && items.length > 0 && (
+          <Tree
+            paths={items.flatMap((item) => (item.type === "diff" ? [item.fileDiff.name] : []))}
+            onPick={(path) => {
+              // A path can appear twice in one patch — a file split across two
+              // entries by a mode change is the ordinary way — so the *first*
+              // item wearing it is the one to go to. `id` carries the position
+              // for exactly that reason; see where `items` is built.
+              const found = items.find(
+                (item) => item.type === "diff" && item.fileDiff.name === path,
+              );
+              if (found !== undefined) {
+                view.current?.scrollTo({ type: "item", id: found.id, align: "start" });
+              }
+            }}
+            onClose={() => setTree(false)}
+          />
+        )}
+
         {items.length > 0 && (
           <CodeView<Note>
+            ref={view}
             items={items}
             selectedLines={live}
             // Every range the gesture passes through, including the ones it is
