@@ -159,6 +159,47 @@ const named = (input: CreateWorkspace): Effect.Effect<string, JobError> =>
     ? Effect.fail(permanent("the workspace has no name — the naming step recorded none"))
     : Effect.succeed(input.workspace);
 
+/**
+ * Resolve the placeholders a hook line may carry.
+ *
+ * ── the bug this exists for ───────────────────────────────────────────────
+ *
+ * A hook is handed to `sh -c` whole, and the Go implementation substituted
+ * `<root>` first — `strings.ReplaceAll(raw, "<root>", root)`. amoeba did not,
+ * so a real project's first hook reached the shell untouched:
+ *
+ *   cp <root>/.env .env
+ *
+ * `<` is a redirect. sh read that as `cp` with its input redirected from a
+ * file called `root`, and said so:
+ *
+ *   sh: root: No such file or directory
+ *
+ * Which names neither the hook, the placeholder, nor the repository — it is
+ * the shell answering a question nobody asked. And because a failing hook
+ * fails the job, a configuration written for the Go implementation took the
+ * whole workspace back out.
+ *
+ * The angle brackets are why it had to be found rather than noticed: an
+ * unresolved placeholder in any other spelling would have been passed through
+ * as a literal and shown up in the error. This one turned into syntax.
+ *
+ * ── what it resolves to ───────────────────────────────────────────────────
+ *
+ * The **source repository**, not the new workspace. That is the whole point of
+ * the placeholder: `.env` and `.shopify` are untracked, so they exist in the
+ * repository the workspace was made from and nowhere else. A hook copying them
+ * from the workspace would copy nothing, succeed, and leave an agent without
+ * its environment.
+ *
+ * Not quoted, deliberately. The line is a shell line and the person writing it
+ * owns its quoting — putting quotes on would break `cp <root>/a <root>/b` and
+ * every glob. A path with a space in it is theirs to quote, as it already is
+ * for every other word on the line.
+ */
+export const expandHook = (command: string, repo: string): string =>
+  command.replaceAll("<root>", repo);
+
 export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> => {
   const { jj, mux, threads, files, intent, settings, run } = deps;
 
@@ -560,7 +601,8 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
           return;
         }
 
-        for (const command of hooks) {
+        for (const raw of hooks) {
+          const command = expandHook(raw, input.repo);
           yield* context.log(`$ ${command}`);
           const output = yield* run
             .run({ command, cwd })
