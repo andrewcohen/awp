@@ -1431,6 +1431,66 @@ export class JobNotFound extends Schema.TaggedError<JobNotFound>()("JobNotFound"
 
 // ── the calls ──────────────────────────────────────────────────────────────
 
+// ── the chat ─────────────────────────────────────────────────────────────────
+//
+// A conversation with an agent, as records rather than as a picture of one.
+// See `chat.ts` in the daemon for what these are made of and why the session
+// is asked for rather than composed from a path.
+
+/** Who said it. `thought` is the model reasoning aloud, and is drawn quietly. */
+export const ChatRole = Schema.Literals(["user", "agent", "thought"]);
+
+export type ChatRole = (typeof ChatRole)["Type"];
+
+/** One of the buttons on a permission request. */
+export const ChatPermissionOption = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  /** `allow_once`, `allow_always`, `reject_once` — the agent's own vocabulary. */
+  kind: Schema.String,
+});
+
+export type ChatPermissionOption = (typeof ChatPermissionOption)["Type"];
+
+/**
+ * Something that happened in a conversation.
+ *
+ * One struct with a `kind` rather than a union of tagged structs, which is the
+ * shape the rest of this contract already uses — and it keeps the renderer off
+ * `_tag`, which the lint rule here deliberately refuses.
+ *
+ * **A tool arrives as several of these sharing one `id`**, and they are
+ * patches: pending with a generic title, then the command, then the output,
+ * then completed. Measured against a real turn — one `tool_call` and four
+ * `tool_call_update` for a single `cat`. So every field but `kind` and `id` is
+ * optional, and the window merges by id rather than appending.
+ */
+export const ChatUpdate = Schema.Struct({
+  kind: Schema.Literals(["message", "tool", "permission"]),
+
+  /** message: who, and what they said. Chunks, so they are appended. */
+  role: Schema.optional(ChatRole),
+  text: Schema.optional(Schema.String),
+
+  /** tool and permission: which one this is about. */
+  id: Schema.optional(Schema.String),
+  title: Schema.optional(Schema.String),
+  /** `execute`, `read`, `edit` — what sort of thing the tool is. */
+  toolKind: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  output: Schema.optional(Schema.String),
+
+  /** permission: what a person may answer. */
+  options: Schema.optional(Schema.Array(ChatPermissionOption)),
+});
+
+export type ChatUpdate = (typeof ChatUpdate)["Type"];
+
+/** The conversation could not be had. */
+export class ChatUnavailable extends Schema.TaggedError<ChatUnavailable>()("ChatUnavailable", {
+  reason: Schema.String,
+}) {}
+
 export class AwpRpcs extends RpcGroup.make(
   /** Every session the multiplexer knows about, awp's or not. */
   Rpc.make("SessionList", {
@@ -1505,6 +1565,59 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("JobChanges", {
     success: Job,
     stream: true,
+  }),
+
+  // ── the chat ─────────────────────────────────────────────────────────────
+  //
+  // The same split as Attach and Write, for the same reason: rpc streams one
+  // way, so reading the conversation and adding to it are two calls. Keyed by
+  // the workspace rather than by a handle, so a window that reconnects can
+  // carry on talking without first re-establishing anything.
+
+  /**
+   * Open a conversation on a workspace and receive it: the history first, then
+   * whatever happens next, in the same shape.
+   *
+   * One adapter process per workspace, shared by everyone looking at it and
+   * released when the last one goes — the arrangement Attach uses for a pty,
+   * and it holds here for a different reason. Two adapters loaded on one
+   * session would be two writers on one transcript, and nothing in the
+   * protocol stops them.
+   */
+  Rpc.make("ChatOpen", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: ChatUpdate,
+    error: ChatUnavailable,
+    stream: true,
+  }),
+
+  /**
+   * Say something.
+   *
+   * Returns when the turn has *started*. The answer comes back down ChatOpen,
+   * because a turn takes as long as the work does — awaiting it here would make
+   * sending a message a call that returns when the agent has finished thinking.
+   */
+  Rpc.make("ChatSend", {
+    payload: { project: Schema.String, workspace: Schema.String, text: Schema.String },
+    error: ChatUnavailable,
+  }),
+
+  /**
+   * Answer a permission request, by the id its update carried.
+   *
+   * This exists because the alternative is the agent's default: a model
+   * classifier approving tool calls with nobody in this window asked. Measured
+   * — see chat.ts.
+   */
+  Rpc.make("ChatAnswer", {
+    payload: {
+      project: Schema.String,
+      workspace: Schema.String,
+      request: Schema.String,
+      option: Schema.String,
+    },
+    error: ChatUnavailable,
   }),
 
   // ── review comments ──────────────────────────────────────────────────────
