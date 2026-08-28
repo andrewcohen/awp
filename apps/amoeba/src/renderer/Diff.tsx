@@ -1,9 +1,9 @@
 import type { CommentSide, ReviewComment, Revision } from "@awp-kit/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
 import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/ArrowsOutLineVertical";
-import { CaretUpIcon } from "@phosphor-icons/react/CaretUp";
 import { CodeView, type CodeViewItem } from "@pierre/diffs/react";
 import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import * as stylex from "@stylexjs/stylex";
@@ -322,6 +322,8 @@ const styles = stylex.create({
   // Only while it is being dragged. A boundary that is invisible at rest has
   // to appear under the hand, or there is no feedback that the drag started.
   held: { backgroundColor: colors.border },
+  /** A quarter turn, so the sidebar's divider lands along the top edge. */
+  turned: { transform: "rotate(90deg)" },
   // Sized to match the icon buttons at the other end of the head row, so the
   // two ends of the row read as one set of controls rather than as a caret
   // that happens to be nearby.
@@ -1227,7 +1229,19 @@ export function Diff({
           {...stylex.props(styles.peg)}
           onClick={() => resize(folded ? DEFAULT_SPLIT : 0)}
         >
-          {folded ? <CaretDownIcon size={12} /> : <CaretUpIcon size={12} />}
+          {/* The sidebar's own glyph, turned a quarter turn.
+
+              A caret is a direction and this is not one: the control does the
+              same thing the sidebar's and the panels' do — put a region away,
+              bring it back — and answering to a different picture made it read
+              as a third kind of thing. Phosphor ships no horizontal
+              `SidebarSimple`, so it is rotated; `Accessory` already mirrors
+              the same icon with `scaleX(-1)` for the same reason.
+
+              One glyph in both states, with `aria-expanded` carrying which it
+              is, exactly as the two column controls do. Swapping the picture
+              is what a caret was doing and is the habit being dropped. */}
+          <SidebarSimpleIcon size={14} aria-hidden {...stylex.props(styles.turned)} />
         </button>
 
         {stat !== undefined && stat.files > 0 ? (
