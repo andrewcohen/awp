@@ -28,9 +28,23 @@ export const mainWindow = new BrowserWindow({
   title: "amoeba",
   url,
   frame: { x: 100, y: 100, width: 1200, height: 800 },
-  // Inset controls rather than hidden: there is no custom chrome yet, and a
-  // window with no way to close it is a bad first impression.
-  titleBarStyle: "hiddenInset",
+  // ── no title bar, and no traffic lights ────────────────────────────────
+  //
+  // `hidden` maps to `Titled: false, FullSizeContentView: true`, which takes
+  // away every native way to move, close or minimise the window. Two things
+  // had to exist first, and both now do:
+  //
+  //   the Window menu     Close ⌘W, Minimize ⌘M, Zoom — in `menu.ts`
+  //   a drag region       the top bar, wearing electrobun's own class
+  //
+  // The second is the one that nearly shipped broken. `-webkit-app-region:
+  // drag` was already on that bar and had never moved anything: electrobun
+  // matches on an inline style attribute or on `.electrobun-webkit-app-region-
+  // drag`, and StyleX emits a class of its own plus a stylesheet rule. The bar
+  // moved the window because `hiddenInset` left a real title bar behind it and
+  // AppKit was doing the work. Take the title bar away and there is nothing.
+  // See the note in `Bars.tsx`.
+  titleBarStyle: "hidden",
 });
 
 // After the window, because two of its items act on one: Reload, and the

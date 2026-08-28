@@ -1577,14 +1577,35 @@ the appearance toggle ended up in a sidebar footer for exactly that reason.
 
 Two consequences, both of which replaced something:
 
-- **The top bar clears the traffic lights on behalf of all three columns.** The
-  window is `hiddenInset`, so the controls float over the content; each column
-  used to carry `space.titlebar` of padding to stay clear of them, in three
-  places, none of which said why. `space.titlebar` is now that bar's height.
-- **The top bar is the drag handle** — `-webkit-app-region: drag`, which StyleX
-  does emit; check the built CSS rather than believing this. With the title bar
-  hidden there is nothing else to grab, which is also why nothing interactive
-  goes in it.
+- **There is no title bar and there are no traffic lights.** The window is
+  `titleBarStyle: "hidden"`. The top bar used to hold 5.25rem of padding whose
+  only job was to clear three circles; it does not any more.
+- **The top bar is the drag handle, and the CSS property is not what makes it
+  one.** This is worth reading before trusting it, because an earlier version
+  of this note was wrong in the way that is hardest to catch: it said
+  `-webkit-app-region: drag` was the mechanism and told you to check the built
+  CSS. The CSS _is_ emitted. Nothing reads it.
+
+  Electrobun's preload matches on the DOM, and on exactly two things:
+
+  ```
+    target.closest('[style*="app-region"][style*="drag"]')   an INLINE style
+    target.closest(".electrobun-webkit-app-region-drag")     its own class
+  ```
+
+  StyleX produces neither — it produces a class of its own plus a stylesheet
+  rule. So the property had never moved this window. It moved because
+  `hiddenInset` left a real title bar behind the strip and AppKit was doing the
+  work, and the bug was invisible for exactly as long as that title bar existed.
+
+  So the bar wears `electrobun-webkit-app-region-drag` as well, and everything
+  interactive in it wears the `no-drag` counterpart. `withRegion` in `Bars.tsx`
+  appends the class to whatever `stylex.props` returned.
+
+  The general shape, which has come up here more than once: **a declaration
+  being emitted is not evidence that anything consumes it.** The same mistake
+  as the worker pool that had no workers and the React Compiler that was not
+  running. Grep for the reader, not for the declaration.
 
 Both bars are `flex-shrink: 0` in a column layout with `minHeight: 0` on the
 middle row, so a short window shrinks the columns rather than pushing the footer
