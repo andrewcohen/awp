@@ -360,6 +360,17 @@ export const Model = Schema.String;
 export const CreateWorkspace = Schema.Struct({
   /** The thread that claims it. See {@link Thread}. */
   thread: Schema.String,
+  /**
+   * The thread this one follows from, or absent for none.
+   *
+   * Carried so the job can *rebuild* the thread, not so it can create one. The
+   * handler makes the thread before enqueuing and the job's rollback removes
+   * it again when it was left empty — which means a retry after a rollback
+   * arrives at a job naming a thread that is no longer there. Everything
+   * needed to put it back has to be on the record, because a resumed job has
+   * nothing else.
+   */
+  threadParent: Schema.optional(Schema.String),
   project: Schema.String,
   /**
    * What a person typed, in their own words.

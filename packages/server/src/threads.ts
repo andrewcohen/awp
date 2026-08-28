@@ -95,6 +95,31 @@ export class Threads extends Context.Service<
      */
     readonly create: (title: string, parent?: string) => Effect.Effect<Thread, ThreadStoreError>;
 
+    /**
+     * Put a thread back under an id it already had. Answers whether it did.
+     *
+     * The counterpart of {@link deleteIfEmpty}, and it exists because that one
+     * left the system in a state nothing could re-enter. `create-workspace`'s
+     * first step *checks* the thread is there and its undo *removes* it, so a
+     * rollback destroyed the precondition of the step that would run first on
+     * the retry — every rolled-back create was permanently unretryable, and
+     * said so in a message about a thread that had been there a moment ago.
+     *
+     * Separate from `create` rather than an optional id on it, because the two
+     * are different acts. `create` mints an id nothing has referred to yet;
+     * this one satisfies references that already exist — a job record naming
+     * the thread it was enqueued for.
+     *
+     * Idempotent: a thread already there is left exactly as it is and the
+     * answer is `false`. It never overwrites a title somebody has since
+     * changed.
+     */
+    readonly restore: (
+      thread: string,
+      title: string,
+      parent?: string,
+    ) => Effect.Effect<boolean, ThreadStoreError>;
+
     readonly rename: (
       thread: string,
       title: string,
@@ -290,6 +315,25 @@ export const make = Effect.gen(function* () {
           });
         }),
       ),
+
+    restore: (thread: string, title: string, parent?: string) =>
+      ask(`cannot restore thread ${thread}`, () => {
+        // Asked first rather than caught: an insert that conflicts is a normal
+        // outcome here — a retry of a job whose rollback never got as far as
+        // the thread — and turning it into an exception to swallow would hide
+        // a real primary-key collision alongside it.
+        // `.all`, not `.get`: only the intersection of bun:sqlite and
+        // node:sqlite is used here, and the daemon and vitest are on different
+        // ones.
+        if (readThread.all(thread).length > 0) {
+          return false;
+        }
+        // `createdAt` is now, and honestly so. The original moment is gone
+        // with the row, and inventing one from the id's date prefix would put
+        // a thread in the sidebar's ordering where the evidence does not.
+        insertThread.run(thread, title.trim(), Date.now(), null, parent ?? null);
+        return true;
+      }),
 
     rename: (thread: string, title: string) =>
       change(
