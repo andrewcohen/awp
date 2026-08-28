@@ -118,12 +118,23 @@ export const Chat = ({
   return (
     <div {...stylex.props(styles.chat)} data-column-part="chat">
       <div {...stylex.props(styles.scroll)}>
-        {items.length === 0 ? (
+        {items.length === 0 && !held.running ? (
           <p {...stylex.props(styles.nothing)}>nothing said yet</p>
         ) : (
           items.map((item) => (
             <Row key={item.key} item={item} project={project} workspace={workspace} />
           ))
+        )}
+
+        {/* A word, not a spinner. The jobs panel's rule holds here for the same
+            reason: the word already says it is running, and a spinner beside a
+            transcript that is itself moving is one animation too many.
+
+            On the wire rather than inferred from silence, because silence is
+            also what an agent that answered with nothing looks like. */}
+        {held.running && <p {...stylex.props(styles.working)}>working…</p>}
+        {held.stopped !== undefined && (
+          <p {...stylex.props(styles.stopped)}>the turn ended: {held.stopped}</p>
         )}
         <div ref={bottom} />
       </div>

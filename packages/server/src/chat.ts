@@ -476,11 +476,29 @@ export const conversation = (
     // the session and are updated by setting one.
     const settings = yield* Ref.make(optionsOf(opened["configOptions"]));
 
-    // After the session exists, and ignored if the adapter will not have it:
-    // an older one that cannot set a mode is still a usable conversation, and
-    // refusing to open at all would be a worse answer than a session running
-    // in the mode it chose.
-    yield* Effect.ignore(request("session/set_mode", { sessionId, modeId: MODE }));
+    // Manual, set through the config option rather than through
+    // `session/set_mode` — and the difference is not stylistic.
+    //
+    // The options above are a snapshot of what the open reply said, and the
+    // reply says `mode: auto` because that is what a new session opens as.
+    // Setting the mode by the other call changes the session and leaves that
+    // snapshot behind, so the window drew `auto` on a session running in
+    // Manual: a control reporting the opposite of the truth about who approves
+    // a tool call. `set_config_option` answers with the whole set, so the same
+    // call that changes it is the one that corrects the record.
+    //
+    // Ignored if the adapter will not have it: an older one that cannot set a
+    // mode is still a usable conversation, and refusing to open at all would
+    // be a worse answer than a session running in the mode it chose.
+    yield* Effect.ignore(
+      Effect.flatMap(
+        request("session/set_config_option", { sessionId, configId: "mode", value: MODE }),
+        (reply) => {
+          const fresh = optionsOf(reply["configOptions"]);
+          return fresh.length === 0 ? Effect.void : Ref.set(settings, fresh);
+        },
+      ),
+    );
 
     const promptOf = (text: string) => ({
       sessionId,
@@ -559,9 +577,13 @@ export const conversation = (
 
       set: (option: string, value: string) =>
         Effect.gen(function* () {
+          // `configId`, not `optionId`. Both read as the obvious name and only
+          // one is the protocol's — the request is `{ sessionId, configId,
+          // value }` — and the adapter answered the wrong one with a refusal
+          // this code then swallowed, so every change silently did nothing.
           const reply = yield* request("session/set_config_option", {
             sessionId,
-            optionId: option,
+            configId: option,
             value,
           });
           // The reply's own list if it carries one, and the current value
