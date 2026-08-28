@@ -17,6 +17,7 @@ import { Bootstrap, layer as bootstrapLayer } from "./bootstrap";
 import { Github } from "./github";
 import * as githubCli from "./github-cli";
 import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
+import { archiveThread } from "./jobs/archive-thread";
 import { createWorkspace } from "./jobs/create-workspace";
 import { Jj } from "./jj";
 import * as intent from "./intent";
@@ -31,7 +32,7 @@ import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
 import * as settings from "./settings";
-import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
+import { Projects, layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
@@ -163,7 +164,11 @@ export const jobs = Layer.unwrap(
       run: yield* Bootstrap,
       github: yield* Github,
     };
-    return jobsLayer([erase(createWorkspace(deps))]);
+    // `projects` is only the archive job's: it turns a member's project *name*
+    // into the repository path `jj -R` needs. Kept out of `deps` so the create
+    // job's dependency list stays what that job actually uses.
+    const projects = yield* Projects;
+    return jobsLayer([erase(createWorkspace(deps)), erase(archiveThread({ ...deps, projects }))]);
   }),
 ).pipe(Layer.provide(Layer.orDie(layerSqlite)));
 

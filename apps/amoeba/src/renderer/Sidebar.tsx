@@ -1,7 +1,7 @@
 import type { SessionInfo, Thread, WorkspaceFacts, WorkspaceStatus } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
-import { MoveToThread } from "./MoveToThread";
+import { ArchiveThread } from "./ArchiveThread";
 import { type Facts, factsKey } from "./useFacts";
 import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
 import { colors, space, text } from "./tokens.stylex";
@@ -128,6 +128,19 @@ const styles = stylex.create({
     gap: "0.4rem",
     padding: `0.15rem ${space.gutter}`,
   },
+  // The heading and its ⋯, side by side. A menu trigger is a button and cannot
+  // be nested inside the fold button, so the two are siblings in a row rather
+  // than one control.
+  headingRow: {
+    display: "flex",
+    alignItems: "center",
+    // The end padding is the row's, so the ⋯ sits at the same edge every other
+    // control in the column does; the fold button keeps the start padding it
+    // already had.
+    paddingInlineEnd: space.gutter,
+  },
+  /** `minWidth: 0` with it, or a long title pushes the ⋯ off the column. */
+  grow: { flex: 1, minWidth: 0 },
   // A section header, and dressed as one by weight and spacing — not by
   // colour.
   //
@@ -447,7 +460,6 @@ function Row({
   title,
   selected,
   onSelect,
-  threads,
   thread,
   onThreadsChanged,
 }: {
@@ -466,7 +478,6 @@ function Row({
   readonly title: string | undefined;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
-  readonly threads: ReadonlyArray<Thread>;
   /** The thread holding this workspace, if any. */
   readonly thread: Thread | undefined;
   readonly onThreadsChanged: () => void;
@@ -566,13 +577,15 @@ function Row({
           <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
           <span {...stylex.props(styles.label)}>{shown}</span>
         </button>
-        <MoveToThread
-          workspace={workspace}
-          threads={threads}
-          current={thread}
-          shown={hovered}
-          onChanged={onThreadsChanged}
-        />
+        {/* Only when this row *is* the thread. A thread holding one workspace
+            draws no heading — see `Group` — so the row is the only line the
+            thread has, and the control has to be on it or it is unreachable
+            for most threads on a real machine. A row under a heading gets
+            nothing: the heading above it already carries the menu, and one
+            per sibling would offer to archive the thread four times. */}
+        {title !== undefined && thread !== undefined && (
+          <ArchiveThread thread={thread} shown={hovered} onArchived={onThreadsChanged} />
+        )}
       </div>
 
       <div {...stylex.props(styles.meta)}>
@@ -670,19 +683,22 @@ function Group({
   onSelect,
   folded,
   onFold,
-  threads,
   onThreadsChanged,
 }: {
   readonly group: ThreadGroup;
   readonly facts: Facts;
   readonly selected: string | undefined;
   readonly onSelect: (session: SessionInfo) => void;
-  readonly threads: ReadonlyArray<Thread>;
   readonly onThreadsChanged: () => void;
   /** Only the loose group folds; a thread is small and is the point. */
   readonly folded: boolean;
   readonly onFold: (() => void) | undefined;
 }) {
+  // Hover on the heading, tracked here for the same reason `Row` tracks its
+  // own: the control is in a child component, and `:hover` on a parent cannot
+  // reach across one. Focus reveals it on its own — see `trigger`.
+  const [hovered, setHovered] = useState(false);
+
   // ── one workspace is not a group ─────────────────────────────────────────
   //
   // Thread and workspace are one-to-one today, so every thread drew a heading
@@ -716,7 +732,6 @@ function Group({
           title={group.title}
           selected={selected}
           onSelect={onSelect}
-          threads={threads}
           thread={group.thread}
           onThreadsChanged={onThreadsChanged}
         />
@@ -724,26 +739,50 @@ function Group({
     );
   }
 
+  // ── the ⋯ is on the thread, and it is a sibling of the fold ──────────────
+  //
+  // A menu trigger is a button, and a button cannot be nested inside the fold
+  // button — so the heading is a row holding both rather than one control.
+  // Only a real thread gets one: the derived groups the sidebar makes for
+  // workspaces nobody has claimed have nothing to archive.
+  const more =
+    group.thread === undefined ? null : (
+      <ArchiveThread thread={group.thread} shown={hovered} onArchived={onThreadsChanged} />
+    );
+
   const heading =
     onFold === undefined ? (
-      <div {...stylex.props(styles.heading)}>
+      <div
+        {...stylex.props(styles.heading)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      >
         <span {...stylex.props(styles.threadName)}>{group.title}</span>
+        {more}
       </div>
     ) : (
-      // A button, because it does something — unlike a thread heading, which
-      // is a heading precisely because a thread has nothing to open.
-      <button
-        type="button"
-        aria-expanded={!folded}
-        onClick={onFold}
-        {...stylex.props(styles.heading, styles.headingButton)}
+      <div
+        {...stylex.props(styles.headingRow)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
-        <span aria-hidden {...stylex.props(styles.caret)}>
-          {folded ? "▸" : "▾"}
-        </span>
-        <span {...stylex.props(styles.threadName, styles.loose)}>{group.title}</span>
-        <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
-      </button>
+        {/* A button, because it does something — unlike a thread heading,
+            which is a heading precisely because a thread has nothing to
+            open. */}
+        <button
+          type="button"
+          aria-expanded={!folded}
+          onClick={onFold}
+          {...stylex.props(styles.heading, styles.headingButton, styles.grow)}
+        >
+          <span aria-hidden {...stylex.props(styles.caret)}>
+            {folded ? "▸" : "▾"}
+          </span>
+          <span {...stylex.props(styles.threadName, styles.loose)}>{group.title}</span>
+          <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
+        </button>
+        {more}
+      </div>
     );
 
   return (
@@ -768,7 +807,6 @@ function Group({
                 title={undefined}
                 selected={selected}
                 onSelect={onSelect}
-                threads={threads}
                 thread={group.thread}
                 onThreadsChanged={onThreadsChanged}
               />
@@ -845,9 +883,6 @@ export function Sidebar({
     groupByWorkspace(sessions),
     (workspace) => factsFor(facts, workspace)?.status,
   );
-  // What the menu may offer. An archived thread is not somewhere to put work,
-  // and `groupByThread` drops them from the strip for the same reason.
-  const live = threads.filter((thread) => thread.archivedAt === undefined);
   const sentinel = useRef<HTMLDivElement | null>(null);
   const stuck = useStuck(sentinel);
   const [looseOpen, setLooseOpen] = useState(rememberedLooseOpen);
@@ -868,7 +903,6 @@ export function Sidebar({
               facts={facts}
               selected={selected}
               onSelect={onSelect}
-              threads={live}
               onThreadsChanged={onThreadsChanged}
               folded={isLoose && !looseOpen}
               onFold={
