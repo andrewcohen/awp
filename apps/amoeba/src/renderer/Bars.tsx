@@ -43,6 +43,45 @@ import { tally } from "./useJobs";
  */
 const STRIP_FLOOR = "9.5rem";
 
+// ── how a window with no title bar is actually moved ──────────────────────
+//
+// `-webkit-app-region: drag` is emitted by StyleX and does nothing. Electrobun
+// does not read CSS for it; its preload matches on the DOM, and on two things
+// only:
+//
+//   target.closest('[style*="app-region"][style*="drag"]')   an INLINE style
+//   target.closest(".electrobun-webkit-app-region-drag")     its own class
+//
+// StyleX produces neither — it produces a class of its own and a rule in a
+// stylesheet. So the property has never moved this window. It moved because
+// `hiddenInset` leaves a real title bar behind the strip, and AppKit was doing
+// the work; the note in AGENTS.md claiming otherwise was checking that the CSS
+// was emitted, which it is, rather than that anything reads it.
+//
+// That mattered the moment the title bar went away. With `titleBarStyle:
+// "hidden"` there is no native region left, so without the class below the
+// window cannot be moved at all.
+//
+// The CSS property is kept as well as the class. It costs nothing, it is the
+// standard spelling, and it is what a different host would read.
+const DRAG = "electrobun-webkit-app-region-drag";
+const NO_DRAG = "electrobun-webkit-app-region-no-drag";
+
+/** `stylex.props`, with one of electrobun's drag classes appended. */
+const withRegion = (
+  region: string,
+  props: {
+    readonly className?: string | undefined;
+    readonly style?: Readonly<Record<string, unknown>> | undefined;
+  },
+): {
+  readonly className: string;
+  readonly style?: Readonly<Record<string, unknown>> | undefined;
+} => ({
+  ...props,
+  className: props.className === undefined ? region : `${props.className} ${region}`,
+});
+
 const styles = stylex.create({
   bar: {
     display: "flex",
@@ -124,7 +163,10 @@ const styles = stylex.create({
     zIndex: 2,
     alignItems: "center",
     height: space.titlebar,
-    paddingInlineStart: space.lightsInline,
+    // No longer clearing the traffic lights — the window is `titleBarStyle:
+    // "hidden"` and there are none. `space.lightsInline` was 5.25rem of
+    // nothing but room for three circles.
+    paddingInlineStart: "0.35rem",
     paddingInlineEnd: "0.35rem",
     // Its own ground, because it is absolute and whatever is beneath it would
     // otherwise show through the buttons. It matters most folded, when the
@@ -253,7 +295,7 @@ export function TopBar({
   readonly onFold: (which: keyof Collapsed) => void;
 }) {
   return (
-    <header {...stylex.props(styles.bar, styles.top, styles.wide(width))}>
+    <header {...withRegion(DRAG, stylex.props(styles.bar, styles.top, styles.wide(width)))}>
       {/* ── folding a column, from the one place that is never folded ──────
 
           These used to live on the divider between the columns: a control that
@@ -272,16 +314,17 @@ export function TopBar({
           mirrored glyph alone. Now the icon's mirror and its position say the
           same thing, and neither is carrying the distinction by itself.
 
-          The left one cannot go further left than this: the window is
-          `hiddenInset`, so the traffic lights float over the first 5.25rem and
-          the bar's own start padding is what clears them. */}
+          The left one now sits at the window's actual edge. It used to be
+          held off by 5.25rem of padding that existed only to clear the traffic
+          lights, and those are gone — see `titleBarStyle` in the main
+          process. */}
       <button
         type="button"
         aria-label={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
         aria-pressed={!collapsed.sidebar}
         title={collapsed.sidebar ? "show the sidebar" : "hide the sidebar"}
         onClick={() => onFold("sidebar")}
-        {...stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn)}
+        {...withRegion(NO_DRAG, stylex.props(styles.toggle, !collapsed.sidebar && styles.toggleOn))}
       >
         <SidebarSimpleIcon size={15} aria-hidden />
       </button>
