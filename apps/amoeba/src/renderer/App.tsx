@@ -20,7 +20,7 @@ import {
 } from "./remembered";
 import { rendererFixture } from "./fixture";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
-import { colors, text } from "./tokens.stylex";
+import { colors, space, text } from "./tokens.stylex";
 import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
 import { useConnection } from "./useConnection";
@@ -48,6 +48,10 @@ const styles = stylex.create({
     display: "flex",
     flexDirection: "column",
     height: "100%",
+    // The containing block for the corner strip, which is absolute and has to
+    // measure from the window rather than from the viewport — the two agree
+    // today and would not the moment anything insets this element.
+    position: "relative",
     backgroundColor: colors.base,
     color: colors.text,
     // The window's default face, inherited by everything that does not ask
@@ -61,6 +65,22 @@ const styles = stylex.create({
   // content instead of pushing the bottom bar off the window — which is the
   // usual way a flex column grows a scrollbar it was told not to have.
   columns: { display: "flex", flex: 1, minHeight: 0 },
+  // Whatever is under the corner strip starts below it, and only that.
+  //
+  // The sidebar, ordinarily — which is the whole of "let the panes go all the
+  // way to the top", since the agent and the panels then begin at zero. But
+  // the strip never folds and the sidebar does, so once the sidebar is away
+  // the strip is sitting over the *agent*, and the inset has to move with it:
+  //
+  //   open     strip 0..260   sidebar inset      agent at y=0
+  //   folded   strip 0..152   agent inset        nothing behind the lights
+  //
+  // Measured both ways; without the second case the terminal's first two lines
+  // are behind two buttons and the traffic lights.
+  //
+  // Padding rather than a spacer element, so the column's scroll container is
+  // still the column.
+  underStrip: { paddingBlockStart: space.titlebar },
   column: {
     minWidth: 0,
     height: "100%",
@@ -295,23 +315,17 @@ export function App() {
   // the state that is supposed to describe it.
   return (
     <div {...stylex.props(themeFor(appearance), styles.window)}>
-      <TopBar
-        session={open}
-        facts={
-          open?.identity === undefined
-            ? undefined
-            : facts.get(factsKey(open.identity.project, open.identity.workspace))
-        }
-        connected={connected}
-        collapsed={collapsed}
-        onFold={(which) => fold(which)()}
-      />
+      {/* A corner, not a row. It is absolutely positioned over the sidebar's
+          width, so the agent and the panels begin at the top of the window —
+          see `styles.top` in Bars.tsx. */}
+      <TopBar width={columns.sidebar} collapsed={collapsed} onFold={(which) => fold(which)()} />
 
       <div {...stylex.props(styles.columns)}>
         <aside
           data-column="sidebar"
           {...stylex.props(
             styles.column,
+            styles.underStrip,
             styles.fixed(columns.sidebar),
             folding && styles.eased(FOLD_MS),
           )}
@@ -345,7 +359,10 @@ export function App() {
           onToggle={fold("sidebar")}
         />
 
-        <main data-column="agent" {...stylex.props(styles.column, styles.agent)}>
+        <main
+          data-column="agent"
+          {...stylex.props(styles.column, styles.agent, collapsed.sidebar && styles.underStrip)}
+        >
           <Boundary where="the terminal">
             <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
           </Boundary>
@@ -386,7 +403,16 @@ export function App() {
         </aside>
       </div>
 
-      <BottomBar jobs={jobs} session={open} />
+      <BottomBar
+        jobs={jobs}
+        session={open}
+        facts={
+          open?.identity === undefined
+            ? undefined
+            : facts.get(factsKey(open.identity.project, open.identity.workspace))
+        }
+        connected={connected}
+      />
 
       {/* Outside the columns, because it is the window's and not a column's.
           It renders nothing at all while shut — see NewThread.tsx. */}

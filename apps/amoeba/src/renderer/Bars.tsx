@@ -34,6 +34,16 @@ import { tally } from "./useJobs";
 // so the middle row is the only thing that flexes and the no-top-level-scroll
 // rule in global.css still holds when the window gets short.
 
+/**
+ * The narrowest the corner strip is allowed to get.
+ *
+ * The traffic lights own the first 5.25rem and two fold controls follow them,
+ * so a strip narrower than this puts a button under a light. It is a floor and
+ * not a width: while the sidebar is open the strip matches it, and a seam that
+ * moved when the sidebar was dragged would read as a rendering fault.
+ */
+const STRIP_FLOOR = "9.5rem";
+
 const styles = stylex.create({
   bar: {
     display: "flex",
@@ -82,37 +92,63 @@ const styles = stylex.create({
   // 84px. That constraint is why the two bands existed; what changed is the
   // answer to it. Giving the control the real edge cost a whole row of chrome
   // and put the title off centre, and the edge was worth neither.
+  // ── and then it stopped spanning the window ──────────────────────────────
+  //
+  // "let the panes go all the way to the top again". A full-width strip is
+  // forty pixels the agent and the panels do not get, spent on a constraint
+  // that is only true of the window's left corner: AppKit floats the traffic
+  // lights over the first 84px, and nothing else up there needs clearing.
+  //
+  //   before  ┌───────────────────────────────┐   after  ┌────┬──────┬─────┐
+  //           │ ▣          no session       ▣ │          │ ▣▣ │agent │tabs │
+  //           ├────────┬──────────┬───────────┤          ├────┤      │     │
+  //           │sidebar │ agent    │ panels    │          │side│      │     │
+  //
+  // So the strip is as wide as the sidebar and no wider, and the other two
+  // columns start at the top of the window. It is `position: absolute` rather
+  // than a row: a row is a row across the whole window by construction, and
+  // what this is now is a corner.
+  //
+  // **It never folds, and that is why it is not inside the sidebar.** Both
+  // fold controls live here, so putting the strip in the column it can hide
+  // would take the way back with it. Folded, it holds its floor width — enough
+  // for the lights and two buttons — and the columns simply begin to its right.
+  //
+  // The title went to the footer. There is no room for it here, and the footer
+  // is already the strip that says what the window is doing; a name that is
+  // read once when the selection changes belongs with the other status, not in
+  // a corner competing with two controls for 152 pixels.
   top: {
-    position: "relative",
+    position: "absolute",
+    insetBlockStart: 0,
+    insetInlineStart: 0,
+    zIndex: 2,
     alignItems: "center",
     height: space.titlebar,
     paddingInlineStart: space.lightsInline,
-    paddingInlineEnd: "0.6rem",
+    paddingInlineEnd: "0.35rem",
+    // Its own ground, because it is absolute and whatever is beneath it would
+    // otherwise show through the buttons. It matters most folded, when the
+    // strip sits over the agent column rather than over the sidebar.
+    backgroundColor: colors.base,
     borderBottomWidth: 1,
     borderBottomStyle: "solid",
     borderBottomColor: colors.border,
-    // The only way to move a window whose title bar is hidden.
+    // The only way to move a window whose title bar is hidden. It applies to
+    // the whole strip: everything interactive in here sets it back to `no-drag`
+    // itself, so the draggable part is exactly the part with nothing in it.
     WebkitAppRegion: "drag",
   },
-  // The title, centred on the **window** rather than on the space left over.
-  //
-  // Absolutely positioned for exactly that: the bar's start padding clears the
-  // traffic lights and its end padding does not, so a title laid out in the
-  // flow would sit visibly right of centre. This is the one element here whose
-  // position is about the window rather than about its siblings.
-  //
-  // `pointer-events: none` so it does not interrupt the drag region it sits
-  // in — there is nothing to click, and a word that stops a window being
-  // dragged is a word in the way.
+  /** How wide the strip is: the sidebar's width, or its floor when folded. */
+  wide: (px: number) => ({ width: `max(${px}px, ${STRIP_FLOOR})` }),
+  // Truncated rather than allowed to push the counts off the bar. A name is
+  // long — a sentence somebody typed — and this row is 1.6rem tall with three
+  // other things in it.
   title: {
-    position: "absolute",
-    insetInlineStart: "50%",
-    transform: "translateX(-50%)",
-    maxWidth: `calc(100% - 2 * ${space.lightsInline})`,
+    minWidth: 0,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    pointerEvents: "none",
   },
 
   bottom: {
@@ -196,37 +232,17 @@ const styles = stylex.create({
  * line about one thing.
  */
 export function TopBar({
-  session,
-  facts,
-  connected,
+  width,
   collapsed,
   onFold,
 }: {
-  readonly session: SessionInfo | undefined;
-  /** What is known about the open session's workspace, if anything is. */
-  readonly facts: WorkspaceFacts | undefined;
-  readonly connected: boolean;
+  /** The sidebar's current width. The strip matches it, down to its floor. */
+  readonly width: number;
   readonly collapsed: Collapsed;
   readonly onFold: (which: keyof Collapsed) => void;
 }) {
   return (
-    <header {...stylex.props(styles.bar, styles.top)}>
-      {/* Just the name.
-      
-        It was `displayName · project · kind`, which is three fields where a
-        title bar has one job. The project and the kind are both already on the
-        sidebar row that is selected — a title bar says what the window is
-        about, and repeating the address under it makes the address the
-        subject. */}
-      <span {...stylex.props(styles.strong, styles.title)}>
-        {session === undefined
-          ? "no session"
-          : (facts?.displayName ??
-            session.identity?.label ??
-            session.identity?.workspace ??
-            session.name)}
-      </span>
-
+    <header {...stylex.props(styles.bar, styles.top, styles.wide(width))}>
       {/* ── folding a column, from the one place that is never folded ──────
 
           These used to live on the divider between the columns: a control that
@@ -259,20 +275,13 @@ export function TopBar({
         <SidebarSimpleIcon size={15} aria-hidden />
       </button>
 
-      <span {...stylex.props(styles.spacer)} />
-      {/* Nothing at all while it is working.
-      
-          A green "daemon" sitting there permanently is a status light that is
-          on by definition — it teaches the eye to skip that corner, which costs
-          exactly the one moment it exists for. The same argument the footer
-          already makes about `0 running · 0 failed`.
-      
-          So the connected state is silence, and the disconnected state is a
-          word rather than a dot: "no daemon" is the sentence, and a red circle
-          would need to be hovered before it said anything. */}
-      {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
+      {/* Beside the sidebar's rather than at the far right.
 
-      {/* The other half of the pair — see the sidebar's, at the far left. */}
+          Each control used to sit at the edge it folds, which was the better
+          arrangement and needed a strip that reached both edges. The window's
+          right edge now belongs to the panels themselves, so the two are a
+          pair here instead — told apart by the mirrored glyph, which is what
+          it was always for. */}
       <button
         type="button"
         aria-label={collapsed.accessory ? "show the panels" : "hide the panels"}
@@ -302,15 +311,39 @@ export function TopBar({
 export function BottomBar({
   jobs,
   session,
+  facts,
+  connected,
 }: {
   readonly jobs: ReadonlyArray<Job>;
   readonly session: SessionInfo | undefined;
+  /** What is known about the open session's workspace, if anything is. */
+  readonly facts: WorkspaceFacts | undefined;
+  readonly connected: boolean;
 }) {
   const counted = tally(jobs);
 
   return (
     <footer {...stylex.props(styles.bar, styles.bottom)}>
       <AppearanceToggle />
+      {/* What is open, in the words a person used for it.
+      
+          It was the centred title of a full-width top bar until that bar became
+          a corner. This is the better home anyway: a title bar says what the
+          window is about, and this one changes when a row is clicked — which
+          makes it status, and the status bar is where the rest of the status
+          already is.
+      
+          Just the name. It was `displayName · project · kind` once, which is
+          three fields where a title has one job; the project and the kind are
+          both already on the selected sidebar row. */}
+      <span {...stylex.props(styles.strong, styles.title)}>
+        {session === undefined
+          ? "no session"
+          : (facts?.displayName ??
+            session.identity?.label ??
+            session.identity?.workspace ??
+            session.name)}
+      </span>
       {counted.running > 0 && (
         <span {...stylex.props(styles.strong)}>{counted.running} running</span>
       )}
@@ -322,6 +355,17 @@ export function BottomBar({
         <span {...stylex.props(styles.warn)}>{counted.dirty} needs cleaning up</span>
       )}
       <span {...stylex.props(styles.spacer)} />
+      {/* Nothing at all while it is working.
+      
+          A green "daemon" sitting there permanently is a status light that is
+          on by definition — it teaches the eye to skip that corner, which costs
+          exactly the one moment it exists for. The same argument this bar
+          already makes about `0 running · 0 failed`.
+      
+          So the connected state is silence, and the disconnected state is a
+          word rather than a dot: "no daemon" is the sentence, and a red circle
+          would need to be hovered before it said anything. */}
+      {!connected && <span {...stylex.props(styles.warn)}>no daemon</span>}
       <span {...stylex.props(styles.name)}>{session?.name}</span>
     </footer>
   );
