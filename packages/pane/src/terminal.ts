@@ -153,54 +153,118 @@ export function mountPaneTerminal(parent: HTMLElement, options: PaneOptions): Pa
   return pane;
 }
 
-// setPaneTheme recolours what it can, which is less than it looks.
+// ── the retained stream, and what it is for ────────────────────────────────
 //
-// ── ghostty-web 0.4.0 cannot change a theme after open(), and says so ─────
+// The pane keeps what it has been sent, because a theme change has to rebuild
+// the emulator and there is nowhere else the screen could come back from.
 //
-// The colours are compiled into the wasm terminal when it is built —
-// `buildWasmConfig` hands the emulator `fgColor`, `bgColor`, `cursorColor` and
-// the sixteen-colour palette — and the library's own option handler admits it:
+// ghostty-web 0.4.0 compiles the colours into the wasm terminal when it is
+// built — `buildWasmConfig` hands it `fgColor`, `bgColor`, `cursorColor` and
+// the sixteen-colour palette — and its own option handler admits the
+// consequence:
 //
 //   case "theme":
 //     console.warn("theme changes after open() are not yet fully supported");
 //
-// The only thing that rebuilds that config is `reset()`, which frees the wasm
-// terminal and makes a new one. That is the scrollback gone, which for a pane
-// watching an agent work is a worse outcome than the wrong colours.
+// The cells the emulator hands back carry **resolved RGB** — `fg_r/g/b`,
+// `bg_r/g/b` — not palette indexes, so the renderer cannot re-map them. That
+// is the finding that decides the whole design: no amount of repainting on
+// this side can recolour a cell the program asked for by number, because the
+// number was resolved against a palette baked in at creation.
 //
-// So what this does is repaint the *renderer's* half: the ground, and any cell
-// whose colour is the default rather than one the program asked for. Measured
-// on the fixture, counting latte-base pixels after switching to light:
+// `reset()` does rebuild the config. What it costs is the scrollback, and for
+// a pane watching an agent work that used to be the worse of the two evils.
+// It stops being a cost once the bytes are still here to write back.
+const REPLAY_CAP = 4 * 1024 * 1024;
+let replay = "";
+
+/**
+ * The last point in a chunk after which everything before it stops mattering.
+ *
+ * A truncated byte stream is the hazard replay has, and it is a real one: cut
+ * in the middle of an escape sequence and the replay paints the wrong colours
+ * from there on. These four sequences are the places a terminal says "forget
+ * the screen", which makes them the only cut points that are certainly safe:
+ *
+ *   ESC [ 2J · ESC [ 3J   erase the screen, and the scrollback
+ *   ESC c                 a full reset
+ *   ESC [ ? 1049 h/l      enter or leave the alternate screen
+ *
+ * The last one is why this is worth doing rather than keeping a fixed tail: an
+ * agent's TUI lives in the alternate screen, so its entry is a perfect restart
+ * point and everything before it is a shell prompt nobody needs back.
+ */
+// eslint-disable-next-line no-control-regex
+const RESTART = /\u001B\[[23]J|\u001Bc|\u001B\[\?1049[hl]/gu;
+
+const lastRestart = (data: string): number => {
+  RESTART.lastIndex = 0;
+  let at = -1;
+  for (let found = RESTART.exec(data); found !== null; found = RESTART.exec(data)) {
+    at = found.index;
+  }
+  return at;
+};
+
+/** Remember a chunk, discarding what a restart or the cap makes irrelevant. */
+const remember = (data: string): void => {
+  replay += data;
+  const at = lastRestart(data);
+  if (at >= 0) {
+    replay = replay.slice(replay.length - data.length + at);
+    return;
+  }
+  if (replay.length > REPLAY_CAP) {
+    // No restart to cut at, so cut after a newline — the next best boundary,
+    // and the one a line-oriented program never straddles.
+    const from = replay.length - REPLAY_CAP;
+    const cut = replay.indexOf("\n", from);
+    replay = replay.slice(cut < 0 ? from : cut + 1);
+  }
+};
+
+/** Exposed for the probe, which has no other way to see what would be replayed. */
+export const replayLength = (): number => replay.length;
+
+// setPaneTheme recolours the terminal, and it costs a rebuild.
 //
-//   canvas.width = 0            0     the nudge this replaced
-//   clear() + render(forceAll)  263
+// The order matters and each step is doing something the others cannot:
 //
-// 263 and not the whole canvas, because the fixture paints most of its cells in
-// explicit colours and those live in the emulator. A real repaint needs the
-// patch — see task #23 — and this is the honest partial until then.
+//   options.theme = …   what `buildWasmConfig` reads. Warns, and still sets.
+//   reset()             frees the wasm terminal and makes one with the new
+//                       palette. This is the only thing that recolours a cell
+//                       the program asked for by number.
+//   renderer.setTheme   the other half — the ground, the cursor, selection
+//   write(replay)       puts the screen back. Without it `reset` is what it
+//                       always was: the right colours on an empty terminal.
+//   clear() + forceAll  a line only paints the cells it has, so the ground
+//                       behind a blank row keeps the last theme's colour
+//                       until something fills it.
 //
-// ── why the nudge did nothing ────────────────────────────────────────────
+// **The nudge this replaced never did anything.** Setting `canvas.width = 0`
+// to put the canvas' pixel size in disagreement with the renderer's metrics
+// reads in the library's source like the one full redraw reachable from public
+// API. It is not one, the canvas returns to its own size, and not one pixel
+// changed. That was written into this file as a finding without a pixel ever
+// being sampled — a mechanism read out of someone else's source is a
+// hypothesis.
 //
-// It set `canvas.width = 0` to put the canvas' pixel size in disagreement with
-// the renderer's metrics, on the reading that `render` resizes and forces a
-// frame when they differ. That was written down as a finding without a pixel
-// ever being sampled, and it is wrong: the canvas returns to its own size and
-// not one pixel changes. `render(buffer, forceAll)` is public and is exactly
-// what the library calls on open; `clear()` is public and fills the ground.
-//
-// **A single corner pixel is the wrong probe here**, and cost an hour: the
-// fixture draws colour ramps and blocks, so the corner is whatever it painted
-// there rather than the theme's ground. Count the canvas' most common colours
-// instead.
+// **A single corner pixel is the wrong probe**, and cost an hour twice: the
+// fixture draws ramps and blocks, so the corner is whatever it painted there
+// rather than the theme's ground, and it reads "unchanged" for a swap that
+// worked and one that did nothing alike. Count the canvas' most common
+// colours instead.
 export function setPaneTheme(theme: ITheme): void {
   if (!term || theme === currentTheme) {
     return;
   }
   currentTheme = theme;
+  term.options.theme = theme;
+  term.reset();
   term.renderer?.setTheme(theme);
-  // Cleared *then* redrawn, and both are needed. `render(…, forceAll)` redraws
-  // every line, and a line only paints the cells it has — the ground behind a
-  // blank row is nobody's cell, so it keeps the colour the last theme left.
+  if (replay !== "") {
+    term.write(replay);
+  }
   term.renderer?.clear();
   if (term.wasmTerm) {
     term.renderer?.render(term.wasmTerm, true, term.viewportY, term);
@@ -246,6 +310,7 @@ const clampCell = (value: number, max: number): number =>
 // interleaved one session's bytes into another's cells.
 export function writePane(data: string): void {
   meterWrite(data.length);
+  remember(data);
   term?.write(data);
 }
 
