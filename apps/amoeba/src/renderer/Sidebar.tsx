@@ -497,8 +497,16 @@ function Row({
   //
   //   facts.displayName   the Go implementation's, and nineteen workspaces on
   //                       this machine have one
-  //   workspace.label     `awp_label`, which amoeba writes for what it makes
+  //   workspace.label     `awp_label`, which amoeba writes for what it makes.
+  //                       Terse and legal rather than exact — zmx validates a
+  //                       label value, so `Review: Inbox UI` is written as
+  //                       `Review-Inbox-UI`. See `labelValue`.
   //   workspace.name      the slug, which every workspace has
+  //
+  // The exact sentence is the thread's title, and it is already on screen: the
+  // heading this row nests under. So a row is free to say which *workspace* it
+  // is rather than repeating what the group is called, which is what the terse
+  // form does anyway.
   //
   // The Go one first and not last, which is the opposite of the obvious
   // ranking. amoeba's own label is the better long-term home — it travels with
