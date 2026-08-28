@@ -299,27 +299,29 @@ const styles = stylex.create({
   // gesture for the same pixels, and it had to stop the pointerdown to do it.
   // It is now in the head row below, where the rest of the panel's controls
   // are, and this bar does one thing.
-  // Once the caret left, what was still here was a 14px band of `colors.base`
-  // with a rule under it — a *bar*, sitting between the list and the head row,
-  // holding nothing. That is what read as "weird padding": an empty stripe
-  // above the head that looked like the head's own top margin.
+  // Space, and no rule at all.
   //
-  // So it is a rule with a hit area now, and nothing else. Transparent, so it
-  // adds no band; 0.45rem, which is the ordinary size of a grab strip and is
-  // what the column dividers use.
+  // This was a 14px band of `colors.base` with a rule under it, then a rule
+  // with 7px of space above it — and the second was reported the same way as
+  // the first: "borders and then spacing outside the borders, which is weird".
+  // It is, and it is the general fault: a line *and* a gap doing one job,
+  // where the gap alone would have done it.
+  //
+  // So the boundary between the list and the head is now empty. What separates
+  // them is that the head is filled — see `head` — and this is the room around
+  // it. Dragging is still here; it just draws nothing until it is being used.
   splitter: {
     position: "relative",
     flexShrink: 0,
     height: "0.45rem",
     backgroundColor: "transparent",
-    borderBottomWidth: 1,
-    borderBottomStyle: "solid",
-    borderBottomColor: colors.border,
     cursor: "row-resize",
     // The gesture is captured here, so it must not also read as a page scroll.
     touchAction: "none",
   },
-  held: { borderBottomColor: colors.muted },
+  // Only while it is being dragged. A boundary that is invisible at rest has
+  // to appear under the hand, or there is no feedback that the drag started.
+  held: { backgroundColor: colors.border },
   // Sized to match the icon buttons at the other end of the head row, so the
   // two ends of the row read as one set of controls rather than as a caret
   // that happens to be nearby.
@@ -363,13 +365,16 @@ const styles = stylex.create({
     // as the whole row being off rather than as one control being wrong.
     paddingBlock: 0,
     paddingInline: "0.35rem",
-    // **An edge on both sides.** Without this the row was bounded above, by
-    // the splitter's rule, and open below — so the only line near it was the
-    // one over it, and the content read as sitting low in a box that had no
-    // bottom. It is a band between two things and now looks like one.
-    borderBottomWidth: 1,
-    borderBottomStyle: "solid",
-    borderBottomColor: colors.border,
+    // **Filled, not ruled.** Two rules were tried here first — one above and
+    // one below — and both were wrong for the same reason: the row is a band
+    // between two scrolling things, and a band is a shape, not a pair of
+    // lines. One step off the window's base is enough to say so, and it says
+    // it on all four sides at once instead of on two.
+    //
+    // It also does the job a rule was there for. The patch scrolls under this
+    // row, and what stops the code appearing to be part of it is that the row
+    // is a different colour, which stays true while it moves.
+    backgroundColor: colors.surface,
     color: colors.muted,
     fontSize: text.small,
   },
