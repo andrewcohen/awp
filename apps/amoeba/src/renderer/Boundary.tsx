@@ -35,16 +35,28 @@ import { colors, text } from "./tokens.stylex";
 const styles = stylex.create({
   // Centred in whatever it was given, which is a column and not the window.
   // `height: 100%` rather than a viewport unit for the reason global.css gives.
+  //
+  // **Both axes, and it needs saying because one of them was doing nothing.**
+  // `justify-content: center` centres along the main axis, which here is the
+  // column, so it was the vertical one; the horizontal came from
+  // `align-items`. What broke the vertical was `overflow-y: auto` on the same
+  // element: an overflow container with centred content clips the *top* when
+  // the content is taller than the box, so a long stack trace pushed the
+  // heading off and the whole thing read as top-aligned and cut.
+  //
+  // So the scroll moved to the one child that can be long — the report — and
+  // this element only centres. Nothing here overflows any more, which is what
+  // makes the centring true rather than approximately true.
   middle: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: "0.6rem",
+    width: "100%",
     height: "100%",
     minHeight: 0,
     padding: "1rem",
-    overflowY: "auto",
   },
   what: { color: colors.warn, fontSize: text.body, textAlign: "center" },
   where: { color: colors.muted, fontSize: text.small },
@@ -52,8 +64,13 @@ const styles = stylex.create({
   // a stack trace is the widest text this window will ever hold, and letting it
   // set the column's width is how a horizontal scrollbar gets born.
   detail: {
-    maxWidth: "100%",
-    maxHeight: "40%",
+    // A column, not a bleed. In the agent column at full width a trace is a
+    // paragraph of forty-character lines centred under a heading, which reads
+    // as a layout rather than as a message; capped, it is a block with the
+    // heading over it.
+    width: "100%",
+    maxWidth: "38rem",
+    minHeight: 0,
     margin: 0,
     padding: "0.5rem",
     backgroundColor: colors.base,
@@ -122,10 +139,31 @@ function Fallen({
               .catch(() => setCopied(false));
           }}
         >
-          {copied ? "copied" : "copy"}
+          {copied ? "copied" : "copy error"}
         </button>
+        {/* Two repairs, cheapest first.
+        
+            `try again` clears the error and re-renders this subtree. It fixes
+            nothing on its own — if the cause is still there it throws again
+            immediately — but the common case is a panel that failed on data
+            that has since changed, and it keeps everything else on screen:
+            the terminal's scrollback, the diff's position, the browser's page.
+        
+            `reload` throws the window away and builds it again. It is the one
+            that works when the renderer's own state is what went wrong, and it
+            costs an attach per open session, so it is offered second rather
+            than instead. */}
         <button type="button" {...stylex.props(styles.button)} onClick={retry}>
           try again
+        </button>
+        <button
+          type="button"
+          {...stylex.props(styles.button)}
+          onClick={() => {
+            globalThis.location.reload();
+          }}
+        >
+          reload
         </button>
       </div>
       <div {...stylex.props(styles.where)}>
