@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import {
+  DEFAULT_SPLIT,
+  rememberOpenSplit,
   rememberPage,
   rememberPanel,
+  rememberSplit,
+  rememberedOpenSplit,
   rememberedPages,
   rememberedPanels,
+  rememberedSplit,
   readStored,
 } from "./remembered";
 
@@ -87,5 +92,36 @@ describe("the page each thread was showing", () => {
     expect(rememberedPanels()["20260828-aaaa"]).toBe("web");
     expect(rememberedPages()["20260828-aaaa"]).toBe("https://example.test/one");
     expect(readStored("amoeba.panels")).not.toBe(readStored("amoeba.page"));
+  });
+});
+
+describe("the height to open the revision list to", () => {
+  // Two values rather than one, because the first has to be able to hold zero:
+  // folded is a state the panel restores on launch, so it cannot be inferred
+  // from a height and the height cannot be inferred from it.
+  test("is the default until something has been open", () => {
+    expect(rememberedOpenSplit()).toBe(DEFAULT_SPLIT);
+  });
+
+  test("comes back as it was put", () => {
+    rememberOpenSplit(210);
+    expect(rememberedOpenSplit()).toBe(210);
+  });
+
+  test("survives the list being collapsed", () => {
+    // The whole point. Collapsing writes zero to the split and leaves this
+    // alone, so expanding returns to the boundary somebody put there rather
+    // than to the default.
+    rememberOpenSplit(210);
+    rememberSplit(0);
+    expect(rememberedSplit()).toBe(0);
+    expect(rememberedOpenSplit()).toBe(210);
+  });
+
+  test("zero is refused, unlike the split itself", () => {
+    // Opening to nothing is not opening. `rememberedSplit` treats zero as
+    // meaningful — folded — and this one cannot.
+    rememberOpenSplit(0);
+    expect(rememberedOpenSplit()).toBe(DEFAULT_SPLIT);
   });
 });
