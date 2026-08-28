@@ -28,10 +28,16 @@ export const DIVIDER = 1;
 // they must agree: the CSS transition, and the timer that takes the transition
 // back off again afterwards. See `folding` in App.tsx for why it is taken off.
 //
-// 180ms is long enough to be read as one thing moving and short enough that a
-// keyboard user folding a column does not wait on it. Ignored entirely under
-// `prefers-reduced-motion`.
-export const FOLD_MS = 180;
+// 180ms was too quick to read as a movement — reported as "too fast and kinda
+// stiff/janky" — and the stiffness was a separate fault from the speed. See
+// `hold` in App.tsx: the column's *content* was reflowing on every frame of
+// the fold, so what looked like a bad easing curve was a list of rows
+// re-wrapping thirty times on the way out.
+//
+// 260ms with the content held still reads as one object leaving. Long enough
+// to follow, short enough that a keyboard user folding a column does not wait
+// on it. Ignored entirely under `prefers-reduced-motion`.
+export const FOLD_MS = 260;
 
 /** Which of the two side columns are folded away. */
 export type Collapsed = {
