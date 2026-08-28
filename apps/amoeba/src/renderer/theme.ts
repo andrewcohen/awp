@@ -53,6 +53,7 @@ const latteChrome: Record<ChromeRole, string> = {
   accent: hue.latteAccent,
   waiting: hue.latteWaiting,
   ready: hue.latteReady,
+  asked: hue.latteAsked,
 };
 
 const macchiatoChrome: Record<ChromeRole, string> = {
@@ -67,6 +68,7 @@ const macchiatoChrome: Record<ChromeRole, string> = {
   accent: hue.macchiatoAccent,
   waiting: hue.macchiatoWaiting,
   ready: hue.macchiatoReady,
+  asked: hue.macchiatoAsked,
 };
 
 /**

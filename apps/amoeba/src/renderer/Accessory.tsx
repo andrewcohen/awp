@@ -4,6 +4,7 @@ import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
 import { Diff } from "./Diff";
 import { Jobs } from "./Jobs";
+import { Pr } from "./Pr";
 import { Tasks } from "./Tasks";
 import { Web } from "./Web";
 import { debugTools } from "./debug";
@@ -60,6 +61,15 @@ import { colors, space, text } from "./tokens.stylex";
 // someone asked to see one — which is why nothing in it polls.
 
 export interface PanelContext {
+  /**
+   * The pull request the open workspace is about, when its thread names one.
+   *
+   * Present is what makes the `PR` tab exist — see `panelsFor`. Absent is the
+   * ordinary case and the tab is then not there at all, rather than sitting in
+   * the strip saying "no pull request": this is the column somebody switches
+   * most, and a permanently empty room in it costs a keystroke every time.
+   */
+  readonly pr: { readonly project: string; readonly number: number } | undefined;
   /** A directory in the open session's workspace, or nothing is open. */
   readonly dir: string | undefined;
   /**
@@ -119,6 +129,28 @@ const panels: ReadonlyArray<Panel> = [
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
   ...debugTools.map((tool) => ({ id: tool.id, label: tool.label, render: tool.render })),
 ];
+
+/**
+ * The panels for this context, which is the fixed list plus one.
+ *
+ * **First when it exists**, and that is the placement argument rather than a
+ * preference: a review workspace exists *because* of a pull request, so while
+ * one is open the PR is the subject and the diff is a way of reading it. The
+ * label carries the number because a tab reading `pr` says nothing a person did
+ * not already know, and `PR #2418` is the one thing on the strip pointing outside
+ * the window.
+ */
+const panelsFor = (context: PanelContext): ReadonlyArray<Panel> =>
+  context.pr === undefined
+    ? panels
+    : [
+        {
+          id: "pr",
+          label: `PR #${String(context.pr.number)}`,
+          render: ({ pr }) => <Pr project={pr?.project} number={pr?.number} />,
+        },
+        ...panels,
+      ];
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -226,16 +258,26 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
   // thread's panel for a frame first, which is the panel flickering as a row
   // is clicked.
   const [byThread, setByThread] = useState<Record<string, string>>(rememberedPanels);
-  const first = panels[0]?.id ?? "";
+  // The strip is no longer a constant: a workspace whose thread names a pull
+  // request has one more tab, and it is the first. See `panelsFor`.
+  const shown = panelsFor(context);
+  const first = shown[0]?.id ?? "";
   // The empty string for a session no thread claims — one bucket they share,
   // which is the honest answer: there is no thread to tell them apart by.
   const key = thread ?? "";
   // A stored id that no longer names a tab falls back rather than selecting
-  // nothing. It happens whenever the strip changes — "meter" became "debug" —
-  // and the failure is silent and total: Base UI renders no panel at all for a
-  // value none of its tabs carry, which reads as the column being broken.
+  // nothing. It happens for two reasons now and the failure is the same silent,
+  // total one either way — Base UI renders no panel at all for a value none of
+  // its tabs carry, which reads as the column being broken:
+  //
+  //   the strip changed      "meter" became "debug"
+  //   the strip is dynamic   a thread whose PR panel was open, then a workspace
+  //                          with no pull request
+  //
+  // Checked against `shown` rather than `panels`, which is what makes the second
+  // case work: the PR tab exists for some selections and not others.
   const stored = byThread[key];
-  const open = stored !== undefined && panels.some((panel) => panel.id === stored) ? stored : first;
+  const open = stored !== undefined && shown.some((panel) => panel.id === stored) ? stored : first;
 
   return (
     <Tabs.Root
@@ -248,7 +290,7 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
       {...stylex.props(styles.column)}
     >
       <Tabs.List {...stylex.props(styles.list)}>
-        {panels.map((panel) => (
+        {shown.map((panel) => (
           <Tabs.Tab
             key={panel.id}
             value={panel.id}
@@ -290,7 +332,7 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
         </button>
       </Tabs.List>
 
-      {panels.map((panel) => (
+      {shown.map((panel) => (
         <Tabs.Panel key={panel.id} value={panel.id} {...stylex.props(styles.panel)}>
           {panel.render(context)}
         </Tabs.Panel>

@@ -3,7 +3,8 @@ import type { CreateWorkspace } from "@awp-kit/protocol";
 import { dirname } from "node:path";
 import { Context, Effect, Layer } from "effect";
 import { beforeEach, describe, expect, test } from "vitest";
-import type { Jj } from "../jj";
+import type { Github } from "../github";
+import type { Jj, JjBookmark } from "../jj";
 import type { Multiplexer } from "../multiplexer";
 import { IntentError, type WorkspaceIntent } from "../intent";
 import type { Bootstrap } from "../bootstrap";
@@ -39,6 +40,8 @@ let present: Set<string> = new Set();
 let hooks: ReadonlyArray<string> = [];
 /** Threads the store holds. A rollback empties this, which is the point. */
 let threadIds: Set<string> = new Set();
+/** What `jj bookmark list` reports after the fetch step has run. */
+let fetched: Array<JjBookmark> = [];
 
 beforeEach(() => {
   trace = [];
@@ -46,6 +49,7 @@ beforeEach(() => {
   present = new Set();
   hooks = [];
   threadIds = new Set(["20260826-aaaa"]);
+  fetched = [];
 });
 
 const act = (what: string): Effect.Effect<void, { readonly reason: string }> =>
@@ -67,7 +71,20 @@ const deps = (): WorkspaceDeps => ({
     setBookmark: (_repo: string, name: string, revision: string) =>
       act(`jj.bookmark(${name}@${revision})`),
     deleteBookmark: (_repo: string, name: string) => act(`jj.unbookmark(${name})`),
+    fetch: () => act("jj.fetch"),
+    importGit: () => act("jj.import"),
+    // What the fetch step reads to turn a branch name into a revset. Backed by
+    // a variable so a test can say the branch arrived on a remote, arrived
+    // locally, or did not arrive at all — which are the step's three outcomes.
+    bookmarks: () => Effect.sync(() => [...fetched]),
   } as unknown as Jj["Service"],
+
+  github: {
+    fetchFork: (
+      _repo: string,
+      head: { readonly owner: string; readonly repo: string; readonly ref: string },
+    ) => act(`git.fetch(${head.owner}/${head.repo}:${head.ref})`),
+  } as unknown as Github["Service"],
 
   mux: {
     start: ({ name }: { readonly name: string }) => act(`zmx.start(${name})`),
@@ -337,6 +354,7 @@ describe("making a workspace", () => {
     expect(job.steps).toEqual([
       "thread",
       "name",
+      "fetch",
       "workspace",
       "bookmark",
       "trust",
@@ -346,6 +364,104 @@ describe("making a workspace", () => {
       "claim",
       "brief",
     ]);
+    expect(trace.some((line) => line.startsWith("jj.bookmark"))).toBe(false);
+    expect(job.status).toBe("succeeded");
+  });
+});
+
+describe("reviewing a pull request", () => {
+  // The only thing that separates a review from ordinary work is `review` on
+  // the input, and what that turns on is one step. Everything else — the
+  // workspace, the session, the claim — is the same job, which is the whole
+  // reason the step is here rather than in a second kind.
+  const reviewing = (over: Partial<CreateWorkspace> = {}) =>
+    make({
+      workspace: "pr-12",
+      label: "#12 tiered discounts",
+      bookmark: undefined,
+      prompt: undefined,
+      base: "feature",
+      review: { number: 12, headRef: "feature" },
+      ...over,
+    });
+
+  test("an ordinary create fetches nothing", async () => {
+    await make();
+
+    // The step ran — it is in the list for every payload — and did nothing. A
+    // fetch on every workspace creation would be a network round trip for work
+    // that starts from a local bookmark.
+    expect(trace.some((line) => line.startsWith("jj.fetch"))).toBe(false);
+    expect(trace.some((line) => line.startsWith("git.fetch"))).toBe(false);
+  });
+
+  test("the base is the remote bookmark the fetch produced", async () => {
+    fetched = [{ name: "feature", remote: "origin", target: undefined }];
+
+    const job = await reviewing();
+
+    expect(job.status).toBe("succeeded");
+    expect(trace).toContain("jj.fetch");
+    // `feature@origin`, not `feature`: jj does not track a fetched branch
+    // locally by default, so the bare name is not a revision here at all.
+    expect(trace).toContain("jj.add(pr-12)");
+    expect(job.input).toMatchObject({ base: "feature@origin" });
+  });
+
+  test("a local bookmark of the same name does not win", async () => {
+    // Somebody's own copy of the branch, which may be behind the pull request.
+    // Reviewing that is worse than not reviewing, because nothing says so.
+    fetched = [
+      { name: "feature", remote: undefined, target: undefined },
+      { name: "feature", remote: "origin", target: undefined },
+    ];
+
+    const job = await reviewing();
+
+    expect(job.input).toMatchObject({ base: "feature@origin" });
+  });
+
+  test("a fork's head is fetched with git, and imported so jj can see it", async () => {
+    // A fork's branch is not on origin, so `jj git fetch` alone leaves the base
+    // naming a branch nothing has heard of.
+    fetched = [{ name: "feature", remote: undefined, target: undefined }];
+
+    const job = await reviewing({
+      review: { number: 12, headRef: "feature", fork: { owner: "someone", repo: "widgets" } },
+    });
+
+    expect(job.status).toBe("succeeded");
+    expect(trace).toContain("git.fetch(someone/widgets:feature)");
+    // The import is what makes the ref git just wrote visible to jj — without
+    // it the bookmark is simply not in the list, and the revision "does not
+    // exist" one step later.
+    expect(trace.indexOf("jj.import")).toBeGreaterThan(
+      trace.indexOf("git.fetch(someone/widgets:feature)"),
+    );
+    expect(job.input).toMatchObject({ base: "feature" });
+  });
+
+  test("a head that is still not here after fetching fails the job, by name", async () => {
+    const job = await reviewing();
+
+    expect(job.status).toBe("failed");
+    expect(job.error).toContain("feature");
+    expect(job.error).toContain("#12");
+    // And nothing was built: the failure is before the workspace step.
+    expect(trace.some((line) => line.startsWith("jj.add"))).toBe(false);
+  });
+
+  test("no name is asked of the model, and no bookmark is set", async () => {
+    fetched = [{ name: "feature", remote: "origin", target: undefined }];
+
+    const job = await reviewing();
+
+    // `pr-12` is the name by definition — see `reviewWorkspace` — so the ten
+    // seconds a model takes would be spent inventing a name that must not vary.
+    expect(trace.some((line) => line.startsWith("intent("))).toBe(false);
+    // And the bookmark falls out rather than being suppressed: it is composed
+    // by the step that names, so a job that skips naming has none. `pr-12` is
+    // not a branch anybody should push.
     expect(trace.some((line) => line.startsWith("jj.bookmark"))).toBe(false);
     expect(job.status).toBe("succeeded");
   });

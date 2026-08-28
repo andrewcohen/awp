@@ -1,4 +1,4 @@
-import { type Thread, type ThreadMember, ThreadNotFound } from "@awp-kit/protocol";
+import { type Thread, type ThreadMember, ThreadNotFound, type ThreadPr } from "@awp-kit/protocol";
 import { Db, type Migration, attempt } from "@awp-kit/store";
 import { Context, Data, Effect, Layer } from "effect";
 
@@ -76,6 +76,29 @@ export const migrations: ReadonlyArray<Migration> = [
     name: "threads.002-parent",
     up: [`alter table threads add column parent_id text references threads (id)`],
   },
+  {
+    // Which pull requests a thread is about.
+    //
+    // A table rather than a column, because a thread may be about several — see
+    // `ThreadPr` in the contract. The UNIQUE is on `(project, number)` and not
+    // on `(thread_id, project, number)`, which is the whole rule: a pull request
+    // belongs to at most one thread, the same way a workspace does, so the
+    // inbox row pointing at a thread always has one answer.
+    //
+    // `on delete cascade` for the reason `thread_members` has it: deleting a
+    // thread must not leave rows pointing at nothing. It also means the
+    // rollback of a failed review takes its link with it.
+    name: "threads.003-prs",
+    up: [
+      `create table thread_prs (
+         thread_id text not null references threads (id) on delete cascade,
+         project   text not null,
+         number    integer not null,
+         unique (project, number)
+       ) strict`,
+      `create index thread_prs_thread on thread_prs (thread_id)`,
+    ],
+  },
 ];
 
 export class Threads extends Context.Service<
@@ -118,6 +141,16 @@ export class Threads extends Context.Service<
       thread: string,
       title: string,
       parent?: string,
+      /**
+       * The pull request the thread was about, put back with it.
+       *
+       * Here rather than left to a later step because this is the one place a
+       * rolled-back thread is rebuilt, and the link is part of what it was. A
+       * retry that came back without it would leave the inbox row unable to
+       * find the thread that is being built for it, which is exactly the state
+       * this function exists to prevent for the thread itself.
+       */
+      pr?: ThreadPr,
     ) => Effect.Effect<boolean, ThreadStoreError>;
 
     readonly rename: (
@@ -146,6 +179,23 @@ export class Threads extends Context.Service<
     readonly detach: (
       thread: string,
       member: ThreadMember,
+    ) => Effect.Effect<Thread, ThreadStoreError | ThreadNotFound>;
+
+    /**
+     * Record that this thread is about a pull request, taking it from whichever
+     * thread held it before.
+     *
+     * The same shape as {@link attach}, and idempotent for the same reason: a
+     * job step calls it, and a step is re-entered.
+     */
+    readonly link: (
+      thread: string,
+      pr: ThreadPr,
+    ) => Effect.Effect<Thread, ThreadStoreError | ThreadNotFound>;
+
+    readonly unlink: (
+      thread: string,
+      pr: ThreadPr,
     ) => Effect.Effect<Thread, ThreadStoreError | ThreadNotFound>;
 
     /**
@@ -226,6 +276,17 @@ export const make = Effect.gen(function* () {
   const release = db.prepare(
     "delete from thread_members where thread_id = ? and project = ? and workspace = ?",
   );
+  // The same shape as `claim`, and the same reason: the UNIQUE is on
+  // `(project, number)`, so the row already there for another thread is the row
+  // this rewrites — the release and the claim in one statement.
+  const linkPr = db.prepare(
+    `insert into thread_prs (thread_id, project, number) values (?, ?, ?)
+     on conflict (project, number) do update set thread_id = excluded.thread_id`,
+  );
+  const unlinkPr = db.prepare(
+    "delete from thread_prs where thread_id = ? and project = ? and number = ?",
+  );
+  const readPrs = db.prepare("select thread_id, project, number from thread_prs order by number");
   // One statement, so the emptiness check and the delete cannot disagree. A
   // thread that gains a workspace between a read and a write is exactly the
   // race this shape removes.
@@ -234,8 +295,16 @@ export const make = Effect.gen(function* () {
        where id = ? and not exists (select 1 from thread_members where thread_id = ?)`,
   );
 
-  /** Every thread with its members, in one pair of reads rather than N + 1. */
+  /** Every thread with its members and pull requests, in three reads not N + 1. */
   const readAll = (): ReadonlyArray<Thread> => {
+    const prs = new Map<string, ThreadPr[]>();
+    for (const row of readPrs.all()) {
+      const id = String(row["thread_id"]);
+      prs.set(id, [
+        ...(prs.get(id) ?? []),
+        { project: String(row["project"]), number: Number(row["number"]) },
+      ]);
+    }
     const members = new Map<string, ThreadMember[]>();
     for (const row of readMembers.all()) {
       const id = String(row["thread_id"]);
@@ -253,6 +322,7 @@ export const make = Effect.gen(function* () {
         archivedAt: date(row["archived_at"]),
         parentId: text(row["parent_id"]),
         members: members.get(id) ?? [],
+        prs: prs.get(id) ?? [],
       };
     });
   };
@@ -302,6 +372,10 @@ export const make = Effect.gen(function* () {
             archivedAt: undefined,
             parentId: parent,
             members: [],
+            // A new thread is about nothing yet. What links a pull request to
+            // one is a separate act — `link` — because a thread is usually
+            // named before anybody knows whether it will have a PR at all.
+            prs: [],
           };
           return ask(`cannot create thread ${id}`, () => {
             insertThread.run(
@@ -316,7 +390,7 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
-    restore: (thread: string, title: string, parent?: string) =>
+    restore: (thread: string, title: string, parent?: string, pr?: ThreadPr) =>
       ask(`cannot restore thread ${thread}`, () => {
         // Asked first rather than caught: an insert that conflicts is a normal
         // outcome here — a retry of a job whose rollback never got as far as
@@ -332,6 +406,12 @@ export const make = Effect.gen(function* () {
         // with the row, and inventing one from the id's date prefix would put
         // a thread in the sidebar's ordering where the evidence does not.
         insertThread.run(thread, title.trim(), Date.now(), null, parent ?? null);
+        // Part of what the thread was, so it goes back with it. A retry whose
+        // thread came back without its pull request would leave the inbox row
+        // unable to find the thread being built for it.
+        if (pr !== undefined) {
+          linkPr.run(thread, pr.project, pr.number);
+        }
         return true;
       }),
 
@@ -368,6 +448,20 @@ export const make = Effect.gen(function* () {
         thread,
         `cannot detach ${member.project}/${member.workspace} from ${thread}`,
         () => void release.run(thread, member.project, member.workspace),
+      ),
+
+    link: (thread: string, pr: ThreadPr) =>
+      change(
+        thread,
+        `cannot link ${pr.project}#${pr.number} to ${thread}`,
+        () => void linkPr.run(thread, pr.project, pr.number),
+      ),
+
+    unlink: (thread: string, pr: ThreadPr) =>
+      change(
+        thread,
+        `cannot unlink ${pr.project}#${pr.number} from ${thread}`,
+        () => void unlinkPr.run(thread, pr.project, pr.number),
       ),
   };
 });

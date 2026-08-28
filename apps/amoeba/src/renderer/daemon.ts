@@ -9,11 +9,15 @@ import type {
   AgentTask,
   CommentSide,
   Effort,
+  Inbox,
   PageNote,
   Patch,
   Project,
+  PullRequest,
+  Repaired,
   ReviewComment,
   ReviewSent,
+  ReviewStarted,
   Revision,
   SessionInfo,
   Thread,
@@ -100,9 +104,25 @@ export const onReconnect = (again: () => void): (() => void) => {
   });
 };
 
+/**
+ * Which daemon this window talks to.
+ *
+ * `undefined` means the default — `ws://127.0.0.1:5274` — which is what a
+ * normal build and a normal dev server both want. `VITE_AWP_DAEMON_URL` is for
+ * the same situation `AWP_DAEMON_PORT` is: a second window and a second daemon
+ * beside the pair somebody is working in, so a branch can be looked at without
+ * stopping the instance in use.
+ *
+ * Read through `import.meta.env`, which Vite substitutes at build time — the
+ * renderer has no process environment to read at runtime, and a value baked in
+ * is the honest shape anyway: which daemon a window was built to talk to is not
+ * something it can change its mind about.
+ */
+const daemonUrl: string | undefined = import.meta.env["VITE_AWP_DAEMON_URL"];
+
 const runtime = ManagedRuntime.make(
   layerClient(
-    undefined,
+    daemonUrl,
     layerConnection({ opened: () => announce(true), lost: () => announce(false) }),
   ),
 );
@@ -367,6 +387,72 @@ export const startThread = (payload: {
   readonly effort?: Effort | undefined;
 }): Promise<ThreadStarted> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadStart(payload)));
+
+// ── the inbox ──────────────────────────────────────────────────────────────
+
+/**
+ * Every open pull request awp can see, sectioned and in order.
+ *
+ * One call for every project, and the sections and the order are the daemon's —
+ * see `InboxList` in the contract. What comes back is a list to draw top to
+ * bottom, plus a row per project saying when it was read and what went wrong if
+ * it could not be.
+ *
+ * `refresh` asks GitHub again. Left off, the daemon answers from what it last
+ * read, which is what makes opening the tab cheap.
+ */
+export const listInbox = (refresh?: boolean): Promise<Inbox> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.InboxList({ refresh })));
+
+/**
+ * Start reviewing a pull request: a thread, and the job that builds its
+ * workspace.
+ *
+ * **Safe to call twice**, which is the whole reason the window does not have to
+ * track what it has already started. The daemon answers with the same thread
+ * and the same job and says `created: false` — see `ReviewStart` in the
+ * contract for the two records that make that true.
+ *
+ * Rejects with `ReviewStartFailed`, whose `reason` is a sentence about the pull
+ * request or the repository.
+ */
+/**
+ * One pull request, with its description and its conversation.
+ *
+ * Resolves with `undefined` when `gh` has no such pull request — a number typed
+ * wrongly, or a project that is not on GitHub. Rejects only when awp does not
+ * know the project or `gh` would not answer at all, which are different things
+ * and read differently in the panel.
+ */
+export const readPullRequest = (
+  project: string,
+  number: number,
+  /** Go past the daemon's cache to GitHub. What the panel's refresh does. */
+  refresh?: boolean,
+): Promise<PullRequest | undefined> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.PullRequestView({ project, number, refresh })),
+  );
+
+/**
+ * Tell the agent what is wrong with a pull request, in one press.
+ *
+ * The daemon composes the sentence and types it; this answers with what it said,
+ * for the same reason `sendReview` does — the panel shows it when asked what
+ * actually went, which is otherwise only knowable by scrolling the agent's
+ * terminal back.
+ *
+ * `prompt` is empty when there was nothing to repair, and nothing was sent.
+ * Rejects with `NoAgent` when there is something to say and no agent to say it
+ * to, and with `ReviewStartFailed` when the pull request cannot be read at all.
+ */
+export const repair = (project: string, number: number): Promise<Repaired> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.PullRequestRepair({ project, number })),
+  );
+
+export const startReview = (project: string, number: number): Promise<ReviewStarted> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewStart({ project, number })));
 
 /**
  * Watch every job change until the returned function is called.

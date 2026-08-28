@@ -264,6 +264,15 @@ const make = Effect.gen(function* () {
         yield* write(op, repo, ["workspace", "forget", name]);
       }),
 
+    // Both of these are writes, so neither takes `--ignore-working-copy`: they
+    // change the repository, and a snapshot out of step with the refs it just
+    // imported is worse than the snapshot itself.
+    fetch: (repo: string) =>
+      write("fetch from git remotes", repo, ["git", "fetch"]).pipe(Effect.asVoid),
+
+    importGit: (repo: string) =>
+      write("import git refs", repo, ["git", "import"]).pipe(Effect.asVoid),
+
     setBookmark: (repo: string, name: string, revision: string) =>
       Effect.gen(function* () {
         const op = `set bookmark ${name}`;

@@ -6,6 +6,7 @@ import {
   type AgentTask,
   AttachRefused,
   AwpRpcs,
+  type Inbox,
   type Patch,
   type Project,
   type ReviewComment,
@@ -123,6 +124,7 @@ const thread: Thread = {
   archivedAt: undefined,
   parentId: undefined,
   members: [{ project: "rowan", workspace: "discounts" }],
+  prs: [],
 };
 
 const revision: Revision = {
@@ -162,6 +164,9 @@ const comment: ReviewComment = {
   line: 42,
   endLine: 42,
   body: "this branch never runs",
+  author: "human",
+  kind: "comment",
+  text: undefined,
   createdAt: new Date("2026-08-27T09:14:00.000Z"),
   sentAt: undefined,
 };
@@ -196,6 +201,48 @@ const task: AgentTask = {
   status: "pending",
 };
 
+const inbox: Inbox = {
+  items: [
+    {
+      project: "thicket",
+      repo: "/Users/someone/code/thicket",
+      number: 412,
+      title: "the lantern rewrite",
+      author: "someone",
+      url: "https://example.invalid/thicket/pull/412",
+      headRef: "andrew/lantern",
+      baseRef: "main",
+      draft: false,
+      ci: "passing",
+      review: "review-required",
+      mergeState: "clean",
+      labels: ["renderer"],
+      mine: false,
+      reviewRequested: true,
+      reviewRerequested: false,
+      hasReviewComments: false,
+      bucket: "needs-your-review",
+      depth: 0,
+      stack: undefined,
+      blocked: false,
+      workspace: undefined,
+      thread: undefined,
+      job: undefined,
+      moved: false,
+    },
+  ],
+  sources: [
+    {
+      project: "thicket",
+      root: "/Users/someone/code/thicket",
+      fetchedAt: new Date("2026-08-28T09:14:00.000Z"),
+      failure: undefined,
+      degraded: undefined,
+    },
+  ],
+  viewer: "someone",
+};
+
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   Attach: ({ session }) =>
@@ -223,14 +270,57 @@ const handlers = AwpRpcs.toLayer({
   ThreadArchive: () => Effect.succeed(thread),
   ThreadAttach: () => Effect.succeed(thread),
   ThreadDetach: () => Effect.succeed(thread),
+  ThreadLinkPr: () => Effect.succeed(thread),
+  ThreadUnlinkPr: () => Effect.succeed(thread),
   WorkspaceCreate: () => Effect.succeed(job),
   ThreadBases: () => Effect.succeed([{ revset: "trunk()", label: "trunk", workspace: undefined }]),
   ThreadStart: () => Effect.succeed({ thread, job }),
+  InboxList: () => Effect.succeed(inbox),
+  PullRequestView: () =>
+    Effect.succeed({
+      project: "thicket",
+      number: 412,
+      title: "the lantern rewrite",
+      body: "Replaces the router.",
+      url: "https://example.invalid/thicket/pull/412",
+      author: "someone",
+      state: "open",
+      draft: false,
+      baseRef: "main",
+      headRef: "andrew/lantern",
+      ci: "passing" as const,
+      review: "review-required" as const,
+      mergeState: "clean" as const,
+      labels: ["renderer"],
+      hasReviewComments: true,
+      remarks: [
+        {
+          author: "somebody",
+          body: "this reads well",
+          verdict: "approved",
+          at: new Date("2026-08-28T09:00:00.000Z"),
+        },
+      ],
+      additions: 120,
+      deletions: 8,
+      files: 3,
+      workspace: "lantern",
+      moved: true,
+    }),
+  ReviewStart: () => Effect.succeed({ thread, job, workspace: "pr-412", created: true }),
+  PullRequestRepair: () => Effect.succeed({ prompt: "PR #412 has failing CI checks.", mine: true }),
+  AgentSend: () => Effect.void,
   Revisions: () => Effect.succeed([revision]),
   Diff: () => Effect.succeed(patch),
   WorkspaceChanges: () => Stream.fromArray([{ at: 1_787_000_000_000 }]),
   ReviewList: () => Effect.succeed([comment]),
   ReviewAdd: () => Effect.succeed(comment),
+  ReviewAt: () => Effect.succeed({ project: "thicket", workspace: "lantern", comments: [comment] }),
+  ReviewFile: () =>
+    Effect.succeed({
+      comment,
+      where: "added a suggestion to thicket/lantern on src/router.ts:42",
+    }),
   ReviewRemove: () => Effect.succeed(true),
   ReviewSend: () => Effect.succeed({ sent: [comment], prompt: "Review feedback — 1 comment:" }),
   NoteSend: () => Effect.succeed("— a note about an element on a page"),

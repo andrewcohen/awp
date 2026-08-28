@@ -1,4 +1,5 @@
 import { layer as dbLayer } from "@awp-kit/store";
+import type { ReviewComment } from "@awp-kit/protocol";
 import { Effect, Layer } from "effect";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,7 +39,10 @@ const draft = (over: {
   readonly workspace?: string;
   readonly side?: "additions" | "deletions";
   readonly createdAt?: Date;
-}) => ({
+  readonly author?: "human" | "agent";
+  readonly kind?: "comment" | "suggestion" | "question" | "praise";
+  readonly text?: string;
+}): ReviewComment => ({
   id: over.id ?? "20260827-0001",
   project: "thicket",
   workspace: over.workspace ?? "lantern",
@@ -51,6 +55,11 @@ const draft = (over: {
   // something else.
   endLine: over.endLine ?? over.line ?? 42,
   body: over.body ?? "this branch never runs",
+  // A person's observation unless a test says otherwise, which is what every
+  // row written before an agent could file one is.
+  author: over.author ?? ("human" as const),
+  kind: over.kind ?? ("comment" as const),
+  text: over.text,
   createdAt: over.createdAt ?? new Date("2026-08-27T09:00:00.000Z"),
   sentAt: undefined,
 });

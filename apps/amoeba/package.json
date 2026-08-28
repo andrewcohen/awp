@@ -26,7 +26,9 @@
     "@tanstack/react-router": "1.170.32",
     "effect": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "react-markdown": "9.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@rolldown/plugin-babel": "0.2.3",

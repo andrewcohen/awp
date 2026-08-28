@@ -3,13 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { layer as dbLayer } from "@awp-kit/store";
-import { AwpRpcs, type CommentSide } from "@awp-kit/protocol";
+import { AwpRpcs, type CommentSide, type ReviewComment } from "@awp-kit/protocol";
 import { NodeFileSystem, NodePath } from "@effect/platform-node-shared";
 import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
 import { RpcTest } from "effect/unstable/rpc";
 import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
+import { Github, GithubError, type Remark } from "./github";
+import type { PullRequest } from "./github-parse";
+import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
 import * as handlers from "./handlers";
 import { IntentError, WorkspaceIntent } from "./intent";
 import { type DiffOf, Jj, JjError, type RevisionsIn } from "./jj";
@@ -52,17 +55,30 @@ const session = (over: Partial<Session>): Session => ({
 
 const all = [session({}), session({ name: DEAD, ended: true, exitCode: 130 })];
 
-const fakeMux = Layer.succeed(Multiplexer, {
-  list: () => Effect.succeed(all),
-  lookup: (name: string) => Effect.succeed(all.find((s) => s.name === name)),
-  // The fake exists to be a Multiplexer, and a Multiplexer can now start a
-  // session. Nothing under test calls it.
-  start: () => Effect.void,
-  send: () => Effect.void,
-  kill: () => Effect.void,
-  setLabels: () => Effect.void,
-  history: () => Effect.succeed(""),
-});
+/**
+ * The listing, plus a review session when a test asks for one.
+ *
+ * A function of the fakes rather than a constant, because one thing the inbox
+ * joins against is the *session* list — a review workspace is openable as soon
+ * as its session exists, which is a step before the thread claims it.
+ */
+const sessionsFor = (fakes: Fakes): ReadonlyArray<Session> =>
+  fakes.sessionWorkspace === undefined
+    ? all
+    : [...all, session({ name: `awp.awp.${fakes.sessionWorkspace}.agent` })];
+
+const fakeMux = (fakes: Fakes) =>
+  Layer.succeed(Multiplexer, {
+    list: () => Effect.succeed(sessionsFor(fakes)),
+    lookup: (name: string) => Effect.succeed(sessionsFor(fakes).find((s) => s.name === name)),
+    // The fake exists to be a Multiplexer, and a Multiplexer can now start a
+    // session. Nothing under test calls it.
+    start: () => Effect.void,
+    send: () => Effect.void,
+    kill: () => Effect.void,
+    setLabels: () => Effect.void,
+    history: () => Effect.succeed(""),
+  });
 
 /**
  * A create-workspace kind whose services do nothing.
@@ -85,6 +101,8 @@ const inert = {
     send: () => Effect.void,
   },
   threads: { attach: () => Effect.void, detach: () => Effect.void },
+  // A review's fetch step reaches for this and nothing else here does.
+  github: { fetchFork: () => Effect.void },
   files: {
     exists: () => Effect.succeed(false),
     makeDirectory: () => Effect.void,
@@ -131,7 +149,47 @@ interface Fakes {
    * settle on one. The only branch in `Revisions` a test can reach.
    */
   readonly noTrunk?: boolean | undefined;
+  /** What `gh pr list` reports, for every repository asked about. */
+  readonly prs?: ReadonlyArray<PullRequest> | undefined;
+  /** Who `gh` is signed in as, or absent for nobody. */
+  readonly viewer?: string | undefined;
+  /** A repository root with no GitHub remote, which must be skipped silently. */
+  readonly offGithub?: string | undefined;
+  /** The workspace the live session belongs to. Default is the fixture's own. */
+  readonly sessionWorkspace?: string | undefined;
+  /** False when a checkout does not contain its pull request's head. */
+  readonly contains?: boolean | undefined;
+  /** True when the working copy has uncommitted work in it. */
+  readonly dirty?: boolean | undefined;
+  /** What the listing had to give up, if a test is about that. */
+  readonly degraded?: string | undefined;
+  /** The pull request description the detail call answers with. */
+  readonly body?: string | undefined;
+  /** What has already been said on the pull request. */
+  readonly remarks?: ReadonlyArray<Remark> | undefined;
 }
+
+/** A pull request as `gh` would have answered, with the dull fields filled. */
+export const pr = (over: Partial<PullRequest>): PullRequest => ({
+  number: 1,
+  headRef: "feature",
+  headOid: "abc",
+  baseRef: "main",
+  title: "a change",
+  author: "someone",
+  url: "https://example.invalid/pull/1",
+  draft: false,
+  ci: "passing",
+  review: "none",
+  mergeState: "clean",
+  labels: [],
+  requested: [],
+  requestedTeams: [],
+  reviewers: [],
+  hasReviewComments: false,
+  fork: undefined,
+  ...over,
+});
 
 const configFor = (fakes: Fakes): string => {
   const path = join(scratch, `config-${(files += 1)}.json`);
@@ -166,32 +224,48 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                     : { name: entry.name, remote: entry.remote, target: entry.target },
                 ),
               ),
+            fetch: () => Effect.void,
+            importGit: () => Effect.void,
             // Answers with the revset it was handed, as the description of its
             // one row. What is under test is which revset the handler chose,
             // and a fake that returned plausible commits would hide it.
             revisions: ({ revset, limit }: RevisionsIn) =>
-              fakes.noTrunk === true && revset.includes("trunk()")
-                ? Effect.fail(
-                    new JjError({ op: "list revisions", reason: "Revset `trunk()` is ambiguous" }),
-                  )
-                : Effect.succeed([
-                    {
-                      changeId: "aaa",
-                      // The commit `trunk()` sits on, when a test says. Every
-                      // other revset gets the placeholder, which matches no
-                      // bookmark and so leaves the label at its fallback.
-                      commitId:
-                        revset === "trunk()" && fakes.trunkCommit !== undefined
-                          ? fakes.trunkCommit
-                          : "bbb",
-                      description: `${revset} limit ${limit}`,
-                      author: "someone",
-                      authored: undefined,
-                      empty: false,
-                      workingCopy: true,
-                      bookmarks: [],
-                    },
-                  ]),
+              // Four revsets this fake answers about, and each is a different
+              // test's knob. Ordered so the two specific ones are matched before
+              // the general fallback.
+              //
+              //   present(<oid>) & ::@   does this checkout contain the head —
+              //                          an empty answer is what `moved` is
+              //   @                      the working copy, whose `empty` is what
+              //                          a stale-checkout prompt reads
+              //   trunk()                the base a thread starts from
+              //   anything else          echoed back, so a test can see which
+              //                          revset the handler chose
+              revset.startsWith("present(")
+                ? Effect.succeed(fakes.contains === false ? [] : [revision(revset)])
+                : revset === "@"
+                  ? Effect.succeed([
+                      { ...revision(`${revset} limit ${limit}`), empty: fakes.dirty !== true },
+                    ])
+                  : fakes.noTrunk === true && revset.includes("trunk()")
+                    ? Effect.fail(
+                        new JjError({
+                          op: "list revisions",
+                          reason: "Revset `trunk()` is ambiguous",
+                        }),
+                      )
+                    : Effect.succeed([
+                        {
+                          ...revision(`${revset} limit ${limit}`),
+                          // The commit `trunk()` sits on, when a test says. Every
+                          // other revset gets the placeholder, which matches no
+                          // bookmark and so leaves the label at its fallback.
+                          commitId:
+                            revset === "trunk()" && fakes.trunkCommit !== undefined
+                              ? fakes.trunkCommit
+                              : "bbb",
+                        },
+                      ]),
             // Likewise: the patch it hands back is the request it was given, so
             // a test can assert on the snapshot decision the handler made.
             diff: (options: DiffOf) => Effect.succeed(JSON.stringify(options)),
@@ -217,13 +291,18 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // `(project, workspace)` pair a thread claims it by, and separating
         // them here would hide any future statement that joins the two.
         Layer.provide(
-          Layer.mergeAll(threadsLayer, reviewsLayer, projectsLayer).pipe(
+          // The inbox feed joins this group because its cache is rows now too —
+          // and it goes on the same connection for the reason the daemon uses
+          // one file: a listing read from disk and a thread that claims the
+          // workspace it names are two halves of one answer.
+          Layer.mergeAll(threadsLayer, reviewsLayer, projectsLayer, inboxLayer).pipe(
             Layer.provide(
               Layer.orDie(
                 dbLayer(join(scratch, `stores-${(files += 1)}.sqlite`), [
                   ...threadMigrations,
                   ...reviewMigrations,
                   ...projectMigrations,
+                  ...inboxMigrations,
                 ]),
               ),
             ),
@@ -233,6 +312,45 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // the contract and the runner, and a file on disk would make these
         // tests share state with each other and with the developer's daemon.
         Layer.provide(jobsLayer([erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory))),
+        // A fake `gh`, and the *real* inbox feed over it — provided with the
+        // stores below, because its cache is rows. The feed is where the cache,
+        // the per-project failure and the assembly live, so faking it instead
+        // would leave the whole of `InboxList` untested: what the fake has to
+        // stand in for is the subprocess, and nothing above it.
+        Layer.provide(
+          Layer.succeed(Github)({
+            pullRequests: () => Effect.succeed({ prs: fakes.prs ?? [], degraded: fakes.degraded }),
+            // The detail call, answered from the same fixtures with the fields
+            // only it has. A test that cares about the body says so.
+            pullRequest: (_repo: string, number: number) =>
+              Effect.succeed(
+                (fakes.prs ?? [])
+                  .filter((one) => one.number === number)
+                  .map((one) => ({
+                    ...one,
+                    body: fakes.body ?? "",
+                    state: "open",
+                    hasReviewComments: one.hasReviewComments,
+                    remarks: fakes.remarks ?? [],
+                    additions: 0,
+                    deletions: 0,
+                    files: 0,
+                  }))[0],
+              ),
+            // Every project is on GitHub unless a test names one that is not.
+            // The skip is what stops a vault of notes producing a red sentence
+            // on every refresh — see `onKnownHost`.
+            isGithub: (repo: string) => Effect.succeed(repo !== (fakes.offGithub ?? "")),
+            viewer: () =>
+              fakes.viewer === undefined
+                ? Effect.fail(
+                    new GithubError({ op: "read the gh login", reason: "gh is not signed in" }),
+                  )
+                : Effect.succeed({ login: fakes.viewer, teams: [] }),
+            repository: () => Effect.succeed({ owner: "acme", repo: "widgets" }),
+            fetchFork: () => Effect.void,
+          }),
+        ),
         Layer.provide(sessions.layer),
         // Pointed at a file that is not there, which answers with an empty
         // table — the honest state for a machine that has only ever run
@@ -254,7 +372,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         Layer.provide(NodePath.layer),
         Layer.provide(attachment.layer),
         Layer.provide(fake.layer),
-        Layer.provide(fakeMux),
+        Layer.provide(fakeMux(fakes)),
       );
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -783,13 +901,25 @@ describe("jobs over the contract", () => {
 // ── review comments ────────────────────────────────────────────────────────
 
 /** A comment, named for where it points. The body is the only thing that varies. */
+/** One revision row, described by the revset that asked for it. */
+const revision = (revset: string) => ({
+  changeId: "aaa",
+  commitId: "bbb",
+  description: revset,
+  author: "someone",
+  authored: undefined,
+  empty: false,
+  workingCopy: true,
+  bookmarks: [] as ReadonlyArray<string>,
+});
+
 const at = (
   path: string,
   line: number,
   body: string,
   side: CommentSide = "additions",
   endLine: number = line,
-) => ({
+): ReviewComment => ({
   id: `${path}:${String(line)}`,
   project: "thicket",
   workspace: "lantern",
@@ -799,6 +929,9 @@ const at = (
   line,
   body,
   endLine,
+  author: "human",
+  kind: "comment",
+  text: undefined,
   createdAt: new Date("2026-08-27T09:00:00.000Z"),
   sentAt: undefined,
 });
@@ -1165,5 +1298,398 @@ describe("projects over the contract", () => {
 
   it("no configured roots is an empty candidate list, not a failure", async () => {
     expect(await run((rpc) => rpc.ProjectCandidates())).toEqual([]);
+  });
+});
+
+// ── the inbox over the contract ────────────────────────────────────────────
+//
+// What only this suite can check: the join between GitHub's answer and awp's
+// own records. The bucket rules and the ordering are pure and live in
+// `inbox.test.ts`; what is here is the seam — that a derived project is asked
+// about at all, that a thread member called `pr-<n>` is found and reported as
+// the row's workspace, and that one repository's failure keeps the others.
+describe("InboxList", () => {
+  it("sections the pull requests of every project awp knows", async () => {
+    const inbox = await run((rpc) => rpc.InboxList({}), {
+      viewer: "me",
+      prs: [
+        pr({ number: 1, headRef: "theirs", author: "someone", requested: ["me"] }),
+        pr({ number: 2, headRef: "mine", author: "me", review: "approved" }),
+        pr({ number: 3, headRef: "broken", author: "me", ci: "failing" }),
+      ],
+    });
+
+    // The fixture's sessions imply the project `awp`, which is the only one
+    // here — so every PR appears once, under the heading its state earns.
+    expect(inbox.viewer).toBe("me");
+    expect(inbox.items.map((item) => [item.number, item.bucket])).toEqual([
+      [1, "needs-your-review"],
+      [3, "needs-action"],
+      [2, "ready-to-merge"],
+    ]);
+    expect(inbox.sources.map((source) => source.project)).toEqual(["awp"]);
+    expect(inbox.sources[0]?.fetchedAt).toBeInstanceOf(Date);
+    expect(inbox.sources[0]?.failure).toBeUndefined();
+  });
+
+  it("with nobody signed in, nothing is yours and nothing wants you", async () => {
+    // The failure mode this guards: every viewer-relative bucket is empty, and
+    // an inbox that is empty because `gh` is not authenticated looks exactly
+    // like an inbox with nothing in it. The login on the answer is what lets a
+    // client say which it is.
+    const inbox = await run((rpc) => rpc.InboxList({}), {
+      prs: [pr({ number: 1, author: "me", requested: ["me"] })],
+    });
+    expect(inbox.viewer).toBeUndefined();
+    expect(inbox.items.map((item) => item.bucket)).toEqual(["other-open"]);
+    expect(inbox.items[0]?.mine).toBe(false);
+  });
+
+  it("names the job building a review, so the row can show its progress", async () => {
+    // The id and not the record: a job changes on its own and the window has a
+    // live feed of every one, so a copy here would be the staler of two.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const started = yield* rpc.ReviewStart({ project: "awp", number: 44 });
+          return { started, inbox: yield* rpc.InboxList({}) };
+        }),
+      { viewer: "me", prs: [pr({ number: 44, title: "a change" })] },
+    );
+
+    const row = answer.inbox.items.find((item) => item.number === 44);
+    expect(row?.job).toBe(answer.started.job?.id);
+  });
+
+  it("links a pull request opened for work that already had a workspace", async () => {
+    // The commonest case: a thread, then work, then a push, then a PR. The
+    // workspace is named after the work rather than `pr-<n>`, and no link could
+    // have been recorded when the thread was made — there was no pull request.
+    //
+    // The head branch is what identifies it: awp names a workspace's bookmark
+    // `<prefix>/<workspace>`, so `andrew/lantern` is the PR for `lantern`.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "lantern" },
+          });
+          const inbox = yield* rpc.InboxList({});
+          // Read again, from the store, to show the link was written down and
+          // not merely reported — which is what makes it survive the branch
+          // being renamed.
+          const every = yield* rpc.ThreadList();
+          return { inbox, thread: every.find((one) => one.id === thread.id) };
+        }),
+      {
+        viewer: "me",
+        bookmarkPrefix: "andrew",
+        prs: [pr({ number: 51, headRef: "andrew/lantern", author: "me" })],
+      },
+    );
+
+    const row = answer.inbox.items.find((item) => item.number === 51);
+    expect(row?.thread).toBe(answer.thread?.id);
+    // And the row now offers to open rather than to create: it said "makes a
+    // workspace" for a workspace already on disk.
+    expect(row?.workspace).toBe("lantern");
+    expect(answer.thread?.prs).toEqual([{ project: "awp", number: 51 }]);
+  });
+
+  it("does not guess when the branch is not one of ours", async () => {
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "lantern" },
+          });
+          return yield* rpc.InboxList({});
+        }),
+      {
+        viewer: "me",
+        bookmarkPrefix: "andrew",
+        // Somebody else's branch that happens to end with the same word. The
+        // prefix is what makes the inference safe, and without it there is
+        // nothing to be safe about.
+        prs: [pr({ number: 52, headRef: "someone/lantern" })],
+      },
+    );
+
+    expect(answer.items[0]?.thread).toBeUndefined();
+    expect(answer.items[0]?.workspace).toBeUndefined();
+  });
+
+  it("finds the thread through the recorded link, not the workspace's name", async () => {
+    // The name is a convention and this is a claim: a workspace renamed, or a
+    // review done in a checkout somebody made by hand, has no `pr-<n>` to
+    // parse — and the link still says which thread the work is in.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          const linked = yield* rpc.ThreadLinkPr({
+            thread: thread.id,
+            pr: { project: "awp", number: 88 },
+          });
+          return { linked, inbox: yield* rpc.InboxList({}) };
+        }),
+      { viewer: "me", prs: [pr({ number: 88 })] },
+    );
+
+    expect(answer.linked.prs).toEqual([{ project: "awp", number: 88 }]);
+    expect(answer.inbox.items[0]?.thread).toBe(answer.linked.id);
+    // And no workspace: the link says which thread, not that anything is built.
+    expect(answer.inbox.items[0]?.workspace).toBeUndefined();
+  });
+
+  it("a pull request belongs to one thread, and the second claim wins", async () => {
+    // The same rule a workspace has, and for the same reason: two threads about
+    // one PR would leave the row picking which of them to point at.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const first = yield* rpc.ThreadCreate({ title: "first" });
+          const second = yield* rpc.ThreadCreate({ title: "second" });
+          yield* rpc.ThreadLinkPr({ thread: first.id, pr: { project: "awp", number: 90 } });
+          const taken = yield* rpc.ThreadLinkPr({
+            thread: second.id,
+            pr: { project: "awp", number: 90 },
+          });
+          const every = yield* rpc.ThreadList();
+          return { taken, every };
+        }),
+      { viewer: "me" },
+    );
+
+    expect(answer.taken.prs).toEqual([{ project: "awp", number: 90 }]);
+    expect(answer.every.find((one) => one.title === "first")?.prs).toEqual([]);
+  });
+
+  it("starting a review links the pull request to the thread it made", async () => {
+    const started = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const answer = yield* rpc.ReviewStart({ project: "awp", number: 61 });
+          const every = yield* rpc.ThreadList();
+          return { answer, thread: every.find((one) => one.id === answer.thread.id) };
+        }),
+      { viewer: "me", prs: [pr({ number: 61, title: "a change" })] },
+    );
+
+    // Linked at creation rather than by the job, so the sidebar and the row can
+    // name the pull request now instead of in half a minute.
+    expect(started.thread?.prs).toEqual([{ project: "awp", number: 61 }]);
+  });
+
+  it("a session makes the row openable before the thread claim lands", async () => {
+    // The fixture's own sessions stand in for a review workspace's: the claim
+    // is the create job's second-to-last step, so a row that waited for it said
+    // nothing for the thirty seconds a person is actually watching.
+    const inbox = await run((rpc) => rpc.InboxList({}), {
+      viewer: "me",
+      // `session()` in this suite names `awp.awp.<workspace>.agent`, and
+      // `identities` recovers the pair from the labels — so a session called
+      // `pr-31` is a workspace called `pr-31` in the project `awp`.
+      sessionWorkspace: "pr-31",
+      prs: [pr({ number: 31, requested: ["me"] })],
+    });
+
+    expect(inbox.items[0]?.workspace).toBe("pr-31");
+    // And no thread has claimed it, which the row has to be able to tell apart:
+    // it is what says whether the job finished.
+    expect(inbox.items[0]?.thread).toBeUndefined();
+  });
+
+  it("a project with no GitHub remote is not a source, and not a complaint", async () => {
+    // Reported from a real window: a vault of notes and a scratch repository
+    // with no remote each produced a red sentence on every refresh — both true,
+    // neither actionable. A permanent warning is a warning that gets skipped.
+    const inbox = await run((rpc) => rpc.InboxList({}), {
+      viewer: "me",
+      // The derived project `awp` resolves to this root through the fake jj.
+      offGithub: "/repos/tmp",
+      prs: [pr({ number: 1 })],
+    });
+
+    expect(inbox.sources).toEqual([]);
+    expect(inbox.items).toEqual([]);
+  });
+
+  it("reports the workspace already reviewing a pull request", async () => {
+    const inbox = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "#7 a change" });
+          // Claimed by hand, which is what the create job's last-but-one step
+          // does — and the only record that says a review exists.
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "pr-7" },
+          });
+          return { inbox: yield* rpc.InboxList({}), thread };
+        }),
+      { viewer: "me", prs: [pr({ number: 7, requested: ["me"] })] },
+    );
+
+    expect(inbox.inbox.items[0]?.workspace).toBe("pr-7");
+    expect(inbox.inbox.items[0]?.thread).toBe(inbox.thread.id);
+  });
+});
+
+describe("a checkout that is behind its pull request", () => {
+  // The signal only. What to *do* about it is the repair prompt's business —
+  // an agent is told to fetch and re-anchor, which is a thing a person reads
+  // before it happens rather than a button that moves their checkout.
+  const wanted = {
+    viewer: "me",
+    bookmarks: ["feature"],
+    prs: [pr({ number: 70, headRef: "feature", headOid: "cafe" })],
+  };
+
+  it("says a row has moved when its checkout does not contain the head", async () => {
+    const inbox = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "#70 a change" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "pr-70" },
+          });
+          return yield* rpc.InboxList({});
+        }),
+      { ...wanted, contains: false },
+    );
+
+    expect(inbox.items[0]?.moved).toBe(true);
+  });
+
+  it("says nothing has moved when the checkout has the head behind it", async () => {
+    // Asked as "is it an ancestor", not "is it equal": somebody who committed
+    // something of their own on top is still reviewing the right code.
+    const inbox = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "#70 a change" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "pr-70" },
+          });
+          return yield* rpc.InboxList({});
+        }),
+      { ...wanted, contains: true },
+    );
+
+    expect(inbox.items[0]?.moved).toBe(false);
+  });
+});
+
+describe("PullRequestRepair", () => {
+  // One press: compose and send. What the sentence *says* is `repair.test.ts`'s
+  // business — this is the seam, which is the part that can be wrong in ways
+  // that file cannot see: which workspace it went to, and what happens when
+  // there is nothing to say or nobody to say it to.
+  const broken = {
+    viewer: "me",
+    bookmarks: ["feature"],
+    prs: [pr({ number: 80, headRef: "feature", ci: "failing", author: "me" })],
+  };
+
+  it("types the prompt at the workspace's agent and says what it said", async () => {
+    const done = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "#80 a change" });
+          yield* rpc.ThreadLinkPr({ thread: thread.id, pr: { project: "awp", number: 80 } });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            // The fixture's own session is `awp.awp.other.agent`, so this is the
+            // workspace that has a live agent to type into.
+            member: { project: "awp", workspace: "other" },
+          });
+          return yield* rpc.PullRequestRepair({ project: "awp", number: 80 });
+        }),
+      broken,
+    );
+
+    expect(done.workspace).toBe("other");
+    expect(done.prompt).toContain("failing CI checks");
+    // Owner tone, because the head branch is under the configured prefix — and
+    // that is what decides whether the agent is asked to push.
+    expect(done.mine).toBe(true);
+  });
+
+  it("nothing wrong is an answer, not a failure", async () => {
+    const done = await run((rpc) => rpc.PullRequestRepair({ project: "awp", number: 81 }), {
+      viewer: "me",
+      prs: [pr({ number: 81, author: "me" })],
+    });
+
+    expect(done.prompt).toBe("");
+    expect(done.workspace).toBeUndefined();
+  });
+
+  it("something to say and nowhere to say it is refused by name", async () => {
+    // No thread, so no workspace, so no agent. Silence here would be a button
+    // that reports success and does nothing.
+    const failed = await run(
+      (rpc) => rpc.PullRequestRepair({ project: "awp", number: 80 }).pipe(Effect.flip),
+      broken,
+    );
+
+    expect(failed).toMatchObject({ _tag: "NoAgent" });
+  });
+});
+
+describe("ReviewStart", () => {
+  const wanted = { viewer: "me", prs: [pr({ number: 12, title: "tiered discounts" })] };
+
+  it("makes a thread and a job, named after the pull request", async () => {
+    const started = await run((rpc) => rpc.ReviewStart({ project: "awp", number: 12 }), wanted);
+
+    expect(started.created).toBe(true);
+    expect(started.workspace).toBe("pr-12");
+    expect(started.thread.title).toBe("#12 tiered discounts");
+    expect(started.job?.key).toBe("review:awp:12");
+    // The name is on the record from the start, which is what stops the naming
+    // step spending ten seconds on a name that is already decided.
+    expect(started.job?.input).toMatchObject({ workspace: "pr-12", base: "feature" });
+  });
+
+  it("pressed twice, it is one thread and one job", async () => {
+    const both = await run(
+      (rpc) =>
+        Effect.all([
+          rpc.ReviewStart({ project: "awp", number: 12 }),
+          rpc.ReviewStart({ project: "awp", number: 12 }),
+        ]),
+      wanted,
+    );
+
+    expect(both[1].created).toBe(false);
+    expect(both[1].thread.id).toBe(both[0].thread.id);
+    expect(both[1].job?.id).toBe(both[0].job?.id);
+  });
+
+  it("a pull request that is not open is refused by name", async () => {
+    const failed = await run(
+      (rpc) => rpc.ReviewStart({ project: "awp", number: 99 }).pipe(Effect.flip),
+      wanted,
+    );
+    expect(failed).toMatchObject({
+      number: 99,
+      reason: expect.stringContaining("not an open pull request"),
+    });
+  });
+
+  it("a project awp has never heard of is refused before gh is asked", async () => {
+    const failed = await run(
+      (rpc) => rpc.ReviewStart({ project: "nowhere", number: 1 }).pipe(Effect.flip),
+      wanted,
+    );
+    expect(failed).toMatchObject({ reason: expect.stringContaining("knows no project") });
   });
 });
