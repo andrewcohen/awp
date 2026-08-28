@@ -1,7 +1,8 @@
 import type { CommentSide, ReviewComment, Revision } from "@awp-kit/protocol";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
-import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
+import { CaretLineDownIcon } from "@phosphor-icons/react/CaretLineDown";
+import { CaretLineUpIcon } from "@phosphor-icons/react/CaretLineUp";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
 import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/ArrowsOutLineVertical";
 import { CodeView, type CodeViewItem } from "@pierre/diffs/react";
@@ -11,6 +12,7 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listRevisions, readDiff, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
+import { FOLD_MS } from "./columns";
 import { contentOf, statOf, subjectOf, versionOf } from "./patch";
 import {
   rememberOpenSplit,
@@ -230,6 +232,38 @@ const styles = stylex.create({
     overflowY: "auto",
     overflowX: "hidden",
   }),
+  // Only for the button, never for the drag.
+  //
+  // A transition on a dragged boundary makes the list chase the pointer a
+  // frame behind, which reads as lag rather than as motion — the same reason
+  // the window's columns animate their fold and not their divider. So it is
+  // put on for the toggle and taken off again, rather than living here.
+  //
+  // The same curve and the same duration as a column's fold, from
+  // `columns.ts`: out fast, in gently. Two animations in one window that
+  // disagree about how long a fold takes read as two different applications.
+  //
+  // **A function, and it has to be.** An identifier inside a `stylex.create`
+  // value is resolved by StyleX itself and must come from a `.stylex.ts` file,
+  // so `${FOLD_MS}ms` in a static style is a build error about theming rules —
+  // which is not what is wrong, and is why the message is confusing. A dynamic
+  // style takes its value at runtime and asks no such question. `App.tsx` is
+  // shaped this way for the same reason; the note is in AGENTS.md and this is
+  // the second time it has been walked into.
+  //
+  // Worth knowing: **no gate catches it.** fmt, lint, typecheck, test and
+  // doctor were all green with the broken version, because only Vite runs the
+  // StyleX Babel pass. The dev server is the check.
+  eased: (ms: number) => ({
+    transitionProperty: "flex-basis",
+    transitionTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
+    transitionDuration: {
+      default: `${ms}ms`,
+      // Someone who has asked their system for less motion is not asking for a
+      // faster version of it.
+      "@media (prefers-reduced-motion: reduce)": "0s",
+    },
+  }),
   // No `display: none` any more. A collapsed list is one row tall and still
   // shows which revision is selected; hiding it outright answered the question
   // it exists to answer with nothing.
@@ -264,7 +298,13 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  mark: { flexShrink: 0, color: colors.live },
+  // Where the working copy is. A tint on the row rather than a mark inside it,
+  // so the ids stay a column — a bullet in the id's place stepped that one line
+  // in by a character.
+  //
+  // Applied *before* `on`, so a selected working copy reads as selected. Two
+  // tints on one row would otherwise argue about which is in charge.
+  here: { backgroundColor: colors.surface },
   // ── a bookmark on a revision row ─────────────────────────────────────────
   //
   // The accent, and monospace, because a bookmark is an address: it is the
@@ -300,17 +340,23 @@ const styles = stylex.create({
   // gesture for the same pixels, and it had to stop the pointerdown to do it.
   // It is now in the head row below, where the rest of the panel's controls
   // are, and this bar does one thing.
-  // Space, and no rule at all.
+  // ── the boundary draws nothing; the list says whether there is more ──────
   //
-  // This was a 14px band of `colors.base` with a rule under it, then a rule
-  // with 7px of space above it — and the second was reported the same way as
-  // the first: "borders and then spacing outside the borders, which is weird".
-  // It is, and it is the general fault: a line *and* a gap doing one job,
-  // where the gap alone would have done it.
+  // Four separators were tried between the list and the head — a band with a
+  // rule under it, a rule with space above it, a fill, and plain space — and
+  // each was reported worse than the last. What every one of them had in
+  // common is that it was drawn all the time, to mark a boundary that is
+  // obvious from the layout anyway.
   //
-  // So the boundary between the list and the head is now empty. What separates
-  // them is that the head is filled — see `head` — and this is the room around
-  // it. Dragging is still here; it just draws nothing until it is being used.
+  // A shadow under the list is different in kind: it appears **only when the
+  // list has more in it than is showing**, so it is not marking the boundary,
+  // it is answering "is there more". That is information, and it goes away
+  // when the answer is no. Collapsed to one row it is always on, which is
+  // exactly right — that is the state where the question is most worth asking.
+  //
+  // The strip itself is now nothing but a place to grab. It draws nothing at
+  // rest and nothing while held either: the list resizing under the hand is
+  // the feedback, and a strip that lights up was one more drawn line.
   splitter: {
     position: "relative",
     flexShrink: 0,
@@ -320,11 +366,8 @@ const styles = stylex.create({
     // The gesture is captured here, so it must not also read as a page scroll.
     touchAction: "none",
   },
-  // Only while it is being dragged. A boundary that is invisible at rest has
-  // to appear under the hand, or there is no feedback that the drag started.
-  held: { backgroundColor: colors.border },
-  /** A quarter turn, so the sidebar's divider lands along the top edge. */
-  turned: { transform: "rotate(90deg)" },
+  /** More below than is showing. An inset shadow, so it costs no layout. */
+  more: { boxShadow: `inset 0 -0.6rem 0.5rem -0.5rem ${colors.base}` },
   // Sized to match the icon buttons at the other end of the head row, so the
   // two ends of the row read as one set of controls rather than as a caret
   // that happens to be nearby.
@@ -772,8 +815,42 @@ export function Diff({
     }
   };
 
+  // On for the length of a toggle, off for a drag. See `styles.eased`.
+  const [easing, setEasing] = useState(false);
+  useEffect(() => {
+    if (!easing) {
+      return;
+    }
+    const timer = setTimeout(() => setEasing(false), FOLD_MS);
+    return () => clearTimeout(timer);
+  }, [easing]);
+
   /** Put the list away, or bring it back to the height it was. */
-  const toggleList = () => resize(folded ? rememberedOpenSplit() : 0);
+  const toggleList = () => {
+    setEasing(true);
+    resize(folded ? rememberedOpenSplit() : 0);
+  };
+
+  // Whether the list has more in it than is showing.
+  //
+  // Read from the element rather than computed from `revisions.length` and the
+  // height, because that computation needs the row height, the container's
+  // real height after the 60% cap, and the scroll position — three numbers the
+  // element already knows and this component would be guessing at.
+  const [more, setMore] = useState(false);
+  const readMore = () => {
+    const el = list.current;
+    if (el === null) {
+      return;
+    }
+    // A pixel of slack: a scroll that has reached the bottom lands a fraction
+    // short at a fractional device pixel ratio, and a shadow that never quite
+    // goes out is worse than one that goes out a pixel early.
+    setMore(el.scrollTop + el.clientHeight < el.scrollHeight - 1);
+  };
+  // On every change that can alter the answer: a new listing, and a move of
+  // the boundary. Scrolling is handled by the element's own handler.
+  useEffect(readMore, [revisions, split]);
 
   // Put the selected revision under the one row that is left.
   //
@@ -1132,9 +1209,12 @@ export function Diff({
           that scrolls to it. */}
       <div
         ref={list}
+        onScroll={readMore}
         {...stylex.props(
           styles.revisions(folded ? rowHeight : split),
+          easing && styles.eased(FOLD_MS),
           folded && styles.shutOverflow,
+          more && styles.more,
         )}
       >
         {revisions.map((one) => {
@@ -1155,22 +1235,35 @@ export function Diff({
               // navigation.ts. The revision list is the one thing here that is
               // a list; the panel's buttons are a toolbar.
               data-nav-item
-              {...stylex.props(styles.revision, selected && styles.on)}
+              {...stylex.props(
+                styles.revision,
+                one.workingCopy && styles.here,
+                selected && styles.on,
+              )}
               onClick={() => setAt(value)}
             >
-              {one.workingCopy ? (
-                <>
-                  <span aria-hidden {...stylex.props(styles.mark)}>
-                    ●
-                  </span>
-                  <span {...stylex.props(styles.subject)}>working copy</span>
-                </>
-              ) : (
-                <>
-                  <span {...stylex.props(styles.id)}>{one.changeId.slice(0, 8)}</span>
-                  <span {...stylex.props(styles.subject)}>{subjectOf(one.description)}</span>
-                </>
-              )}
+              {/* Every row the same shape, including this one.
+
+                  The working copy used to print a green dot and the words
+                  "working copy", unconditionally — so describing the commit
+                  you are standing in changed every row in the panel except the
+                  one you had just described. It also put a bullet where every
+                  other row has a change id, so that one line stepped in by a
+                  character and the column of ids stopped being a column.
+
+                  The row is tinted instead. It carries the same two fields as
+                  its neighbours, the ids line up, and what says "this is where
+                  you are" is the row rather than a mark inside it.
+
+                  The fallback is "working copy" and not `subjectOf`'s
+                  "(no description set)": an undescribed working copy is the
+                  ordinary state of a jj stack, not a missing field. */}
+              <span {...stylex.props(styles.id)}>{one.changeId.slice(0, 8)}</span>
+              <span {...stylex.props(styles.subject)}>
+                {one.workingCopy && one.description.trim() === ""
+                  ? "working copy"
+                  : subjectOf(one.description)}
+              </span>
 
               {/* Local bookmarks only, which the daemon has already filtered —
                   a commit's own `json(bookmarks)` carries a *remote* row
@@ -1198,7 +1291,7 @@ export function Diff({
         aria-label="revision list height"
         aria-orientation="horizontal"
         aria-valuenow={split}
-        {...stylex.props(styles.splitter, dragging && styles.held)}
+        {...stylex.props(styles.splitter)}
         onPointerDown={(event) => {
           event.currentTarget.setPointerCapture(event.pointerId);
           setDragging(true);
@@ -1239,19 +1332,20 @@ export function Diff({
           {...stylex.props(styles.peg)}
           onClick={toggleList}
         >
-          {/* The sidebar's own glyph, turned a quarter turn.
+          {/* A caret against a line: collapse *to the top edge*, and back.
 
-              A caret is a direction and this is not one: the control does the
-              same thing the sidebar's and the panels' do — put a region away,
-              bring it back — and answering to a different picture made it read
-              as a third kind of thing. Phosphor ships no horizontal
-              `SidebarSimple`, so it is rotated; `Accessory` already mirrors
-              the same icon with `scaleX(-1)` for the same reason.
+              Three glyphs were tried. A bare caret says a direction and not
+              what it acts on. `SidebarSimple` rotated a quarter turn says the
+              right thing and looks wrong doing it — the icon is drawn for a
+              vertical edge and its rounded square reads as tilted rather than
+              as turned, which was reported immediately.
 
-              One glyph in both states, with `aria-expanded` carrying which it
-              is, exactly as the two column controls do. Swapping the picture
-              is what a caret was doing and is the habit being dropped. */}
-          <SidebarSimpleIcon size={14} aria-hidden {...stylex.props(styles.turned)} />
+              The line is what the bare caret was missing: it names the edge
+              the list folds against. And here the picture *should* swap
+              between states, unlike the sidebar's and the panels' controls —
+              those name a region, which does not change, and this names a
+              direction, which does. */}
+          {folded ? <CaretLineDownIcon size={13} /> : <CaretLineUpIcon size={13} />}
         </button>
 
         {stat !== undefined && stat.files > 0 ? (
