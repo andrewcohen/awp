@@ -46,7 +46,7 @@ const LABELLED = t(
 );
 
 const QUOTED_CMD = t(
-  "  name=awp.thicket.effect-ts-tiered-d-f500.action_dev",
+  "  name=awp.thicket.effect-ts-tabular-ca90.action_dev",
   "pid=65040",
   "clients=0",
   "created=1787590617",

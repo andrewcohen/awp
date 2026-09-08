@@ -125,9 +125,9 @@ const labelled = (session: Session): boolean => {
  * not need, so **one workspace's sessions can have differently shortened
  * stems**:
  *
- *   awp.thicket.effect-ts-tiered-d-f500.action_dev
- *   awp.thicket.effect-ts-tabular-expo-f500.editor
- *   awp.thicket.effect-ts-tabular-expou-f500.agent
+ *   awp.thicket.effect-ts-tabular-ca90.action_dev
+ *   awp.thicket.effect-ts-tabular-expo-ca90.editor
+ *   awp.thicket.effect-ts-tabular-expor-ca90.agent
  *
  * Three names, three stems, one workspace —
  * `thicket/effect-ts-tabular-export-timemachine`. Read individually they are

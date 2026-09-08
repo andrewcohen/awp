@@ -162,13 +162,13 @@ describe("compatibility with sessions that already exist", () => {
       "thicket",
       "effect-tabular-export-timemachine",
       "action_dev",
-      "awp.thicket.effect-tabular-exp-f488.action_dev",
+      "awp.thicket.effect-tabular-exp-a81c.action_dev",
     ],
     [
       "thicket",
       "effect-tabular-export-timemachine",
       "agent",
-      "awp.thicket.effect-tabular-export-f488.agent",
+      "awp.thicket.effect-tabular-export-t-a81c.agent",
     ],
     [
       "thicket",

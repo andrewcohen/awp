@@ -29,7 +29,7 @@ import { App } from "./App";
 //
 // A route stores the truth instead:
 //
-//   before   selected = "awp.thicket.effect-ts-tabular-expou-f500.agent"
+//   before   selected = "awp.thicket.effect-ts-tabular-expor-ca90.agent"
 //   after    /w/thicket/effect-ts-tabular-export-timemachine/agent
 //
 // The second survives a session being restarted under a different shortening.

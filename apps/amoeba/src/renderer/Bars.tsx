@@ -296,7 +296,7 @@ const styles = stylex.create({
  * Which session is open, and whether there is a daemon behind it.
  *
  * The identity rather than the session name: a name is an address —
- * `awp.thicket.effect-ts-tabular-expou-f500.agent` — and the shortening that
+ * `awp.thicket.effect-ts-tabular-expor-ca90.agent` — and the shortening that
  * makes it fit is exactly what makes it unreadable. `identity` is the
  * unshortened truth and is on the wire for this reason.
  *
