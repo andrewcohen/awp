@@ -531,7 +531,7 @@ session that wrote it and cannot be seen from anywhere else.
 **Scope is the design question, and tagging is probably the answer.** A task is
 not always about one thread:
 
-    thread     "make the tabular exports apply at checkout"
+    thread     "paginate the tabular exports"
     project    "this repo still has no integration tests"
     global     "learn what jj fix actually rewrites"
 
@@ -970,48 +970,38 @@ Depends on nothing. Related: #114 (say so when something changed) — a rename i
 the least ambiguous case for a toast, since the row simply reads differently
 afterwards.
 
-## 117. Quote a piece of the chat and reply to it
+## 122. A workspace with no session has an unreachable chat
 
-Asked for: "hover or highlight anything in agent chat and be able to reply to it".
+Reported: "the test thread is orphaned i think? i cant get into the chat" — and
+it was, because the zmx session for that workspace had been killed. The
+workspace was still there, the thread still held it, and the conversation was
+still on disk.
 
-A conversation with an agent goes wrong in a specific place — one claim in a paragraph, one command in a tool call, one file it named. Today the only way to say so is to describe where you mean in prose, at the bottom, after it has scrolled away. The panel already holds the structure that would let you point instead.
+The address is the cause. `/w/$project/$workspace/$kind` is resolved by finding
+a _session_, so a workspace whose session has exited resolves to nothing and
+the agent column has nothing to show — including the chat, **which does not
+need a pty at all**. One ACP conversation per workspace, keyed by directory:
+the session is irrelevant to it.
 
-**This window has done it twice already**, and both are the pattern to follow rather than the thing to reinvent:
+    now      a session exists  →  the row resolves  →  the chat can be opened
+             nothing running   →  no row selection  →  the conversation is
+                                                       unreachable, and reads
+                                                       as lost work
 
-    the diff       drag across line numbers → a comment on that range
-    the web panel  point at an element → a note carrying its selector
+Three things to decide, and the first is most of it:
 
-Both anchor to something addressable and both send a _record_, not typed text.
+    what the address means    a workspace, or a session in one. `sessionAt`
+                              answering undefined is correct for the pane and
+                              wrong for every panel beside it
+    what the pane draws       there is no terminal to attach to, so it says so
+                              — which is honest and is not what happens now
+    starting one              a row for a workspace with nothing running wants
+                              an obvious way to start its agent again, which
+                              is `Multiplexer.start` and has no RPC
 
-What that means here:
-
-- **A selection is the anchor.** Hovering a message shows the affordance;
-  selecting text inside it makes the quote. A whole-message reply is the
-  degenerate case of selecting all of it, so build the selection one.
-- **What crosses the wire.** The quoted text and enough to find it again:
-  which item, and the offsets within it. A message is chunks appended in
-  `conversation.ts`, so an offset is stable only once the turn has ended —
-  quoting a message still streaming needs deciding.
-- **A tool call is quotable too**, and is the more useful half: pointing at
-  the command it ran, or at one line of its output, is exactly the "no, not
-  that" a person wants to say.
-- **It goes in the composer, not straight out.** The diff batches comments
-  because six remarks are one prompt; here the reply is the next turn, so
-  the quote should land in the box with the cursor after it and let somebody
-  type. That also makes it undoable by deleting it.
-
-Two things to check before starting, both learned nearby:
-
-- **A render during a gesture ends the gesture.** The diff's line selection
-  was broken for exactly this reason — opening the composer at pointerdown
-  rebuilt the rows the pointer was still moving across. Settle on pointerup.
-- **Markdown output is React elements, not text**, so a selection inside an
-  agent message spans nodes the panel did not create by hand. Read the
-  Selection API rather than assuming a single text node.
-
-Depends on nothing in flight. Related: #44 (comment on a diff and send it),
-#55 (annotate an element and send it), #102 (patches inside tool output — a
-quoted diff line would want the same renderer).
+Related: #91 (the chat), and the sessions half of the sidebar, which already
+draws a workspace row whether or not anything is running in it — so the
+sidebar is right and the address is the part that is behind.
 
 ## 119. Own the agent's terminals, so a long command is watchable and killable
 

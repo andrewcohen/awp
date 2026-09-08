@@ -98,9 +98,9 @@ It does not work, and the reason is not obvious.
 workspace's sessions are shortened to **different stems**:
 
 ```
-  awp.thicket.effect-ts-tiered-d-f500.action_dev
-  awp.thicket.effect-ts-tabular-expo-f500.editor
-  awp.thicket.effect-ts-tabular-expou-f500.agent
+  awp.thicket.effect-ts-tabular-ca90.action_dev
+  awp.thicket.effect-ts-tabular-expo-ca90.editor
+  awp.thicket.effect-ts-tabular-expor-ca90.agent
         └─ three stems, one workspace: effect-ts-tabular-export-timemachine
 ```
 
@@ -899,7 +899,7 @@ used to be one string of React state holding exactly that shortened name, kept
 across reloads by hand:
 
 ```
-  before   selected = "awp.thicket.effect-ts-tabular-expou-f500.agent"
+  before   selected = "awp.thicket.effect-ts-tabular-expor-ca90.agent"
   after    /w/thicket/effect-ts-tabular-export-timemachine/agent
 ```
 
@@ -3052,6 +3052,36 @@ working perfectly — the same trap already recorded for Playwright. Walk
   pre span, from the page          0
   spans inside 3 shadow roots      137
 ```
+
+## Quoting is selecting, and the window says text is not selectable
+
+`body { user-select: none }` in `global.css`, and the comment says why: a drag
+on empty chrome should move the window rather than select it. That is right for
+chrome and wrong for the one surface in this window that is _prose_ — the chat
+transcript, which somebody reads for minutes, copies from, and quotes.
+
+It was measured while building the quote control, and the measurement is the
+finding: a real drag across a message left `getSelection().toString()` empty,
+and `user-select` computed to `none`. So the selection half of the feature was
+unreachable, and — the larger of the two — **copying what an agent said did not
+work either**.
+
+```
+  before   userSelect "none"   a drag selects nothing
+  after    userSelect "text"   a drag selects, and a quote carries the phrase
+                               rather than the whole message
+```
+
+`Boundary` already did this for the same reason, and its note is the one to
+copy: a stack trace nobody can select is one that gets retyped from a
+photograph.
+
+**Check it by selecting, not by reading the declaration.** A real drag through
+`agent-browser mouse down/move/up`, then `getSelection().toString()` — a
+synthetic `Range` proves nothing here, and it lied twice: once because a
+focused textarea owns the selection, and once because `selectAllChildren` on a
+row returned an empty string. Both times the control fell back to quoting the
+whole item and looked like it worked.
 
 ## Never write a real name down
 

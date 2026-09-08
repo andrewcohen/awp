@@ -1,6 +1,6 @@
 import type { ChatConfigOption } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { Chip } from "./Chip";
 import {
   type Asked,
@@ -18,6 +18,7 @@ import {
 } from "./conversation";
 import { Markdown } from "./Markdown";
 import { chatAnswer, chatConfig, chatFork, chatSend, chatSet, watchChat } from "./daemon";
+import { selectedIn, withQuote } from "./quote";
 import { colors, text } from "./tokens.stylex";
 
 // The agent as a conversation rather than as a picture of one.
@@ -92,6 +93,7 @@ const Panel = ({
   const [draft, setDraft] = useState("");
   const [config, setConfig] = useState<ReadonlyArray<ChatConfigOption>>([]);
   const bottom = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
   /** How many messages this window has sent, so each can be named. */
   const sent = useRef(0);
 
@@ -147,6 +149,24 @@ const Panel = ({
       bottom.current?.scrollIntoView({ block: "end" });
     }
   }, [grown]);
+
+  /**
+   * Quote a piece of the conversation into the composer.
+   *
+   * Into the box rather than out to the agent: a quoted reply *is* the next
+   * turn and wants a sentence written after it, where the diff panel batches
+   * comments because six remarks are one prompt.
+   *
+   * Focus moves to the box and the caret goes to the end, because the next
+   * thing to happen is typing. `requestAnimationFrame` is not needed —
+   * `setDraft` has not painted yet, so the value is set on the element by the
+   * time the effect of typing matters, and `setSelectionRange` on the current
+   * value would put the caret in the wrong place.
+   */
+  const quote = useCallback((words: string) => {
+    setDraft((current) => withQuote(current, words));
+    box.current?.focus();
+  }, []);
 
   const say = useCallback(() => {
     const words = draft.trim();
@@ -212,7 +232,13 @@ const Panel = ({
           </div>
         ) : (
           items.map((item) => (
-            <Row key={item.key} item={item} project={project} workspace={workspace} />
+            <Row
+              key={item.key}
+              item={item}
+              project={project}
+              workspace={workspace}
+              onQuote={quote}
+            />
           ))
         )}
 
@@ -232,6 +258,7 @@ const Panel = ({
       <div {...stylex.props(styles.composer)}>
         <div {...stylex.props(styles.box)}>
           <textarea
+            ref={box}
             {...stylex.props(styles.input)}
             value={draft}
             rows={2}
@@ -353,65 +380,138 @@ const Row = ({
   item,
   project,
   workspace,
+  onQuote,
 }: {
   readonly item: Item;
   readonly project: string;
   readonly workspace: string;
+  readonly onQuote: (text: string) => void;
 }) => {
   if (item.kind === "said") {
-    return <Message item={item} />;
+    return <Message item={item} onQuote={onQuote} />;
   }
   if (item.kind === "ran") {
-    return <Tool item={item} project={project} workspace={workspace} />;
+    return <Tool item={item} project={project} workspace={workspace} onQuote={onQuote} />;
   }
   return <Permission item={item} project={project} workspace={workspace} />;
 };
 
-const Message = ({ item }: { readonly item: Said }) => (
-  <div {...stylex.props(styles.item, styles.said, item.role === "thought" && styles.thought)}>
-    <span {...stylex.props(styles.who, item.role === "user" && styles.mine)}>
-      {item.role === "user" ? "you" : item.role === "thought" ? "thinking" : "agent"}
-      {/* ── a steer says that it is waiting ───────────────────────────────
+/**
+ * The control that quotes a row, and what it quotes.
+ *
+ * ── the selection if there is one, the whole thing if not ─────────────────
+ *
+ * Both were asked for — "hover or highlight anything in agent chat and be
+ * able to reply to it" — and they are one control rather than two: a reply
+ * about a whole message is the degenerate case of selecting all of it.
+ *
+ * ── it is read on the press, which is after the gesture ───────────────────
+ *
+ * Nothing about a selection is captured while it is being made. The diff
+ * panel's line selection was broken for exactly the opposite reason — a
+ * render at `pointerdown` rebuilt the rows the pointer was still moving
+ * across — and the rule that came out of it applies here as the easy case:
+ * a click on this button is a second gesture, long after the first settled.
+ *
+ * ── hidden on hover, never `display: none` ───────────────────────────────
+ *
+ * The window's mandate: an element outside the layout cannot be tabbed to, so
+ * hover-only would mean the feature does not exist without a pointer.
+ * `opacity: 0` with a focus rule, the same shape `MoveToThread` uses.
+ */
+const Quote = ({
+  from,
+  whole,
+  shown,
+  onQuote,
+}: {
+  /** The row's own element, so a selection outside it is not this row's. */
+  readonly from: RefObject<HTMLDivElement | null>;
+  /** What to quote when nothing is selected. */
+  readonly whole: string;
+  /** The row is hovered. Focus reveals it on its own. */
+  readonly shown: boolean;
+  readonly onQuote: (text: string) => void;
+}) => (
+  <button
+    type="button"
+    data-nav-item
+    {...stylex.props(styles.quote, shown && styles.shown)}
+    title="quote this in a reply — select part of it first to quote only that"
+    aria-label="quote this in a reply"
+    onClick={() => onQuote(selectedIn(from.current) ?? whole)}
+  >
+    quote
+  </button>
+);
+
+const Message = ({
+  item,
+  onQuote,
+}: {
+  readonly item: Said;
+  readonly onQuote: (text: string) => void;
+}) => {
+  const row = useRef<HTMLDivElement>(null);
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      ref={row}
+      onPointerEnter={() => setOver(true)}
+      onPointerLeave={() => setOver(false)}
+      {...stylex.props(styles.item, styles.said, item.role === "thought" && styles.thought)}
+    >
+      <span {...stylex.props(styles.who, item.role === "user" && styles.mine)}>
+        {item.role === "user" ? "you" : item.role === "thought" ? "thinking" : "agent"}
+        {/* ── a steer says that it is waiting ───────────────────────────────
           Measured: a message sent mid-turn is answered only once the turn it
           interrupted has ended. Drawn as an ordinary message it reads as a
           question the agent ignored — and then, when the answer does come,
           as an answer to the wrong thing. */}
-      {item.queued && (
-        <span
-          {...stylex.props(styles.queued)}
-          title="sent — the agent is finishing what it was doing and will answer this next"
-        >
-          queued
-        </span>
+        {item.queued && (
+          <span
+            {...stylex.props(styles.queued)}
+            title="sent — the agent is finishing what it was doing and will answer this next"
+          >
+            queued
+          </span>
+        )}
+        <span {...stylex.props(styles.spacer)} />
+        <Quote from={row} whole={item.text} shown={over} onQuote={onQuote} />
+      </span>
+      {/* ── markdown for what the agent wrote, and not for what you wrote ──
+
+          An agent answers in markdown — headings, lists, fenced code — and
+          drawn as text that is most of the reply showing its own syntax.
+          `Markdown.tsx` already exists for the PR panel and is reused whole:
+          it builds React elements rather than HTML, so there is no sanitiser
+          to get right.
+
+          Your own message is drawn as text on purpose. It is exactly what you
+          typed, and rendering it would mean a message containing `# ` silently
+          becoming a heading — which is a window editing what somebody said. */}
+      {item.role === "agent" ? (
+        <Markdown>{item.text}</Markdown>
+      ) : (
+        <p {...stylex.props(styles.words)}>{item.text}</p>
       )}
-    </span>
-    {/* ── markdown for what the agent wrote, and not for what you wrote ────
-
-        An agent answers in markdown — headings, lists, fenced code — and drawn
-        as text that is most of the reply showing its own syntax. `Markdown.tsx`
-        already exists for the PR panel and is reused whole: it builds React
-        elements rather than HTML, so there is no sanitiser to get right.
-
-        Your own message is drawn as text on purpose. It is exactly what you
-        typed, and rendering it would mean a message containing `# ` silently
-        becoming a heading — which is a window editing what somebody said. */}
-    {item.role === "agent" ? (
-      <Markdown>{item.text}</Markdown>
-    ) : (
-      <p {...stylex.props(styles.words)}>{item.text}</p>
-    )}
-  </div>
-);
+    </div>
+  );
+};
 
 const Tool = ({
   item,
   project,
   workspace,
+  onQuote,
 }: {
   readonly item: Ran;
   readonly project: string;
   readonly workspace: string;
+  readonly onQuote: (text: string) => void;
 }) => {
+  const row = useRef<HTMLDivElement>(null);
+  const [over, setOver] = useState(false);
   // Shut by default, and open once for anything that went wrong.
   //
   // Output is usually long and usually uninteresting — the row already says
@@ -420,7 +520,12 @@ const Tool = ({
   const [open, setOpen] = useState(item.status === "failed");
 
   return (
-    <div {...stylex.props(styles.item, styles.ran)}>
+    <div
+      ref={row}
+      onPointerEnter={() => setOver(true)}
+      onPointerLeave={() => setOver(false)}
+      {...stylex.props(styles.item, styles.ran)}
+    >
       <span {...stylex.props(styles.status, item.status === "failed" && styles.failed)}>
         {mark(item.status)}
       </span>
@@ -449,6 +554,11 @@ const Tool = ({
             and a subagent doing slow work are the same picture without this,
             and only one of them is worth waiting for. */}
         {stalled(item) !== undefined && <p {...stylex.props(styles.retry)}>{stalled(item)}</p>}
+        {/* Quoting a tool call is the more useful half of this: pointing at
+            the command it ran, or at one line of its output, is exactly the
+            "no, not that" a person wants to say. With nothing selected it
+            quotes the command — the output is usually long and folded away. */}
+        <Quote from={row} whole={`${verb(item)} ${item.title}`} shown={over} onQuote={onQuote} />
         {/* The question about this call, on this call. See the note on `ask`:
             a separate row was a second copy of the command already above it. */}
         {item.ask !== undefined && (
@@ -551,6 +661,22 @@ const styles = stylex.create({
     flex: 1,
     minHeight: 0,
     overflowY: "auto",
+    // ── selectable, against the window's default ──────────────────────────
+    //
+    // `body { user-select: none }` in global.css, because a drag on empty
+    // chrome should move the window rather than select it. This is not empty
+    // chrome: it is the one surface here that is prose, read for minutes, and
+    // quoted from — and quoting *is* selecting, so the selection half of the
+    // quote control was unreachable until this line existed.
+    //
+    // Measured before it did: a real drag across a message left
+    // `getSelection().toString()` empty and `user-select` computed to `none`.
+    // Copying what an agent said did not work either, which is the larger of
+    // the two things this fixes.
+    //
+    // `Boundary` does the same for the same reason — a stack trace nobody can
+    // select is one that gets retyped from a photograph.
+    userSelect: "text",
     // The window's rule: a horizontal scrollbar is a layout that was allowed
     // to be wider than the column holding it. Output wraps instead.
     overflowX: "hidden",
@@ -651,6 +777,35 @@ const styles = stylex.create({
     overflowWrap: "anywhere",
   },
   failed: { color: colors.warn },
+  /**
+   * Present, and out of the way until it is wanted.
+   *
+   * `opacity`, never `display: none` — an element outside the layout cannot
+   * be tabbed to, and hover-only means the feature does not exist without a
+   * pointer. The same shape `MoveToThread` uses.
+   */
+  quote: {
+    alignSelf: "flex-start",
+    flexShrink: 0,
+    fontFamily: text.ui,
+    fontSize: text.small,
+    padding: "0 0.3rem",
+    borderStyle: "none",
+    backgroundColor: "transparent",
+    color: colors.muted,
+    cursor: "pointer",
+    opacity: { default: 0, ":hover": 1, ":focus-visible": 1 },
+    transitionProperty: "opacity",
+    transitionDuration: { default: "160ms", "@media (prefers-reduced-motion: reduce)": "0s" },
+  },
+  /**
+   * Revealed by the row's own hover, held in the row's state.
+   *
+   * The parent's hover cannot be a selector here: StyleX resolves styles at
+   * render, so which of them applies has to be a value the component can
+   * read. `ArchiveThread` is the worked example and this follows it.
+   */
+  shown: { opacity: 1 },
   /** A sentence about a stall, not a state — see the note on the row. */
   retry: {
     marginTop: "0.15rem",
