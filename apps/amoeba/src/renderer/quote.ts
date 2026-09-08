@@ -18,33 +18,64 @@
 // be loaded by vitest.
 
 /**
- * What is selected inside `el`, or nothing.
+ * Where a selection is on screen, so a control can be put beside it.
  *
- * **The Selection API, not the text.** An agent's message is rendered markdown
- * — React elements this file did not create, several nodes deep — so there is
- * no single text node to read and no `value` to slice. `toString()` is what
- * flattens a range that spans a `<strong>`, two list items and half a
- * paragraph.
- *
- * A selection that starts in this item and ends outside it is not a quote of
- * this item, so the test is on the range's common ancestor rather than on
- * either end: `commonAncestorContainer` is inside `el` only when the whole
- * range is.
+ * The range's own rectangle rather than the row's: what somebody highlighted
+ * is a phrase halfway down a paragraph, and an affordance at the top of the
+ * message is an affordance about something else.
  */
-export const selectedIn = (el: HTMLElement | null): string | undefined => {
+export interface Spot {
+  readonly text: string;
+  /** Viewport coordinates of the highlighted range. */
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+}
+
+/**
+ * What is selected inside `el`, and where — or nothing.
+ *
+ * ── read on a settled gesture, never during one ──────────────────────────
+ *
+ * `selectionchange` fires all through a drag. Reading it there puts a control
+ * under a pointer that is still selecting, which is the hazard the diff
+ * panel's line selection already recorded: a render during a gesture ends the
+ * gesture.
+ *
+ * ── the Selection API, not the text ─────────────────────────────────────
+ *
+ * An agent's message is rendered markdown — React elements this file did not
+ * create, several nodes deep — so there is no single text node to read and no
+ * `value` to slice. `toString()` is what flattens a range spanning a
+ * `<strong>`, two list items and half a paragraph.
+ *
+ * ── and it must be a selection in THIS element ─────────────────────────────
+ *
+ * A selection that starts in the transcript and ends outside it is not a
+ * quote of the transcript, so the test is on the range's common ancestor
+ * rather than on either end: `commonAncestorContainer` is inside `el` only
+ * when the whole range is.
+ */
+export const spotIn = (el: HTMLElement | null): Spot | undefined => {
   if (el === null) {
     return undefined;
   }
   const selection = globalThis.getSelection?.();
-  if (selection === null || selection === undefined || selection.isCollapsed) {
-    return undefined;
-  }
-  if (selection.rangeCount === 0) {
+  if (
+    selection === null ||
+    selection === undefined ||
+    selection.isCollapsed ||
+    selection.rangeCount === 0
+  ) {
     return undefined;
   }
   const range = selection.getRangeAt(0);
-  const words = selection.toString().trim();
-  return words !== "" && el.contains(range.commonAncestorContainer) ? words : undefined;
+  const text = selection.toString().trim();
+  if (text === "" || !el.contains(range.commonAncestorContainer)) {
+    return undefined;
+  }
+  const box = range.getBoundingClientRect();
+  return { text, left: box.left, top: box.top, width: box.width };
 };
 
 /**

@@ -3053,6 +3053,43 @@ working perfectly — the same trap already recorded for Playwright. Walk
   spans inside 3 shadow roots      137
 ```
 
+## The affordance appears because something is highlighted
+
+The request was "hover or highlight anything in agent chat and be able to reply
+to it", and the first build read that as _hover_: a control on every row,
+revealed when the pointer was over it. Reported back as wrong, and the reason
+generalises —
+
+```
+  hover      a control per row, present whether or not anybody wants one, and
+             silent about WHICH part of the row it means
+  highlight  one control, only while there is a selection, beside the words
+             that were selected
+```
+
+A highlight is already an answer to "which part"; a hover is not. So the
+control is `position: fixed` at the _range's_ rectangle — not the row's, since
+what somebody highlighted is a phrase halfway down a paragraph and a button at
+the top of the message is a button about something else.
+
+Three things that follow:
+
+- **Settle on `pointerup`, never `selectionchange`.** That event fires all
+  through a drag, and reading it there puts a control under a pointer that is
+  still selecting. `selectionchange` is used for one thing only: taking the
+  control away once the selection has collapsed.
+- **Fixed, so it cannot move the text it is about.** In the flow it would
+  reflow the paragraph under the pointer, and a selection cannot survive its
+  own words moving.
+- **Spend the highlight.** Quoting clears the selection, or the control stays
+  over a phrase already quoted and a second press quotes it twice.
+
+What this cannot grant is a way to _make_ a selection without a pointer: the
+transcript is not a focusable region and caret browsing is the browser's to
+offer. The control itself is a real button while it is shown, so Tab reaches it
+— and the gap is said out loud rather than papered over with a hover control
+nobody asked for.
+
 ## Quoting is selecting, and the window says text is not selectable
 
 `body { user-select: none }` in `global.css`, and the comment says why: a drag

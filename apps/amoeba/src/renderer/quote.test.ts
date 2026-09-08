@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { quoted, withQuote } from "./quote";
 
-// `selectedIn` is not here: it reads a live Selection, which is a DOM the
-// renderer's vitest environment does not have. What it does is checked in a
-// real window instead — see the probe note in the commit.
+// `spotIn` is not here: it reads a live Selection and a range's rectangle,
+// neither of which the renderer's vitest environment has. What it does is
+// checked in a real window with real pointer events instead — a synthetic
+// Range lies about it, twice over. See the commit.
 
 describe("quoted", () => {
   it("makes a blockquote, so markdown reads it as a quotation", () => {

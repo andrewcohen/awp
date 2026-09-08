@@ -1,6 +1,6 @@
 import type { ChatConfigOption } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Chip } from "./Chip";
 import {
   type Asked,
@@ -18,7 +18,7 @@ import {
 } from "./conversation";
 import { Markdown } from "./Markdown";
 import { chatAnswer, chatConfig, chatFork, chatSend, chatSet, watchChat } from "./daemon";
-import { selectedIn, withQuote } from "./quote";
+import { type Spot, spotIn, withQuote } from "./quote";
 import { colors, text } from "./tokens.stylex";
 
 // The agent as a conversation rather than as a picture of one.
@@ -94,6 +94,22 @@ const Panel = ({
   const [config, setConfig] = useState<ReadonlyArray<ChatConfigOption>>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
+  /**
+   * The highlighted phrase and where it is, or nothing.
+   *
+   * ── highlight, not hover ─────────────────────────────────────────────────
+   *
+   * The first version put a control on every row and revealed it on hover,
+   * which was the wrong reading of the request — "hover or highlight anything
+   * in agent chat and be able to reply to it" is about the *highlight*. A
+   * hover control is a control per row whether or not anybody is pointing at
+   * anything, and it says nothing about which part of the row is meant.
+   *
+   * This is the selection's own rectangle, so the control lands beside the
+   * words that were highlighted.
+   */
+  const [spot, setSpot] = useState<Spot | undefined>(undefined);
   /** How many messages this window has sent, so each can be named. */
   const sent = useRef(0);
 
@@ -150,6 +166,33 @@ const Panel = ({
     }
   }, [grown]);
 
+  useEffect(() => {
+    // ── settled gestures only ──────────────────────────────────────────────
+    //
+    // `selectionchange` fires continuously through a drag, and reading it
+    // there would put a control under the pointer that is still selecting —
+    // the same hazard as the diff panel's line selection, where a render
+    // during a gesture ended the gesture. So the affordance appears on
+    // `pointerup` and on `keyup` (shift+arrows are a selection too), and
+    // `selectionchange` is used only to take it away once the selection has
+    // collapsed.
+    const settle = () => setSpot(spotIn(scroll.current));
+    const collapsed = () => {
+      const now = globalThis.getSelection?.();
+      if (now === null || now === undefined || now.isCollapsed) {
+        setSpot(undefined);
+      }
+    };
+    globalThis.addEventListener("pointerup", settle);
+    globalThis.addEventListener("keyup", settle);
+    document.addEventListener("selectionchange", collapsed);
+    return () => {
+      globalThis.removeEventListener("pointerup", settle);
+      globalThis.removeEventListener("keyup", settle);
+      document.removeEventListener("selectionchange", collapsed);
+    };
+  }, []);
+
   /**
    * Quote a piece of the conversation into the composer.
    *
@@ -165,6 +208,10 @@ const Panel = ({
    */
   const quote = useCallback((words: string) => {
     setDraft((current) => withQuote(current, words));
+    // The highlight has been spent. Left on screen it would keep the control
+    // over a phrase already quoted, and a second press would quote it twice.
+    globalThis.getSelection?.()?.removeAllRanges();
+    setSpot(undefined);
     box.current?.focus();
   }, []);
 
@@ -207,7 +254,7 @@ const Panel = ({
 
   return (
     <div {...stylex.props(styles.chat)} data-column-part="chat">
-      <div {...stylex.props(styles.scroll)}>
+      <div ref={scroll} {...stylex.props(styles.scroll)}>
         {items.length === 0 && held.running === 0 ? (
           // ── the empty state is where the fork belongs ────────────────────
           //
@@ -232,13 +279,7 @@ const Panel = ({
           </div>
         ) : (
           items.map((item) => (
-            <Row
-              key={item.key}
-              item={item}
-              project={project}
-              workspace={workspace}
-              onQuote={quote}
-            />
+            <Row key={item.key} item={item} project={project} workspace={workspace} />
           ))
         )}
 
@@ -254,6 +295,11 @@ const Panel = ({
         )}
         <div ref={bottom} />
       </div>
+
+      {/* Beside the highlight, not in the flow: `position: fixed` at the
+          range's own rectangle. In the flow it would move the text it is
+          about — which is the thing a selection cannot survive. */}
+      {spot !== undefined && <Quote spot={spot} onQuote={quote} />}
 
       <div {...stylex.props(styles.composer)}>
         <div {...stylex.props(styles.box)}>
@@ -380,87 +426,79 @@ const Row = ({
   item,
   project,
   workspace,
-  onQuote,
 }: {
   readonly item: Item;
   readonly project: string;
   readonly workspace: string;
-  readonly onQuote: (text: string) => void;
 }) => {
   if (item.kind === "said") {
-    return <Message item={item} onQuote={onQuote} />;
+    return <Message item={item} />;
   }
   if (item.kind === "ran") {
-    return <Tool item={item} project={project} workspace={workspace} onQuote={onQuote} />;
+    return <Tool item={item} project={project} workspace={workspace} />;
   }
   return <Permission item={item} project={project} workspace={workspace} />;
 };
 
 /**
- * The control that quotes a row, and what it quotes.
+ * The control that quotes the highlighted phrase.
  *
- * ── the selection if there is one, the whole thing if not ─────────────────
+ * ── it appears because something is highlighted ───────────────────────────
  *
- * Both were asked for — "hover or highlight anything in agent chat and be
- * able to reply to it" — and they are one control rather than two: a reply
- * about a whole message is the degenerate case of selecting all of it.
+ * Which is the whole correction over the first version: that one put a button
+ * on every row and revealed it on hover, and a hover control neither waits to
+ * be wanted nor says which part of a message it means. This one exists only
+ * while there is a selection, and sits beside it.
  *
- * ── it is read on the press, which is after the gesture ───────────────────
+ * ── fixed, and clamped to the window ─────────────────────────────────────
  *
- * Nothing about a selection is captured while it is being made. The diff
- * panel's line selection was broken for exactly the opposite reason — a
- * render at `pointerdown` rebuilt the rows the pointer was still moving
- * across — and the rule that came out of it applies here as the easy case:
- * a click on this button is a second gesture, long after the first settled.
+ * `position: fixed` at the range's viewport rectangle, so it does not push
+ * the text it is about — a selection cannot survive its own words moving.
+ * Clamped at the left edge because a phrase highlighted at the start of a
+ * line would otherwise put the control off screen, and the window's rule is
+ * that nothing grows a scrollbar sideways.
  *
- * ── hidden on hover, never `display: none` ───────────────────────────────
+ * ── the keyboard, honestly ───────────────────────────────────────────────
  *
- * The window's mandate: an element outside the layout cannot be tabbed to, so
- * hover-only would mean the feature does not exist without a pointer.
- * `opacity: 0` with a focus rule, the same shape `MoveToThread` uses.
+ * It is a real button in the tree while it is shown, so Tab reaches it and
+ * Return presses it. What this cannot grant is a way to *make* a selection
+ * without a pointer: the transcript is not a focusable region, and caret
+ * browsing is the browser's to offer. Said out loud rather than papered over
+ * with a hover control nobody asked for.
  */
 const Quote = ({
-  from,
-  whole,
-  shown,
+  spot,
   onQuote,
 }: {
-  /** The row's own element, so a selection outside it is not this row's. */
-  readonly from: RefObject<HTMLDivElement | null>;
-  /** What to quote when nothing is selected. */
-  readonly whole: string;
-  /** The row is hovered. Focus reveals it on its own. */
-  readonly shown: boolean;
+  readonly spot: Spot;
   readonly onQuote: (text: string) => void;
 }) => (
   <button
     type="button"
     data-nav-item
-    {...stylex.props(styles.quote, shown && styles.shown)}
-    title="quote this in a reply — select part of it first to quote only that"
-    aria-label="quote this in a reply"
-    onClick={() => onQuote(selectedIn(from.current) ?? whole)}
+    {...stylex.props(styles.quote)}
+    style={{
+      // Dynamic because it follows a selection, which no static rule can
+      // know. Above the phrase, centred on it, and never left of the column.
+      left: Math.max(8, spot.left + spot.width / 2 - QUOTE_WIDTH / 2),
+      top: Math.max(8, spot.top - QUOTE_HEIGHT - 6),
+    }}
+    title="quote what you highlighted into a reply"
+    onClick={() => onQuote(spot.text)}
   >
     quote
   </button>
 );
 
-const Message = ({
-  item,
-  onQuote,
-}: {
-  readonly item: Said;
-  readonly onQuote: (text: string) => void;
-}) => {
-  const row = useRef<HTMLDivElement>(null);
-  const [over, setOver] = useState(false);
+/** The control's own size, so it can be centred on the phrase it is about. */
+const QUOTE_WIDTH = 62;
+
+/** Its height, so it can sit above the phrase rather than over it. */
+const QUOTE_HEIGHT = 24;
+
+const Message = ({ item }: { readonly item: Said }) => {
   return (
-    <div
-      ref={row}
-      onPointerEnter={() => setOver(true)}
-      onPointerLeave={() => setOver(false)}
-      {...stylex.props(styles.item, styles.said, item.role === "thought" && styles.thought)}
-    >
+    <div {...stylex.props(styles.item, styles.said, item.role === "thought" && styles.thought)}>
       <span {...stylex.props(styles.who, item.role === "user" && styles.mine)}>
         {item.role === "user" ? "you" : item.role === "thought" ? "thinking" : "agent"}
         {/* ── a steer says that it is waiting ───────────────────────────────
@@ -476,8 +514,6 @@ const Message = ({
             queued
           </span>
         )}
-        <span {...stylex.props(styles.spacer)} />
-        <Quote from={row} whole={item.text} shown={over} onQuote={onQuote} />
       </span>
       {/* ── markdown for what the agent wrote, and not for what you wrote ──
 
@@ -503,15 +539,11 @@ const Tool = ({
   item,
   project,
   workspace,
-  onQuote,
 }: {
   readonly item: Ran;
   readonly project: string;
   readonly workspace: string;
-  readonly onQuote: (text: string) => void;
 }) => {
-  const row = useRef<HTMLDivElement>(null);
-  const [over, setOver] = useState(false);
   // Shut by default, and open once for anything that went wrong.
   //
   // Output is usually long and usually uninteresting — the row already says
@@ -520,12 +552,7 @@ const Tool = ({
   const [open, setOpen] = useState(item.status === "failed");
 
   return (
-    <div
-      ref={row}
-      onPointerEnter={() => setOver(true)}
-      onPointerLeave={() => setOver(false)}
-      {...stylex.props(styles.item, styles.ran)}
-    >
+    <div {...stylex.props(styles.item, styles.ran)}>
       <span {...stylex.props(styles.status, item.status === "failed" && styles.failed)}>
         {mark(item.status)}
       </span>
@@ -554,11 +581,6 @@ const Tool = ({
             and a subagent doing slow work are the same picture without this,
             and only one of them is worth waiting for. */}
         {stalled(item) !== undefined && <p {...stylex.props(styles.retry)}>{stalled(item)}</p>}
-        {/* Quoting a tool call is the more useful half of this: pointing at
-            the command it ran, or at one line of its output, is exactly the
-            "no, not that" a person wants to say. With nothing selected it
-            quotes the command — the output is usually long and folded away. */}
-        <Quote from={row} whole={`${verb(item)} ${item.title}`} shown={over} onQuote={onQuote} />
         {/* The question about this call, on this call. See the note on `ask`:
             a separate row was a second copy of the command already above it. */}
         {item.ask !== undefined && (
@@ -784,28 +806,35 @@ const styles = stylex.create({
    * be tabbed to, and hover-only means the feature does not exist without a
    * pointer. The same shape `MoveToThread` uses.
    */
+  /**
+   * The control, beside the highlight.
+   *
+   * Raised and outlined, because it is floating over text rather than sitting
+   * in a row — and it appears while somebody is looking at the words it is
+   * over, which is exactly the case the window's animation mandate is about.
+   */
   quote: {
-    alignSelf: "flex-start",
-    flexShrink: 0,
+    position: "fixed",
+    zIndex: 5,
+    width: `${String(QUOTE_WIDTH)}px`,
+    height: `${String(QUOTE_HEIGHT)}px`,
     fontFamily: text.ui,
     fontSize: text.small,
-    padding: "0 0.3rem",
-    borderStyle: "none",
-    backgroundColor: "transparent",
-    color: colors.muted,
+    fontWeight: text.medium,
+    borderStyle: "solid",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: "0.3rem",
+    backgroundColor: colors.raised,
+    color: colors.text,
     cursor: "pointer",
-    opacity: { default: 0, ":hover": 1, ":focus-visible": 1 },
-    transitionProperty: "opacity",
-    transitionDuration: { default: "160ms", "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationName: stylex.keyframes({
+      from: { opacity: 0, transform: "translateY(3px)" },
+      to: { opacity: 1, transform: "none" },
+    }),
+    animationDuration: { default: "160ms", "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
   },
-  /**
-   * Revealed by the row's own hover, held in the row's state.
-   *
-   * The parent's hover cannot be a selector here: StyleX resolves styles at
-   * render, so which of them applies has to be a value the component can
-   * read. `ArchiveThread` is the worked example and this follows it.
-   */
-  shown: { opacity: 1 },
   /** A sentence about a stall, not a state — see the note on the row. */
   retry: {
     marginTop: "0.15rem",
