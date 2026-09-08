@@ -27,6 +27,7 @@ import {
   type SessionIdentity,
   type SessionInfo,
   SessionNotFound,
+  SessionStartFailed,
   ThreadNotFound,
   ThreadStartFailed,
   type WorkspaceFacts,
@@ -45,7 +46,7 @@ import { archiveThreadRef } from "./jobs/archive-thread";
 import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
-import { sessionName } from "./naming";
+import { identityLabels, sessionName } from "./naming";
 import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
@@ -617,6 +618,80 @@ export const layer = AwpRpcs.toLayer(
           }),
           Effect.orDie,
         ),
+
+      // A pure function of the pair, and the reason it is a call at all is in
+      // the protocol: the renderer cannot compose it. No error channel —
+      // there is no question here to answer negatively.
+      WorkspaceDir: ({ project, workspace }) => Effect.succeed(workspacePath(project, workspace)),
+
+      /**
+       * A workspace's agent, started again.
+       *
+       * ── the address is a workspace, and this is what was missing ──────────
+       * Everything else about a workspace outlives its session: the directory,
+       * the bookmark, the thread that claimed it and the conversation on disk.
+       * Only the terminal goes, and until this there was nothing that could
+       * bring one back — so a workspace whose agent had exited read as lost
+       * work, which is exactly what it was reported as.
+       *
+       * Two lookups and two acts, and each pair is here rather than in a
+       * service because it is a translation and not a decision:
+       *
+       *   root     the imported project's, else jj's answer for the workspace
+       *            directory. `sourceRoot` is what makes the fallback right —
+       *            a secondary workspace is not the repository it is a
+       *            checkout of, and this is the one call that knows the
+       *            difference
+       *   label    the title of the thread holding the pair, because the label
+       *            the session used to carry died with it
+       *   start    `zmx run -d`, never attach. See Multiplexer.start
+       *   labels   its own call for the same reason the job has two steps:
+       *            the name is shortened and cannot be split back, so the
+       *            labels are the only unshortened truth
+       *
+       * The agent command comes from the project's config merged over the
+       * global one, which is why the root is resolved before it is read.
+       */
+      SessionStart: ({ project, workspace }) =>
+        Effect.gen(function* () {
+          const dir = workspacePath(project, workspace);
+          const listed = yield* allProjects();
+          const imported = listed.find((one) => one.name === project);
+          const root =
+            imported?.root ??
+            (yield* jj
+              .sourceRoot(dir)
+              .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason }))));
+
+          const settings = yield* config.read(root);
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const claimed = held.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === project && member.workspace === workspace,
+              ),
+          );
+
+          const name = sessionName(project, workspace, AGENT);
+          yield* mux
+            .start({
+              name,
+              cwd: dir,
+              command: settings.agent,
+              // The same two the create job sets, and for the same reason: the
+              // status hooks in a person's Claude Code settings are gated on
+              // them, so an agent started without them reports nothing at all.
+              env: { AWP_WORKSPACE: workspace, AWP_REPO_ROOT: root },
+            })
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+
+          yield* mux
+            .setLabels(name, identityLabels(project, workspace, AGENT, claimed?.title))
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+
+          return name;
+        }),
 
       Attach: ({ session, cols, rows }) =>
         Stream.unwrap(

@@ -22,8 +22,8 @@ import {
  * undefined rather than taking the two halves as arguments.
  */
 const factsFor = (facts: Facts, workspace: Workspace): WorkspaceFacts | undefined => {
-  const id = workspace.sessions[0]?.identity;
-  return id === undefined ? undefined : facts.get(factsKey(id.project, id.workspace));
+  const pair = workspace.pair;
+  return pair === undefined ? undefined : facts.get(factsKey(pair.project, pair.workspace));
 };
 
 // The list of workspaces, and which of them can be opened.
@@ -459,7 +459,9 @@ function Row({
   facts,
   title,
   selected,
+  at,
   onSelect,
+  onOpen,
   thread,
   onThreadsChanged,
 }: {
@@ -477,7 +479,27 @@ function Row({
    */
   readonly title: string | undefined;
   readonly selected: string | undefined;
+  /**
+   * The workspace the window is looking at, whether or not a session is open
+   * in it.
+   *
+   * Beside `selected` rather than instead of it, because the two answer
+   * different questions: this decides which *row* is marked, and the name
+   * decides which of a row's kind chips is. A row whose only session has
+   * exited has no name to match and is still the row somebody is on — see
+   * `sessionAt`, which stopped answering for an ended session.
+   */
+  readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  /**
+   * Open the workspace itself, when there is no session to open.
+   *
+   * The row is an address and not a session — see `unstarted` in
+   * workspaces.ts. A workspace a thread holds and nothing is running in is
+   * still openable: its conversation, its diff and its pull request are all
+   * questions about the checkout, and none of them needs a terminal.
+   */
+  readonly onOpen: (project: string, workspace: string) => void;
   /** The thread holding this workspace, if any. */
   readonly thread: Thread | undefined;
   readonly onThreadsChanged: () => void;
@@ -486,10 +508,18 @@ function Row({
   // a child component and `:hover` on a parent cannot reach across one. Focus
   // is left to CSS — see `trigger` in MoveToThread.
   const [hovered, setHovered] = useState(false);
-  const active = workspace.sessions.some((session) => session.name === selected);
+  const pair = workspace.pair;
+  const active =
+    pair !== undefined && at !== undefined
+      ? pair.project === at.project && pair.workspace === at.workspace
+      : workspace.sessions.some((session) => session.name === selected);
   const live = workspace.sessions.some((session) => !session.ended);
   const primary = openable(workspace);
   const several = workspace.sessions.length > 1;
+  // Nothing is running here, and it is one of ours. A foreign row IS its
+  // session, so it has nothing else to be and stays shut.
+  const stopped = workspace.sessions.length === 0 && workspace.pair !== undefined;
+  const shut = primary === undefined && !stopped;
 
   // Whichever half of project/workspace the name did not use. A `default`
   // workspace is the repository's, so the project is the name and `default`
@@ -562,7 +592,7 @@ function Row({
       <div {...stylex.props(styles.titleRow)}>
         <button
           type="button"
-          disabled={primary === undefined}
+          disabled={shut}
           // What ctrl+j and ctrl+k step through in this column. The row's
           // title, and not the chips or the hover controls beside it — a list
           // that moved through those is a list nobody can predict. See
@@ -571,8 +601,14 @@ function Row({
           // The reason is the tooltip as well as line two. A row that will not
           // say why it is disabled is worse than no row at all.
           title={refusal ?? workspace.address}
-          onClick={() => primary !== undefined && onSelect(primary)}
-          {...stylex.props(styles.title, primary === undefined && styles.titleShut)}
+          onClick={() => {
+            if (primary !== undefined) {
+              onSelect(primary);
+            } else if (pair !== undefined) {
+              onOpen(pair.project, pair.workspace);
+            }
+          }}
+          {...stylex.props(styles.title, shut && styles.titleShut)}
         >
           <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
           <span {...stylex.props(styles.label)}>{shown}</span>
@@ -624,6 +660,19 @@ function Row({
                   ? `${facts.phase} ${facts.done}/${facts.total}`
                   : facts.phase}
               </span>
+            )}
+            {/* Said, because the row is otherwise identical to a running one
+                and the dot alone is a colour somebody has to have learned.
+                The kinds chip would say nothing here — there are none. */}
+            {stopped && (
+              <>
+                {(other !== "" || slug !== undefined) && (
+                  <span aria-hidden {...stylex.props(styles.sep)}>
+                    ·
+                  </span>
+                )}
+                <span {...stylex.props(styles.kind)}>no session</span>
+              </>
             )}
             {(other !== "" || slug !== undefined) && listed.length > 0 && (
               <span aria-hidden {...stylex.props(styles.sep)}>
@@ -680,7 +729,9 @@ function Group({
   group,
   facts,
   selected,
+  at,
   onSelect,
+  onOpen,
   folded,
   onFold,
   onThreadsChanged,
@@ -688,7 +739,11 @@ function Group({
   readonly group: ThreadGroup;
   readonly facts: Facts;
   readonly selected: string | undefined;
+  /** The workspace the window is looking at. See Row's own. */
+  readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  /** Open a workspace that has no session. See Row's own. */
+  readonly onOpen: (project: string, workspace: string) => void;
   readonly onThreadsChanged: () => void;
   /** Only the loose group folds; a thread is small and is the point. */
   readonly folded: boolean;
@@ -731,7 +786,9 @@ function Group({
           facts={factsFor(facts, only)}
           title={group.title}
           selected={selected}
+          at={at}
           onSelect={onSelect}
+          onOpen={onOpen}
           thread={group.thread}
           onThreadsChanged={onThreadsChanged}
         />
@@ -806,7 +863,9 @@ function Group({
                 // it on every child would name the group four times.
                 title={undefined}
                 selected={selected}
+                at={at}
                 onSelect={onSelect}
+                onOpen={onOpen}
                 thread={group.thread}
                 onThreadsChanged={onThreadsChanged}
               />
@@ -861,7 +920,9 @@ export function Sidebar({
   facts,
   threads,
   selected,
+  at,
   onSelect,
+  onOpen,
   onNew,
   onThreadsChanged,
   failure,
@@ -871,7 +932,11 @@ export function Sidebar({
   readonly facts: Facts;
   readonly threads: ReadonlyArray<Thread>;
   readonly selected: string | undefined;
+  /** The workspace the window is looking at. See Row's own. */
+  readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly onSelect: (session: SessionInfo) => void;
+  /** Open a workspace that has no session. See Row's own. */
+  readonly onOpen: (project: string, workspace: string) => void;
   /** Open the new-thread modal. The window owns it — see App.tsx. */
   readonly onNew: () => void;
   /** A workspace changed threads, so the list App holds is out of date. */
@@ -902,7 +967,9 @@ export function Sidebar({
               group={group}
               facts={facts}
               selected={selected}
+              at={at}
               onSelect={onSelect}
+              onOpen={onOpen}
               onThreadsChanged={onThreadsChanged}
               folded={isLoose && !looseOpen}
               onFold={

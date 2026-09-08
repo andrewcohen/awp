@@ -175,9 +175,53 @@ const subscribe = <E>(run: (rpc: AwpClientShape) => Effect.Effect<void, E>): (()
   };
 };
 
+/**
+ * What the daemon actually said, out of a refusal that reached this window.
+ *
+ * ── `String(error)` is the tag, and only the tag ────────────────────────────
+ *
+ * Every refusal in the contract is a `Schema.TaggedError` carrying one field —
+ * `reason` — and none of them sets `message`. So the obvious rendering answers
+ * with the class name and nothing else:
+ *
+ *   String(error)   "SessionStartFailed"
+ *   error.reason    "There is no jj repo in \"…/awp/diff-view\""
+ *
+ * Five places in this window were doing the first, three of them under a
+ * comment saying the second — "the daemon's own sentence; it names the
+ * directory and says whether it is missing". Measured on a real refusal: what
+ * reached the screen was one word, and the field that would have named the
+ * directory was never read. It looked like a panel with nothing to say.
+ *
+ * Falls back to `message` and then to `String`, because a defect that escapes
+ * as an ordinary `Error` still has to render as something.
+ */
+export const said = (error: unknown): string => {
+  const reason = (error as { readonly reason?: unknown } | null)?.reason;
+  if (typeof reason === "string" && reason !== "") {
+    return reason;
+  }
+  const message = error instanceof Error ? error.message : "";
+  return message === "" ? String(error) : message;
+};
+
 /** Every session the multiplexer knows about. */
 export const listSessions = (): Promise<ReadonlyArray<SessionInfo>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.SessionList()));
+
+/**
+ * Start a workspace's agent again, and answer with the session's name.
+ *
+ * Idempotent in the daemon, so pressing twice is one session. The name comes
+ * back so the caller can go to it without waiting for the next listing — see
+ * `SessionStart` in the contract.
+ */
+export const startSession = (project: string, workspace: string): Promise<string> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.SessionStart({ project, workspace })));
+
+/** Where a workspace's checkout is. Only asked when no session carries it. */
+export const workspaceDir = (project: string, workspace: string): Promise<string> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.WorkspaceDir({ project, workspace })));
 
 /** Keystrokes. Fire and forget — see below. */
 export const write = (session: string, data: string): void => {

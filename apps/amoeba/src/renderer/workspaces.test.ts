@@ -313,6 +313,63 @@ describe("groupByThread", () => {
     expect(groups.every((group) => group.thread !== undefined)).toBe(true);
   });
 
+  // ── #122: a workspace with no session used to have no row ────────────────
+  //
+  // Reported as "the test thread is orphaned i think? i cant get into the
+  // chat". The zmx session had been killed; the directory, the bookmark, the
+  // claim and the conversation were all still there, and the thread drew
+  // "nothing yet" over all of it.
+  test("a thread draws a member nothing is running in", () => {
+    const groups = groupByThread(
+      [thread({ members: [{ project: "rowan", workspace: "discounts" }] })],
+      [],
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.workspaces.map((one) => one.address)).toEqual(["rowan.discounts"]);
+    expect(groups[0]?.workspaces[0]?.sessions).toEqual([]);
+    // The pair, and not a string to be split back apart. A row is an address.
+    expect(groups[0]?.workspaces[0]?.pair).toEqual({
+      project: "rowan",
+      workspace: "discounts",
+    });
+  });
+
+  test("a member with a session is not drawn twice", () => {
+    // The whole risk of drawing members as well as sessions. One workspace,
+    // two sources, one row — and the row is the one carrying the sessions.
+    const workspaces = groupByWorkspace([inProject("rowan", "discounts")]);
+    const groups = groupByThread(
+      [thread({ members: [{ project: "rowan", workspace: "discounts" }] })],
+      workspaces,
+    );
+
+    expect(groups[0]?.workspaces).toHaveLength(1);
+    expect(groups[0]?.workspaces[0]?.sessions).toHaveLength(1);
+  });
+
+  test("running members come before idle ones", () => {
+    // A workspace somebody is working in is worth more of the strip than one
+    // nothing is running in, and neither order is what the sessions' own is.
+    const workspaces = groupByWorkspace([inProject("rowan", "discounts")]);
+    const groups = groupByThread(
+      [
+        thread({
+          members: [
+            { project: "beta", workspace: "aaa" },
+            { project: "rowan", workspace: "discounts" },
+          ],
+        }),
+      ],
+      workspaces,
+    );
+
+    expect(groups[0]?.workspaces.map((one) => one.address)).toEqual([
+      "rowan.discounts",
+      "beta.aaa",
+    ]);
+  });
+
   test("an archived thread is not on the strip", () => {
     const groups = groupByThread([thread({ archivedAt: new Date(3000) })], []);
     expect(groups).toEqual([]);

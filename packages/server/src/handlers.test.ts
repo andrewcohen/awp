@@ -25,7 +25,8 @@ import { IntentError, WorkspaceIntent } from "./intent";
 import { type DiffOf, Jj, JjError, type RevisionsIn } from "./jj";
 import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
-import { type WorkspaceDeps, createWorkspace } from "./jobs/create-workspace";
+import { type WorkspaceDeps, createWorkspace, workspacePath } from "./jobs/create-workspace";
+import { sessionName } from "./naming";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
@@ -78,12 +79,20 @@ const fakeMux = (fakes: Fakes) =>
   Layer.succeed(Multiplexer, {
     list: () => Effect.succeed(sessionsFor(fakes)),
     lookup: (name: string) => Effect.succeed(sessionsFor(fakes).find((s) => s.name === name)),
-    // The fake exists to be a Multiplexer, and a Multiplexer can now start a
-    // session. Nothing under test calls it.
-    start: () => Effect.void,
+    // Recorded when a test asks, because the whole of `SessionStart` is *what*
+    // it hands zmx — the directory, the command and the two environment
+    // variables the status hooks are gated on. A handler that returned a name
+    // and started something else would pass any assertion on its reply.
+    start: (options: unknown) => {
+      fakes.zmx?.start.push(options);
+      return Effect.void;
+    },
     send: () => Effect.void,
     kill: () => Effect.void,
-    setLabels: () => Effect.void,
+    setLabels: (name: string, labels: Record<string, string>) => {
+      fakes.zmx?.labels.push({ name, labels });
+      return Effect.void;
+    },
     history: () => Effect.succeed(""),
   });
 
@@ -174,6 +183,8 @@ interface Fakes {
   readonly body?: string | undefined;
   /** What has already been said on the pull request. */
   readonly remarks?: ReadonlyArray<Remark> | undefined;
+  /** Somewhere for the fake multiplexer to write down what it was handed. */
+  readonly zmx?: { readonly start: unknown[]; readonly labels: unknown[] } | undefined;
 }
 
 /** A pull request as `gh` would have answered, with the dull fields filled. */
@@ -1402,6 +1413,64 @@ describe("NoteSend", () => {
     );
 
     expect(Result.isFailure(outcome)).toBe(true);
+  });
+});
+
+// ── #122: a workspace with no session, and the one act it has ─────────────
+//
+// Everything else about a dead workspace is a question — the chat, the diff,
+// the pull request — and each of those already worked without a terminal once
+// the address stopped resolving through a session. The terminal is the only
+// thing genuinely gone, so it is the only thing with a call.
+const zmx = () => ({ start: [] as unknown[], labels: [] as unknown[] });
+
+describe("starting a workspace's agent again", () => {
+  it("starts the agent in the workspace, and answers with the session's name", async () => {
+    const seen = zmx();
+    const name = await run(
+      (rpc) => rpc.SessionStart({ project: "rowan", workspace: "discounts" }),
+      {
+        zmx: seen,
+      },
+    );
+
+    expect(name).toBe(sessionName("rowan", "discounts", "agent"));
+    // The convention every other part of awp already reads — `suggestedBy`
+    // recovers an unlabelled session's identity from exactly this shape.
+    expect(seen.start).toHaveLength(1);
+    expect(seen.start[0]).toMatchObject({
+      name,
+      cwd: workspacePath("rowan", "discounts"),
+      command: ["claude"],
+      // Necessary and not sufficient, and the create job's note says why: the
+      // status hooks in a person's Claude Code settings are gated on both, so
+      // an agent started without them reports nothing at all.
+      env: { AWP_WORKSPACE: "discounts", AWP_REPO_ROOT: "/repos/discounts" },
+    });
+  });
+
+  it("labels the session, because the name cannot be split back apart", async () => {
+    // The label the old session carried died with it, so it is written again
+    // from the records that outlived it. Its own call, like the job's own
+    // second step: a session that started and could not be labelled is a
+    // session, and a step that did two things has an undo for one of them.
+    const seen = zmx();
+    await run((rpc) => rpc.SessionStart({ project: "rowan", workspace: "discounts" }), {
+      zmx: seen,
+    });
+
+    expect(seen.labels).toHaveLength(1);
+    expect(seen.labels[0]).toMatchObject({
+      labels: { awp_project: "rowan", awp_workspace: "discounts", awp_kind: "agent" },
+    });
+  });
+
+  it("answers where a workspace is, because the renderer cannot compose it", async () => {
+    // A pure function of the pair, and a call anyway: the home directory is
+    // not something a browser knows, and the renderer may not import a node
+    // builtin — `import/no-nodejs-modules` is on for exactly this reason.
+    const dir = await run((rpc) => rpc.WorkspaceDir({ project: "rowan", workspace: "discounts" }));
+    expect(dir).toBe(workspacePath("rowan", "discounts"));
   });
 });
 

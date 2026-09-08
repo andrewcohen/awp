@@ -1101,39 +1101,6 @@ records lineage _between_ threads, not order _inside_ one. A field on
 that reads it — a row that says "waiting on beta/tabular-exports" rather than
 looking idle.
 
-## 122. A workspace with no session has an unreachable chat
-
-Reported: "the test thread is orphaned i think? i cant get into the chat" — and
-it was, because the zmx session for that workspace had been killed. The
-workspace was still there, the thread still held it, and the conversation was
-still on disk.
-
-The address is the cause. `/w/$project/$workspace/$kind` is resolved by finding
-a _session_, so a workspace whose session has exited resolves to nothing and
-the agent column has nothing to show — including the chat, **which does not
-need a pty at all**. One ACP conversation per workspace, keyed by directory:
-the session is irrelevant to it.
-
-    now      a session exists  →  the row resolves  →  the chat can be opened
-             nothing running   →  no row selection  →  the conversation is
-                                                       unreachable, and reads
-                                                       as lost work
-
-Three things to decide, and the first is most of it:
-
-    what the address means    a workspace, or a session in one. `sessionAt`
-                              answering undefined is correct for the pane and
-                              wrong for every panel beside it
-    what the pane draws       there is no terminal to attach to, so it says so
-                              — which is honest and is not what happens now
-    starting one              a row for a workspace with nothing running wants
-                              an obvious way to start its agent again, which
-                              is `Multiplexer.start` and has no RPC
-
-Related: #91 (the chat), and the sessions half of the sidebar, which already
-draws a workspace row whether or not anything is running in it — so the
-sidebar is right and the address is the part that is behind.
-
 ## 119. Own the agent's terminals, so a long command is watchable and killable
 
 A command the agent runs for two minutes is, in the chat, a row that says `…` and then eventually says something. It cannot be watched while it runs and cannot be stopped.

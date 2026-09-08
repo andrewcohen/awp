@@ -404,16 +404,36 @@ export function TopBar({
  * display name — only the name zmx knows it by. That is an address rather than
  * a title, so it is drawn as one: whole, in mono, and not pretending to be
  * prose it is not.
+ *
+ * ── the workspace, not the session ────────────────────────────────────────
+ *
+ * `at` is what the window is looking at, and it can be a workspace with
+ * nothing running in it. This used to read `no session` for one, which is a
+ * true sentence about the wrong subject: the header names *where you are*, and
+ * a workspace whose agent has exited is still somewhere. What has no name at
+ * all is `#/`, and that is the only case left saying it.
  */
 function Title({
   session,
+  at,
   facts,
 }: {
   readonly session: SessionInfo | undefined;
+  /** The workspace on screen, session or no session. */
+  readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly facts: WorkspaceFacts | undefined;
 }) {
   if (session === undefined) {
-    return <span {...stylex.props(styles.strong, styles.title)}>no session</span>;
+    return at === undefined ? (
+      <span {...stylex.props(styles.strong, styles.title)}>no session</span>
+    ) : (
+      <span {...stylex.props(styles.named)}>
+        <span {...stylex.props(styles.where)}>{at.project}/</span>
+        <span {...stylex.props(styles.strong, styles.title)}>
+          {facts?.displayName ?? at.workspace}
+        </span>
+      </span>
+    );
   }
 
   const project = session.identity?.project;
@@ -439,6 +459,7 @@ function Title({
 export function AgentBar({
   jobs,
   session,
+  at,
   facts,
   connected,
   collapsed,
@@ -448,7 +469,9 @@ export function AgentBar({
 }: {
   readonly jobs: ReadonlyArray<Job>;
   readonly session: SessionInfo | undefined;
-  /** What is known about the open session's workspace, if anything is. */
+  /** The workspace on screen, whether or not a session is open in it. */
+  readonly at: { readonly project: string; readonly workspace: string } | undefined;
+  /** What is known about the open workspace, if anything is. */
   readonly facts: WorkspaceFacts | undefined;
   readonly connected: boolean;
   readonly collapsed: Collapsed;
@@ -480,7 +503,7 @@ export function AgentBar({
 
           The project does not truncate and the title does. A clipped title is
           still a title; a clipped project is a different project. */}
-      <Title session={session} facts={facts} />
+      <Title session={session} at={at} facts={facts} />
 
       <span {...stylex.props(styles.spacer)} />
 

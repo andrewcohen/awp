@@ -245,6 +245,8 @@ const inbox: Inbox = {
 
 const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
+  WorkspaceDir: (pair) => Effect.succeed(`/ws/${pair.project}/${pair.workspace}`),
+  SessionStart: (pair) => Effect.succeed(`awp.${pair.project}.${pair.workspace}.agent`),
   Attach: ({ session }) =>
     session === "gone"
       ? Stream.fail(new AttachRefused({ session, reason: "no such session" }))

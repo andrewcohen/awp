@@ -944,6 +944,125 @@ something already known, and would race the first listing on launch.
 and only when the hash is empty. A reload keeps the hash on its own; what a
 history cannot survive is the application being quit and started again.
 
+### An address names a workspace; only the pane wants a session
+
+`sessionAt` was the only question asked of an address, and every panel beside
+the terminal was answered by it. So a workspace whose agent had exited had no
+chat, no diff and no pull request — while its directory, its bookmark, its
+thread and its conversation on disk were all exactly where they were left.
+
+```
+  a session exists   →  the row resolves  →  everything opens
+  nothing running    →  nothing resolves  →  the conversation is unreachable,
+                                             and reads as lost work
+```
+
+Reported as "the test thread is orphaned i think? i cant get into the chat",
+which is the sentence to keep: **nothing about the symptom points at the
+address.** The chat needs no pty at all — `ChatOpen` takes a pair and derives
+the directory — so the one part of the window that could not have cared was
+the part that stopped working.
+
+Two questions now, and each caller asks the one it means:
+
+```
+  sessionAt   the session, if it is here and can be attached to   the pane
+  placeAt     the workspace, running or not                       everything else
+```
+
+**`placeAt` is gated on the pair being _known_, by two sources.** A session
+carrying the identity is the ordinary case; a live thread holding the pair is
+what covers the case this exists for. A remembered address survives a quit and
+the workspace it named may not, so an unknown pair answers nothing rather than
+opening panels onto a directory nothing has heard of.
+
+**`ended` is a third refusal, and it was found in the wild.** The old test was
+presence plus no refusal, and zmx keeps an exited session in `zmx ls`:
+
+```
+  name=awp.awp.test.agent  ended=1788891181  exit_code=127
+```
+
+So the pane attached to a process that was not running, which draws a blank
+terminal — indistinguishable from a terminal that failed to start. Read the
+daemon's `ended` and not zmx's, incidentally: zmx's is about the last **task**,
+and `withProcesses` overwrites it from the process table. That distinction is
+already recorded further up and it is what makes the field usable here.
+
+**The sidebar draws a thread's members, not only its sessions.** Every row on
+that strip came from `groupByWorkspace(sessions)`, so a member with nothing
+running had no row and its thread drew "nothing yet" over all of it.
+`unstarted` builds the row from the member; running rows come first, and a
+member already covered by a session is not drawn twice.
+
+`Workspace.pair` exists because of that. Every caller used to read
+`sessions[0].identity`, which is nothing for a row with no sessions — and
+`address` is not a substitute: it is `project.workspace` for a tooltip, and a
+project name may contain a dot, so splitting it back is the same mistake as
+splitting a session name.
+
+**The one act is `SessionStart`, and it is on the pane's face only.** Everything
+else about a dead workspace is a question; the terminal is the thing that is
+actually gone. `NoSession` replaced the _fixture_, which is what `Pane` drew
+with no session name — colour ramps and box drawing, which reads as a bug in
+the terminal rather than as an answer.
+
+**`WorkspaceDir` is a call for a pure function, and has to be.** The path is
+`~/.awp/workspaces/<project>/<workspace>`, and the renderer cannot compose it:
+a browser does not know the home directory, and `import/no-nodejs-modules` is
+on for the renderer for exactly this reason. Same argument as `SessionIdentity`
+being on the wire — a client re-deriving a daemon's rule is a second
+implementation, and the copy that drifts is the one nobody tests.
+
+`bun run probe:session-start` is what proves the act, and one line of its
+output is the whole reason it exists:
+
+```
+  before        awp.awp.test.agent ended=false exit=127
+  started       awp.awp.test.agent
+  after         ended=false exit=127 pid=48016      ← byte for byte "before"
+  running in it claude                              ← the only line that answers it
+```
+
+**Every field in the listing is about the session, and none of them says
+whether the agent came up.** `exit_code` is the previous task's and stays the
+newest one until the new task finishes; `ended` is about the process, which is
+the shell either way. The first read of a start that worked perfectly is
+identical to the read before it, and was taken as "nothing happened" once.
+`busy` is the field that answers it, is deliberately not on the wire, and the
+probe therefore reads a child of the session's pid — the first half of the same
+rule `withProcesses` applies.
+
+### `String(error)` is the tag, and only the tag
+
+Five places in the renderer rendered a refusal as `String(error)`, three of them
+under a comment saying it was "the daemon's own sentence, which names the
+directory". It is not. Every refusal in the contract is a `Schema.TaggedError`
+carrying one field, `reason`, and none of them sets `message`:
+
+```
+  String(error)   "SessionStartFailed"
+  error.reason    'could not run zmx in …/awp/diff-view (does the directory
+                   exist, and is zmx on PATH?)'
+```
+
+What that looked like: a button that appeared to do nothing at all. The click
+ran, the daemon refused, the panel set its failure to one word and drew it in a
+row nobody would read as an error. `said` in `daemon.ts` is the one reader, and
+it falls back to `message` then `String` so a real defect still renders.
+
+Found by instrumenting the click, having first read the button as broken — the
+general shape being the one already recorded twice here: **a declaration being
+emitted is not evidence that anything consumes it**, and a value being _set_ is
+not evidence that what was set says anything.
+
+The same run improved the sentence it was failing to show. `runIn` in `zmx.ts`
+answered every spawn failure with "zmx failed (is it installed and on PATH?)",
+which is right for `run` — nothing else can stop a spawn with no `cwd` — and
+wrong for the one call that has a directory: **a directory that does not exist
+is also a spawn failure.** A confident wrong cause is worse than an uncertain
+right one, because it sends the reader to the wrong file.
+
 - **The shell is Electron, and its three bundles are not Vite's.** `main`,
   `preload-host` and `preload-guest` come out of `scripts/build-electron.ts`
   through `Bun.build`, because what they need is two module formats and no Babel

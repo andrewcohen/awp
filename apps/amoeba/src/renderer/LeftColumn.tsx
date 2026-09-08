@@ -96,6 +96,7 @@ export function LeftColumn({
   jobs,
   threads,
   selected,
+  at,
   onSelect,
   onNew,
   onThreadsChanged,
@@ -108,6 +109,8 @@ export function LeftColumn({
   readonly jobs: ReadonlyArray<Job>;
   readonly threads: ReadonlyArray<Thread>;
   readonly selected: string | undefined;
+  /** The workspace the window is looking at, session or no session. */
+  readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly onSelect: (session: SessionInfo) => void;
   readonly onNew: () => void;
   readonly onThreadsChanged: () => void;
@@ -146,7 +149,12 @@ export function LeftColumn({
           facts={facts}
           threads={threads}
           selected={selected}
+          at={at}
           onSelect={onSelect}
+          // The same callback the inbox opens a row with: both of them name a
+          // pair rather than a session, because neither knows — or needs to
+          // know — which of a workspace's sessions happens to be running.
+          onOpen={onOpenWorkspace}
           onNew={onNew}
           onThreadsChanged={onThreadsChanged}
           failure={failure}

@@ -1,4 +1,4 @@
-import type { SessionIdentity, SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
+import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
 
 // The sidebar lists workspaces. zmx lists sessions. This is the difference.
 //
@@ -67,7 +67,17 @@ export type Workspace = {
    * identical words where the distinguishing one should be.
    */
   readonly otherIdent: string | undefined;
-  /** Ordered: the primary kind first, then the rest by name. */
+  /**
+   * The pair this row is, or absent for a session awp did not create.
+   *
+   * Explicit rather than read back off `sessions[0].identity`, which is what
+   * every caller used to do and which stopped working the moment a row could
+   * have no sessions at all. {@link Workspace.address} is not a substitute:
+   * it is `project.workspace` for a tooltip, and a project name may contain a
+   * dot, so splitting it back is the same mistake as splitting a session name.
+   */
+  readonly pair: { readonly project: string; readonly workspace: string } | undefined;
+  /** Ordered: the primary kind first, then the rest by name. Possibly none. */
   readonly sessions: ReadonlyArray<SessionInfo>;
   /**
    * When the oldest of its sessions was started, or 0 if zmx did not say.
@@ -121,6 +131,7 @@ export const groupByWorkspace = (
       foreign.push({
         key: session.name,
         address: session.name,
+        pair: undefined,
         label: undefined,
         name: session.name,
         otherIdent: undefined,
@@ -142,6 +153,7 @@ export const groupByWorkspace = (
     return {
       key,
       address: key,
+      pair: { project, workspace },
       // Taken from whichever session carries one. Only the agent is labelled
       // today — the job writes it when it starts that session — so an editor
       // opened later beside it must not decide the workspace has no label.
@@ -235,15 +247,44 @@ export const threadHolding = (
       )?.id;
 
 const claimant = (threads: ReadonlyArray<Thread>, workspace: Workspace): Thread | undefined => {
-  const id = workspace.sessions[0]?.identity;
-  if (id === undefined || workspace.foreign) {
+  const pair = workspace.pair;
+  if (pair === undefined || workspace.foreign) {
     return undefined;
   }
   return threads.find((thread) =>
     thread.members.some(
-      (member) => member.project === id.project && member.workspace === id.workspace,
+      (member) => member.project === pair.project && member.workspace === pair.workspace,
     ),
   );
+};
+
+/**
+ * A workspace a thread holds and nothing is running in.
+ *
+ * ── a row for something that has no session ──────────────────────────────
+ * Every row on this strip used to be built from a *session*, so a workspace
+ * whose agent had exited had no row — and its thread drew "nothing yet" over
+ * a directory, a bookmark and a conversation that were all still there. It
+ * was reported as lost work, and it read exactly like that.
+ *
+ * What it cannot have: `label`, which lived on the session's `awp_label` and
+ * died with it, and `since`, which is when a session started. The row falls
+ * back to the slug and sorts last, both of which are what an unknown answers
+ * everywhere else here.
+ */
+const unstarted = (member: { readonly project: string; readonly workspace: string }): Workspace => {
+  const isDefault = member.workspace === DEFAULT;
+  return {
+    key: `${member.project}.${member.workspace}`,
+    address: `${member.project}.${member.workspace}`,
+    pair: { project: member.project, workspace: member.workspace },
+    label: undefined,
+    name: isDefault ? member.project : member.workspace,
+    otherIdent: isDefault ? DEFAULT : member.project,
+    sessions: [],
+    since: 0,
+    foreign: false,
+  };
 };
 
 /**
@@ -328,12 +369,23 @@ export const groupByThread = (
     claimed.set(thread.id, [...(claimed.get(thread.id) ?? []), workspace]);
   }
 
-  const groups: ThreadGroup[] = live.map((thread) => ({
-    key: thread.id,
-    title: thread.title === "" ? "untitled" : thread.title,
-    thread,
-    workspaces: claimed.get(thread.id) ?? [],
-  }));
+  // A thread's own members, whether or not anything is running in them. The
+  // sessions decide the order — see `unstarted` — and a member already covered
+  // by one is not drawn twice.
+  const groups: ThreadGroup[] = live.map((thread) => {
+    const running = claimed.get(thread.id) ?? [];
+    const seen = new Set(running.map((one) => one.key));
+    const idle = thread.members
+      .map(unstarted)
+      .filter((one) => !seen.has(one.key))
+      .toSorted((a, b) => a.address.localeCompare(b.address));
+    return {
+      key: thread.id,
+      title: thread.title === "" ? "untitled" : thread.title,
+      thread,
+      workspaces: [...running, ...idle],
+    };
+  });
 
   // Newest thread first — a thread is made when work starts, so the one at the
   // top is the one being worked on. Workspaces inside stay in the order
@@ -374,7 +426,7 @@ export const groupByThread = (
  * one to show beside a workspace is that workspace's.
  */
 export const prOf = (
-  identity: SessionIdentity | undefined,
+  identity: { readonly project: string; readonly workspace: string } | undefined,
   threads: ReadonlyArray<Thread>,
 ): { readonly project: string; readonly number: number } | undefined => {
   if (identity === undefined) {

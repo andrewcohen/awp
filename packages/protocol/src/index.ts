@@ -1604,6 +1604,19 @@ export const ChatConfigOption = Schema.Struct({
 
 export type ChatConfigOption = (typeof ChatConfigOption)["Type"];
 
+/**
+ * A session could not be started again.
+ *
+ * A sentence rather than a set of cases, for the same reason
+ * {@link ProjectImportFailed} carries one: every cause is a thing about the
+ * machine — no such project, a workspace directory that has been removed, zmx
+ * refusing — and the only useful rendering of any of them is what was said.
+ */
+export class SessionStartFailed extends Schema.TaggedError<SessionStartFailed>()(
+  "SessionStartFailed",
+  { reason: Schema.String },
+) {}
+
 /** The conversation could not be had. */
 export class ChatUnavailable extends Schema.TaggedError<ChatUnavailable>()("ChatUnavailable", {
   reason: Schema.String,
@@ -1613,6 +1626,54 @@ export class AwpRpcs extends RpcGroup.make(
   /** Every session the multiplexer knows about, awp's or not. */
   Rpc.make("SessionList", {
     success: Schema.Array(SessionInfo),
+  }),
+
+  /**
+   * Where a workspace's checkout is.
+   *
+   * ── why this is asked rather than composed ────────────────────────────────
+   * `~/.awp/workspaces/<project>/<workspace>` is the convention, and the
+   * renderer could write that string itself — except that it could not: the
+   * home directory is not something a browser knows, and the renderer may not
+   * import a node builtin at all (`import/no-nodejs-modules`, which is on for
+   * exactly this reason).
+   *
+   * It is the same argument as {@link SessionIdentity} being on the wire. A
+   * client re-deriving a rule the daemon owns is a second implementation of
+   * it, and the copy that drifts is the one nobody tests.
+   *
+   * Asked only for a workspace with no session, because a session already
+   * carries `startDir`. Answers the path whether or not anything is there —
+   * the callers are questions about a checkout, and "no such directory" is
+   * theirs to report in their own words.
+   */
+  Rpc.make("WorkspaceDir", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.String,
+  }),
+
+  /**
+   * Start a workspace's agent session again.
+   *
+   * The one act the sidebar could not offer, and the reason it had to exist is
+   * in the address rather than in the session: a workspace whose session has
+   * exited is still a workspace — its directory, its bookmark, its thread and
+   * its conversation are all still there — and until this there was no way
+   * back to a terminal in it short of a shell.
+   *
+   * **The agent kind only.** An editor or a user action is configured per
+   * project and started on purpose; the agent is the one every workspace has
+   * and the one whose absence is what makes a row look dead.
+   *
+   * Idempotent, because `Multiplexer.start` is: a name that is already there
+   * is left exactly as it was, which is also what stops this ever touching a
+   * session it did not create. Answers with the session's name so the caller
+   * can go straight to it rather than waiting for the next listing.
+   */
+  Rpc.make("SessionStart", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.String,
+    error: SessionStartFailed,
   }),
 
   /**

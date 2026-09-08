@@ -10,8 +10,10 @@ import { Divider } from "./Divider";
 import { LeftColumn } from "./LeftColumn";
 import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Chat } from "./Chat";
+import { NoSession } from "./NoSession";
 import { Pane } from "./Pane";
-import { addressFrom, addressOf, pathOf, sessionAt } from "./address";
+import { addressFrom, addressOf, pathOf, placeAt, sessionAt } from "./address";
+import { useWorkspaceDir } from "./useWorkspaceDir";
 import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
 import {
   rememberCollapsed,
@@ -290,9 +292,17 @@ export function App() {
   const { projects, reload: reloadProjects } = useProjects();
   const facts = useFacts();
 
-  // What is open: the session the address names, if it is here and can be
-  // attached to. Derived, never written back — see `sessionAt`.
+  // What is open, asked two ways, and the difference is the whole of #122.
+  //
+  //   open   the session the address names, if it is here and can be attached
+  //          to. The pane's question, and nobody else's
+  //   here   the workspace it names, whether or not anything is running in it.
+  //          Everything that is a question about the checkout — the chat, the
+  //          diff, the pull request — asks this one
+  //
+  // Both derived, never written back. See `sessionAt` and `placeAt`.
   const open = sessionAt(address, sessions);
+  const here = placeAt(address, sessions, threads);
 
   // Which pull request the open workspace is about, if its thread names one.
   //
@@ -301,7 +311,11 @@ export function App() {
   // something already on screen. `prs[0]` because a thread may be about several
   // and the panel shows one — the first is the one it was started for, and a
   // second tab per pull request is a strip nobody asked for.
-  const openPr = prOf(open?.identity, threads);
+  const openPr = prOf(here, threads);
+
+  // The checkout's directory when no session is carrying it. Asked only then —
+  // see `useWorkspaceDir`.
+  const elsewhere = useWorkspaceDir(here?.project, here?.workspace, open === undefined);
 
   // The preference belongs to the workspace, and what is open changes under
   // it. Read on selection rather than kept in a map: localStorage already
@@ -310,8 +324,8 @@ export function App() {
   // Two strings rather than the identity object: a fresh object every render
   // is a dependency that always differs, so the effect would run on every
   // render and read localStorage each time.
-  const openProject = open?.identity?.project;
-  const openWorkspace = open?.identity?.workspace;
+  const openProject = here?.project;
+  const openWorkspace = here?.workspace;
   useEffect(() => {
     setFace(
       openProject === undefined || openWorkspace === undefined
@@ -446,6 +460,10 @@ export function App() {
                 // same records.
                 jobs={jobs}
                 selected={open?.name}
+                // Which row is marked, which is not the same question as
+                // which session is attached — see Row's `at`. A workspace
+                // whose agent has exited is still the one on screen.
+                at={here}
                 onSelect={(session) => {
                   void navigate({ to: pathOf(addressOf(session)) });
                 }}
@@ -506,19 +524,21 @@ export function App() {
           <AgentBar
             jobs={jobs}
             session={open}
+            // Where the window is, which is not the same as which session is
+            // attached: a workspace whose agent has exited is still somewhere,
+            // and the header used to read `no session` for one.
+            at={here}
             facts={
-              open?.identity === undefined
-                ? undefined
-                : facts.get(factsKey(open.identity.project, open.identity.workspace))
+              here === undefined ? undefined : facts.get(factsKey(here.project, here.workspace))
             }
             connected={connected}
             collapsed={collapsed}
-            face={open?.identity === undefined ? undefined : face}
+            face={here === undefined ? undefined : face}
             onFace={(chosen) => {
-              if (open?.identity === undefined) {
+              if (here === undefined) {
                 return;
               }
-              rememberFace(open.identity.project, open.identity.workspace, chosen);
+              rememberFace(here.project, here.workspace, chosen);
               setFace(chosen);
             }}
             onFold={(which) => fold(which)()}
@@ -533,7 +553,7 @@ export function App() {
               is the newer code by a wide margin — if it throws, the terminal
               underneath it is exactly what somebody needs to still be able to
               reach. */}
-          {open?.identity !== undefined && face === "chat" ? (
+          {here !== undefined && face === "chat" ? (
             <Boundary where="the chat">
               {/* Keyed, so a different workspace remounts rather than being
                   cleared by an effect. Clearing in an effect is a second
@@ -541,9 +561,22 @@ export function App() {
                   it leaves one frame in which the previous conversation is on
                   screen under the new workspace's name. */}
               <Chat
-                key={`${open.identity.project}/${open.identity.workspace}`}
-                project={open.identity.project}
-                workspace={open.identity.workspace}
+                key={`${here.project}/${here.workspace}`}
+                project={here.project}
+                workspace={here.workspace}
+              />
+            </Boundary>
+          ) : here !== undefined && open === undefined ? (
+            /* A workspace with no terminal in it, which used to draw the
+               *fixture* — a test pattern where an answer belonged. See
+               NoSession, which is also the only place a dead workspace has
+               anything to press. */
+            <Boundary where="the terminal">
+              <NoSession
+                key={`${here.project}/${here.workspace}`}
+                project={here.project}
+                workspace={here.workspace}
+                onStarted={reloadSessions}
               />
             </Boundary>
           ) : (
@@ -587,10 +620,13 @@ export function App() {
                 // makes the `PR` tab exist at all — derived from the threads
                 // this window already holds rather than asked for.
                 pr={openPr}
-                thread={threadHolding(threads, open?.identity?.project, open?.identity?.workspace)}
-                dir={open?.startDir}
-                project={open?.identity?.project}
-                workspace={open?.identity?.workspace}
+                thread={threadHolding(threads, here?.project, here?.workspace)}
+                // The session's own directory when there is one, and the
+                // workspace's otherwise — see `useWorkspaceDir`. A diff is a
+                // question about a checkout and needs no terminal in it.
+                dir={open?.startDir ?? elsewhere}
+                project={here?.project}
+                workspace={here?.workspace}
                 scheme={scheme}
               />
             </Boundary>

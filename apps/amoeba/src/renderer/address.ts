@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@awp-kit/protocol";
+import type { SessionInfo, Thread } from "@awp-kit/protocol";
 
 // An address, and the two questions asked of one.
 //
@@ -84,9 +84,20 @@ export const addressFrom = (params: Record<string, string | undefined>): Address
 /**
  * The session an address names, if it is here and can be attached to.
  *
- * Both halves matter. A remembered address may name a session that has since
- * ended, and one the daemon refuses — because it is the session the daemon
- * itself is running in — is present in the listing and must not be opened.
+ * Three halves now, and the third was found in the wild. A remembered address
+ * may name a session that has since gone from the listing; one the daemon
+ * refuses — because it is the session the daemon itself is running in — is
+ * present and must not be opened; and one whose process has **exited** is
+ * present, unrefused, and cannot be attached to either:
+ *
+ *   name=awp.awp.test.agent  ended=1788891181  exit_code=127
+ *
+ * zmx keeps an ended session in `zmx ls`, so the old test — a name in the
+ * listing with no refusal — answered with it, and the pane attached to a
+ * process that was not running. What that looks like is a blank terminal,
+ * which is also what a terminal that failed to draw looks like. `placeAt`
+ * still resolves the workspace from it, so the answer here being nothing is
+ * what puts the start control on screen rather than a dead pane.
  *
  * Nothing is written back when this answers undefined. The address is what was
  * asked for and the listing is what is true; correcting one from the other
@@ -107,5 +118,60 @@ export const sessionAt = (
         session.identity.workspace === address.workspace &&
         session.identity.kind === address.kind,
   );
-  return found?.refusal === undefined ? found : undefined;
+  return found?.refusal === undefined && found?.ended !== true ? found : undefined;
+};
+
+/**
+ * The workspace an address names, whether or not anything is running in it.
+ *
+ * ── the address is a workspace, and `sessionAt` is the narrower question ────
+ *
+ * Everything beside the terminal used to be drawn from `sessionAt`, which
+ * meant a workspace whose agent had exited had no chat, no diff and no pull
+ * request — though its directory, its bookmark, its thread and its
+ * conversation were all still there. It was reported as lost work, and from
+ * the outside that is exactly what it was:
+ *
+ *   a session exists   →  the row resolves  →  everything opens
+ *   nothing running    →  nothing resolves  →  the conversation is unreachable
+ *
+ * So the two questions are separate, and each caller asks the one it means.
+ * `sessionAt` is for attaching — the pane, and nothing else. This is for
+ * everything that is a question about the *checkout*, none of which needs a
+ * pty at all.
+ *
+ * Gated on the workspace being *known*, and by two sources rather than one. A
+ * session carrying the identity is the ordinary case; a live thread holding
+ * the pair is what covers the one this exists for. A remembered address that
+ * names neither answers undefined rather than opening panels onto a directory
+ * nothing has ever heard of.
+ *
+ * A foreign session — `/s/<name>` — is not a workspace and never resolves
+ * here. It has no identity, so there is nothing to hold a conversation in and
+ * the pane is the only honest answer for it.
+ */
+export const placeAt = (
+  address: Address,
+  sessions: ReadonlyArray<SessionInfo>,
+  threads: ReadonlyArray<Thread>,
+): { readonly project: string; readonly workspace: string; readonly kind: string } | undefined => {
+  if (address.at !== "workspace") {
+    return undefined;
+  }
+  const known =
+    sessions.some(
+      (session) =>
+        session.identity?.project === address.project &&
+        session.identity.workspace === address.workspace,
+    ) ||
+    threads.some(
+      (thread) =>
+        thread.archivedAt === undefined &&
+        thread.members.some(
+          (member) => member.project === address.project && member.workspace === address.workspace,
+        ),
+    );
+  return known
+    ? { project: address.project, workspace: address.workspace, kind: address.kind }
+    : undefined;
 };
