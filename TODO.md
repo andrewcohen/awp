@@ -1030,6 +1030,69 @@ The second is the answer and it is already a task. This is the strongest
 argument for #93 there is: without it, "many agents, one thread" is a claim the
 sidebar makes and nothing else honours.
 
+### There is no captain, and there is no one agent over many repos
+
+Both were asked directly and they are the same argument, which is why they are
+written down together: **each would be a thing with no workspace.** Every
+per-workspace thing in this window is keyed by one — `WorkspaceFacts`, the diff
+panel, the PR panel, the bookmark, `sessionName`, the address in the URL — so
+an agent that spans repositories has no row to be drawn in, and gets drawn as
+belonging to one of them while invisibly touching the rest. That is a lie the
+window would be telling.
+
+**A captain would also be a second copy of what the store already holds.**
+
+    what the work is        the thread record: title, members, PRs, lineage
+    what each agent is on   WorkspaceFacts, and the chat's turn state
+    what must happen next   the jobs runner: ordered steps, resume,
+                            compensation
+    what a person wants     the person, sitting in the window
+
+A captain's understanding lives in a context window that dies with its
+session; the thread's lives in sqlite. This file's own rule covers the rest: a
+client re-deriving the rule is a second implementation, and the copy that
+drifts is the one nobody tests. A captain summarising the api agent's work for
+the frontend agent is that copy, and it has to summarise work it has no context
+for.
+
+**What the agents actually lack is sight, not a chairman.**
+
+    captain   api agent → captain → summary → frontend agent   three hops,
+                                                               one of them lossy
+    MCP       the frontend agent asks the daemon what its thread holds
+
+Which is (2) above, and it closes the only thing one-agent-many-repos was
+winning on — a single context that knows both sides.
+
+**Real ordering is a rule, not a judgement.** "The api PR lands first" belongs
+in the store with a step that waits, in the runner that already resumes and
+compensates. Anything a captain would do that must survive a restart has to be
+there anyway: a step resumed by a restarted daemon has only its record.
+
+### When one agent over several repositories is right anyway
+
+It is not never, and the case is specific: **when it is honestly one edit that
+touches several repositories.** Rename a field in the shared contract and fix
+the two consumers — one intention, done in order, nothing to coordinate. That
+is not two conversations.
+
+So the question is per thread rather than global:
+
+    one change across repos     one agent. It is sequential anyway
+    two changes, one outcome    an agent each. "Add the exports to the api"
+                                and "show them in the ui" are two
+                                conversations with two branches and two PRs
+
+Left unbuilt until somebody hits the coupled case and wants it. When they do,
+the session side is small — `session/new` takes `additionalDirectories`, which
+the adapter advertises in `sessionCapabilities` — and the work is the
+**sidebar's**: deciding how to draw one agent sitting across two rows. Which is
+the same unanswered question as the captain's, and the reason neither is built.
+
+The conditions that would change this: more members than a person can hold in
+their head, work running unattended overnight, or a decision that genuinely
+needs a model rather than a rule. None of them hold yet.
+
 ### 3. No member waits on another
 
 "The frontend change lands after the api PR" has nowhere to live. `parentId`
@@ -1037,22 +1100,6 @@ records lineage _between_ threads, not order _inside_ one. A field on
 `thread_members` is the cheap version; what makes it worth having is something
 that reads it — a row that says "waiting on beta/tabular-exports" rather than
 looking idle.
-
-### The alternative, and why it is not the default
-
-**One agent could span repositories.** `session/new` accepts
-`additionalDirectories`, advertised in the adapter's own
-`sessionCapabilities` — so a single conversation could hold two checkouts, and
-the coordination problem in (2) would evaporate.
-
-It is still the wrong default here, and the reason is not preference: every
-per-workspace thing in this window is keyed by workspace. `WorkspaceFacts`, the
-diff panel's revision list, the PR panel, the bookmark, `sessionName`, the
-address in the URL. One agent over two checkouts has no single answer to "which
-diff am I looking at", and the sidebar has nowhere to draw it.
-
-Worth measuring if MCP coordination turns out too thin — and it is cheaper than
-it looks, which is the part to remember rather than the conclusion.
 
 ## 122. A workspace with no session has an unreachable chat
 
