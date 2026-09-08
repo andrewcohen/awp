@@ -294,6 +294,24 @@ const Mermaid = ({ source }: { readonly source: string }) => {
 const styles = stylex.create({
   block: { margin: "0.5rem 0", minWidth: 0, overflowX: "auto" },
   diagram: { display: "flex", justifyContent: "center" },
+  // ── a plain fence SCROLLS, it does not wrap ──────────────────────────────
+  //
+  // It was `pre-wrap` with `overflow-wrap: anywhere`, which is the right
+  // treatment for a paragraph and the wrong one here. A fence with no
+  // language on it is nearly always preformatted text whose line breaks *are*
+  // the content — an ascii diagram, a column of measurements, a command —
+  // and wrapping destroys the one thing the fence was preserving:
+  //
+  //     now       one list per Claude Code session, on disk, found by mtime
+  //
+  //     now       one list          ← the same three lines, wrapped into a
+  //     per Claude Code               280px column. Every column gone
+  //     session, on disk,
+  //
+  // Found in the tasks panel, whose bodies are sections of a TODO.md and are
+  // full of them. It agrees with `block` above, which is what a *highlighted*
+  // fence gets — the two disagreeing meant a fence's language decided whether
+  // its alignment survived.
   plain: {
     fontFamily: text.mono,
     fontSize: text.small,
@@ -302,8 +320,9 @@ const styles = stylex.create({
     borderRadius: "0.3rem",
     padding: "0.5rem 0.6rem",
     margin: "0.5rem 0",
-    whiteSpace: "pre-wrap",
-    overflowWrap: "anywhere",
+    minWidth: 0,
+    whiteSpace: "pre",
+    overflowX: "auto",
   },
   drawing: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
   broken: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },

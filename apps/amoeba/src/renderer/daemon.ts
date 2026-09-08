@@ -7,6 +7,7 @@ import {
 } from "@awp-kit/protocol/client";
 import type {
   AgentTask,
+  Task,
   ChatConfigOption,
   ChatDelivery,
   ChatUpdate,
@@ -698,6 +699,18 @@ export const sendNote = (project: string, workspace: string, note: PageNote): Pr
  */
 export const listTasks = (from: string): Promise<ReadonlyArray<AgentTask>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.TaskList({ from })));
+
+/**
+ * Every task awp holds, filtered by tag.
+ *
+ * Distinct from {@link listTasks}, which is one session's own list keyed by a
+ * directory. This one needs no directory at all — the store is the point, and
+ * a workspace with nothing running still has tasks written down about it.
+ */
+export const listBoard = (tags?: ReadonlyArray<string>): Promise<ReadonlyArray<Task>> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.TaskBoard(tags === undefined ? {} : { tags })),
+  );
 
 /**
  * Ask the agent to pick one task up, now.

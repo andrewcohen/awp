@@ -1,7 +1,9 @@
-import type { AgentTask } from "@awp-kit/protocol";
+import type { AgentTask, Task } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
-import { listTasks, sendTask } from "./daemon";
+import { listBoard, listTasks, sendTask } from "./daemon";
+import { Markdown } from "./Markdown";
+import { type Listed, merge } from "./tasklist";
 import { colors, space, text } from "./tokens.stylex";
 
 // What the agent in this workspace has written down for itself.
@@ -37,6 +39,17 @@ import { colors, space, text } from "./tokens.stylex";
 // So the description is out of the layout entirely until the subject is
 // clicked. That makes the panel a list of titles, which is what it should have
 // been, and the reading of one task a deliberate act.
+//
+// ── two sources, one list ──────────────────────────────────────────────────
+//
+// The session's list is not the only one any more. `TaskBoard` answers what
+// awp itself holds — a project's TODO.md, tagged and durable — and the two are
+// drawn as one queue with the source as a mark on the row. `tasklist.ts` says
+// why one list rather than two sections, and why nothing is deduplicated.
+//
+// The board needs no directory, which changes what an empty panel means: a
+// workspace with nothing running still has tasks written down about it, so
+// this panel is no longer blank when no session is open.
 //
 // ── done tasks are a count, not rows ───────────────────────────────────────
 //
@@ -174,12 +187,26 @@ const styles = stylex.create({
     ":hover": { color: colors.text, borderColor: colors.muted },
   },
   shown: { opacity: 1 },
+  // The scope control. A button that reads as a label until it is hovered —
+  // the panel's own noun, and pressing it widens the question.
+  scope: {
+    marginInlineStart: "auto",
+    borderStyle: "none",
+    backgroundColor: "transparent",
+    color: colors.muted,
+    fontFamily: text.mono,
+    fontSize: text.small,
+    cursor: "pointer",
+    padding: "0.1rem 0.25rem",
+    borderRadius: "0.2rem",
+    ":hover": { color: colors.text, backgroundColor: colors.raised },
+  },
   said: { color: colors.live },
   failed: { color: colors.warn },
 });
 
 interface RowProps {
-  readonly task: AgentTask;
+  readonly task: Listed;
   /** Absent for a session awp did not make: there is no agent to address. */
   readonly onSend: (() => void) | undefined;
   readonly state: "idle" | "sending" | "sent" | "failed";
@@ -220,12 +247,22 @@ function Row({ task, onSend, state }: RowProps) {
           onClick={() => setOpen((was) => !was)}
           {...stylex.props(styles.subject)}
         >
-          <span {...stylex.props(styles.id)}>{task.id}</span>
+          <span {...stylex.props(styles.id)}>{task.label}</span>
           {task.subject}
         </button>
 
         {open && task.description.trim() !== "" ? (
-          <p {...stylex.props(styles.detail)}>{task.description.trim()}</p>
+          // Markdown, because a board task's body IS markdown — it is a
+          // section of somebody's TODO.md, headings and code blocks and all,
+          // and #123's runs to 6722 characters. Rendered as preformatted text
+          // it showed `## Summary` and `- [ ]` as literal characters, which is
+          // the same finding the PR panel already recorded.
+          //
+          // A session task's description is plain prose and renders as prose
+          // through the same path, so there is no branch here.
+          <div {...stylex.props(styles.detail)}>
+            <Markdown>{task.description.trim()}</Markdown>
+          </div>
         ) : undefined}
       </div>
 
@@ -261,8 +298,17 @@ export interface TasksProps {
 
 export function Tasks({ dir, project, workspace }: TasksProps) {
   const [tasks, setTasks] = useState<ReadonlyArray<AgentTask>>([]);
+  const [board, setBoard] = useState<ReadonlyArray<Task>>([]);
   const [asked, setAsked] = useState(false);
   const [states, setStates] = useState<Record<string, RowProps["state"]>>({});
+  // ── scoped to this project, or everywhere ────────────────────────────────
+  //
+  // Both are real questions and the store answers both with one argument, so
+  // this is a control rather than a fixed choice. `project` is the default
+  // because a column beside a checkout is usually asked about that checkout —
+  // and `everywhere` is the reason the store exists at all, so it cannot be
+  // the thing nobody can reach.
+  const [everywhere, setEverywhere] = useState(false);
   const held = useRef<ReadonlyArray<AgentTask>>([]);
 
   // Read on mount, then again on a timer.
@@ -275,9 +321,29 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
   //
   // Only while the panel is mounted, which Base UI makes cheap: a hidden tab
   // is unmounted, so a panel nobody is looking at is not polling.
+  //
+  // The board is asked on the same tick and is nearly free: the daemon answers
+  // from its store and forks the re-read of the files behind the reply, which
+  // is the whole reason `TaskBoard` is shaped that way.
   useEffect(() => {
     let live = true;
     const take = () => {
+      const scope = everywhere || project === undefined ? undefined : [`project:${project}`];
+      listBoard(scope)
+        .then((got) => {
+          if (live) {
+            setBoard(got);
+            setAsked(true);
+          }
+        })
+        .catch(() => {
+          // An older daemon has no `TaskBoard` at all, and the session's list
+          // is still worth drawing. The bar says when the daemon is gone.
+          if (live) {
+            setAsked(true);
+          }
+        });
+
       if (dir === undefined) {
         setTasks([]);
         setAsked(true);
@@ -311,20 +377,19 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
       live = false;
       clearInterval(timer);
     };
-  }, [dir]);
+  }, [dir, project, everywhere]);
 
-  const open = tasks.filter((task) => task.status !== "completed");
-  const done = tasks.length - open.length;
+  const { rows, done } = merge(tasks, board);
 
-  const send = (task: AgentTask) => {
+  const send = (task: Listed) => {
     if (project === undefined || workspace === undefined) {
       return;
     }
     return () => {
-      setStates((was) => ({ ...was, [task.id]: "sending" }));
-      sendTask(project, workspace, task)
-        .then(() => setStates((was) => ({ ...was, [task.id]: "sent" })))
-        .catch(() => setStates((was) => ({ ...was, [task.id]: "failed" })));
+      setStates((was) => ({ ...was, [task.key]: "sending" }));
+      sendTask(project, workspace, task.task)
+        .then(() => setStates((was) => ({ ...was, [task.key]: "sent" })))
+        .catch(() => setStates((was) => ({ ...was, [task.key]: "failed" })));
     };
   };
 
@@ -332,26 +397,46 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
     <div {...stylex.props(styles.panel)}>
       <div {...stylex.props(styles.head)}>
         <span {...stylex.props(styles.count)}>
-          {open.length === 0 ? "nothing to do" : `${open.length} to do`}
+          {rows.length === 0 ? "nothing to do" : `${rows.length} to do`}
           {done === 0 ? "" : ` · ${done} done`}
         </span>
+        {project === undefined ? undefined : (
+          <button
+            type="button"
+            data-nav-item
+            aria-pressed={everywhere}
+            title={
+              everywhere
+                ? `show only ${project}'s tasks`
+                : "show every project's tasks, not just this one"
+            }
+            onClick={() => setEverywhere((was) => !was)}
+            {...stylex.props(styles.scope)}
+          >
+            {everywhere ? "everywhere" : project}
+          </button>
+        )}
       </div>
 
       <div {...stylex.props(styles.list)}>
-        {dir === undefined ? (
-          <p {...stylex.props(styles.note)}>Open a session to see what its agent is planning.</p>
-        ) : open.length > 0 ? (
-          open.map((task) => (
-            <Row key={task.id} task={task} onSend={send(task)} state={states[task.id] ?? "idle"} />
+        {rows.length > 0 ? (
+          rows.map((task) => (
+            <Row
+              key={task.key}
+              task={task}
+              onSend={send(task)}
+              state={states[task.key] ?? "idle"}
+            />
           ))
         ) : asked ? (
-          // Three different situations, one sentence, and that is honest: an
-          // agent that has finished its list, one that never kept a list, and
-          // a workspace whose agent is not Claude Code are indistinguishable
-          // from here. See `readTasks`.
+          // Two situations now, and they want different sentences. An empty
+          // board is a fact about what is written down; an empty session list
+          // is the older, vaguer case — an agent that finished, one that never
+          // kept a list, and an agent that is not Claude Code all look alike.
           <p {...stylex.props(styles.note)}>
-            No outstanding tasks. This is the agent&rsquo;s own list, so it is empty until the agent
-            writes one.
+            {dir === undefined
+              ? "Nothing written down yet. A project's TODO.md is read into this list."
+              : "No outstanding tasks — neither the agent's own list nor anything written down."}
           </p>
         ) : undefined}
       </div>

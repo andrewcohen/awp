@@ -52,20 +52,6 @@ const styles = stylex.create({
     fontFamily: text.mono,
     fontSize: text.small,
   },
-  // A fenced block scrolls inside its own box rather than widening the panel —
-  // the rule from AGENTS.md: a column must never grow a horizontal scrollbar,
-  // so the wide thing carries one itself.
-  pre: {
-    margin: "0.5rem 0",
-    padding: "0.4rem 0.5rem",
-    maxHeight: "18rem",
-    overflow: "auto",
-    backgroundColor: colors.surface,
-    borderRadius: "0.25rem",
-    fontFamily: text.mono,
-    fontSize: text.small,
-    lineHeight: 1.45,
-  },
   // Inside a `pre`, the code element must not paint its own chip.
   bare: { padding: 0, backgroundColor: "transparent" },
   quote: {
