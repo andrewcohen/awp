@@ -695,6 +695,132 @@ describe("jobs over the contract", () => {
     expect((found.job.input as { readonly workspace?: string }).workspace).toBeUndefined();
   });
 
+  // ── adding a repository to a thread that exists ──────────────────────────
+  //
+  // A thread holds pairs and a piece of work often needs two of them. The
+  // model always allowed it; nothing could reach it, because ThreadStart
+  // always minted a thread and ThreadAttach only moves one that exists.
+
+  it("adds a workspace to a thread instead of making one", async () => {
+    const found = await run((rpc) =>
+      Effect.gen(function* () {
+        const first = yield* rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "thicket",
+          from: "/somewhere/thicket",
+          base: undefined,
+        });
+        yield* rpc.ThreadAttach({
+          thread: first.thread.id,
+          member: { project: "thicket", workspace: "tabular-exports" },
+        });
+        const second = yield* rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "orchard",
+          from: "/somewhere/orchard",
+          base: undefined,
+          thread: first.thread.id,
+        });
+        const listed = yield* rpc.ThreadList();
+        return { first, second, listed };
+      }),
+    );
+
+    // The same thread, not a second one beside it.
+    expect(found.second.thread.id).toBe(found.first.thread.id);
+    expect(found.listed).toHaveLength(1);
+    // And a job of its own, so a partial failure is one row failing rather
+    // than the whole thing.
+    expect(found.second.job.kind).toBe("create-workspace");
+  });
+
+  it("gives the new workspace its sibling's name", async () => {
+    // Pre-set from the sibling, which skips the naming step's model call — ten
+    // seconds spent inventing a name that must not vary — and stops one thread
+    // holding `tabular-exports` in one repository and `export-tables` in the
+    // next.
+    const found = await run((rpc) =>
+      Effect.gen(function* () {
+        const first = yield* rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "thicket",
+          from: "/somewhere/thicket",
+          base: undefined,
+        });
+        yield* rpc.ThreadAttach({
+          thread: first.thread.id,
+          member: { project: "thicket", workspace: "tabular-exports" },
+        });
+        return yield* rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "orchard",
+          from: "/somewhere/orchard",
+          base: undefined,
+          thread: first.thread.id,
+        });
+      }),
+    );
+
+    const input = found.job.input as {
+      readonly workspace?: string;
+      readonly prompt?: string;
+      readonly base?: string;
+    };
+    expect(input.workspace).toBe("tabular-exports");
+    // The prompt comes with the name, because skipping the naming step skips
+    // the prompt it would have written — and a workspace with no prompt is an
+    // agent nobody briefed.
+    expect(input.prompt).toBe("add tabular exports to checkout");
+    // Its own trunk, not the thread's bookmark: that bookmark is in another
+    // repository, which `baseOfThread` refuses by name.
+    expect(input.base).toBe("trunk()");
+  });
+
+  it("refuses a project the thread already has a workspace in", async () => {
+    // A stack — two workspaces in one repository for one thread — is a real
+    // thing to want and is not what "add this project" means. The create would
+    // land on the directory the sibling occupies.
+    const found = await run((rpc) =>
+      Effect.gen(function* () {
+        const first = yield* rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "thicket",
+          from: "/somewhere/thicket",
+          base: undefined,
+        });
+        yield* rpc.ThreadAttach({
+          thread: first.thread.id,
+          member: { project: "thicket", workspace: "tabular-exports" },
+        });
+        return yield* Effect.result(
+          rpc.ThreadStart({
+            description: "again",
+            project: "thicket",
+            from: "/somewhere/thicket",
+            base: undefined,
+            thread: first.thread.id,
+          }),
+        );
+      }),
+    );
+    expect(Result.isFailure(found)).toBe(true);
+  });
+
+  it("refuses a thread that is not there", async () => {
+    const found = await run((rpc) =>
+      Effect.result(
+        rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "orchard",
+          from: "/somewhere/orchard",
+          base: undefined,
+          thread: "20260908-nope",
+        }),
+      ),
+    );
+    expect(Result.isFailure(found)).toBe(true);
+  });
+
   it("makes no thread when nothing was typed", async () => {
     // This used to assert an ordering — resolve, then create — because the
     // model was called here and refused an empty sentence. Naming moved into

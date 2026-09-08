@@ -3,6 +3,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
 import { FolderIcon } from "@phosphor-icons/react/Folder";
 import { FolderPlusIcon } from "@phosphor-icons/react/FolderPlus";
+import { XIcon } from "@phosphor-icons/react/X";
 import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
@@ -188,6 +189,26 @@ const styles = stylex.create({
     fontSize: text.small,
     cursor: "pointer",
   },
+  /** The row of other repositories, quieter than the bar above it. */
+  barAlso: { paddingTop: 0, flexWrap: "wrap", rowGap: "0.3rem" },
+  alsoSaid: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
+  /** A chosen repository, and the control that removes it. */
+  pill: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.25rem",
+    fontFamily: text.mono,
+    fontSize: text.small,
+    padding: "0.1rem 0.35rem",
+    borderStyle: "solid",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: "0.25rem",
+    backgroundColor: colors.raised,
+    color: colors.text,
+    cursor: { default: "pointer", ":disabled": "default" },
+  },
+  pillX: { color: colors.muted },
   chipIcon: { flexShrink: 0, color: colors.muted },
   chipCaret: { flexShrink: 0, color: colors.muted, opacity: 0.7 },
   // The bottom bar's pair are the quieter ones while they say nothing but
@@ -366,6 +387,27 @@ function Composer({
   // than trusting what a client sends. See `ThreadStart`.
   const from = projects.find((p) => p.name === project)?.root;
 
+  /**
+   * The other repositories this piece of work also needs.
+   *
+   * ── one thread, several repositories ──────────────────────────────────────
+   *
+   * A thread holds `(project, workspace)` pairs and a change plus the api
+   * behind it is one piece of work in two of them. The store always allowed
+   * it; until `ThreadStart` took a thread there was no way to make the second.
+   *
+   * Named projects rather than a count, and additive rather than a multi-
+   * select, because on a real machine there are sixteen of them and a wrapped
+   * grid of sixteen toggles is a control nobody reads. Choosing one appends a
+   * pill; the pill removes it.
+   *
+   * The base chip above applies to the *first* project only. Each of these
+   * starts at its own trunk — the thread's bookmark lives in another
+   * repository, and the daemon refuses to branch across one. The pill says so.
+   */
+  const [also, setAlso] = useState<ReadonlyArray<string>>([]);
+  const spare = projects.filter((p) => p.name !== project && !also.includes(p.name));
+
   // Fetched per project, because a bookmark belongs to a repository. An effect
   // and not a value: this is a request, and the project it is for can change
   // while the modal is open.
@@ -398,6 +440,8 @@ function Composer({
   }, [from, request.workspace, request.fromWorkspace]);
 
   const described = typed.trim();
+  // Switching the first project cannot leave it in the list beside itself.
+  const extras = also.filter((name) => name !== project);
   const ready = from !== undefined && described !== "" && !busy;
 
   const submit = () => {
@@ -411,19 +455,44 @@ function Composer({
     // time it draws that workspace — which can be well before this promise
     // settles.
     rememberFaceDefault(face);
-    startThread({
-      description: described,
-      project,
-      from,
-      base,
+    const overrides = {
       model: model === INHERIT ? undefined : model,
       effort: effort === INHERIT ? undefined : effort,
-    })
-      .then(() => {
+    };
+    // ── the first call makes the thread, the rest join it ───────────────────
+    //
+    // Sequential, and it has to be: every call after the first names the
+    // thread the first returned. Each is its own job, which is what makes a
+    // partial failure legible — one row in the jobs panel failing rather than
+    // a create that either did everything or nothing.
+    //
+    // The loop is here rather than in the daemon because there is no rule in
+    // it to re-derive: the id comes back from the first reply, and each
+    // workspace is an independent piece of work from the job runner's point
+    // of view. What the daemon owns is every *decision* — the name, the base,
+    // the refusals — which is where it belongs.
+    startThread({ description: described, project, from, base, ...overrides })
+      .then(async (started) => {
+        for (const name of extras) {
+          const root = projects.find((p) => p.name === name)?.root;
+          if (root === undefined) {
+            continue;
+          }
+          await startThread({
+            description: described,
+            project: name,
+            from: root,
+            thread: started.thread.id,
+            ...overrides,
+          });
+        }
         onStarted();
         onClose();
       })
       .catch((error: unknown) => {
+        // The thread may exist with some of its workspaces already building.
+        // Said rather than hidden: closing the modal on a partial failure
+        // would leave a person to notice the missing repository later.
         setFailure(String(error));
         setBusy(false);
       });
@@ -503,6 +572,52 @@ function Composer({
           disabled={busy}
         />
       </div>
+
+      {/* ── the other repositories this work needs ────────────────────────
+          Under the bar that says where it lands, because that is what it
+          extends. A picker that appends rather than a grid of toggles: there
+          are sixteen projects on a real machine, and a wrapped grid of
+          sixteen is a control nobody reads. */}
+      {(extras.length > 0 || spare.length > 0) && (
+        <div {...stylex.props(styles.bar, styles.barAlso)}>
+          <span {...stylex.props(styles.alsoSaid)}>also in</span>
+          {extras.map((name) => (
+            <button
+              key={name}
+              type="button"
+              {...stylex.props(styles.pill)}
+              title={`${name} — starts from its own main line, because this thread's bookmark is in ${project}`}
+              aria-label={`remove ${name}`}
+              disabled={busy}
+              onClick={() => setAlso((all) => all.filter((one) => one !== name))}
+            >
+              {name}
+              <XIcon size={10} {...stylex.props(styles.pillX)} />
+            </button>
+          ))}
+          {spare.length > 0 && (
+            <Chip
+              id="new-thread-also"
+              // A verb, because the value it holds is nothing: choosing is
+              // the whole of what it does, and the chosen project leaves as a
+              // pill rather than staying selected here.
+              label={extras.length === 0 ? "another repo" : "one more"}
+              title="add another repository to this piece of work"
+              value=""
+              onChange={(name) =>
+                // Idempotent, because the picker is still on screen after a
+                // choice: pressing the same project twice is a person making
+                // sure, not a request for two of it.
+                setAlso((all) => (all.includes(name) ? all : [...all, name]))
+              }
+              options={spare.map((p) => ({ value: p.name, label: p.name }))}
+              icon={<FolderPlusIcon size={11} {...stylex.props(styles.chipIcon)} />}
+              disabled={busy}
+              quiet
+            />
+          )}
+        </div>
+      )}
 
       {/* Between the bars rather than over them, so what it adds to stays on
           screen while it is open. */}

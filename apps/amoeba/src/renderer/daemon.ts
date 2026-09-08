@@ -395,6 +395,15 @@ export const startThread = (payload: {
    */
   readonly base?: string | undefined;
   /**
+   * A thread to add this workspace to, rather than making one.
+   *
+   * How a piece of work spans repositories: the first call makes the thread,
+   * and each one after it names the thread the first returned. The daemon
+   * takes the sibling's workspace name and this project's own trunk — see
+   * `ThreadStart` in the contract, where each of those is argued.
+   */
+  readonly thread?: string | undefined;
+  /**
    * Overrides for the configured agent command, or absent to leave it alone.
    *
    * Absent is not the same as passing what the config already says: the daemon

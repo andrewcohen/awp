@@ -46,7 +46,21 @@ export function Chip<T extends string>({
       // unnarrowed. This is the only cast on the screen, and it is here rather
       // than at four call sites: every value the popup can emit came out of
       // `options`, so T is exactly what it is.
-      onValueChange={(next) => onChange(String(next) as T)}
+      onValueChange={(next) => {
+        // ── null is a clear, not a value ─────────────────────────────────
+        //
+        // Base UI reports a cleared selection as `null`, and `String(null)`
+        // is the string "null" — which every call site then stores and draws.
+        // Latent until a chip held a value that is not one of its options:
+        // the new-thread modal's "another repo" picker keeps `""` on purpose,
+        // because choosing is the whole of what it does and the chosen
+        // project leaves as a pill. Picking one appended two things, the
+        // second of them a project called `null`.
+        if (next === null || next === undefined) {
+          return;
+        }
+        onChange(String(next) as T);
+      }}
       disabled={disabled ?? false}
     >
       <Select.Trigger

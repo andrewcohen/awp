@@ -2175,6 +2175,28 @@ export class AwpRpcs extends RpcGroup.make(
       description: Schema.String,
       project: Schema.String,
       /**
+       * A thread to add this workspace to, rather than a new one.
+       *
+       * ── one thread, several repositories ─────────────────────────────────
+       *
+       * A thread holds `(project, workspace)` pairs and a piece of work often
+       * needs two of them — a change and the api behind it. That has always
+       * been the shape of `thread_members`, and `create-workspace` has always
+       * taken a thread id; what did not exist was any way to reach it. So the
+       * *second* repository in a piece of work could not be created from the
+       * window at all: `ThreadStart` always minted a new thread, and
+       * `ThreadAttach` only moves a workspace that already exists.
+       *
+       * Absent is the ordinary case and means what it always did. Given, it
+       * changes four things — see the handler, which is where each is
+       * argued — and the shortest version is: the thread is not created, the
+       * base is this project's trunk rather than a thread's bookmark, the
+       * workspace takes its *sibling's* name so a thread reads as one piece
+       * of work across repositories, and a lost race does not archive a
+       * thread that already holds somebody's work.
+       */
+      thread: Schema.optional(Schema.String),
+      /**
        * A directory inside the project — a session's `startDir` will do.
        *
        * The daemon turns it into the repository root. The client passes what

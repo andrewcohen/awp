@@ -11,7 +11,7 @@ rather than the summary when what you learn changes the shape of the work.
 
 Regenerated wholesale. Do not hand-edit a single entry expecting it to survive — change the task, then write this out again. `bun run fmt` reflows this file, so the sequence is regenerate, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-46 open, 74 finished, as of 2026-09-08.
+47 open, 74 finished, as of 2026-09-08.
 
 Hand-edited rather than regenerated, for #115, #118, #121 and the two #91
 bullets they closed: the list they are regenerated from lives in a session that
@@ -969,6 +969,90 @@ is the shortcut rather than the feature.
 Depends on nothing. Related: #114 (say so when something changed) — a rename is
 the least ambiguous case for a toast, since the row simply reads differently
 afterwards.
+
+## 123. One thread, many repos, one agent each
+
+Asked directly: is a thread to many agents and many repos viable, one agent per
+repo? **It is the model already** — what is missing is a way in, a way for the
+agents to see each other, and a way to say one waits on another.
+
+What exists today, none of it new:
+
+    thread_members    (project, workspace) pairs, UNIQUE on the pair — so a
+                      thread already spans repositories and a workspace
+                      belongs to exactly one thread
+    sessions          one per kind per workspace: agent · editor · action
+    thread_prs        several pull requests per thread, one thread per PR
+    chat              one ACP conversation per workspace, keyed by directory
+    create-workspace  takes `input.thread` and claims the workspace for it
+
+    thread  "tabular exports"
+      ├── rowan/tabular-exports   agent · editor · action   → PR #412
+      └── beta/tabular-exports    agent · editor · action   → PR #98
+
+So one agent per repo is not a decision to make; it is what a workspace _is_.
+Three things are actually missing, and they are worth doing in this order.
+
+### 1. Adding a repo to a thread — landed
+
+`ThreadStart` takes an optional `thread`, and the cmd+N modal picks several
+projects: the first call makes the thread, each one after it names the id the
+first returned. Four things branch, each argued in the handler — no thread is
+created, the base is this project's own trunk, the workspace takes its
+sibling's name and prompt so a thread reads as one piece of work, and the
+existing thread's lineage is passed through rather than re-read.
+
+Two things left as they are, deliberately:
+
+    a stack in one repo   refused by name. Two workspaces in one repository
+                          for one thread is a real thing to want and is not
+                          what "add this project" means — the create would
+                          land on the directory the sibling occupies
+    the loop is in the    each call after the first needs the id the first
+    window                returned, and each workspace is its own job, so a
+                          partial failure is one row failing rather than an
+                          all-or-nothing create
+
+### 2. The agents cannot see each other
+
+One conversation per workspace, each with its own context. Nothing tells the
+api agent what the frontend agent decided, so two agents on one piece of work
+are two pieces of work that happen to share a title.
+
+    a shared brief   put the thread's description and its sibling workspaces
+                     into each opening brief. One line of work, one-way, and
+                     stale from the moment it is written
+    MCP (#93)        each agent ASKS what its thread holds — sibling
+                     workspaces, their PRs, their diffs, the review comments
+                     left on them. Read-only first
+
+The second is the answer and it is already a task. This is the strongest
+argument for #93 there is: without it, "many agents, one thread" is a claim the
+sidebar makes and nothing else honours.
+
+### 3. No member waits on another
+
+"The frontend change lands after the api PR" has nowhere to live. `parentId`
+records lineage _between_ threads, not order _inside_ one. A field on
+`thread_members` is the cheap version; what makes it worth having is something
+that reads it — a row that says "waiting on beta/tabular-exports" rather than
+looking idle.
+
+### The alternative, and why it is not the default
+
+**One agent could span repositories.** `session/new` accepts
+`additionalDirectories`, advertised in the adapter's own
+`sessionCapabilities` — so a single conversation could hold two checkouts, and
+the coordination problem in (2) would evaporate.
+
+It is still the wrong default here, and the reason is not preference: every
+per-workspace thing in this window is keyed by workspace. `WorkspaceFacts`, the
+diff panel's revision list, the PR panel, the bookmark, `sessionName`, the
+address in the URL. One agent over two checkouts has no single answer to "which
+diff am I looking at", and the sidebar has nowhere to draw it.
+
+Worth measuring if MCP coordination turns out too thin — and it is cheaper than
+it looks, which is the part to remember rather than the conclusion.
 
 ## 122. A workspace with no session has an unreachable chat
 

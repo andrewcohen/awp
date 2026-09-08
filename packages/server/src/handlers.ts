@@ -412,6 +412,22 @@ export const layer = AwpRpcs.toLayer(
             ),
           );
 
+    /**
+     * One thread by id, or a refusal naming it.
+     *
+     * A read of the list rather than a `get`, because the store answers with
+     * the list and a second method for one row would be a second query to
+     * keep in step. Threads are tens, not thousands.
+     */
+    const threadNamed = (id: string) =>
+      Effect.gen(function* () {
+        const found = yield* threads.list().pipe(Effect.orDie);
+        const one = found.find((entry) => entry.id === id);
+        return one === undefined
+          ? yield* Effect.fail(new ThreadStartFailed({ reason: `no thread ${id} to add to` }))
+          : one;
+      });
+
     const baseOfThread = (id: string, project: string, repo: string) =>
       Effect.gen(function* () {
         const found = yield* threads.list().pipe(Effect.orDie);
@@ -860,7 +876,7 @@ export const layer = AwpRpcs.toLayer(
           ];
         }),
 
-      ThreadStart: ({ description, project, from, parent, base, model, effort }) =>
+      ThreadStart: ({ description, project, from, parent, base, model, effort, thread: into }) =>
         Effect.gen(function* () {
           // Refused before anything else, and cheaply. Naming happens inside
           // the job now, so this is no longer caught by the model declining an
@@ -881,10 +897,38 @@ export const layer = AwpRpcs.toLayer(
 
           const settings = yield* config.read();
 
+          // ── adding a repository to a thread that exists ──────────────────
+          //
+          // Everything below this point either applies to both paths or is
+          // branched, and each branch has a reason worth stating rather than
+          // a convenience.
+          const held = into === undefined ? undefined : yield* threadNamed(into);
+
+          // Refused rather than merged. A thread with two workspaces in one
+          // repository is a legitimate thing to want — a stack — but it is
+          // not what pressing "add this project" means, and the create would
+          // land on the directory the sibling already occupies.
+          if (held !== undefined && held.members.some((member) => member.project === project)) {
+            return yield* Effect.fail(
+              new ThreadStartFailed({
+                reason: `"${held.title}" already has a workspace in ${project}`,
+              }),
+            );
+          }
+
           // Where the new workspace starts. An explicit revision wins; then a
           // parent thread, resolved to *its* bookmark; then the main line.
+          //
+          // **A repository being added to a thread starts at its own trunk**,
+          // and not at the thread's bookmark, because that bookmark is in
+          // another repository — `baseOfThread` refuses exactly this and says
+          // so by name. There is nothing in *this* repository the thread has
+          // touched yet, so trunk is not a fallback here, it is the answer.
           const startFrom =
-            base ?? (parent === undefined ? TRUNK : yield* baseOfThread(parent, project, repo));
+            base ??
+            (into !== undefined || parent === undefined
+              ? TRUNK
+              : yield* baseOfThread(parent, project, repo));
 
           // Which thread this follows on from. Named outright when a caller
           // said so; otherwise recovered from the base, because the window
@@ -896,20 +940,60 @@ export const layer = AwpRpcs.toLayer(
           // a machine whose workspaces predate threads, and was the whole
           // reason the picker used to come up empty.
           const followsFrom =
-            parent ??
-            (startFrom === TRUNK
-              ? undefined
-              : yield* threadOwning(workspaceOf(startFrom, settings.bookmarkPrefix), project));
+            held !== undefined
+              ? // The thread's own lineage, not a fresh reading of it. This is
+                // recorded on the job so its `thread` step can rebuild the
+                // thread after a rollback, and rebuilding it with no parent
+                // would quietly lose a claim somebody made when they started
+                // the work.
+                held.parentId
+              : (parent ??
+                (startFrom === TRUNK
+                  ? undefined
+                  : yield* threadOwning(workspaceOf(startFrom, settings.bookmarkPrefix), project)));
 
           // Titled with what was typed, because nothing better exists yet. The
           // job's first step asks a model for a proper one and renames it —
           // which is a title that improves ten seconds later, rather than a
           // window that will not close for ten seconds.
-          const thread = yield* threads.create(description.trim(), followsFrom).pipe(Effect.orDie);
+          const thread =
+            held ?? (yield* threads.create(description.trim(), followsFrom).pipe(Effect.orDie));
+
+          // ── a thread's workspaces share a name ───────────────────────────
+          //
+          // Pre-set from the sibling, which does two things. It skips the
+          // `name` step's model call — ten seconds spent inventing a name
+          // that must not vary — and it makes a thread read as one piece of
+          // work across repositories, which is what the sidebar draws:
+          //
+          //   thread  "tabular exports"
+          //     ├── rowan/tabular-exports
+          //     └── beta/tabular-exports
+          //
+          // A model asked twice from the same sentence is a model that may
+          // answer `tabular-exports` once and `export-tables` the next time.
+          //
+          // `prompt` comes with it, because skipping the naming step skips
+          // the prompt it would have produced — and a workspace built with no
+          // prompt is an agent nobody briefed. What a person typed is the
+          // honest thing to send.
+          const sibling = held?.members[0]?.workspace;
+          const named =
+            sibling === undefined
+              ? {}
+              : {
+                  workspace: sibling,
+                  label: held?.title ?? sibling,
+                  prompt: description.trim(),
+                  ...(settings.bookmarkPrefix === undefined
+                    ? {}
+                    : { bookmark: `${settings.bookmarkPrefix}/${sibling}` }),
+                };
 
           const job = yield* jobs
             .enqueue(createWorkspaceRef, {
               thread: thread.id,
+              ...named,
               // Recorded, not re-derived. `followsFrom` was resolved from the
               // chosen base a moment ago and the job may have to rebuild this
               // thread on a retry — see the `thread` step. A resumed job has
