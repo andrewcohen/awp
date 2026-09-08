@@ -690,6 +690,16 @@ export const chatSend = (project: string, workspace: string, text: string): Prom
   );
 
 /**
+ * Open the terminal's own conversation in the chat, by forking it.
+ *
+ * Resolves to the new session id once the fork exists, which is when the panel
+ * should re-subscribe: the daemon has already made the fork the workspace's
+ * chat session and thrown away the adapter that was on the old one.
+ */
+export const chatFork = (project: string, workspace: string): Promise<string> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatFork({ project, workspace })));
+
+/**
  * What the session is running as: the model, the effort, the permission mode.
  *
  * A call rather than something on the stream, because it is asked when a panel

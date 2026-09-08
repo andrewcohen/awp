@@ -17,7 +17,7 @@ import {
   waiting,
 } from "./conversation";
 import { Markdown } from "./Markdown";
-import { chatAnswer, chatConfig, chatSend, chatSet, watchChat } from "./daemon";
+import { chatAnswer, chatConfig, chatFork, chatSend, chatSet, watchChat } from "./daemon";
 import { colors, text } from "./tokens.stylex";
 
 // The agent as a conversation rather than as a picture of one.
@@ -40,12 +40,52 @@ import { colors, text } from "./tokens.stylex";
 const mark = (status: string): string =>
   status === "completed" ? "✓" : status === "failed" ? "✗" : "…";
 
+/**
+ * The panel, and the thing that can be replaced wholesale.
+ *
+ * Forking changes which session this workspace's chat *is*, so everything
+ * below — the folded transcript, the settings, the read of the config — is
+ * about a conversation that no longer applies. Remounting says exactly that
+ * and needs nothing else to say it: no effect that resets state, and no
+ * dependency on a counter the effect never reads. Both of those were the first
+ * version, and both are lint errors here for good reasons.
+ */
 export const Chat = ({
   project,
   workspace,
 }: {
   readonly project: string;
   readonly workspace: string;
+}) => {
+  const [again, setAgain] = useState(0);
+  const [forking, setForking] = useState(false);
+
+  const fork = useCallback(() => {
+    setForking(true);
+    void chatFork(project, workspace)
+      .then(() => setAgain((was) => was + 1))
+      .catch(() => {
+        // A conversation that cannot be forked says so where every other
+        // chat failure does: on the stream the panel is already reading.
+      })
+      .finally(() => setForking(false));
+  }, [project, workspace]);
+
+  return (
+    <Panel key={again} project={project} workspace={workspace} onFork={fork} forking={forking} />
+  );
+};
+
+const Panel = ({
+  project,
+  workspace,
+  onFork,
+  forking,
+}: {
+  readonly project: string;
+  readonly workspace: string;
+  readonly onFork: () => void;
+  readonly forking: boolean;
 }) => {
   const [held, setHeld] = useState<Conversation>(nothing);
   const items = held.items;
@@ -149,7 +189,27 @@ export const Chat = ({
     <div {...stylex.props(styles.chat)} data-column-part="chat">
       <div {...stylex.props(styles.scroll)}>
         {items.length === 0 && held.running === 0 ? (
-          <p {...stylex.props(styles.nothing)}>nothing said yet</p>
+          // ── the empty state is where the fork belongs ────────────────────
+          //
+          // A chat with nothing in it, on a workspace whose agent has been
+          // running in the terminal all along, is exactly the moment somebody
+          // wants the conversation that is already happening. Offered here
+          // rather than in the bar because it is an answer to what is on
+          // screen; the bar would carry it on every conversation, including
+          // the ones it would overwrite.
+          <div {...stylex.props(styles.empty)}>
+            <p {...stylex.props(styles.nothing)}>nothing said yet</p>
+            <button
+              type="button"
+              data-nav-item
+              {...stylex.props(styles.option)}
+              title="copy the conversation the terminal is having and continue it here — the terminal's own is left alone"
+              disabled={forking}
+              onClick={onFork}
+            >
+              {forking ? "forking…" : "continue the terminal's conversation"}
+            </button>
+          </div>
         ) : (
           items.map((item) => (
             <Row key={item.key} item={item} project={project} workspace={workspace} />
@@ -507,6 +567,8 @@ const styles = stylex.create({
     gap: "1.1rem",
   },
   nothing: { color: colors.muted, fontFamily: text.ui, fontSize: text.small },
+  /** The empty state, which is a sentence and an offer rather than a sentence. */
+  empty: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.6rem" },
   item: {
     // Nothing pops. Every item in this list appears while somebody is looking
     // at the list, which is exactly the case the mandate is about.

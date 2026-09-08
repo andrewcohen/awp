@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { layer as dbLayer } from "@awp-kit/store";
-import { AwpRpcs, type CommentSide, type ReviewComment } from "@awp-kit/protocol";
+import {
+  AwpRpcs,
+  type CommentSide,
+  type ReviewComment,
+  type WorkspaceFacts,
+  type WorkspaceStatus,
+} from "@awp-kit/protocol";
 import { NodeFileSystem, NodePath } from "@effect/platform-node-shared";
 import { Effect, Fiber, Layer, Result, type Scope, Stream } from "effect";
 import type { RpcClient } from "effect/unstable/rpc";
@@ -222,6 +228,8 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
           Layer.succeed(Chat)({
             open: () => Effect.succeed(Stream.empty),
             send: () => Effect.succeed("prompt" as const),
+            openTerminal: () => Effect.succeed("forked-1"),
+            statuses: () => Stream.empty,
             answer: () => Effect.void,
             config: () => Effect.succeed([]),
             set: () => Effect.succeed([]),
@@ -1765,5 +1773,63 @@ describe("ReviewStart", () => {
       wanted,
     );
     expect(failed).toMatchObject({ reason: expect.stringContaining("knows no project") });
+  });
+});
+
+const factsRow = (workspace: string, status: WorkspaceStatus | undefined): WorkspaceFacts => ({
+  project: "thicket",
+  workspace,
+  displayName: undefined,
+  status,
+  unread: false,
+  pr: undefined,
+  bookmark: undefined,
+  prompt: undefined,
+  phase: undefined,
+  task: undefined,
+  done: undefined,
+  total: undefined,
+  lastActiveAt: undefined,
+});
+
+describe("factsWith", () => {
+  // Two sources describing two different agents — the file knows about the one
+  // in a workspace's terminal, the chat about the one in this window. The
+  // precedence is the whole of the merge, so it is tested rather than read.
+
+  it("lets a live turn override what a hook last wrote", () => {
+    const merged = handlers.factsWith(
+      [factsRow("lantern", "idle")],
+      new Map([["thicket\nlantern", "working" as const]]),
+    );
+    expect(merged[0]?.status).toBe("working");
+  });
+
+  it("keeps the file's answer when the chat is saying nothing", () => {
+    // The chat reports only working and waiting. A workspace absent from that
+    // map has an idle conversation, or none — and neither is evidence about
+    // the agent somebody has running in the terminal.
+    const merged = handlers.factsWith([factsRow("lantern", "working")], new Map());
+    expect(merged[0]?.status).toBe("working");
+  });
+
+  it("adds a row for a workspace the file has never heard of", () => {
+    // The file belongs to the Go implementation, so a workspace created in
+    // this window may not be in it at all.
+    const merged = handlers.factsWith([], new Map([["thicket\nlantern", "waiting" as const]]));
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      project: "thicket",
+      workspace: "lantern",
+      status: "waiting",
+    });
+  });
+
+  it("does not duplicate a workspace that is in both", () => {
+    const merged = handlers.factsWith(
+      [factsRow("lantern", "idle"), factsRow("orchard-tools", undefined)],
+      new Map([["thicket\nlantern", "waiting" as const]]),
+    );
+    expect(merged.map((one) => one.workspace)).toEqual(["lantern", "orchard-tools"]);
   });
 });

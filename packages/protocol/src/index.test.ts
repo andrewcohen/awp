@@ -314,6 +314,7 @@ const handlers = AwpRpcs.toLayer({
   ChatOpen: () =>
     Stream.fromArray([{ kind: "message" as const, role: "agent" as const, text: "hello" }]),
   ChatSend: () => Effect.succeed("prompt" as const),
+  ChatFork: () => Effect.succeed("forked-1"),
   ChatAnswer: () => Effect.void,
   ChatConfig: () => Effect.succeed([]),
   ChatSet: () => Effect.succeed([]),

@@ -35,9 +35,38 @@ The constraint learned the hard way on 2026-08-25: a terminal theme is not decor
 
 Nothing moves andrew/<name> forward as commits land, so a bookmark sits at the FIRST commit of its branch. Measured: andrew/awp-kit-amoeba is at lmpznzxr "chore: move existing tree into archive/", 51 commits behind the workspace's working copy. test1234 branched from exactly that and landed 51 commits behind; diff-view did too and was rebased by hand afterwards (op log shows two "point bookmark andrew/diff-view" entries). So "base this thread on that bookmark" gives the start of the work rather than the current tip. Decide between moving the bookmark on commit and resolving the base to the workspace's tip.
 
-## 42. Show what the agent is doing on a sidebar row
+## 42. Show what a TERMINAL agent is doing on a sidebar row
 
-The dot only says "the session exists". The strip has no signal of activity, so at 26 rows the eye has nothing to land on — the one remaining item from the sidebar review. The Go implementation solved this with agent status reporting (archive/specs/20260429-i021-agent-status-reporting-spec.md): claude hooks write status, awp reads it. Needs a decision on the channel — hooks writing to a file, or ACP once #37 lands, which would carry it natively. Blocked on that choice rather than on the rendering.
+Half of this landed with ACP, and the half that is left is the harder one — so
+what remains is written out plainly rather than left as the original sentence.
+
+What a row can now say, live, with no hook and no file:
+
+    a turn in flight                 working
+    a permission nobody has answered waiting — the one state that is about
+                                     the person rather than the machine
+
+That comes from the daemon's own ACP conversations, merged into
+`WorkspaceFacts.status` by `factsWith` in handlers.ts, and it is a **precedence
+rather than an override**: the chat reports only those two states and never
+`idle`, because a chat nobody is using is no evidence at all about the agent
+somebody has running in the workspace's terminal.
+
+Which is exactly what is left. Most rows on a real machine are a `claude` in a
+pty, and for those the only source is still `~/.awp/workspace-state.json` —
+written by the Go implementation's Claude Code hooks, which nothing in this
+repo installs. Three ways out, and the choice has not been made:
+
+    our own hooks      write the same file, or a better one, from a
+                       Claude Code hook awp installs into a workspace
+    the agent under    the terminal session runs the ACP adapter rather than
+    ACP                `claude` directly, and the chat is one view of it
+    accept the split   a chat-backed row is live, a terminal-backed row is as
+                       fresh as the last hook wrote, and the strip says
+                       nothing about which
+
+The second is the one that makes every other unanswered question here go away,
+and it is also the largest.
 
 ## 47. Give a thread a drawing the agent can read
 
@@ -423,18 +452,14 @@ So a restart costs the turn in flight, not the thread; there is nothing to daemo
 
 ## Left
 
-- **the session id is not recorded** against the workspace. Asking
-  `session/list` per open is correct and cheap today; it is a linear scan of
-  a directory with 146 entries on this machine and nobody has measured it.
-- **markdown in a code fence.** The panel renders markdown, and `pre span` is
-  0 in a real window: a fenced block has no highlighting. #102 is where the
-  shiki the diff panel already loads gets reused for it.
-- **fork, for a session somebody is sitting in.** `load` would make the ACP
-  side a second writer on a transcript an interactive `claude` is still
-  appending to. Offering "open this in the chat" on a running terminal
-  session is the feature people want and it is a `fork` underneath.
-- **the adapter is a per-machine install** at `~/.awp/tools`, with a sentence
-  naming the command when it is missing. Nothing installs it for anybody.
+Nothing of its own. What was here has landed: the turn boundary is on the wire,
+`chat_sessions` records one session per workspace, the panel renders markdown,
+`bun run acp:install` puts the adapter on a machine, and the terminal's own
+conversation can be opened in the chat by forking it — see the fork note in
+AGENTS.md, which is mostly a record of the two ways that goes wrong.
+
+One gap remains and it belongs to #102 rather than here: a fenced code block in
+the chat has no highlighting at all (`pre span` is 0 in a real window).
 
 ## 92. Add a task from the tasks panel
 

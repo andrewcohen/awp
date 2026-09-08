@@ -29,6 +29,8 @@ import {
   SessionNotFound,
   ThreadNotFound,
   ThreadStartFailed,
+  type WorkspaceFacts,
+  type WorkspaceStatus,
 } from "@awp-kit/protocol";
 import { homedir } from "node:os";
 import { basename } from "node:path";
@@ -283,6 +285,58 @@ const WORKING_COPY = "@";
  * harmless: the field decides which entry is preselected and which thread
  * gets recorded as the parent, and being wrong means neither happens.
  */
+/**
+ * A workspace's key in the live-status map, the same shape `chat.ts` composes.
+ *
+ * A newline, because a project is a basename and a workspace is a path
+ * segment, so neither can hold one.
+ */
+const liveKey = (project: string, workspace: string) => `${project}\n${workspace}`;
+
+/**
+ * The file's facts, with what the chat knows laid over them.
+ *
+ * Pure and exported so the precedence is a thing with a test rather than a
+ * clause inside a stream. A workspace the chat knows about and the file has
+ * never heard of gets a row of its own — the file is the Go implementation's,
+ * and a workspace created in this window may not be in it at all.
+ */
+export const factsWith = (
+  rows: ReadonlyArray<WorkspaceFacts>,
+  live: ReadonlyMap<string, WorkspaceStatus>,
+): ReadonlyArray<WorkspaceFacts> => {
+  const seen = new Set<string>();
+  const merged = rows.map((row) => {
+    const at = liveKey(row.project, row.workspace);
+    seen.add(at);
+    const now = live.get(at);
+    return now === undefined ? row : { ...row, status: now };
+  });
+  return [
+    ...merged,
+    ...[...live.entries()]
+      .filter(([at]) => !seen.has(at))
+      .map(([at, status]) => {
+        const [project, workspace] = at.split("\n");
+        return {
+          project: project ?? "",
+          workspace: workspace ?? "",
+          displayName: undefined,
+          status,
+          unread: false,
+          pr: undefined,
+          bookmark: undefined,
+          prompt: undefined,
+          phase: undefined,
+          task: undefined,
+          done: undefined,
+          total: undefined,
+          lastActiveAt: undefined,
+        } satisfies WorkspaceFacts;
+      }),
+  ];
+};
+
 const workspaceOf = (bookmark: string, prefix: string | undefined): string | undefined =>
   prefix !== undefined && bookmark.startsWith(`${prefix}/`)
     ? bookmark.slice(prefix.length + 1)
@@ -620,6 +674,11 @@ export const layer = AwpRpcs.toLayer(
       ChatSend: ({ project, workspace, text }) =>
         chat
           .send(project, workspace, text)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
+      ChatFork: ({ project, workspace }) =>
+        chat
+          .openTerminal(project, workspace)
           .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
 
       ChatAnswer: ({ project, workspace, request, option }) =>
@@ -1358,7 +1417,38 @@ export const layer = AwpRpcs.toLayer(
       // ThreadStoreError dies here rather than crossing the wire. ThreadNotFound
       // does cross it: naming a thread that is not there is a question with a
       // negative answer, which is a different thing entirely.
-      WorkspaceFactsChanges: () => facts.changes(),
+      /**
+       * What is known about each workspace, from both places that know.
+       *
+       * ── two sources, and neither can prove the other wrong ──────────────
+       *
+       *   the file    ~/.awp/workspace-state.json, written by Claude Code
+       *               hooks in the Go implementation. Knows about the agent
+       *               running in a workspace's TERMINAL.
+       *   the chat    this daemon's own ACP conversations. Knows about the
+       *               agent in THIS WINDOW.
+       *
+       * A workspace can have both, so this is a precedence and not an
+       * override. The chat reports only `working` and `waiting` — never
+       * `idle` — precisely so that a chat nobody is using cannot claim the
+       * terminal's agent has stopped.
+       *
+       *   waiting   a question somebody has to answer. Wins outright: it is
+       *             the one state that is about the person rather than the
+       *             machine, and it is the reason the strip has a colour at
+       *             all.
+       *   working   wins over whatever the file last said, because the file
+       *             is a hook's last write and this is live.
+       *   absent    the file's own answer stands, unchanged.
+       *
+       * Merged in the daemon for the same reason the project list is: only
+       * this process holds both halves, and a client re-deriving the rule
+       * would be a second implementation of it.
+       */
+      WorkspaceFactsChanges: () =>
+        Stream.map(Stream.zipLatest(facts.changes(), chat.statuses()), ([rows, live]) =>
+          factsWith(rows, live),
+        ),
 
       /**
        * The imported projects, plus the ones the running sessions imply.

@@ -2891,6 +2891,90 @@ The standalone row is still there for a question about a call this window was
 never told about — refusing to draw it would leave an agent waiting on
 somebody who cannot see what it asked.
 
+### A fork is not a load, and it has to happen where it will be used
+
+"Open the conversation the terminal is having" is the feature people want, and
+it is a `session/fork` underneath — never a `session/load`. Loading makes the
+daemon a second writer on a transcript an interactive `claude` is still
+appending to, with neither process aware of the other, which is why
+`ChatOpen` refuses to join the newest session in a directory at all. A fork
+reads it, copies it under a new id and leaves the original alone.
+
+**The first shape was: fork here, write the id down, open it there.** It does
+not work, and the way it fails is the shape this file keeps recording:
+
+```
+  forked to        2392409f-…
+  in the listing   NO            a fresh fork is not in session/list
+  opened the fork  NO — fell back to 715cd9c7-…
+```
+
+`session/load` on a fork that has said nothing yet fails, and the fallback is a
+new empty session — which from outside is _exactly_ what a fork that carried no
+memory looks like. So the fork is made inside the adapter that will hold the
+conversation: `ChatOptions.fork` asks the open itself to do it. What the daemon
+can do from outside is arrange for the next open to fork, which is what the
+in-memory `forkNext` set is; a refusal clears it, or an ordinary open minutes
+later would fork on somebody's behalf with nothing having asked.
+
+**And once it has said something it is loadable.** That is the half the feature
+rests on, because the adapter is released two minutes after the last window
+closes and every later visit is a fresh process loading by id:
+
+```
+  fresh fork, then load      NO
+  after one turn, then load  yes, replaying 6 updates
+```
+
+**A fork replays nothing.** It is `resume` + `forkSession` under the hood, and
+resume "replays nothing, remembers everything" — so an empty stream proves
+nothing either way and only a question does. `probe:chat` asks the fork what
+word the original was told, which is the only check that separates a working
+fork from a new session wearing the name.
+
+That question was also reported as failing twice while the fork worked
+perfectly, because the answer arrived as `"he"` then `"ron"` and the check
+tested each update for the whole word. **Join the chunks before asserting on
+them** — the same thing the panel's fold exists to do.
+
+### Two sources for one status, and neither can prove the other idle
+
+A sidebar row's dot has always come from `~/.awp/workspace-state.json` — the Go
+implementation's file, written by Claude Code hooks, and `workspace-state.ts`
+says in its own note that ACP is what replaces that: "a live notification
+instead of a hook writing a file".
+
+It is a _second source_, though, not a replacement, and the reason is that the
+two describe **different agents**:
+
+```
+  the file    the `claude` running in a workspace's TERMINAL
+  the chat    the ACP conversation open in THIS WINDOW
+```
+
+A workspace can have both. So the merge is a precedence, in `factsWith`:
+
+```
+  waiting   a question nobody has answered. Wins outright — the one state
+            that is about the person rather than the machine
+  working   a turn in flight. Wins over the file, which is a hook's last
+            write where this is live
+  absent    the file's answer stands
+```
+
+**The chat never reports `idle`**, and that is the load-bearing half. A chat
+sitting idle is no evidence at all about the agent somebody has running in the
+terminal, and writing `idle` over the file's `working` would claim knowledge
+this process does not have.
+
+What the daemon tracks is folded from the conversation's own updates rather
+than asked for, because there is nothing to ask — a turn is a state, and the
+daemon is the thing that knows both its edges. One wrinkle worth knowing:
+**there is no update for a permission being answered.** The adapter does not
+report a reply, because the reply is the reply, so the only place that knows is
+`answer` — which is why the watcher's counters are decremented from there
+rather than from the stream.
+
 ### A subagent is a tool call, and `_meta` says which
 
 There is **no subagent update kind in ACP** — no nesting, no separate stream,

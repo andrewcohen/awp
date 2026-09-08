@@ -1723,6 +1723,25 @@ export class AwpRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Open the terminal's own conversation in the chat, by forking it.
+   *
+   * A fork and not a load. Loading would make the daemon a second writer on a
+   * transcript an interactive `claude` is still appending to, with neither
+   * process aware of the other — which is why `ChatOpen` never joins the
+   * newest session in a directory. A fork reads it, copies it under a new id
+   * and leaves the original alone, so this is the one shape of "look at what
+   * the terminal is doing" that is safe to offer.
+   *
+   * Answers the new session id. The window then re-opens its stream, which
+   * replays the forked history as ordinary updates.
+   */
+  Rpc.make("ChatFork", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.String,
+    error: ChatUnavailable,
+  }),
+
+  /**
    * Answer a permission request, by the id its update carried.
    *
    * This exists because the alternative is the agent's default: a model

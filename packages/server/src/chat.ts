@@ -53,12 +53,18 @@ import {
   RcMap,
   Ref,
   Result,
+  SubscriptionRef,
   type Scope,
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { realpathSync } from "node:fs";
-import type { ChatConfigOption, ChatDelivery, ChatUpdate } from "@awp-kit/protocol";
+import type {
+  ChatConfigOption,
+  ChatDelivery,
+  ChatUpdate,
+  WorkspaceStatus,
+} from "@awp-kit/protocol";
 import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
 import { workspacePath } from "./jobs/create-workspace";
 import { childEnv } from "./zmx-session";
@@ -97,6 +103,24 @@ export interface ChatOptions {
    * with a sentence about a session id, one step after the mistake.
    */
   readonly session?: string;
+  /**
+   * Start by forking whatever else is going on in this directory.
+   *
+   * "Open the terminal's conversation in the chat", and it has to happen
+   * *here*, inside the process that will hold the conversation. Measured with
+   * `probe:chat`: a session forked seconds ago is not in `session/list`, and
+   * `session/load` on it from another process fails —
+   *
+   *   forked to        2392409f-…
+   *   in the listing   NO
+   *   opened the fork  NO — fell back to 715cd9c7-…
+   *
+   * — so a design that forked in one place, wrote the id down and opened it
+   * somewhere else got a brand new empty session, which from outside is
+   * indistinguishable from a fork that carried no memory. That was the first
+   * shape and this is the finding that killed it.
+   */
+  readonly fork?: boolean;
 }
 
 interface Pending {
@@ -140,6 +164,15 @@ interface Conversation {
    *            be steered
    */
   readonly send: (text: string) => Effect.Effect<ChatDelivery, ChatError>;
+  /**
+   * Every session the adapter sees in this directory.
+   *
+   * Only the probe asks. It is here because "did the fork appear in the
+   * listing" is a question about the adapter that nothing else can answer, and
+   * the answer decides whether opening by id loads the fork or quietly starts
+   * a new session beside it.
+   */
+  readonly sessions: () => Effect.Effect<ReadonlyArray<string>, ChatError>;
   /** Answer a permission request by the id the update carried. */
   readonly answer: (request: string, option: string) => Effect.Effect<void, ChatError>;
   /** What this session is running as, and what it could be running as instead. */
@@ -490,6 +523,19 @@ export const conversation = (
           | undefined
       )?.["supported"] === true;
 
+    // ── forking, for a conversation somebody else is already having ───────
+    //
+    // Also a capability, advertised as
+    // `agentCapabilities.sessionCapabilities.fork`, and read for the same
+    // reason: an adapter that cannot fork should refuse by name rather than
+    // fail inside a request about a method it has never heard of.
+    const forkable =
+      (
+        (hello["agentCapabilities"] as Record<string, unknown> | undefined)?.[
+          "sessionCapabilities"
+        ] as Record<string, unknown> | undefined
+      )?.["fork"] !== undefined;
+
     // The session for this directory: the one the daemon named, if it is
     // still there, and a new one otherwise.
     //
@@ -512,20 +558,26 @@ export const conversation = (
     //   guessed   -var-folders-…-T-awp-acp-spike-XZUyvb      does not exist
     //   actual    -private-var-folders-…-T-awp-acp-spike
     //
-    // So the list is asked for — and used only to confirm the id the caller
-    // already holds.
+    // ── and do not pre-check the listing either ───────────────────────────
+    //
+    // This used to confirm the recorded id against `session/list` before
+    // loading it, so that a transcript which had been deleted or moved failed
+    // here rather than inside `session/load` with a sentence about an id. That
+    // was a proxy for "will a load work", and **a fork is the case where the
+    // proxy is wrong**: measured with `probe:chat`, a session forked seconds
+    // earlier is not in the listing at all —
+    //
+    //   forked to        b635c85e-…
+    //   in the listing   NO   (1 session, and it is the original)
+    //
+    // — so the check refused it and this code quietly opened a *new* session
+    // instead. From outside that is indistinguishable from a fork that
+    // carried no memory, which is precisely how it was reported by the probe.
+    //
+    // So the load is attempted and a refusal falls back to a new session. The
+    // error quality the check was protecting is kept by saying so in the log
+    // rather than by guessing in advance.
     const here = realpathSync(options.cwd);
-    const listed: Record<string, unknown> = yield* Effect.orElseSucceed(
-      request("session/list", { cwd: options.cwd }),
-      () => ({}) as Record<string, unknown>,
-    );
-    const sessions = Array.isArray(listed["sessions"]) ? listed["sessions"] : [];
-    const known =
-      options.session === undefined
-        ? undefined
-        : sessions
-            .map((raw) => raw as Record<string, unknown>)
-            .find((session) => session["sessionId"] === options.session && session["cwd"] === here);
 
     const claudeCode = {
       _meta: {
@@ -535,15 +587,71 @@ export const conversation = (
       },
     };
 
+    /** Copy the newest other conversation in this directory, and open it. */
+    const forkNewest = () =>
+      Effect.gen(function* () {
+        if (!forkable) {
+          return yield* Effect.fail(
+            new ChatError({ reason: "this agent cannot fork a conversation" }),
+          );
+        }
+        const now: Record<string, unknown> = yield* Effect.orElseSucceed(
+          request("session/list", { cwd: options.cwd }),
+          () => ({}) as Record<string, unknown>,
+        );
+        const others = (Array.isArray(now["sessions"]) ? now["sessions"] : [])
+          .map((raw) => raw as Record<string, unknown>)
+          .filter((one) => one["cwd"] === here && one["sessionId"] !== options.session);
+        // Newest first, by whatever the adapter dates them with. One with no
+        // date sorts last rather than being dropped: an undated transcript is
+        // still a conversation, and may be the only candidate there is.
+        const newest = others.toSorted((left, right) =>
+          String(right["updatedAt"] ?? right["createdAt"] ?? "").localeCompare(
+            String(left["updatedAt"] ?? left["createdAt"] ?? ""),
+          ),
+        )[0];
+        const from = newest?.["sessionId"];
+        if (typeof from !== "string") {
+          return yield* Effect.fail(
+            new ChatError({ reason: "there is no other conversation in this workspace to open" }),
+          );
+        }
+        return yield* request("session/fork", {
+          sessionId: from,
+          cwd: options.cwd,
+          mcpServers: [],
+          ...claudeCode,
+        });
+      });
+
+    // The fork, when one was asked for: the newest *other* session in this
+    // directory, copied under a new id. Its own is skipped, or reopening a
+    // chat would fork the conversation it is already showing.
+    //
+    // A fork rather than a load, and that inverts the rule above rather than
+    // breaking it: loading makes this process a second writer on a transcript
+    // an interactive `claude` is still appending to, where a fork reads it,
+    // copies it and leaves the original alone.
+    const forked = options.fork !== true ? undefined : yield* forkNewest();
+
+    const loaded =
+      forked !== undefined || options.session === undefined
+        ? undefined
+        : yield* Effect.result(
+            request("session/load", {
+              sessionId: options.session,
+              cwd: options.cwd,
+              mcpServers: [],
+              ...claudeCode,
+            }),
+          );
+
     const opened =
-      known === undefined
-        ? yield* request("session/new", { cwd: options.cwd, mcpServers: [], ...claudeCode })
-        : yield* request("session/load", {
-            sessionId: options.session,
-            cwd: options.cwd,
-            mcpServers: [],
-            ...claudeCode,
-          });
+      forked !== undefined
+        ? forked
+        : loaded !== undefined && Result.isSuccess(loaded)
+          ? loaded.success
+          : yield* request("session/new", { cwd: options.cwd, mcpServers: [], ...claudeCode });
 
     const sessionId = String(opened["sessionId"] ?? options.session ?? "");
     if (sessionId === "") {
@@ -665,6 +773,19 @@ export const conversation = (
           return "prompt" as const;
         }),
 
+      /** Every session the adapter sees here, by id. Asked for by the probe. */
+      sessions: () =>
+        Effect.map(
+          Effect.orElseSucceed(
+            request("session/list", { cwd: options.cwd }),
+            () => ({}) as Record<string, unknown>,
+          ),
+          (all) =>
+            (Array.isArray(all["sessions"]) ? all["sessions"] : [])
+              .map((raw) => String((raw as Record<string, unknown>)["sessionId"] ?? ""))
+              .filter((one) => one !== ""),
+        ),
+
       answer: (requestId: string, option: string) =>
         Effect.gen(function* () {
           const pending = (yield* Ref.get(asked)).get(requestId);
@@ -764,6 +885,22 @@ export class Chat extends Context.Service<
       text: string,
     ) => Effect.Effect<ChatDelivery, ChatError>;
 
+    /**
+     * What each workspace's chat agent is doing, now and whenever it changes.
+     *
+     * Only `working` and `waiting` are ever reported, and a workspace with an
+     * idle chat is absent rather than `idle`: this source knows about the
+     * conversation in this window and nothing about the agent somebody has
+     * running in the workspace's terminal.
+     */
+    readonly statuses: () => Stream.Stream<ReadonlyMap<string, WorkspaceStatus>>;
+
+    /**
+     * Fork the terminal's conversation in this workspace and make it the
+     * chat's, answering the new session id.
+     */
+    readonly openTerminal: (project: string, workspace: string) => Effect.Effect<string, ChatError>;
+
     /** Answer one of its permission requests. */
     readonly answer: (
       project: string,
@@ -813,6 +950,68 @@ export const make = Effect.gen(function* () {
        on conflict (project, workspace) do update set session_id = excluded.session_id`,
   );
 
+  /**
+   * Workspaces whose next conversation should start by forking the terminal's.
+   *
+   * A flag read by the lookup rather than a call made beside it, because the
+   * fork has to happen *in the process that will hold the conversation* — see
+   * `ChatOptions.fork`, and the measurement that says a fresh fork cannot be
+   * loaded from anywhere else. So `openTerminal` cannot do the forking; all it
+   * can do is arrange for the next open to.
+   *
+   * In memory and not in the database on purpose: it describes what to do the
+   * next time an adapter starts, and a daemon that restarted has no adapter
+   * and no window waiting on one.
+   */
+  const forkNext = yield* Ref.make<ReadonlySet<string>>(new Set());
+
+  /**
+   * What each workspace's *chat* agent is doing, and only its chat agent.
+   *
+   * ── this is a second source, not the answer ───────────────────────────────
+   *
+   * `workspace-state.ts` reads the same field out of a file the Go
+   * implementation writes from Claude Code hooks, and its own note says ACP is
+   * what replaces that — "a live notification instead of a hook writing a
+   * file". This is that notification.
+   *
+   * It does **not** replace the file, and the reason is that the two describe
+   * different agents. A workspace can have a `claude` running in its terminal
+   * *and* a conversation open in this window; the file knows about the first
+   * and this knows about the second. So neither can say the other is idle, and
+   * the merge is a precedence rather than an override — see `factsWith` in
+   * handlers.ts.
+   *
+   * A `SubscriptionRef` rather than a `Ref` and a queue, because what the
+   * sidebar wants is exactly its two halves: the value now, for a window that
+   * has just opened, and every change after it.
+   */
+  const statuses = yield* SubscriptionRef.make<ReadonlyMap<string, WorkspaceStatus>>(new Map());
+
+  const setStatus = (key: string, status: WorkspaceStatus | undefined) =>
+    SubscriptionRef.update(statuses, (all) => {
+      if (all.get(key) === status) {
+        return all;
+      }
+      const next = new Map(all);
+      if (status === undefined) {
+        next.delete(key);
+      } else {
+        next.set(key, status);
+      }
+      return next;
+    });
+
+  /**
+   * How to tell a workspace's watcher that a question has been answered.
+   *
+   * There is no update for it — the adapter does not report that a permission
+   * was replied to, because the reply is a reply — so the one place that knows
+   * is `answer` below. A map of callbacks rather than a field on the
+   * conversation, because the watcher's counters belong to the watcher.
+   */
+  const forget = new Map<string, (request: string) => Effect.Effect<void>>();
+
   const conversations = yield* RcMap.make({
     lookup: (key: string) =>
       Effect.gen(function* () {
@@ -822,10 +1021,18 @@ export const make = Effect.gen(function* () {
           () => [],
         );
         const known = remembered[0]?.["session_id"];
+        // Taken, not read: a fork is a thing somebody asked for once, and a
+        // flag left set would fork again every time the adapter timed out.
+        const asked = yield* Ref.getAndUpdate(forkNext, (all) => {
+          const rest = new Set(all);
+          rest.delete(key);
+          return rest;
+        });
 
         const held = yield* conversation(spawner, {
           cwd: workspacePath(project, workspace),
           ...(typeof known === "string" ? { session: known } : {}),
+          ...(asked.has(key) ? { fork: true } : {}),
         });
 
         // Written after the session exists rather than before, and every time
@@ -837,6 +1044,66 @@ export const make = Effect.gen(function* () {
             writeSession.run(project, workspace, held.sessionId),
           ),
         );
+        // ── watch what it is doing, for the sidebar ────────────────────────
+        //
+        // Folded from the conversation's own updates rather than asked for,
+        // because there is nothing to ask: a turn is a state, and the daemon
+        // is the thing that knows both of its edges.
+        //
+        //   a turn in flight             working
+        //   a question nobody has answered   waiting — for a person, which is
+        //                                    the one state that is about them
+        //   neither                      nothing said, see below
+        //
+        // A second subscriber on the same conversation, which the numbered
+        // queue was already built for. It reads history first, and history
+        // carries the turn updates this process emitted before — hence the
+        // count rather than a flag, the same reason the panel keeps one.
+        const updates = yield* held.updates;
+        const inFlight = yield* Ref.make(0);
+        const asks = yield* Ref.make<ReadonlySet<string>>(new Set());
+        const say = Effect.gen(function* () {
+          const waiting = (yield* Ref.get(asks)).size > 0;
+          const running = yield* Ref.get(inFlight);
+          // **Idle is not reported at all**, and that is the point of the
+          // whole arrangement. A chat sitting idle says nothing about the
+          // agent somebody has running in the workspace's terminal, and
+          // writing `idle` over the file's `working` would claim knowledge
+          // this does not have.
+          yield* setStatus(key, waiting ? "waiting" : running > 0 ? "working" : undefined);
+        });
+        yield* Effect.forkScoped(
+          Effect.ignore(
+            Stream.runForEach(updates, (update) =>
+              Effect.gen(function* () {
+                if (update.kind === "turn") {
+                  yield* Ref.update(inFlight, (was) =>
+                    update.status === "started" ? was + 1 : Math.max(0, was - 1),
+                  );
+                }
+                if (update.kind === "permission" && update.id !== undefined) {
+                  yield* Ref.update(asks, (all) => new Set(all).add(update.id as string));
+                }
+                yield* say;
+              }),
+            ),
+          ),
+        );
+        // The row keeps no state of its own once the adapter has gone: an
+        // answer that outlived its conversation is a claim about a process
+        // that is not running.
+        yield* Effect.addFinalizer(() => setStatus(key, undefined));
+        forget.set(key, (id: string) =>
+          Effect.andThen(
+            Ref.update(asks, (all) => {
+              const rest = new Set(all);
+              rest.delete(id);
+              return rest;
+            }),
+            say,
+          ),
+        );
+
         return held;
       }),
     // A held-open adapter costs a process and a model's context, and a person
@@ -865,13 +1132,60 @@ export const make = Effect.gen(function* () {
     send: (project: string, workspace: string, text: string) =>
       held(project, workspace, (one) => one.send(text)),
 
+    /**
+     * Point this workspace's chat at a fork of the terminal's conversation.
+     *
+     * Three steps, and each is there for a reason the other two do not cover:
+     *
+     *   invalidate   the adapter being held is on the old session, and it
+     *                lives for two minutes after the last reader goes. The
+     *                window would otherwise re-subscribe to what it had.
+     *   mark         the fork itself must happen inside the *new* adapter —
+     *                a fork is not loadable from another process, measured
+     *   acquire      eagerly, so this call can answer with the new id and a
+     *                refusal ("nothing else here to open") lands on the press
+     *                rather than silently on the next subscribe
+     *
+     * The window then re-subscribes and finds this same adapter still held,
+     * which is why the fork is not made twice.
+     */
+    openTerminal: (project: string, workspace: string) =>
+      Effect.gen(function* () {
+        const key = keyOf(project, workspace);
+        yield* RcMap.invalidate(conversations, key);
+        yield* Ref.update(forkNext, (all) => new Set(all).add(key));
+        return yield* Effect.scoped(
+          Effect.map(RcMap.get(conversations, key), (one) => one.sessionId),
+        );
+      }).pipe(
+        // A refusal must not leave the flag armed, or the next ordinary open
+        // of this workspace would try to fork on somebody's behalf minutes
+        // later, with nothing on screen having asked for it.
+        Effect.tapError(() =>
+          Ref.update(forkNext, (all) => {
+            const rest = new Set(all);
+            rest.delete(keyOf(project, workspace));
+            return rest;
+          }),
+        ),
+      ),
+
     answer: (project: string, workspace: string, request: string, option: string) =>
-      held(project, workspace, (one) => one.answer(request, option)),
+      Effect.tap(
+        held(project, workspace, (one) => one.answer(request, option)),
+        () => forget.get(keyOf(project, workspace))?.(request) ?? Effect.void,
+      ),
 
     config: (project: string, workspace: string) => held(project, workspace, (one) => one.config),
 
     set: (project: string, workspace: string, option: string, value: string) =>
       held(project, workspace, (one) => one.set(option, value)),
+
+    statuses: () =>
+      Stream.concat(
+        Stream.fromEffect(SubscriptionRef.get(statuses)),
+        SubscriptionRef.changes(statuses),
+      ),
   };
 });
 

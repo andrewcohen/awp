@@ -46,6 +46,7 @@
     "probe:acp": "bun packages/server/src/probe/acp.ts",
     "probe:chat": "bun packages/server/src/probe/chat.ts",
     "probe:steer": "bun packages/server/src/probe/steer.ts",
+    "acp:install": "bun packages/server/src/acp-install.ts",
     "probe:shell": "bun run --filter amoeba probe:shell"
   },
   "devDependencies": {

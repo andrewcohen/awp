@@ -112,6 +112,88 @@ const program = Effect.gen(function* () {
     console.log(`    ${line}`);
   }
 
+  // A fork of the conversation somebody else is having.
+  //
+  // The check that says the feature is safe as well as working. Two properties,
+  // and the second is the one that shaped the design:
+  //
+  //   its own id      so nobody becomes a second writer of the original
+  //   its memory      asked for, not read off a replay. The adapter forks by
+  //                   resume + forkSession, and resume "replays nothing,
+  //                   remembers everything" — so an empty replay proves
+  //                   nothing either way, and only a question does
+  //
+  // Forked at open, in the process that will hold it, because a fork made
+  // somewhere else cannot be loaded here: measured, `session/load` on a fresh
+  // fork fails and quietly lands on a new session instead.
+  const forked = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const copy = yield* conversation(spawner, { cwd: dir, model: "sonnet", fork: true });
+      const updates = yield* copy.updates;
+      const seen = yield* Ref.make<ReadonlyArray<ChatUpdate>>([]);
+      yield* Effect.forkScoped(
+        Effect.ignore(
+          Stream.runForEach(updates, (update) => Ref.update(seen, (all) => [...all, update])),
+        ),
+      );
+      yield* Effect.sleep("5 seconds");
+      const replayed = (yield* Ref.get(seen)).length;
+      yield* copy.send("What word did the file name? Reply with just that word.");
+      yield* Effect.sleep("30 seconds");
+      return { id: copy.sessionId, replayed, seen: yield* Ref.get(seen) };
+    }),
+  );
+
+  // And can it be opened again once it has said something?
+  //
+  // This is what the whole feature rests on rather than a curiosity: the
+  // adapter is released two minutes after the last window closes, so every
+  // later visit is a fresh process loading the fork by id. A fresh fork is
+  // NOT loadable — measured — and if that were still true after a turn, a
+  // forked conversation would silently become a new empty one while somebody
+  // was away from it.
+  const reopened = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const again = yield* conversation(spawner, {
+        cwd: dir,
+        model: "sonnet",
+        session: forked.id,
+      });
+      const updates = yield* again.updates;
+      const seen = yield* Ref.make<ReadonlyArray<ChatUpdate>>([]);
+      yield* Effect.forkScoped(
+        Effect.ignore(
+          Stream.runForEach(updates, (update) => Ref.update(seen, (all) => [...all, update])),
+        ),
+      );
+      yield* Effect.sleep("10 seconds");
+      return { id: again.sessionId, seen: yield* Ref.get(seen) };
+    }),
+  );
+  // Joined before it is checked. A model answers in chunks — this one arrived
+  // as "he" then "ron" — so asking whether any single update contains the word
+  // is asking whether the model happened to emit it whole. That reported a
+  // working fork as a fork with no memory, twice, which is the same mistake
+  // the panel's fold exists to prevent.
+  const said = forked.seen
+    .filter((update) => update.kind === "message" && update.role === "agent")
+    .map((update) => update.text ?? "")
+    .join("");
+  const remembered = said.includes(WORD);
+  console.log("\n3. forked, so the conversation it copied is untouched");
+  console.log(
+    `   reopened by id        ${
+      reopened.id === forked.id
+        ? `yes, replaying ${String(reopened.seen.length)} updates`
+        : `NO — a fresh process got ${reopened.id.slice(0, 8)}… instead`
+    }`,
+  );
+  console.log(
+    `   a session of its own  ${forked.id !== opened ? "yes" : "NO — it is the one it copied"}` +
+      `\n   replayed              ${String(forked.replayed)} updates before being asked anything` +
+      `\n   remembers the word    ${remembered ? `yes — "${said.trim().slice(0, 40)}"` : `NO — it said "${said.trim().slice(0, 40)}"`}`,
+  );
+
   // A conversation with no id, in a directory that already has one.
   //
   // This is the check that would have caught the bug, and neither a test nor
@@ -134,7 +216,7 @@ const program = Effect.gen(function* () {
       return { id: chat.sessionId, seen: yield* Ref.get(seen) };
     }),
   );
-  console.log("\n3. opened with no id, beside the one that exists");
+  console.log("\n4. opened with no id, beside the ones that exist");
   console.log(`   a different session   ${stranger.id !== opened ? "yes" : "NO — it joined it"}`);
   console.log(`   replayed              ${stranger.seen.length} updates`);
 
@@ -152,7 +234,15 @@ const program = Effect.gen(function* () {
       `\n  tool ids    ${merged.size} for ${String(first.filter((u) => u.kind === "tool").length)} updates` +
       `\n  replay      ${second.length > 0 ? "yes" : "NOTHING — the session was not found"}\n`,
   );
-  return heard && second.length > 0 && stranger.id !== opened && stranger.seen.length === 0 ? 0 : 1;
+  return heard &&
+    second.length > 0 &&
+    stranger.id !== opened &&
+    stranger.seen.length === 0 &&
+    forked.id !== opened &&
+    remembered &&
+    reopened.id === forked.id
+    ? 0
+    : 1;
 }).pipe(
   Effect.provide(
     NodeChildProcessSpawner.layer.pipe(
