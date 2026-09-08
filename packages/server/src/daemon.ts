@@ -37,6 +37,7 @@ import { Projects, layer as projectsLayer, migrations as projectMigrations } fro
 import * as workspaceState from "./workspace-state";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
+import { migrations as taskMigrations, layer as tasksLayer } from "./tasks";
 import * as zmx from "./zmx";
 
 /**
@@ -129,6 +130,7 @@ export const db = Layer.orDie(
     ...projectMigrations,
     ...inboxMigrations,
     ...chatMigrations,
+    ...taskMigrations,
   ]),
 );
 
@@ -199,6 +201,8 @@ export const jobs = Layer.unwrap(
 
 export const threads = threadsLayer;
 
+export const tasks = tasksLayer;
+
 export const reviews = reviewsLayer;
 
 export const projects = projectsLayer;
@@ -236,6 +240,7 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   // the output, where `jobs` finds the one already made.
   Layer.provide(jobs.pipe(Layer.provideMerge(chatLayer))),
   Layer.provide(threads),
+  Layer.provide(tasks),
   Layer.provide(reviews),
   Layer.provide(projects),
   Layer.provide(inboxLayer),

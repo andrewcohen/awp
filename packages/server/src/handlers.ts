@@ -33,6 +33,7 @@ import {
   ThreadStartFailed,
   type WorkspaceFacts,
   type WorkspaceStatus,
+  type Task,
 } from "@awp-kit/protocol";
 import { homedir } from "node:os";
 import { basename } from "node:path";
@@ -52,6 +53,27 @@ import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
 import { Threads } from "./threads";
+import { type Task as StoredTask, Tasks } from "./tasks";
+import { make as taskFeedOf } from "./task-feed";
+
+/**
+ * A stored task, as the contract has it.
+ *
+ * Narrower than the row deliberately: `sourceKey` is this store's join key and
+ * `updatedAt` is the moment of the last ingest rather than anything about the
+ * task, so neither is something a client could act on. `seq` is renamed
+ * because on the wire it is simply the order to draw them in — which source
+ * counted it is already said by `source`.
+ */
+const onTheWire = (task: StoredTask): Task => ({
+  id: task.id,
+  subject: task.subject,
+  description: task.description,
+  status: task.status,
+  source: task.source,
+  tags: task.tags,
+  seq: task.sourceSeq,
+});
 
 /** The same refusal, under the name the two review calls publish. */
 const asReviewFailure = <A, R>(
@@ -367,6 +389,7 @@ export const layer = AwpRpcs.toLayer(
     const config = yield* Settings;
     const jj = yield* Jj;
     const chat = yield* Chat;
+    const tasks = yield* Tasks;
     // Taken once, here, rather than per request. A handler's return value has
     // to name no requirements — the rpc layer is what settles them — so the
     // watcher's file system is closed over instead of being asked for inside
@@ -613,6 +636,23 @@ export const layer = AwpRpcs.toLayer(
 
         return [...imported, ...derived.toSorted((a, b) => a.name.localeCompare(b.name))];
       });
+
+    /**
+     * The task board, answered from the store and swept behind the answer.
+     *
+     * Built here rather than provided as a service because the sources are
+     * `allProjects()`, which is a closure in this body — a service would have
+     * to be handed the same list from somewhere, and there is nowhere else
+     * that holds both halves.
+     */
+    const taskFeed = yield* taskFeedOf({
+      tasks,
+      projects: () =>
+        allProjects().pipe(
+          Effect.map((all) => all.map((one) => ({ name: one.name, root: one.root }))),
+          Effect.orElseSucceed(() => []),
+        ),
+    });
 
     return {
       // No declared error, so a failure here is a defect. That is the honest
@@ -1655,6 +1695,17 @@ export const layer = AwpRpcs.toLayer(
        * since been removed, and offering it would be offering a failure two
        * screens later.
        */
+      /**
+       * Every task awp holds, from the store, with a re-read started behind it.
+       *
+       * The sources are the imported projects' own `TODO.md` files, which is
+       * why this is built from `allProjects` rather than taking a list: a
+       * second way of working out which projects exist would be a second
+       * answer to the same question.
+       */
+      TaskBoard: ({ tags, statuses }) =>
+        taskFeed.read({ tags, statuses }).pipe(Effect.map((all) => all.map(onTheWire))),
+
       ProjectList: () => allProjects(),
 
       /**

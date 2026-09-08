@@ -11,10 +11,10 @@ rather than the summary when what you learn changes the shape of the work.
 
 Regenerated wholesale. Do not hand-edit a single entry expecting it to survive — change the task, then write this out again. `bun run fmt` reflows this file, so the sequence is regenerate, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-47 open, 74 finished, as of 2026-09-08.
+46 open, 75 finished, as of 2026-09-08.
 
-Hand-edited rather than regenerated, for #115, #118, #121 and the two #91
-bullets they closed: the list they are regenerated from lives in a session that
+Hand-edited rather than regenerated, for #111, #115, #118, #121, #124
+and the two #91 bullets they closed: the list they are regenerated from lives in a session that
 has ended. The next regeneration will overwrite this.
 
 In progress: #91.
@@ -484,6 +484,13 @@ The second is the honest one today and the first becomes reasonable the moment #
 
 Either way the panel needs a composer — a field at the head, or an "+" that opens one — and it should take a subject and an optional description, since a subject alone is what makes a task list unreadable a week later.
 
+**Both routes are now avoidable, and that is the answer.** #124 landed a store
+awp owns, so adding a task is a write to its own table — no second writer of
+somebody else's file, no id to invent, and no round trip through a model that
+may reword what was typed. What is left of this task is the composer and the
+question of what a task added _here_ is tagged with, which is a smaller
+decision than the one this entry was written about.
+
 Related: [[fuzzy search over the tasks panel]] (#89) and [[a show-completed section on the tasks panel]] (#87) are the other two things the head of this panel has to hold, and there is not room for three separate controls up there. Worth designing the head once.
 
 ## 93. The rest of the agent's face on the daemon
@@ -527,7 +534,7 @@ Related: #91 is the same gap from the other side and is done. ACP gives amoeba
 a channel _to_ the agent's conversation; MCP gives the agent a channel _to_
 amoeba.
 
-## Tasks are the first thing the MCP server should offer
+## 124. Tasks are the first thing the MCP server should offer · in progress
 
 Anthropic's position is that the task tool has stopped earning its place. That
 is not the experience here: the tasks panel is one of the most-used things in
@@ -543,26 +550,35 @@ session that wrote it and cannot be seen from anywhere else.
     now       one list per Claude Code session, on disk, found by mtime
     wanted    tasks awp owns, with a scope, visible across the whole window
 
-**Scope is the design question, and tagging is probably the answer.** A task is
-not always about one thread:
+**Landed: the read half, and the panel.** `tasks.ts` is the store, `todo-tasks.ts` reads a
+project's `TODO.md`, `task-feed.ts` answers from the store and sweeps behind
+the answer, `TaskBoard` is on the wire, and `awp_tasks` / `awp_task` are the
+two MCP tools. Measured against the real daemon — 46 tasks, this file's own,
+with #91 correctly in progress and the longest body at 6722 characters. The
+panel draws it beside the session's own list as one queue, with a scope
+control for this project or everywhere. See AGENTS.md, which records those
+decisions and the one only a probe could have found: a project's root is its
+_default_ jj workspace, so reading the root reads whatever revision that
+checkout is parked on.
 
-    thread     "paginate the tabular exports"
-    project    "this repo still has no integration tests"
-    global     "learn what jj fix actually rewrites"
+**Left, in the order it is worth doing:**
 
-A field with three values forces every task to pick one and makes the third
-awkward. Tags do not, and they give the cross-cutting view for free: one panel
-listing everything, filtered by whatever tag is interesting — a project, a
-thread, or nothing at all for the whole board.
+- **Claude Code's own lists as a second source.** `agent-tasks.ts` is already
+  the reader; what is missing is the ingest call and a key shaped like
+  `<session>/<n>`. The panel already draws both sources and deliberately does
+  not deduplicate — see `tasklist.ts` — so what is left here is the ingest,
+  and the question of whether a task in both places should ever become one
+  row. Probably not: the two have different statuses and the agent's copy is
+  the one it is working from.
+- **Writing.** `add`, a status change, and a tag applied by a person — which
+  needs the tag table to distinguish a tag ingest derived from one somebody
+  applied, or a sweep will delete it. The note above the migration says so.
+- **`thread:` tags**, which is what makes the store answer "what is this
+  thread's work" rather than only "what is this project's".
 
-**What the agent should be able to do**, which is the actual MCP surface: list
-with a filter, add, update status, and link a task to the thread it is being
-worked in. Reading is the half that matters first — an agent that can see the
-project's open tasks before it starts is the thing that stops it inventing
-work already written down.
-
-Related: the pending task about adding a task from the panel, which is the same
-store from the other side.
+Related: #92 is the same store from the other side, and the store is what
+removes its dilemma — neither of its two routes has to be chosen once awp owns
+a table of its own.
 
 ## 94. A sent message sometimes lands without its Return
 
@@ -882,29 +898,6 @@ So the fix is the same as the drag's: viewed-ness has to be state the panel hold
 To settle: whether "viewed" survives a change to the file itself. Marking a file viewed and then the agent editing it should probably un-mark it, since what was read is no longer what is there. That is the same question GitHub answers by dropping the viewed mark on a new commit.
 
 Related to the pending task about the diff panel remembering what has been viewed — this is the bug in what exists, that one is the persistence.
-
-## 111. A workspace made by a job does not appear until the window is reloaded
-
-Reported: created a thread, the thread appeared, and its workspace never did — the sidebar read "nothing yet" under the heading, forever.
-
-That is exactly the failure `App.tsx` already has a fix for, and its own comment says why it is so hard to see: "nothing yet" is precisely what a thread whose creation _failed_ looks like, while the workspace, bookmark and session are all on disk. They were, in this case — checked in the store and on disk afterwards.
-
-The existing fix re-reads the sessions and the threads when the count of terminal jobs changes:
-
-    const finished = jobs.filter((job) => isTerminal(job.status)).length;
-    useEffect(() => { reloadSessions(); reloadThreads(); }, [finished]);
-
-So the suspect is the jobs feed, not the sidebar: `finished` only changes if the window is being told about the job. The daemon had been restarted a few minutes earlier, which is the one condition that takes every feed out at once — an rpc stream is a request, so its fiber dies with the connection.
-
-Measured, and it did not reproduce the way expected. From a browser against an isolated second instance, with the daemon down at page load and brought up afterwards:
-
-    before          rows=1    "no daemon — start it with bun run daemon"
-    while down      rows=1
-    after restart   rows=11   the real sidebar, with rows
-
-So the resubscribe recovers from never-having-connected. What that run did NOT test is the case that actually happened — a window connected to a live daemon, that daemon dying, and a job completing in its replacement. That is the next measurement, and it needs the daemon to be up before the page loads.
-
-Worth considering regardless: keying on a _count of terminal jobs_ makes the refresh depend on the window having witnessed the transition. A window that reconnects after the job finished sees the job already terminal, so the count is whatever it is and never changes again. That is a real hole independent of whether it is this one.
 
 ## 113. Dragging a divider near the top moves the window
 

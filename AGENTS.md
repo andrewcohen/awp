@@ -839,6 +839,221 @@ session it did not create.
 so the jobs panel can be looked at while nothing real enqueues anything. They go
 together, and they go as soon as the first real kind lands.
 
+## Tasks awp owns, filled from files nothing here writes
+
+A task list belonged to a **session**: `agent-tasks.ts` walks from a directory
+to Claude Code's transcripts to the newest task directory under them. That is a
+good reader and a bad home — a task cannot outlive the session that wrote it,
+cannot be seen from any other checkout, and cannot be about anything larger
+than the one it was written in.
+
+```
+  before   one list per Claude Code session, on disk, found by mtime
+  after    one table in awp.sqlite, tagged, readable from anywhere
+```
+
+**Nothing here is the first writer, and the panel is read-only on purpose.** A
+store nobody writes to is empty forever, so the writer is _ingest_: whatever a
+source already wrote, copied in. That keeps the promise `agent-tasks.ts` makes
+in its own comment — amoeba is not a second writer of somebody else's list —
+while giving a task a home that survives.
+
+### A tag, not a scope column
+
+```
+  thread     "paginate the tabular exports"
+  project    "this repo still has no integration tests"
+  global     "learn what jj fix actually rewrites"
+```
+
+A field with three values forces every task to pick one and makes the third
+awkward. Tags do not, and they give the cross-cutting view for free: one query,
+filtered by whatever tag is interesting, or nothing at all for everything.
+
+**A tag is deliberately not a foreign key.** `thread:<id>` is a label somebody
+applied, and it outlives the thread being archived — the same argument as
+recording a thread's `parentId` rather than re-deriving it from jj. A tag
+pointing at a thread that is gone is a claim about history, not a broken
+reference.
+
+### `unique (source, source_key)` buys two things
+
+sqlite treats NULLs as **distinct** in a UNIQUE, so the one index that makes
+ingest idempotent puts no constraint at all on a task with no source key — one
+typed here, the day there is somewhere to type it. Both from one line.
+
+`source_seq` is beside it because a source that counts its tasks writes `10`
+after `2`, and text order puts them the other way round — which is a task list
+in an order nobody wrote. `agent-tasks.ts` already sorts numerically for the
+same reason.
+
+`status` is text with **no `check`**. Claude Code's own set can grow — that file
+says "or whatever else it gains" — and a constraint here turns an upstream
+addition into a daemon that will not start.
+
+### Ingest takes the whole set, because a finished task is an absence
+
+`ingest(source, keyPrefix, tasks)` and not an upsert per task. How a task
+finishes in this repository is that its entry **leaves** `TODO.md`, and there is
+no record whose absence a per-task write could notice — the same shape as
+`useJobs`' refresh, and the same reason.
+
+**Scoped by a key prefix**, which is not decoration: without it, reading one
+project's file would delete every other project's rows, and the panel would
+show whichever project was read last.
+
+### A project's root is its default workspace, and that is the wrong file
+
+The finding that `probe:tasks` exists for, and it could not have come from a
+test — `tasks.test.ts` proves ingest over a list handed to it, and the sweep's
+whole job is to _find_ that list on a real machine.
+
+```
+  project awp, root ~/go/src/…/awp   the DEFAULT jj workspace, on an old commit
+  TODO.md there                      absent
+  TODO.md in the workspace being      46 tasks
+  worked in
+```
+
+`TODO.md` is a working-copy file, so reading a project's root reads whatever
+revision that one checkout happens to be parked on. So every candidate is
+offered — the root, and each `~/.awp/workspaces/<project>/*` — and the
+**newest by modification time** wins.
+
+Newest, and not all of them: taking all would put one project's list in the
+store several times over, at several revisions, with nothing able to say which
+row was true. It is also the rule `agent-tasks.ts` already applies to pick
+among a directory's sessions, which is the argument for it being this one.
+
+The candidates come from the directory convention rather than from
+`jj workspace list`: `workspacePath`'s shape is already the thing this repo
+relies on to recover a session's identity when it carries no labels, and a
+subprocess per project per sweep is a cost paid for an answer `readdir` has.
+
+### The read answers from the store and sweeps behind it
+
+The pull request cache's shape, for the same two reasons: Base UI unmounts a
+hidden tab, so the panel is mounted on every glance and must not cost a disk
+sweep per glance — and a question that writes is what `--ignore-working-copy`
+exists to prevent. `Effect.forkDetach` and not `fork`, because the fiber has to
+outlive the request that started it.
+
+**So a cold first read is legitimately empty**, and looks exactly like a
+project with no `TODO.md`. `probe:tasks` reads twice for that reason alone:
+
+```
+  cold   0 task(s)
+  warm   46 task(s)     ← the only line that separates "nothing to read" from
+                          "the sweep never ran"
+```
+
+### `TaskBoard`, not `TaskList` — the name was taken
+
+`TaskList` is the reader for a _session's_ own list, keyed by a directory. The
+two are deliberately different calls: that one asks what the agent in one
+checkout is doing, this one asks what is written down anywhere.
+
+### The MCP surface is two tools, and the split is the size of the answer
+
+```
+  awp_tasks   subjects, statuses and ids       scanned, and read to plan from
+  awp_task    one entry in full                where the argument actually is
+```
+
+One tool answering both would put 46 tasks' worth of argument into a context
+window to answer "what is already written down". A task here is an argument
+rather than a ticket — `TODO.md` says so in its own preamble — so the body is
+the valuable half and has to be asked for one at a time.
+
+**`scope` is not a project name.** The binding rule holds — no tool here can
+name another checkout — but the cross-cutting read is the reason the store
+exists, so it is offered as `scope: project | all` with nothing to get wrong.
+`project` is resolved from the server's own directory, through the same call
+and the same refusal `awp_thread` uses.
+
+**`includeDone` drops the status filter rather than inverting it.** The open
+set is named — `pending`, `in_progress`, `blocked` — because a negative filter
+would quietly include a status this window has never seen.
+
+### The panel draws two lists as one
+
+```
+  the session's   what the agent in this checkout wrote for itself, off disk.
+                  Dies with the session
+  the board       what awp holds — a project's TODO.md, tagged, durable
+```
+
+One list with the source as a mark, not two headed sections. Somebody scanning
+this column is asking "what should happen next", and provenance is not the axis
+they are scanning by — heading the sections makes the one thing nobody sorts by
+the primary one.
+
+**Nothing is deduplicated, and that is deliberate.** The same work being a
+`TODO.md` entry _and_ a session task is common, and the two entries are not the
+same object: different ids, different statuses, and the agent's copy is the one
+it is actually working from. Merging would have to pick a status, and picking
+wrong is worse than a row appearing twice with two honest states.
+
+**The board needs no directory**, which changes what an empty panel means. It
+used to be blank whenever no session was open; a workspace with nothing running
+still has tasks written down about it.
+
+**`#91`, not `todo:awp#91`.** The full id is what `awp_task` takes and what
+nobody would read in a 280px column — the source is already said by the mark
+and the project by the panel's scope.
+
+**The scope control widens the question rather than being a fixed choice.** The
+default is this project, because a column beside a checkout is usually asked
+about that checkout; `everywhere` is the reason the store exists at all, so it
+cannot be the thing nobody can reach. It only appears when a project is known.
+
+Measured in a browser at `#/`, which attaches to no session:
+
+```
+  47 to do        #91 and #124 first, both marked in progress
+  markdown        P · EM · CODE · PRE · STRONG — and no literal `##`
+  panel scroll    280 = 280, with 2327 characters of somebody's markdown in it
+```
+
+### A plain fence must scroll, not wrap
+
+Found by the above, and it had been wrong since `Fence.tsx` was written —
+invisible for as long as the only fences on screen were short.
+
+```
+  block  a HIGHLIGHTED fence   overflow-x: auto      ✓ columns survive
+  plain  no language on it     pre-wrap + anywhere   ✗ columns destroyed
+```
+
+A fence with no language is nearly always preformatted text whose line breaks
+**are** the content — an ascii diagram, a column of measurements, a command.
+What wrapping did to one of this file's own diagrams, in a 280px column:
+
+```
+  now       one list per Claude Code session, on disk, found by mtime
+
+  now       one list          ← the same line, wrapped. Every column gone,
+  per Claude Code               and the diagram now reads as prose
+  session, on disk,
+```
+
+So a fence's _language_ was deciding whether its alignment survived, which is
+not a distinction anybody wrote down on purpose. `plain` now matches `block`.
+
+**And `Markdown.tsx` had a `styles.pre` that nothing used.** Its comment said a
+fenced block scrolls inside its own box — the AGENTS.md rule, quoted correctly
+— while `pre:` in the components map renders `<Fence>`, which has styles of its
+own. The same shape recorded elsewhere in this file: **a declaration being
+emitted is not evidence that anything consumes it.** Measure the computed style
+on the element, which is what settled this one:
+
+```
+  whiteSpace  "pre-wrap"   overflowX  "visible"   scroll [186, 186]   before
+  whiteSpace  "pre"        overflowX  "auto"      scroll [616, 186]   after
+                                                          └─ real content
+                                                             width, scrolling
+```
+
 ## Frontend
 
 **The stack is chosen. Do not add a fourth thing to it.**
@@ -892,6 +1107,42 @@ than a `gh` call.
 The router _is_ now used, and the reason is worth stating because the obvious
 one is wrong. The window has one screen and no navigation to speak of, so
 "needs routes" was never going to be what earned it.
+
+### A stream carries changes from now, so it is not a substitute for asking
+
+Every list in the window re-asks the daemon when the socket comes back —
+`onReconnect`, in `useThreads`, `useProjects`, `useInbox`, `usePullRequest`.
+The jobs hook was the only one that did not, and its own stream is exactly
+why it had to.
+
+```
+  listJobs()     everything, as of now      ← taken once, at mount
+  JobChanges     every change FROM now      ← resubscribed on reconnect
+                 └─ so a job that went terminal while the socket was down
+                    arrives nowhere at all. The feed carries on from `now`,
+                    and `now` is after the thing that happened
+```
+
+**What that cost was not the jobs panel.** It was the sidebar. `App.tsx`
+re-reads the sessions and the threads when the jobs that have _stopped_
+change, because a job is the only thing that creates a session — so a create
+job that finished during an outage left the window with no reason to look
+again. The thread was on screen, the workspace was on disk, and the row said
+`nothing yet`, which is precisely what a thread whose creation _failed_ looks
+like.
+
+**And the key is which jobs, not how many.** It was `.length`, which only
+moves when a job finishes _and_ nothing else has left the list — and clearing
+the panel deletes terminal rows, so the count falls and the next completion
+returns it to a number it has already been. No change, therefore no refresh,
+for exactly the job somebody is waiting on. `finishedKey` in `refresh.ts`
+joins the sorted ids instead; sorted, because the listing and the feed do not
+agree on order and an order-dependent key would re-read on nothing.
+
+The general shape, which this file records twice already in other words:
+**a subscription answers what changes, and a question answers what is.**
+Anything that resubscribes has to ask again as well, or it is up to date on
+everything except what it missed.
 
 ### Anything that appears or disappears is animated
 

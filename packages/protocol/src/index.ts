@@ -201,6 +201,47 @@ export type WorkspaceFacts = (typeof WorkspaceFacts)["Type"];
 // daemon restart and the list quietly goes back to being derived.
 
 /** A repository awp has been told about. */
+/**
+ * One task awp holds.
+ *
+ * Ingested rather than authored, for now: a project's `TODO.md` and — next —
+ * Claude Code's own per-session lists are copied into awp's store, which is
+ * what makes a task outlive the session that wrote it. `source` says who may
+ * change it, and nothing in this window writes back to a source it did not
+ * create.
+ */
+export const Task = Schema.Struct({
+  id: Schema.String,
+  subject: Schema.String,
+  /** Everything under the heading, verbatim. Markdown, and rendered as such. */
+  description: Schema.String,
+  /**
+   * Free text, deliberately not a literal union.
+   *
+   * Claude Code's own set can grow — `agent-tasks.ts` says so — and a schema
+   * that refused an unknown value would make an upstream addition arrive as a
+   * decode failure rather than as a task.
+   */
+  status: Schema.String,
+  /** `todo` · `claude` · `awp`. A string for the same reason `status` is. */
+  source: Schema.String,
+  /**
+   * What the task is about, as labels rather than a scope field.
+   *
+   * `project:thicket`, `thread:<id>`, or anything a person applies. A field
+   * with three values would force every task to pick one and make the third
+   * awkward; a tag gives the cross-cutting view for free.
+   *
+   * A `thread:` tag is deliberately not a reference: it is a label applied at
+   * a moment, and it outlives the thread being archived — the same argument as
+   * a thread's `parentId` being recorded rather than re-derived.
+   */
+  tags: Schema.Array(Schema.String),
+  /** The source's own ordering number, where it has one. */
+  seq: Schema.UndefinedOr(Schema.Number),
+});
+export type Task = (typeof Task)["Type"];
+
 export const Project = Schema.Struct({
   /**
    * The repository directory's basename, and the project's whole identity.
@@ -2191,6 +2232,34 @@ export class AwpRpcs extends RpcGroup.make(
 
   Rpc.make("ProjectList", {
     success: Schema.Array(Project),
+  }),
+
+  /**
+   * Every task awp holds, filtered.
+   *
+   * Named `TaskBoard` rather than `TaskList`, which is taken by the reader for
+   * a *session's* own list — `agent-tasks.ts`'s, keyed by a directory. The two
+   * are deliberately different calls: that one asks what the agent in one
+   * checkout is doing, this one asks what is written down anywhere.
+   *
+   * Read-only, and that is the whole surface for now. There is no composer, so
+   * nothing in this window is a writer — the store is filled by ingest from
+   * sources that already existed, which keeps the promise `agent-tasks.ts`
+   * makes about not being a second writer of somebody else's list.
+   *
+   * The reply comes from the store and a re-read of the sources is started
+   * *behind* it, the same shape as the pull request cache: a panel remounted
+   * on every tab switch must not cost a disk sweep per glance, and a question
+   * that writes is what `--ignore-working-copy` exists to prevent.
+   */
+  Rpc.make("TaskBoard", {
+    payload: {
+      /** Every tag named has to be present — an AND. Absent means everything. */
+      tags: Schema.optional(Schema.Array(Schema.String)),
+      /** Absent means every status, finished ones included. */
+      statuses: Schema.optional(Schema.Array(Schema.String)),
+    },
+    success: Schema.Array(Task),
   }),
 
   /**

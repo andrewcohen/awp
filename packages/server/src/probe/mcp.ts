@@ -135,6 +135,27 @@ console.log(
   `  awp_thread    ${thread.failed ? "REFUSED " : ""}${thread.text.replaceAll("\n", "\n                ")}`,
 );
 
+// ── the task board, which is the reason the store exists ───────────────────
+//
+// Read against the real daemon, because the one thing a test cannot say is
+// whether anything actually ingested: `tasks.test.ts` proves ingest over a
+// temp file, and a board that comes back empty here means the sweep never
+// ran — which looks exactly like a project with no TODO.md.
+const tasks = await tool("awp_tasks");
+const first = tasks.text.split("\n").slice(0, 4).join("\n                ");
+console.log(`  awp_tasks     ${tasks.failed ? "REFUSED " : ""}${first}`);
+
+// And one in full, by the id the listing just gave. The value of a task here
+// is its argument rather than its subject, so a listing that cannot be
+// followed is half a feature.
+const id = /^\s+(\S+)/mu.exec(tasks.text.split("\n").slice(1).join("\n"))?.[1];
+if (id !== undefined) {
+  const one = await tool("awp_task", { id });
+  console.log(
+    `  awp_task      ${one.failed ? "REFUSED " : ""}${one.text.slice(0, 120).replaceAll("\n", " · ")}`,
+  );
+}
+
 const comments = await tool("awp_review_comments");
 console.log(
   `  comments      ${comments.failed ? "REFUSED " : ""}${comments.text.replaceAll("\n", "\n                ")}`,

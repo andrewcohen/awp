@@ -1,7 +1,17 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import type { ReviewComment, ThreadHere } from "@awp-kit/protocol";
-import { type Daemon, TOOLS, answer, commentsSaid, kindOf, parseLine, threadSaid } from "./mcp";
+import type { ReviewComment, Task, ThreadHere } from "@awp-kit/protocol";
+import {
+  type Daemon,
+  TOOLS,
+  answer,
+  commentsSaid,
+  kindOf,
+  parseLine,
+  taskSaid,
+  tasksSaid,
+  threadSaid,
+} from "./mcp";
 
 // The dispatch is a pure function of a request and a reader, so everything
 // here is testable without a process: the handshake, the tool list, the shape
@@ -57,6 +67,10 @@ const daemonOf = (
       file: (finding) => {
         asked.push(finding);
         return Effect.succeed({ where: "added a comment to rowan/tabular-exports" });
+      },
+      board: (filter) => {
+        asked.push({ board: filter });
+        return Effect.succeed([]);
       },
       ...over,
     },
@@ -309,5 +323,87 @@ describe("parseLine", () => {
     expect(parseLine("not json")).toBeUndefined();
     expect(parseLine("[1,2]")).toEqual([1, 2]);
     expect(parseLine('{"method":"x"}')).toEqual({ method: "x" });
+  });
+});
+
+const task = (over: Partial<Task> = {}): Task => ({
+  id: "todo:thicket#113",
+  subject: "Dragging a divider near the top moves the window",
+  description: "The cause is almost certainly the drag region.",
+  status: "pending",
+  source: "todo",
+  tags: ["project:thicket"],
+  seq: 113,
+  ...over,
+});
+
+describe("awp_tasks", () => {
+  it("asks for this project's tasks, from the directory and never an argument", () => {
+    // The binding rule again. The cross-cutting read is deliberately offered,
+    // but as a scope with nothing to name — so there is no call an agent could
+    // make that reaches a project it is not standing in.
+    const got = call("awp_tasks");
+    expect(got.asked).toEqual([
+      { threadAt: HERE },
+      { board: { tags: ["project:rowan"], statuses: ["pending", "in_progress", "blocked"] } },
+    ]);
+  });
+
+  it("scope all drops the tag and does not ask where it is", () => {
+    expect(call("awp_tasks", { scope: "all" }).asked).toEqual([
+      { board: { statuses: ["pending", "in_progress", "blocked"] } },
+    ]);
+  });
+
+  it("includeDone drops the status filter rather than adding to it", () => {
+    // A negative filter would quietly include a status this window has never
+    // seen, which is why the open set is named.
+    const asked = call("awp_tasks", { scope: "all", includeDone: true }).asked;
+    expect(asked).toEqual([{ board: {} }]);
+  });
+
+  it("a directory that is not a workspace refuses with the daemon's sentence", () => {
+    const got = call(
+      "awp_tasks",
+      {},
+      { threadAt: () => Effect.fail({ reason: "/tmp/x is not inside an awp workspace" }) },
+    );
+    expect(got.failed).toBe(true);
+    expect(got.text).toBe("/tmp/x is not inside an awp workspace");
+  });
+
+  it("says so when there are none", () => {
+    expect(tasksSaid([], "thicket")).toContain("No tasks recorded for thicket");
+  });
+
+  it("marks a status that is not the ordinary one, and only that", () => {
+    // pending is most rows, and marking every row is not marking anything.
+    const said = tasksSaid([task(), task({ id: "todo:thicket#91", status: "in_progress" })], "x");
+    expect(said).toContain("2 tasks for x");
+    expect(said).toContain("todo:thicket#113  Dragging");
+    expect(said).toContain("[in progress]");
+  });
+});
+
+describe("awp_task", () => {
+  it("answers the whole entry, because that is where the argument is", () => {
+    const said = taskSaid(task({ description: "Measured: 4.5s for eleven pull requests." }));
+    expect(said).toContain("Dragging a divider near the top moves the window");
+    expect(said).toContain("Tags: project:thicket");
+    expect(said).toContain("Measured: 4.5s");
+  });
+
+  it("names the tool that lists the ids when the id is wrong", () => {
+    // The sentence IS the interface here: what reads it is a model, and
+    // "not found" alone leaves it guessing at the format.
+    const got = call("awp_task", { id: "nope" }, { board: () => Effect.succeed([task()]) });
+    expect(got.failed).toBe(true);
+    expect(got.text).toContain("awp_tasks lists them");
+  });
+
+  it("refuses a call with no id before asking the daemon", () => {
+    const got = call("awp_task");
+    expect(got.failed).toBe(true);
+    expect(got.asked).toEqual([]);
   });
 });

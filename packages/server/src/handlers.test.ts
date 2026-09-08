@@ -33,6 +33,7 @@ import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews
 import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
+import { Tasks } from "./tasks";
 
 // The contract, its handlers and the services under them — everything except
 // the socket.
@@ -231,6 +232,16 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // faked, because the real one spawns claude and takes ten seconds; the
         // model call has its own probe.
         Layer.provide(settings.layer(configFor(fakes))),
+        // A task store that holds nothing. The board's own behaviour — ingest
+        // being safe twice, a sweep scoped to one project — is `tasks.test.ts`
+        // against a real file; what a fake here could say is that the handler
+        // passes a filter through, which is what reading it says.
+        Layer.provide(
+          Layer.succeed(Tasks)({
+            list: () => Effect.succeed([]),
+            ingest: () => Effect.succeed({ added: 0, changed: 0, removed: 0 }),
+          }),
+        ),
         // A conversation nobody has. The chat calls are exercised by
         // `chat.test.ts` against the update parsing, and end to end by
         // `probe:chat` — a fake here would only assert that the handler

@@ -50,6 +50,7 @@
     "acp:install": "bun packages/server/src/acp-install.ts",
     "mcp": "bun packages/server/src/mcp-main.ts",
     "probe:mcp": "bun packages/server/src/probe/mcp.ts",
+    "probe:tasks": "bun packages/server/src/probe/tasks.ts",
     "probe:shell": "bun run --filter amoeba probe:shell"
   },
   "devDependencies": {

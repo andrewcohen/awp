@@ -50,7 +50,7 @@
 
 import { join } from "node:path";
 import { Effect, Result } from "effect";
-import type { CommentKind, ReviewComment, ThreadHere } from "@awp-kit/protocol";
+import type { CommentKind, ReviewComment, Task, ThreadHere } from "@awp-kit/protocol";
 
 /**
  * Where this package's stdio entry point is on disk.
@@ -190,6 +190,10 @@ export interface Daemon {
   readonly threadAt: (from: string) => Effect.Effect<ThreadHere, Refusal>;
   readonly commentsAt: (from: string) => Effect.Effect<ReadonlyArray<ReviewComment>, Refusal>;
   readonly file: (finding: Finding) => Effect.Effect<{ readonly where: string }, Refusal>;
+  readonly board: (filter: {
+    readonly tags?: ReadonlyArray<string>;
+    readonly statuses?: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<Task>, Refusal>;
 }
 
 /**
@@ -274,7 +278,58 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "awp_tasks",
+    description:
+      "What is already written down as work to do — this project's task list, with each " +
+      "task's status and id. Read it BEFORE planning: the most common way to waste an " +
+      "hour here is to propose something that is already a task, with the reasoning for " +
+      "it already argued out. Subjects only; pass an id to awp_task for the whole entry.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        // Deliberately not a project NAME. The binding rule holds — there is
+        // no way to name another project — but the cross-cutting read is the
+        // reason the store exists, so it is offered as a scope with no
+        // argument to get wrong.
+        scope: {
+          type: "string",
+          enum: ["project", "all"],
+          description:
+            "project: the repository this checkout belongs to, the default. all: every " +
+            "project awp knows about.",
+        },
+        includeDone: {
+          type: "boolean",
+          description: "Finished tasks too. Off by default — the list is read to plan from.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "awp_task",
+    description:
+      "One task in full: the argument behind it, what was measured, what was tried and " +
+      "did not work. This is the half worth reading — a task here is an argument rather " +
+      "than a ticket, and the subject alone tells you almost nothing.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "As awp_tasks reports it." } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
 ] as const;
+
+/**
+ * The statuses a task list is read to plan from.
+ *
+ * Named rather than "not completed", because the set is open — a source may
+ * gain a status this window has never seen, and a negative filter would then
+ * quietly include it. `agent-tasks.ts` says as much about Claude Code's own.
+ */
+const OPEN = ["pending", "in_progress", "blocked"] as const;
 
 /** A tool's answer, as MCP carries one: content, and whether it went wrong. */
 const said = (text: string, failed = false): unknown => ({
@@ -288,6 +343,41 @@ const said = (text: string, failed = false): unknown => ({
   // knowing, the directory it was in.
   ...(failed ? { isError: true } : {}),
 });
+
+/**
+ * The task list, as prose.
+ *
+ * Subjects and ids, one per line, and nothing else — a list read to plan from
+ * is scanned, and 46 entries' worth of argument is most of a context window.
+ * `awp_task` is the way to the body, which is where the value is.
+ *
+ * `[in progress]` rather than a column of every status, because pending is the
+ * ordinary case and marking it would be marking every row — the same
+ * arithmetic as the inbox's leading icon having none for the common state.
+ */
+export const tasksSaid = (tasks: ReadonlyArray<Task>, scope: string): string => {
+  if (tasks.length === 0) {
+    return `No tasks recorded for ${scope}.`;
+  }
+  const lines = tasks.map((task) => {
+    const status = task.status === "pending" ? "" : ` [${task.status.replaceAll("_", " ")}]`;
+    return `  ${task.id}${status}  ${task.subject}`;
+  });
+  return [`${tasks.length} task${tasks.length === 1 ? "" : "s"} for ${scope}:`, ...lines].join(
+    "\n",
+  );
+};
+
+/** One task in full. The subject, then the argument under it, verbatim. */
+export const taskSaid = (task: Task): string =>
+  [
+    `${task.subject}${task.status === "pending" ? "" : ` — ${task.status.replaceAll("_", " ")}`}`,
+    task.tags.length === 0 ? undefined : `Tags: ${task.tags.join(", ")}`,
+    "",
+    task.description === "" ? "(no description)" : task.description,
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n");
 
 /** `path:12`, or `path:12-18` for a range. */
 const at = (comment: ReviewComment): string =>
@@ -422,6 +512,48 @@ export const answer = (
               Result.isSuccess(found)
                 ? said(commentsSaid(found.success))
                 : said(found.failure.reason, true),
+            );
+          }
+
+          case "awp_tasks": {
+            const all = text(args, "scope") === "all";
+            const done = args["includeDone"] === true;
+            // The project comes from the directory this server was started
+            // in, never from an argument — the same binding every other tool
+            // here has. `awp_thread` already answers it, and its refusal for
+            // a directory outside a workspace is the one wanted.
+            const where = all ? undefined : yield* Effect.result(daemon.threadAt(cwd));
+            if (where !== undefined && !Result.isSuccess(where)) {
+              return reply(said(where.failure.reason, true));
+            }
+            const project = where === undefined ? undefined : where.success.project;
+            const found = yield* Effect.result(
+              daemon.board({
+                ...(project === undefined ? {} : { tags: [`project:${project}`] }),
+                ...(done ? {} : { statuses: OPEN }),
+              }),
+            );
+            return reply(
+              Result.isSuccess(found)
+                ? said(tasksSaid(found.success, project ?? "every project"))
+                : said(found.failure.reason, true),
+            );
+          }
+
+          case "awp_task": {
+            const wanted = text(args, "id");
+            if (wanted === undefined) {
+              return reply(said("awp_task needs an id — awp_tasks lists them", true));
+            }
+            const found = yield* Effect.result(daemon.board({}));
+            if (!Result.isSuccess(found)) {
+              return reply(said(found.failure.reason, true));
+            }
+            const one = found.success.find((task) => task.id === wanted);
+            return reply(
+              one === undefined
+                ? said(`no task called ${wanted} — awp_tasks lists them`, true)
+                : said(taskSaid(one)),
             );
           }
 

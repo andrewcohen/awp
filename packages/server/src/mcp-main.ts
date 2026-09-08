@@ -67,6 +67,7 @@ const over = (rpc: client.AwpClientShape): Daemon => ({
       Effect.mapError(refusal),
     ),
   file: (finding) => rpc.ReviewFile(finding).pipe(Effect.mapError(refusal)),
+  board: (filter) => rpc.TaskBoard(filter).pipe(Effect.mapError(refusal)),
 });
 
 const program = Effect.gen(function* () {
