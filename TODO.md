@@ -718,32 +718,32 @@ Unconfigured should probably be "open a PR" rather than a refusal — it is the 
 
 Related: [[an open-or-create PR button in the diff head]] (#98) and [[keep a thread's bookmark at its tip]] (#41) — shipping a bookmark that sits at the first commit of a branch ships one commit, which was measured at 51 behind on this workspace. Worth deciding whether ship-it simply _is_ #98's button after a hold, rather than a second control.
 
-## 102. Render markdown in the chat, mermaid and diffs included
+## 102. Re-parse a streaming message without re-parsing all of it
 
-Once the agent's conversation is addressable rather than only drawn in a terminal — #91, ACP — the window has messages to render, and a message from an agent is markdown. That means a renderer, and two of its blocks are already solved here.
+Markdown, diffs and mermaid all landed — see the fence note in AGENTS.md. What
+is left is the one bullet that was always the hard part, and it is now the
+whole of this task.
 
-**Diffs.** A fenced ```diff block goes to `@pierre/diffs`, which is already a dependency and already the thing that renders every patch in this window. That matters beyond convenience: a diff in a message and a diff in the diff panel should look identical, or the same change reads as two different things depending on where it is seen. `parsePatchFiles` and `CodeView` take a string, which is exactly what a fenced block is.
+ACP delivers a message as it is written, and the panel folds each chunk onto
+the text and re-renders. So a long reply with three diagrams in it re-parses
+the entire message on every token, and each `Fence` decides again what it is:
 
-**Mermaid.** ```mermaid blocks render as diagrams. Worth knowing before choosing how: mermaid is large — the full bundle is several hundred KB and pulls in its own parser per diagram type — so it wants a dynamic import at the point a block appears rather than a top-level one, the same shape the highlighting worker uses. It also renders to SVG asynchronously and can throw on a malformed graph, which an agent will produce: a failed diagram must fall back to showing the source text, not to an empty box or a boundary.
+    chunk arrives    fold → whole message re-parsed by react-markdown
+                     → every fence re-mounted → mermaid asked to draw again
 
-**Everything else is the ordinary list**, and the ordinary list is where the work actually is: headings, lists, tables, links, inline and fenced code. Fenced code that is _not_ diff or mermaid should go through the same shiki highlighter the diff panel already loads, so there is one highlighter and one theme rather than two.
+Nothing about that is visible yet at the lengths a chat produces, which is why
+it is a task rather than a fix. What to measure before changing anything: the
+meter panel already answers "is something dropping frames", and a reply with a
+diagram in it is the case to watch.
 
-Three things to settle:
+`shiki-stream` ships inside `@pierre/diffs` and is worth reading first — the
+diff panel's own tokenizer already has a streaming form, so the answer may be
+to render a fence from a stream rather than to memoise the parse.
 
-- **which markdown parser.** Nothing here has one yet. Whatever it is has
-  to be safe against a message containing raw HTML — an agent quoting a
-  page will produce some — so either a parser that does not emit HTML, or a
-  sanitiser, decided rather than assumed.
-- **streaming.** ACP delivers a message as it is written, so the renderer
-  has to cope with a half-finished fence. The naive answer re-parses the
-  whole message on every chunk, which for a long message with three diagrams
-  in it is a lot of work per token. `shiki-stream` ships inside
-  `@pierre/diffs` and is worth reading before inventing something.
-- **where it lives.** Probably its own package — `@awp-kit/markdown` — since
-  the pane, the diff panel and a future chat all have a claim on it, and the
-  tsconfig project references are the import graph.
-
-Related: [[run the agent under ACP, not only in a terminal]] (#91), which is the thing that makes this worth having at all. Nothing to render until there is a conversation to render.
+A half-finished fence is the other half of the same problem: three backticks
+have arrived and the language has not, so the block is briefly a `pre` and then
+becomes a diagram. Deciding to hold a fence until it closes is cheap and may be
+all this needs.
 
 ## 103. Decide whether a service starts on its own
 

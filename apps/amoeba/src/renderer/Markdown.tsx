@@ -1,4 +1,5 @@
 import * as stylex from "@stylexjs/stylex";
+import { Fence } from "./Fence";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { colors, text } from "./tokens.stylex";
@@ -137,7 +138,18 @@ const components: Components = {
       {props.children}
     </a>
   ),
-  pre: (props) => <pre {...stylex.props(styles.pre)}>{props.children}</pre>,
+  // ── a fence is not always prose in a box ────────────────────────────────
+  //
+  // `Fence` decides by the fence's own language: a patch goes to the library
+  // that renders every other patch in this window, a mermaid block becomes a
+  // diagram, and anything else with a language is highlighted by the shiki
+  // the diff panel already has workers running for. A fence with no language
+  // is the one case that stays a `pre`.
+  //
+  // Read here rather than in `code`, because what replaces a fence is a
+  // `<div>` — and a div inside a `pre` is markup a browser repairs by closing
+  // the `pre` early, which puts the rest of the message inside the block.
+  pre: (props) => <Fence>{props.children}</Fence>,
   code: (props) => (
     // `className` is how react-markdown marks a fenced block's language,
     // and its absence is what distinguishes inline code from a block —

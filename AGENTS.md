@@ -2996,6 +2996,63 @@ read as `max_retries` first and camelCase second rather than assumed. A
 subagent behind a rate limit and a subagent doing slow work are otherwise the
 same picture, and only one of them is worth waiting for.
 
+## A fence in a message is three different things
+
+An agent answers in markdown, and three of its fences are not prose. All three
+go through machinery this window already has rather than anything new:
+
+````
+  ```diff · ```patch   parsePatchFiles → CodeView, the same components the
+                       diff panel renders every patch with
+  ```mermaid           a diagram, dynamically imported
+  ```<lang>            @pierre/diffs' `File`, which reads the worker pool out
+                       of the same context CodeView does
+````
+
+**One highlighter, and it is already behind three workers.** `File` reads
+`WorkerPoolContext` exactly as `CodeView` does — see `highlighting.tsx`, which
+puts a pool there for the window's life — so a fence costs a message to a
+worker rather than a tokenize on the thread the terminal's render loop is on.
+Reaching for shiki directly would have been the same library twice: the diff
+panel's copy resolved in three workers, and a second one resolved here.
+
+**`PatchDiff` is the obvious component and the wrong one.** It refuses anything
+that is not exactly one file, which a fence in a message usually is not:
+
+```
+  Error: FileDiff: Provided patch must contain exactly 1 file diff
+```
+
+— thrown by an agent's own one-line example, and caught by the agent column's
+error boundary, which is the boundary earning its keep. So the text is parsed
+first and whatever came back is drawn; nothing parsed means it is still a patch
+to _read_, so it goes through shiki's `diff` grammar instead of being dropped.
+
+**Read the failure, do not infer it.** The mermaid fallback fired repeatedly on
+diagrams that were fine. Two hypotheses were built and coded against on the
+strength of a bare "did not draw" — two diagrams racing, then StrictMode's
+double effect invoke making one component collide with itself — and both were
+wrong. Rendering mermaid's own sentence beside the source answered it on the
+next run:
+
+```````
+  Parse error on line 3        ← correct for the text it was given
+  ```mermaid
+  graph TD; A-->B;
+  ``````mermaid                ← six backticks: the fence never closed, so one
+  graph TD; A-->B; B-->C;        block swallowed the next
+```````
+
+**Count tokens inside the shadow root.** `File` and `CodeView` render into one,
+so `el.querySelectorAll("pre span")` is 0 in a window where highlighting is
+working perfectly — the same trap already recorded for Playwright. Walk
+`shadowRoot` explicitly:
+
+```
+  pre span, from the page          0
+  spans inside 3 shadow roots      137
+```
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes
