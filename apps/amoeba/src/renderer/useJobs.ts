@@ -1,6 +1,6 @@
 import type { Job } from "@awp-kit/jobs";
 import { useEffect, useRef, useState } from "react";
-import { listJobs, watchJobs } from "./daemon";
+import { listJobs, onReconnect, watchJobs } from "./daemon";
 
 // The jobs the window knows about, kept current.
 //
@@ -81,11 +81,30 @@ export function useJobs(): JobsView {
         }
       });
 
+    // ── re-list when the daemon comes back, like every other list ─────────
+    //
+    // This was the only hook that did not, and the stream is exactly why it
+    // has to. `JobChanges` is a feed of changes from the moment of subscribe,
+    // so a job that went terminal while the socket was down never arrives —
+    // the feed resubscribes and carries on from *now*.
+    //
+    // What that cost was not the jobs panel. The sidebar's refresh is keyed on
+    // the jobs this hook holds, so a create job that finished during an outage
+    // left the window with no reason to re-read its sessions: the thread was
+    // on screen, its workspace was on disk, and the row said "nothing yet"
+    // until somebody reloaded. See the note in App.tsx.
+    const again = onReconnect(replace);
+
     return () => {
       live = false;
       alive.current = false;
+      again();
       stop();
     };
+    // `replace` is redeclared per render and deliberately not a dependency:
+    // this effect subscribes once for the life of the hook, and re-running it
+    // would drop the feed and take the listing again on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return { jobs: [...held.values()].toSorted(newestFirst), failure, refresh: replace };

@@ -1,4 +1,3 @@
-import { isTerminal } from "@awp-kit/jobs";
 import * as stylex from "@stylexjs/stylex";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -26,6 +25,7 @@ import {
   rememberedWidths,
 } from "./remembered";
 import { rendererFixture } from "./fixture";
+import { finishedKey } from "./refresh";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
 import { colors, space, text } from "./tokens.stylex";
 import { useColumnKeys } from "./navigation";
@@ -351,11 +351,18 @@ export function App() {
   // thread whose creation *failed* looks like, while the workspace, bookmark
   // and session were all on disk.
   //
-  // Counted rather than compared: `finished` changes exactly once per job that
-  // stops, which is exactly when there might be a new session to see. The
-  // threads are re-read at the same moment because the claim that puts a
-  // workspace under its thread is the job's second-to-last step.
-  const finished = jobs.filter((job) => isTerminal(job.status)).length;
+  // Keyed on which jobs have stopped rather than how many, which is exactly
+  // when there might be a new session to see. The threads are re-read at the
+  // same moment because the claim that puts a workspace under its thread is
+  // the job's second-to-last step.
+  //
+  // And the jobs this reads have to be current for any of it to fire, which is
+  // why `useJobs` now re-lists on reconnect — the feed carries changes from
+  // the moment of subscribe, so a job that finished during an outage arrives
+  // nowhere. See the note there.
+  // A signature of which jobs have stopped, not how many — `refresh.ts` says
+  // why a count could not do it.
+  const finished = finishedKey(jobs);
   useEffect(() => {
     reloadSessions();
     reloadThreads();
