@@ -4,7 +4,7 @@ import { FolderIcon } from "@phosphor-icons/react/Folder";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { XIcon } from "@phosphor-icons/react/X";
-import { forgetProject, importProject, projectCandidates } from "./daemon";
+import { forgetProject, importProject, projectCandidates, said } from "./daemon";
 import { colors, text } from "./tokens.stylex";
 
 // Telling awp about a repository.
@@ -183,7 +183,7 @@ export function ImportProject({
         setBusy(false);
       })
       .catch((error: unknown) => {
-        setFailure(String(error));
+        setFailure(said(error));
         setBusy(false);
       });
   };
@@ -207,7 +207,7 @@ export function ImportProject({
         // The daemon's own sentence — it names the directory and says whether
         // it is missing or merely not a repository. One composed here would say
         // less and could be wrong.
-        setFailure(String(error));
+        setFailure(said(error));
         setBusy(false);
       });
   };

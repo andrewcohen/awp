@@ -132,7 +132,23 @@ const make = Effect.gen(function* () {
         (cause) =>
           new MultiplexerError({
             op,
-            reason: `${op}: zmx failed (is it installed and on PATH?)`,
+            // ── the directory, and not only the binary ────────────────────
+            //
+            // `run`'s version of this sentence names zmx and PATH, which is
+            // right for it: nothing else can stop a spawn with no `cwd`. This
+            // one has a directory, and **a directory that does not exist is
+            // also a spawn failure** — the child cannot chdir into it, and
+            // nothing about that reads as a PATH problem.
+            //
+            // What it looked like, on a workspace whose directory had been
+            // removed and whose agent somebody pressed "start" on:
+            //
+            //   start awp.awp.diff-view.agent: zmx failed
+            //     (is it installed and on PATH?)   ← zmx was installed
+            //
+            // A confident wrong cause is worse than an uncertain right one,
+            // because it sends the reader to the wrong file.
+            reason: `${op}: could not run zmx in ${cwd} (does the directory exist, and is zmx on PATH?)`,
             cause,
           }),
       ),

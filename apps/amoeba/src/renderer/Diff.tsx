@@ -18,7 +18,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { STACK, listRevisions, readDiff, watchWorkspace } from "./daemon";
+import { STACK, listRevisions, readDiff, said, watchWorkspace } from "./daemon";
 import { THEME } from "./highlighting";
 import { FOLD_MS } from "./columns";
 import { contentOf, statOf, subjectOf, versionOf } from "./patch";
@@ -734,7 +734,7 @@ export function Diff({
       .catch((error: unknown) => {
         if (mine === newest.current) {
           setPatch(undefined);
-          setFailure(error instanceof Error ? error.message : String(error));
+          setFailure(said(error));
         }
       });
   }, []);

@@ -3,7 +3,7 @@ import { Menu } from "@base-ui/react/menu";
 import type { Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
-import { archiveThread } from "./daemon";
+import { archiveThread, said } from "./daemon";
 import { colors, text } from "./tokens.stylex";
 
 // Putting a thread away, and taking its checkouts back with it.
@@ -172,7 +172,7 @@ export function ArchiveThread({
         onArchived();
       })
       .catch((error: unknown) => {
-        setFailure(error instanceof Error ? error.message : String(error));
+        setFailure(said(error));
       })
       .finally(() => setBusy(false));
   };

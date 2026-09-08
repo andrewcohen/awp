@@ -14,7 +14,7 @@ import type { InboxItem } from "@awp-kit/protocol";
 import { bucketLabel, inboxBuckets } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
-import { startReview } from "./daemon";
+import { said, startReview } from "./daemon";
 import { guide } from "./stacks";
 import { colors, space, text } from "./tokens.stylex";
 import { useInbox } from "./useInbox";
@@ -344,7 +344,7 @@ const toned = (tone: Tone | undefined): stylex.StyleXStyles | undefined => {
  * order they are drawn.
  */
 const spoken = (item: InboxItem, state: Doing | undefined): string => {
-  const said = [lead(item)?.says, ...also(item).map((mark) => mark.says)].filter(
+  const marks = [lead(item)?.says, ...also(item).map((mark) => mark.says)].filter(
     (one): one is string => one !== undefined,
   );
   const what =
@@ -355,7 +355,7 @@ const spoken = (item: InboxItem, state: Doing | undefined): string => {
         : state !== undefined
           ? `#${item.number} — ${state.says}`
           : `review #${item.number} — makes a workspace`;
-  return said.length === 0 ? what : `${what} · ${said.join(" · ")}`;
+  return marks.length === 0 ? what : `${what} · ${marks.join(" · ")}`;
 };
 
 /**
@@ -471,7 +471,7 @@ export function Inbox({
         return started;
       })
       .catch((error: unknown) => {
-        setRefused(String(error));
+        setRefused(said(error));
       })
       .finally(() => {
         // Handed over to the job, whether the call worked or not. A row left
