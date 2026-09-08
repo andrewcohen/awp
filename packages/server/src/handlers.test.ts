@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { erase, layer as jobsLayer, layerMemory } from "@awp-kit/jobs";
 import { layer as dbLayer } from "@awp-kit/store";
@@ -429,6 +429,135 @@ const parentWith = (rpc: Client, project: string, workspace: string) =>
     yield* rpc.ThreadAttach({ thread: made.id, member: { project, workspace } });
     return made.id;
   });
+
+// ── #93: the read that points the other way ───────────────────────────────
+//
+// Every wire between the window and its agent pointed one way. This is the one
+// an agent needs most, and the one a thread across two repositories cannot do
+// without: standing in one checkout, what is the rest of this work and where.
+const dirOf = (project: string, workspace: string) =>
+  join(homedir(), ".awp", "workspaces", project, workspace);
+
+describe("the thread a checkout belongs to", () => {
+  it("answers the thread, its lineage and every checkout with a path", async () => {
+    const got = await run((rpc) =>
+      Effect.gen(function* () {
+        // Through `ThreadStart`, because that is the only call that records a
+        // parent — `parentId` is a claim somebody made when they started the
+        // work, not something re-derived later. See the note on it.
+        const parent = yield* parentWith(rpc, "thicket", "the-api");
+        const started = yield* rpc.ThreadStart({
+          description: "add tabular exports to checkout",
+          project: "thicket",
+          from: "/somewhere/thicket",
+          parent,
+          base: undefined,
+        });
+        yield* rpc.ThreadAttach({
+          thread: started.thread.id,
+          member: { project: "rowan", workspace: "tabular-exports" },
+        });
+        yield* rpc.ThreadAttach({
+          thread: started.thread.id,
+          member: { project: "beta", workspace: "tabular-exports" },
+        });
+        return yield* rpc.ThreadAt({ from: dirOf("rowan", "tabular-exports") });
+      }),
+    );
+
+    expect(got.project).toBe("rowan");
+    expect(got.workspace).toBe("tabular-exports");
+    expect(got.thread?.title).toBe("add tabular exports to checkout");
+    // The parent's TITLE and not its id. An id would send the agent looking
+    // for a second call that does not exist.
+    expect(got.thread?.parent).toBe("the first thing");
+    // A path per checkout, because that is the field that makes this
+    // actionable: a pair is not something an agent can read.
+    expect(
+      got.thread?.checkouts.map((one) => `${one.project}/${one.workspace} ${one.dir}`),
+    ).toEqual([
+      `rowan/tabular-exports ${dirOf("rowan", "tabular-exports")}`,
+      `beta/tabular-exports ${dirOf("beta", "tabular-exports")}`,
+    ]);
+  });
+
+  it("a workspace no thread claims is an answer, not a refusal", async () => {
+    // Most checkouts on a real machine predate threads entirely. Refusing here
+    // would make the call useless on the ordinary case — the two negatives are
+    // different things and only one of them is a failure.
+    const got = await run((rpc) => rpc.ThreadAt({ from: dirOf("rowan", "unclaimed") }));
+
+    expect(got.workspace).toBe("unclaimed");
+    expect(got.thread).toBeUndefined();
+  });
+
+  it("an archived thread does not claim its checkouts", async () => {
+    // An archived thread is a record of work, not current work. Answering with
+    // one would tell an agent to coordinate with something nobody is doing.
+    const got = await run((rpc) =>
+      Effect.gen(function* () {
+        const made = yield* rpc.ThreadCreate({ title: "done with" });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "rowan", workspace: "old" },
+        });
+        yield* rpc.ThreadArchive({ thread: made.id, archived: true });
+        return yield* rpc.ThreadAt({ from: dirOf("rowan", "old") });
+      }),
+    );
+
+    expect(got.thread).toBeUndefined();
+  });
+
+  it("a directory outside the workspaces root refuses by name", async () => {
+    // The Go implementation is the argument: an agent that ran the filing
+    // command in the source repository filed seven findings into that
+    // repository's own review, and both sides reported success.
+    const failed = await run((rpc) =>
+      rpc.ThreadAt({ from: "/Users/x/code/thicket" }).pipe(Effect.flip),
+    );
+
+    expect(failed).toMatchObject({
+      reason: expect.stringContaining("is not inside an awp workspace"),
+    });
+  });
+
+  it("the workspaces root itself is not a workspace in it", async () => {
+    const failed = await run((rpc) =>
+      rpc.ThreadAt({ from: join(homedir(), ".awp", "workspaces") }).pipe(Effect.flip),
+    );
+
+    expect(failed).toMatchObject({
+      reason: expect.stringContaining("is the workspaces directory itself"),
+    });
+  });
+
+  it("a checkout an ended session is in is not running", async () => {
+    // zmx keeps an exited session listed, so mere presence in the listing
+    // would report every abandoned checkout as occupied — which is the
+    // opposite of what an agent asks this to decide.
+    const got = await run((rpc) =>
+      Effect.gen(function* () {
+        const made = yield* rpc.ThreadCreate({ title: "two sessions" });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "awp", workspace: "other" },
+        });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "awp", workspace: "finished" },
+        });
+        return yield* rpc.ThreadAt({ from: dirOf("awp", "other") });
+      }),
+    );
+
+    const running = new Map(
+      (got.thread?.checkouts ?? []).map((one) => [one.workspace, one.running]),
+    );
+    expect(running.get("other")).toBe(true);
+    expect(running.get("finished")).toBe(false);
+  });
+});
 
 describe("the diff a workspace is asked for", () => {
   it("asks for the working copy and everything since the main line", async () => {

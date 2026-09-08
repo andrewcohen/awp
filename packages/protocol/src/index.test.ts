@@ -267,6 +267,19 @@ const handlers = AwpRpcs.toLayer({
   ProjectImport: () => Effect.succeed(project),
   ProjectForget: () => Effect.succeed(true),
   ThreadList: () => Effect.succeed([thread]),
+  ThreadAt: ({ from }) =>
+    Effect.succeed({
+      project: "thicket",
+      workspace: "lantern",
+      dir: from,
+      thread: {
+        id: thread.id,
+        title: thread.title,
+        parent: undefined,
+        prs: thread.prs,
+        checkouts: [{ project: "thicket", workspace: "lantern", dir: from, running: true }],
+      },
+    }),
   ThreadCreate: () => Effect.succeed(thread),
   ThreadRename: () => Effect.succeed(thread),
   ThreadArchive: () => Effect.succeed(thread),

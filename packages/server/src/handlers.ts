@@ -18,6 +18,7 @@ import {
   DiffUnavailable,
   JobNotFound,
   NoAgent,
+  NotAWorkspace,
   type PageNote,
   type Project,
   ProjectImportFailed,
@@ -51,6 +52,16 @@ import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
 import { Threads } from "./threads";
+
+/** The same refusal, under the name the two review calls publish. */
+const asReviewFailure = <A, R>(
+  effect: Effect.Effect<A, NotAWorkspace | ReviewFileFailed, R>,
+): Effect.Effect<A, ReviewFileFailed, R> =>
+  effect.pipe(
+    Effect.catchTag("NotAWorkspace", (error) =>
+      Effect.fail(new ReviewFileFailed({ reason: error.reason })),
+    ),
+  );
 
 /** The kind a review is delivered to. Matches PRIMARY in the renderer. */
 const AGENT = "agent";
@@ -190,7 +201,7 @@ export const notePrompt = (note: PageNote): string => {
 };
 import { refusalFor } from "./attachment";
 import { readTasks, taskPrompt } from "./agent-tasks";
-import { Multiplexer, type Session, identities } from "./multiplexer";
+import { Multiplexer, type Session, identities, isLive } from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
 import { Sessions } from "./sessions";
 import { changesUnder } from "./watch";
@@ -524,6 +535,11 @@ export const layer = AwpRpcs.toLayer(
      * filed seven findings into that repository's own review, and both sides
      * reported success. A sentence naming the directory is the only thing that
      * makes that visible from the agent's end.
+     *
+     * `NotAWorkspace` rather than a per-call error, because the condition is
+     * the same for every directory-scoped call and there are three of them
+     * now. The two review calls map it back to their own published error, so
+     * their contract is unchanged — see each of them.
      */
     const workspaceAt = (from: string) =>
       Effect.gen(function* () {
@@ -531,7 +547,7 @@ export const layer = AwpRpcs.toLayer(
         const full = paths.resolve(from);
         if (full !== root && !full.startsWith(`${root}/`)) {
           return yield* Effect.fail(
-            new ReviewFileFailed({
+            new NotAWorkspace({
               reason: `${full} is not inside an awp workspace — run this from the workspace being reviewed`,
             }),
           );
@@ -539,7 +555,7 @@ export const layer = AwpRpcs.toLayer(
         const [project, workspace] = full.slice(root.length + 1).split("/");
         if (project === undefined || workspace === undefined || workspace === "") {
           return yield* Effect.fail(
-            new ReviewFileFailed({
+            new NotAWorkspace({
               reason: `${full} is the workspaces directory itself, not a workspace in it`,
             }),
           );
@@ -1741,6 +1757,76 @@ export const layer = AwpRpcs.toLayer(
           Effect.orDie,
         ),
 
+      /**
+       * The work a checkout is part of, asked from the checkout. See
+       * {@link ThreadHere} for what it is for and why it takes no pair.
+       *
+       * Three records joined, and each is here rather than in a service
+       * because the join is a translation:
+       *
+       *   the pair       from the directory — `workspaceAt`, the same resolver
+       *                  the two review calls use
+       *   the thread     whichever live one holds it. Archived is not a match:
+       *                  an archived thread is a record, not current work
+       *   the sessions   so each sibling checkout can say whether somebody is
+       *                  in it. `isLive`, not mere presence — zmx keeps an
+       *                  exited session listed, which would report every
+       *                  abandoned checkout as occupied
+       *
+       * `dir` on every checkout, and the caller cannot compose one: the
+       * convention is the daemon's rule. See `ThreadCheckout`.
+       *
+       * The parent's *title*, resolved here, and it is not always resolvable —
+       * a thread whose parent has since been deleted keeps its `parentId` and
+       * gets `parent: undefined`. That is the honest reading: the claim was
+       * made, and the thing it pointed at is gone.
+       */
+      ThreadAt: ({ from }) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(from);
+          const all = yield* threads.list().pipe(Effect.orDie);
+          const holding = all.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === at.project && member.workspace === at.workspace,
+              ),
+          );
+          if (holding === undefined) {
+            return { ...at, thread: undefined };
+          }
+
+          const live = yield* mux.list().pipe(Effect.orDie);
+          const found = identities(live);
+          const busy = new Set(
+            live
+              .filter((session) => isLive(session))
+              .map((session) => {
+                const id = found.get(session.name);
+                return id === undefined ? "" : `${id.project}/${id.workspace}`;
+              }),
+          );
+
+          return {
+            ...at,
+            thread: {
+              id: holding.id,
+              title: holding.title,
+              parent:
+                holding.parentId === undefined
+                  ? undefined
+                  : all.find((thread) => thread.id === holding.parentId)?.title,
+              prs: holding.prs,
+              checkouts: holding.members.map((member) => ({
+                project: member.project,
+                workspace: member.workspace,
+                dir: workspacePath(member.project, member.workspace),
+                running: busy.has(`${member.project}/${member.workspace}`),
+              })),
+            },
+          };
+        }),
+
       ThreadCreate: ({ title }) => threads.create(title).pipe(Effect.orDie),
 
       ThreadRename: ({ thread, title }) =>
@@ -1827,103 +1913,109 @@ export const layer = AwpRpcs.toLayer(
        * implementation when nothing could ask it.
        */
       ReviewAt: ({ from }) =>
-        Effect.gen(function* () {
-          const at = yield* workspaceAt(from);
-          const comments = yield* reviews.list(at.project, at.workspace).pipe(Effect.orDie);
-          return { ...at, comments };
-        }),
+        asReviewFailure(
+          Effect.gen(function* () {
+            const at = yield* workspaceAt(from);
+            const comments = yield* reviews.list(at.project, at.workspace).pipe(Effect.orDie);
+            return { ...at, comments };
+          }),
+        ),
 
       ReviewFile: (payload) =>
-        Effect.gen(function* () {
-          const at = yield* workspaceAt(payload.from);
+        asReviewFailure(
+          Effect.gen(function* () {
+            const at = yield* workspaceAt(payload.from);
 
-          if (payload.body.trim() === "") {
-            return yield* Effect.fail(new ReviewFileFailed({ reason: "the finding has no body" }));
-          }
-          if (payload.line < 1) {
-            return yield* Effect.fail(
-              new ReviewFileFailed({ reason: `line ${payload.line} is not a line` }),
-            );
-          }
+            if (payload.body.trim() === "") {
+              return yield* Effect.fail(
+                new ReviewFileFailed({ reason: "the finding has no body" }),
+              );
+            }
+            if (payload.line < 1) {
+              return yield* Effect.fail(
+                new ReviewFileFailed({ reason: `line ${payload.line} is not a line` }),
+              );
+            }
 
-          // The path is checked against the workspace, and the line against the
-          // file. Both are refusals rather than stored guesses: a finding is
-          // read by a person against the code, and one pointing at a line that
-          // is not there is worse than no finding — it reads as a comment about
-          // whatever now occupies that number.
-          const full = paths.join(at.dir, payload.path);
-          if (!full.startsWith(`${at.dir}/`)) {
-            return yield* Effect.fail(
-              new ReviewFileFailed({ reason: `${payload.path} is outside the workspace` }),
+            // The path is checked against the workspace, and the line against the
+            // file. Both are refusals rather than stored guesses: a finding is
+            // read by a person against the code, and one pointing at a line that
+            // is not there is worse than no finding — it reads as a comment about
+            // whatever now occupies that number.
+            const full = paths.join(at.dir, payload.path);
+            if (!full.startsWith(`${at.dir}/`)) {
+              return yield* Effect.fail(
+                new ReviewFileFailed({ reason: `${payload.path} is outside the workspace` }),
+              );
+            }
+            const lines = yield* files.readFileString(full).pipe(
+              Effect.map((whole) => whole.split("\n")),
+              Effect.mapError(
+                () =>
+                  new ReviewFileFailed({
+                    reason: `no file ${payload.path} in ${at.project}/${at.workspace}`,
+                  }),
+              ),
             );
-          }
-          const lines = yield* files.readFileString(full).pipe(
-            Effect.map((whole) => whole.split("\n")),
-            Effect.mapError(
-              () =>
+            const found = lines[payload.line - 1];
+            if (found === undefined) {
+              return yield* Effect.fail(
                 new ReviewFileFailed({
-                  reason: `no file ${payload.path} in ${at.project}/${at.workspace}`,
+                  reason: `${payload.path} has ${lines.length} lines, so line ${payload.line} is not one`,
                 }),
-            ),
-          );
-          const found = lines[payload.line - 1];
-          if (found === undefined) {
-            return yield* Effect.fail(
-              new ReviewFileFailed({
-                reason: `${payload.path} has ${lines.length} lines, so line ${payload.line} is not one`,
-              }),
-            );
-          }
-          // Compared with the ends trimmed. An agent quoting a line has almost
-          // certainly not preserved its indentation exactly, and refusing over
-          // whitespace would refuse a correct finding.
-          if (payload.text !== undefined && payload.text.trim() !== found.trim()) {
-            return yield* Effect.fail(
-              new ReviewFileFailed({
-                reason: `${payload.path}:${payload.line} reads "${found.trim()}", not "${payload.text.trim()}" — the line has moved`,
-              }),
-            );
-          }
+              );
+            }
+            // Compared with the ends trimmed. An agent quoting a line has almost
+            // certainly not preserved its indentation exactly, and refusing over
+            // whitespace would refuse a correct finding.
+            if (payload.text !== undefined && payload.text.trim() !== found.trim()) {
+              return yield* Effect.fail(
+                new ReviewFileFailed({
+                  reason: `${payload.path}:${payload.line} reads "${found.trim()}", not "${payload.text.trim()}" — the line has moved`,
+                }),
+              );
+            }
 
-          const at2 = new Date(yield* Clock.currentTimeMillis);
-          const endLine = payload.endLine ?? payload.line;
-          const kind = payload.kind ?? "comment";
-          const comment = yield* reviews
-            .add({
-              id: commentId(at2, Math.random()),
-              project: at.project,
-              workspace: at.workspace,
-              // The working copy: a finding is about the checkout as it stands,
-              // which is what the agent has been reading.
-              revision: "@",
-              path: payload.path,
-              side: payload.side ?? "additions",
-              line: payload.line,
-              endLine: endLine < payload.line ? payload.line : endLine,
-              body: payload.body.trim(),
-              // This call exists for an agent; a person passing `--author human`
-              // is filing on their own behalf from a terminal, which is theirs
-              // to say rather than this handler's to assume.
-              author: payload.author ?? "agent",
-              kind,
-              text: found,
-              createdAt: at2,
-              // Already delivered, in the direction that matters: a finding is
-              // written *for* the person, so there is nobody left to send it to.
-              // See `ReviewComment.author`.
-              sentAt: at2,
-            })
-            .pipe(Effect.orDie);
+            const at2 = new Date(yield* Clock.currentTimeMillis);
+            const endLine = payload.endLine ?? payload.line;
+            const kind = payload.kind ?? "comment";
+            const comment = yield* reviews
+              .add({
+                id: commentId(at2, Math.random()),
+                project: at.project,
+                workspace: at.workspace,
+                // The working copy: a finding is about the checkout as it stands,
+                // which is what the agent has been reading.
+                revision: "@",
+                path: payload.path,
+                side: payload.side ?? "additions",
+                line: payload.line,
+                endLine: endLine < payload.line ? payload.line : endLine,
+                body: payload.body.trim(),
+                // This call exists for an agent; a person passing `--author human`
+                // is filing on their own behalf from a terminal, which is theirs
+                // to say rather than this handler's to assume.
+                author: payload.author ?? "agent",
+                kind,
+                text: found,
+                createdAt: at2,
+                // Already delivered, in the direction that matters: a finding is
+                // written *for* the person, so there is nobody left to send it to.
+                // See `ReviewComment.author`.
+                sentAt: at2,
+              })
+              .pipe(Effect.orDie);
 
-          const span =
-            comment.endLine > comment.line
-              ? `${comment.line}-${comment.endLine}`
-              : `${comment.line}`;
-          return {
-            comment,
-            where: `added a ${kind} to ${at.project}/${at.workspace} on ${payload.path}:${span}`,
-          };
-        }),
+            const span =
+              comment.endLine > comment.line
+                ? `${comment.line}-${comment.endLine}`
+                : `${comment.line}`;
+            return {
+              comment,
+              where: `added a ${kind} to ${at.project}/${at.workspace} on ${payload.path}:${span}`,
+            };
+          }),
+        ),
 
       ReviewRemove: ({ comment }) => reviews.remove(comment).pipe(Effect.orDie),
 

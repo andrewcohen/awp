@@ -67,6 +67,7 @@ import type {
 } from "@awp-kit/protocol";
 import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
 import { workspacePath } from "./jobs/create-workspace";
+import { daemonUrl, mcpEntry, serverSpec } from "./mcp";
 import { childEnv } from "./zmx-session";
 
 /** Anything that stopped a conversation being had. */
@@ -587,6 +588,24 @@ export const conversation = (
       },
     };
 
+    // ── the agent's own face on the daemon ────────────────────────────────
+    //
+    // Every wire between this window and its agent pointed one way: the
+    // window could type a review at an agent, and the agent could answer only
+    // by printing into a terminal amoeba draws. This is the other direction —
+    // see `mcp.ts` — and handing it over here is what makes it need no file on
+    // disk and no edit to anybody's config.
+    //
+    // Bound to `options.cwd`, which is the workspace. Every tool is scoped to
+    // the directory the server runs in and none of them takes a workspace
+    // argument, so a conversation cannot reach another checkout. Same rule as
+    // `-R` on every jj call, made structural.
+    //
+    // Sent on **every** open, load and fork alike. A loaded conversation is a
+    // conversation continuing, and one that came back without its tools would
+    // read as an agent that had forgotten how to use them.
+    const mcpServers = [serverSpec({ entry: mcpEntry(), cwd: options.cwd, url: daemonUrl() })];
+
     /** Copy the newest other conversation in this directory, and open it. */
     const forkNewest = () =>
       Effect.gen(function* () {
@@ -619,7 +638,7 @@ export const conversation = (
         return yield* request("session/fork", {
           sessionId: from,
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
           ...claudeCode,
         });
       });
@@ -641,7 +660,7 @@ export const conversation = (
             request("session/load", {
               sessionId: options.session,
               cwd: options.cwd,
-              mcpServers: [],
+              mcpServers,
               ...claudeCode,
             }),
           );
@@ -651,7 +670,7 @@ export const conversation = (
         ? forked
         : loaded !== undefined && Result.isSuccess(loaded)
           ? loaded.success
-          : yield* request("session/new", { cwd: options.cwd, mcpServers: [], ...claudeCode });
+          : yield* request("session/new", { cwd: options.cwd, mcpServers, ...claudeCode });
 
     const sessionId = String(opened["sessionId"] ?? options.session ?? "");
     if (sessionId === "") {

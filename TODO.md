@@ -486,31 +486,46 @@ Either way the panel needs a composer — a field at the head, or an "+" that op
 
 Related: [[fuzzy search over the tasks panel]] (#89) and [[a show-completed section on the tasks panel]] (#87) are the other two things the head of this panel has to hold, and there is not room for three separate controls up there. Worth designing the head once.
 
-## 93. An MCP server so the agent can drive the window
+## 93. The rest of the agent's face on the daemon
 
-Every wire between amoeba and its agent currently points one way. The window can type at the agent — a review, a page note, a task — and the agent cannot say anything back except by printing into a terminal that amoeba only draws.
+The server exists — `packages/server/src/mcp.ts`, stdio, one per agent, every
+tool bound to the checkout it runs in. Three tools are in it: `awp_thread`,
+`awp_review_comments` and `awp_file_finding`. The transport and scope decisions
+are made and are structural, so everything below is additive.
 
-An MCP server the agent connects to turns that round. The daemon already holds everything worth exposing and already serves it over a schema-checked RPC; MCP would be a second face on the same handlers, aimed at the agent instead of at the window.
+What is left, roughly in order of how obviously it is wanted:
 
-The example that makes it concrete: **the agent posting review comments.** Today a review flows window → agent. An agent that has just finished a change should be able to annotate its own diff — "this bit is the risky one", "this file is generated, skip it" — and have those appear in the diff panel as comments beside the lines. `ReviewAdd` already takes exactly that shape (revision, path, side, two line numbers, body), so the tool is nearly the RPC.
-
-Others worth having, roughly in order of how obviously they are wanted:
-
-    open a diff at a revision       "look at what I just did"
-    open a page in the web panel    a preview, a failing CI run, a dashboard
+    open a diff at a revision       "look at what I just did". The window
+                                    would have to be told, which means a
+                                    change stream or a nudge — the first tool
+                                    here that acts on the WINDOW rather than
+                                    on the store
+    open a page in the web panel    a preview, a failing CI run, a dashboard.
+                                    Same problem, same answer
     put a task on the list          the honest version of #92, without a
                                     second writer of ~/.claude/tasks
-    read the review comments        so an agent can pick up remarks left for
-                                    it without being told them again
-    say what it is doing            the real answer to #42, volunteered
+    say what it is doing            the volunteered half of #42. The chat
+                                    already reports a turn; a terminal agent
+                                    has no way to say anything
 
-Two things to decide early, because both are hard to change later:
+**The first two need something that does not exist yet.** Every tool today
+answers a question or writes to the store, and the window reads the store. A
+tool that opens a panel has to reach a _window_, and there may be none, or two.
+Decide whether that is a stream the window subscribes to — the shape
+`JobChanges` already has — or a stored "what the agent last asked to be shown"
+that the window picks up. The second survives a reload and the first does not.
 
-**Scope.** An MCP server the agent can reach is an agent that can act on the window, including a window showing a different thread. Every tool should be bound to the workspace the agent is in — the same shape as `-R` on every jj call, and for the same reason: there should be no call that reaches the wrong place by accident.
+**The terminal agent has no MCP server.** The ACP conversation gets one handed
+to it in `session/new`; a `claude` started by the create job in a pty does not,
+because nothing writes a `.mcp.json` into the workspace and nothing adds
+`--mcp-config` to the agent command. That is most agents on a real machine. The
+bootstrap step is the obvious place, and `.awp/` is already untracked — but a
+file written into the workspace is a file that goes stale when the entry point
+moves, where the flag is resolved fresh each start.
 
-**Transport.** stdio per agent is the simple answer and means the daemon spawns a server per session. A single HTTP/SSE server on a known port, with the workspace as an argument, is one process but needs the binding above to be real rather than conventional.
-
-Related: [[run the agent under ACP, not only in a terminal]] (#91) — that is the same gap approached from the other side. ACP gives amoeba a channel _to_ the agent's conversation; MCP gives the agent a channel _to_ amoeba. They are complementary rather than alternatives, and doing both is what makes the window and the agent one system rather than two looking at each other.
+Related: #91 is the same gap from the other side and is done. ACP gives amoeba
+a channel _to_ the agent's conversation; MCP gives the agent a channel _to_
+amoeba.
 
 ## Tasks are the first thing the MCP server should offer
 

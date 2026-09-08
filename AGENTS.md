@@ -1033,6 +1033,140 @@ identical to the read before it, and was taken as "nothing happened" once.
 probe therefore reads a child of the session's pid — the first half of the same
 rule `withProcesses` applies.
 
+## The agent's own face on the daemon
+
+Every wire between the window and its agent pointed one way. The window could
+type at an agent — a review, a page note, a task — and the agent could answer
+only by printing into a terminal amoeba draws. `mcp.ts` is the other
+direction: an MCP server the agent connects to, over the same handlers the
+window uses.
+
+Three decisions, and each is the sort that is hard to change later.
+
+**The transport is stdio, one server per agent.** The alternative was one
+HTTP/SSE server on a known port with the workspace as an argument — one
+process instead of many, and it makes the binding below _conventional_ rather
+than structural: anything that could reach the port could name any workspace.
+stdio has no port and no argument, and the cost is a process that does nothing
+but forward and dies with the agent.
+
+**The scope is the working directory, and the binding is the absence of a
+parameter.**
+
+```
+  ThreadAt   ReviewAt   ReviewFile      all take `from`, none takes a pair
+  awp_thread · awp_review_comments · awp_file_finding
+                                       none takes a project or a workspace
+```
+
+There is no call an agent could make that reaches another checkout. Same rule
+as `-R` on every jj call, and `mcp.test.ts` asserts it on the tool schemas
+rather than on the dispatch — a tool that grew a `project` argument would fail
+that test before anything called it.
+
+The Go implementation is the argument: an agent that ran the filing command in
+the _source_ repository filed seven findings into that repository's own review,
+and both sides reported success. `NotAWorkspace` exists so that arrives as a
+sentence naming the directory, and the sentence _is_ the interface — what reads
+it is a model.
+
+**No MCP SDK.** MCP's stdio transport is line-delimited JSON-RPC 2.0, which is
+byte for byte what `acp.ts` already speaks to the Claude Code adapter — and
+that client is hand-rolled here for the same reason. Three methods are answered
+and one notification ignored; a dependency for thirty lines of dispatch is a
+dependency whose upgrades this repo would have to track.
+
+### A refused tool is a result; an unknown method is an error
+
+The two negatives go down different channels, and getting either wrong is
+invisible until a real client is on the other end.
+
+```
+  tools/call, no such tool     { isError: true }   the MODEL chose the name
+  tools/call, daemon refused   { isError: true }   the model has to read why
+  an unimplemented METHOD      -32601              the CLIENT asked; clients
+                                                   probe for optional methods
+                                                   expecting exactly this
+```
+
+A refusal sent as a JSON-RPC error is hidden by most clients, which tell the
+model only that the call failed — for `NotAWorkspace` that throws away the one
+thing worth knowing.
+
+**A notification is answered with nothing at all.** `notifications/initialized`
+has no `id`, and a reply carrying a null id is a protocol error at the other
+end. Every client sends it on every connection, so getting this wrong breaks
+all of them. The probe sends it _between_ two requests, deliberately: a stray
+reply would be read as the answer to the next one, which is how it would
+actually break, and is invisible if it is the last thing sent.
+
+### Prose, not JSON, because a model reads it
+
+`awp_thread` answers sentences. A JSON blob makes every field equally
+prominent, and here they are not — the other checkouts' **directories** are the
+reason to call it at all, and a pair is not something an agent can act on. So
+`ThreadCheckout` carries `dir`, which the caller could not compose: the
+convention is the daemon's rule, the same argument as `SessionIdentity` being
+on the wire.
+
+`running` on each checkout is not "healthy" — it is `isLive`, not mere presence
+in the listing, because zmx keeps an exited session listed and that would report
+every abandoned checkout as occupied.
+
+Two negatives again, and only one is a failure:
+
+```
+  not a workspace at all   NotAWorkspace — the agent is somewhere it did not
+                           expect to be, and is told by name
+  a workspace, no thread   `thread: undefined` — an answer. Most checkouts on
+                           a real machine predate threads entirely
+```
+
+Refusing the second would make the tool useless on the ordinary case.
+
+### The server is handed to the conversation, not written to a file
+
+`chat.ts` puts it in `mcpServers` on every `session/new`, `session/load` **and**
+`session/fork`. No `.mcp.json` in the workspace, no edit to anybody's config —
+and on every open rather than only new ones, because a loaded conversation that
+came back without its tools reads as an agent that has forgotten how to use
+them.
+
+`serverSpec` names `process.execPath` rather than a `bun` on the PATH, for the
+same reason `adapterPath` does: the daemon runs under Bun and the agent's
+environment is not the daemon's. And `AWP_DAEMON_URL` travels with it, so a
+second instance's agents reach the second instance — otherwise every branch
+daemon's conversations would file findings into the one somebody is working in,
+which is the same class of mistake the directory binding prevents, one level up.
+
+### `bun run probe:mcp`, and the two things it caught
+
+```
+  initialize    {"name":"awp","version":"0.0.0"} {"tools":{}}
+  tools/list    awp_thread, awp_review_comments, awp_file_finding
+  awp_thread    You are in awp/awp-kit-amoeba at …
+  outside       refused: /Users/acohen is not inside an awp workspace
+  file_finding  added a comment to awp/awp-kit-amoeba on AGENTS.md:1
+  round trip    the finding came back
+```
+
+**`await` the flush.** Bun's writable end buffers, and a `flush()` whose promise
+is dropped can leave the line unsent while the probe waits for an answer to it.
+That presents as a server that never replies — and it was the server answering
+perfectly the whole time, with nothing having reached it. Verified by running
+the entry point with a here-doc on stdin, which answered instantly.
+
+**A check that cannot fail reads as a pass.** The "started outside a workspace
+must refuse" check used `process.cwd()` and reported NOT REFUSED — correctly,
+because this repository is itself checked out at
+`~/.awp/workspaces/awp/awp-kit-amoeba`, so the probe's own directory _is_ a
+workspace. It uses `homedir()` now.
+
+The probe also removes the finding it filed, over the rpc rather than through a
+tool — because there deliberately is no removal tool. An agent that could delete
+review comments could delete the ones somebody left for it. A probe that left its
+own remarks in a person's diff panel is a probe nobody runs twice.
+
 ### `String(error)` is the tag, and only the tag
 
 Five places in the renderer rendered a refusal as `String(error)`, three of them

@@ -349,6 +349,106 @@ export class ThreadNotFound extends Schema.TaggedError<ThreadNotFound>()("Thread
 }) {}
 
 /**
+ * A directory is not a checkout awp made.
+ *
+ * The one thing that can go wrong with every **directory-scoped** call, and it
+ * is one condition rather than one per call: `~/.awp/workspaces/<project>/<ws>`
+ * either holds the path or it does not.
+ *
+ * A refusal and not a guess, and the Go implementation is why: an agent that
+ * ran the filing command in the *source* repository filed seven findings into
+ * that repository's own review, and both sides reported success. A sentence
+ * naming the directory is the only thing that makes that visible from the
+ * agent's end — which is also what makes this an error with prose in it rather
+ * than a tag to branch on. What reads it is an agent, so the sentence is the
+ * interface.
+ */
+export class NotAWorkspace extends Schema.TaggedError<NotAWorkspace>()("NotAWorkspace", {
+  reason: Schema.String,
+}) {}
+
+/**
+ * One checkout of a thread, as a caller standing in another one needs it.
+ *
+ * `dir` is the field that makes this worth sending. An agent told that its
+ * work also lives in `beta/tabular-exports` cannot do anything with the pair —
+ * it needs the path, and the path is `~/.awp/workspaces/<project>/<workspace>`,
+ * which is a rule the daemon owns. Same argument as {@link SessionIdentity}
+ * being on the wire: a caller re-deriving it is a second implementation.
+ *
+ * `running` is not "healthy". It is whether a session is live in that checkout,
+ * which is what separates "somebody is working here, coordinate" from "this is
+ * a checkout waiting to be picked up".
+ */
+export const ThreadCheckout = Schema.Struct({
+  project: Schema.String,
+  workspace: Schema.String,
+  /** Where the checkout is. The reason a pair alone would not do. */
+  dir: Schema.String,
+  /** Whether a session is running in it. */
+  running: Schema.Boolean,
+});
+
+export type ThreadCheckout = (typeof ThreadCheckout)["Type"];
+
+/**
+ * The work a checkout is part of, answered from the checkout.
+ *
+ * ── every wire pointed one way ─────────────────────────────────────────────
+ *
+ * The window could type at an agent — a review, a page note — and an agent
+ * could say nothing back except by printing into a terminal the window only
+ * draws. This is the read that turns that round, and it is the one a thread
+ * across several repositories cannot do without: an agent in one checkout has
+ * no way to learn that the api half of its own change is in another, or where.
+ *
+ * **Scoped by directory, not by argument.** There is no pair to pass, so there
+ * is no call that can reach the wrong workspace — the structural form of the
+ * `-R` rule on every jj call. It is also what makes this safe to hand an agent
+ * over MCP: the binding is the absence of a parameter.
+ *
+ * Two different negatives, and only one is a failure:
+ *
+ *   not a workspace at all   {@link NotAWorkspace} — the agent is somewhere it
+ *                            did not expect to be, and should be told by name
+ *   a workspace, no thread   `thread: undefined` — an answer. Most checkouts
+ *                            on a real machine predate threads entirely
+ */
+export const ThreadHere = Schema.Struct({
+  /** The checkout the caller is standing in. */
+  project: Schema.String,
+  workspace: Schema.String,
+  dir: Schema.String,
+  /** The work it is part of, or absent because no live thread claims it. */
+  thread: Schema.UndefinedOr(
+    Schema.Struct({
+      id: Schema.String,
+      title: Schema.String,
+      /**
+       * What this work follows on from, by title.
+       *
+       * The title and not the id, because the id is for joining and this
+       * answer is read. An id would send the agent looking for a second call
+       * that does not exist.
+       */
+      parent: Schema.UndefinedOr(Schema.String),
+      /** The pull requests this work is about. */
+      prs: Schema.Array(ThreadPr),
+      /**
+       * Every checkout the thread holds, the caller's own included.
+       *
+       * Included rather than filtered out, so a count means what it says and
+       * the caller can tell which row is itself from the pair above. Filtering
+       * would make "one member" and "no siblings" the same reading.
+       */
+      checkouts: Schema.Array(ThreadCheckout),
+    }),
+  ),
+});
+
+export type ThreadHere = (typeof ThreadHere)["Type"];
+
+/**
  * A thread could not be started — the model was unreachable, or answered with
  * something unusable.
  *
@@ -2224,6 +2324,18 @@ export class AwpRpcs extends RpcGroup.make(
    * exists solely on a remote is not something jj can branch from here without
    * fetching first, and offering it would be offering a failure.
    */
+  /**
+   * The thread a directory's checkout belongs to. See {@link ThreadHere}.
+   *
+   * The read half of the agent-facing surface, and the mirror of `ReviewAt`:
+   * both take a directory and neither takes a pair.
+   */
+  Rpc.make("ThreadAt", {
+    payload: { from: Schema.String },
+    success: ThreadHere,
+    error: NotAWorkspace,
+  }),
+
   Rpc.make("ThreadBases", {
     payload: { from: Schema.String },
     success: Schema.Array(ThreadBase),
