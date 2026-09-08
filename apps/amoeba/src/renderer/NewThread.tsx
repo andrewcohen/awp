@@ -458,6 +458,11 @@ function Composer({
     const overrides = {
       model: model === INHERIT ? undefined : model,
       effort: effort === INHERIT ? undefined : effort,
+      // Sent as well as remembered, and the remembering is not the point any
+      // more: this used to reach `localStorage` and nowhere else, so it chose
+      // which panel the window drew and the job briefed the terminal
+      // regardless. The `brief` step is what has to know. See `Face`.
+      face,
     };
     // ── the first call makes the thread, the rest join it ───────────────────
     //

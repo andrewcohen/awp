@@ -1,3 +1,4 @@
+import type { Face as ProtocolFace } from "@awp-kit/protocol";
 import { type Collapsed, type Columns, bothOpen } from "./columns";
 
 // What the window was looking at, across a reload.
@@ -381,8 +382,15 @@ export const rememberPanel = (thread: string | undefined, panel: string): void =
 // window, not of the work. Two windows on one machine may reasonably watch the
 // same workspace two different ways.
 
-/** The two faces. */
-export type Face = "terminal" | "chat";
+/**
+ * The two faces, re-exported rather than redeclared.
+ *
+ * It was a type of its own here while the choice was a window preference and
+ * nothing else. It is on the wire now — the `brief` step has to know which
+ * face to deliver to — so a second declaration of the same two words is a
+ * second place to add a third face and forget the first.
+ */
+export type Face = ProtocolFace;
 
 const FACE = "awp.face";
 const FACE_DEFAULT = "awp.face.default";

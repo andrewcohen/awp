@@ -585,6 +585,111 @@ implementation symlinked one in for exactly this reason. `input.repo` is the
 repository the workspace was made _from_, and that is where a project's own
 config actually is.
 
+### The brief goes where the person was looking
+
+Reported as "i started it in chat mode yet it is running in terminal mode",
+and the diagnosis is one line: the face was a **renderer preference**.
+
+```
+  the form       you pick "chat"  →  rememberFaceDefault("chat")  →  localStorage
+  ThreadStart    description · project · thread · from · parent · base ·
+                 model · effort            ← no face. The daemon was never told
+  the brief step zmx send <the prompt>      ← the pty, always
+```
+
+So the choice decided which panel the window _drew_ and nothing else. The
+other order is worse and is what makes this a wire field rather than a wider
+default: had the window opened on the chat face, it would have shown an empty
+conversation saying `nothing said yet` beside work happening in a terminal
+nobody was looking at. Two agents, one briefed, one visible.
+
+`Face` is on the contract now, `ThreadStart` carries it, and it is on the job
+record — as `Schema.optional`, which is the rule for every field on that
+record: the input is stored as JSON, JSON has no `undefined`, and
+`UndefinedOr` requires the key. Absent means the terminal, which is what every
+job enqueued before the field existed asked for by saying nothing.
+
+**One step, two deliveries — not two steps.** The step list is fixed per kind
+because the runner reads `done` back from the store and resumes against it, so
+a list that varied by payload is a list a restarted daemon could not
+reproduce. Same reason the bookmark is an optional _bookmark_ and never an
+optional step.
+
+**The session is still started for the chat face**, and that is a decision
+rather than an oversight. The chat is a separate process from the pty, so a
+workspace worked in the chat still gets a terminal — idle, at a prompt, for
+whoever wants one. Skipping it would leave nothing to attach to from another
+window and `zmx history` with nothing in it. Only one of them is briefed,
+though: two agents told the same thing in one checkout is two agents editing
+the same files.
+
+**A closure, not the `Chat` service.** `chat.ts` imports `workspacePath` from
+`create-workspace.ts` — it is the one place the workspaces convention lives —
+so the job importing `Chat` would be a cycle, and `import/no-cycle` is on
+repo-wide. `daemon.ts` wires one call, which is the one place both are in hand.
+
+And it is resolved **there**, not reached for inside the step:
+`Effect.flatMap(Chat, …)` would put `Chat` in the step's requirement channel,
+and **a step's `run` has no requirements** — a step resumed by a restarted
+daemon has no caller whose context it could inherit.
+
+**One Chat, shared.** `Layer.provideMerge`, not `provide`: `provide` keeps the
+dependency private to what it provided to, so a second `Layer.provide(chatLayer)`
+under `jobs` would build a second `Chat`. Two would mean the job briefing a
+conversation nobody is watching, which from outside is a chat that came up
+empty next to work that had already been asked for.
+
+### `send` returns before the answer, and that kills a briefed agent
+
+The part that made the fix not work, and it is a bug that was already there.
+
+`RcMap` releases a conversation two minutes after its last reference goes, and
+releasing it kills the adapter. `send` returns as soon as the adapter accepts
+the prompt — which is right for a person typing, because their window is
+subscribed and something is holding it. **The create job has no window.** So a
+brief delivered by `send` alone reaches the agent and then has it shot two
+minutes into its first answer, which from outside is a model that gave up
+mid-thought.
+
+It is not new. A person who sends a message and switches to the diff tab
+unmounts the chat panel — Base UI unmounts a hidden tab — which drops the
+subscription, and a long answer dies the same way. The job made it certain
+rather than likely.
+
+`Chat.brief` is `send` plus holding the reference until the turn has ended, and
+the caller's own wait is what does the holding. It is the last step of a job
+that already spends minutes in `bun install`, and a step that waits is a step
+the jobs panel can show — better feedback than a job that says succeeded while
+the agent is still reading.
+
+**Polled, not driven off the change stream.** `statuses` has one and
+`settledWhen` does not use it, because what is wanted is a _settled_ reading
+and the stream is a stream of edges: the status is absent both before a turn
+starts and after it ends. An edge-driven wait either returns instantly on the
+reading it began with or has to reason about which absence it is looking at.
+Two reads a second for a few minutes costs nothing measurable.
+
+**Two bounds, and neither fails.**
+
+```
+  startsWithin  30s   an adapter that accepted the prompt and did nothing with
+                      it is a real thing — the whole reason `send` reports how
+                      it was delivered. Without this the step hangs forever
+  holdsFor      20m   a turn running for an hour is the agent doing what it
+                      was asked, and a job has no business holding a step open
+                      that long
+```
+
+Giving up is not a failure: the transcript is on disk, so somebody opening the
+chat re-acquires the adapter and replays. A timeout that _failed_ would fail a
+job whose work is already done.
+
+`settledWhen` takes a reading rather than the ref, which is the only thing that
+makes those two bounds testable — the real one is a `SubscriptionRef` fed by an
+adapter, and there is no adapter in a test. The script `idle, working, working,
+idle` is the shape that catches the hazard: a wait that returned on the first
+idle reading passes every other check.
+
 ### A hook is a line, an agent is a program
 
 `hooks.bootstrap` is whatever should run in a new workspace before its agent is

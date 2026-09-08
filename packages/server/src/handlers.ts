@@ -967,7 +967,17 @@ export const layer = AwpRpcs.toLayer(
           ];
         }),
 
-      ThreadStart: ({ description, project, from, parent, base, model, effort, thread: into }) =>
+      ThreadStart: ({
+        description,
+        project,
+        from,
+        parent,
+        base,
+        face,
+        model,
+        effort,
+        thread: into,
+      }) =>
         Effect.gen(function* () {
           // Refused before anything else, and cheaply. Naming happens inside
           // the job now, so this is no longer caught by the model declining an
@@ -1095,6 +1105,11 @@ export const layer = AwpRpcs.toLayer(
               repo,
               base: startFrom,
               agent: agentWith(settings, { model, effort }),
+              // Which face the `brief` step delivers to. Forwarded rather than
+              // defaulted here: absent on the payload and absent on the record
+              // mean the same thing — the terminal — and the step is the one
+              // place that reading belongs.
+              ...(face === undefined ? {} : { face }),
             })
             .pipe(Effect.orDie);
 

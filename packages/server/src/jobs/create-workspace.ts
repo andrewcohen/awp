@@ -114,6 +114,24 @@ export interface WorkspaceDeps {
   readonly settings: Settings["Service"];
   /** Runs the configured bootstrap hooks. See the `bootstrap` step. */
   readonly run: Bootstrap["Service"];
+  /**
+   * Delivers the brief to the chat, when that is the face that was chosen.
+   *
+   * ── a function and not the `Chat` service, because of the import graph ───
+   *
+   * `chat.ts` imports `workspacePath` from this file — it is the one place the
+   * `~/.awp/workspaces/<project>/<workspace>` convention lives — so importing
+   * `Chat` here would be a cycle, and `import/no-cycle` is on repo-wide.
+   *
+   * Narrow rather than convenient, and that is worth keeping either way: what
+   * this step needs is one call, and a step that held the whole service could
+   * quietly start doing something else with it.
+   */
+  readonly brief: (options: {
+    readonly project: string;
+    readonly workspace: string;
+    readonly text: string;
+  }) => Effect.Effect<void, { readonly reason: string }>;
 }
 
 /**
@@ -209,7 +227,7 @@ export const expandHook = (command: string, repo: string): string =>
   command.replaceAll("<root>", repo);
 
 export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> => {
-  const { jj, mux, threads, files, intent, settings, run, github } = deps;
+  const { jj, mux, threads, files, intent, settings, run, github, brief } = deps;
 
   const agentSession = (project: string, workspace: string): string =>
     sessionName(project, workspace, AGENT);
@@ -706,14 +724,36 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
           yield* context.log("nothing to tell the agent");
           return;
         }
+        const workspace = yield* named(input);
+
+        // ── the brief goes where the person was looking ───────────────────
+        //
+        // This step used to type into the pty unconditionally, and the face
+        // the new-thread form offered only ever reached `localStorage`. So a
+        // thread started in chat mode was briefed in the terminal, and the
+        // chat — if the window opened on it — showed an empty conversation
+        // saying `nothing said yet` beside work happening somewhere else.
+        //
+        // Absent means the terminal, which is what every job enqueued before
+        // this field existed asked for by saying nothing.
+        if (input.face === "chat") {
+          yield* context.log("telling the chat what to do");
+          yield* brief({ project: input.project, workspace, text: input.prompt }).pipe(
+            Effect.mapError((error) => permanent(`could not brief the chat: ${error.reason}`)),
+          );
+          return;
+        }
+
         yield* context.log("telling the agent what to do");
         yield* mux
-          .send(agentSession(input.project, yield* named(input)), input.prompt)
+          .send(agentSession(input.project, workspace), input.prompt)
           .pipe(Effect.mapError(refused("could not brief the agent")));
       }),
-    // No undo, and none is possible: there is no way to un-type something into
-    // a terminal. That is why this is **last** — nothing after it can fail and
-    // send the runner back through a step that cannot be run twice safely.
+    // No undo, and none is possible for either face: there is no way to
+    // un-type something into a terminal, and no way to unsay something to an
+    // agent that has already started answering. That is why this is **last** —
+    // nothing after it can fail and send the runner back through a step that
+    // cannot be run twice safely.
   };
 
   const claimStep: JobStep<CreateWorkspace> = {

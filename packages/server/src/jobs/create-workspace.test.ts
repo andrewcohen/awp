@@ -160,6 +160,9 @@ const deps = (): WorkspaceDeps => ({
     run: ({ command, cwd }: { readonly command: string; readonly cwd: string }) =>
       act(`hook(${command}@${cwd.split("/").slice(-2).join("/")})`).pipe(Effect.as("")),
   } as unknown as Bootstrap["Service"],
+  // The chat's half of the brief. On the trace like everything else, so the
+  // test can say WHICH face was told rather than only that something was.
+  brief: ({ project, workspace }) => act(`chat.brief(${project}/${workspace})`),
 });
 
 const input = (over: Partial<CreateWorkspace> = {}): CreateWorkspace => ({
@@ -366,6 +369,72 @@ describe("making a workspace", () => {
     ]);
     expect(trace.some((line) => line.startsWith("jj.bookmark"))).toBe(false);
     expect(job.status).toBe("succeeded");
+  });
+});
+
+// ── the brief goes where the person was looking ───────────────────────────
+//
+// Reported as "i started it in chat mode yet it is running in terminal mode".
+// The new-thread form has offered the choice for as long as there have been
+// two faces, and it only ever reached `localStorage` — so it decided which
+// panel the window drew and the job typed into the pty either way.
+describe("which face is briefed", () => {
+  test("the terminal, by default and when asked for", async () => {
+    for (const face of [undefined, "terminal" as const]) {
+      trace = [];
+      threadIds = new Set(["20260826-aaaa"]);
+      const job = await make(face === undefined ? {} : { face });
+
+      expect(job.status).toBe("succeeded");
+      expect(trace.at(-1)).toBe("zmx.send(awp.rowan.tabular-exports.agent)");
+      expect(trace.some((line) => line.startsWith("chat.brief"))).toBe(false);
+    }
+  });
+
+  test("the chat, when that is what was chosen", async () => {
+    const job = await make({ face: "chat" });
+
+    expect(job.status).toBe("succeeded");
+    expect(trace.at(-1)).toBe("chat.brief(rowan/tabular-exports)");
+    // And NOT the terminal as well. Two agents briefed with the same prompt in
+    // one checkout is two agents editing the same files, which is worse than
+    // either one alone.
+    expect(trace.some((line) => line.startsWith("zmx.send"))).toBe(false);
+  });
+
+  test("the session is still started for the chat face", async () => {
+    // Deliberate, and the trade is worth stating. The chat is a separate
+    // process from the pty, so a workspace worked in the chat still gets a
+    // terminal — idle, at a prompt, for when somebody wants one. Skipping it
+    // would leave no way to attach from another window, and `zmx history`
+    // with nothing in it.
+    await make({ face: "chat" });
+
+    expect(trace).toContain("zmx.start(awp.rowan.tabular-exports.agent)");
+  });
+
+  test("a chat that refuses fails the job, and the rollback runs", async () => {
+    // The same rule the bootstrap hooks follow: a workspace that reports
+    // success and was never briefed is a workspace whose agent is sitting
+    // there having been asked nothing, and the person finds out minutes later.
+    breaking = new Set(["chat.brief(rowan/tabular-exports)"]);
+    const job = await make({ face: "chat" });
+
+    expect(job.status).toBe("failed");
+    expect(job.error).toContain("could not brief the chat");
+    expect(trace).toContain("zmx.kill(awp.rowan.tabular-exports.agent)");
+  });
+
+  test("the step list does not vary by face", async () => {
+    // The runner reads `done` back from the store and resumes against the
+    // kind's list, so a list that varied by payload is a list a restarted
+    // daemon could not reproduce. Both faces are one step doing two things.
+    const terminal = await make();
+    trace = [];
+    threadIds = new Set(["20260826-aaaa"]);
+    const chat = await make({ face: "chat" });
+
+    expect(chat.steps).toEqual(terminal.steps);
   });
 });
 

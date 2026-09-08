@@ -239,6 +239,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
           Layer.succeed(Chat)({
             open: () => Effect.succeed(Stream.empty),
             send: () => Effect.succeed("prompt" as const),
+            brief: () => Effect.void,
             openTerminal: () => Effect.succeed("forked-1"),
             statuses: () => Stream.empty,
             answer: () => Effect.void,
@@ -814,6 +815,27 @@ describe("jobs over the contract", () => {
     ]);
   });
 
+  // ── the seam that was missing ─────────────────────────────────────────────
+  //
+  // Reported as "i started it in chat mode yet it is running in terminal
+  // mode". The choice reached `localStorage` and stopped there, so it decided
+  // which panel the window drew and the job typed into the pty either way.
+  // The `brief` step's own branch is tested in create-workspace.test.ts; what
+  // was actually broken is this — nothing carried the choice to it.
+  it("puts the chosen face on the job, so the brief step can read it", async () => {
+    const found = await run((rpc) =>
+      rpc.ThreadStart({
+        description: "add tabular exports to checkout",
+        project: "thicket",
+        from: "/somewhere/thicket",
+        face: "chat",
+        base: undefined,
+      }),
+    );
+
+    expect((found.job.input as { readonly face?: string }).face).toBe("chat");
+  });
+
   it("starts a thread from a sentence, and hands back the job building it", async () => {
     const found = await run((rpc) =>
       rpc.ThreadStart({
@@ -833,6 +855,10 @@ describe("jobs over the contract", () => {
     // The name is not on the input yet, and that is the point: this call no
     // longer waits ten seconds for one.
     expect((found.job.input as { readonly workspace?: string }).workspace).toBeUndefined();
+    // And no face, which is the terminal. Absent on the payload and absent on
+    // the record mean the same thing, so the handler forwards rather than
+    // defaulting — the `brief` step is the one place that reading belongs.
+    expect((found.job.input as { readonly face?: string }).face).toBeUndefined();
   });
 
   // ── adding a repository to a thread that exists ──────────────────────────

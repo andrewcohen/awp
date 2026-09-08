@@ -14,7 +14,7 @@ import { AwpRpcs } from "@awp-kit/protocol";
 import { NodeSocketServer } from "@effect/platform-node-shared";
 import { Effect, FileSystem, Layer } from "effect";
 import { Bootstrap, layer as bootstrapLayer } from "./bootstrap";
-import { layer as chatLayer, migrations as chatMigrations } from "./chat";
+import { Chat, layer as chatLayer, migrations as chatMigrations } from "./chat";
 import { Github } from "./github";
 import * as githubCli from "./github-cli";
 import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
@@ -156,6 +156,7 @@ export const db = Layer.orDie(
  */
 export const jobs = Layer.unwrap(
   Effect.gen(function* () {
+    const chat = yield* Chat;
     const deps = {
       jj: yield* Jj,
       mux: yield* Multiplexer,
@@ -165,6 +166,28 @@ export const jobs = Layer.unwrap(
       settings: yield* Settings,
       run: yield* Bootstrap,
       github: yield* Github,
+      // ── the create job's one call into the chat ─────────────────────────
+      //
+      // A closure and not the service, because `chat.ts` imports
+      // `workspacePath` from `create-workspace.ts` — so the job importing
+      // `Chat` would be a cycle, and `import/no-cycle` is on repo-wide.
+      // Wired here, which is the one place both are in hand.
+      //
+      // `brief` and not `send`, and the difference is the reason the method
+      // exists: `send` returns as soon as the adapter accepts the prompt, and
+      // with no window subscribed the conversation is released two minutes
+      // later — which kills the adapter two minutes into the agent's first
+      // answer. `brief` holds it until the turn has ended. See chat.ts.
+      // Resolved here rather than reached for inside the step, and that is a
+      // rule rather than a style: **a step's `run` has no requirements** and
+      // cannot — a step resumed by a restarted daemon has no caller whose
+      // context it could inherit. `Effect.flatMap(Chat, …)` would put `Chat`
+      // in that channel and the kind would stop being buildable.
+      brief: (options: {
+        readonly project: string;
+        readonly workspace: string;
+        readonly text: string;
+      }) => chat.brief(options.project, options.workspace, options.text),
     };
     // `projects` is only the archive job's: it turns a member's project *name*
     // into the repository path `jj -R` needs. Kept out of `deps` so the create
@@ -199,8 +222,19 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(NodeSocketServer.layerWebSocket({ host: DAEMON_HOST, port: DAEMON_PORT })),
   Layer.provide(handlers.layer),
   Layer.provide(services),
-  Layer.provide(chatLayer),
-  Layer.provide(jobs),
+  // ── one Chat, and both of its consumers get that one ──────────────────────
+  //
+  // The handlers hold the conversations a window watches; the create job's
+  // `brief` step delivers into one. Those have to be the *same* service — two
+  // instances would mean the job briefing a conversation nobody is looking at,
+  // and from outside that is a chat that came up empty next to work that had
+  // already been asked for.
+  //
+  // `provideMerge` and not `provide` for exactly that: `provide` keeps the
+  // dependency private to what it provided to, so a second `Layer.provide(
+  // chatLayer)` under `jobs` would build a second Chat. Merging leaves it in
+  // the output, where `jobs` finds the one already made.
+  Layer.provide(jobs.pipe(Layer.provideMerge(chatLayer))),
   Layer.provide(threads),
   Layer.provide(reviews),
   Layer.provide(projects),

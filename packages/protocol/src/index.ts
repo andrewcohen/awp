@@ -344,6 +344,29 @@ export const Thread = Schema.Struct({
 
 export type Thread = (typeof Thread)["Type"];
 
+/**
+ * Which of the agent column's two faces a workspace is worked in.
+ *
+ * ── it was a renderer preference, and that was the bug ────────────────────
+ *
+ * The new-thread form has offered this choice for as long as there have been
+ * two faces, and it only ever reached `localStorage`: it decided which panel
+ * the *window drew* and was never sent anywhere. The job started a `claude` in
+ * a pty and typed the prompt into it whichever face was chosen, so a thread
+ * started in chat mode ran in the terminal.
+ *
+ * Reported as "i started it in chat mode yet it is running in terminal mode",
+ * and the half that makes it worth a wire field rather than a wider default is
+ * the other order: had the window opened on the chat face, it would have shown
+ * an empty conversation saying `nothing said yet` while the work happened in a
+ * terminal nobody was looking at. Two agents, one briefed, one visible.
+ *
+ * So the choice crosses to the daemon, and the `brief` step delivers to it.
+ */
+export const Face = Schema.Literals(["terminal", "chat"]);
+
+export type Face = (typeof Face)["Type"];
+
 export class ThreadNotFound extends Schema.TaggedError<ThreadNotFound>()("ThreadNotFound", {
   thread: Schema.String,
 }) {}
@@ -664,6 +687,19 @@ export const CreateWorkspace = Schema.Struct({
    * branch anybody should push — falls out of fields that already existed.
    */
   review: Schema.optional(ReviewTarget),
+  /**
+   * Where the `brief` step delivers the prompt. See {@link Face}.
+   *
+   * `Schema.optional` and not `UndefinedOr`, which is the rule for everything
+   * on this record: the input is stored as JSON, JSON has no `undefined`, and
+   * `UndefinedOr` requires the key — so a job enqueued without a face would
+   * die on its first step with "stored input does not match", one backoff
+   * after the mistake and in a message about the wrong thing.
+   *
+   * Absent means the terminal, which is what every job written before this
+   * field existed did.
+   */
+  face: Schema.optional(Face),
   /** What the agent session runs. */
   agent: Schema.Array(Schema.String),
 });
@@ -2405,6 +2441,14 @@ export class AwpRpcs extends RpcGroup.make(
        * follow it, because two of a flag is a thing the CLI resolves by a rule
        * nobody here should be relying on. See `agentWith` in settings.ts.
        */
+      /**
+       * Which face to brief. Absent means the terminal.
+       *
+       * On the payload rather than left to the window, because what the window
+       * can do with it alone is draw a panel — and the thing that has to know
+       * is the job's last step. See {@link Face}.
+       */
+      face: Schema.optional(Face),
       model: Schema.optional(Model),
       effort: Schema.optional(Effort),
     },

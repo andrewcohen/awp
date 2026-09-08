@@ -47,8 +47,10 @@ import { Db, type Migration, attempt } from "@awp-kit/store";
 import {
   Context,
   Data,
+  Duration,
   Effect,
   Layer,
+  Option,
   Queue,
   RcMap,
   Ref,
@@ -69,6 +71,63 @@ import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
 import { workspacePath } from "./jobs/create-workspace";
 import { daemonUrl, mcpEntry, serverSpec } from "./mcp";
 import { childEnv } from "./zmx-session";
+
+/**
+ * How long {@link settledWhen} waits, in the daemon.
+ *
+ * Both bounds exist because either failure is silent:
+ *
+ *   startsWithin  a turn that never begins would wait forever. An adapter that
+ *                 accepted the prompt and did nothing with it is a real thing
+ *                 — the whole reason `send` reports how it was delivered — and
+ *                 a job step must not hang on one
+ *   holdsFor      a turn that runs for an hour is the agent doing what it was
+ *                 asked, and a job has no business holding a step open that
+ *                 long. Giving up is not a failure: the transcript is on disk,
+ *                 so somebody opening the chat re-acquires the adapter and
+ *                 replays what happened
+ */
+export const WAITS = { startsWithin: "30 seconds", holdsFor: "20 minutes" } as const;
+
+/**
+ * Hold on until a turn has started and then finished.
+ *
+ * Takes a reading rather than the ref, which is what makes the two bounds
+ * testable at all: the real one is a `SubscriptionRef` fed by an adapter, and
+ * there is no adapter in a test.
+ *
+ * ── polled, deliberately ─────────────────────────────────────────────────
+ *
+ * `statuses` has a change stream and this does not use it, because what is
+ * wanted is a *settled* reading and the stream is a stream of edges. The
+ * status is absent both before a turn starts and after it ends, so an
+ * edge-driven wait either returns instantly on the reading it began with or
+ * has to reason about which absence it is looking at. Two reads a second for a
+ * few minutes costs nothing measurable.
+ *
+ * **Neither bound fails.** This is a keepalive, not a verification — whatever
+ * was being said has been said by the time this is called, and a timeout that
+ * failed would fail a job whose work is done.
+ */
+export const settledWhen = (
+  busy: Effect.Effect<boolean>,
+  waits: { readonly startsWithin: Duration.Input; readonly holdsFor: Duration.Input },
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const until = (wanted: boolean) =>
+      Effect.andThen(Effect.sleep("100 millis"), busy).pipe(
+        Effect.repeat({ until: (running) => running === wanted }),
+      );
+
+    // `Option.isNone` rather than a tag check, and this is the case that
+    // matters: no turn ever started, so there is nothing to hold open for and
+    // waiting the whole window would be a step asleep for twenty minutes over
+    // an adapter that ignored what it was told.
+    if (Option.isNone(yield* Effect.timeoutOption(until(true), waits.startsWithin))) {
+      return;
+    }
+    yield* Effect.timeoutOption(until(false), waits.holdsFor);
+  });
 
 /** Anything that stopped a conversation being had. */
 export class ChatError extends Data.TaggedError("ChatError")<{
@@ -905,6 +964,35 @@ export class Chat extends Context.Service<
     ) => Effect.Effect<ChatDelivery, ChatError>;
 
     /**
+     * Say the first thing to a conversation nobody is watching, and stay until
+     * the agent has finished answering.
+     *
+     * ── why this is not `send` ────────────────────────────────────────────
+     *
+     * `send` returns as soon as the adapter has accepted the prompt, which is
+     * right for a person typing: the window is subscribed, so something holds
+     * the conversation open while the answer arrives.
+     *
+     * The create job has no window. `RcMap` releases a conversation two
+     * minutes after its last reference goes, and releasing it kills the
+     * adapter — so a brief delivered by `send` alone reaches the agent and
+     * then has the agent shot two minutes into its first answer. What that
+     * looks like from outside is a chat that was asked something and stopped
+     * mid-thought, which is indistinguishable from a model that gave up.
+     *
+     * So this holds the reference until the turn it started has ended, and the
+     * caller's own wait is what does the holding. It is the last step of a job
+     * that already spends minutes in `bun install`; a step that waits is a
+     * step the jobs panel can show, which is better feedback than a job that
+     * says succeeded while the agent is still reading.
+     */
+    readonly brief: (
+      project: string,
+      workspace: string,
+      text: string,
+    ) => Effect.Effect<void, ChatError>;
+
+    /**
      * What each workspace's chat agent is doing, now and whenever it changes.
      *
      * Only `working` and `waiting` are ever reported, and a workspace with an
@@ -1137,6 +1225,13 @@ export const make = Effect.gen(function* () {
   // that writing to a session nobody is attached to has to fail — a pty is a
   // live thing — where saying something to a conversation nobody has open is
   // perfectly meaningful, and opening one to say it is the right answer.
+  /** Whether a turn is in flight on this key, and holding on until none is. */
+  const settled = (key: string) =>
+    settledWhen(
+      Effect.map(SubscriptionRef.get(statuses), (all) => all.get(key) !== undefined),
+      WAITS,
+    );
+
   const held = <A>(
     project: string,
     workspace: string,
@@ -1150,6 +1245,11 @@ export const make = Effect.gen(function* () {
 
     send: (project: string, workspace: string, text: string) =>
       held(project, workspace, (one) => one.send(text)),
+
+    brief: (project: string, workspace: string, text: string) =>
+      held(project, workspace, (one) =>
+        Effect.andThen(one.send(text), settled(keyOf(project, workspace))),
+      ),
 
     /**
      * Point this workspace's chat at a fork of the terminal's conversation.

@@ -12,6 +12,7 @@ import type {
   ChatUpdate,
   CommentSide,
   Effort,
+  Face,
   Inbox,
   PageNote,
   Patch,
@@ -456,6 +457,15 @@ export const startThread = (payload: {
    */
   readonly model?: string | undefined;
   readonly effort?: Effort | undefined;
+  /**
+   * Which face the `brief` step delivers the prompt to.
+   *
+   * Sent, rather than only remembered in this window. The form has offered
+   * this choice for as long as there have been two faces and it only ever
+   * reached `localStorage`, so a thread started in chat mode was briefed in
+   * the terminal — see `Face` in the contract.
+   */
+  readonly face?: Face | undefined;
 }): Promise<ThreadStarted> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadStart(payload)));
 

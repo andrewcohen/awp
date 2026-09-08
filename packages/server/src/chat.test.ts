@@ -1,5 +1,6 @@
+import { Effect, Exit, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import { MODE, migrations, optionsOf, permissionOf, updateOf } from "./chat";
+import { MODE, migrations, optionsOf, permissionOf, settledWhen, updateOf } from "./chat";
 
 // The shapes here are not invented: they are the updates a real turn produced,
 // copied off a spike against the adapter on 2026-08-28. A fixture written from
@@ -335,5 +336,80 @@ describe("optionsOf", () => {
     // offers today is a select, so nothing is lost by saying so.
     expect(optionsOf([{ id: "note", type: "string", currentValue: "hi" }])).toEqual([]);
     expect(optionsOf(undefined)).toEqual([]);
+  });
+});
+
+// ── holding a conversation open for the turn it was just told to start ──────
+//
+// `send` returns as soon as the adapter accepts a prompt, which is right for a
+// person typing: their window is subscribed, so something holds the
+// conversation. The create job has no window — `RcMap` releases a conversation
+// two minutes after its last reference and releasing it kills the adapter — so
+// a brief delivered by `send` alone gets the agent shot two minutes into its
+// first answer.
+//
+// The bounds are here rather than in the daemon because both failures are
+// silent: one hangs a job step forever, the other holds one for twenty
+// minutes over an adapter that ignored what it was told.
+/** A reading that answers from a script, one call at a time. */
+const readings = (script: ReadonlyArray<boolean>) =>
+  Effect.gen(function* () {
+    const at = yield* Ref.make(0);
+    const reads: Array<number> = [];
+    return {
+      reads,
+      busy: Effect.gen(function* () {
+        const next = yield* Ref.getAndUpdate(at, (was) => was + 1);
+        reads.push(next);
+        return script[next] ?? script.at(-1) ?? false;
+      }),
+    };
+  });
+
+describe("waiting for a turn to settle", () => {
+  const waits = { startsWithin: "600 millis", holdsFor: "3 seconds" } as const;
+
+  it("returns once a turn has started and finished", async () => {
+    // idle, idle, working, working, idle — the shape of a real brief: the
+    // adapter takes a moment to start the turn, and the answer takes longer.
+    const done = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { busy, reads } = yield* readings([false, true, true, false]);
+        yield* settledWhen(busy, waits);
+        return reads.length;
+      }),
+    );
+
+    // Four readings: one before the turn, one that sees it, and on to the one
+    // that sees it gone. It did not return on the first idle reading, which is
+    // the whole hazard — the status is absent both before a turn and after it.
+    expect(done).toBeGreaterThanOrEqual(4);
+  });
+
+  it("gives up when no turn ever starts, rather than hanging", async () => {
+    // An adapter that accepted the prompt and did nothing with it is a real
+    // thing — the reason `send` reports how it was delivered at all.
+    const started = Date.now();
+    await Effect.runPromise(settledWhen(Effect.succeed(false), waits));
+    const took = Date.now() - started;
+
+    expect(took).toBeGreaterThanOrEqual(500);
+    // The START bound, not the WHOLE one. Waiting the long window here is a
+    // job step asleep for twenty minutes over nothing.
+    expect(took).toBeLessThan(2500);
+  });
+
+  it("gives up on a turn that outlasts the window, and does not fail", async () => {
+    // A turn running for an hour is the agent doing what it was asked. Giving
+    // up is not a failure: the transcript is on disk, so somebody opening the
+    // chat re-acquires the adapter and replays what happened.
+    const started = Date.now();
+    const exit = await Effect.runPromiseExit(settledWhen(Effect.succeed(true), waits));
+    const took = Date.now() - started;
+
+    // `Exit.isSuccess`, not a tag check — see the note in CLAUDE.md on `_tag`.
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(took).toBeGreaterThanOrEqual(2500);
+    expect(took).toBeLessThan(6000);
   });
 });
