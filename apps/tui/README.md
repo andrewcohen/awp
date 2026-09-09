@@ -1,4 +1,4 @@
-# opentui-terminal-poc
+# tui
 
 Two questions, in one TUI.
 
@@ -10,10 +10,11 @@ Two questions, in one TUI.
 Both answers are yes. The numbers and the findings are below.
 
 ```
-bun install
-bun src/main.tsx            # the POC: threads → an agent → a terminal
+bun run tui                 # from the repository root
+bun src/main.tsx            # or from here
 bun src/za-tui.ts           # the first half on its own: a zmx picker
 bun src/probe/poc.ts        # drives all three screens and says what it saw
+bun src/probe/render.tsx    # a message at a width this file chose
 ```
 
 ## The POC
