@@ -1,0 +1,154 @@
+// The TUI's one connection to the daemon.
+//
+// A copy of the renderer's seam in shape and a third of its size, and the
+// interesting thing about writing it was how little had to change: the client
+// in `@awp-kit/protocol/client` says in its own comment that it serves "a
+// browser, a test, and a command-line tool", and it does — `globalThis.WebSocket`
+// exists in Bun, so the same layer builds here.
+//
+// Everything above this file is callbacks. Everything below keeps its Scopes
+// and its interruption, which is what makes the daemon's end of a stream close
+// when this process stops caring.
+
+import type { ChatDelivery, ChatUpdate } from "@awp-kit/protocol";
+import {
+  AwpClient,
+  type AwpClientShape,
+  layerClient,
+  layerConnection,
+} from "@awp-kit/protocol/client";
+import { Effect, Fiber, ManagedRuntime, Schedule, Stream } from "effect";
+import { appendFileSync } from "node:fs";
+
+/**
+ * Which daemon.
+ *
+ * `AWP_DAEMON_URL` because that is the variable `chat.ts` already hands its MCP
+ * servers, so an agent's tools and a TUI beside them reach the same instance.
+ * A second instance on 5284 is the repo's own convention for looking at a
+ * branch without disturbing the daemon somebody is working in.
+ */
+export const url = process.env.AWP_DAEMON_URL ?? "ws://127.0.0.1:5274";
+
+const listeners = new Set<(connected: boolean) => void>();
+let connected = false;
+
+export const onConnection = (listener: (connected: boolean) => void): (() => void) => {
+  listeners.add(listener);
+  listener(connected);
+  return () => listeners.delete(listener);
+};
+
+/**
+ * Somewhere to see what the socket did.
+ *
+ * A TUI owns the screen, so `console.log` is captured by the renderer's own
+ * console overlay and a failure that happens before anything is drawn has
+ * nowhere to go. `AWP_TUI_LOG` is that nowhere.
+ */
+export const logTui = (line: string) => {
+  const path = process.env.AWP_TUI_LOG;
+  if (path === undefined) return;
+  // Appended, not written: `Bun.write` truncates, so a log written that way
+  // holds one line — the last one — and every earlier thing the process said
+  // is gone by the time anybody reads it.
+  appendFileSync(path, `${new Date().toISOString()} ${line}\n`);
+};
+
+const announce = (state: boolean) => {
+  logTui(`connection ${state}`);
+  connected = state;
+  for (const listener of listeners) listener(state);
+};
+
+const runtime = ManagedRuntime.make(
+  layerClient(url, layerConnection({ opened: () => announce(true), lost: () => announce(false) })),
+);
+
+// An rpc stream is a request, so its fiber dies with the connection it was made
+// on. The socket reconnects on its own; a feed does not, and a feed that did
+// not resubscribe would leave the transcript showing whatever it last heard
+// while the status line said the daemon was fine.
+const RESUBSCRIBE = Schedule.min([Schedule.exponential(500, 1.5), Schedule.spaced(5000)]);
+
+const subscribe = <E>(run: (rpc: AwpClientShape) => Effect.Effect<void, E>): (() => void) => {
+  const fiber = runtime.runFork(
+    Effect.flatMap(AwpClient, run).pipe(
+      Effect.retry(RESUBSCRIBE),
+      Effect.catchCause(() => Effect.void),
+    ),
+  );
+  return () => {
+    runtime.runFork(Fiber.interrupt(fiber));
+  };
+};
+
+/**
+ * The daemon's own sentence, out of a refusal.
+ *
+ * Every refusal in the contract is a `Schema.TaggedError` carrying `reason` and
+ * none of them sets `message`, so `String(error)` is the tag and only the tag —
+ * "ChatUnavailable" where the field says which directory and why.
+ */
+export const said = (error: unknown): string => {
+  const reason = (error as { reason?: unknown } | null)?.reason;
+  if (typeof reason === "string") return reason;
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : String(error);
+};
+
+/** The conversation on a workspace: the history, then whatever happens next. */
+export const watchChat = (
+  project: string,
+  workspace: string,
+  onUpdate: (update: ChatUpdate) => void,
+): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
+      Effect.sync(() => onUpdate(update)),
+    ).pipe(Effect.tapCause((cause) => Effect.sync(() => logTui(`chat feed: ${String(cause)}`)))),
+  );
+
+/**
+ * Say something.
+ *
+ * Resolves when it has been delivered rather than when the agent has finished,
+ * and answers which way it went: `steer` into the turn already running, or
+ * `prompt` for a turn of its own.
+ */
+export const chatSend = (project: string, workspace: string, text: string): Promise<ChatDelivery> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text })),
+  );
+
+/** Answer a permission request by the id its update carried. */
+export const chatAnswer = (
+  project: string,
+  workspace: string,
+  request: string,
+  option: string,
+): Promise<void> =>
+  runtime.runPromise(
+    Effect.asVoid(
+      Effect.flatMap(AwpClient, (rpc) => rpc.ChatAnswer({ project, workspace, request, option })),
+    ),
+  );
+
+/** Every thread, newest first — the list this POC opens on. */
+export const threads = () =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadList()));
+
+/**
+ * Where a workspace is on disk.
+ *
+ * Asked rather than composed. `~/.awp/workspaces/<project>/<workspace>` is the
+ * daemon's convention, and a client that spelled it out itself would be a
+ * second implementation of it — the copy that drifts being the one nobody
+ * tests. Same argument as `SessionIdentity` being on the wire.
+ */
+export const workspaceDir = (project: string, workspace: string) =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.WorkspaceDir({ project, workspace })));
+
+/** Every session the daemon can see, which is how the TUI finds a workspace. */
+export const sessions = () =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.SessionList()));

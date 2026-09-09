@@ -1,0 +1,24 @@
+{
+  "name": "opentui-terminal-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "poc": "bun src/main.tsx",
+    "tui": "bun src/za-tui.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "probe:poc": "bun src/probe/poc.ts",
+    "probe:drive": "bun src/probe/drive.ts",
+    "probe:ceiling": "bun src/probe/ceiling.ts",
+    "probe:join": "bun src/probe/join.ts"
+  },
+  "dependencies": {
+    "@awp-kit/protocol": "workspace:*",
+    "@awp-kit/server": "workspace:*",
+    "@effect/platform-node-shared": "catalog:",
+    "@opentui/core": "0.5.11",
+    "@opentui/react": "0.5.11",
+    "@types/react": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:"
+  }
+}
