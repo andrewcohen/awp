@@ -10,12 +10,21 @@ Two questions, in one TUI.
 Both answers are yes. The numbers and the findings are below.
 
 ```
-bun run tui                 # from the repository root
+bun run tui                 # from the repository root — runs bun directly,
+                            # never through `--filter`; see below
 bun src/main.tsx            # or from here
 bun src/za-tui.ts           # the first half on its own: a zmx picker
 bun src/probe/poc.ts        # drives all three screens and says what it saw
 bun src/probe/render.tsx    # a message at a width this file chose
 ```
+
+**Not `bun run --filter tui tui`.** Filtering runs the script in a subprocess
+whose output bun collects to prefix it, so the child gets a pipe rather than a
+terminal: opentui finds no tty, falls back to 80x24, never enters the
+alternate screen and never puts stdin in raw mode. What that looks like is the
+escape codes printed as text down the bottom of an ordinary scrollback, with
+nothing responding to a key. The root script execs `bun apps/tui/src/main.tsx`
+for that reason and must keep doing so.
 
 ## The POC
 
