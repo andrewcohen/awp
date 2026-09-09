@@ -9,23 +9,25 @@
 // with `stickyScroll` is all four, and it handles the wheel.
 
 import { useRef, useState } from "react";
+import { useTerminalDimensions } from "@opentui/react";
 import type { TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { chatAnswer, chatSend, said } from "./daemon";
-import { linesOf } from "./lines";
+import { wrap } from "./lines";
 import { isBack, isQuit } from "./keys";
-import { CHROME, SPIN } from "./theme";
+import { CHROME, SPIN, SYNTAX } from "./theme";
 import type { Place } from "./Threads";
 import { useConversation, useSpinner } from "./useConversation";
 
-const COLOUR = {
-  user: CHROME.accent,
-  agent: CHROME.text,
-  thought: CHROME.muted,
-  tool: CHROME.muted,
-  ask: CHROME.ask,
-  gutter: CHROME.base,
-} as const;
+/** A tool row is a receipt: what ran, and whether it worked. */
+const mark = (status: string) =>
+  status === "completed" ? "✓" : status === "failed" ? "✗" : status === "asking" ? "?" : "…";
+
+/** One line of it, because the whole of a 4000-line grep is not a receipt. */
+const receipt = (output: string): string | undefined => {
+  const first = output.split("\n").find((line) => line.trim() !== "");
+  return first === undefined ? undefined : first.slice(0, 100);
+};
 
 export const Chat = ({
   place,
@@ -46,6 +48,13 @@ export const Chat = ({
   const [notice, setNotice] = useState("");
   const working = state.running > 0;
   const tick = useSpinner(working);
+
+  // One line until there is more than one line's worth in it, then as many as
+  // six. A composer that is three rows tall before anybody types is three rows
+  // of transcript nobody can see.
+  const { width } = useTerminalDimensions();
+  const room = Math.max(20, width - 6);
+  const rows = Math.min(6, Math.max(1, wrap(draft, room).length));
 
   const ask = state.items
     .toReversed()
@@ -114,8 +123,6 @@ export const Chat = ({
     }
   });
 
-  const lines = linesOf(state.items.slice(-400), 100);
-
   return (
     <box flexGrow={1} flexDirection="column" backgroundColor={CHROME.base}>
       <text
@@ -135,12 +142,55 @@ export const Chat = ({
         paddingRight={1}
         scrollbarOptions={{ visible: false }}
       >
-        {lines.map((line, at) => (
-          <text key={at} fg={COLOUR[line.role]} content={line.text === "" ? " " : line.text} />
-        ))}
+        {/* ── one block per item, not one line per line ──────────────────────
+            The first draft flattened everything to strings and painted a row
+            each, which is why the speaker and the sentence were the same
+            colour: a `text` has one foreground. Rendering the item lets the
+            label be dim and the words be bright, and lets an agent's answer be
+            markdown — headings, lists, tables and fenced code, highlighted by
+            the same tree-sitter the editor components use. */}
+        {state.items.slice(-200).map((item, at) =>
+          item.kind === "said" ? (
+            <box key={at} flexDirection="row" paddingBottom={1}>
+              <text
+                width={4}
+                fg={CHROME.muted}
+                content={item.role === "user" ? "you " : item.role === "thought" ? "  ~ " : "··· "}
+              />
+              {item.role === "agent" ? (
+                <markdown flexGrow={1} content={item.text.trimEnd()} syntaxStyle={SYNTAX} conceal />
+              ) : (
+                <text
+                  flexGrow={1}
+                  wrapMode="word"
+                  fg={item.role === "user" ? CHROME.said : CHROME.muted}
+                  content={item.text.trimEnd()}
+                />
+              )}
+            </box>
+          ) : (
+            <box key={at} flexDirection="column" paddingBottom={1}>
+              <text
+                fg={CHROME.muted}
+                content={`  ${mark(item.status)} ${item.title}${
+                  item.subagent === undefined ? "" : ` · ${item.subagent}`
+                }`}
+              />
+              {receipt(item.output) === undefined ? undefined : (
+                <text fg={CHROME.muted} content={`      ${receipt(item.output)}`} />
+              )}
+              {item.ask === undefined ? undefined : (
+                <text
+                  fg={CHROME.ask}
+                  content={`    asks: ${item.ask.options.map((one) => one.label).join("   ")}`}
+                />
+              )}
+            </box>
+          ),
+        )}
         {/* A blank row, then the mark hard against the left edge of the view —
-            it is the window saying something, not the agent, so it does not
-            line up with anybody's message. */}
+            it is the window speaking, not the agent, so it lines up with
+            nobody's message. */}
         {working ? <text content=" " /> : undefined}
         {working ? (
           <text fg={CHROME.muted} content={`${SPIN[tick % SPIN.length]} thinking`} />
@@ -152,16 +202,17 @@ export const Chat = ({
       <text height={1} content=" " />
 
       <box
-        height={3}
+        height={rows}
         flexDirection="row"
         paddingLeft={1}
         paddingRight={1}
         backgroundColor={CHROME.raised}
       >
-        <text width={4} fg={CHROME.accent} content="you " />
+        <text width={2} fg={CHROME.accent} content="> " />
         <textarea
           ref={composer}
           flexGrow={1}
+          height={rows}
           focused
           onContentChange={() => setDraft(composer.current?.plainText ?? "")}
           onSubmit={() => send(composer.current?.plainText ?? "")}
