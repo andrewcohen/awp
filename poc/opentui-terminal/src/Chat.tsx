@@ -284,17 +284,30 @@ export const Chat = ({
           wrapMode="word"
           backgroundColor={CHROME.raised}
           textColor={CHROME.text}
-          // Enter sends, which is the inverse of the textarea's own default,
-          // and cmd or alt with it makes a line. `super` only arrives from a
-          // terminal speaking the kitty keyboard protocol — alt is the
-          // fallback for one that does not, which is why both are bound.
+          // ── enter sends; something-enter makes a line ──────────────────
+          //
+          // Four of them, because which one a terminal actually delivers is
+          // not this application's to decide:
+          //
+          //   cmd+enter     never arrives. Reported as "going fullscreen" —
+          //                 that is the terminal's own binding, and it is
+          //                 taken before any program sees the key
+          //   shift+enter   the chat convention, and it needs the kitty
+          //                 keyboard protocol to be distinguishable at all
+          //   alt+enter     ESC then CR, which every terminal sends
+          //   ctrl+o        the one that needs nothing: a plain control byte
+          //
+          // `super` stays bound for a terminal that does pass cmd through.
           keyBindings={[
             { name: "return", action: "submit" },
             { name: "kpenter", action: "submit" },
-            { name: "return", super: true, action: "newline" },
-            { name: "kpenter", super: true, action: "newline" },
+            { name: "return", shift: true, action: "newline" },
+            { name: "kpenter", shift: true, action: "newline" },
             { name: "return", meta: true, action: "newline" },
             { name: "kpenter", meta: true, action: "newline" },
+            { name: "return", super: true, action: "newline" },
+            { name: "kpenter", super: true, action: "newline" },
+            { name: "o", ctrl: true, action: "newline" },
           ]}
         />
       </box>
@@ -312,7 +325,7 @@ export const Chat = ({
         content={
           notice === ""
             ? pending === undefined
-              ? " ⏎ send · cmd-⏎ newline · esc cancel · ctrl-\\ back · ctrl-q quit"
+              ? " ⏎ send · ⇧⏎ or ctrl-o newline · esc cancel · ctrl-\\ back · ctrl-q quit"
               : ` ctrl-y ${pending.options[0]?.label ?? "allow"} · ctrl-n ${
                   pending.options.at(-1)?.label ?? "deny"
                 } · ctrl-\\ back`
