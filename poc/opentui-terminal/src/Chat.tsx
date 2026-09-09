@@ -13,7 +13,7 @@ import { useTerminalDimensions } from "@opentui/react";
 import type { TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { chatAnswer, chatSend, said } from "./daemon";
-import { wrap } from "./lines";
+import { segments, wrap } from "./lines";
 import { isBack, isQuit } from "./keys";
 import { CHROME, SPIN, SYNTAX } from "./theme";
 import type { Place } from "./Threads";
@@ -28,6 +28,21 @@ import { useConversation, useSpinner } from "./useConversation";
  */
 const clip = (text: string, most: number) =>
   text.length > most ? `${text.slice(0, most - 1)}…` : text;
+
+/**
+ * One line, whatever it takes.
+ *
+ * A title is not a title: it is the command, and a `python3 - <<'PY'` carries
+ * its whole script in it, newlines and all. Clipping counts characters and a
+ * multi-line string was still multi-line after being clipped — which is why a
+ * "one line" row was drawing nine. So the first line is taken *before* the
+ * width is applied, and an ellipsis says the rest is there.
+ */
+const oneLine = (text: string, most: number): string => {
+  const [first = "", ...rest] = text.split("\n");
+  const trimmed = first.trimEnd();
+  return clip(rest.length > 0 ? `${trimmed} …` : trimmed, most);
+};
 
 const mark = (status: string) =>
   status === "completed" ? "✓" : status === "failed" ? "✗" : status === "asking" ? "?" : "…";
@@ -57,6 +72,15 @@ export const Chat = ({
   // of transcript nobody can see.
   const { width } = useTerminalDimensions();
   const room = Math.max(20, width - 6);
+  // ── every block is given a width, and none is left to infer one ──────────
+  //
+  // A flex child will not shrink below its content unless it is told it may,
+  // which is the same rule the renderer's own AGENTS.md records for the web:
+  // `flex: 1` **with** `minWidth: 0`, and either alone is the bug. Here it
+  // showed up twice at once — an agent's paragraph ran off the right, and the
+  // tool rows collapsed to the width of the four-cell label beside it, which
+  // is where the 4 came from.
+  const inner = Math.max(24, width - 2);
   const rows = Math.min(6, Math.max(1, wrap(draft, room).length));
 
   const ask = state.items
@@ -150,21 +174,43 @@ export const Chat = ({
             each, which is why the speaker and the sentence were the same
             colour: a `text` has one foreground. Rendering the item lets the
             label be dim and the words be bright, and lets an agent's answer be
-            markdown — headings, lists, tables and fenced code, highlighted by
-            the same tree-sitter the editor components use. */}
+            drawn in two pieces: prose as text, which wraps, and a fence as
+            code, highlighted by tree-sitter and left unwrapped because the
+            line breaks in a fence are the content. The `markdown` renderable
+            was the obvious answer and cannot be used — see `wrapMarkdown`. */}
         {state.items.slice(-200).map((item, at) =>
           item.kind === "said" ? (
-            <box key={at} flexDirection="row" paddingBottom={1}>
+            <box key={at} width={inner} flexDirection="row" paddingBottom={1}>
               <text
                 width={4}
                 fg={CHROME.muted}
                 content={item.role === "user" ? "you " : item.role === "thought" ? "  ~ " : "··· "}
               />
               {item.role === "agent" ? (
-                <markdown flexGrow={1} content={item.text.trimEnd()} syntaxStyle={SYNTAX} conceal />
+                <box width={inner - 4} flexDirection="column">
+                  {segments(item.text.trimEnd()).map((part, index) =>
+                    part.kind === "code" ? (
+                      <code
+                        key={index}
+                        width={inner - 4}
+                        content={part.text}
+                        filetype={part.language === "" ? "text" : part.language}
+                        syntaxStyle={SYNTAX}
+                      />
+                    ) : (
+                      <text
+                        key={index}
+                        width={inner - 4}
+                        wrapMode="word"
+                        fg={CHROME.text}
+                        content={part.text}
+                      />
+                    ),
+                  )}
+                </box>
               ) : (
                 <text
-                  flexGrow={1}
+                  width={inner - 4}
                   wrapMode="word"
                   fg={item.role === "user" ? CHROME.said : CHROME.muted}
                   content={item.text.trimEnd()}
@@ -182,16 +228,19 @@ export const Chat = ({
             //
             // A question is the exception: it is the one tool row that wants
             // something from a person, so it keeps a line of its own.
-            <box key={at} flexDirection="column" paddingBottom={1}>
+            <box key={at} width={inner} flexDirection="column" paddingBottom={1}>
               <text
+                width={inner}
+                wrapMode="none"
                 fg={CHROME.muted}
-                content={`  ${mark(item.status)} ${clip(
-                  `${item.title}${item.subagent === undefined ? "" : ` · ${item.subagent}`}`,
-                  Math.max(12, width - 6),
+                content={`  ${mark(item.status)} ${(item.subagent ?? item.toolKind ?? "tool").padEnd(7)} ${oneLine(
+                  item.title,
+                  Math.max(12, inner - 13),
                 )}`}
               />
               {item.ask === undefined ? undefined : (
                 <text
+                  width={inner}
                   wrapMode="word"
                   fg={CHROME.ask}
                   content={`    asks: ${item.ask.options.map((one) => one.label).join("   ")}`}
@@ -235,9 +284,15 @@ export const Chat = ({
           wrapMode="word"
           backgroundColor={CHROME.raised}
           textColor={CHROME.text}
+          // Enter sends, which is the inverse of the textarea's own default,
+          // and cmd or alt with it makes a line. `super` only arrives from a
+          // terminal speaking the kitty keyboard protocol — alt is the
+          // fallback for one that does not, which is why both are bound.
           keyBindings={[
             { name: "return", action: "submit" },
             { name: "kpenter", action: "submit" },
+            { name: "return", super: true, action: "newline" },
+            { name: "kpenter", super: true, action: "newline" },
             { name: "return", meta: true, action: "newline" },
             { name: "kpenter", meta: true, action: "newline" },
           ]}
@@ -257,7 +312,7 @@ export const Chat = ({
         content={
           notice === ""
             ? pending === undefined
-              ? " ⏎ send · esc cancel · ctrl-\\ back · ctrl-q quit"
+              ? " ⏎ send · cmd-⏎ newline · esc cancel · ctrl-\\ back · ctrl-q quit"
               : ` ctrl-y ${pending.options[0]?.label ?? "allow"} · ctrl-n ${
                   pending.options.at(-1)?.label ?? "deny"
                 } · ctrl-\\ back`

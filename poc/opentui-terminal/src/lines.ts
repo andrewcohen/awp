@@ -81,3 +81,102 @@ export const linesOf = (items: ReadonlyArray<Item>, width: number): ReadonlyArra
 
   return out;
 };
+
+/**
+ * DEAD END, kept for the note. Hard-wrapping markdown does not work.
+ *
+ * `MarkdownRenderable` builds each paragraph as a `CodeRenderable` with
+ * `width: "100%"` and no `wrapMode` — read in opentui 0.5.11's own source
+ * after watching three paragraphs arrive cut at exactly the same column. So a
+ * long sentence is clipped, not wrapped, however much width it is given.
+ *
+ * Wrapping the text before it gets there is safe for prose: a newline inside a
+ * paragraph is a soft break and markdown joins it back up. It is *not* safe
+ * for the three kinds of line whose breaks are the content, so those are left
+ * exactly as they are:
+ *
+ *   ``` fences   a wrapped line of code is a different line of code
+ *   | tables |   the renderer measures the columns itself
+ *   headings     short by nature, and a wrapped one loses its level
+ *
+ * And then markdown joins them straight back up: a newline inside a paragraph
+ * is a *soft* break and the parser's whole job is to undo it. Measured — the
+ * tail of a wrapped sentence never appeared on screen. Prose is segmented out
+ * and drawn as text instead; see `segments`.
+ */
+export const wrapMarkdown = (text: string, width: number): string => {
+  if (width < 12) return text;
+  const out: string[] = [];
+  let fenced = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(?:```|~~~)/u.test(line)) {
+      fenced = !fenced;
+      out.push(line);
+      continue;
+    }
+    if (fenced || line.length <= width || /^\s*[|#]/u.test(line)) {
+      out.push(line);
+      continue;
+    }
+    const marker = /^\s*(?:[*+-]\s+|\d+[).]\s+|>\s+)?/u.exec(line)?.[0] ?? "";
+    const body = line.slice(marker.length);
+    const room = Math.max(8, width - marker.length);
+    const [first, ...rest] = wrap(body, room);
+    out.push(marker + (first ?? ""), ...rest.map((one) => " ".repeat(marker.length) + one));
+  }
+  return out.join("\n");
+};
+
+export type Segment =
+  | { readonly kind: "prose"; readonly text: string }
+  | { readonly kind: "code"; readonly text: string; readonly language: string };
+
+/**
+ * An agent's message, split into the two things it is made of.
+ *
+ * The markdown renderable would be the obvious way to draw a message and it
+ * cannot: it does not wrap, and it undoes any wrapping done for it. So prose
+ * is drawn as text — which wraps, being text — and a fenced block is drawn as
+ * code, highlighted by the same tree-sitter, and left unwrapped because the
+ * line breaks in a fence *are* the content.
+ *
+ * The same split amoeba's chat panel makes, for a different reason: there it
+ * is because a fence is three different things and one of them is a patch.
+ */
+export const segments = (text: string): ReadonlyArray<Segment> => {
+  const out: Segment[] = [];
+  let prose: string[] = [];
+  let code: string[] = [];
+  let language = "";
+  let fenced = false;
+
+  const flushProse = () => {
+    const joined = prose.join("\n").trim();
+    if (joined !== "") out.push({ kind: "prose", text: joined });
+    prose = [];
+  };
+
+  for (const line of text.split("\n")) {
+    const fence = /^\s*(?:```|~~~)\s*(\S*)/u.exec(line);
+    if (fence !== null) {
+      if (fenced) {
+        out.push({ kind: "code", text: code.join("\n"), language });
+        code = [];
+        language = "";
+        fenced = false;
+      } else {
+        flushProse();
+        language = fence[1] ?? "";
+        fenced = true;
+      }
+      continue;
+    }
+    if (fenced) code.push(line);
+    else prose.push(line);
+  }
+  // An unclosed fence is what a message still being streamed looks like, so it
+  // is a code block rather than a mistake.
+  if (fenced && code.length > 0) out.push({ kind: "code", text: code.join("\n"), language });
+  flushProse();
+  return out;
+};
